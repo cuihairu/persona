@@ -1,0 +1,83 @@
+[package]
+name = "persona-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Persona Team"]
+description = "Command-line interface for Persona digital identity management system"
+license = "MIT"
+repository = "https://github.com/your-username/persona"
+homepage = "https://github.com/your-username/persona"
+documentation = "https://docs.rs/persona-cli"
+keywords = ["identity", "privacy", "security", "cli", "digital-identity"]
+categories = ["command-line-utilities", "authentication", "cryptography"]
+readme = "README.md"
+
+[[bin]]
+name = "persona"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+persona-core = { path = "../core" }
+
+# CLI framework
+clap = { version = "4.4", features = ["derive", "color", "suggestions"] }
+clap_complete = "4.4"
+
+# Configuration
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+config = "0.14"
+
+# Terminal UI
+console = "0.15"
+indicatif = "0.17"
+dialoguer = { version = "0.11", optional = true }
+colored = "2.0"
+crossterm = "0.27"
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# File system
+dirs = "5.0"
+walkdir = "2.4"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+url = "2.4"
+
+# Security
+secrecy = "0.8"
+zeroize = "1.7"
+
+# Data formats
+csv = { version = "1.3", optional = true }
+tabled = "0.15"
+
+[dev-dependencies]
+tempfile = "3.8"
+assert_cmd = "2.0"
+predicates = "3.0"
+
+[features]
+default = ["interactive"]
+interactive = ["dialoguer"]
+json-output = []
+csv-export = ["csv"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -1,0 +1,470 @@
+<!DOCTYPE HTML>
+<html lang="zh" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>安全需求 - Persona 数字身份管理系统</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Master your digital identity. Switch freely with one click.">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon.svg">
+        <link rel="shortcut icon" href="../favicon.png">
+        <link rel="stylesheet" href="../css/variables.css">
+        <link rel="stylesheet" href="../css/general.css">
+        <link rel="stylesheet" href="../css/chrome.css">
+        <link rel="stylesheet" href="../css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="../fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="highlight-css" href="../highlight.css">
+        <link rel="stylesheet" id="tomorrow-night-css" href="../tomorrow-night.css">
+        <link rel="stylesheet" id="ayu-highlight-css" href="../ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/custom.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Persona 数字身份管理系统</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+                        <a href="https://github.com/your-username/persona" title="Git repository" aria-label="Git repository">
+                            <i id="git-repository-button" class="fa fa-github"></i>
+                        </a>
+                        <a href="https://github.com/your-username/persona/edit/main/docs/src/analysis/security-requirements.md" title="Suggest an edit" aria-label="Suggest an edit" rel="edit">
+                            <i id="git-edit-button" class="fa fa-edit"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <i class="fa fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="数字身份管理安全需求与特征分析"><a class="header" href="#数字身份管理安全需求与特征分析">数字身份管理安全需求与特征分析</a></h1>
+<h2 id="安全威胁模型"><a class="header" href="#安全威胁模型">安全威胁模型</a></h2>
+<h3 id="主要威胁类型"><a class="header" href="#主要威胁类型">主要威胁类型</a></h3>
+<h4 id="1-数据泄露威胁"><a class="header" href="#1-数据泄露威胁">1. 数据泄露威胁</a></h4>
+<ul>
+<li><strong>内部威胁</strong>: 恶意内部人员访问</li>
+<li><strong>外部攻击</strong>: 黑客入侵、数据库泄露</li>
+<li><strong>物理威胁</strong>: 设备丢失、硬盘被盗</li>
+<li><strong>社会工程</strong>: 钓鱼攻击、身份冒充</li>
+</ul>
+<h4 id="2-数据完整性威胁"><a class="header" href="#2-数据完整性威胁">2. 数据完整性威胁</a></h4>
+<ul>
+<li><strong>恶意篡改</strong>: 攻击者修改存储数据</li>
+<li><strong>系统故障</strong>: 硬件故障导致数据损坏</li>
+<li><strong>同步冲突</strong>: 多设备同步时的数据冲突</li>
+</ul>
+<h4 id="3-可用性威胁"><a class="header" href="#3-可用性威胁">3. 可用性威胁</a></h4>
+<ul>
+<li><strong>服务中断</strong>: 系统故障或攻击导致无法访问</li>
+<li><strong>密钥丢失</strong>: 主密钥丢失导致数据无法解密</li>
+<li><strong>账户锁定</strong>: 多次错误尝试导致账户被锁</li>
+</ul>
+<h2 id="分级安全需求"><a class="header" href="#分级安全需求">分级安全需求</a></h2>
+<h3 id="极高安全级别场景"><a class="header" href="#极高安全级别场景">极高安全级别场景</a></h3>
+<p><strong>适用场景</strong>: 钱包助记词、银行卡信息、健康医疗信息</p>
+<h4 id="安全特征要求"><a class="header" href="#安全特征要求">安全特征要求</a></h4>
+<ul>
+<li><strong>加密强度</strong>: AES-256 + RSA-4096</li>
+<li><strong>密钥管理</strong>: 硬件安全模块(HSM)或安全飞地</li>
+<li><strong>访问控制</strong>: 多因素认证(MFA) + 生物识别</li>
+<li><strong>审计日志</strong>: 完整的访问和操作日志</li>
+<li><strong>数据隔离</strong>: 物理或逻辑完全隔离</li>
+<li><strong>备份策略</strong>: 加密离线备份 + 地理分散</li>
+</ul>
+<h4 id="技术实现要求"><a class="header" href="#技术实现要求">技术实现要求</a></h4>
+<pre><code>- 端到端加密，服务器无法解密
+- 零知识架构设计
+- 硬件安全密钥支持
+- 定期安全审计
+- 数据销毁机制
+</code></pre>
+<h3 id="高安全级别场景"><a class="header" href="#高安全级别场景">高安全级别场景</a></h3>
+<p><strong>适用场景</strong>: 密码密钥、服务器配置、SSH密钥、企业身份、数字证书</p>
+<h4 id="安全特征要求-1"><a class="header" href="#安全特征要求-1">安全特征要求</a></h4>
+<ul>
+<li><strong>加密强度</strong>: AES-256</li>
+<li><strong>密钥管理</strong>: 基于密码的密钥派生(PBKDF2/Argon2)</li>
+<li><strong>访问控制</strong>: 双因素认证(2FA)</li>
+<li><strong>会话管理</strong>: 自动超时锁定</li>
+<li><strong>数据完整性</strong>: 数字签名验证</li>
+<li><strong>网络安全</strong>: TLS 1.3 传输加密</li>
+</ul>
+<h4 id="技术实现要求-1"><a class="header" href="#技术实现要求-1">技术实现要求</a></h4>
+<pre><code>- 客户端加密存储
+- 安全的密钥交换协议
+- 访问频率限制
+- 异常行为检测
+- 定期密码轮换提醒
+</code></pre>
+<h3 id="中等安全级别场景"><a class="header" href="#中等安全级别场景">中等安全级别场景</a></h3>
+<p><strong>适用场景</strong>: 游戏密码、社交媒体、订阅服务、教育平台、物联网设备</p>
+<h4 id="安全特征要求-2"><a class="header" href="#安全特征要求-2">安全特征要求</a></h4>
+<ul>
+<li><strong>加密强度</strong>: AES-128</li>
+<li><strong>访问控制</strong>: 单因素认证 + 可选2FA</li>
+<li><strong>会话管理</strong>: 标准超时机制</li>
+<li><strong>数据备份</strong>: 加密云备份</li>
+<li><strong>同步安全</strong>: 设备间安全同步</li>
+</ul>
+<h4 id="技术实现要求-2"><a class="header" href="#技术实现要求-2">技术实现要求</a></h4>
+<pre><code>- 标准加密存储
+- 基本访问日志
+- 设备信任机制
+- 简化的恢复流程
+</code></pre>
+<h2 id="核心安全特征"><a class="header" href="#核心安全特征">核心安全特征</a></h2>
+<h3 id="1-加密架构设计"><a class="header" href="#1-加密架构设计">1. 加密架构设计</a></h3>
+<h4 id="分层加密策略"><a class="header" href="#分层加密策略">分层加密策略</a></h4>
+<pre><code>第一层: 用户主密码 + 生物识别
+第二层: 设备密钥 + 硬件绑定
+第三层: 数据分类加密 + 字段级加密
+第四层: 传输加密 + 存储加密
+</code></pre>
+<h4 id="密钥管理体系"><a class="header" href="#密钥管理体系">密钥管理体系</a></h4>
+<ul>
+<li><strong>主密钥</strong>: 用户控制，永不上传</li>
+<li><strong>设备密钥</strong>: 设备唯一，硬件绑定</li>
+<li><strong>数据密钥</strong>: 分类管理，定期轮换</li>
+<li><strong>传输密钥</strong>: 临时生成，会话结束销毁</li>
+</ul>
+<h3 id="2-身份认证机制"><a class="header" href="#2-身份认证机制">2. 身份认证机制</a></h3>
+<h4 id="多因素认证组合"><a class="header" href="#多因素认证组合">多因素认证组合</a></h4>
+<ul>
+<li><strong>知识因子</strong>: 主密码、安全问题</li>
+<li><strong>持有因子</strong>: 硬件密钥、手机令牌</li>
+<li><strong>生物因子</strong>: 指纹、面部识别、声纹</li>
+<li><strong>行为因子</strong>: 输入模式、使用习惯</li>
+</ul>
+<h4 id="自适应认证"><a class="header" href="#自适应认证">自适应认证</a></h4>
+<ul>
+<li><strong>风险评估</strong>: 基于位置、设备、时间的风险分析</li>
+<li><strong>动态调整</strong>: 根据风险等级调整认证要求</li>
+<li><strong>异常检测</strong>: 识别异常登录行为</li>
+</ul>
+<h3 id="3-数据保护机制"><a class="header" href="#3-数据保护机制">3. 数据保护机制</a></h3>
+<h4 id="数据分类保护"><a class="header" href="#数据分类保护">数据分类保护</a></h4>
+<pre><code>极敏感数据: 端到端加密 + 硬件隔离
+敏感数据: 强加密 + 访问控制
+一般数据: 标准加密 + 基础保护
+</code></pre>
+<h4 id="数据生命周期管理"><a class="header" href="#数据生命周期管理">数据生命周期管理</a></h4>
+<ul>
+<li><strong>创建</strong>: 自动分类和加密</li>
+<li><strong>存储</strong>: 分级存储和备份</li>
+<li><strong>访问</strong>: 权限控制和审计</li>
+<li><strong>更新</strong>: 版本控制和完整性验证</li>
+<li><strong>销毁</strong>: 安全删除和密钥销毁</li>
+</ul>
+<h3 id="4-访问控制模型"><a class="header" href="#4-访问控制模型">4. 访问控制模型</a></h3>
+<h4 id="基于角色的访问控制rbac"><a class="header" href="#基于角色的访问控制rbac">基于角色的访问控制(RBAC)</a></h4>
+<ul>
+<li><strong>用户角色</strong>: 个人用户、企业用户、管理员</li>
+<li><strong>权限分级</strong>: 读取、修改、删除、管理</li>
+<li><strong>资源分类</strong>: 按数据类型和敏感级别分类</li>
+</ul>
+<h4 id="零信任安全模型"><a class="header" href="#零信任安全模型">零信任安全模型</a></h4>
+<ul>
+<li><strong>持续验证</strong>: 每次访问都需要验证</li>
+<li><strong>最小权限</strong>: 仅授予必要的最小权限</li>
+<li><strong>动态调整</strong>: 基于实时风险评估调整权限</li>
+</ul>
+<h3 id="5-审计和监控"><a class="header" href="#5-审计和监控">5. 审计和监控</a></h3>
+<h4 id="全面审计日志"><a class="header" href="#全面审计日志">全面审计日志</a></h4>
+<ul>
+<li><strong>用户操作</strong>: 登录、访问、修改记录</li>
+<li><strong>系统事件</strong>: 错误、异常、性能指标</li>
+<li><strong>安全事件</strong>: 攻击尝试、权限变更</li>
+<li><strong>数据流向</strong>: 数据创建、传输、删除轨迹</li>
+</ul>
+<h4 id="实时监控告警"><a class="header" href="#实时监控告警">实时监控告警</a></h4>
+<ul>
+<li><strong>异常行为</strong>: 异地登录、批量操作</li>
+<li><strong>安全威胁</strong>: 暴力破解、恶意访问</li>
+<li><strong>系统状态</strong>: 性能异常、服务中断</li>
+<li><strong>合规检查</strong>: 策略违规、权限异常</li>
+</ul>
+<h2 id="合规性要求"><a class="header" href="#合规性要求">合规性要求</a></h2>
+<h3 id="国际标准合规"><a class="header" href="#国际标准合规">国际标准合规</a></h3>
+<ul>
+<li><strong>ISO 27001</strong>: 信息安全管理体系</li>
+<li><strong>SOC 2</strong>: 服务组织控制报告</li>
+<li><strong>GDPR</strong>: 欧盟通用数据保护条例</li>
+<li><strong>CCPA</strong>: 加州消费者隐私法案</li>
+</ul>
+<h3 id="行业特定合规"><a class="header" href="#行业特定合规">行业特定合规</a></h3>
+<ul>
+<li><strong>金融行业</strong>: PCI DSS、SOX法案</li>
+<li><strong>医疗行业</strong>: HIPAA合规</li>
+<li><strong>政府部门</strong>: 等级保护要求</li>
+<li><strong>企业级</strong>: 内部安全策略</li>
+</ul>
+<h2 id="技术实现建议"><a class="header" href="#技术实现建议">技术实现建议</a></h2>
+<h3 id="加密技术栈"><a class="header" href="#加密技术栈">加密技术栈</a></h3>
+<pre><code>对称加密: AES-256-GCM
+非对称加密: RSA-4096, ECC P-384
+哈希算法: SHA-256, SHA-3
+密钥派生: Argon2id, PBKDF2
+数字签名: ECDSA, RSA-PSS
+</code></pre>
+<h3 id="安全开发实践"><a class="header" href="#安全开发实践">安全开发实践</a></h3>
+<ul>
+<li><strong>安全编码</strong>: OWASP安全编码规范</li>
+<li><strong>代码审计</strong>: 静态和动态安全测试</li>
+<li><strong>渗透测试</strong>: 定期安全评估</li>
+<li><strong>漏洞管理</strong>: 及时修复和更新</li>
+</ul>
+<h3 id="部署安全"><a class="header" href="#部署安全">部署安全</a></h3>
+<ul>
+<li><strong>容器安全</strong>: Docker安全配置</li>
+<li><strong>网络安全</strong>: 防火墙和入侵检测</li>
+<li><strong>主机安全</strong>: 系统加固和监控</li>
+<li><strong>云安全</strong>: 云服务安全配置</li>
+</ul>
+<h2 id="用户体验与安全平衡"><a class="header" href="#用户体验与安全平衡">用户体验与安全平衡</a></h2>
+<h3 id="安全易用性原则"><a class="header" href="#安全易用性原则">安全易用性原则</a></h3>
+<ul>
+<li><strong>透明安全</strong>: 安全机制对用户透明</li>
+<li><strong>渐进增强</strong>: 根据需求逐步增加安全措施</li>
+<li><strong>智能提醒</strong>: 主动的安全建议和提醒</li>
+<li><strong>快速恢复</strong>: 简化的账户恢复流程</li>
+</ul>
+<h3 id="性能优化"><a class="header" href="#性能优化">性能优化</a></h3>
+<ul>
+<li><strong>加密优化</strong>: 硬件加速和算法优化</li>
+<li><strong>缓存策略</strong>: 安全的本地缓存机制</li>
+<li><strong>异步处理</strong>: 后台安全检查和同步</li>
+<li><strong>负载均衡</strong>: 分布式安全服务</li>
+</ul>
+<h2 id="应急响应计划"><a class="header" href="#应急响应计划">应急响应计划</a></h2>
+<h3 id="安全事件分类"><a class="header" href="#安全事件分类">安全事件分类</a></h3>
+<ul>
+<li><strong>P0级</strong>: 数据泄露、系统入侵</li>
+<li><strong>P1级</strong>: 服务中断、权限异常</li>
+<li><strong>P2级</strong>: 性能问题、配置错误</li>
+<li><strong>P3级</strong>: 一般异常、用户反馈</li>
+</ul>
+<h3 id="响应流程"><a class="header" href="#响应流程">响应流程</a></h3>
+<ol>
+<li><strong>事件检测</strong>: 自动监控和人工发现</li>
+<li><strong>影响评估</strong>: 快速评估影响范围和严重程度</li>
+<li><strong>应急处置</strong>: 立即采取控制措施</li>
+<li><strong>调查分析</strong>: 深入分析事件原因</li>
+<li><strong>恢复服务</strong>: 安全恢复正常服务</li>
+<li><strong>总结改进</strong>: 事后总结和改进措施</li>
+</ol>
+<p>这份安全需求分析为数字身份管理系统提供了全面的安全框架，确保在不同场景下都能提供适当的安全保护。</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../analysis/scenarios.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="../analysis/user-requirements.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../analysis/scenarios.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="../analysis/user-requirements.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+        <!-- Livereload script (if served using the cli tool) -->
+        <script>
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsAddress = wsProtocol + "//" + location.host + "/" + "__livereload";
+            const socket = new WebSocket(wsAddress);
+            socket.onmessage = function (event) {
+                if (event.data === "reload") {
+                    socket.close();
+                    location.reload();
+                }
+            };
+
+            window.onbeforeunload = function() {
+                socket.close();
+            }
+        </script>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr.min.js"></script>
+        <script src="../mark.min.js"></script>
+        <script src="../searcher.js"></script>
+
+        <script src="../clipboard.min.js"></script>
+        <script src="../highlight.js"></script>
+        <script src="../book.js"></script>
+
+        <!-- Custom JS scripts -->
+        <script src="../theme/custom.js"></script>
+
+
+
+    </div>
+    </body>
+</html>

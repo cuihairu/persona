@@ -1,0 +1,1 @@
+std::result::Result<Vec<u8>, Box<(dyn StdError + Send + Sync + 'static)>>
