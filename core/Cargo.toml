@@ -1,0 +1,53 @@
+[package]
+name = "persona-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core cryptographic and storage functionality for Persona"
+
+[dependencies]
+# 加密相关
+ring.workspace = true
+argon2.workspace = true
+aes-gcm.workspace = true
+ed25519-dalek.workspace = true
+rand.workspace = true
+zeroize.workspace = true
+
+# 数据库
+rusqlite = { workspace = true, optional = true }
+sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }
+
+# 序列化
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+
+# 异步运行时
+tokio.workspace = true
+
+# 日志
+tracing.workspace = true
+
+# 错误处理
+anyhow.workspace = true
+thiserror.workspace = true
+
+# 时间处理
+chrono.workspace = true
+
+# 其他依赖
+async-trait.workspace = true
+dirs.workspace = true
+hex.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+mockall.workspace = true
+tokio-test = "0.4"
+
+[features]
+default = ["sqlite"]
+sqlite = ["rusqlite", "sqlx"]
