@@ -5,6 +5,10 @@ use dialoguer::{Confirm, MultiSelect, Select};
 use std::path::PathBuf;
 
 use crate::config::CliConfig;
+use persona_core::{Database, PersonaService};
+use persona_core::models::{CredentialData};
+use dialoguer::Password;
+use crate::utils::file_crypto::{encrypt_file_inplace, KdfParams};
 use crate::utils::progress::create_progress_bar;
 
 #[derive(Args)]
@@ -114,13 +118,24 @@ async fn select_identities_interactive(config: &CliConfig) -> Result<Vec<String>
     Ok(selections.into_iter().map(|i| all_identities[i].clone()).collect())
 }
 
-async fn get_all_identity_names(_config: &CliConfig) -> Result<Vec<String>> {
-    // TODO: Implement actual database query
-    Ok(vec![
-        "personal".to_string(),
-        "work".to_string(), 
-        "social".to_string()
-    ])
+async fn get_all_identity_names(config: &CliConfig) -> Result<Vec<String>> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let items = if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => service.get_identities().await?,
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        // If no users configured yet, read via repository
+        persona_core::storage::IdentityRepository::new(db).find_all().await?
+    };
+    Ok(items.into_iter().map(|i| i.name).collect())
 }
 
 async fn validate_identity_names(names: &[String], config: &CliConfig) -> Result<()> {
@@ -208,7 +223,11 @@ async fn perform_export(
 
     // Apply encryption if requested
     if args.encrypt {
-        encrypt_file(output_path, config)?;
+        let passphrase = Password::new()
+            .with_prompt("Enter export passphrase")
+            .with_confirmation("Confirm passphrase", "Passphrases do not match")
+            .interact()?;
+        encrypt_file_inplace(output_path, &passphrase, None)?;
     }
 
     Ok(())
@@ -218,9 +237,23 @@ async fn export_json(
     identity_names: &[String],
     output_path: &PathBuf,
     args: &ExportArgs,
-    _config: &CliConfig,
+    config: &CliConfig,
     pb: &indicatif::ProgressBar
 ) -> Result<()> {
+    // Open service (may require unlock)
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let unlocked = if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock (for credential export)")
+            .interact()?;
+        matches!(service.authenticate_user(&password).await?, persona_core::auth::authentication::AuthResult::Success)
+    } else {
+        true
+    };
+
     let mut export_data = serde_json::json!({
         "export_info": {
             "version": "1.0",
@@ -232,21 +265,68 @@ async fn export_json(
     });
 
     for (i, name) in identity_names.iter().enumerate() {
-        // TODO: Load actual identity data from database
+        // Load identity detail
+        let identity = if unlocked {
+            service.get_identity_by_name(name).await?
+        } else {
+            persona_core::storage::IdentityRepository::new(db.clone()).find_by_name(name).await?
+        }.with_context(|| format!("Identity '{}' not found", name))?;
+
+        // Collect credentials metadata and optionally data
+        let mut credentials_json = Vec::new();
+        if unlocked {
+            let creds = service.get_credentials_for_identity(&identity.id).await.unwrap_or_default();
+            for cred in creds {
+                let mut entry = serde_json::json!({
+                    "id": cred.id.to_string(),
+                    "name": cred.name,
+                    "type": cred.credential_type.to_string(),
+                    "security_level": cred.security_level.to_string(),
+                    "url": cred.url,
+                    "username": cred.username,
+                    "notes": cred.notes,
+                    "tags": cred.tags,
+                    "metadata": cred.metadata,
+                    "created": cred.created_at.to_rfc3339(),
+                    "updated": cred.updated_at.to_rfc3339(),
+                    "last_accessed": cred.last_accessed.map(|d| d.to_rfc3339()),
+                    "is_active": cred.is_active,
+                    "is_favorite": cred.is_favorite,
+                });
+                if args.include_sensitive {
+                    if let Some(data) = service.get_credential_data(&cred.id).await? {
+                        let json_data = serde_json::to_value(&data)
+                            .unwrap_or(serde_json::json!({"raw": "unserializable"}));
+                        entry.as_object_mut().unwrap().insert("data".to_string(), json_data);
+                    }
+                } else {
+                    // include encrypted bytes hex to allow offline re-import if needed
+                    entry.as_object_mut().unwrap().insert(
+                        "encrypted_data".to_string(),
+                        serde_json::json!(hex::encode(&cred.encrypted_data)),
+                    );
+                }
+                credentials_json.push(entry);
+            }
+        }
+
         let identity_data = serde_json::json!({
-            "name": name,
-            "type": "personal",
-            "description": format!("Identity: {}", name),
-            "email": format!("{}@example.com", name),
-            "created": "2024-01-15 10:30:00",
-            "modified": "2024-01-20 14:45:00"
+            "id": identity.id.to_string(),
+            "name": identity.name,
+            "type": identity.identity_type.to_string(),
+            "description": identity.description,
+            "email": identity.email,
+            "phone": identity.phone,
+            "tags": identity.tags,
+            "attributes": identity.attributes,
+            "active": identity.is_active,
+            "created": identity.created_at.to_rfc3339(),
+            "modified": identity.updated_at.to_rfc3339(),
+            "credentials": credentials_json,
         });
 
         export_data["identities"].as_array_mut().unwrap().push(identity_data);
         pb.set_position(i as u64 + 1);
-        
-        // Simulate processing time
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
     let json_content = serde_json::to_string_pretty(&export_data)?;
@@ -284,21 +364,39 @@ async fn export_csv(
     identity_names: &[String],
     output_path: &PathBuf,
     _args: &ExportArgs,
-    _config: &CliConfig,
+    config: &CliConfig,
     pb: &indicatif::ProgressBar
 ) -> Result<()> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {}
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    }
     let mut csv_content = String::new();
     csv_content.push_str("Name,Type,Description,Email,Created,Modified\n");
 
     for (i, name) in identity_names.iter().enumerate() {
-        // TODO: Load actual identity data from database
+        let identity = service.get_identity_by_name(name).await?
+            .with_context(|| format!("Identity '{}' not found", name))?;
         csv_content.push_str(&format!(
-            "{},personal,Identity: {},{}@example.com,2024-01-15 10:30:00,2024-01-20 14:45:00\n",
-            name, name, name
+            "{},{},{},{},{},{}\n",
+            identity.name,
+            identity.identity_type.to_string(),
+            identity.description.unwrap_or_default().replace(',', " "),
+            identity.email.unwrap_or_default(),
+            identity.created_at.format("%Y-%m-%d %H:%M:%S"),
+            identity.updated_at.format("%Y-%m-%d %H:%M:%S")
         ));
 
         pb.set_position(i as u64 + 1);
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
     }
 
     std::fs::write(output_path, csv_content)
@@ -310,34 +408,31 @@ async fn export_csv(
 fn compress_file(file_path: &PathBuf, level: u8) -> Result<()> {
     println!("{} Compressing file...", "🗜️".to_string());
 
-    // TODO: Implement actual compression using flate2 or similar
-    // For now, just rename to indicate compression
-    let compressed_path = file_path.with_extension(
-        format!("{}.gz", file_path.extension().unwrap_or_default().to_string_lossy())
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::fs::File;
+    use std::io::Write;
+
+    let src_path = file_path;
+    let compressed_path = src_path.with_extension(
+        format!("{}.gz", src_path.extension().unwrap_or_default().to_string_lossy())
     );
 
-    std::fs::rename(file_path, &compressed_path)
-        .context("Failed to compress file")?;
+    let mut input = std::fs::read(src_path).context("Failed to read file for compression")?;
+    let mut encoder = GzEncoder::new(
+        File::create(&compressed_path).context("Failed to create gzip file")?,
+        Compression::new(level.min(9) as u32),
+    );
+    encoder.write_all(&input).context("Failed to write gzip data")?;
+    encoder.finish().context("Failed to finish gzip")?;
+    // Remove original
+    std::fs::remove_file(src_path).ok();
 
     println!("{} File compressed (level {})", "✓".green(), level);
     Ok(())
 }
 
-fn encrypt_file(file_path: &PathBuf, _config: &CliConfig) -> Result<()> {
-    println!("{} Encrypting file...", "🔐".to_string());
-
-    // TODO: Implement actual encryption
-    // For now, just rename to indicate encryption
-    let encrypted_path = file_path.with_extension(
-        format!("{}.enc", file_path.extension().unwrap_or_default().to_string_lossy())
-    );
-
-    std::fs::rename(file_path, &encrypted_path)
-        .context("Failed to encrypt file")?;
-
-    println!("{} File encrypted", "✓".green());
-    Ok(())
-}
+// legacy helper removed; kept for back-compat if referenced
 
 fn show_export_info(output_path: &PathBuf) -> Result<()> {
     if let Ok(metadata) = std::fs::metadata(output_path) {

@@ -1,0 +1,18 @@
+# Code owners for the Persona monorepo
+# Update the handles below to your actual GitHub users or teams.
+
+# Default owners
+*       @persona-maintainers
+
+# Rust crates
+/core/  @persona-maintainers
+/cli/   @persona-maintainers
+/server/@persona-maintainers
+/agents/@persona-maintainers
+
+# Desktop app
+/desktop/ @persona-maintainers
+
+# Docs
+/docs/  @persona-maintainers
+

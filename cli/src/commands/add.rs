@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::config::CliConfig;
+use persona_core::{Identity, IdentityType, PersonaService, Database};
 
 #[derive(Args)]
 pub struct AddArgs {
@@ -85,15 +86,40 @@ pub async fn execute(args: AddArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-struct Identity {
-    name: String,
-    identity_type: String,
-    description: String,
-    email: Option<String>,
-    phone: Option<String>,
-    attributes: HashMap<String, Value>,
-    tags: Vec<String>,
+async fn create_identity_with_service(mut identity: Identity) -> Result<Identity> {
+    // TODO: Get database path from config
+    let db_path = std::env::var("PERSONA_DB_PATH")
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| std::env::current_dir().unwrap())
+                .join(".persona")
+                .join("identities.db")
+                .to_string_lossy()
+                .to_string()
+        });
+
+    // Create database and service
+    let db = Database::from_file(&db_path).await
+        .context("Failed to connect to database")?;
+
+    // Run migrations
+    db.migrate().await
+        .context("Failed to run database migrations")?;
+
+    let mut service = PersonaService::new(db).await
+        .context("Failed to create PersonaService")?;
+
+    // For now, just create the identity without unlocking the service
+    // In a real implementation, we would need to handle authentication
+    println!("{} Identity '{}' prepared for creation.",
+        "✓".green().bold(),
+        identity.name.yellow().bold()
+    );
+    println!("{} To complete setup, you need to unlock the service with a master password.",
+        "ℹ".blue().bold()
+    );
+
+    Ok(identity)
 }
 
 fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
@@ -108,19 +134,24 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
 
     // Get identity type
     let identity_types = vec![
-        "personal", "work", "social", "gaming", "shopping", 
-        "financial", "healthcare", "education", "other"
+        ("personal", IdentityType::Personal),
+        ("work", IdentityType::Work),
+        ("social", IdentityType::Social),
+        ("gaming", IdentityType::Gaming),
+        ("financial", IdentityType::Financial),
+        ("other", IdentityType::Custom("other".to_string()))
     ];
-    
+
     let identity_type = if let Some(t) = args.identity_type {
-        t
+        t.parse::<IdentityType>().unwrap_or(IdentityType::Custom(t))
     } else {
+        let type_names: Vec<&str> = identity_types.iter().map(|(name, _)| *name).collect();
         let selection = Select::new()
             .with_prompt("Identity type")
-            .items(&identity_types)
+            .items(&type_names)
             .default(0)
             .interact()?;
-        identity_types[selection].to_string()
+        identity_types[selection].1.clone()
     };
 
     // Get description
@@ -156,34 +187,61 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
     };
 
     // Get additional attributes
-    let attributes = collect_additional_attributes()?;
+    let attributes_map = collect_additional_attributes()?;
 
     // Get tags
-    let tags = collect_tags()?;
+    let tags_vec = collect_tags()?;
 
-    Ok(Identity {
-        name,
-        identity_type,
-        description,
-        email,
-        phone,
-        attributes,
-        tags,
-    })
+    // Create identity using persona-core constructor
+    let mut identity = Identity::new(name, identity_type);
+
+    // Set optional fields
+    if let Some(desc) = description {
+        if !desc.is_empty() {
+            identity.description = Some(desc);
+        }
+    }
+    identity.email = email;
+    identity.phone = phone;
+    // Apply collected tags/attributes
+    if !tags_vec.is_empty() {
+        identity.tags = tags_vec;
+    }
+    if !attributes_map.is_empty() {
+        // Convert Value -> String for storage
+        for (k, v) in attributes_map {
+            let s = match v {
+                Value::String(s) => s,
+                Value::Number(n) => n.to_string(),
+                Value::Bool(b) => b.to_string(),
+                other => other.to_string(),
+            };
+            identity.attributes.insert(k, s);
+        }
+    }
+
+    Ok(identity)
 }
 
 fn create_identity_non_interactive(args: AddArgs) -> Result<Identity> {
     let name = args.name.context("Identity name is required in non-interactive mode")?;
-    
-    Ok(Identity {
-        name,
-        identity_type: args.identity_type.unwrap_or_else(|| "personal".to_string()),
-        description: args.description.unwrap_or_default(),
-        email: args.email,
-        phone: args.phone,
-        attributes: HashMap::new(),
-        tags: Vec::new(),
-    })
+
+    let identity_type = args.identity_type
+        .map(|t| t.parse::<IdentityType>().unwrap_or(IdentityType::Custom(t)))
+        .unwrap_or(IdentityType::Personal);
+
+    let mut identity = Identity::new(name, identity_type);
+
+    // Set optional fields
+    if let Some(desc) = args.description {
+        if !desc.is_empty() {
+            identity.description = Some(desc);
+        }
+    }
+    identity.email = args.email;
+    identity.phone = args.phone;
+
+    Ok(identity)
 }
 
 fn collect_additional_attributes() -> Result<HashMap<String, Value>> {
@@ -267,13 +325,46 @@ fn validate_identity(identity: &Identity) -> Result<()> {
     Ok(())
 }
 
-async fn save_identity(identity: &Identity, _config: &CliConfig) -> Result<()> {
-    // TODO: Implement actual database save using persona-core
-    info!("Saving identity: {}", identity.name);
-    
-    // Simulate save operation
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    
+async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
+    use dialoguer::Password;
+    use colored::Colorize;
+
+    // Open database
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy())
+        .await
+        .context("Failed to connect to database")?;
+    // Ensure schema
+    db.migrate().await.context("Failed to run database migrations")?;
+
+    // Create service
+    let mut service = PersonaService::new(db).await.context("Failed to create PersonaService")?;
+
+    // Ensure unlocked: try auth if a user exists; otherwise initialize
+    if service.has_users().await.context("Failed to check users")? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                // proceed
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        let password = Password::new()
+            .with_prompt("Set a new master password")
+            .with_confirmation("Confirm master password", "Passwords don't match")
+            .interact()?;
+        let _ = service.initialize_user(&password).await?;
+    }
+
+    // Create in DB (preserve all optional fields)
+    let _created = service
+        .create_identity_full(identity.clone())
+        .await
+        .context("Failed to create identity in database")?;
+
     Ok(())
 }
 

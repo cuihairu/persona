@@ -1,0 +1,14 @@
+{
+  "name": "persona-monorepo",
+  "private": true,
+  "workspaces": [
+    "desktop"
+  ],
+  "description": "Persona monorepo: core (Rust), CLI (Rust), desktop (Tauri+React), server (Rust), agents, docs",
+  "scripts": {
+    "build": "echo \"Use 'cargo build' for Rust crates and 'npm -w desktop run build' for desktop\"",
+    "dev:desktop": "npm -w desktop run dev",
+    "test:desktop": "npm -w desktop run test"
+  }
+}
+

@@ -3,6 +3,7 @@ use std::path::Path;
 use tracing::{debug, warn};
 
 pub mod progress;
+pub mod file_crypto;
 
 /// Create directory if it doesn't exist
 pub fn create_directory<P: AsRef<Path>>(path: P) -> Result<()> {

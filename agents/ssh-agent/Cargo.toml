@@ -1,0 +1,29 @@
+[package]
+name = "persona-ssh-agent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Persona SSH Agent - developer-friendly SSH agent backed by Persona vault"
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+persona-core = { path = "../../core" }
+
+# Unix domain sockets and helpers
+tokio-util = "0.7"
+byteorder = "1.5"
+ed25519-dalek = "2.1"
+base64 = "0.21"
+ring = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true
+mockall.workspace = true

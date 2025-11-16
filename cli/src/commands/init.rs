@@ -7,6 +7,7 @@ use tracing::{info, warn};
 
 use crate::config::CliConfig;
 use crate::utils::{create_directory, validate_workspace_path};
+use persona_core::{Database, PersonaService};
 
 #[derive(Args)]
 pub struct InitArgs {
@@ -228,15 +229,59 @@ max_files = 5
     Ok(())
 }
 
-async fn initialize_database(workspace_path: &PathBuf, _master_password: Option<&str>) -> Result<()> {
+async fn initialize_database(workspace_path: &PathBuf, master_password: Option<&str>) -> Result<()> {
     let db_path = workspace_path.join("identities.db");
-    
-    // TODO: Initialize SQLite database with proper schema
-    // This would use the persona-core library to set up the database
-    
-    // For now, create an empty file
-    std::fs::write(&db_path, "")?;
-    
-    println!("{} Initialized identity database", "✓".green().bold());
+
+    // Initialize SQLite database with proper schema using persona-core
+    let db = Database::from_file(&db_path.to_string_lossy())
+        .await
+        .context("Failed to create database connection")?;
+
+    // Run migrations to set up the schema
+    db.migrate()
+        .await
+        .context("Failed to run database migrations")?;
+
+    // Ensure a workspace row exists (supports legacy and v2 schemas)
+    {
+        use persona_core::storage::WorkspaceRepository;
+        use persona_core::models::Workspace;
+        let repo = WorkspaceRepository::new(db.clone());
+        // Use path string to lookup or create
+        let path_str = workspace_path.to_string_lossy().to_string();
+        let name = workspace_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("default")
+            .to_string();
+        if repo.find_by_path(&path_str).await?.is_none() {
+            let mut ws = Workspace::new(workspace_path.clone(), name);
+            // Persist; repo will choose proper schema (legacy/v2)
+            let _ = repo.create(&ws).await?;
+        }
+    }
+
+    // If master password is provided, initialize the service
+    if let Some(password) = master_password {
+        let mut service = PersonaService::new(db)
+            .await
+            .context("Failed to create PersonaService")?;
+
+        // Initialize first-time user
+        match service.initialize_user(password).await {
+            Ok(_user_id) => {
+                println!("{} Initialized user authentication", "✓".green().bold());
+            }
+            Err(e) => {
+                warn!("Failed to initialize user: {}", e);
+                println!("{} Database created, but user initialization failed", "⚠".yellow().bold());
+                println!("  You can set up authentication later using 'persona unlock'");
+            }
+        }
+    } else {
+        println!("{} Database created, authentication not configured", "✓".green().bold());
+        println!("  Run 'persona unlock' to set up your master password");
+    }
+
     Ok(())
 }

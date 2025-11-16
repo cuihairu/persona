@@ -49,37 +49,52 @@ impl Database {
             .execute(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
-        
+
         Ok(result.rows_affected())
     }
-    
+
+    /// Execute a query with parameters
+    pub async fn execute_with_params(&self, query: &str, params: &[&(dyn sqlx::Encode<Sqlite> + sqlx::Type<Sqlite> + Sync)]) -> Result<u64> {
+        let mut query_builder = sqlx::query(query);
+        for param in params {
+            query_builder = query_builder.bind(param);
+        }
+
+        let result = query_builder
+            .execute(&self.pool)
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Execute a query that returns a single row
     pub async fn fetch_one(&self, query: &str) -> Result<sqlx::sqlite::SqliteRow> {
         let row = sqlx::query(query)
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
-        
+
         Ok(row)
     }
-    
+
     /// Execute a query that returns multiple rows
     pub async fn fetch_all(&self, query: &str) -> Result<Vec<sqlx::sqlite::SqliteRow>> {
         let rows = sqlx::query(query)
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
-        
+
         Ok(rows)
     }
-    
+
     /// Execute a query that may return a row
     pub async fn fetch_optional(&self, query: &str) -> Result<Option<sqlx::sqlite::SqliteRow>> {
         let row = sqlx::query(query)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
-        
+
         Ok(row)
     }
     
@@ -142,22 +157,22 @@ mod tests {
     #[tokio::test]
     async fn test_in_memory_database() {
         let db = Database::in_memory().await.unwrap();
-        
+
         // Create a test table
         db.execute(
-            "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)",
-            &[]
+            "CREATE TABLE test (id INTEGER PRIMARY KEY, name TEXT)"
         ).await.unwrap();
-        
+
         // Insert data
-        db.execute(
+        let name = "test_name";
+        db.execute_with_params(
             "INSERT INTO test (name) VALUES (?)",
-            &[&"test_name"]
+            &[&name]
         ).await.unwrap();
-        
+
         // Query data
-        let row = db.fetch_one("SELECT name FROM test WHERE id = 1", &[]).await.unwrap();
-        let name: String = row.get("name");
-        assert_eq!(name, "test_name");
+        let row = db.fetch_one("SELECT name FROM test WHERE id = 1").await.unwrap();
+        let retrieved_name: String = row.get("name");
+        assert_eq!(retrieved_name, "test_name");
     }
 }
