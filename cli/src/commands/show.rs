@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::CliConfig;
+use persona_core::{Database, PersonaService, storage::IdentityRepository, Identity as CoreIdentity};
 
 #[derive(Args)]
 pub struct ShowArgs {
@@ -57,30 +58,49 @@ struct IdentityDetails {
     usage_count: u32,
 }
 
-async fn fetch_identity_details(name: &str, _config: &CliConfig) -> Result<IdentityDetails> {
-    // TODO: Implement actual database fetch using persona-core
-    
-    // Mock data for demonstration
+async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<IdentityDetails> {
+    use dialoguer::Password;
+    // Open DB
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy())
+        .await
+        .context("Failed to connect to database")?;
+    db.migrate().await.context("Failed to run database migrations")?;
+
+    // Service
+    let mut service = PersonaService::new(db.clone()).await.context("Failed to create PersonaService")?;
+    let mut maybe: Option<CoreIdentity> = None;
+    if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                maybe = service.get_identity_by_name(name).await?;
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        // Fallback to direct repository read for non-authenticated DB
+        let repo = IdentityRepository::new(db);
+        maybe = repo.find_by_name(name).await?;
+    }
+
+    let id = maybe.with_context(|| format!("Identity '{}' not found", name))?;
     Ok(IdentityDetails {
-        name: name.to_string(),
-        identity_type: "personal".to_string(),
-        description: "My personal identity for daily use".to_string(),
-        email: Some("john@example.com".to_string()),
-        phone: Some("+1234567890".to_string()),
-        tags: vec!["default".to_string(), "primary".to_string(), "verified".to_string()],
-        attributes: {
-            let mut attrs = HashMap::new();
-            attrs.insert("full_name".to_string(), Value::String("John Doe".to_string()));
-            attrs.insert("birth_date".to_string(), Value::String("1990-01-01".to_string()));
-            attrs.insert("location".to_string(), Value::String("New York, NY".to_string()));
-            attrs.insert("website".to_string(), Value::String("https://johndoe.com".to_string()));
-            attrs
-        },
-        active: true,
-        created: "2024-01-15 10:30:00".to_string(),
-        modified: "2024-01-20 14:45:00".to_string(),
-        last_used: Some("2024-01-22 09:15:00".to_string()),
-        usage_count: 42,
+        name: id.name.clone(),
+        identity_type: id.identity_type.to_string(),
+        description: id.description.unwrap_or_default(),
+        email: id.email,
+        phone: id.phone,
+        tags: id.tags.clone(),
+        attributes: id.attributes.into_iter().map(|(k,v)| (k, Value::String(v))).collect(),
+        active: id.is_active,
+        created: id.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+        modified: id.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+        // Usage tracking not implemented yet; leave placeholders
+        last_used: None,
+        usage_count: 0,
     })
 }
 

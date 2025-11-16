@@ -6,6 +6,8 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::config::CliConfig;
+use persona_core::{Database, PersonaService, storage::{WorkspaceRepository, IdentityRepository}};
+use persona_core::models::{AuditLog, AuditAction, ResourceType};
 
 #[derive(Args)]
 pub struct SwitchArgs {
@@ -87,16 +89,35 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn get_current_identity(_config: &CliConfig) -> Result<Option<String>> {
-    // TODO: Implement getting current active identity from database
-    // For now, return mock data
-    Ok(Some("personal".to_string()))
+async fn get_current_identity(config: &CliConfig) -> Result<Option<String>> {
+    // Read workspace.active_identity_id; map to identity name
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let repo = WorkspaceRepository::new(db.clone());
+    let path_str = config.workspace.path.to_string_lossy().to_string();
+    if let Some(ws) = repo.find_by_path(&path_str).await? {
+        if let Some(id) = ws.active_identity_id {
+            // Try to fetch identity name
+            // Prefer unlocked service; otherwise direct repo read
+            let mut service = PersonaService::new(db.clone()).await?;
+            if service.has_users().await? {
+                // Do not prompt here; only return None if locked
+                return Ok(None);
+            } else {
+                let irepo = IdentityRepository::new(db);
+                if let Some(identity) = irepo.find_by_id(&id).await? {
+                    return Ok(Some(identity.name));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 async fn get_previous_identity(_config: &CliConfig) -> Result<String> {
-    // TODO: Implement getting previous identity from history
-    // For now, return mock data
-    Ok("work".to_string())
+    // TODO: implement history; fallback to error for now
+    anyhow::bail!("Previous identity history not available yet")
 }
 
 async fn select_identity_interactive(config: &CliConfig) -> Result<String> {
@@ -121,33 +142,78 @@ async fn select_identity_interactive(config: &CliConfig) -> Result<String> {
 }
 
 async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
-    let identities = fetch_available_identities(config).await?;
-    
-    if !identities.contains_key(name) {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let exists = if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                service.get_identity_by_name(name).await?.is_some()
+            }
+            _ => false,
+        }
+    } else {
+        IdentityRepository::new(db).find_by_name(name).await?.is_some()
+    };
+    if !exists {
         anyhow::bail!("Identity '{}' not found", name);
     }
-
     Ok(())
 }
 
 async fn perform_switch(
     target_identity: &str, 
     current_identity: Option<&str>, 
-    _config: &CliConfig
+    config: &CliConfig
 ) -> Result<()> {
     info!("Switching from {:?} to {}", current_identity, target_identity);
 
-    // TODO: Implement actual identity switching logic
-    // This would involve:
-    // 1. Deactivating current identity
-    // 2. Activating target identity
-    // 3. Updating configuration
-    // 4. Updating environment variables
-    // 5. Notifying other applications
-    // 6. Recording switch in history
+    // 1. Resolve target identity id
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let identity = if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                service.get_identity_by_name(target_identity).await?
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        IdentityRepository::new(db.clone()).find_by_name(target_identity).await?
+    };
+    let identity = identity.with_context(|| format!("Identity '{}' not found", target_identity))?;
 
-    // Simulate switch operation
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    // 2. Update workspace.active_identity_id (v2 schema; legacy no-op via repo fallback)
+    let repo = WorkspaceRepository::new(db.clone());
+    let path_str = config.workspace.path.to_string_lossy().to_string();
+    if let Some(mut ws) = repo.find_by_path(&path_str).await? {
+        ws.switch_identity(identity.id);
+        let _ = repo.update(&ws).await?;
+    }
+
+    // 3. Audit log workspace enter / identity switched
+    let mut log = AuditLog::new(AuditAction::WorkspaceEntered, ResourceType::Workspace, true)
+        .with_identity_id(Some(identity.id))
+        .with_resource_id(Some(path_str));
+    // write audit (no unlock requirement if DB unencrypted)
+    let audit_repo = persona_core::storage::AuditLogRepository::new(db);
+    let _ = audit_repo.create(&log).await;
+
+    // TODO:
+    // 4. Update environment variables/session for downstream tools
+    // 5. Notify agent/desktop listeners
+    // 6. Record history
 
     Ok(())
 }
@@ -189,50 +255,37 @@ struct IdentityInfo {
     modified: String,
 }
 
-async fn fetch_available_identities(_config: &CliConfig) -> Result<HashMap<String, IdentityInfo>> {
-    // TODO: Implement actual database fetch using persona-core
-    
-    // Mock data for demonstration
+async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String, IdentityInfo>> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let items = if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => service.get_identities().await?,
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        IdentityRepository::new(db).find_all().await?
+    };
     let mut identities = HashMap::new();
-    
-    identities.insert(
-        "personal".to_string(),
-        IdentityInfo {
-            description: "My personal identity".to_string(),
-            identity_type: "personal".to_string(),
-            email: Some("john@example.com".to_string()),
-            phone: Some("+1234567890".to_string()),
-            tags: vec!["default".to_string(), "primary".to_string()],
-            created: "2024-01-15 10:30:00".to_string(),
-            modified: "2024-01-20 14:45:00".to_string(),
-        }
-    );
-
-    identities.insert(
-        "work".to_string(),
-        IdentityInfo {
-            description: "Work-related identity".to_string(),
-            identity_type: "work".to_string(),
-            email: Some("john.doe@company.com".to_string()),
-            phone: Some("+1987654321".to_string()),
-            tags: vec!["professional".to_string()],
-            created: "2024-01-16 09:15:00".to_string(),
-            modified: "2024-01-18 16:20:00".to_string(),
-        }
-    );
-
-    identities.insert(
-        "social".to_string(),
-        IdentityInfo {
-            description: "Social media identity".to_string(),
-            identity_type: "social".to_string(),
-            email: Some("john.social@gmail.com".to_string()),
-            phone: None,
-            tags: vec!["social".to_string(), "public".to_string()],
-            created: "2024-01-17 20:00:00".to_string(),
-            modified: "2024-01-19 12:30:00".to_string(),
-        }
-    );
-
+    for id in items {
+        identities.insert(
+            id.name.clone(),
+            IdentityInfo {
+                description: id.description.unwrap_or_default(),
+                identity_type: id.identity_type.to_string().to_lowercase(),
+                email: id.email,
+                phone: id.phone,
+                tags: id.tags,
+                created: id.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+                modified: id.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+            },
+        );
+    }
     Ok(identities)
 }

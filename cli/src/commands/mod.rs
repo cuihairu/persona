@@ -11,3 +11,5 @@ pub mod sync;
 pub mod config;
 pub mod security;
 pub mod completions;
+pub mod migrate;
+pub mod ssh;

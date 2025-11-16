@@ -6,6 +6,12 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::CliConfig;
+use persona_core::{
+    Database, PersonaService,
+    storage::IdentityRepository,
+    models::{Identity as CoreIdentity, IdentityType},
+};
+use uuid::Uuid;
 
 #[derive(Args)]
 pub struct EditArgs {
@@ -98,6 +104,7 @@ pub async fn execute(args: EditArgs, config: &CliConfig) -> Result<()> {
 
 #[derive(Debug, Clone)]
 struct Identity {
+    id: Option<Uuid>,
     name: String,
     identity_type: String,
     description: String,
@@ -108,27 +115,58 @@ struct Identity {
     modified: String,
 }
 
-async fn identity_exists(name: &str, _config: &CliConfig) -> Result<bool> {
-    // TODO: Implement actual database check
-    let mock_identities = ["personal", "work", "social"];
-    Ok(mock_identities.contains(&name))
+async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                Ok(service.get_identity_by_name(name).await?.is_some())
+            }
+            _ => Ok(false),
+        }
+    } else {
+        Ok(IdentityRepository::new(db).find_by_name(name).await?.is_some())
+    }
 }
 
-async fn load_identity(name: &str, _config: &CliConfig) -> Result<Identity> {
-    // TODO: Implement actual database load
+async fn load_identity(name: &str, config: &CliConfig) -> Result<Identity> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let core: CoreIdentity = if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                service.get_identity_by_name(name).await?
+                    .with_context(|| format!("Identity '{}' not found", name))?
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        IdentityRepository::new(db).find_by_name(name).await?
+            .with_context(|| format!("Identity '{}' not found", name))?
+    };
+
     Ok(Identity {
-        name: name.to_string(),
-        identity_type: "personal".to_string(),
-        description: "My personal identity".to_string(),
-        email: Some("john@example.com".to_string()),
-        phone: Some("+1234567890".to_string()),
-        tags: vec!["default".to_string(), "primary".to_string()],
-        attributes: {
-            let mut attrs = HashMap::new();
-            attrs.insert("full_name".to_string(), Value::String("John Doe".to_string()));
-            attrs.insert("location".to_string(), Value::String("New York, NY".to_string()));
-            attrs
-        },
+        id: Some(core.id),
+        name: core.name,
+        identity_type: core.identity_type.to_string(),
+        description: core.description.unwrap_or_default(),
+        email: core.email,
+        phone: core.phone,
+        tags: core.tags,
+        attributes: core.attributes.into_iter().map(|(k,v)| (k, Value::String(v))).collect(),
         modified: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     })
 }
@@ -447,8 +485,50 @@ fn show_changes_summary(identity: &Identity) -> Result<()> {
     Ok(())
 }
 
-async fn save_identity(identity: &Identity, _config: &CliConfig) -> Result<()> {
-    // TODO: Implement actual database save using persona-core
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
+    use dialoguer::Password;
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {}
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    }
+
+    // Load current identity (by id if present)
+    let mut current = if let Some(id) = identity.id {
+        service.get_identity(&id).await?
+            .with_context(|| format!("Identity not found by id {}", id))?
+    } else {
+        service.get_identity_by_name(&identity.name).await?
+            .with_context(|| "Identity not found".to_string())?
+    };
+
+    // Apply changes
+    current.name = identity.name.clone();
+    current.identity_type = identity.identity_type.parse::<IdentityType>()
+        .unwrap_or(IdentityType::Custom(identity.identity_type.clone()));
+    current.description = if identity.description.is_empty() { None } else { Some(identity.description.clone()) };
+    current.email = identity.email.clone();
+    current.phone = identity.phone.clone();
+    current.tags = identity.tags.clone();
+    current.attributes = identity.attributes.iter().map(|(k,v)| {
+        let s = match v {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            other => other.to_string(),
+        };
+        (k.clone(), s)
+    }).collect();
+    current.touch();
+
+    service.update_identity(&current).await?;
     Ok(())
 }

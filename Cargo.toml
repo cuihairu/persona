@@ -4,7 +4,8 @@ members = [
     "core",
     "server", 
     "mobile/rust",
-    "cli"
+    "cli",
+    "agents/ssh-agent"
 ]
 
 [workspace.package]
@@ -23,6 +24,7 @@ aes-gcm = "0.10"
 ed25519-dalek = "2.0"
 rand = "0.8"
 zeroize = "1.7"
+flate2 = "1.0"
 
 # 数据库
 rusqlite = { version = "0.30", features = ["bundled"] }

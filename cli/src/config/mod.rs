@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,8 +101,11 @@ impl Default for CliConfig {
 
 impl CliConfig {
     /// Load configuration from file or create default
-    pub fn load() -> Result<Self> {
-        let config_path = Self::get_config_path()?;
+    pub fn load(config_override: Option<&Path>) -> Result<Self> {
+        let config_path = match config_override {
+            Some(p) => p.to_path_buf(),
+            None => Self::get_config_path()?,
+        };
         
         if config_path.exists() {
             debug!("Loading configuration from: {}", config_path.display());

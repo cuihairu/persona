@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
 use serde_json::Value;
@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use tabled::{Table, Tabled};
 
 use crate::config::CliConfig;
+use persona_core::{Database, PersonaService, Identity as CoreIdentity};
 
 #[derive(Args)]
 pub struct ListArgs {
@@ -133,50 +134,49 @@ struct Identity {
     attributes: HashMap<String, Value>,
 }
 
-async fn fetch_identities(_config: &CliConfig) -> Result<Vec<Identity>> {
-    // TODO: Implement actual database fetch using persona-core
-    
-    // Mock data for demonstration
-    let mock_identities = vec![
-        Identity {
-            name: "personal".to_string(),
-            identity_type: "personal".to_string(),
-            description: "My personal identity".to_string(),
-            email: Some("john@example.com".to_string()),
-            phone: Some("+1234567890".to_string()),
-            tags: vec!["default".to_string(), "primary".to_string()],
-            active: true,
-            created: "2024-01-15 10:30:00".to_string(),
-            modified: "2024-01-20 14:45:00".to_string(),
-            attributes: HashMap::new(),
-        },
-        Identity {
-            name: "work".to_string(),
-            identity_type: "work".to_string(),
-            description: "Work-related identity".to_string(),
-            email: Some("john.doe@company.com".to_string()),
-            phone: Some("+1987654321".to_string()),
-            tags: vec!["professional".to_string()],
-            active: false,
-            created: "2024-01-16 09:15:00".to_string(),
-            modified: "2024-01-18 16:20:00".to_string(),
-            attributes: HashMap::new(),
-        },
-        Identity {
-            name: "social".to_string(),
-            identity_type: "social".to_string(),
-            description: "Social media identity".to_string(),
-            email: Some("john.social@gmail.com".to_string()),
-            phone: None,
-            tags: vec!["social".to_string(), "public".to_string()],
-            active: false,
-            created: "2024-01-17 20:00:00".to_string(),
-            modified: "2024-01-19 12:30:00".to_string(),
-            attributes: HashMap::new(),
-        },
-    ];
+async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
+    use dialoguer::Password;
+    // Open DB
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy())
+        .await
+        .context("Failed to connect to database")?;
+    db.migrate().await.context("Failed to run database migrations")?;
+    let db_clone = db.clone();
 
-    Ok(mock_identities)
+    // Service
+    let mut service = PersonaService::new(db).await.context("Failed to create PersonaService")?;
+    let items: Vec<CoreIdentity> = if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                service.get_identities().await?
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        // Fallback: when no users set up, read directly via repository (data is not encrypted)
+        let repo = persona_core::storage::IdentityRepository::new(db_clone);
+        repo.find_all().await?
+    };
+    let mapped: Vec<Identity> = items
+        .into_iter()
+        .map(|id| Identity {
+            name: id.name,
+            identity_type: id.identity_type.to_string().to_lowercase(),
+            description: id.description.unwrap_or_default(),
+            email: id.email,
+            phone: id.phone,
+            tags: id.tags,
+            active: id.is_active,
+            created: id.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+            modified: id.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
+            attributes: id.attributes.into_iter().map(|(k,v)| (k, Value::String(v))).collect(),
+        })
+        .collect();
+    Ok(mapped)
 }
 
 fn apply_filters(mut identities: Vec<Identity>, args: &ListArgs) -> Result<Vec<Identity>> {

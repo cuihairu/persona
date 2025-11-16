@@ -54,6 +54,12 @@ enum Commands {
     
     /// Import identities
     Import(commands::import::ImportArgs),
+
+    /// Migrate database schema (e.g., Workspace v2)
+    Migrate(commands::migrate::MigrateArgs),
+
+    /// SSH key operations (developer features)
+    Ssh(commands::ssh::SshArgs),
 }
 
 #[tokio::main]
@@ -64,7 +70,9 @@ async fn main() -> Result<()> {
     init_logging(cli.verbose)?;
 
     // Load configuration
-    let config = CliConfig::load(cli.config.as_deref())?;
+    let mut config = CliConfig::load(cli.config.as_deref())?;
+    // Try to merge workspace config if present
+    let _ = config.load_workspace_config();
 
     // Execute command
     match cli.command {
@@ -77,6 +85,8 @@ async fn main() -> Result<()> {
         Commands::Edit(args) => commands::edit::execute(args, &config).await,
         Commands::Export(args) => commands::export::execute(args, &config).await,
         Commands::Import(args) => commands::import::execute(args, &config).await,
+        Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
+        Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
     }
 }
 

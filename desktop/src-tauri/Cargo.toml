@@ -1,0 +1,27 @@
+[package]
+name = "persona-desktop"
+version = "0.1.0"
+description = "Persona Desktop Application"
+authors = ["Persona Team"]
+license = "MIT"
+repository = "https://github.com/your-username/persona"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+persona-core = { path = "../core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tauri = { version = "1.5", features = [ "dialog-save", "fs-read-file", "fs-remove-file", "dialog-ask", "path-all", "fs-write-file", "dialog-confirm", "fs-exists", "dialog-message", "fs-remove-dir", "fs-create-dir", "dialog-open", "clipboard-all", "shell-open"] }
+tokio = { version = "1.0", features = ["full"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+dirs = "5.0"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

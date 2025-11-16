@@ -4,6 +4,9 @@ use colored::*;
 use dialoguer::{Confirm, Input};
 
 use crate::config::CliConfig;
+use persona_core::{Database, PersonaService, storage::{IdentityRepository, WorkspaceRepository}};
+use persona_core::models::{AuditLog, AuditAction, ResourceType};
+use uuid::Uuid;
 
 #[derive(Args)]
 pub struct RemoveArgs {
@@ -93,28 +96,69 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn identity_exists(name: &str, _config: &CliConfig) -> Result<bool> {
-    // TODO: Implement actual database check using persona-core
-    // For now, assume identity exists if it's one of our mock identities
-    let mock_identities = ["personal", "work", "social"];
-    Ok(mock_identities.contains(&name))
+async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                Ok(service.get_identity_by_name(name).await?.is_some())
+            }
+            _ => Ok(false),
+        }
+    } else {
+        Ok(IdentityRepository::new(db).find_by_name(name).await?.is_some())
+    }
 }
 
-async fn is_active_identity(name: &str, _config: &CliConfig) -> Result<bool> {
-    // TODO: Implement actual active identity check using persona-core
-    // For now, assume "personal" is active
-    Ok(name == "personal")
+async fn is_active_identity(name: &str, config: &CliConfig) -> Result<bool> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let repo = WorkspaceRepository::new(db.clone());
+    let path_str = config.workspace.path.to_string_lossy().to_string();
+    if let Some(ws) = repo.find_by_path(&path_str).await? {
+        if let Some(active_id) = ws.active_identity_id {
+            if let Some(identity) = IdentityRepository::new(db).find_by_name(name).await? {
+                return Ok(identity.id == active_id);
+            }
+        }
+    }
+    Ok(false)
 }
 
-async fn show_removal_summary(name: &str, _config: &CliConfig) -> Result<()> {
-    // TODO: Fetch actual identity details from database
+async fn show_removal_summary(name: &str, config: &CliConfig) -> Result<()> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let identity = if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                service.get_identity_by_name(name).await?
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        IdentityRepository::new(db).find_by_name(name).await?
+    }.with_context(|| format!("Identity '{}' not found", name))?;
+
     println!("{}", "Identity to be removed:".yellow().bold());
-    println!("  Name: {}", name.cyan());
-    println!("  Type: {}", "personal".cyan());
-    println!("  Email: {}", "john@example.com".cyan());
-    println!("  Created: {}", "2024-01-15 10:30:00".dim());
-    println!("  Last used: {}", "2024-01-22 09:15:00".dim());
-    
+    println!("  Name: {}", identity.name.cyan());
+    println!("  Type: {}", identity.identity_type.to_string().cyan());
+    println!("  Email: {}", identity.email.as_deref().unwrap_or("-").cyan());
+    println!("  Created: {}", identity.created_at.format("%Y-%m-%d %H:%M:%S").to_string().dim());
+    println!("  Modified: {}", identity.updated_at.format("%Y-%m-%d %H:%M:%S").to_string().dim());
     Ok(())
 }
 
@@ -126,25 +170,49 @@ async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
         chrono::Utc::now().format("%Y%m%d_%H%M%S")
     ));
 
-    // TODO: Implement actual backup creation using persona-core
-    // This would export the identity data to a backup file
-    
+    // Export identity data via persona-core if unlocked; otherwise write minimal stub
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+
     // Create backup directory if it doesn't exist
     if let Some(parent) = backup_path.parent() {
         std::fs::create_dir_all(parent)
             .context("Failed to create backup directory")?;
     }
 
-    // Mock backup creation
-    let backup_data = serde_json::json!({
-        "identity": {
-            "name": name,
-            "type": "personal",
-            "email": "john@example.com",
-            "created": "2024-01-15 10:30:00",
-            "backup_created": chrono::Utc::now().to_rfc3339()
+    let mut service = PersonaService::new(db.clone()).await?;
+    let backup_data = if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                if let Some(identity) = service.get_identity_by_name(name).await? {
+                    let export = service.export_identity(&identity.id).await?;
+                    serde_json::json!({
+                        "identity": export.identity,
+                        "credentials": export.credentials,
+                        "backup_created": chrono::Utc::now().to_rfc3339()
+                    })
+                } else {
+                    anyhow::bail!("Identity '{}' not found", name);
+                }
+            }
+            other => anyhow::bail!("Authentication failed: {:?}", other),
         }
-    });
+    } else {
+        // Without unlock, write minimal metadata
+        let repo = IdentityRepository::new(db);
+        let identity = repo.find_by_name(name).await?
+            .with_context(|| format!("Identity '{}' not found", name))?;
+        serde_json::json!({
+            "identity": identity,
+            "credentials": [],
+            "backup_created": chrono::Utc::now().to_rfc3339()
+        })
+    };
 
     std::fs::write(&backup_path, serde_json::to_string_pretty(&backup_data)?)
         .context("Failed to write backup file")?;
@@ -154,27 +222,56 @@ async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
         backup_path.display().to_string().dim()
     );
 
+    // Audit backup creation
+    let mut audit_db = Database::from_file(&config.get_database_path().to_string_lossy()).await?;
+    audit_db.migrate().await?;
+    let audit_repo = persona_core::storage::AuditLogRepository::new(audit_db);
+    let log = AuditLog::new(AuditAction::BackupCreated, ResourceType::Identity, true)
+        .with_resource_id(Some(name.to_string()));
+    let _ = audit_repo.create(&log).await;
+
     Ok(())
 }
 
-async fn perform_removal(name: &str, purge: bool, _config: &CliConfig) -> Result<()> {
+async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<()> {
     println!("{} Removing identity data...", "🔄".to_string());
 
-    // TODO: Implement actual removal using persona-core
-    // This would involve:
-    // 1. Removing identity from database
-    // 2. Clearing associated files if purge is true
-    // 3. Updating active identity if this was active
-    // 4. Cleaning up temporary files
-    // 5. Updating usage statistics
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {}
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    }
+
+    // Locate identity
+    let identity = service.get_identity_by_name(name).await?
+        .with_context(|| format!("Identity '{}' not found", name))?;
+
+    // Update workspace active if needed (v2 schema)
+    let repo = WorkspaceRepository::new(db.clone());
+    let path_str = config.workspace.path.to_string_lossy().to_string();
+    if let Some(mut ws) = repo.find_by_path(&path_str).await? {
+        if ws.active_identity_id == Some(identity.id) {
+            ws.clear_active_identity();
+            let _ = repo.update(&ws).await?;
+        }
+    }
+
+    // Delete identity
+    let _ = service.delete_identity(&identity.id).await?;
 
     if purge {
         println!("{} Purging all associated data...", "🧹".to_string());
         // Remove all associated files, caches, etc.
     }
-
-    // Simulate removal operation
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     Ok(())
 }
@@ -198,7 +295,23 @@ async fn show_post_removal_info(config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn get_remaining_identities_count(_config: &CliConfig) -> Result<usize> {
-    // TODO: Implement actual count from database
-    Ok(2) // Mock remaining count
+async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db).await?;
+    if service.has_users().await? {
+        use dialoguer::Password;
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                Ok(service.get_identities().await?.len())
+            }
+            _ => Ok(0),
+        }
+    } else {
+        Ok(0)
+    }
 }

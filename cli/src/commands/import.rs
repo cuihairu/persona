@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 use crate::config::CliConfig;
 use crate::utils::progress::create_progress_bar;
+use persona_core::{Database, PersonaService};
+use persona_core::models::IdentityType;
+use persona_core::storage::IdentityRepository;
+use dialoguer::Password;
 
 #[derive(Args)]
 pub struct ImportArgs {
@@ -158,12 +162,15 @@ fn validate_import_file(file_path: &PathBuf) -> Result<()> {
 }
 
 fn decrypt_import_file(file_path: &PathBuf, _config: &CliConfig) -> Result<PathBuf> {
+    use crate::utils::file_crypto::decrypt_file_to_temp;
+    use dialoguer::Password;
     println!("{} Decrypting import file...", "🔓".to_string());
-
-    // TODO: Implement actual decryption
-    // For now, just return the original file
+    let passphrase = Password::new()
+        .with_prompt("Enter import passphrase")
+        .interact()?;
+    let out = decrypt_file_to_temp(file_path, &passphrase)?;
     println!("{} File decrypted", "✓".green());
-    Ok(file_path.clone())
+    Ok(out)
 }
 
 fn parse_import_file(file_path: &PathBuf) -> Result<ImportData> {
@@ -347,18 +354,34 @@ fn select_identities_interactive(import_data: &ImportData) -> Result<Vec<ImportI
 
 async fn check_import_conflicts(
     identities: &[ImportIdentity], 
-    _config: &CliConfig
+    config: &CliConfig
 ) -> Result<Vec<ImportConflict>> {
     let mut conflicts = Vec::new();
 
-    // TODO: Check against actual database
-    // For now, simulate some conflicts
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    let names = if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {
+                service.get_identities().await?.into_iter().map(|i| i.name).collect::<Vec<_>>()
+            }
+            _ => Vec::new(),
+        }
+    } else {
+        IdentityRepository::new(db).find_all().await?.into_iter().map(|i| i.name).collect()
+    };
+    let set: std::collections::HashSet<_> = names.into_iter().collect();
     for identity in identities {
-        if identity.name == "personal" {
+        if set.contains(&identity.name) {
             conflicts.push(ImportConflict {
                 name: identity.name.clone(),
                 conflict_type: "name_exists".to_string(),
-                existing_data: "Existing personal identity".to_string(),
+                existing_data: "Identity already exists".to_string(),
                 new_data: identity.description.clone(),
             });
         }
@@ -397,17 +420,21 @@ fn handle_import_conflicts(conflicts: &[ImportConflict], args: &ImportArgs) -> R
     Ok(())
 }
 
-async fn create_backup(_config: &CliConfig) -> Result<()> {
+async fn create_backup(config: &CliConfig) -> Result<()> {
     println!("{} Creating backup...", "💾".to_string());
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-    let backup_file = format!("persona_backup_{}.json", timestamp);
+    let backup_file = config.backup.directory.join(format!("persona_backup_{}.db", timestamp));
 
-    // TODO: Implement actual backup creation
-    std::fs::write(&backup_file, "{\"backup\": true}")
-        .context("Failed to create backup")?;
+    if let Some(parent) = backup_file.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    // Simple DB file copy backup
+    let db_path = config.get_database_path();
+    std::fs::copy(&db_path, &backup_file)
+        .with_context(|| format!("Failed to create backup file at {}", backup_file.display()))?;
 
-    println!("{} Backup created: {}", "✓".green(), backup_file.cyan());
+    println!("{} Backup created: {}", "✓".green(), backup_file.display().to_string().cyan());
     Ok(())
 }
 
@@ -448,14 +475,80 @@ async fn perform_dry_run(
 async fn perform_import(
     identities: &[ImportIdentity],
     args: &ImportArgs,
-    _config: &CliConfig
+    config: &CliConfig
 ) -> Result<()> {
     let pb = create_progress_bar(identities.len() as u64, "Importing identities");
 
+    // Open DB + service and unlock if needed
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    db.migrate().await?;
+    let mut service = PersonaService::new(db.clone()).await?;
+    if service.has_users().await? {
+        let password = Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?;
+        match service.authenticate_user(&password).await? {
+            persona_core::auth::authentication::AuthResult::Success => {}
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
+    } else {
+        // If no users configured, initialize one? For import we allow creating identities without encryption.
+    }
+
     for (i, identity) in identities.iter().enumerate() {
-        // TODO: Implement actual database import
-        // Simulate processing time
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Check existing
+        let existing = service.get_identity_by_name(&identity.name).await?;
+
+        match args.mode.as_str() {
+            "skip" if existing.is_some() => {
+                pb.set_message(&format!("Skipped {}", identity.name));
+                pb.set_position(i as u64 + 1);
+                continue;
+            }
+            "replace" if existing.is_some() => {
+                let mut current = existing.unwrap();
+                // Replace all fields
+                current.identity_type = identity.identity_type.parse::<IdentityType>()
+                    .unwrap_or(IdentityType::Custom(identity.identity_type.clone()));
+                current.description = if identity.description.is_empty() { None } else { Some(identity.description.clone()) };
+                current.email = identity.email.clone();
+                current.phone = identity.phone.clone();
+                current.tags = identity.tags.clone();
+                // attributes: currently not imported from file -> keep current
+                current.touch();
+                let _ = service.update_identity(&current).await?;
+            }
+            "merge" if existing.is_some() => {
+                let mut current = existing.unwrap();
+                // Merge non-empty fields
+                if !identity.identity_type.is_empty() {
+                    current.identity_type = identity.identity_type.parse::<IdentityType>()
+                        .unwrap_or(IdentityType::Custom(identity.identity_type.clone()));
+                }
+                if !identity.description.is_empty() {
+                    current.description = Some(identity.description.clone());
+                }
+                if identity.email.is_some() { current.email = identity.email.clone(); }
+                if identity.phone.is_some() { current.phone = identity.phone.clone(); }
+                if !identity.tags.is_empty() { current.tags = identity.tags.clone(); }
+                current.touch();
+                let _ = service.update_identity(&current).await?;
+            }
+            _ => {
+                // Create new
+                let mut new = persona_core::models::Identity::new(
+                    identity.name.clone(),
+                    identity.identity_type.parse::<IdentityType>()
+                        .unwrap_or(IdentityType::Custom(identity.identity_type.clone())),
+                );
+                new.description = if identity.description.is_empty() { None } else { Some(identity.description.clone()) };
+                new.email = identity.email.clone();
+                new.phone = identity.phone.clone();
+                new.tags = identity.tags.clone();
+                let _ = service.create_identity_full(new).await?;
+            }
+        }
 
         let action = match args.mode.as_str() {
             "merge" => "Merged",
