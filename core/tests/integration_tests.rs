@@ -1,58 +1,66 @@
 use persona_core::*;
-use std::collections::HashMap;
-
 /// Integration tests for the Persona core library
 #[tokio::test]
 async fn test_full_persona_workflow() {
     // Initialize database and service
-    let db = Database::in_memory().await.expect("Failed to create database");
+    let db = Database::in_memory()
+        .await
+        .expect("Failed to create database");
     db.migrate().await.expect("Failed to run migrations");
 
-    let mut service = PersonaService::new(db).await.expect("Failed to create service");
+    let mut service = PersonaService::new(db)
+        .await
+        .expect("Failed to create service");
 
     // Test service is initially locked
     assert!(!service.is_unlocked());
 
     // Generate salt and unlock service
     let salt = service.generate_salt();
-    service.unlock("super_secret_password", &salt).expect("Failed to unlock service");
+    service
+        .unlock("super_secret_password", &salt)
+        .expect("Failed to unlock service");
     assert!(service.is_unlocked());
 
     // Create personal identity
-    let personal_identity = service.create_identity(
-        "John Doe".to_string(),
-        IdentityType::Personal,
-    ).await.expect("Failed to create personal identity");
+    let personal_identity = service
+        .create_identity("John Doe".to_string(), IdentityType::Personal)
+        .await
+        .expect("Failed to create personal identity");
 
     // Create work identity
-    let work_identity = service.create_identity(
-        "John Doe (Work)".to_string(),
-        IdentityType::Work,
-    ).await.expect("Failed to create work identity");
+    let work_identity = service
+        .create_identity("John Doe (Work)".to_string(), IdentityType::Work)
+        .await
+        .expect("Failed to create work identity");
 
     // Verify identities were created
-    let identities = service.get_identities().await.expect("Failed to get identities");
+    let identities = service
+        .get_identities()
+        .await
+        .expect("Failed to get identities");
     assert_eq!(identities.len(), 2);
 
     // Create password credential
     let password_data = CredentialData::Password(PasswordCredentialData {
         password: "secure_password_123".to_string(),
         email: Some("john.doe@example.com".to_string()),
-        security_questions: vec![
-            SecurityQuestion {
-                question: "What was your first pet's name?".to_string(),
-                answer: "Fluffy".to_string(),
-            }
-        ],
+        security_questions: vec![SecurityQuestion {
+            question: "What was your first pet's name?".to_string(),
+            answer: "Fluffy".to_string(),
+        }],
     });
 
-    let password_credential = service.create_credential(
-        personal_identity.id,
-        "Email Account".to_string(),
-        CredentialType::Password,
-        SecurityLevel::High,
-        &password_data,
-    ).await.expect("Failed to create password credential");
+    let password_credential = service
+        .create_credential(
+            personal_identity.id,
+            "Email Account".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            &password_data,
+        )
+        .await
+        .expect("Failed to create password credential");
 
     // Create crypto wallet credential
     let wallet_data = CredentialData::CryptoWallet(CryptoWalletData {
@@ -64,13 +72,16 @@ async fn test_full_persona_workflow() {
         network: "mainnet".to_string(),
     });
 
-    let wallet_credential = service.create_credential(
-        personal_identity.id,
-        "Bitcoin Wallet".to_string(),
-        CredentialType::CryptoWallet,
-        SecurityLevel::Critical,
-        &wallet_data,
-    ).await.expect("Failed to create wallet credential");
+    let wallet_credential = service
+        .create_credential(
+            personal_identity.id,
+            "Bitcoin Wallet".to_string(),
+            CredentialType::CryptoWallet,
+            SecurityLevel::Critical,
+            &wallet_data,
+        )
+        .await
+        .expect("Failed to create wallet credential");
 
     // Create SSH key credential
     let ssh_data = CredentialData::SshKey(SshKeyData {
@@ -80,17 +91,22 @@ async fn test_full_persona_workflow() {
         passphrase: Some("key_passphrase".to_string()),
     });
 
-    let ssh_credential = service.create_credential(
-        work_identity.id,
-        "Work Server".to_string(),
-        CredentialType::SshKey,
-        SecurityLevel::High,
-        &ssh_data,
-    ).await.expect("Failed to create SSH credential");
+    let _ssh_credential = service
+        .create_credential(
+            work_identity.id,
+            "Work Server".to_string(),
+            CredentialType::SshKey,
+            SecurityLevel::High,
+            &ssh_data,
+        )
+        .await
+        .expect("Failed to create SSH credential");
 
     // Test credential retrieval and decryption
-    let retrieved_password = service.get_credential_data(&password_credential.id)
-        .await.expect("Failed to get password credential");
+    let retrieved_password = service
+        .get_credential_data(&password_credential.id)
+        .await
+        .expect("Failed to get password credential");
 
     match retrieved_password {
         Some(CredentialData::Password(pwd_data)) => {
@@ -102,8 +118,10 @@ async fn test_full_persona_workflow() {
     }
 
     // Test wallet credential
-    let retrieved_wallet = service.get_credential_data(&wallet_credential.id)
-        .await.expect("Failed to get wallet credential");
+    let retrieved_wallet = service
+        .get_credential_data(&wallet_credential.id)
+        .await
+        .expect("Failed to get wallet credential");
 
     match retrieved_wallet {
         Some(CredentialData::CryptoWallet(wallet_data)) => {
@@ -114,38 +132,52 @@ async fn test_full_persona_workflow() {
     }
 
     // Test credentials for identity
-    let personal_credentials = service.get_credentials_for_identity(&personal_identity.id)
-        .await.expect("Failed to get personal credentials");
+    let personal_credentials = service
+        .get_credentials_for_identity(&personal_identity.id)
+        .await
+        .expect("Failed to get personal credentials");
     assert_eq!(personal_credentials.len(), 2);
 
-    let work_credentials = service.get_credentials_for_identity(&work_identity.id)
-        .await.expect("Failed to get work credentials");
+    let work_credentials = service
+        .get_credentials_for_identity(&work_identity.id)
+        .await
+        .expect("Failed to get work credentials");
     assert_eq!(work_credentials.len(), 1);
 
     // Test search functionality
-    let email_results = service.search_credentials("Email")
-        .await.expect("Failed to search credentials");
+    let email_results = service
+        .search_credentials("Email")
+        .await
+        .expect("Failed to search credentials");
     assert_eq!(email_results.len(), 1);
     assert_eq!(email_results[0].name, "Email Account");
 
     // Test credentials by type
-    let password_credentials = service.get_credentials_by_type(&CredentialType::Password)
-        .await.expect("Failed to get password credentials");
+    let password_credentials = service
+        .get_credentials_by_type(&CredentialType::Password)
+        .await
+        .expect("Failed to get password credentials");
     assert_eq!(password_credentials.len(), 1);
 
-    let crypto_credentials = service.get_credentials_by_type(&CredentialType::CryptoWallet)
-        .await.expect("Failed to get crypto credentials");
+    let crypto_credentials = service
+        .get_credentials_by_type(&CredentialType::CryptoWallet)
+        .await
+        .expect("Failed to get crypto credentials");
     assert_eq!(crypto_credentials.len(), 1);
 
     // Test identity export
-    let export = service.export_identity(&personal_identity.id)
-        .await.expect("Failed to export identity");
+    let export = service
+        .export_identity(&personal_identity.id)
+        .await
+        .expect("Failed to export identity");
     assert_eq!(export.identity.id, personal_identity.id);
     assert_eq!(export.credentials.len(), 2);
 
     // Test statistics
-    let stats = service.get_statistics()
-        .await.expect("Failed to get statistics");
+    let stats = service
+        .get_statistics()
+        .await
+        .expect("Failed to get statistics");
     assert_eq!(stats.total_identities, 2);
     assert_eq!(stats.total_credentials, 3);
     assert_eq!(stats.active_credentials, 3);
@@ -159,12 +191,16 @@ async fn test_full_persona_workflow() {
     assert!(locked_result.is_err());
 
     // Unlock again
-    service.unlock("super_secret_password", &salt).expect("Failed to unlock service again");
+    service
+        .unlock("super_secret_password", &salt)
+        .expect("Failed to unlock service again");
     assert!(service.is_unlocked());
 
     // Should work again
-    let identities_after_unlock = service.get_identities()
-        .await.expect("Failed to get identities after unlock");
+    let identities_after_unlock = service
+        .get_identities()
+        .await
+        .expect("Failed to get identities after unlock");
     assert_eq!(identities_after_unlock.len(), 2);
 }
 
@@ -178,16 +214,31 @@ async fn test_identity_management() {
     service.unlock("test_password", &salt).unwrap();
 
     // Test identity creation with different types
-    let personal = service.create_identity("Personal".to_string(), IdentityType::Personal).await.unwrap();
-    let work = service.create_identity("Work".to_string(), IdentityType::Work).await.unwrap();
-    let gaming = service.create_identity("Gaming".to_string(), IdentityType::Gaming).await.unwrap();
+    let personal = service
+        .create_identity("Personal".to_string(), IdentityType::Personal)
+        .await
+        .unwrap();
+    let _work = service
+        .create_identity("Work".to_string(), IdentityType::Work)
+        .await
+        .unwrap();
+    let gaming = service
+        .create_identity("Gaming".to_string(), IdentityType::Gaming)
+        .await
+        .unwrap();
 
     // Test get by type
-    let personal_identities = service.get_identities_by_type(&IdentityType::Personal).await.unwrap();
+    let personal_identities = service
+        .get_identities_by_type(&IdentityType::Personal)
+        .await
+        .unwrap();
     assert_eq!(personal_identities.len(), 1);
     assert_eq!(personal_identities[0].name, "Personal");
 
-    let work_identities = service.get_identities_by_type(&IdentityType::Work).await.unwrap();
+    let work_identities = service
+        .get_identities_by_type(&IdentityType::Work)
+        .await
+        .unwrap();
     assert_eq!(work_identities.len(), 1);
 
     // Test identity update
@@ -216,30 +267,47 @@ async fn test_credential_security_levels() {
     let salt = service.generate_salt();
     service.unlock("test_password", &salt).unwrap();
 
-    let identity = service.create_identity("Test".to_string(), IdentityType::Personal).await.unwrap();
+    let identity = service
+        .create_identity("Test".to_string(), IdentityType::Personal)
+        .await
+        .unwrap();
 
     // Create credentials with different security levels
-    let low_security = service.create_credential(
-        identity.id,
-        "Social Media".to_string(),
-        CredentialType::Password,
-        SecurityLevel::Low,
-        &CredentialData::Raw(b"low_security_data".to_vec()),
-    ).await.unwrap();
+    let low_security = service
+        .create_credential(
+            identity.id,
+            "Social Media".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Low,
+            &CredentialData::Raw(b"low_security_data".to_vec()),
+        )
+        .await
+        .unwrap();
 
-    let high_security = service.create_credential(
-        identity.id,
-        "Bank Account".to_string(),
-        CredentialType::BankCard,
-        SecurityLevel::Critical,
-        &CredentialData::Raw(b"critical_data".to_vec()),
-    ).await.unwrap();
+    let high_security = service
+        .create_credential(
+            identity.id,
+            "Bank Account".to_string(),
+            CredentialType::BankCard,
+            SecurityLevel::Critical,
+            &CredentialData::Raw(b"critical_data".to_vec()),
+        )
+        .await
+        .unwrap();
 
     // Verify security levels are stored correctly
-    let low_cred = service.get_credential(&low_security.id).await.unwrap().unwrap();
+    let low_cred = service
+        .get_credential(&low_security.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(low_cred.security_level, SecurityLevel::Low);
 
-    let high_cred = service.get_credential(&high_security.id).await.unwrap().unwrap();
+    let high_cred = service
+        .get_credential(&high_security.id)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(high_cred.security_level, SecurityLevel::Critical);
 
     // Test statistics include security level breakdown
@@ -297,10 +365,10 @@ fn test_signing_operations() {
     assert!(verifying_key.verify(message, &signature).is_ok());
 }
 
-#[test]
-fn test_password_generation() {
+#[tokio::test]
+async fn test_password_generation() {
     let db = Database::in_memory().await.unwrap();
-    let mut service = PersonaService::new(db).await.unwrap();
+    let service = PersonaService::new(db).await.unwrap();
 
     // Test password generation
     let password1 = service.generate_password(12, false);
@@ -313,6 +381,8 @@ fn test_password_generation() {
     assert_ne!(password1, password2); // Should be different
 
     // Test character sets
-    assert!(!password1.chars().any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)));
+    assert!(!password1
+        .chars()
+        .any(|c| "!@#$%^&*()_+-=[]{}|;:,.<>?".contains(c)));
     // password_with_symbols may contain symbols (though not guaranteed in a short string)
 }

@@ -4,7 +4,7 @@ This is the master checklist to reach “1Password-like” parity while adding d
 
 Now (current sprint)
 - [x] CI: GitHub Actions (Rust fmt/clippy/test; Desktop lint/test)
-- [ ] Architecture diagram in docs (core/service/storage/agents/desktop/server)
+- [x] Architecture diagram in docs (core/service/storage/agents/desktop/server)
 - [x] CLI: identity edit/remove wired to DB
 - [x] CLI: switch active identity (persist `active_identity_id`, maintain history)
 - [x] Core: workspace schema v2 (persist `path`, `active_identity_id`, `settings`) + migration
@@ -15,47 +15,52 @@ Monorepo & Tooling
 - [x] Rust workspace crates (core, cli, server, mobile/rust)
 - [x] JS workspace for desktop (root `package.json`)
 - [x] Add SSH Agent crate skeleton (`agents/ssh-agent`)
-- [ ] CODEOWNERS + PR template + Conventional Commits
-- [ ] Makefile targets for build/test/lint across all packages
+- [x] CODEOWNERS + PR template + Conventional Commits
+- [x] Makefile targets for build/test/lint across all packages
 
 Security & Auth
-- [ ] Key hierarchy: per-item keys wrapped by master key
-- [ ] SRP-like remote auth abstraction (prep for server)
-- [ ] Biometric unlock hooks (Touch ID/Face ID/Windows Hello)
+- [x] Key hierarchy: per-item keys wrapped by master key
+- [x] SRP-like remote auth abstraction (prep for server)
+- [x] Biometric unlock hooks (Touch ID/Face ID/Windows Hello)
 - [ ] Auto-lock timers and “re-authenticate for sensitive ops”
-- [ ] Secrets redaction policy for logs
+- [x] Secrets redaction policy for logs
 
 Storage & Data
-- [ ] Workspace v2 schema + migrations and CLI migration command
-- [ ] Item versioning (identity/credential change history)
-- [ ] Attachments blob store (file chunks + refs)
-- [ ] Export/Import with compression + encryption + integrity checks
+- [x] Workspace v2 schema + migrations and CLI migration command
+- [x] Item versioning (identity/credential change history)
+- [x] Attachments blob store (file chunks + refs)
+- [x] Export/Import with compression + encryption + integrity checks
 
 CLI
 - [x] add/list/show wired to DB with unlock flow and fallback when no user
-- [ ] edit/remove identity
-- [ ] switch (activate/deactivate, history, config persistence)
-- [ ] credential CRUD (filters: type/tag/active/favorite)
-- [ ] TOTP: setup via QR + code generation
+- [x] edit/remove identity (完整实现:交互式编辑、字段验证、备份、审计日志)
+- [x] switch (activate/deactivate, history, config persistence)
+- [x] credential CRUD (filters: type/tag/active/favorite)
+- [x] TOTP: setup via QR + code generation
 - [ ] password generator options (length, symbol sets, pronounceable)
 - [ ] TUI mode (ratatui/crossterm)
 - [ ] Non-interactive CI mode with environment variable injection
 
 SSH Agent (developer focus)
-- [ ] UNIX socket server implementing SSH agent protocol (list/add/remove/sign)
+- [x] UNIX socket server implementing SSH agent protocol (list/add/remove/sign)
 - [x] UNIX socket server MVP: request_identities/sign_request (ed25519), loads keys from vault
-- [ ] Windows named pipe support
+- [x] Windows named pipe support (cross-platform transport abstraction)
 - [x] Key management (create/list/remove), store in core with metadata
-- [ ] Per-host/per-command policies; confirmation prompts
+- [x] Per-host/per-command policies; confirmation prompts
 - [x] Basic confirmation prompt gating via env `PERSONA_AGENT_REQUIRE_CONFIRM`
 - [x] Rate limiting via env `PERSONA_AGENT_MIN_INTERVAL_MS`
- - [x] CLI control: start/stop/status, query agent identities
- - [x] Known hosts policy (optional): env `PERSONA_AGENT_ENFORCE_KNOWN_HOSTS`, wrapper `persona ssh run --host <h> -- <cmd>` to pass host, confirm-on-unknown via env `PERSONA_AGENT_CONFIRM_ON_UNKNOWN`
-- [ ] Biometric gating for signing + rate limiting + detailed audit
-- [ ] known_hosts policy check; refusal on mismatch
+- [x] CLI control: start/stop/status, query agent identities
+- [x] Known hosts policy (optional): env `PERSONA_AGENT_ENFORCE_KNOWN_HOSTS`, wrapper `persona ssh run --host <h> -- <cmd>` to pass host, confirm-on-unknown via env `PERSONA_AGENT_CONFIRM_ON_UNKNOWN`
+- [x] Biometric gating for signing (with fallback to confirmation)
+- [x] Comprehensive policy system (TOML-based configuration)
+  - [x] Global policies (deny_all, rate limits, known_hosts enforcement)
+  - [x] Per-key policies (allowed/denied hosts, time ranges, daily limits, biometric requirements)
+  - [x] Per-host policies (allowed keys, confirmation requirements, hourly limits)
+  - [x] Glob pattern matching for hostname restrictions
+- [x] E2E tests for SSH protocol encoding/decoding
+- [ ] Full E2E test: `ssh -T git@github.com` path using agent (requires integration testing)
 - [ ] CLI commands: `persona ssh import|generate|list|add-to-agent|rm|status`
 - [x] CLI commands (partial): `generate|list|rm|status|add-to-agent (placeholder)`
-- [ ] E2E test: `ssh -T git@github.com` path using agent
 
 Digital Wallet (Persona enhancement)
 - [ ] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
@@ -79,7 +84,11 @@ Server & Sync (optional)
 - [ ] SCIM/SSO bridging (future)
 
 Browser & Autofill (future)
-- [ ] Browser extension skeleton (autofill; domain rules)
+- [x] Browser extension skeleton (autofill; domain rules)
+  - [x] Wire popup UI to Persona desktop/CLI bridge
+  - [x] Form detection + autofill heuristics (passwords, TOTP, address)
+  - [x] Domain policies + phishing protections
+- [x] Safari WebExtension host shell (Swift bridge + manifest sync)
 - [ ] Passkeys (WebAuthn) storage + autofill
 - [ ] Phishing protections; identity-based context switching
 

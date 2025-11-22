@@ -7,40 +7,40 @@ use uuid::Uuid;
 pub struct Identity {
     /// Unique identifier for the identity
     pub id: Uuid,
-    
+
     /// Human-readable name
     pub name: String,
-    
+
     /// Identity type (personal, work, social, etc.)
     pub identity_type: IdentityType,
-    
+
     /// Optional description
     pub description: Option<String>,
-    
+
     /// Primary email address
     pub email: Option<String>,
-    
+
     /// Phone number
     pub phone: Option<String>,
-    
+
     /// SSH public key
     pub ssh_key: Option<String>,
-    
+
     /// GPG public key
     pub gpg_key: Option<String>,
-    
+
     /// Tags for categorization
     pub tags: Vec<String>,
-    
+
     /// Custom attributes
     pub attributes: HashMap<String, String>,
-    
+
     /// Creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
-    
+
     /// Last modification timestamp
     pub updated_at: chrono::DateTime<chrono::Utc>,
-    
+
     /// Whether this identity is currently active
     pub is_active: bool,
 }
@@ -58,7 +58,7 @@ pub enum IdentityType {
 
 impl std::str::FromStr for IdentityType {
     type Err = String;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "Personal" => Ok(IdentityType::Personal),
@@ -104,12 +104,12 @@ impl Identity {
             is_active: true,
         }
     }
-    
+
     /// Update the identity's modification timestamp
     pub fn touch(&mut self) {
         self.updated_at = chrono::Utc::now();
     }
-    
+
     /// Add a tag to the identity
     pub fn add_tag(&mut self, tag: String) {
         if !self.tags.contains(&tag) {
@@ -117,7 +117,7 @@ impl Identity {
             self.touch();
         }
     }
-    
+
     /// Remove a tag from the identity
     pub fn remove_tag(&mut self, tag: &str) {
         if let Some(pos) = self.tags.iter().position(|t| t == tag) {
@@ -125,18 +125,18 @@ impl Identity {
             self.touch();
         }
     }
-    
+
     /// Set a custom attribute
     pub fn set_attribute(&mut self, key: String, value: String) {
         self.attributes.insert(key, value);
         self.touch();
     }
-    
+
     /// Get a custom attribute
     pub fn get_attribute(&self, key: &str) -> Option<&String> {
         self.attributes.get(key)
     }
-    
+
     /// Remove a custom attribute
     pub fn remove_attribute(&mut self, key: &str) {
         if self.attributes.remove(key).is_some() {

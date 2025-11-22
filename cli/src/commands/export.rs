@@ -1,15 +1,15 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, MultiSelect, Select};
+use dialoguer::{Confirm, MultiSelect};
 use std::path::PathBuf;
 
 use crate::config::CliConfig;
-use persona_core::{Database, PersonaService};
-use persona_core::models::{CredentialData};
-use dialoguer::Password;
-use crate::utils::file_crypto::{encrypt_file_inplace, KdfParams};
+use crate::utils::file_crypto::encrypt_file_inplace;
 use crate::utils::progress::create_progress_bar;
+use dialoguer::Password;
+use persona_core::Repository;
+use persona_core::{Database, PersonaService};
 
 #[derive(Args)]
 pub struct ExportArgs {
@@ -52,7 +52,7 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
         get_all_identity_names(config).await?
     } else {
         validate_identity_names(&args.names, config).await?;
-        args.names
+        args.names.clone()
     };
 
     if identity_names.is_empty() {
@@ -70,7 +70,7 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
     if !Confirm::new()
         .with_prompt("Proceed with export?")
         .default(true)
-        .interact()? 
+        .interact()?
     {
         println!("{}", "Export cancelled.".yellow());
         return Ok(());
@@ -79,11 +79,16 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
     // Warn about sensitive data
     if args.include_sensitive {
         println!();
-        println!("{}", "⚠️  Warning: Export will include sensitive data!".red().bold());
+        println!(
+            "{}",
+            "⚠️  Warning: Export will include sensitive data!"
+                .red()
+                .bold()
+        );
         if !Confirm::new()
             .with_prompt("Are you sure you want to include sensitive data?")
             .default(false)
-            .interact()? 
+            .interact()?
         {
             println!("{}", "Export cancelled.".yellow());
             return Ok(());
@@ -95,8 +100,11 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
 
     println!();
     println!("{} Export completed successfully!", "✓".green().bold());
-    println!("  Output file: {}", output_path.display().to_string().cyan());
-    
+    println!(
+        "  Output file: {}",
+        output_path.display().to_string().cyan()
+    );
+
     // Show file info
     show_export_info(&output_path)?;
 
@@ -105,7 +113,7 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
 
 async fn select_identities_interactive(config: &CliConfig) -> Result<Vec<String>> {
     let all_identities = get_all_identity_names(config).await?;
-    
+
     if all_identities.is_empty() {
         anyhow::bail!("No identities found to export");
     }
@@ -115,38 +123,61 @@ async fn select_identities_interactive(config: &CliConfig) -> Result<Vec<String>
         .items(&all_identities)
         .interact()?;
 
-    Ok(selections.into_iter().map(|i| all_identities[i].clone()).collect())
+    Ok(selections
+        .into_iter()
+        .map(|i| all_identities[i].clone())
+        .collect())
 }
 
 async fn get_all_identity_names(config: &CliConfig) -> Result<Vec<String>> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
-    let mut service = PersonaService::new(db.clone()).await?;
-    let items = if service.has_users().await? {
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run migrations: {}", e))?;
+    let mut service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create service: {}", e))?;
+    let items = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
-            persona_core::auth::authentication::AuthResult::Success => service.get_identities().await?,
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Auth failed: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => service
+                .get_identities()
+                .await
+                .map_err(|e| anyhow!("Failed to fetch identities: {}", e))?,
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         // If no users configured yet, read via repository
-        persona_core::storage::IdentityRepository::new(db).find_all().await?
+        persona_core::storage::IdentityRepository::new(db)
+            .find_all()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch identities: {}", e))?
     };
     Ok(items.into_iter().map(|i| i.name).collect())
 }
 
 async fn validate_identity_names(names: &[String], config: &CliConfig) -> Result<()> {
     let all_identities = get_all_identity_names(config).await?;
-    
+
     for name in names {
         if !all_identities.contains(name) {
             anyhow::bail!("Identity '{}' not found", name);
         }
     }
-    
+
     Ok(())
 }
 
@@ -158,34 +189,59 @@ fn determine_output_path(args: &ExportArgs, identity_names: &[String]) -> Result
     // Generate default filename
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let filename = if identity_names.len() == 1 {
-        format!("persona_export_{}_{}.{}", identity_names[0], timestamp, args.format)
+        format!(
+            "persona_export_{}_{}.{}",
+            identity_names[0], timestamp, args.format
+        )
     } else {
-        format!("persona_export_{}_{}.{}", identity_names.len(), timestamp, args.format)
+        format!(
+            "persona_export_{}_{}.{}",
+            identity_names.len(),
+            timestamp,
+            args.format
+        )
     };
 
     Ok(PathBuf::from(filename))
 }
 
 fn show_export_summary(
-    identity_names: &[String], 
-    output_path: &PathBuf, 
-    args: &ExportArgs
+    identity_names: &[String],
+    output_path: &PathBuf,
+    args: &ExportArgs,
 ) -> Result<()> {
     println!("{}", "Export Summary:".yellow().bold());
-    println!("  Identities: {} ({})", 
+    println!(
+        "  Identities: {} ({})",
         identity_names.len().to_string().cyan(),
-        identity_names.join(", ").dim()
+        identity_names.join(", ").dimmed()
     );
-    println!("  Output file: {}", output_path.display().to_string().cyan());
+    println!(
+        "  Output file: {}",
+        output_path.display().to_string().cyan()
+    );
     println!("  Format: {}", args.format.cyan());
-    println!("  Include sensitive: {}", 
-        if args.include_sensitive { "Yes".red() } else { "No".green() }
+    println!(
+        "  Include sensitive: {}",
+        if args.include_sensitive {
+            "Yes".red()
+        } else {
+            "No".green()
+        }
     );
-    println!("  Encryption: {}", 
-        if args.encrypt { "Yes".green() } else { "No".dim() }
+    println!(
+        "  Encryption: {}",
+        if args.encrypt {
+            "Yes".green()
+        } else {
+            "No".dimmed()
+        }
     );
     if args.compression > 0 {
-        println!("  Compression: Level {}", args.compression.to_string().cyan());
+        println!(
+            "  Compression: Level {}",
+            args.compression.to_string().cyan()
+        );
     }
     println!();
 
@@ -196,14 +252,13 @@ async fn perform_export(
     identity_names: &[String],
     output_path: &PathBuf,
     args: &ExportArgs,
-    config: &CliConfig
+    config: &CliConfig,
 ) -> Result<()> {
     let pb = create_progress_bar(identity_names.len() as u64, "Exporting identities");
 
     // Create output directory if needed
     if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent)
-            .context("Failed to create output directory")?;
+        std::fs::create_dir_all(parent).context("Failed to create output directory")?;
     }
 
     // Export based on format
@@ -238,18 +293,34 @@ async fn export_json(
     output_path: &PathBuf,
     args: &ExportArgs,
     config: &CliConfig,
-    pb: &indicatif::ProgressBar
+    pb: &indicatif::ProgressBar,
 ) -> Result<()> {
     // Open service (may require unlock)
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
-    let mut service = PersonaService::new(db.clone()).await?;
-    let unlocked = if service.has_users().await? {
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run migrations: {}", e))?;
+    let mut service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create service: {}", e))?;
+    let unlocked = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         let password = Password::new()
             .with_prompt("Enter master password to unlock (for credential export)")
             .interact()?;
-        matches!(service.authenticate_user(&password).await?, persona_core::auth::authentication::AuthResult::Success)
+        matches!(
+            service
+                .authenticate_user(&password)
+                .await
+                .map_err(|e| anyhow!("Auth failed: {}", e))?,
+            persona_core::auth::authentication::AuthResult::Success
+        )
     } else {
         true
     };
@@ -267,15 +338,25 @@ async fn export_json(
     for (i, name) in identity_names.iter().enumerate() {
         // Load identity detail
         let identity = if unlocked {
-            service.get_identity_by_name(name).await?
+            service
+                .get_identity_by_name(name)
+                .await
+                .map_err(|e| anyhow!("Failed to load identity '{}': {}", name, e))?
         } else {
-            persona_core::storage::IdentityRepository::new(db.clone()).find_by_name(name).await?
-        }.with_context(|| format!("Identity '{}' not found", name))?;
+            persona_core::storage::IdentityRepository::new(db.clone())
+                .find_by_name(name)
+                .await
+                .map_err(|e| anyhow!("Failed to load identity '{}': {}", name, e))?
+        }
+        .with_context(|| format!("Identity '{}' not found", name))?;
 
         // Collect credentials metadata and optionally data
         let mut credentials_json = Vec::new();
         if unlocked {
-            let creds = service.get_credentials_for_identity(&identity.id).await.unwrap_or_default();
+            let creds = service
+                .get_credentials_for_identity(&identity.id)
+                .await
+                .unwrap_or_default();
             for cred in creds {
                 let mut entry = serde_json::json!({
                     "id": cred.id.to_string(),
@@ -294,10 +375,17 @@ async fn export_json(
                     "is_favorite": cred.is_favorite,
                 });
                 if args.include_sensitive {
-                    if let Some(data) = service.get_credential_data(&cred.id).await? {
+                    if let Some(data) = service
+                        .get_credential_data(&cred.id)
+                        .await
+                        .map_err(|e| anyhow!("Failed to load credential data: {}", e))?
+                    {
                         let json_data = serde_json::to_value(&data)
                             .unwrap_or(serde_json::json!({"raw": "unserializable"}));
-                        entry.as_object_mut().unwrap().insert("data".to_string(), json_data);
+                        entry
+                            .as_object_mut()
+                            .unwrap()
+                            .insert("data".to_string(), json_data);
                     }
                 } else {
                     // include encrypted bytes hex to allow offline re-import if needed
@@ -325,13 +413,15 @@ async fn export_json(
             "credentials": credentials_json,
         });
 
-        export_data["identities"].as_array_mut().unwrap().push(identity_data);
+        export_data["identities"]
+            .as_array_mut()
+            .unwrap()
+            .push(identity_data);
         pb.set_position(i as u64 + 1);
     }
 
     let json_content = serde_json::to_string_pretty(&export_data)?;
-    std::fs::write(output_path, json_content)
-        .context("Failed to write JSON export file")?;
+    std::fs::write(output_path, json_content).context("Failed to write JSON export file")?;
 
     Ok(())
 }
@@ -341,7 +431,7 @@ async fn export_yaml(
     output_path: &PathBuf,
     args: &ExportArgs,
     config: &CliConfig,
-    pb: &indicatif::ProgressBar
+    pb: &indicatif::ProgressBar,
 ) -> Result<()> {
     // First export as JSON, then convert to YAML
     let temp_json = output_path.with_extension("temp.json");
@@ -351,8 +441,7 @@ async fn export_yaml(
     let json_value: serde_json::Value = serde_json::from_str(&json_content)?;
     let yaml_content = serde_yaml::to_string(&json_value)?;
 
-    std::fs::write(output_path, yaml_content)
-        .context("Failed to write YAML export file")?;
+    std::fs::write(output_path, yaml_content).context("Failed to write YAML export file")?;
 
     // Clean up temp file
     let _ = std::fs::remove_file(&temp_json);
@@ -365,17 +454,31 @@ async fn export_csv(
     output_path: &PathBuf,
     _args: &ExportArgs,
     config: &CliConfig,
-    pb: &indicatif::ProgressBar
+    pb: &indicatif::ProgressBar,
 ) -> Result<()> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
-    let mut service = PersonaService::new(db.clone()).await?;
-    if service.has_users().await? {
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run migrations: {}", e))?;
+    let mut service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create service: {}", e))?;
+    if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Auth failed: {}", e))?
+        {
             persona_core::auth::authentication::AuthResult::Success => {}
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
@@ -384,7 +487,10 @@ async fn export_csv(
     csv_content.push_str("Name,Type,Description,Email,Created,Modified\n");
 
     for (i, name) in identity_names.iter().enumerate() {
-        let identity = service.get_identity_by_name(name).await?
+        let identity = service
+            .get_identity_by_name(name)
+            .await
+            .map_err(|e| anyhow!("Failed to load identity '{}': {}", name, e))?
             .with_context(|| format!("Identity '{}' not found", name))?;
         csv_content.push_str(&format!(
             "{},{},{},{},{},{}\n",
@@ -399,8 +505,7 @@ async fn export_csv(
         pb.set_position(i as u64 + 1);
     }
 
-    std::fs::write(output_path, csv_content)
-        .context("Failed to write CSV export file")?;
+    std::fs::write(output_path, csv_content).context("Failed to write CSV export file")?;
 
     Ok(())
 }
@@ -408,22 +513,25 @@ async fn export_csv(
 fn compress_file(file_path: &PathBuf, level: u8) -> Result<()> {
     println!("{} Compressing file...", "🗜️".to_string());
 
-    use flate2::Compression;
     use flate2::write::GzEncoder;
+    use flate2::Compression;
     use std::fs::File;
     use std::io::Write;
 
     let src_path = file_path;
-    let compressed_path = src_path.with_extension(
-        format!("{}.gz", src_path.extension().unwrap_or_default().to_string_lossy())
-    );
+    let compressed_path = src_path.with_extension(format!(
+        "{}.gz",
+        src_path.extension().unwrap_or_default().to_string_lossy()
+    ));
 
     let mut input = std::fs::read(src_path).context("Failed to read file for compression")?;
     let mut encoder = GzEncoder::new(
         File::create(&compressed_path).context("Failed to create gzip file")?,
         Compression::new(level.min(9) as u32),
     );
-    encoder.write_all(&input).context("Failed to write gzip data")?;
+    encoder
+        .write_all(&input)
+        .context("Failed to write gzip data")?;
     encoder.finish().context("Failed to finish gzip")?;
     // Remove original
     std::fs::remove_file(src_path).ok();
@@ -441,9 +549,12 @@ fn show_export_info(output_path: &PathBuf) -> Result<()> {
     }
 
     println!();
-    println!("{}", "Next steps:".dim());
+    println!("{}", "Next steps:".dimmed());
     println!("  • Share the export file securely");
-    println!("  • Import on another system: {}", "persona import <file>".cyan());
+    println!(
+        "  • Import on another system: {}",
+        "persona import <file>".cyan()
+    );
     println!("  • Store backup safely");
 
     Ok(())

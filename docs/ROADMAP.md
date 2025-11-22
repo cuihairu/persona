@@ -7,17 +7,17 @@ Milestone 0 – Repo Hygiene (1–2 days)
   - [x] Ensure Cargo workspace across crates
   - [x] Add JS workspace for desktop (root `package.json`)
   - [x] Add `agents/ssh-agent` crate skeleton
-  - [ ] Add CI (GitHub Actions): Rust fmt/clippy/test, Desktop lint/test
-  - [ ] Add CODEOWNERS; PR templates; Conventional Commits
+  - [x] Add CI (GitHub Actions): Rust fmt/clippy/test, Desktop lint/test
+  - [x] Add CODEOWNERS; PR templates; Conventional Commits
 - Docs
   - [x] 1Password feature inventory
   - [x] Monorepo guide
   - [x] Roadmap
-  - [ ] Architecture diagram (core/service/storage/agents)
+  - [x] Architecture diagram (core/service/storage/agents)
 
 Milestone 1 – Core Security & Storage (1–2 weeks)
 - Crypto & Auth
-  - [ ] Replace simple unlock with SRP-like remote auth abstraction (prep for server)
+  - [x] Replace simple unlock with SRP-like remote auth abstraction (prep for server)
   - [ ] Key hierarchy: per-item keys wrapped by user master key
   - [ ] Biometric unlock hook (macOS Touch ID; Windows Hello; Linux Secret Service)
   - [ ] Auto-lock timers; “require re-auth for sensitive ops”
@@ -100,10 +100,9 @@ Quality & Compliance (ongoing)
 - [ ] Threat model & security review
 - [ ] Fuzzing paths for parsers (mnemonic, keystore)
 - [ ] Secrets redaction policy in logs; zero sensitive data in telemetry
-- [ ] Reproducible builds; supply chain checks (cargo-deny, npm audit)
+- [ ] Reproducible builds; supply chain checks (cargo-deny, pnpm audit)
 
 Open Questions
 - Recovery model for master password (none by default; consider Shamir/guardians)
 - Cross-device sync key exchange without server (QR pair? local LAN?)
 - Wallet hardware integration (Ledger/Trezor) roadmap
-

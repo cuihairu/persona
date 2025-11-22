@@ -63,6 +63,18 @@ cargo build --workspace
 make ci
 ```
 
+### JS/桌面端依赖（pnpm）
+```bash
+# 安装 workspace 依赖（desktop + browser extension）
+pnpm install
+
+# 运行桌面端开发模式
+pnpm --filter desktop run dev
+
+# 构建浏览器扩展
+pnpm --filter persona-chromium-extension run build
+```
+
 ### 初始化工作区与基础操作
 ```bash
 # 初始化工作区（未加密）
@@ -71,7 +83,7 @@ persona init --path ~/PersonaDemo --yes
 # 初始化工作区（加密，设置主密码）
 persona init --path ~/PersonaSecure --yes --encrypted --master-password "your_password"
 
-# 新增/查看/列表
+# 新增/查看/列表（身份）
 persona add
 persona show <name>
 persona list
@@ -81,6 +93,17 @@ persona switch <name>
 
 # 迁移（确保 schema 最新且写入 workspace 记录）
 persona migrate
+
+# 凭据管理（密码/API Key 等）
+persona credential add --identity alice --name "GitHub" --credential-type password --prompt-secret
+persona credential list --identity alice --format table
+persona credential show --id <UUID> --reveal
+persona credential remove --id <UUID>
+
+# TOTP（二步验证）管理
+persona totp setup --identity alice --qr ~/Downloads/github.png
+persona totp code --id <UUID>
+persona totp code --id <UUID> --watch
 ```
 
 ### 导出/导入（压缩 + 加密）
@@ -140,13 +163,10 @@ persona ssh stop-agent
 
 ## 🤝 贡献指南
 
-欢迎贡献代码、报告问题或提出建议！
-
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 创建 Pull Request
+- 阅读 [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) 了解 Conventional Commits 规范与 PR 要求。
+- Fork 项目并创建功能分支（例如 `git checkout -b feat/cli-edit`）。
+- 按 [Conventional Commits](https://www.conventionalcommits.org) 格式撰写 PR/commit 标题，例如 `feat(cli): add credential filters`。
+- 推送分支并创建 Pull Request，确保通过 `make lint-all` 与 `make test-all`。
 
 ## 📄 许可证
 

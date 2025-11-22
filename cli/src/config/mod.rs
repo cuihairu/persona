@@ -61,7 +61,7 @@ impl Default for CliConfig {
     fn default() -> Self {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let workspace_path = home_dir.join(".persona");
-        
+
         Self {
             workspace: WorkspaceConfig {
                 path: workspace_path.clone(),
@@ -106,15 +106,17 @@ impl CliConfig {
             Some(p) => p.to_path_buf(),
             None => Self::get_config_path()?,
         };
-        
+
         if config_path.exists() {
             debug!("Loading configuration from: {}", config_path.display());
-            let content = std::fs::read_to_string(&config_path)
-                .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
-            
-            let config: CliConfig = toml::from_str(&content)
-                .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
-            
+            let content = std::fs::read_to_string(&config_path).with_context(|| {
+                format!("Failed to read config file: {}", config_path.display())
+            })?;
+
+            let config: CliConfig = toml::from_str(&content).with_context(|| {
+                format!("Failed to parse config file: {}", config_path.display())
+            })?;
+
             info!("Configuration loaded successfully");
             Ok(config)
         } else {
@@ -126,15 +128,15 @@ impl CliConfig {
     /// Save configuration to file
     pub fn save(&self) -> Result<()> {
         let config_path = Self::get_config_path()?;
-        
+
         // Create parent directory if it doesn't exist
         if let Some(parent) = config_path.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
         }
 
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         std::fs::write(&config_path, content)
             .with_context(|| format!("Failed to write config file: {}", config_path.display()))?;
@@ -148,7 +150,7 @@ impl CliConfig {
         let config_dir = dirs::config_dir()
             .or_else(|| dirs::home_dir().map(|h| h.join(".config")))
             .context("Failed to determine config directory")?;
-        
+
         Ok(config_dir.join("persona").join("config.toml"))
     }
 
@@ -160,21 +162,32 @@ impl CliConfig {
     /// Load workspace-specific configuration
     pub fn load_workspace_config(&mut self) -> Result<()> {
         let workspace_config_path = self.get_workspace_config_path();
-        
+
         if workspace_config_path.exists() {
-            debug!("Loading workspace configuration from: {}", workspace_config_path.display());
-            let content = std::fs::read_to_string(&workspace_config_path)
-                .with_context(|| format!("Failed to read workspace config: {}", workspace_config_path.display()))?;
-            
-            let workspace_config: CliConfig = toml::from_str(&content)
-                .with_context(|| format!("Failed to parse workspace config: {}", workspace_config_path.display()))?;
-            
+            debug!(
+                "Loading workspace configuration from: {}",
+                workspace_config_path.display()
+            );
+            let content = std::fs::read_to_string(&workspace_config_path).with_context(|| {
+                format!(
+                    "Failed to read workspace config: {}",
+                    workspace_config_path.display()
+                )
+            })?;
+
+            let workspace_config: CliConfig = toml::from_str(&content).with_context(|| {
+                format!(
+                    "Failed to parse workspace config: {}",
+                    workspace_config_path.display()
+                )
+            })?;
+
             // Merge workspace config with global config
             self.merge_workspace_config(workspace_config);
-            
+
             info!("Workspace configuration loaded and merged");
         }
-        
+
         Ok(())
     }
 
@@ -182,16 +195,16 @@ impl CliConfig {
     fn merge_workspace_config(&mut self, workspace_config: CliConfig) {
         // Update workspace-specific settings
         self.workspace = workspace_config.workspace;
-        
+
         // Merge other settings (workspace config takes precedence)
         if workspace_config.security.encryption_enabled != self.security.encryption_enabled {
             self.security = workspace_config.security;
         }
-        
+
         if workspace_config.backup.enabled != self.backup.enabled {
             self.backup = workspace_config.backup;
         }
-        
+
         if workspace_config.sync.enabled != self.sync.enabled {
             self.sync = workspace_config.sync;
         }
@@ -201,13 +214,20 @@ impl CliConfig {
     pub fn validate(&self) -> Result<()> {
         // Validate workspace path
         if !self.workspace.path.exists() {
-            anyhow::bail!("Workspace path does not exist: {}", self.workspace.path.display());
+            anyhow::bail!(
+                "Workspace path does not exist: {}",
+                self.workspace.path.display()
+            );
         }
 
         // Validate backup directory
         if self.backup.enabled && !self.backup.directory.exists() {
-            std::fs::create_dir_all(&self.backup.directory)
-                .with_context(|| format!("Failed to create backup directory: {}", self.backup.directory.display()))?;
+            std::fs::create_dir_all(&self.backup.directory).with_context(|| {
+                format!(
+                    "Failed to create backup directory: {}",
+                    self.backup.directory.display()
+                )
+            })?;
         }
 
         // Validate sync configuration
@@ -218,7 +238,10 @@ impl CliConfig {
         // Validate output format
         let valid_formats = ["table", "json", "yaml", "csv"];
         if !valid_formats.contains(&self.ui.default_output_format.as_str()) {
-            anyhow::bail!("Invalid default output format: {}", self.ui.default_output_format);
+            anyhow::bail!(
+                "Invalid default output format: {}",
+                self.ui.default_output_format
+            );
         }
 
         // Validate logging level
@@ -252,8 +275,8 @@ impl CliConfig {
 
     /// Check if workspace is initialized
     pub fn is_workspace_initialized(&self) -> bool {
-        self.workspace.path.exists() && 
-        self.get_database_path().exists() &&
-        self.get_workspace_config_path().exists()
+        self.workspace.path.exists()
+            && self.get_database_path().exists()
+            && self.get_workspace_config_path().exists()
     }
 }

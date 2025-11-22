@@ -6,6 +6,7 @@ Summary
 
 Checklist
 - [ ] Linked issue (if any)
+- [ ] PR title follows Conventional Commits (e.g., `feat(cli): ...`)
 - [ ] Updated TODO.md for new tasks/scopes (if relevant)
 - [ ] Tests added/updated
 - [ ] `cargo fmt && cargo clippy` pass
@@ -15,4 +16,3 @@ Checklist
 Notes
 - Risk/rollback plan:
 - Follow-ups:
-

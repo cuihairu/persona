@@ -93,9 +93,8 @@ cd persona
 cargo build --release
 
 # 构建桌面应用
-cd desktop
-npm install
-npm run tauri build
+pnpm install
+pnpm --filter desktop run tauri build
 
 # 构建移动应用
 cd ../mobile

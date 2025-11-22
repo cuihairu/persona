@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// 审计日志条目
 /// 用于记录系统中的所有安全相关操作
@@ -18,6 +18,9 @@ pub struct AuditLog {
 
     /// 凭据ID (可选，操作涉及的凭据)
     pub credential_id: Option<Uuid>,
+
+    /// 会话ID (可选，操作发生的会话)
+    pub session_id: Option<String>,
 
     /// 操作类型
     pub action: AuditAction,
@@ -56,6 +59,8 @@ pub enum AuditAction {
     Logout,
     LoginFailed,
     SessionExpired,
+    SessionLocked,
+    SessionUnlocked,
     PasswordChange,
     MfaEnabled,
     MfaDisabled,
@@ -105,6 +110,8 @@ impl std::fmt::Display for AuditAction {
             AuditAction::Logout => "logout",
             AuditAction::LoginFailed => "login_failed",
             AuditAction::SessionExpired => "session_expired",
+            AuditAction::SessionLocked => "session_locked",
+            AuditAction::SessionUnlocked => "session_unlocked",
             AuditAction::PasswordChange => "password_change",
             AuditAction::MfaEnabled => "mfa_enabled",
             AuditAction::MfaDisabled => "mfa_disabled",
@@ -235,16 +242,13 @@ impl std::str::FromStr for ResourceType {
 
 impl AuditLog {
     /// 创建新的审计日志条目
-    pub fn new(
-        action: AuditAction,
-        resource_type: ResourceType,
-        success: bool,
-    ) -> Self {
+    pub fn new(action: AuditAction, resource_type: ResourceType, success: bool) -> Self {
         Self {
             id: Uuid::new_v4(),
             user_id: None,
             identity_id: None,
             credential_id: None,
+            session_id: None,
             action,
             resource_type,
             resource_id: None,
@@ -272,6 +276,18 @@ impl AuditLog {
     /// 构建器模式：设置凭据ID
     pub fn with_credential_id(mut self, credential_id: Option<Uuid>) -> Self {
         self.credential_id = credential_id;
+        self
+    }
+
+    /// 构建器模式：设置会话ID
+    pub fn with_session_id(mut self, session_id: Option<String>) -> Self {
+        self.session_id = session_id;
+        self
+    }
+
+    /// 构建器模式：设置详细信息
+    pub fn with_details(mut self, details: Option<String>) -> Self {
+        self.error_message = details; // 使用error_message字段存储详细信息
         self
     }
 
@@ -329,14 +345,15 @@ impl AuditLog {
 
     /// 是否是失败操作
     pub fn is_failure(&self) -> bool {
-        !self.success || matches!(
-            self.action,
-            AuditAction::LoginFailed
-                | AuditAction::UnauthorizedAccess
-                | AuditAction::BruteForceDetected
-                | AuditAction::SuspiciousActivity
-                | AuditAction::DataExfiltration
-        )
+        !self.success
+            || matches!(
+                self.action,
+                AuditAction::LoginFailed
+                    | AuditAction::UnauthorizedAccess
+                    | AuditAction::BruteForceDetected
+                    | AuditAction::SuspiciousActivity
+                    | AuditAction::DataExfiltration
+            )
     }
 }
 
@@ -346,11 +363,7 @@ mod tests {
 
     #[test]
     fn test_audit_log_creation() {
-        let log = AuditLog::new(
-            AuditAction::Login,
-            ResourceType::User,
-            true,
-        );
+        let log = AuditLog::new(AuditAction::Login, ResourceType::User, true);
 
         assert_eq!(log.action, AuditAction::Login);
         assert_eq!(log.resource_type, ResourceType::User);
@@ -413,11 +426,8 @@ mod tests {
             true,
         );
 
-        let non_sensitive_log = AuditLog::new(
-            AuditAction::IdentityViewed,
-            ResourceType::Identity,
-            true,
-        );
+        let non_sensitive_log =
+            AuditLog::new(AuditAction::IdentityViewed, ResourceType::Identity, true);
 
         assert!(sensitive_log.is_security_sensitive());
         assert!(!non_sensitive_log.is_security_sensitive());
@@ -425,17 +435,9 @@ mod tests {
 
     #[test]
     fn test_failure_detection() {
-        let failed_log = AuditLog::new(
-            AuditAction::LoginFailed,
-            ResourceType::User,
-            false,
-        );
+        let failed_log = AuditLog::new(AuditAction::LoginFailed, ResourceType::User, false);
 
-        let success_log = AuditLog::new(
-            AuditAction::Login,
-            ResourceType::User,
-            true,
-        );
+        let success_log = AuditLog::new(AuditAction::Login, ResourceType::User, true);
 
         assert!(failed_log.is_failure());
         assert!(!success_log.is_failure());

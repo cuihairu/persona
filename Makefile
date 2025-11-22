@@ -30,13 +30,15 @@ setup: install ## 设置开发环境
 
 # 构建项目
 build: ## 构建所有组件
-	@echo "构建核心库..."
-	cargo build --release
+	@echo "构建核心库 (workspace)..."
+	cargo build --workspace --release
 	@echo "构建桌面应用..."
 	cd desktop && npm run tauri build
 	@echo "构建移动应用..."
 	cd mobile && flutter build apk
 	@echo "构建完成!"
+
+build-all: build ## 构建所有组件（别名）
 
 # 开发模式
 dev: ## 启动开发模式
@@ -54,13 +56,15 @@ dev-mobile: ## 启动移动应用开发模式
 
 # 测试
 test: ## 运行所有测试
-	@echo "运行 Rust 测试..."
-	cargo test
+	@echo "运行 Rust 测试 (workspace, all features)..."
+	cargo test --workspace --all-features
 	@echo "运行桌面应用测试..."
 	cd desktop && npm test
 	@echo "运行移动应用测试..."
 	cd mobile && flutter test
 	@echo "测试完成!"
+
+test-all: test ## 运行所有测试（别名）
 
 test-rust: ## 运行 Rust 测试
 	cargo test
@@ -73,23 +77,27 @@ test-mobile: ## 运行移动应用测试
 
 # 代码检查
 lint: ## 运行代码检查
-	@echo "检查 Rust 代码..."
-	cargo clippy -- -D warnings
+	@echo "检查 Rust 代码 (workspace, all targets/features)..."
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 	@echo "检查桌面应用代码..."
 	cd desktop && npm run lint
 	@echo "检查移动应用代码..."
 	cd mobile && flutter analyze
 	@echo "代码检查完成!"
 
+lint-all: lint ## 运行所有代码检查（别名）
+
 # 代码格式化
 format: ## 格式化代码
-	@echo "格式化 Rust 代码..."
-	cargo fmt
+	@echo "格式化 Rust 代码 (workspace)..."
+	cargo fmt --all
 	@echo "格式化桌面应用代码..."
 	cd desktop && npm run format
 	@echo "格式化移动应用代码..."
 	cd mobile && dart format .
 	@echo "代码格式化完成!"
+
+format-all: format ## 格式化所有代码（别名）
 
 # 清理
 clean: ## 清理构建文件

@@ -1,11 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
+use serde::{Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::CliConfig;
-use persona_core::{Database, PersonaService, storage::IdentityRepository, Identity as CoreIdentity};
+use persona_core::{
+    storage::IdentityRepository, Database, Identity as CoreIdentity, PersonaService,
+};
 
 #[derive(Args)]
 pub struct ShowArgs {
@@ -22,8 +25,9 @@ pub struct ShowArgs {
 }
 
 pub async fn execute(args: ShowArgs, config: &CliConfig) -> Result<()> {
-    println!("{} Showing identity '{}'...", 
-        "👤".to_string(), 
+    println!(
+        "{} Showing identity '{}'...",
+        "👤".to_string(),
         args.name.bright_cyan().bold()
     );
     println!();
@@ -42,7 +46,7 @@ pub async fn execute(args: ShowArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct IdentityDetails {
     name: String,
     identity_type: String,
@@ -62,29 +66,43 @@ async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<Identi
     use dialoguer::Password;
     // Open DB
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy())
+    let db = Database::from_file(&db_path)
         .await
-        .context("Failed to connect to database")?;
-    db.migrate().await.context("Failed to run database migrations")?;
+        .map_err(|e| anyhow!("Failed to connect to database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
 
     // Service
-    let mut service = PersonaService::new(db.clone()).await.context("Failed to create PersonaService")?;
-    let mut maybe: Option<CoreIdentity> = None;
-    if service.has_users().await? {
+    let mut service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
+    let maybe: Option<CoreIdentity> = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
-            persona_core::auth::authentication::AuthResult::Success => {
-                maybe = service.get_identity_by_name(name).await?;
-            }
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to authenticate user: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => service
+                .get_identity_by_name(name)
+                .await
+                .map_err(|e| anyhow!("Failed to fetch identity: {}", e))?,
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         // Fallback to direct repository read for non-authenticated DB
         let repo = IdentityRepository::new(db);
-        maybe = repo.find_by_name(name).await?;
-    }
+        repo.find_by_name(name)
+            .await
+            .map_err(|e| anyhow!("Failed to fetch identity: {}", e))?
+    };
 
     let id = maybe.with_context(|| format!("Identity '{}' not found", name))?;
     Ok(IdentityDetails {
@@ -94,7 +112,11 @@ async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<Identi
         email: id.email,
         phone: id.phone,
         tags: id.tags.clone(),
-        attributes: id.attributes.into_iter().map(|(k,v)| (k, Value::String(v))).collect(),
+        attributes: id
+            .attributes
+            .into_iter()
+            .map(|(k, v)| (k, Value::String(v)))
+            .collect(),
         active: id.is_active,
         created: id.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
         modified: id.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
@@ -107,11 +129,17 @@ async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<Identi
 fn display_table_format(identity: &IdentityDetails, show_sensitive: bool) -> Result<()> {
     // Basic information
     println!("{}", "Basic Information:".yellow().bold());
-    println!("  {}: {}", "Name".dim(), identity.name.bright_cyan());
-    println!("  {}: {}", "Type".dim(), identity.identity_type.cyan());
-    println!("  {}: {}", "Description".dim(), identity.description);
-    println!("  {}: {}", "Active".dim(), 
-        if identity.active { "Yes".green() } else { "No".red() }
+    println!("  {}: {}", "Name".dimmed(), identity.name.bright_cyan());
+    println!("  {}: {}", "Type".dimmed(), identity.identity_type.cyan());
+    println!("  {}: {}", "Description".dimmed(), identity.description);
+    println!(
+        "  {}: {}",
+        "Active".dimmed(),
+        if identity.active {
+            "Yes".green()
+        } else {
+            "No".red()
+        }
     );
     println!();
 
@@ -119,10 +147,10 @@ fn display_table_format(identity: &IdentityDetails, show_sensitive: bool) -> Res
     if identity.email.is_some() || identity.phone.is_some() {
         println!("{}", "Contact Information:".yellow().bold());
         if let Some(ref email) = identity.email {
-            println!("  {}: {}", "Email".dim(), email.cyan());
+            println!("  {}: {}", "Email".dimmed(), email.cyan());
         }
         if let Some(ref phone) = identity.phone {
-            println!("  {}: {}", "Phone".dim(), phone.cyan());
+            println!("  {}: {}", "Phone".dimmed(), phone.cyan());
         }
         println!();
     }
@@ -146,11 +174,11 @@ fn display_table_format(identity: &IdentityDetails, show_sensitive: bool) -> Res
                 Value::Bool(b) => b.to_string(),
                 _ => serde_json::to_string(value).unwrap_or_else(|_| "N/A".to_string()),
             };
-            
+
             if show_sensitive || !is_sensitive_attribute(key) {
-                println!("  {}: {}", key.dim(), value_str.cyan());
+                println!("  {}: {}", key.dimmed(), value_str.cyan());
             } else {
-                println!("  {}: {}", key.dim(), "***".dim());
+                println!("  {}: {}", key.dimmed(), "***".dimmed());
             }
         }
         println!();
@@ -158,16 +186,20 @@ fn display_table_format(identity: &IdentityDetails, show_sensitive: bool) -> Res
 
     // Usage statistics
     println!("{}", "Usage Statistics:".yellow().bold());
-    println!("  {}: {}", "Usage Count".dim(), identity.usage_count.to_string().cyan());
+    println!(
+        "  {}: {}",
+        "Usage Count".dimmed(),
+        identity.usage_count.to_string().cyan()
+    );
     if let Some(ref last_used) = identity.last_used {
-        println!("  {}: {}", "Last Used".dim(), last_used.cyan());
+        println!("  {}: {}", "Last Used".dimmed(), last_used.cyan());
     }
     println!();
 
     // Timestamps
     println!("{}", "Timestamps:".yellow().bold());
-    println!("  {}: {}", "Created".dim(), identity.created.cyan());
-    println!("  {}: {}", "Modified".dim(), identity.modified.cyan());
+    println!("  {}: {}", "Created".dimmed(), identity.created.cyan());
+    println!("  {}: {}", "Modified".dimmed(), identity.modified.cyan());
 
     Ok(())
 }
@@ -186,10 +218,20 @@ fn display_yaml_format(identity: &IdentityDetails) -> Result<()> {
 
 fn is_sensitive_attribute(key: &str) -> bool {
     let sensitive_keys = [
-        "password", "secret", "token", "key", "ssn", "social_security",
-        "credit_card", "bank_account", "pin", "passcode"
+        "password",
+        "secret",
+        "token",
+        "key",
+        "ssn",
+        "social_security",
+        "credit_card",
+        "bank_account",
+        "pin",
+        "passcode",
     ];
-    
+
     let key_lower = key.to_lowercase();
-    sensitive_keys.iter().any(|&sensitive| key_lower.contains(sensitive))
+    sensitive_keys
+        .iter()
+        .any(|&sensitive| key_lower.contains(sensitive))
 }

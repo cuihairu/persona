@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use clap::{Args, Subcommand};
 use colored::*;
+use dialoguer::{Confirm, Password};
 use persona_core::{
+    models::{CredentialData, CredentialType, Identity as CoreIdentity, SecurityLevel, SshKeyData},
     Database, PersonaService,
-    models::{CredentialType, SecurityLevel, CredentialData, SshKeyData, Identity as CoreIdentity},
 };
-use dialoguer::{Input, Password, Confirm};
 use uuid::Uuid;
 
 #[derive(Args, Debug)]
@@ -103,21 +104,35 @@ pub enum SshSubcommand {
 
 pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result<()> {
     match args.command {
-        SshSubcommand::Generate { identity, name, key_type, favorite } => {
-            generate_key(&identity, name, &key_type, favorite, config).await
-        }
+        SshSubcommand::Generate {
+            identity,
+            name,
+            key_type,
+            favorite,
+        } => generate_key(&identity, name, &key_type, favorite, config).await,
         SshSubcommand::List { identity } => list_keys(&identity, config).await,
         SshSubcommand::Remove { id, yes } => remove_key(id, yes, config).await,
         SshSubcommand::Status => {
             println!("{}", "SSH Agent status (placeholder):".yellow().bold());
-            println!("  {}", "Not implemented yet. Use your system ssh-agent temporarily.".dim());
+            println!(
+                "  {}",
+                "Not implemented yet. Use your system ssh-agent temporarily.".dimmed()
+            );
             Ok(())
         }
-        SshSubcommand::AddToAgent { identity: _, print_export } => start_agent(config, print_export).await,
+        SshSubcommand::AddToAgent {
+            identity: _,
+            print_export,
+        } => start_agent(config, print_export).await,
         SshSubcommand::AgentStatus => agent_status(config),
         SshSubcommand::StartAgent { print_export } => start_agent(config, print_export).await,
         SshSubcommand::ListAll => list_all_keys(config).await,
-        SshSubcommand::Import { identity, name, seed_base64, seed_hex } => import_seed(&identity, name, seed_base64, seed_hex, config).await,
+        SshSubcommand::Import {
+            identity,
+            name,
+            seed_base64,
+            seed_hex,
+        } => import_seed(&identity, name, seed_base64, seed_hex, config).await,
         SshSubcommand::ExportPub { id } => export_pubkey(id, config).await,
         SshSubcommand::StopAgent => stop_agent(),
         SshSubcommand::Run { host, command } => run_with_host(&host, command, config).await,
@@ -126,10 +141,13 @@ pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result
 
 async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaService> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await
+    let db = Database::from_file(&db_path.to_string_lossy())
+        .await
         .context("Failed to open database")?;
     db.migrate().await.context("Failed to run migrations")?;
-    let mut service = PersonaService::new(db).await.context("Failed to create PersonaService")?;
+    let mut service = PersonaService::new(db)
+        .await
+        .context("Failed to create PersonaService")?;
     if service.has_users().await? {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
@@ -143,11 +161,19 @@ async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaServ
 }
 
 async fn resolve_identity(service: &PersonaService, name: &str) -> Result<CoreIdentity> {
-    service.get_identity_by_name(name).await?
+    service
+        .get_identity_by_name(name)
+        .await?
         .with_context(|| format!("Identity '{}' not found", name))
 }
 
-async fn generate_key(identity_name: &str, label: Option<String>, key_type: &str, favorite: bool, config: &crate::config::CliConfig) -> Result<()> {
+async fn generate_key(
+    identity_name: &str,
+    label: Option<String>,
+    key_type: &str,
+    favorite: bool,
+    config: &crate::config::CliConfig,
+) -> Result<()> {
     println!("{}", "🔑 Generating SSH key...".cyan().bold());
     if key_type.to_lowercase() != "ed25519" {
         anyhow::bail!("Only ed25519 is supported currently");
@@ -157,7 +183,7 @@ async fn generate_key(identity_name: &str, label: Option<String>, key_type: &str
     let identity = resolve_identity(&service, identity_name).await?;
 
     // Generate ed25519 keypair
-    use ed25519_dalek::{SigningKey, VerifyingKey, SECRET_KEY_LENGTH};
+    use ed25519_dalek::{SigningKey, VerifyingKey};
     use rand::rngs::OsRng;
 
     let signing_key = SigningKey::generate(&mut OsRng);
@@ -167,7 +193,7 @@ async fn generate_key(identity_name: &str, label: Option<String>, key_type: &str
 
     // Encode to OpenSSH public line: base64 of [len:"ssh-ed25519"][b"ssh-ed25519"][len:pub][pub]
     let openssh_pub = encode_ssh_ed25519_public(&pub_bytes, None);
-    let private_b64 = base64::encode(secret_bytes);
+    let private_b64 = BASE64.encode(secret_bytes);
 
     let name = label.unwrap_or_else(|| format!("SSH Key ({})", identity.name));
     let mut data = SshKeyData {
@@ -176,13 +202,15 @@ async fn generate_key(identity_name: &str, label: Option<String>, key_type: &str
         key_type: "ed25519".to_string(),
         passphrase: None,
     };
-    let cred = service.create_credential(
-        identity.id,
-        name.clone(),
-        CredentialType::SshKey,
-        SecurityLevel::High,
-        &CredentialData::SshKey(data.clone()),
-    ).await?;
+    let cred = service
+        .create_credential(
+            identity.id,
+            name.clone(),
+            CredentialType::SshKey,
+            SecurityLevel::High,
+            &CredentialData::SshKey(data.clone()),
+        )
+        .await?;
 
     println!("{} Created SSH key credential:", "✓".green().bold());
     println!("  Name: {}", name.cyan());
@@ -190,7 +218,7 @@ async fn generate_key(identity_name: &str, label: Option<String>, key_type: &str
     println!("  Public: {}", openssh_pub);
     println!("  ID: {}", cred.id);
     if favorite {
-        println!("  {}", "Mark as favorite: TODO".dim());
+        println!("  {}", "Mark as favorite: TODO".dimmed());
     }
     Ok(())
 }
@@ -203,11 +231,18 @@ async fn list_keys(identity_name: &str, config: &crate::config::CliConfig) -> Re
     for cred in creds {
         if matches!(cred.credential_type, CredentialType::SshKey) {
             count += 1;
-            println!("{} {}", "#".dim(), count);
+            println!("{} {}", "#".dimmed(), count);
             println!("  ID: {}", cred.id);
             println!("  Name: {}", cred.name.cyan());
             println!("  Created: {}", cred.created_at.format("%Y-%m-%d %H:%M:%S"));
-            println!("  Favorite: {}", if cred.is_favorite { "yes".green() } else { "no".dim() });
+            println!(
+                "  Favorite: {}",
+                if cred.is_favorite {
+                    "yes".green()
+                } else {
+                    "no".dimmed()
+                }
+            );
         }
     }
     if count == 0 {
@@ -222,7 +257,8 @@ async fn remove_key(id: Uuid, yes: bool, config: &crate::config::CliConfig) -> R
         if !Confirm::new()
             .with_prompt(format!("Remove SSH key credential {}?", id))
             .default(false)
-            .interact()? {
+            .interact()?
+        {
             println!("{}", "Cancelled.".yellow());
             return Ok(());
         }
@@ -241,7 +277,7 @@ fn encode_ssh_ed25519_public(pubkey: &[u8; 32], comment: Option<&str>) -> String
     buf.extend_from_slice(algo);
     buf.write_u32::<BigEndian>(pubkey.len() as u32).unwrap();
     buf.extend_from_slice(pubkey);
-    let b64 = base64::encode(&buf);
+    let b64 = BASE64.encode(&buf);
     match comment {
         Some(c) if !c.is_empty() => format!("ssh-ed25519 {} {}", b64, c),
         _ => format!("ssh-ed25519 {}", b64),
@@ -249,16 +285,16 @@ fn encode_ssh_ed25519_public(pubkey: &[u8; 32], comment: Option<&str>) -> String
 }
 
 async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> Result<()> {
-    use tokio::process::Command;
     use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::process::Command;
     println!("{}", "Starting persona-ssh-agent...".cyan().bold());
     let db_path = config.get_database_path();
     let mut cmd = Command::new("persona-ssh-agent");
     cmd.env("PERSONA_DB_PATH", db_path.to_string_lossy().to_string());
     // if vault encrypted, prompt for master password and pass via env
     let mut tmp_service = ensure_service(config).await?; // ensure migrations; may prompt
-    // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
-    // Here we conservatively ask user again (not stored from ensure_service)
+                                                         // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
+                                                         // Here we conservatively ask user again (not stored from ensure_service)
     let pass = Password::new()
         .with_prompt("Enter master password for agent (leave empty if not set)")
         .allow_empty_password(true)
@@ -281,24 +317,34 @@ async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> R
         }
     }
     if let Some(sock) = sock_line {
-        println!("{} {}", "Agent socket:".yellow(), sock.split('=').nth(1).unwrap_or("").cyan());
+        println!(
+            "{} {}",
+            "Agent socket:".yellow(),
+            sock.split('=').nth(1).unwrap_or("").cyan()
+        );
         if print_export {
             println!();
-            println!("{}", "Run the following in your shell:".dim());
+            println!("{}", "Run the following in your shell:".dimmed());
             println!("  export {}", sock);
         }
     } else {
-        println!("{}", "Could not detect SSH_AUTH_SOCK from agent output.".yellow());
+        println!(
+            "{}",
+            "Could not detect SSH_AUTH_SOCK from agent output.".yellow()
+        );
     }
 
     Ok(())
 }
 
 fn agent_status(config: &crate::config::CliConfig) -> Result<()> {
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR").ok()
+    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
+        .ok()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".persona")
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".persona")
         });
     let sock_file = state_dir.join("ssh-agent.sock");
     let pid_file = state_dir.join("ssh-agent.pid");
@@ -331,9 +377,9 @@ fn agent_status(config: &crate::config::CliConfig) -> Result<()> {
 }
 
 fn query_agent_identities(sock_path: &str) -> Result<usize> {
+    use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
-    use std::io::{Write, Read};
-    use byteorder::{BigEndian, ByteOrder, WriteBytesExt, ReadBytesExt};
     let mut stream = UnixStream::connect(sock_path)
         .with_context(|| format!("Failed to connect to agent at {}", sock_path))?;
     // Build request: len(4) + type(1)=11
@@ -358,16 +404,23 @@ fn query_agent_identities(sock_path: &str) -> Result<usize> {
     Ok(count)
 }
 
-async fn run_with_host(host: &str, command: Vec<String>, _config: &crate::config::CliConfig) -> Result<()> {
+async fn run_with_host(
+    host: &str,
+    command: Vec<String>,
+    _config: &crate::config::CliConfig,
+) -> Result<()> {
     use tokio::process::Command;
     if command.is_empty() {
         anyhow::bail!("Provide a command after --");
     }
     // Write host to state file
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR").ok()
+    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
+        .ok()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".persona")
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".persona")
         });
     std::fs::create_dir_all(&state_dir).ok();
     let host_file = state_dir.join("agent-target-host");
@@ -390,13 +443,19 @@ async fn run_with_host(host: &str, command: Vec<String>, _config: &crate::config
     }
 }
 
-async fn import_seed(identity_name: &str, label: Option<String>, seed_b64: Option<String>, seed_hex: Option<String>, config: &crate::config::CliConfig) -> Result<()> {
+async fn import_seed(
+    identity_name: &str,
+    label: Option<String>,
+    seed_b64: Option<String>,
+    seed_hex: Option<String>,
+    config: &crate::config::CliConfig,
+) -> Result<()> {
     println!("{}", "🔑 Importing SSH seed...".cyan().bold());
     let mut service = ensure_service(config).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
     let mut seed = if let Some(b64) = seed_b64 {
-        base64::decode(&b64).context("Invalid base64 seed")?
+        BASE64.decode(&b64).context("Invalid base64 seed")?
     } else if let Some(hexs) = seed_hex {
         let cleaned = hexs.trim();
         hex::decode(cleaned).context("Invalid hex seed")?
@@ -416,18 +475,20 @@ async fn import_seed(identity_name: &str, label: Option<String>, seed_b64: Optio
     let public_openssh = encode_ssh_ed25519_public(&pub_bytes, None);
     let name = label.unwrap_or_else(|| "SSH Key (imported)".to_string());
     let ssh_data = SshKeyData {
-        private_key: base64::encode(arr),
+        private_key: BASE64.encode(arr),
         public_key: public_openssh.clone(),
         key_type: "ed25519".to_string(),
         passphrase: None,
     };
-    let cred = service.create_credential(
-        identity.id,
-        name.clone(),
-        CredentialType::SshKey,
-        SecurityLevel::High,
-        &CredentialData::SshKey(ssh_data),
-    ).await?;
+    let cred = service
+        .create_credential(
+            identity.id,
+            name.clone(),
+            CredentialType::SshKey,
+            SecurityLevel::High,
+            &CredentialData::SshKey(ssh_data),
+        )
+        .await?;
     println!("{} Imported SSH key:", "✓".green().bold());
     println!("  Identity: {}", identity.name.cyan());
     println!("  Name: {}", name.cyan());
@@ -455,10 +516,13 @@ async fn export_pubkey(id: uuid::Uuid, config: &crate::config::CliConfig) -> Res
 
 fn stop_agent() -> Result<()> {
     use std::process::Command;
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR").ok()
+    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
+        .ok()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from(".")).join(".persona")
+            dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".persona")
         });
     let pid_file = state_dir.join("ssh-agent.pid");
     if !pid_file.exists() {
@@ -471,15 +535,20 @@ fn stop_agent() -> Result<()> {
         println!("{}", "Empty PID file.".yellow());
         return Ok(());
     }
-    let status = Command::new("kill").arg(pid).status().unwrap_or_else(|_| std::process::ExitStatus::from_raw(0));
-    if status.success() {
-        println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
-        // Cleanup sock/pid files
-        let _ = std::fs::remove_file(pid_file);
-        let sock_file = state_dir.join("ssh-agent.sock");
-        let _ = std::fs::remove_file(sock_file);
-    } else {
-        println!("{}", "Failed to stop agent (kill)".red());
+    match Command::new("kill").arg(pid).status() {
+        Ok(status) if status.success() => {
+            println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
+            // Cleanup sock/pid files
+            let _ = std::fs::remove_file(pid_file);
+            let sock_file = state_dir.join("ssh-agent.sock");
+            let _ = std::fs::remove_file(sock_file);
+        }
+        Ok(_) => {
+            println!("{}", "Failed to stop agent (kill)".red());
+        }
+        Err(err) => {
+            println!("{} Failed to execute kill: {}", "✗".red(), err);
+        }
     }
     Ok(())
 }

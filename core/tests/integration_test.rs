@@ -1,8 +1,5 @@
-use anyhow::Result;
 use persona_core::*;
 use tempfile::tempdir;
-use tokio;
-
 /// End-to-end integration test for the core Persona functionality
 #[tokio::test]
 async fn test_complete_identity_workflow() -> Result<()> {
@@ -11,7 +8,7 @@ async fn test_complete_identity_workflow() -> Result<()> {
     let db_path = temp_dir.path().join("test_persona.db");
 
     // Step 1: Initialize database and service
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    let db = Database::from_file(&db_path).await?;
     db.migrate().await?;
 
     let mut service = PersonaService::new(db).await?;
@@ -24,10 +21,9 @@ async fn test_complete_identity_workflow() -> Result<()> {
     println!("✓ User initialized with ID: {}", user_id);
 
     // Step 3: Create an identity
-    let identity = service.create_identity(
-        "Test Identity".to_string(),
-        IdentityType::Personal,
-    ).await?;
+    let identity = service
+        .create_identity("Test Identity".to_string(), IdentityType::Personal)
+        .await?;
 
     assert_eq!(identity.name, "Test Identity");
     assert_eq!(identity.identity_type, IdentityType::Personal);
@@ -41,13 +37,15 @@ async fn test_complete_identity_workflow() -> Result<()> {
         security_questions: vec![],
     });
 
-    let credential = service.create_credential(
-        identity.id,
-        "Test Website".to_string(),
-        CredentialType::Password,
-        SecurityLevel::High,
-        &password_data,
-    ).await?;
+    let credential = service
+        .create_credential(
+            identity.id,
+            "Test Website".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            &password_data,
+        )
+        .await?;
 
     assert_eq!(credential.name, "Test Website");
     assert_eq!(credential.credential_type, CredentialType::Password);
@@ -77,8 +75,10 @@ async fn test_complete_identity_workflow() -> Result<()> {
     assert_eq!(stats.total_identities, 1);
     assert_eq!(stats.total_credentials, 1);
     assert_eq!(stats.active_credentials, 1);
-    println!("✓ Statistics: {} identities, {} credentials",
-             stats.total_identities, stats.total_credentials);
+    println!(
+        "✓ Statistics: {} identities, {} credentials",
+        stats.total_identities, stats.total_credentials
+    );
 
     // Step 8: Test locking and unlocking
     service.lock();
@@ -98,17 +98,16 @@ async fn test_credential_encryption() -> Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("test_encryption.db");
 
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    let db = Database::from_file(&db_path).await?;
     db.migrate().await?;
 
     let mut service = PersonaService::new(db).await?;
     let _user_id = service.initialize_user("encryption_test_password").await?;
 
     // Create identity
-    let identity = service.create_identity(
-        "Encryption Test".to_string(),
-        IdentityType::Work,
-    ).await?;
+    let identity = service
+        .create_identity("Encryption Test".to_string(), IdentityType::Work)
+        .await?;
 
     // Test different credential types
     let test_cases = vec![
@@ -136,16 +135,20 @@ async fn test_credential_encryption() -> Result<()> {
 
     for (name, data, cred_type) in test_cases {
         // Create credential
-        let credential = service.create_credential(
-            identity.id,
-            name.to_string(),
-            cred_type,
-            SecurityLevel::Critical,
-            &data,
-        ).await?;
+        let credential = service
+            .create_credential(
+                identity.id,
+                name.to_string(),
+                cred_type,
+                SecurityLevel::Critical,
+                &data,
+            )
+            .await?;
 
         // Retrieve and verify
-        let retrieved = service.get_credential_data(&credential.id).await?
+        let retrieved = service
+            .get_credential_data(&credential.id)
+            .await?
             .expect("Failed to retrieve credential data");
 
         match (&data, &retrieved) {
@@ -172,7 +175,7 @@ async fn test_error_handling() -> Result<()> {
     let temp_dir = tempdir()?;
     let db_path = temp_dir.path().join("test_errors.db");
 
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
+    let db = Database::from_file(&db_path).await?;
     db.migrate().await?;
 
     let service = PersonaService::new(db).await?;

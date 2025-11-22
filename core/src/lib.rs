@@ -5,19 +5,22 @@
 
 pub mod auth;
 pub mod crypto;
+pub mod logging;
 pub mod models;
-pub mod storage;
 pub mod service;
+pub mod storage;
 
 // Re-export commonly used types
-pub use models::*;
 pub use auth::*;
 pub use crypto::*;
-pub use storage::*;
+pub use logging::*;
+pub use models::*;
 pub use service::*;
+pub use storage::*;
 
 /// Core result type used throughout the library
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+pub type Result<T> =
+    std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 /// Core error type for the Persona system
 #[derive(Debug, thiserror::Error)]
@@ -45,4 +48,10 @@ pub enum PersonaError {
 
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
+
+    #[error("Resource not found: {0}")]
+    NotFound(String),
+
+    #[error("Validation error: {0}")]
+    Validation(String),
 }

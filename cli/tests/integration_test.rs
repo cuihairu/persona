@@ -1,8 +1,8 @@
 use anyhow::Result;
 use assert_cmd::Command;
 use predicates::prelude::*;
-use tempfile::tempdir;
 use std::fs;
+use tempfile::tempdir;
 
 /// CLI integration tests
 ///
@@ -44,7 +44,9 @@ fn test_init_command() -> Result<()> {
         .arg("--encrypted")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Persona workspace initialized successfully"));
+        .stdout(predicate::str::contains(
+            "Persona workspace initialized successfully",
+        ));
 
     // Verify that workspace structure was created
     assert!(workspace_path.join("identities").exists());
@@ -89,7 +91,7 @@ fn test_add_command_requires_workspace() -> Result<()> {
         .current_dir(non_workspace_path)
         .assert()
         .failure();
-        // Should fail because no workspace is initialized
+    // Should fail because no workspace is initialized
 
     Ok(())
 }
@@ -101,7 +103,8 @@ fn test_list_command_empty_workspace() -> Result<()> {
 
     // First initialize a workspace
     let mut init_cmd = Command::cargo_bin("persona")?;
-    init_cmd.arg("init")
+    init_cmd
+        .arg("init")
         .arg("--path")
         .arg(workspace_path)
         .arg("--yes")
@@ -110,7 +113,8 @@ fn test_list_command_empty_workspace() -> Result<()> {
 
     // Then try to list identities (should be empty)
     let mut list_cmd = Command::cargo_bin("persona")?;
-    list_cmd.arg("list")
+    list_cmd
+        .arg("list")
         .current_dir(workspace_path)
         .assert()
         .success()
@@ -131,7 +135,7 @@ fn test_workspace_validation() -> Result<()> {
         .arg("--yes")
         .assert()
         .failure();
-        // Should fail due to invalid path
+    // Should fail due to invalid path
 
     Ok(())
 }
@@ -182,7 +186,10 @@ fn test_init_with_master_password() -> Result<()> {
     // Verify database was created and initialized
     assert!(workspace_path.join("identities.db").exists());
     let db_size = fs::metadata(workspace_path.join("identities.db"))?.len();
-    assert!(db_size > 0, "Database should not be empty after initialization");
+    assert!(
+        db_size > 0,
+        "Database should not be empty after initialization"
+    );
 
     Ok(())
 }
@@ -203,10 +210,7 @@ fn test_invalid_arguments() -> Result<()> {
 #[test]
 fn test_verbose_flag() -> Result<()> {
     let mut cmd = Command::cargo_bin("persona")?;
-    cmd.arg("--verbose")
-        .arg("--help")
-        .assert()
-        .success();
+    cmd.arg("--verbose").arg("--help").assert().success();
 
     Ok(())
 }
@@ -221,7 +225,7 @@ fn test_missing_config() -> Result<()> {
         .current_dir(temp_dir.path())
         .assert()
         .failure();
-        // Should fail because no workspace is configured
+    // Should fail because no workspace is configured
 
     Ok(())
 }

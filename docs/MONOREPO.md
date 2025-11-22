@@ -9,18 +9,18 @@ Structure
 - agents/ssh-agent (Rust crate) – SSH Agent daemon (developer feature)
 - desktop (Tauri+React app) – cross-platform desktop UI
 - mobile (Flutter/Rust bridge placeholder) – future mobile app
-- docs – specs, roadmap, and design docs
+- docs – specs, roadmap, and design docs (see `docs/KEY_HIERARCHY.md` for crypto details, `docs/REMOTE_AUTH.md` for SRP auth, and `docs/BIOMETRIC_HOOKS.md`)
 
 Tooling
 - Rust: Cargo workspace (root Cargo.toml)
-- JS: npm workspaces (root package.json; `desktop` workspace)
+- JS: pnpm workspace (root package.json; `desktop`, `browser/chromium-extension`)
 - Makefile: convenience targets for common dev flows
 
 Build
 - Rust: `cargo build --workspace`
-- Desktop: `npm -w desktop install && npm -w desktop run dev`
+- JS workspaces: `pnpm install`
+- Desktop: `pnpm --filter desktop run dev`
 
 Contrib
 - Follow Rust 2021 edition style; run `cargo fmt && cargo clippy`
-- For desktop, run ESLint + Jest; PRs must include tests for core logic
-
+- For desktop/browser, run ESLint + Jest via pnpm; PRs must include tests for core logic

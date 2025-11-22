@@ -1,10 +1,13 @@
-use async_trait::async_trait;
-use crate::{Result, PersonaError};
-use crate::models::{Identity, Workspace, Credential, AuditLog, CredentialType, IdentityType, SecurityLevel, AuditAction, ResourceType};
+use crate::models::{
+    AuditAction, AuditLog, Credential, CredentialType, Identity, IdentityType, ResourceType,
+    SecurityLevel, Workspace,
+};
 use crate::storage::Database;
+use crate::{PersonaError, Result};
+use async_trait::async_trait;
 use sqlx::Row;
-use uuid::Uuid;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// Generic repository trait
 #[async_trait]
@@ -65,7 +68,8 @@ impl IdentityRepository {
             .map_err(|e| PersonaError::Database(format!("Invalid UUID: {}", e)))?;
 
         let identity_type_str: String = row.get("identity_type");
-        let identity_type = identity_type_str.parse::<IdentityType>()
+        let identity_type = identity_type_str
+            .parse::<IdentityType>()
             .map_err(|e| PersonaError::Database(format!("Invalid identity type: {}", e)))?;
 
         let tags_json: String = row.get("tags");
@@ -110,8 +114,9 @@ impl Repository<Identity> for IdentityRepository {
         let tags_json = serde_json::to_string(&identity.tags)
             .map_err(|e| PersonaError::Database(format!("Failed to serialize tags: {}", e)))?;
 
-        let attributes_json = serde_json::to_string(&identity.attributes)
-            .map_err(|e| PersonaError::Database(format!("Failed to serialize attributes: {}", e)))?;
+        let attributes_json = serde_json::to_string(&identity.attributes).map_err(|e| {
+            PersonaError::Database(format!("Failed to serialize attributes: {}", e))
+        })?;
 
         sqlx::query(
             r#"
@@ -119,7 +124,7 @@ impl Repository<Identity> for IdentityRepository {
                 id, name, identity_type, description, email, phone, ssh_key, gpg_key,
                 tags, attributes, created_at, updated_at, is_active
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
+            "#,
         )
         .bind(identity.id.to_string())
         .bind(&identity.name)
@@ -175,8 +180,9 @@ impl Repository<Identity> for IdentityRepository {
         let tags_json = serde_json::to_string(&identity.tags)
             .map_err(|e| PersonaError::Database(format!("Failed to serialize tags: {}", e)))?;
 
-        let attributes_json = serde_json::to_string(&identity.attributes)
-            .map_err(|e| PersonaError::Database(format!("Failed to serialize attributes: {}", e)))?;
+        let attributes_json = serde_json::to_string(&identity.attributes).map_err(|e| {
+            PersonaError::Database(format!("Failed to serialize attributes: {}", e))
+        })?;
 
         sqlx::query(
             r#"
@@ -184,7 +190,7 @@ impl Repository<Identity> for IdentityRepository {
                 name = ?, identity_type = ?, description = ?, email = ?, phone = ?,
                 ssh_key = ?, gpg_key = ?, tags = ?, attributes = ?, updated_at = ?, is_active = ?
             WHERE id = ?
-            "#
+            "#,
         )
         .bind(&identity.name)
         .bind(identity.identity_type.to_string())
@@ -231,10 +237,10 @@ impl CredentialRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
-                   encrypted_data, notes, tags, metadata, created_at, updated_at,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
             FROM credentials WHERE identity_id = ? ORDER BY created_at DESC
-            "#
+            "#,
         )
         .bind(identity_id.to_string())
         .fetch_all(self.db.pool())
@@ -253,10 +259,10 @@ impl CredentialRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
-                   encrypted_data, notes, tags, metadata, created_at, updated_at,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
             FROM credentials WHERE credential_type = ? ORDER BY created_at DESC
-            "#
+            "#,
         )
         .bind(credential_type.to_string())
         .fetch_all(self.db.pool())
@@ -276,10 +282,10 @@ impl CredentialRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
-                   encrypted_data, notes, tags, metadata, created_at, updated_at,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
             FROM credentials WHERE name LIKE ? AND is_active = 1 ORDER BY created_at DESC
-            "#
+            "#,
         )
         .bind(&search_query)
         .fetch_all(self.db.pool())
@@ -298,10 +304,10 @@ impl CredentialRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
-                   encrypted_data, notes, tags, metadata, created_at, updated_at,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
             FROM credentials WHERE is_favorite = 1 AND is_active = 1 ORDER BY created_at DESC
-            "#
+            "#,
         )
         .fetch_all(self.db.pool())
         .await
@@ -371,6 +377,8 @@ impl CredentialRepository {
 
         let encrypted_data: Vec<u8> = row.get("encrypted_data");
 
+        let wrapped_item_key: Option<Vec<u8>> = row.get("wrapped_item_key");
+
         Ok(Credential {
             id,
             identity_id,
@@ -380,6 +388,7 @@ impl CredentialRepository {
             url: row.get("url"),
             username: row.get("username"),
             encrypted_data,
+            wrapped_item_key,
             notes: row.get("notes"),
             tags,
             metadata,
@@ -405,10 +414,10 @@ impl Repository<Credential> for CredentialRepository {
             r#"
             INSERT INTO credentials (
                 id, identity_id, name, credential_type, security_level, url, username,
-                encrypted_data, notes, tags, metadata, created_at, updated_at,
+                encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                 last_accessed, is_active, is_favorite
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
         )
         .bind(credential.id.to_string())
         .bind(credential.identity_id.to_string())
@@ -418,6 +427,7 @@ impl Repository<Credential> for CredentialRepository {
         .bind(&credential.url)
         .bind(&credential.username)
         .bind(&credential.encrypted_data)
+        .bind(&credential.wrapped_item_key)
         .bind(&credential.notes)
         .bind(&tags_json)
         .bind(&metadata_json)
@@ -437,10 +447,10 @@ impl Repository<Credential> for CredentialRepository {
         let row = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
-                   encrypted_data, notes, tags, metadata, created_at, updated_at,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
             FROM credentials WHERE id = ?
-            "#
+            "#,
         )
         .bind(id.to_string())
         .fetch_optional(self.db.pool())
@@ -457,10 +467,10 @@ impl Repository<Credential> for CredentialRepository {
         let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
-                   encrypted_data, notes, tags, metadata, created_at, updated_at,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
             FROM credentials ORDER BY created_at DESC
-            "#
+            "#,
         )
         .fetch_all(self.db.pool())
         .await
@@ -484,7 +494,7 @@ impl Repository<Credential> for CredentialRepository {
             r#"
             UPDATE credentials SET
                 identity_id = ?, name = ?, credential_type = ?, security_level = ?, url = ?,
-                username = ?, encrypted_data = ?, notes = ?, tags = ?, metadata = ?,
+                username = ?, encrypted_data = ?, wrapped_item_key = ?, notes = ?, tags = ?, metadata = ?,
                 updated_at = ?, last_accessed = ?, is_active = ?, is_favorite = ?
             WHERE id = ?
             "#
@@ -496,6 +506,7 @@ impl Repository<Credential> for CredentialRepository {
         .bind(&credential.url)
         .bind(&credential.username)
         .bind(&credential.encrypted_data)
+        .bind(&credential.wrapped_item_key)
         .bind(&credential.notes)
         .bind(&tags_json)
         .bind(&metadata_json)
@@ -636,8 +647,9 @@ impl WorkspaceRepository {
 impl Repository<Workspace> for WorkspaceRepository {
     async fn create(&self, workspace: &Workspace) -> Result<Workspace> {
         if self.has_workspace_v2().await.unwrap_or(false) {
-            let settings_json = serde_json::to_string(&workspace.settings)
-                .map_err(|e| PersonaError::Database(format!("Failed to serialize settings: {}", e)))?;
+            let settings_json = serde_json::to_string(&workspace.settings).map_err(|e| {
+                PersonaError::Database(format!("Failed to serialize settings: {}", e))
+            })?;
             sqlx::query(
                 r#"
                 INSERT INTO workspaces (id, name, path, active_identity_id, settings, created_at, updated_at)
@@ -659,7 +671,7 @@ impl Repository<Workspace> for WorkspaceRepository {
                 r#"
                 INSERT INTO workspaces (id, name, description, created_at, updated_at, is_active)
                 VALUES (?, ?, ?, ?, ?, 1)
-                "#
+                "#,
             )
             .bind(workspace.id.to_string())
             .bind(&workspace.name)
@@ -714,7 +726,7 @@ impl Repository<Workspace> for WorkspaceRepository {
             Ok(v)
         } else {
             let rows = sqlx::query(
-                "SELECT id, name, description, created_at, updated_at, is_active FROM workspaces"
+                "SELECT id, name, description, created_at, updated_at, is_active FROM workspaces",
             )
             .fetch_all(self.db.pool())
             .await
@@ -729,14 +741,15 @@ impl Repository<Workspace> for WorkspaceRepository {
 
     async fn update(&self, workspace: &Workspace) -> Result<Workspace> {
         if self.has_workspace_v2().await.unwrap_or(false) {
-            let settings_json = serde_json::to_string(&workspace.settings)
-                .map_err(|e| PersonaError::Database(format!("Failed to serialize settings: {}", e)))?;
+            let settings_json = serde_json::to_string(&workspace.settings).map_err(|e| {
+                PersonaError::Database(format!("Failed to serialize settings: {}", e))
+            })?;
             sqlx::query(
                 r#"
                 UPDATE workspaces
                 SET name = ?, path = ?, active_identity_id = ?, settings = ?, updated_at = ?
                 WHERE id = ?
-                "#
+                "#,
             )
             .bind(&workspace.name)
             .bind(workspace.path.to_string_lossy().to_string())
@@ -751,7 +764,7 @@ impl Repository<Workspace> for WorkspaceRepository {
             sqlx::query(
                 r#"
                 UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?
-                "#
+                "#,
             )
             .bind(&workspace.name)
             .bind(workspace.updated_at.to_rfc3339())
@@ -774,6 +787,7 @@ impl Repository<Workspace> for WorkspaceRepository {
 }
 
 /// Audit log repository for security monitoring
+#[derive(Clone)]
 pub struct AuditLogRepository {
     db: Database,
 }
@@ -791,7 +805,7 @@ impl AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE user_id = ? ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .bind(user_id)
         .fetch_all(self.db.pool())
@@ -813,7 +827,7 @@ impl AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE identity_id = ? ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .bind(identity_id.to_string())
         .fetch_all(self.db.pool())
@@ -835,7 +849,7 @@ impl AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE action = ? ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .bind(action.to_string())
         .fetch_all(self.db.pool())
@@ -857,7 +871,7 @@ impl AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE success = 0 ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .fetch_all(self.db.pool())
         .await
@@ -873,12 +887,22 @@ impl AuditLogRepository {
     /// Find security-sensitive operations
     pub async fn find_security_sensitive(&self) -> Result<Vec<AuditLog>> {
         let security_actions = [
-            "login", "login_failed", "password_change", "credential_decrypted",
-            "credential_exported", "unauthorized_access", "brute_force_detected",
-            "suspicious_activity", "data_exfiltration"
+            "login",
+            "login_failed",
+            "password_change",
+            "credential_decrypted",
+            "credential_exported",
+            "unauthorized_access",
+            "brute_force_detected",
+            "suspicious_activity",
+            "data_exfiltration",
         ];
 
-        let placeholders = security_actions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = security_actions
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
         let query = format!(
             r#"
             SELECT id, user_id, identity_id, credential_id, action, resource_type,
@@ -910,7 +934,7 @@ impl AuditLogRepository {
     pub async fn find_by_time_range(
         &self,
         start: chrono::DateTime<chrono::Utc>,
-        end: chrono::DateTime<chrono::Utc>
+        end: chrono::DateTime<chrono::Utc>,
     ) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
@@ -918,7 +942,7 @@ impl AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .bind(start.to_rfc3339())
         .bind(end.to_rfc3339())
@@ -941,7 +965,7 @@ impl AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE ip_address = ? ORDER BY timestamp DESC
-            "#
+            "#,
         )
         .bind(ip_address)
         .fetch_all(self.db.pool())
@@ -964,10 +988,11 @@ impl AuditLogRepository {
             .map_err(|e| PersonaError::Database(e.to_string()))?;
 
         // Failed operations count
-        let failed_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE success = 0")
-            .fetch_one(self.db.pool())
-            .await
-            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        let failed_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM audit_logs WHERE success = 0")
+                .fetch_one(self.db.pool())
+                .await
+                .map_err(|e| PersonaError::Database(e.to_string()))?;
 
         // Recent login attempts (last 24 hours)
         let yesterday = chrono::Utc::now() - chrono::Duration::hours(24);
@@ -1016,11 +1041,13 @@ impl AuditLogRepository {
             .map_err(|e| PersonaError::Database(format!("Invalid UUID: {}", e)))?;
 
         let action_str: String = row.get("action");
-        let action = action_str.parse::<AuditAction>()
+        let action = action_str
+            .parse::<AuditAction>()
             .map_err(|e| PersonaError::Database(format!("Invalid action: {}", e)))?;
 
         let resource_type_str: String = row.get("resource_type");
-        let resource_type = resource_type_str.parse::<ResourceType>()
+        let resource_type = resource_type_str
+            .parse::<ResourceType>()
             .map_err(|e| PersonaError::Database(format!("Invalid resource type: {}", e)))?;
 
         let metadata_json: String = row.get("metadata");
@@ -1035,12 +1062,14 @@ impl AuditLogRepository {
         // Handle optional fields
         let user_id: Option<String> = row.get("user_id");
 
-        let identity_id: Option<Uuid> = row.get::<Option<String>, _>("identity_id")
+        let identity_id: Option<Uuid> = row
+            .get::<Option<String>, _>("identity_id")
             .map(|s| Uuid::parse_str(&s))
             .transpose()
             .map_err(|e| PersonaError::Database(format!("Invalid identity UUID: {}", e)))?;
 
-        let credential_id: Option<Uuid> = row.get::<Option<String>, _>("credential_id")
+        let credential_id: Option<Uuid> = row
+            .get::<Option<String>, _>("credential_id")
             .map(|s| Uuid::parse_str(&s))
             .transpose()
             .map_err(|e| PersonaError::Database(format!("Invalid credential UUID: {}", e)))?;
@@ -1050,6 +1079,7 @@ impl AuditLogRepository {
             user_id,
             identity_id,
             credential_id,
+            session_id: row.get("session_id"),
             action,
             resource_type,
             resource_id: row.get("resource_id"),
@@ -1076,7 +1106,7 @@ impl Repository<AuditLog> for AuditLogRepository {
                 resource_id, ip_address, user_agent, success, error_message,
                 metadata, timestamp
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
+            "#,
         )
         .bind(log.id.to_string())
         .bind(&log.user_id)
@@ -1105,7 +1135,7 @@ impl Repository<AuditLog> for AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE id = ?
-            "#
+            "#,
         )
         .bind(id.to_string())
         .fetch_optional(self.db.pool())
@@ -1125,7 +1155,7 @@ impl Repository<AuditLog> for AuditLogRepository {
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs ORDER BY timestamp DESC LIMIT 1000
-            "#
+            "#,
         )
         .fetch_all(self.db.pool())
         .await
@@ -1151,7 +1181,7 @@ impl Repository<AuditLog> for AuditLogRepository {
                 resource_type = ?, resource_id = ?, ip_address = ?, user_agent = ?,
                 success = ?, error_message = ?, metadata = ?, timestamp = ?
             WHERE id = ?
-            "#
+            "#,
         )
         .bind(&log.user_id)
         .bind(log.identity_id.map(|id| id.to_string()))

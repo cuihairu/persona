@@ -1,0 +1,88 @@
+# Persona SSH Agent Policy Configuration Example
+#
+# Place this file at ~/.persona/agent-policy.toml or set PERSONA_AGENT_POLICY_FILE
+# to specify a custom location.
+
+[global]
+# Require user confirmation for every signature
+require_confirm = false
+
+# Minimum interval between signatures (milliseconds)
+min_interval_ms = 0
+
+# Enforce known_hosts checking
+enforce_known_hosts = false
+
+# Prompt for confirmation on unknown hosts
+confirm_on_unknown_host = false
+
+# Maximum signatures per hour (0 = unlimited)
+max_signatures_per_hour = 0
+
+# Deny all signatures (emergency lockdown)
+deny_all = false
+
+# Per-key policies
+# Keys are identified by credential_id UUID
+
+[[key_policies]]
+# Example: Restrict a key to specific hosts
+credential_id = "12345678-1234-5678-1234-567812345678"
+enabled = true
+allowed_hosts = ["github.com", "gitlab.com", "*.company.com"]
+denied_hosts = []
+require_confirm = false
+max_uses_per_day = 100
+allowed_time_range = "09:00-18:00"  # Only allow during business hours
+
+[[key_policies]]
+# Example: High-security key requiring confirmation
+credential_id = "87654321-4321-8765-4321-876543218765"
+enabled = true
+allowed_hosts = ["prod-*.company.com"]
+denied_hosts = []
+require_confirm = true
+max_uses_per_day = 10
+# No time restriction
+
+# Per-host policies
+# Hosts support glob patterns
+
+[[host_policies]]
+# Example: Production hosts require extra scrutiny
+hostname = "prod-*.company.com"
+enabled = true
+allowed_keys = []  # Empty = all keys allowed
+require_confirm = true
+max_connections_per_hour = 20
+
+[[host_policies]]
+# Example: Development hosts are unrestricted
+hostname = "dev-*.company.com"
+enabled = true
+allowed_keys = []
+require_confirm = false
+max_connections_per_hour = 0
+
+[[host_policies]]
+# Example: Block a specific host
+hostname = "untrusted-server.example.com"
+enabled = false
+allowed_keys = []
+require_confirm = false
+max_connections_per_hour = 0
+
+# Time-based restrictions example:
+# Use ISO 8601 time format (HH:MM)
+# - "09:00-17:00" - Business hours
+# - "22:00-06:00" - Overnight (crosses midnight)
+#
+# For emergency lockdown, set global.deny_all = true
+
+# Rate limiting strategies:
+# 1. Global rate limit: global.min_interval_ms
+# 2. Per-hour limit: global.max_signatures_per_hour
+# 3. Per-key daily limit: key_policies.max_uses_per_day
+# 4. Per-host hourly limit: host_policies.max_connections_per_hour
+#
+# All limits are enforced simultaneously.
