@@ -1,15 +1,15 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input, MultiSelect, Select};
+use dialoguer::{Confirm, Input, Password, Select};
 use serde_json::Value;
 use std::collections::HashMap;
 use tracing::info;
 
 use crate::config::CliConfig;
-use persona_core::{Identity, IdentityType, PersonaService, Database};
+use persona_core::{Database, Identity, IdentityType, PersonaService};
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct AddArgs {
     /// Identity name
     name: Option<String>,
@@ -52,9 +52,9 @@ pub async fn execute(args: AddArgs, config: &CliConfig) -> Result<()> {
     }
 
     let identity = if args.yes {
-        create_identity_non_interactive(args)?
+        create_identity_non_interactive(&args)?
     } else {
-        create_identity_interactive(args)?
+        create_identity_interactive(&args)?
     };
 
     // Validate identity data
@@ -64,72 +64,45 @@ pub async fn execute(args: AddArgs, config: &CliConfig) -> Result<()> {
     save_identity(&identity, config).await?;
 
     println!();
-    println!("{} Identity '{}' created successfully!", 
-        "✓".green().bold(), 
+    println!(
+        "{} Identity '{}' created successfully!",
+        "✓".green().bold(),
         identity.name.bright_green().bold()
     );
 
     if args.set_active {
         set_active_identity(&identity.name, config).await?;
-        println!("{} Set '{}' as active identity", 
-            "✓".green().bold(), 
+        println!(
+            "{} Set '{}' as active identity",
+            "✓".green().bold(),
             identity.name.bright_green()
         );
     }
 
     println!();
     println!("{}", "Next steps:".yellow().bold());
-    println!("  • View identity: {}", format!("persona show {}", identity.name).cyan());
-    println!("  • Edit identity: {}", format!("persona edit {}", identity.name).cyan());
-    println!("  • Switch to identity: {}", format!("persona switch {}", identity.name).cyan());
+    println!(
+        "  • View identity: {}",
+        format!("persona show {}", identity.name).cyan()
+    );
+    println!(
+        "  • Edit identity: {}",
+        format!("persona edit {}", identity.name).cyan()
+    );
+    println!(
+        "  • Switch to identity: {}",
+        format!("persona switch {}", identity.name).cyan()
+    );
 
     Ok(())
 }
 
-async fn create_identity_with_service(mut identity: Identity) -> Result<Identity> {
-    // TODO: Get database path from config
-    let db_path = std::env::var("PERSONA_DB_PATH")
-        .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| std::env::current_dir().unwrap())
-                .join(".persona")
-                .join("identities.db")
-                .to_string_lossy()
-                .to_string()
-        });
-
-    // Create database and service
-    let db = Database::from_file(&db_path).await
-        .context("Failed to connect to database")?;
-
-    // Run migrations
-    db.migrate().await
-        .context("Failed to run database migrations")?;
-
-    let mut service = PersonaService::new(db).await
-        .context("Failed to create PersonaService")?;
-
-    // For now, just create the identity without unlocking the service
-    // In a real implementation, we would need to handle authentication
-    println!("{} Identity '{}' prepared for creation.",
-        "✓".green().bold(),
-        identity.name.yellow().bold()
-    );
-    println!("{} To complete setup, you need to unlock the service with a master password.",
-        "ℹ".blue().bold()
-    );
-
-    Ok(identity)
-}
-
-fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
+fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     // Get identity name
-    let name = if let Some(name) = args.name {
-        name
+    let name = if let Some(name) = args.name.as_ref() {
+        name.clone()
     } else {
-        Input::new()
-            .with_prompt("Identity name")
-            .interact_text()?
+        Input::new().with_prompt("Identity name").interact_text()?
     };
 
     // Get identity type
@@ -139,11 +112,12 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
         ("social", IdentityType::Social),
         ("gaming", IdentityType::Gaming),
         ("financial", IdentityType::Financial),
-        ("other", IdentityType::Custom("other".to_string()))
+        ("other", IdentityType::Custom("other".to_string())),
     ];
 
-    let identity_type = if let Some(t) = args.identity_type {
-        t.parse::<IdentityType>().unwrap_or(IdentityType::Custom(t))
+    let identity_type = if let Some(t) = args.identity_type.as_ref() {
+        t.parse::<IdentityType>()
+            .unwrap_or(IdentityType::Custom(t.clone()))
     } else {
         let type_names: Vec<&str> = identity_types.iter().map(|(name, _)| *name).collect();
         let selection = Select::new()
@@ -155,8 +129,8 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
     };
 
     // Get description
-    let description = if let Some(desc) = args.description {
-        desc
+    let description = if let Some(desc) = args.description.as_ref() {
+        desc.clone()
     } else {
         Input::new()
             .with_prompt("Description")
@@ -165,25 +139,33 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
     };
 
     // Get email
-    let email = if args.email.is_some() {
-        args.email
+    let email = if let Some(email) = args.email.as_ref() {
+        Some(email.clone())
     } else {
         let email_input: String = Input::new()
             .with_prompt("Email (optional)")
             .allow_empty(true)
             .interact_text()?;
-        if email_input.is_empty() { None } else { Some(email_input) }
+        if email_input.is_empty() {
+            None
+        } else {
+            Some(email_input)
+        }
     };
 
     // Get phone
-    let phone = if args.phone.is_some() {
-        args.phone
+    let phone = if let Some(phone) = args.phone.as_ref() {
+        Some(phone.clone())
     } else {
         let phone_input: String = Input::new()
             .with_prompt("Phone (optional)")
             .allow_empty(true)
             .interact_text()?;
-        if phone_input.is_empty() { None } else { Some(phone_input) }
+        if phone_input.is_empty() {
+            None
+        } else {
+            Some(phone_input)
+        }
     };
 
     // Get additional attributes
@@ -196,10 +178,8 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
     let mut identity = Identity::new(name, identity_type);
 
     // Set optional fields
-    if let Some(desc) = description {
-        if !desc.is_empty() {
-            identity.description = Some(desc);
-        }
+    if !description.is_empty() {
+        identity.description = Some(description);
     }
     identity.email = email;
     identity.phone = phone;
@@ -223,23 +203,29 @@ fn create_identity_interactive(args: AddArgs) -> Result<Identity> {
     Ok(identity)
 }
 
-fn create_identity_non_interactive(args: AddArgs) -> Result<Identity> {
-    let name = args.name.context("Identity name is required in non-interactive mode")?;
+fn create_identity_non_interactive(args: &AddArgs) -> Result<Identity> {
+    let name = args
+        .name
+        .as_ref()
+        .cloned()
+        .context("Identity name is required in non-interactive mode")?;
 
-    let identity_type = args.identity_type
-        .map(|t| t.parse::<IdentityType>().unwrap_or(IdentityType::Custom(t)))
+    let identity_type = args
+        .identity_type
+        .as_ref()
+        .map(|t| t.parse::<IdentityType>().unwrap_or(IdentityType::Custom(t.clone())))
         .unwrap_or(IdentityType::Personal);
 
     let mut identity = Identity::new(name, identity_type);
 
     // Set optional fields
-    if let Some(desc) = args.description {
+    if let Some(desc) = args.description.as_ref() {
         if !desc.is_empty() {
-            identity.description = Some(desc);
+            identity.description = Some(desc.clone());
         }
     }
-    identity.email = args.email;
-    identity.phone = args.phone;
+    identity.email = args.email.clone();
+    identity.phone = args.phone.clone();
 
     Ok(identity)
 }
@@ -250,12 +236,15 @@ fn collect_additional_attributes() -> Result<HashMap<String, Value>> {
     if !Confirm::new()
         .with_prompt("Add additional attributes?")
         .default(false)
-        .interact()? 
+        .interact()?
     {
         return Ok(attributes);
     }
 
-    println!("{}", "Enter additional attributes (press Enter with empty key to finish):".dim());
+    println!(
+        "{}",
+        "Enter additional attributes (press Enter with empty key to finish):".dimmed()
+    );
 
     loop {
         let key: String = Input::new()
@@ -281,7 +270,7 @@ fn collect_tags() -> Result<Vec<String>> {
     if !Confirm::new()
         .with_prompt("Add tags?")
         .default(false)
-        .interact()? 
+        .interact()?
     {
         return Ok(Vec::new());
     }
@@ -326,26 +315,35 @@ fn validate_identity(identity: &Identity) -> Result<()> {
 }
 
 async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
-    use dialoguer::Password;
-    use colored::Colorize;
-
     // Open database
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy())
+    let db = Database::from_file(&db_path)
         .await
-        .context("Failed to connect to database")?;
+        .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?;
     // Ensure schema
-    db.migrate().await.context("Failed to run database migrations")?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to run database migrations: {}", e))?;
 
     // Create service
-    let mut service = PersonaService::new(db).await.context("Failed to create PersonaService")?;
+    let mut service = PersonaService::new(db)
+        .await
+        .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
 
     // Ensure unlocked: try auth if a user exists; otherwise initialize
-    if service.has_users().await.context("Failed to check users")? {
+    if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to authenticate user: {}", e))?
+        {
             persona_core::auth::authentication::AuthResult::Success => {
                 // proceed
             }
@@ -356,14 +354,17 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
             .with_prompt("Set a new master password")
             .with_confirmation("Confirm master password", "Passwords don't match")
             .interact()?;
-        let _ = service.initialize_user(&password).await?;
+        let _ = service
+            .initialize_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to initialize user: {}", e))?;
     }
 
     // Create in DB (preserve all optional fields)
     let _created = service
         .create_identity_full(identity.clone())
         .await
-        .context("Failed to create identity in database")?;
+        .map_err(|e| anyhow!("Failed to create identity in database: {}", e))?;
 
     Ok(())
 }
@@ -375,8 +376,9 @@ async fn set_active_identity(name: &str, _config: &CliConfig) -> Result<()> {
 }
 
 async fn import_from_file(file_path: &str, _config: &CliConfig) -> Result<()> {
-    println!("{} Importing identity from file: {}", 
-        "📁".to_string(), 
+    println!(
+        "{} Importing identity from file: {}",
+        "📁".to_string(),
         file_path.yellow()
     );
 

@@ -1,18 +1,21 @@
-# Code owners for the Persona monorepo
-# Update the handles below to your actual GitHub users or teams.
+# Persona code owners
+# Keep owners scoped so reviews stay targeted.
 
-# Default owners
-*       @persona-maintainers
+# Fallback
+*                   @persona-dev/maintainers
 
-# Rust crates
-/core/  @persona-maintainers
-/cli/   @persona-maintainers
-/server/@persona-maintainers
-/agents/@persona-maintainers
+# Rust workspace
+/core/              @persona-dev/rust
+/cli/               @persona-dev/rust @persona-dev/cli
+/server/            @persona-dev/rust @persona-dev/server
+/agents/            @persona-dev/rust @persona-dev/ssh
 
-# Desktop app
-/desktop/ @persona-maintainers
+# Desktop & mobile
+/desktop/           @persona-dev/desktop
+/mobile/            @persona-dev/mobile
 
-# Docs
-/docs/  @persona-maintainers
-
+# Docs & tooling
+/docs/              @persona-dev/docs
+/scripts/           @persona-dev/infra
+Makefile            @persona-dev/infra
+.github/            @persona-dev/infra

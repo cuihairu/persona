@@ -16,6 +16,8 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 persona-core = { path = "../../core" }
+dirs = { workspace = true }
+hex = { workspace = true }
 
 # Unix domain sockets and helpers
 tokio-util = "0.7"
@@ -23,6 +25,11 @@ byteorder = "1.5"
 ed25519-dalek = "2.1"
 base64 = "0.21"
 ring = { workspace = true }
+
+# Policy enforcement
+toml = "0.8"
+glob-match = "0.2"
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

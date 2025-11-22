@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
 use dialoguer::{Confirm, Select};
@@ -6,8 +6,11 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::config::CliConfig;
-use persona_core::{Database, PersonaService, storage::{WorkspaceRepository, IdentityRepository}};
-use persona_core::models::{AuditLog, AuditAction, ResourceType};
+use persona_core::models::{AuditAction, AuditLog, ResourceType};
+use persona_core::{
+    storage::{IdentityRepository, WorkspaceRepository},
+    Database, PersonaService, Repository,
+};
 
 #[derive(Args)]
 pub struct SwitchArgs {
@@ -45,8 +48,9 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     // Check if already active
     if let Some(ref current) = current_identity {
         if current == &target_identity {
-            println!("{} Identity '{}' is already active", 
-                "ℹ️".blue(), 
+            println!(
+                "{} Identity '{}' is already active",
+                "ℹ️".blue(),
                 target_identity.bright_blue().bold()
             );
             return Ok(());
@@ -59,7 +63,11 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     // Show confirmation if not forced
     if !args.force {
         let confirmation_message = if let Some(current) = &current_identity {
-            format!("Switch from '{}' to '{}'?", current.yellow(), target_identity.green())
+            format!(
+                "Switch from '{}' to '{}'?",
+                current.yellow(),
+                target_identity.green()
+            )
         } else {
             format!("Switch to '{}'?", target_identity.green())
         };
@@ -67,7 +75,7 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
         if !Confirm::new()
             .with_prompt(confirmation_message)
             .default(true)
-            .interact()? 
+            .interact()?
         {
             println!("{}", "Switch cancelled.".yellow());
             return Ok(());
@@ -78,8 +86,9 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     perform_switch(&target_identity, current_identity.as_deref(), config).await?;
 
     println!();
-    println!("{} Successfully switched to identity '{}'", 
-        "✓".green().bold(), 
+    println!(
+        "{} Successfully switched to identity '{}'",
+        "✓".green().bold(),
         target_identity.bright_green().bold()
     );
 
@@ -92,21 +101,39 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
 async fn get_current_identity(config: &CliConfig) -> Result<Option<String>> {
     // Read workspace.active_identity_id; map to identity name
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
     let repo = WorkspaceRepository::new(db.clone());
     let path_str = config.workspace.path.to_string_lossy().to_string();
-    if let Some(ws) = repo.find_by_path(&path_str).await? {
+    if let Some(ws) = repo
+        .find_by_path(&path_str)
+        .await
+        .map_err(|e| anyhow!("Failed to load workspace: {}", e))?
+    {
         if let Some(id) = ws.active_identity_id {
             // Try to fetch identity name
             // Prefer unlocked service; otherwise direct repo read
-            let mut service = PersonaService::new(db.clone()).await?;
-            if service.has_users().await? {
+            let service = PersonaService::new(db.clone())
+                .await
+                .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
+            if service
+                .has_users()
+                .await
+                .map_err(|e| anyhow!("Failed to check users: {}", e))?
+            {
                 // Do not prompt here; only return None if locked
                 return Ok(None);
             } else {
                 let irepo = IdentityRepository::new(db);
-                if let Some(identity) = irepo.find_by_id(&id).await? {
+                if let Some(identity) = irepo
+                    .find_by_id(&id)
+                    .await
+                    .map_err(|e| anyhow!("Failed to fetch identity: {}", e))?
+                {
                     return Ok(Some(identity.name));
                 }
             }
@@ -143,22 +170,43 @@ async fn select_identity_interactive(config: &CliConfig) -> Result<String> {
 
 async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
-    let mut service = PersonaService::new(db.clone()).await?;
-    let exists = if service.has_users().await? {
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
+    let service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
+    let mut service = service;
+    let exists = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         use dialoguer::Password;
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
-            persona_core::auth::authentication::AuthResult::Success => {
-                service.get_identity_by_name(name).await?.is_some()
-            }
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to authenticate user: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => service
+                .get_identity_by_name(name)
+                .await
+                .map_err(|e| anyhow!("Failed to lookup identity: {}", e))?
+                .is_some(),
             _ => false,
         }
     } else {
-        IdentityRepository::new(db).find_by_name(name).await?.is_some()
+        IdentityRepository::new(db)
+            .find_by_name(name)
+            .await
+            .map_err(|e| anyhow!("Failed to lookup identity: {}", e))?
+            .is_some()
     };
     if !exists {
         anyhow::bail!("Identity '{}' not found", name);
@@ -167,48 +215,79 @@ async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
 }
 
 async fn perform_switch(
-    target_identity: &str, 
-    current_identity: Option<&str>, 
-    config: &CliConfig
+    target_identity: &str,
+    current_identity: Option<&str>,
+    config: &CliConfig,
 ) -> Result<()> {
-    info!("Switching from {:?} to {}", current_identity, target_identity);
+    info!(
+        "Switching from {:?} to {}",
+        current_identity, target_identity
+    );
 
     // 1. Resolve target identity id
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
-    let mut service = PersonaService::new(db.clone()).await?;
-    let identity = if service.has_users().await? {
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
+    let mut service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
+    let identity = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         use dialoguer::Password;
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
-            persona_core::auth::authentication::AuthResult::Success => {
-                service.get_identity_by_name(target_identity).await?
-            }
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to authenticate user: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => service
+                .get_identity_by_name(target_identity)
+                .await
+                .map_err(|e| anyhow!("Failed to load identity: {}", e))?,
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
-        IdentityRepository::new(db.clone()).find_by_name(target_identity).await?
+        IdentityRepository::new(db.clone())
+            .find_by_name(target_identity)
+            .await
+            .map_err(|e| anyhow!("Failed to load identity: {}", e))?
     };
     let identity = identity.with_context(|| format!("Identity '{}' not found", target_identity))?;
 
     // 2. Update workspace.active_identity_id (v2 schema; legacy no-op via repo fallback)
     let repo = WorkspaceRepository::new(db.clone());
     let path_str = config.workspace.path.to_string_lossy().to_string();
-    if let Some(mut ws) = repo.find_by_path(&path_str).await? {
+    if let Some(mut ws) = repo
+        .find_by_path(&path_str)
+        .await
+        .map_err(|e| anyhow!("Failed to load workspace: {}", e))?
+    {
         ws.switch_identity(identity.id);
-        let _ = repo.update(&ws).await?;
+        let _ = repo
+            .update(&ws)
+            .await
+            .map_err(|e| anyhow!("Failed to update workspace: {}", e))?;
     }
 
     // 3. Audit log workspace enter / identity switched
-    let mut log = AuditLog::new(AuditAction::WorkspaceEntered, ResourceType::Workspace, true)
+    let log = AuditLog::new(AuditAction::WorkspaceEntered, ResourceType::Workspace, true)
         .with_identity_id(Some(identity.id))
         .with_resource_id(Some(path_str));
     // write audit (no unlock requirement if DB unencrypted)
     let audit_repo = persona_core::storage::AuditLogRepository::new(db);
-    let _ = audit_repo.create(&log).await;
+    let _ = audit_repo
+        .create(&log)
+        .await
+        .map_err(|e| anyhow!("Failed to write audit log: {}", e))?;
 
     // TODO:
     // 4. Update environment variables/session for downstream tools
@@ -220,24 +299,24 @@ async fn perform_switch(
 
 async fn show_identity_summary(name: &str, config: &CliConfig) -> Result<()> {
     let identities = fetch_available_identities(config).await?;
-    
+
     if let Some(info) = identities.get(name) {
         println!();
         println!("{}", "Identity Summary:".yellow().bold());
         println!("  Name: {}", name.bright_cyan());
         println!("  Type: {}", info.identity_type.cyan());
-        println!("  Description: {}", info.description.dim());
-        
+        println!("  Description: {}", info.description.dimmed());
+
         if let Some(ref email) = info.email {
             println!("  Email: {}", email.cyan());
         }
-        
+
         if let Some(ref phone) = info.phone {
             println!("  Phone: {}", phone.cyan());
         }
 
         if !info.tags.is_empty() {
-            println!("  Tags: {}", info.tags.join(", ").dim());
+            println!("  Tags: {}", info.tags.join(", ").dimmed());
         }
     }
 
@@ -257,20 +336,40 @@ struct IdentityInfo {
 
 async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String, IdentityInfo>> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy()).await?;
-    db.migrate().await?;
-    let mut service = PersonaService::new(db.clone()).await?;
-    let items = if service.has_users().await? {
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
+    let mut service = PersonaService::new(db.clone())
+        .await
+        .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
+    let items = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         use dialoguer::Password;
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
-            persona_core::auth::authentication::AuthResult::Success => service.get_identities().await?,
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to authenticate user: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => service
+                .get_identities()
+                .await
+                .map_err(|e| anyhow!("Failed to fetch identities: {}", e))?,
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
-        IdentityRepository::new(db).find_all().await?
+        IdentityRepository::new(db)
+            .find_all()
+            .await
+            .map_err(|e| anyhow!("Failed to list identities: {}", e))?
     };
     let mut identities = HashMap::new();
     for id in items {

@@ -1,13 +1,13 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
-use tracing::{info, warn};
 
 mod commands;
 mod config;
 mod utils;
 
 use config::CliConfig;
+use persona_core::RedactedLoggerBuilder;
 
 #[derive(Parser)]
 #[command(name = "persona")]
@@ -30,28 +30,28 @@ struct Cli {
 enum Commands {
     /// Initialize a new persona workspace
     Init(commands::init::InitArgs),
-    
+
     /// Add a new identity
     Add(commands::add::AddArgs),
-    
+
     /// List all identities
     List(commands::list::ListArgs),
-    
+
     /// Switch to a different identity
     Switch(commands::switch::SwitchArgs),
-    
+
     /// Show identity details
     Show(commands::show::ShowArgs),
-    
+
     /// Remove an identity
     Remove(commands::remove::RemoveArgs),
-    
+
     /// Edit an identity
     Edit(commands::edit::EditArgs),
-    
+
     /// Export identities
     Export(commands::export::ExportArgs),
-    
+
     /// Import identities
     Import(commands::import::ImportArgs),
 
@@ -60,6 +60,15 @@ enum Commands {
 
     /// SSH key operations (developer features)
     Ssh(commands::ssh::SshArgs),
+
+    /// Credential management (password/api key/etc.)
+    Credential(commands::credential::CredentialArgs),
+
+    /// TOTP setup and code generation
+    Totp(commands::totp::TotpArgs),
+
+    /// Auto-lock policy management
+    AutoLock(commands::auto_lock::AutoLockArgs),
 }
 
 #[tokio::main]
@@ -87,6 +96,9 @@ async fn main() -> Result<()> {
         Commands::Import(args) => commands::import::execute(args, &config).await,
         Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
         Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
+        Commands::Credential(args) => commands::credential::execute(args, &config).await,
+        Commands::Totp(args) => commands::totp::execute(args, &config).await,
+        Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
     }
 }
 
@@ -98,24 +110,31 @@ fn init_logging(verbose: bool) -> Result<()> {
         tracing::Level::INFO
     };
 
-    tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_target(false)
-        .init();
+    RedactedLoggerBuilder::new(level)
+        .include_target(false)
+        .init()?;
 
-    Ok()
+    Ok(())
 }
 
 fn print_banner() {
-    println!("{}", "
+    println!(
+        "{}",
+        "
     ██████╗ ███████╗██████╗ ███████╗ ██████╗ ███╗   ██╗ █████╗ 
     ██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗████╗  ██║██╔══██╗
     ██████╔╝█████╗  ██████╔╝███████╗██║   ██║██╔██╗ ██║███████║
     ██╔═══╝ ██╔══╝  ██╔══██╗╚════██║██║   ██║██║╚██╗██║██╔══██║
     ██║     ███████╗██║  ██║███████║╚██████╔╝██║ ╚████║██║  ██║
     ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝
-    ".cyan().bold());
-    
-    println!("{}", "Master your digital identity. Switch freely with one click.".italic());
+    "
+        .cyan()
+        .bold()
+    );
+
+    println!(
+        "{}",
+        "Master your digital identity. Switch freely with one click.".italic()
+    );
     println!();
 }

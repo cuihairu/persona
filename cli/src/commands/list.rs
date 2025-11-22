@@ -1,12 +1,13 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Result};
 use clap::Args;
 use colored::*;
+use serde::{Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use tabled::{Table, Tabled};
 
 use crate::config::CliConfig;
-use persona_core::{Database, PersonaService, Identity as CoreIdentity};
+use persona_core::{Database, Identity as CoreIdentity, PersonaService, Repository};
 
 #[derive(Args)]
 pub struct ListArgs {
@@ -97,7 +98,7 @@ pub async fn execute(args: ListArgs, config: &CliConfig) -> Result<()> {
     if identities.is_empty() {
         println!("{}", "No identities found.".yellow());
         println!();
-        println!("{}", "Create your first identity with:".dim());
+        println!("{}", "Create your first identity with:".dimmed());
         println!("  {}", "persona add".cyan());
         return Ok(());
     }
@@ -120,7 +121,7 @@ pub async fn execute(args: ListArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 struct Identity {
     name: String,
     identity_type: String,
@@ -138,28 +139,43 @@ async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
     use dialoguer::Password;
     // Open DB
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy())
+    let db = Database::from_file(&db_path)
         .await
-        .context("Failed to connect to database")?;
-    db.migrate().await.context("Failed to run database migrations")?;
+        .map_err(|e| anyhow!("Failed to connect to database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
     let db_clone = db.clone();
 
     // Service
-    let mut service = PersonaService::new(db).await.context("Failed to create PersonaService")?;
-    let items: Vec<CoreIdentity> = if service.has_users().await? {
+    let mut service = PersonaService::new(db)
+        .await
+        .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
+    let items: Vec<CoreIdentity> = if service
+        .has_users()
+        .await
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?
+    {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service.authenticate_user(&password).await? {
-            persona_core::auth::authentication::AuthResult::Success => {
-                service.get_identities().await?
-            }
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Failed to authenticate user: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => service
+                .get_identities()
+                .await
+                .map_err(|e| anyhow!("Failed to fetch identities: {}", e))?,
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         // Fallback: when no users set up, read directly via repository (data is not encrypted)
         let repo = persona_core::storage::IdentityRepository::new(db_clone);
-        repo.find_all().await?
+        repo.find_all()
+            .await
+            .map_err(|e| anyhow!("Failed to read identities: {}", e))?
     };
     let mapped: Vec<Identity> = items
         .into_iter()
@@ -173,7 +189,11 @@ async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
             active: id.is_active,
             created: id.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
             modified: id.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
-            attributes: id.attributes.into_iter().map(|(k,v)| (k, Value::String(v))).collect(),
+            attributes: id
+                .attributes
+                .into_iter()
+                .map(|(k, v)| (k, Value::String(v)))
+                .collect(),
         })
         .collect();
     Ok(mapped)
@@ -187,13 +207,19 @@ fn apply_filters(mut identities: Vec<Identity>, args: &ListArgs) -> Result<Vec<I
 
     // Filter by identity type
     if let Some(ref filter_type) = args.identity_type {
-        identities.retain(|id| id.identity_type.to_lowercase().contains(&filter_type.to_lowercase()));
+        identities.retain(|id| {
+            id.identity_type
+                .to_lowercase()
+                .contains(&filter_type.to_lowercase())
+        });
     }
 
     // Filter by tag
     if let Some(ref filter_tag) = args.tag {
         identities.retain(|id| {
-            id.tags.iter().any(|tag| tag.to_lowercase().contains(&filter_tag.to_lowercase()))
+            id.tags
+                .iter()
+                .any(|tag| tag.to_lowercase().contains(&filter_tag.to_lowercase()))
         });
     }
 
@@ -201,9 +227,9 @@ fn apply_filters(mut identities: Vec<Identity>, args: &ListArgs) -> Result<Vec<I
     if let Some(ref search_term) = args.search {
         let search_lower = search_term.to_lowercase();
         identities.retain(|id| {
-            id.name.to_lowercase().contains(&search_lower) ||
-            id.description.to_lowercase().contains(&search_lower) ||
-            id.identity_type.to_lowercase().contains(&search_lower)
+            id.name.to_lowercase().contains(&search_lower)
+                || id.description.to_lowercase().contains(&search_lower)
+                || id.identity_type.to_lowercase().contains(&search_lower)
         });
     }
 
@@ -241,7 +267,11 @@ fn display_table(identities: &[Identity], detailed: bool) -> Result<()> {
                 email: id.email.as_deref().unwrap_or("-").to_string(),
                 phone: id.phone.as_deref().unwrap_or("-").to_string(),
                 tags: id.tags.join(", "),
-                active: if id.active { "Yes".green().to_string() } else { "No".dim().to_string() },
+                active: if id.active {
+                    "Yes".green().to_string()
+                } else {
+                    "No".dimmed().to_string()
+                },
                 created: id.created.clone(),
                 modified: id.modified.clone(),
             })
@@ -261,7 +291,11 @@ fn display_table(identities: &[Identity], detailed: bool) -> Result<()> {
                 identity_type: id.identity_type.clone(),
                 email: id.email.as_deref().unwrap_or("-").to_string(),
                 phone: id.phone.as_deref().unwrap_or("-").to_string(),
-                active: if id.active { "Yes".green().to_string() } else { "No".dim().to_string() },
+                active: if id.active {
+                    "Yes".green().to_string()
+                } else {
+                    "No".dimmed().to_string()
+                },
                 created: id.created.clone(),
             })
             .collect();
@@ -322,7 +356,7 @@ fn display_csv(identities: &[Identity], detailed: bool) -> Result<()> {
 fn show_summary(identities: &[Identity]) -> Result<()> {
     let total = identities.len();
     let active_count = identities.iter().filter(|id| id.active).count();
-    
+
     // Count by type
     let mut type_counts = HashMap::new();
     for identity in identities {
@@ -332,7 +366,7 @@ fn show_summary(identities: &[Identity]) -> Result<()> {
     println!("{}", "Summary:".yellow().bold());
     println!("  Total identities: {}", total.to_string().cyan());
     println!("  Active identities: {}", active_count.to_string().green());
-    
+
     if !type_counts.is_empty() {
         println!("  By type:");
         for (identity_type, count) in type_counts {

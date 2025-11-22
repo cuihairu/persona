@@ -1,6 +1,5 @@
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use persona_core::{Result, PersonaError};
 
 /// Initialize the mobile library
 #[no_mangle]
@@ -20,14 +19,15 @@ pub extern "C" fn persona_version() -> *mut c_char {
 }
 
 /// Free a string allocated by this library
+/// # Safety
+/// Caller must pass a pointer returned by this library (e.g., from `persona_version`)
+/// and ensure it is not used after freeing. Passing any other pointer is undefined behavior.
 #[no_mangle]
-pub extern "C" fn persona_free_string(s: *mut c_char) {
+pub unsafe extern "C" fn persona_free_string(s: *mut c_char) {
     if s.is_null() {
         return;
     }
-    unsafe {
-        let _ = CString::from_raw(s);
-    }
+    let _ = CString::from_raw(s);
 }
 
 /// Error handling
@@ -44,13 +44,13 @@ impl PersonaResult {
             error_message: std::ptr::null_mut(),
         }
     }
-    
+
     fn error(message: &str) -> Self {
         let error_message = match CString::new(message) {
             Ok(c_string) => c_string.into_raw(),
             Err(_) => std::ptr::null_mut(),
         };
-        
+
         Self {
             success: false,
             error_message,
@@ -59,12 +59,13 @@ impl PersonaResult {
 }
 
 /// Free a PersonaResult
+/// # Safety
+/// The `error_message` pointer inside `PersonaResult` must either be null or allocated
+/// by this library. Caller must ensure it will not be reused after freeing.
 #[no_mangle]
-pub extern "C" fn persona_free_result(result: PersonaResult) {
+pub unsafe extern "C" fn persona_free_result(result: PersonaResult) {
     if !result.error_message.is_null() {
-        unsafe {
-            let _ = CString::from_raw(result.error_message);
-        }
+        let _ = CString::from_raw(result.error_message);
     }
 }
 
@@ -72,19 +73,20 @@ pub extern "C" fn persona_free_result(result: PersonaResult) {
 // These would be implemented based on specific mobile platform needs
 
 /// Create a new identity (placeholder)
+/// # Safety
+/// `name` must be a valid null-terminated UTF-8 string pointer. Caller retains ownership
+/// of the pointer and must not pass null.
 #[no_mangle]
-pub extern "C" fn persona_create_identity(name: *const c_char) -> PersonaResult {
+pub unsafe extern "C" fn persona_create_identity(name: *const c_char) -> PersonaResult {
     if name.is_null() {
         return PersonaResult::error("Name cannot be null");
     }
-    
-    let name_str = unsafe {
-        match CStr::from_ptr(name).to_str() {
-            Ok(s) => s,
-            Err(_) => return PersonaResult::error("Invalid UTF-8 in name"),
-        }
+
+    let name_str = match CStr::from_ptr(name).to_str() {
+        Ok(s) => s,
+        Err(_) => return PersonaResult::error("Invalid UTF-8 in name"),
     };
-    
+
     // TODO: Implement actual identity creation
     println!("Creating identity: {}", name_str);
     PersonaResult::success()

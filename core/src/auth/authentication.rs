@@ -1,8 +1,8 @@
+use crate::crypto::{EncryptionService, PasswordHasher};
+use crate::{PersonaError, Result};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use std::time::{Duration, SystemTime};
-use crate::crypto::{PasswordHasher, EncryptionService};
-use crate::{Result, PersonaError};
+use uuid::Uuid;
 
 /// Authentication factor types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -103,10 +103,14 @@ impl UserAuth {
     pub fn get_master_key_salt(&self) -> Result<[u8; 32]> {
         match &self.master_key_salt {
             Some(salt_hex) => {
-                let salt_bytes = hex::decode(salt_hex)
-                    .map_err(|e| PersonaError::CryptographicError(format!("Invalid salt format: {}", e)))?;
+                let salt_bytes = hex::decode(salt_hex).map_err(|e| {
+                    PersonaError::CryptographicError(format!("Invalid salt format: {}", e))
+                })?;
                 if salt_bytes.len() != 32 {
-                    return Err(PersonaError::CryptographicError("Invalid salt length".to_string()).into());
+                    return Err(PersonaError::CryptographicError(
+                        "Invalid salt length".to_string(),
+                    )
+                    .into());
                 }
                 let mut salt = [0u8; 32];
                 salt.copy_from_slice(&salt_bytes);
@@ -142,7 +146,8 @@ impl UserAuth {
 
         // Lock account after 5 failed attempts
         if self.failed_attempts >= 5 {
-            self.locked_until = Some(SystemTime::now() + Duration::from_secs(300)); // 5 minutes
+            self.locked_until = Some(SystemTime::now() + Duration::from_secs(300));
+            // 5 minutes
         }
     }
 
@@ -175,15 +180,11 @@ impl UserAuth {
 }
 
 /// Master key derivation service
-pub struct MasterKeyService {
-    password_hasher: PasswordHasher,
-}
+pub struct MasterKeyService;
 
 impl MasterKeyService {
     pub fn new() -> Self {
-        Self {
-            password_hasher: PasswordHasher::new(),
-        }
+        Self
     }
 
     /// Derive master encryption key from password
@@ -205,7 +206,7 @@ impl MasterKeyService {
         let mut extended_salt = [0u8; 32];
         extended_salt[..16].copy_from_slice(&base_salt);
         // Add some additional entropy for the remaining bytes
-        use rand::{RngCore, rngs::OsRng};
+        use rand::{rngs::OsRng, RngCore};
         OsRng.fill_bytes(&mut extended_salt[16..]);
         extended_salt
     }

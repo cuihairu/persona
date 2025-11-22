@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::{Confirm, Input, Password};
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::config::CliConfig;
 use crate::utils::{create_directory, validate_workspace_path};
-use persona_core::{Database, PersonaService};
+use persona_core::{Database, PersonaService, Repository};
 
 #[derive(Args)]
 pub struct InitArgs {
@@ -38,16 +38,16 @@ pub async fn execute(args: InitArgs, _config: &CliConfig) -> Result<()> {
 
     // Determine workspace path
     let workspace_path = determine_workspace_path(args.path, args.yes)?;
-    
+
     // Validate workspace path
     validate_workspace_path(&workspace_path)?;
 
     // Create workspace directory
-    create_directory(&workspace_path)
-        .context("Failed to create workspace directory")?;
+    create_directory(&workspace_path).context("Failed to create workspace directory")?;
 
-    println!("{} Workspace directory: {}", 
-        "✓".green().bold(), 
+    println!(
+        "{} Workspace directory: {}",
+        "✓".green().bold(),
         workspace_path.display().to_string().yellow()
     );
 
@@ -77,14 +77,22 @@ pub async fn execute(args: InitArgs, _config: &CliConfig) -> Result<()> {
     initialize_database(&workspace_path, master_password.as_deref()).await?;
 
     println!();
-    println!("{}", "🎉 Persona workspace initialized successfully!".green().bold());
+    println!(
+        "{}",
+        "🎉 Persona workspace initialized successfully!"
+            .green()
+            .bold()
+    );
     println!();
     println!("{}", "Next steps:".yellow().bold());
     println!("  1. Create your first identity: {}", "persona add".cyan());
     println!("  2. List all identities: {}", "persona list".cyan());
-    println!("  3. Switch between identities: {}", "persona switch <name>".cyan());
+    println!(
+        "  3. Switch between identities: {}",
+        "persona switch <name>".cyan()
+    );
     println!();
-    println!("{}", "For more help, run: persona --help".dim());
+    println!("{}", "For more help, run: persona --help".dimmed());
 
     Ok(())
 }
@@ -124,8 +132,9 @@ fn get_master_password(provided_password: Option<String>, yes: bool) -> Result<O
     if yes {
         // Generate a random password in non-interactive mode
         let password = generate_random_password();
-        println!("{} Generated master password: {}", 
-            "⚠️".yellow(), 
+        println!(
+            "{} Generated master password: {}",
+            "⚠️".yellow(),
             password.bright_yellow().bold()
         );
         println!("{}", "Please save this password securely!".red().bold());
@@ -143,9 +152,10 @@ fn get_master_password(provided_password: Option<String>, yes: bool) -> Result<O
 
 fn generate_random_password() -> String {
     use rand::Rng;
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+    const CHARSET: &[u8] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
     let mut rng = rand::thread_rng();
-    
+
     (0..16)
         .map(|_| {
             let idx = rng.gen_range(0..CHARSET.len());
@@ -155,13 +165,7 @@ fn generate_random_password() -> String {
 }
 
 fn create_workspace_structure(workspace_path: &PathBuf) -> Result<()> {
-    let directories = [
-        "identities",
-        "backups", 
-        "exports",
-        "temp",
-        "logs",
-    ];
+    let directories = ["identities", "backups", "exports", "temp", "logs"];
 
     for dir in &directories {
         let dir_path = workspace_path.join(dir);
@@ -174,12 +178,12 @@ fn create_workspace_structure(workspace_path: &PathBuf) -> Result<()> {
 }
 
 fn initialize_config(
-    workspace_path: &PathBuf, 
-    encryption_enabled: bool, 
-    backup_dir: Option<PathBuf>
+    workspace_path: &PathBuf,
+    encryption_enabled: bool,
+    backup_dir: Option<PathBuf>,
 ) -> Result<()> {
     let config_path = workspace_path.join("config.toml");
-    
+
     let config_content = format!(
         r#"# Persona CLI Configuration
 
@@ -222,30 +226,32 @@ max_files = 5
             .display()
     );
 
-    std::fs::write(&config_path, config_content)
-        .context("Failed to write configuration file")?;
+    std::fs::write(&config_path, config_content).context("Failed to write configuration file")?;
 
     println!("{} Created configuration file", "✓".green().bold());
     Ok(())
 }
 
-async fn initialize_database(workspace_path: &PathBuf, master_password: Option<&str>) -> Result<()> {
+async fn initialize_database(
+    workspace_path: &PathBuf,
+    master_password: Option<&str>,
+) -> Result<()> {
     let db_path = workspace_path.join("identities.db");
 
     // Initialize SQLite database with proper schema using persona-core
-    let db = Database::from_file(&db_path.to_string_lossy())
+    let db = Database::from_file(&db_path)
         .await
-        .context("Failed to create database connection")?;
+        .map_err(|e| anyhow::anyhow!("Failed to open workspace DB: {}", e))?;
 
     // Run migrations to set up the schema
     db.migrate()
         .await
-        .context("Failed to run database migrations")?;
+        .map_err(|e| anyhow::anyhow!("Failed to run database migrations: {}", e))?;
 
     // Ensure a workspace row exists (supports legacy and v2 schemas)
     {
-        use persona_core::storage::WorkspaceRepository;
         use persona_core::models::Workspace;
+        use persona_core::storage::WorkspaceRepository;
         let repo = WorkspaceRepository::new(db.clone());
         // Use path string to lookup or create
         let path_str = workspace_path.to_string_lossy().to_string();
@@ -254,10 +260,18 @@ async fn initialize_database(workspace_path: &PathBuf, master_password: Option<&
             .and_then(|s| s.to_str())
             .unwrap_or("default")
             .to_string();
-        if repo.find_by_path(&path_str).await?.is_none() {
-            let mut ws = Workspace::new(workspace_path.clone(), name);
+        if repo
+            .find_by_path(&path_str)
+            .await
+            .map_err(|e| anyhow::anyhow!("Workspace lookup failed: {}", e))?
+            .is_none()
+        {
+            let ws = Workspace::new(workspace_path.clone(), name);
             // Persist; repo will choose proper schema (legacy/v2)
-            let _ = repo.create(&ws).await?;
+            let _ = repo
+                .create(&ws)
+                .await
+                .map_err(|e| anyhow::anyhow!("Workspace creation failed: {}", e))?;
         }
     }
 
@@ -265,7 +279,7 @@ async fn initialize_database(workspace_path: &PathBuf, master_password: Option<&
     if let Some(password) = master_password {
         let mut service = PersonaService::new(db)
             .await
-            .context("Failed to create PersonaService")?;
+            .map_err(|e| anyhow::anyhow!("Failed to create PersonaService: {}", e))?;
 
         // Initialize first-time user
         match service.initialize_user(password).await {
@@ -274,12 +288,18 @@ async fn initialize_database(workspace_path: &PathBuf, master_password: Option<&
             }
             Err(e) => {
                 warn!("Failed to initialize user: {}", e);
-                println!("{} Database created, but user initialization failed", "⚠".yellow().bold());
+                println!(
+                    "{} Database created, but user initialization failed",
+                    "⚠".yellow().bold()
+                );
                 println!("  You can set up authentication later using 'persona unlock'");
             }
         }
     } else {
-        println!("{} Database created, authentication not configured", "✓".green().bold());
+        println!(
+            "{} Database created, authentication not configured",
+            "✓".green().bold()
+        );
         println!("  Run 'persona unlock' to set up your master password");
     }
 

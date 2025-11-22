@@ -1,9 +1,15 @@
+pub mod attachment;
+pub mod audit_log;
+pub mod auto_lock_policy;
+pub mod change_history;
+pub mod credential;
 pub mod identity;
 pub mod workspace;
-pub mod credential;
-pub mod audit_log;
 
+pub use attachment::*;
+pub use audit_log::*;
+pub use auto_lock_policy::*;
+pub use change_history::*;
+pub use credential::*;
 pub use identity::*;
 pub use workspace::*;
-pub use credential::*;
-pub use audit_log::*;

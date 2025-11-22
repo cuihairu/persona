@@ -1,8 +1,10 @@
 {
   "name": "persona-monorepo",
   "private": true,
+  "packageManager": "pnpm@10.22.0",
   "workspaces": [
-    "desktop"
+    "desktop",
+    "browser/chromium-extension"
   ],
   "description": "Persona monorepo: core (Rust), CLI (Rust), desktop (Tauri+React), server (Rust), agents, docs",
   "scripts": {
@@ -11,4 +13,3 @@
     "test:desktop": "npm -w desktop run test"
   }
 }
-

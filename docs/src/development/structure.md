@@ -127,7 +127,7 @@ persona/
 cargo build -p persona-core
 
 # 开发桌面应用
-cd desktop && npm run tauri:dev
+pnpm --filter desktop run tauri:dev
 
 # 开发移动应用
 cd mobile && flutter run
@@ -141,7 +141,7 @@ cargo test --workspace
 
 ### 依赖管理
 - **Rust**: Cargo workspace 统一管理
-- **Node.js**: desktop/package.json
+- **Node.js**: pnpm workspace（根 package.json + pnpm-workspace.yaml）
 - **Flutter**: mobile/pubspec.yaml
 
 ### 代码共享策略
@@ -158,8 +158,8 @@ cargo test --workspace
 - **网络层**: 仅传输加密数据
 
 ### 构建安全
-- **依赖锁定**: Cargo.lock, package-lock.json
-- **安全审计**: cargo audit, npm audit
+- **依赖锁定**: Cargo.lock, pnpm-lock.yaml
+- **安全审计**: cargo audit, pnpm audit
 - **代码签名**: 发布版本数字签名
 
 ### 运行时安全

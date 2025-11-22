@@ -1,8 +1,16 @@
+pub mod attachment;
+pub mod auto_lock_policy_repository;
+pub mod blob;
+pub mod change_history;
 pub mod database;
 pub mod filesystem;
 pub mod repository;
 pub mod user_auth;
 
+pub use attachment::*;
+pub use auto_lock_policy_repository::*;
+pub use blob::*;
+pub use change_history::*;
 pub use database::*;
 pub use filesystem::*;
 pub use repository::*;

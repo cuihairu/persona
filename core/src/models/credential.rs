@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Different types of credentials that can be stored
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -96,6 +96,9 @@ pub struct Credential {
     /// Encrypted credential data
     pub encrypted_data: Vec<u8>,
 
+    /// Item-level encryption key wrapped by the master key (None for legacy rows)
+    pub wrapped_item_key: Option<Vec<u8>>,
+
     /// Notes about this credential
     pub notes: Option<String>,
 
@@ -129,6 +132,7 @@ impl Credential {
         credential_type: CredentialType,
         security_level: SecurityLevel,
         encrypted_data: Vec<u8>,
+        wrapped_item_key: Option<Vec<u8>>,
     ) -> Self {
         let now = Utc::now();
         Self {
@@ -140,6 +144,7 @@ impl Credential {
             url: None,
             username: None,
             encrypted_data,
+            wrapped_item_key,
             notes: None,
             tags: Vec::new(),
             metadata: HashMap::new(),

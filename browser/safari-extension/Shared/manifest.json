@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Persona Autofill (Safari)",
+  "version": "0.1.0",
+  "description": "Safari WebExtension shell for Persona autofill and identity switching.",
+  "action": {
+    "default_title": "Persona",
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage", "scripting", "activeTab"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "safari_web_extension": {
+    "page": "popup.html"
+  }
+}

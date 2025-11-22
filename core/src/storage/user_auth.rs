@@ -1,10 +1,9 @@
-use crate::{Result, PersonaError};
-use crate::auth::authentication::{UserAuth, AuthFactor};
+use crate::auth::authentication::{AuthFactor, UserAuth};
 use crate::storage::Database;
-use async_trait::async_trait;
+use crate::{PersonaError, Result};
 use sqlx::Row;
+use std::time::SystemTime;
 use uuid::Uuid;
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
 /// Repository for user authentication records (single-user MVP)
 pub struct UserAuthRepository {
@@ -34,7 +33,7 @@ impl UserAuthRepository {
                    failed_attempts, locked_until, last_auth, password_change_required,
                    created_at, updated_at
             FROM user_auth LIMIT 1
-            "#
+            "#,
         )
         .fetch_optional(self.db.pool())
         .await
@@ -54,7 +53,7 @@ impl UserAuthRepository {
                    failed_attempts, locked_until, last_auth, password_change_required,
                    created_at, updated_at
             FROM user_auth WHERE user_id = ?
-            "#
+            "#,
         )
         .bind(user_id.to_string())
         .fetch_optional(self.db.pool())
@@ -79,7 +78,7 @@ impl UserAuthRepository {
                 failed_attempts, locked_until, last_auth, password_change_required,
                 created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#
+            "#,
         )
         .bind(auth.user_id.to_string())
         .bind(&auth.master_password_hash)
@@ -115,7 +114,7 @@ impl UserAuthRepository {
                 password_change_required = ?,
                 updated_at = ?
             WHERE user_id = ?
-            "#
+            "#,
         )
         .bind(&auth.master_password_hash)
         .bind(&auth.master_key_salt)
@@ -144,8 +143,7 @@ impl UserAuthRepository {
 
         // Deserialize enabled factors
         let factors_json: String = row.get("enabled_factors");
-        let factors: Vec<AuthFactor> = serde_json::from_str(&factors_json)
-            .unwrap_or_default();
+        let factors: Vec<AuthFactor> = serde_json::from_str(&factors_json).unwrap_or_default();
         user.enabled_factors = factors;
 
         let failed_attempts: i64 = row.get("failed_attempts");
@@ -160,9 +158,9 @@ impl UserAuthRepository {
 }
 
 fn system_time_to_rfc3339(time: Option<SystemTime>) -> Option<String> {
-    time.and_then(|t| {
+    time.map(|t| {
         let datetime: chrono::DateTime<chrono::Utc> = t.into();
-        Some(datetime.to_rfc3339())
+        datetime.to_rfc3339()
     })
 }
 
@@ -170,4 +168,3 @@ fn rfc3339_to_system_time(opt: Option<String>) -> Option<SystemTime> {
     opt.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc).into())
 }
-

@@ -1,1 +1,0 @@
-std::result::Result<sqlx::Transaction<'_, Sqlite>, Box<(dyn StdError + Send + Sync + 'static)>>

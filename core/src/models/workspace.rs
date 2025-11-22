@@ -7,22 +7,22 @@ use uuid::Uuid;
 pub struct Workspace {
     /// Unique workspace ID
     pub id: Uuid,
-    
+
     /// Workspace root path
     pub path: PathBuf,
-    
+
     /// Workspace name
     pub name: String,
-    
+
     /// Current active identity ID
     pub active_identity_id: Option<Uuid>,
-    
+
     /// Workspace settings
     pub settings: WorkspaceSettings,
-    
+
     /// Creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
-    
+
     /// Last update timestamp
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -32,19 +32,19 @@ pub struct Workspace {
 pub struct WorkspaceSettings {
     /// Enable encryption for sensitive data
     pub encryption_enabled: bool,
-    
+
     /// Auto-backup interval in hours (0 = disabled)
     pub auto_backup_hours: u32,
-    
+
     /// Maximum number of backups to keep
     pub backup_retention_count: u32,
-    
+
     /// Session timeout in seconds
     pub session_timeout_seconds: u32,
-    
+
     /// Require confirmation for destructive operations
     pub require_confirmation: bool,
-    
+
     /// Default identity type for new identities
     pub default_identity_type: String,
 }
@@ -93,17 +93,17 @@ impl Workspace {
         self.active_identity_id = None;
         self.touch();
     }
-    
+
     /// Get the database path for this workspace
     pub fn database_path(&self) -> PathBuf {
         self.path.join("identities.db")
     }
-    
+
     /// Get the config path for this workspace
     pub fn config_path(&self) -> PathBuf {
         self.path.join("config.toml")
     }
-    
+
     /// Get the backup directory path
     pub fn backup_path(&self) -> PathBuf {
         self.path.join("backups")
