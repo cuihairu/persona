@@ -17,6 +17,8 @@ Monorepo & Tooling
 - [x] Add SSH Agent crate skeleton (`agents/ssh-agent`)
 - [x] CODEOWNERS + PR template + Conventional Commits
 - [x] Makefile targets for build/test/lint across all packages
+- [ ] 文档：整理统一客户端通信架构（CLI/桌面/浏览器/Agent 依赖同一个本地服务/IPC 协议）
+- [ ] 文档：说明本地服务 IPC 优先使用 Unix Socket（含 Windows 支持，必要时回退 Named Pipe）
 
 Security & Auth
 - [x] Key hierarchy: per-item keys wrapped by master key
@@ -82,6 +84,7 @@ Server & Sync (optional)
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
+- [ ] 文档：用户可选的存储/同步模式（纯本地、自托管云/自有 iCloud、Persona Server 辅助）
 
 Browser & Autofill (future)
 - [x] Browser extension skeleton (autofill; domain rules)
