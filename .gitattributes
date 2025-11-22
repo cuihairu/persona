@@ -27,9 +27,11 @@ desktop/node_modules/**  linguist-vendored
 docs/book/**             linguist-vendored
 docs/**                  linguist-documentation
 
+# Exclude large Makefile from linguist language stats
+Makefile                linguist-detectable=false
+
 # Lockfiles / diffs
 package-lock.json -diff
 pnpm-lock.yaml   -diff
 yarn.lock        -diff
 Cargo.lock       text
-
