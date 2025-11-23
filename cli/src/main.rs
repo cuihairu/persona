@@ -67,6 +67,9 @@ enum Commands {
     /// Password generator utilities
     Password(commands::password::PasswordArgs),
 
+    /// Interactive terminal UI
+    Tui(commands::tui::TuiArgs),
+
     /// TOTP setup and code generation
     Totp(commands::totp::TotpArgs),
 
@@ -101,6 +104,7 @@ async fn main() -> Result<()> {
         Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
         Commands::Credential(args) => commands::credential::execute(args, &config).await,
         Commands::Password(args) => commands::password::execute(args, &config).await,
+        Commands::Tui(args) => commands::tui::execute(args, &config).await,
         Commands::Totp(args) => commands::totp::execute(args, &config).await,
         Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
     }

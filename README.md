@@ -107,6 +107,10 @@ persona totp code --id <UUID> --watch
 # Password generator with custom sets
 persona password generate --length 32 --set lowercase --set uppercase --set digits --set symbols
 persona password generate --pronounceable --length 18 --set lowercase --set uppercase
+
+# TUI dashboard (ratatui + crossterm)
+persona tui --identity alice   # optional: preselect identity
+q to quit, r to reload, ↑/↓ or j/k to navigate
 ```
 
 ### Export / Import (Compression + Encryption)

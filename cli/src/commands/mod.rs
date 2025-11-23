@@ -13,3 +13,4 @@ pub mod show;
 pub mod ssh;
 pub mod switch;
 pub mod totp;
+pub mod tui;
