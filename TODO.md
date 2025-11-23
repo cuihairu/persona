@@ -39,7 +39,7 @@ CLI
 - [x] switch (activate/deactivate, history, config persistence)
 - [x] credential CRUD (filters: type/tag/active/favorite)
 - [x] TOTP: setup via QR + code generation
-- [ ] password generator options (length, symbol sets, pronounceable)
+- [x] password generator options (length, symbol sets, pronounceable)
 - [ ] TUI mode (ratatui/crossterm)
 - [ ] Non-interactive CI mode with environment variable injection
 

@@ -7,6 +7,7 @@ pub mod import;
 pub mod init;
 pub mod list;
 pub mod migrate;
+pub mod password;
 pub mod remove;
 pub mod show;
 pub mod ssh;
