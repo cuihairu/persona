@@ -64,6 +64,9 @@ enum Commands {
     /// Credential management (password/api key/etc.)
     Credential(commands::credential::CredentialArgs),
 
+    /// Password generator utilities
+    Password(commands::password::PasswordArgs),
+
     /// TOTP setup and code generation
     Totp(commands::totp::TotpArgs),
 
@@ -97,6 +100,7 @@ async fn main() -> Result<()> {
         Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
         Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
         Commands::Credential(args) => commands::credential::execute(args, &config).await,
+        Commands::Password(args) => commands::password::execute(args, &config).await,
         Commands::Totp(args) => commands::totp::execute(args, &config).await,
         Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
     }

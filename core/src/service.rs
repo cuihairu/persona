@@ -8,9 +8,10 @@ use crate::{
     crypto::{EncryptionService, KeyHierarchy, Sha256Hasher},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
-        ChangeHistoryStats, ChangeType, Credential, CredentialData, SecurityLevel,
-        CredentialType, EntityType, Identity, IdentityType, ResourceType,
+        ChangeHistoryStats, ChangeType, Credential, CredentialData, CredentialType, EntityType,
+        Identity, IdentityType, ResourceType, SecurityLevel,
     },
+    password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
         AttachmentManager, AttachmentRepository, AuditLogRepository, BlobStore,
         ChangeHistoryRepository, CredentialRepository, Database, IdentityRepository, Repository,
@@ -649,33 +650,29 @@ impl PersonaService {
         self.identity_repo.find_by_type(identity_type).await
     }
 
-    /// Generate a strong password
+    /// Generate a strong password (legacy helper).
     pub fn generate_password(&self, length: usize, include_symbols: bool) -> String {
-        use rand::{rngs::OsRng, Rng};
+        let mut options = PasswordGeneratorOptions::default();
+        options.length = length.max(4);
+        options.include_symbols = include_symbols;
 
-        let lowercase = "abcdefghijklmnopqrstuvwxyz";
-        let uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        let numbers = "0123456789";
-        let symbols = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+        PasswordGenerator::generate(&options).unwrap_or_else(|_| {
+            // Fall back to a safe default if option validation fails for any reason.
+            PasswordGenerator::generate(&PasswordGeneratorOptions {
+                length: 12,
+                include_symbols: false,
+                ..PasswordGeneratorOptions::default()
+            })
+            .unwrap_or_else(|_| "persona-temp".to_string())
+        })
+    }
 
-        let mut charset = String::new();
-        charset.push_str(lowercase);
-        charset.push_str(uppercase);
-        charset.push_str(numbers);
-
-        if include_symbols {
-            charset.push_str(symbols);
-        }
-
-        let charset_bytes = charset.as_bytes();
-        let mut password = String::new();
-
-        for _ in 0..length {
-            let idx = OsRng.gen_range(0..charset_bytes.len());
-            password.push(charset_bytes[idx] as char);
-        }
-
-        password
+    /// Generate a password using advanced options.
+    pub fn generate_password_with_options(
+        &self,
+        options: &PasswordGeneratorOptions,
+    ) -> Result<String> {
+        PasswordGenerator::generate(options)
     }
 
     /// Generate salt for master key derivation

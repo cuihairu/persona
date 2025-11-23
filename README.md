@@ -103,6 +103,10 @@ persona credential remove --id <UUID>
 persona totp setup --identity alice --qr ~/Downloads/github.png
 persona totp code --id <UUID>
 persona totp code --id <UUID> --watch
+
+# Password generator with custom sets
+persona password generate --length 32 --set lowercase --set uppercase --set digits --set symbols
+persona password generate --pronounceable --length 18 --set lowercase --set uppercase
 ```
 
 ### Export / Import (Compression + Encryption)
