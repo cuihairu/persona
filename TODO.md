@@ -40,7 +40,7 @@ CLI
 - [x] credential CRUD (filters: type/tag/active/favorite)
 - [x] TOTP: setup via QR + code generation
 - [x] password generator options (length, symbol sets, pronounceable)
-- [ ] TUI mode (ratatui/crossterm)
+- [x] TUI mode (ratatui/crossterm)
 - [ ] Non-interactive CI mode with environment variable injection
 
 SSH Agent (developer focus)

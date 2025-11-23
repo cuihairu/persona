@@ -42,7 +42,7 @@ Milestone 2 – CLI Parity (1–2 weeks)
   - [ ] TOTP: generate/setup via QR; time skew handling
   - [ ] Password generator (policy controls: length, symbols, pronounceable)
 - Dev usability
-  - [ ] TUI mode (crossterm/ratatui) for quick flows
+  - [x] TUI mode (crossterm/ratatui) for quick flows
   - [ ] Non-interactive CI mode with env var injection
 
 Milestone 3 – SSH Agent (2–3 weeks)
