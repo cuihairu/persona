@@ -53,9 +53,9 @@ impl AutoLockPolicyRepository {
         .await
         .map_err(|e| PersonaError::Database(format!("Failed to create auto-lock policy: {}", e)))?;
 
-        tx.commit()
-            .await
-            .map_err(|e| PersonaError::Database(format!("Failed to commit policy creation: {}", e)))?;
+        tx.commit().await.map_err(|e| {
+            PersonaError::Database(format!("Failed to commit policy creation: {}", e))
+        })?;
 
         Ok(self
             .find_by_id(&policy.id)
@@ -110,8 +110,7 @@ impl AutoLockPolicyRepository {
             .await
             .map_err(|e| PersonaError::Database(format!("Failed to fetch policy: {}", e)))?;
 
-        row.map(|row| self.row_to_policy(row))
-            .transpose()
+        row.map(|row| self.row_to_policy(row)).transpose()
     }
 
     pub async fn find_all(&self) -> Result<Vec<AutoLockPolicy>> {
@@ -120,7 +119,9 @@ impl AutoLockPolicyRepository {
             .await
             .map_err(|e| PersonaError::Database(format!("Failed to fetch policies: {}", e)))?;
 
-        rows.into_iter().map(|row| self.row_to_policy(row)).collect()
+        rows.into_iter()
+            .map(|row| self.row_to_policy(row))
+            .collect()
     }
 
     pub async fn delete(&self, id: &Uuid) -> Result<bool> {
@@ -133,12 +134,15 @@ impl AutoLockPolicyRepository {
     }
 
     pub async fn find_active(&self) -> Result<Vec<AutoLockPolicy>> {
-        let rows = sqlx::query("SELECT * FROM auto_lock_policies WHERE is_active = 1 ORDER BY name")
-            .fetch_all(self.db.pool())
-            .await
-            .map_err(|e| PersonaError::Database(format!("Failed to fetch policies: {}", e)))?;
+        let rows =
+            sqlx::query("SELECT * FROM auto_lock_policies WHERE is_active = 1 ORDER BY name")
+                .fetch_all(self.db.pool())
+                .await
+                .map_err(|e| PersonaError::Database(format!("Failed to fetch policies: {}", e)))?;
 
-        rows.into_iter().map(|row| self.row_to_policy(row)).collect()
+        rows.into_iter()
+            .map(|row| self.row_to_policy(row))
+            .collect()
     }
 
     pub async fn find_by_security_level(
@@ -153,7 +157,9 @@ impl AutoLockPolicyRepository {
         .await
         .map_err(|e| PersonaError::Database(format!("Failed to fetch policies: {}", e)))?;
 
-        rows.into_iter().map(|row| self.row_to_policy(row)).collect()
+        rows.into_iter()
+            .map(|row| self.row_to_policy(row))
+            .collect()
     }
 
     pub async fn find_by_name_like(&self, name_pattern: &str) -> Result<Vec<AutoLockPolicy>> {
@@ -166,7 +172,9 @@ impl AutoLockPolicyRepository {
         .await
         .map_err(|e| PersonaError::Database(format!("Failed to search policies: {}", e)))?;
 
-        rows.into_iter().map(|row| self.row_to_policy(row)).collect()
+        rows.into_iter()
+            .map(|row| self.row_to_policy(row))
+            .collect()
     }
 
     pub async fn get_statistics(&self, _policy_id: &Uuid) -> Result<Option<PolicyStatistics>> {
@@ -242,9 +250,9 @@ impl AutoLockPolicyRepository {
             .await
             .map_err(|e| PersonaError::Database(format!("Failed to set default policy: {}", e)))?;
 
-        tx.commit()
-            .await
-            .map_err(|e| PersonaError::Database(format!("Failed to commit default policy change: {}", e)))?;
+        tx.commit().await.map_err(|e| {
+            PersonaError::Database(format!("Failed to commit default policy change: {}", e))
+        })?;
         Ok(())
     }
 
@@ -269,20 +277,21 @@ impl AutoLockPolicyRepository {
             id,
             name: row.get("name"),
             description: row.get::<Option<String>, _>("description"),
-            security_level: row.get::<String, _>("security_level").parse().map_err(|e| {
-                PersonaError::Database(format!("Invalid security level: {}", e))
-            })?,
+            security_level: row
+                .get::<String, _>("security_level")
+                .parse()
+                .map_err(|e| PersonaError::Database(format!("Invalid security level: {}", e)))?,
             inactivity_timeout_secs: row.get::<i64, _>("inactivity_timeout_secs") as u64,
             absolute_timeout_secs: row.get::<i64, _>("absolute_timeout_secs") as u64,
-            sensitive_operation_timeout_secs: row
-                .get::<i64, _>("sensitive_operation_timeout_secs") as u64,
+            sensitive_operation_timeout_secs: row.get::<i64, _>("sensitive_operation_timeout_secs")
+                as u64,
             max_concurrent_sessions: row.get::<i64, _>("max_concurrent_sessions") as usize,
             enable_warnings: row.get("enable_warnings"),
             warning_time_secs: row.get::<i64, _>("warning_time_secs") as u64,
             force_lock_sensitive: row.get("force_lock_sensitive"),
             activity_grace_period_secs: row.get::<i64, _>("activity_grace_period_secs") as u64,
-            background_check_interval_secs: row
-                .get::<i64, _>("background_check_interval_secs") as u64,
+            background_check_interval_secs: row.get::<i64, _>("background_check_interval_secs")
+                as u64,
             metadata,
             is_active: row.get("is_active"),
             created_at,

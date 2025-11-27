@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use serde::{Serialize};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 

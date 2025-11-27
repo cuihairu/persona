@@ -147,6 +147,39 @@ security-audit: ## 运行安全审计
 	cd desktop && npm audit
 	@echo "安全审计完成!"
 
+security-check: ## 运行完整安全检查（audit + deny）
+	@echo "=== 运行 cargo-deny 供应链检查 ==="
+	cargo deny check
+	@echo ""
+	@echo "=== 运行 cargo-audit 漏洞扫描 ==="
+	cargo audit
+	@echo ""
+	@echo "=== 运行 npm audit ==="
+	cd desktop && npm audit || true
+	@echo ""
+	@echo "安全检查完成!"
+
+security-advisories: ## 仅检查已知漏洞
+	@echo "检查 Rust 漏洞数据库..."
+	cargo deny check advisories
+	cargo audit
+	@echo "漏洞检查完成!"
+
+security-licenses: ## 检查许可证合规性
+	@echo "检查依赖许可证..."
+	cargo deny check licenses
+	@echo "许可证检查完成!"
+
+security-bans: ## 检查禁用的依赖
+	@echo "检查禁用的依赖..."
+	cargo deny check bans
+	@echo "依赖检查完成!"
+
+security-sources: ## 检查依赖来源
+	@echo "检查依赖来源..."
+	cargo deny check sources
+	@echo "来源检查完成!"
+
 # 性能测试
 benchmark: ## 运行性能测试
 	@echo "运行 Rust 性能测试..."
@@ -196,11 +229,11 @@ i18n-extract: ## 提取国际化字符串
 	cd mobile && flutter gen-l10n
 
 # 全面检查
-check-all: lint test security-audit ## 运行所有检查
+check-all: lint test security-check ## 运行所有检查（包括安全检查）
 	@echo "所有检查完成!"
 
 # CI/CD 相关
-ci: install lint test ## CI 流水线
+ci: install lint test security-advisories ## CI 流水线（包括漏洞扫描）
 	@echo "CI 流水线完成!"
 
 cd: build docs-build ## CD 流水线

@@ -392,11 +392,7 @@ async fn show_credential(config: &CliConfig, id: Uuid, reveal: bool) -> Result<(
             .with_prompt("Reveal secret value? (visible on screen)")
             .interact()?;
         if confirm {
-            if let Some(data) = service
-                .get_credential_data(&id)
-                .await
-                .into_anyhow()?
-            {
+            if let Some(data) = service.get_credential_data(&id).await.into_anyhow()? {
                 match data {
                     CredentialData::Password(password) => {
                         println!("  Password: {}", password.password.blue());

@@ -60,6 +60,7 @@ pub struct AutoLockPolicy {
 /// Security levels for auto-lock policies
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Copy)]
 #[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum AutoLockSecurityLevel {
     /// Low security - longer timeouts, more lenient
     Low,
@@ -229,7 +230,10 @@ impl AutoLockPolicy {
         let level_order = match (self.security_level, other.security_level) {
             (AutoLockSecurityLevel::Maximum, _) => true,
             (_, AutoLockSecurityLevel::Maximum) => false,
-            (AutoLockSecurityLevel::High, AutoLockSecurityLevel::Low | AutoLockSecurityLevel::Medium) => true,
+            (
+                AutoLockSecurityLevel::High,
+                AutoLockSecurityLevel::Low | AutoLockSecurityLevel::Medium,
+            ) => true,
             (AutoLockSecurityLevel::Medium, AutoLockSecurityLevel::Low) => true,
             (AutoLockSecurityLevel::Low, _) => false,
             _ => self.inactivity_timeout_secs < other.inactivity_timeout_secs,

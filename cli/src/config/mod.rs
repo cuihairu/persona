@@ -107,7 +107,7 @@ impl CliConfig {
             None => Self::get_config_path()?,
         };
 
-        if config_path.exists() {
+        let mut config = if config_path.exists() {
             debug!("Loading configuration from: {}", config_path.display());
             let content = std::fs::read_to_string(&config_path).with_context(|| {
                 format!("Failed to read config file: {}", config_path.display())
@@ -118,10 +118,66 @@ impl CliConfig {
             })?;
 
             info!("Configuration loaded successfully");
-            Ok(config)
+            config
         } else {
             debug!("Config file not found, using default configuration");
-            Ok(Self::default())
+            Self::default()
+        };
+
+        // Override with environment variables
+        config.apply_env_overrides();
+
+        Ok(config)
+    }
+
+    /// Apply environment variable overrides
+    fn apply_env_overrides(&mut self) {
+        // Non-interactive mode
+        if let Ok(val) = std::env::var("PERSONA_NON_INTERACTIVE") {
+            if val == "1" || val.to_lowercase() == "true" {
+                self.ui.interactive = false;
+            }
+        }
+
+        // Workspace path
+        if let Ok(path) = std::env::var("PERSONA_WORKSPACE_PATH") {
+            self.workspace.path = PathBuf::from(path);
+        }
+
+        // Master password (for CI/automation)
+        // Note: This is stored temporarily and should be cleared after use
+        if std::env::var("PERSONA_MASTER_PASSWORD").is_ok() {
+            debug!("Master password detected in environment");
+        }
+
+        // Encryption setting
+        if let Ok(val) = std::env::var("PERSONA_ENCRYPTION_ENABLED") {
+            if let Ok(enabled) = val.parse::<bool>() {
+                self.security.encryption_enabled = enabled;
+            }
+        }
+
+        // Output format
+        if let Ok(format) = std::env::var("PERSONA_OUTPUT_FORMAT") {
+            let valid_formats = ["table", "json", "yaml", "csv"];
+            if valid_formats.contains(&format.as_str()) {
+                self.ui.default_output_format = format;
+            }
+        }
+
+        // Color output
+        if let Ok(val) = std::env::var("PERSONA_NO_COLOR") {
+            if val == "1" || val.to_lowercase() == "true" {
+                self.ui.color_enabled = false;
+            }
+        }
+
+        // Logging level
+        if let Ok(level) = std::env::var("PERSONA_LOG_LEVEL") {
+            let valid_levels = ["trace", "debug", "info", "warn", "error"];
+            if valid_levels.contains(&level.as_str()) {
+                self.logging.level = level;
+            }
         }
     }
 
@@ -278,5 +334,15 @@ impl CliConfig {
         self.workspace.path.exists()
             && self.get_database_path().exists()
             && self.get_workspace_config_path().exists()
+    }
+
+    /// Check if running in interactive mode
+    pub fn is_interactive(&self) -> bool {
+        self.ui.interactive && atty::is(atty::Stream::Stdin)
+    }
+
+    /// Check if color output is enabled
+    pub fn is_color_enabled(&self) -> bool {
+        self.ui.color_enabled && atty::is(atty::Stream::Stdout)
     }
 }

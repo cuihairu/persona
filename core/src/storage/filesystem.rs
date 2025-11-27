@@ -50,7 +50,8 @@ impl FileSystem {
     /// Check if path is a file
     pub async fn is_file<P: AsRef<Path>>(path: P) -> Result<bool> {
         let metadata = async_fs::metadata(path).await.map_err(|e| {
-            Box::new(PersonaError::Io(e.to_string())) as Box<dyn std::error::Error + Send + Sync + 'static>
+            Box::new(PersonaError::Io(e.to_string()))
+                as Box<dyn std::error::Error + Send + Sync + 'static>
         })?;
         Ok(metadata.is_file())
     }
@@ -58,7 +59,8 @@ impl FileSystem {
     /// Check if path is a directory
     pub async fn is_dir<P: AsRef<Path>>(path: P) -> Result<bool> {
         let metadata = async_fs::metadata(path).await.map_err(|e| {
-            Box::new(PersonaError::Io(e.to_string())) as Box<dyn std::error::Error + Send + Sync + 'static>
+            Box::new(PersonaError::Io(e.to_string()))
+                as Box<dyn std::error::Error + Send + Sync + 'static>
         })?;
         Ok(metadata.is_dir())
     }
@@ -94,12 +96,14 @@ impl FileSystem {
     /// List directory contents
     pub async fn read_dir<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
         let mut entries = async_fs::read_dir(path).await.map_err(|e| {
-            Box::new(PersonaError::Io(e.to_string())) as Box<dyn std::error::Error + Send + Sync + 'static>
+            Box::new(PersonaError::Io(e.to_string()))
+                as Box<dyn std::error::Error + Send + Sync + 'static>
         })?;
 
         let mut paths = Vec::new();
         while let Some(entry) = entries.next_entry().await.map_err(|e| {
-            Box::new(PersonaError::Io(e.to_string())) as Box<dyn std::error::Error + Send + Sync + 'static>
+            Box::new(PersonaError::Io(e.to_string()))
+                as Box<dyn std::error::Error + Send + Sync + 'static>
         })? {
             paths.push(entry.path());
         }
@@ -110,7 +114,8 @@ impl FileSystem {
     /// Get file size
     pub async fn file_size<P: AsRef<Path>>(path: P) -> Result<u64> {
         let metadata = async_fs::metadata(path).await.map_err(|e| {
-            Box::new(PersonaError::Io(e.to_string())) as Box<dyn std::error::Error + Send + Sync + 'static>
+            Box::new(PersonaError::Io(e.to_string()))
+                as Box<dyn std::error::Error + Send + Sync + 'static>
         })?;
         Ok(metadata.len())
     }

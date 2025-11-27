@@ -213,7 +213,10 @@ fn create_identity_non_interactive(args: &AddArgs) -> Result<Identity> {
     let identity_type = args
         .identity_type
         .as_ref()
-        .map(|t| t.parse::<IdentityType>().unwrap_or(IdentityType::Custom(t.clone())))
+        .map(|t| {
+            t.parse::<IdentityType>()
+                .unwrap_or(IdentityType::Custom(t.clone()))
+        })
         .unwrap_or(IdentityType::Personal);
 
     let mut identity = Identity::new(name, identity_type);

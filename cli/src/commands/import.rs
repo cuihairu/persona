@@ -4,8 +4,8 @@ use colored::*;
 use dialoguer::{Confirm, MultiSelect};
 use std::path::PathBuf;
 
-use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use crate::utils::progress::create_progress_bar;
+use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use dialoguer::Password;
 use persona_core::{
     models::IdentityType,
@@ -393,18 +393,12 @@ async fn check_import_conflicts(
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
-        .await
-        .into_anyhow()?;
+    let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
     let names = if service.has_users().await.into_anyhow()? {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service
-            .authenticate_user(&password)
-            .await
-            .into_anyhow()?
-        {
+        match service.authenticate_user(&password).await.into_anyhow()? {
             persona_core::auth::authentication::AuthResult::Success => service
                 .get_identities()
                 .await
@@ -552,18 +546,12 @@ async fn perform_import(
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
-        .await
-        .into_anyhow()?;
+    let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
     if service.has_users().await.into_anyhow()? {
         let password = Password::new()
             .with_prompt("Enter master password to unlock")
             .interact()?;
-        match service
-            .authenticate_user(&password)
-            .await
-            .into_anyhow()?
-        {
+        match service.authenticate_user(&password).await.into_anyhow()? {
             persona_core::auth::authentication::AuthResult::Success => {}
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }

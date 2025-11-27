@@ -17,8 +17,8 @@ Monorepo & Tooling
 - [x] Add SSH Agent crate skeleton (`agents/ssh-agent`)
 - [x] CODEOWNERS + PR template + Conventional Commits
 - [x] Makefile targets for build/test/lint across all packages
-- [ ] 文档：整理统一客户端通信架构（CLI/桌面/浏览器/Agent 依赖同一个本地服务/IPC 协议）
-- [ ] 文档：说明本地服务 IPC 优先使用 Unix Socket（含 Windows 支持，必要时回退 Named Pipe）
+- [x] 文档：整理统一客户端通信架构（CLI/桌面/浏览器/Agent 依赖同一个本地服务/IPC 协议）
+- [x] 文档：说明本地服务 IPC 优先使用 Unix Socket（含 Windows 支持，必要时回退 Named Pipe）
 
 Security & Auth
 - [x] Key hierarchy: per-item keys wrapped by master key
@@ -41,7 +41,7 @@ CLI
 - [x] TOTP: setup via QR + code generation
 - [x] password generator options (length, symbol sets, pronounceable)
 - [x] TUI mode (ratatui/crossterm)
-- [ ] Non-interactive CI mode with environment variable injection
+- [x] Non-interactive CI mode with environment variable injection
 
 SSH Agent (developer focus)
 - [x] UNIX socket server implementing SSH agent protocol (list/add/remove/sign)
@@ -60,9 +60,11 @@ SSH Agent (developer focus)
   - [x] Per-host policies (allowed keys, confirmation requirements, hourly limits)
   - [x] Glob pattern matching for hostname restrictions
 - [x] E2E tests for SSH protocol encoding/decoding
-- [ ] Full E2E test: `ssh -T git@github.com` path using agent (requires integration testing)
-- [ ] CLI commands: `persona ssh import|generate|list|add-to-agent|rm|status`
-- [x] CLI commands (partial): `generate|list|rm|status|add-to-agent (placeholder)`
+- [x] E2E tests for agent request_identities and GitHub connection
+- [x] CLI commands: `persona ssh import|generate|list|list-all|export-pub|add-to-agent|start-agent|stop-agent|agent-status|run|remove`
+- [x] Complete README documentation with usage examples
+- [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
+- [ ] Windows-specific testing and optimization
 
 Digital Wallet (Persona enhancement)
 - [ ] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
@@ -98,7 +100,7 @@ Browser & Autofill (future)
 Quality & Security
 - [ ] Threat model & periodic security review
 - [ ] Fuzz tests for parsers (mnemonic/keystore/QR)
-- [ ] Supply chain checks (cargo-deny, npm audit)
+- [x] Supply chain checks (cargo-deny, npm audit)
 - [ ] Reproducible builds
 
 References

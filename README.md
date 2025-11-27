@@ -1,6 +1,10 @@
 # Persona – Digital Identity and Developer Credential Manager
 
-Chinese brand name: "Shuyao" (数钥, pronounced “shu yao”). It captures the idea of “digital keys” in a short, memorable word. We generally refer to the product as “Persona (数钥)” or “Shuyao Persona” in brand materials.
+[![CI](https://github.com/your-username/persona/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/persona/actions/workflows/ci.yml)
+[![Security Audit](https://github.com/your-username/persona/actions/workflows/security.yml/badge.svg)](https://github.com/your-username/persona/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Chinese brand name: "Shuyao" (数钥, pronounced "shu yao"). It captures the idea of "digital keys" in a short, memorable word. We generally refer to the product as "Persona (数钥)" or "Shuyao Persona" in brand materials.
 
 Master your digital identity. Switch freely with one click.
 
@@ -14,6 +18,7 @@ Persona is a secure and convenient platform for managing digital identities and 
 - 💰 Digital wallet: mnemonic and private-key storage (derivation/signing to follow)
 - 🗄️ Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)
 - 🧾 Audit log: critical operations and signing events (with digest)
+- 🛡️ Supply chain security: automated dependency scanning with cargo-deny and npm audit
 
 ## 🏗️ Architecture
 
@@ -156,6 +161,18 @@ persona ssh stop-agent
 - [ROADMAP](./docs/ROADMAP.md) – roadmap and detailed TODO items
 - [TODO](./TODO.md) – daily-maintained task list
 - [Brand assets](./docs/branding/README.md) – logos, wordmarks, colors, and guidelines
+
+### Architecture & Design
+
+- [Client Communication Architecture](./docs/CLIENT_COMMUNICATION_ARCHITECTURE.md) – unified IPC architecture
+- [Non-Interactive Mode Guide](./docs/NON_INTERACTIVE_MODE.md) – CI/CD integration guide
+
+### Security Documentation
+
+- [SSH Agent Features](./docs/SSH_AGENT_FEATURES.md) – complete SSH agent documentation
+- [SSH Agent README](./agents/ssh-agent/README.md) – SSH agent quick start
+- [SSH Agent Testing](./agents/ssh-agent/TESTING.md) – comprehensive testing guide
+- [Supply Chain Security](./docs/SUPPLY_CHAIN_SECURITY.md) – dependency security checks
 
 ## 🛣️ Roadmap
 
