@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 /// Policy configuration for SSH key usage
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct SigningPolicy {
     /// Global settings
     pub global: GlobalPolicy,
@@ -28,18 +29,10 @@ pub struct SigningPolicy {
     pub host_policies: HashMap<String, HostPolicy>,
 }
 
-impl Default for SigningPolicy {
-    fn default() -> Self {
-        Self {
-            global: GlobalPolicy::default(),
-            key_policies: HashMap::new(),
-            host_policies: HashMap::new(),
-        }
-    }
-}
 
 /// Global agent policy settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct GlobalPolicy {
     /// Require user confirmation for every signature
     #[serde(default)]
@@ -66,18 +59,6 @@ pub struct GlobalPolicy {
     pub deny_all: bool,
 }
 
-impl Default for GlobalPolicy {
-    fn default() -> Self {
-        Self {
-            require_confirm: false,
-            min_interval_ms: 0,
-            enforce_known_hosts: false,
-            confirm_on_unknown_host: false,
-            max_signatures_per_hour: 0,
-            deny_all: false,
-        }
-    }
-}
 
 /// Per-key policy settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,16 +277,15 @@ impl PolicyEnforcer {
 
             // Check host restrictions for this key
             if let Some(hostname) = hostname {
-                if !key_policy.denied_hosts.is_empty() {
-                    if self.matches_any_pattern(hostname, &key_policy.denied_hosts) {
+                if !key_policy.denied_hosts.is_empty()
+                    && self.matches_any_pattern(hostname, &key_policy.denied_hosts) {
                         return Ok(SignatureDecision::Denied {
                             reason: format!("Host '{}' is denied for this key", hostname),
                         });
                     }
-                }
 
-                if !key_policy.allowed_hosts.is_empty() {
-                    if !self.matches_any_pattern(hostname, &key_policy.allowed_hosts) {
+                if !key_policy.allowed_hosts.is_empty()
+                    && !self.matches_any_pattern(hostname, &key_policy.allowed_hosts) {
                         return Ok(SignatureDecision::Denied {
                             reason: format!(
                                 "Host '{}' is not in allowed list for this key",
@@ -313,7 +293,6 @@ impl PolicyEnforcer {
                             ),
                         });
                     }
-                }
             }
 
             // Check daily usage limit for key
@@ -354,13 +333,12 @@ impl PolicyEnforcer {
                 }
 
                 // Check if key is allowed for this host
-                if !host_policy.allowed_keys.is_empty() {
-                    if !host_policy.allowed_keys.contains(&key_id) {
+                if !host_policy.allowed_keys.is_empty()
+                    && !host_policy.allowed_keys.contains(&key_id) {
                         return Ok(SignatureDecision::Denied {
                             reason: format!("Key not allowed for host '{}'", hostname),
                         });
                     }
-                }
 
                 // Check hourly limit for host (extract values first to avoid borrow conflict)
                 let max_connections = host_policy.max_connections_per_hour;

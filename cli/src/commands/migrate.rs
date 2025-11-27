@@ -5,8 +5,7 @@ use colored::*;
 use persona_core::{
     models::{AuditAction, AuditLog, ResourceType, Workspace},
     storage::{AuditLogRepository, WorkspaceRepository},
-    Repository,
-    Database,
+    Database, Repository,
 };
 
 #[derive(Args, Debug)]
@@ -81,7 +80,11 @@ pub async fn execute(args: MigrateArgs, config: &crate::config::CliConfig) -> Re
     println!("  Workspace: {}", path_str.cyan());
     println!(
         "  Created new workspace row: {}",
-        if created { "yes".green() } else { "no".dimmed() }
+        if created {
+            "yes".green()
+        } else {
+            "no".dimmed()
+        }
     );
     println!();
     println!("{}", "Done.".green().bold());

@@ -2,7 +2,7 @@
 //! Cross-platform transport layer for SSH Agent communication
 
 use anyhow::Result;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[cfg(windows)]
 use tokio::net::windows::named_pipe;
@@ -49,6 +49,7 @@ impl AgentStream {
     }
 
     /// Flush the stream
+    #[allow(dead_code)]
     pub async fn flush(&mut self) -> Result<()> {
         match self {
             #[cfg(unix)]
@@ -133,6 +134,7 @@ impl AgentListener {
     }
 
     /// Get the address string for this listener
+    #[allow(dead_code)]
     pub fn address(&self) -> String {
         match self {
             #[cfg(unix)]
@@ -170,6 +172,7 @@ pub fn default_agent_path() -> std::path::PathBuf {
 }
 
 /// Get environment variable name for agent socket
+#[allow(dead_code)]
 pub fn agent_socket_env_var() -> &'static str {
     #[cfg(unix)]
     {

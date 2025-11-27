@@ -35,6 +35,25 @@ jobs:
       - name: test
         run: cargo test --workspace --all-features
 
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Install cargo-deny
+        run: cargo install --locked cargo-deny
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      - name: Run cargo-deny
+        run: cargo deny check
+      - name: Run cargo-audit
+        run: cargo audit
+        continue-on-error: true # Don't fail CI on advisories, just warn
+
   desktop:
     name: Desktop (Tauri + React)
     runs-on: ubuntu-latest
@@ -55,4 +74,7 @@ jobs:
         run: npm run lint
       - name: Tests
         run: npm test -- --ci --reporters=default --reporters=jest-junit
+      - name: Security Audit
+        run: npm audit --audit-level=moderate
+        continue-on-error: true # Don't fail CI on moderate vulnerabilities
 

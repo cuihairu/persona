@@ -230,7 +230,11 @@ fn show_current_values(identity: &Identity) -> Result<()> {
     }
 
     if !identity.tags.is_empty() {
-        println!("  {}: {}", "Tags".dimmed(), identity.tags.join(", ").dimmed());
+        println!(
+            "  {}: {}",
+            "Tags".dimmed(),
+            identity.tags.join(", ").dimmed()
+        );
     }
 
     if !identity.attributes.is_empty() {

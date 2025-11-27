@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::{debug, warn};
 
-pub mod file_crypto;
 pub mod core_ext;
+pub mod file_crypto;
 pub mod progress;
 /// Create directory if it doesn't exist
 pub fn create_directory<P: AsRef<Path>>(path: P) -> Result<()> {
@@ -193,7 +193,9 @@ pub fn is_interactive_terminal() -> bool {
 
 /// Get terminal width
 pub fn get_terminal_width() -> usize {
-    crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80)
+    crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80)
 }
 
 /// Confirm action with user
