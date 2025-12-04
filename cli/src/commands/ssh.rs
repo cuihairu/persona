@@ -126,7 +126,7 @@ pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result
         } => start_agent(config, print_export).await,
         SshSubcommand::AgentStatus => agent_status(config),
         SshSubcommand::StartAgent { print_export } => start_agent(config, print_export).await,
-        SshSubcommand::ListAll => list_all_keys(config).await,
+        SshSubcommand::ListAll => list_keys("", config).await,
         SshSubcommand::Import {
             identity,
             name,
@@ -141,7 +141,7 @@ pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result
 
 async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaService> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path.to_string_lossy())
+    let db = Database::from_file(db_path.as_ref())
         .await
         .context("Failed to open database")?;
     db.migrate().await.context("Failed to run migrations")?;
@@ -183,10 +183,12 @@ async fn generate_key(
     let identity = resolve_identity(&service, identity_name).await?;
 
     // Generate ed25519 keypair
-    use ed25519_dalek::{SigningKey, VerifyingKey};
+    use ed25519_dalek::{SigningKey, VerifyingKey, SecretKey, SignatureError};
     use rand::rngs::OsRng;
 
-    let signing_key = SigningKey::generate(&mut OsRng);
+    let mut rng = OsRng;
+    let secret_key = SecretKey::generate(&mut rng);
+    let signing_key = SigningKey::from_bytes(&secret_key.to_bytes())?;
     let verifying_key: VerifyingKey = signing_key.verifying_key();
     let secret_bytes = signing_key.to_bytes(); // 32-byte seed
     let pub_bytes = verifying_key.to_bytes(); // 32-byte public

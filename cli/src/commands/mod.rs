@@ -14,3 +14,4 @@ pub mod ssh;
 pub mod switch;
 pub mod totp;
 pub mod tui;
+pub mod wallet;

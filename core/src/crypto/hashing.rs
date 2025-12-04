@@ -1,4 +1,4 @@
-use crate::Result;
+use crate::{PersonaResult, PersonaError};
 use argon2::{
     password_hash::{PasswordHash, SaltString},
     Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier,
@@ -20,29 +20,24 @@ impl PasswordHasher {
     }
 
     /// Hash a password with a random salt
-    pub fn hash_password(&self, password: &str) -> Result<String> {
+    pub fn hash_password(&self, password: &str) -> PersonaResult<String> {
         let salt = SaltString::generate(&mut OsRng);
         let hash = Argon2PasswordHasher::hash_password(&self.argon2, password.as_bytes(), &salt)
-            .map_err(|e| {
-                Box::new(crate::PersonaError::Io(e.to_string()))
-                    as Box<dyn std::error::Error + Send + Sync + 'static>
-            })?;
+            .map_err(|e| PersonaError::Crypto(format!("Hashing failed: {}", e)))?;
         Ok(hash.to_string())
     }
 
     /// Verify a password against a hash
-    pub fn verify_password(&self, password: &str, hash: &str) -> Result<bool> {
-        let parsed_hash = PasswordHash::new(hash).map_err(|e| {
-            Box::new(crate::PersonaError::Io(e.to_string()))
-                as Box<dyn std::error::Error + Send + Sync + 'static>
-        })?;
+    pub fn verify_password(&self, password: &str, hash: &str) -> PersonaResult<bool> {
+        let parsed_hash = PasswordHash::new(hash)
+            .map_err(|e| PersonaError::Crypto(format!("Invalid hash format: {}", e)))?;
         match self
             .argon2
             .verify_password(password.as_bytes(), &parsed_hash)
         {
             Ok(()) => Ok(true),
             Err(argon2::password_hash::Error::Password) => Ok(false),
-            Err(e) => Err(Box::new(crate::PersonaError::Io(e.to_string()))),
+            Err(e) => Err(PersonaError::Crypto(format!("Verification failed: {}", e))),
         }
     }
 }

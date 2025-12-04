@@ -75,6 +75,9 @@ enum Commands {
 
     /// Auto-lock policy management
     AutoLock(commands::auto_lock::AutoLockArgs),
+
+    /// Crypto wallet management
+    Wallet(commands::wallet::WalletArgs),
 }
 
 #[tokio::main]
@@ -107,6 +110,7 @@ async fn main() -> Result<()> {
         Commands::Tui(args) => commands::tui::execute(args, &config).await,
         Commands::Totp(args) => commands::totp::execute(args, &config).await,
         Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
+        Commands::Wallet(args) => commands::wallet::handle_wallet(args, &config).await,
     }
 }
 

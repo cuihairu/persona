@@ -10,7 +10,7 @@ use dialoguer::Password;
 use persona_core::{
     auth::AuthResult,
     models::{Credential as CoreCredential, Identity as CoreIdentity},
-    storage::{CredentialRepository, IdentityRepository},
+    storage::{CredentialRepository, IdentityRepository, Repository},
     Database, PersonaService,
 };
 use ratatui::{
@@ -54,7 +54,7 @@ pub async fn execute(args: TuiArgs, config: &CliConfig) -> Result<()> {
 
 async fn init_data_provider(config: &CliConfig) -> Result<DataProvider> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path)
+    let db = Database::from_file(db_path.as_ref())
         .await
         .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
     db.migrate()
@@ -409,7 +409,7 @@ impl AppState {
     }
 }
 
-fn render_ui<B: ratatui::backend::Backend>(f: &mut ratatui::Frame<B>, app: &AppState) {
+fn render_ui(f: &mut ratatui::Frame, app: &AppState) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints(
@@ -456,8 +456,8 @@ fn render_ui<B: ratatui::backend::Backend>(f: &mut ratatui::Frame<B>, app: &AppS
     f.render_widget(status, layout[2]);
 }
 
-fn render_identity_list<B: ratatui::backend::Backend>(
-    f: &mut ratatui::Frame<B>,
+fn render_identity_list(
+    f: &mut ratatui::Frame,
     area: ratatui::prelude::Rect,
     app: &AppState,
 ) {
@@ -503,8 +503,8 @@ fn render_identity_list<B: ratatui::backend::Backend>(
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_credentials<B: ratatui::backend::Backend>(
-    f: &mut ratatui::Frame<B>,
+fn render_credentials(
+    f: &mut ratatui::Frame,
     area: ratatui::prelude::Rect,
     app: &AppState,
 ) {
@@ -536,16 +536,15 @@ fn render_credentials<B: ratatui::backend::Backend>(
             .collect()
     };
 
-    let table = Table::new(rows)
-        .header(header)
-        .block(Block::default().title("Credentials").borders(Borders::ALL))
-        .widths(&[
+    let table = Table::new(rows, &[
             Constraint::Percentage(30),
             Constraint::Percentage(15),
-            Constraint::Percentage(20),
+            Constraint::Percentage(25),
             Constraint::Percentage(15),
-            Constraint::Percentage(20),
-        ]);
+            Constraint::Percentage(15),
+        ])
+        .header(header)
+        .block(Block::default().title("Credentials").borders(Borders::ALL));
 
     f.render_widget(table, area);
 }

@@ -52,19 +52,14 @@ impl BlobStore {
 
         // Validate file exists
         if !FileSystem::exists(file_path).await {
-            return Err(Box::new(PersonaError::Io(
-                "File does not exist".to_string(),
-            )));
+            return Err(anyhow!("File does not exist"));
         }
 
         // Get file metadata
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| {
-                Box::new(PersonaError::Io("Invalid filename".to_string()))
-                    as Box<dyn std::error::Error + Send + Sync + 'static>
-            })?
+            .ok_or_else(|| anyhow!("Invalid filename"))?
             .to_string();
 
         let file_size = FileSystem::file_size(file_path).await?;
