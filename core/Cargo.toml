@@ -15,6 +15,19 @@ ed25519-dalek.workspace = true
 rand.workspace = true
 zeroize.workspace = true
 
+# 密码学 - BIP/加密货币相关
+bip39.workspace = true
+tiny-bip39.workspace = true
+bip32.workspace = true
+k256.workspace = true
+secp256k1.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+ripemd.workspace = true
+hmac.workspace = true
+pbkdf2.workspace = true
+bs58.workspace = true
+
 # 数据库
 rusqlite = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }
