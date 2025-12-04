@@ -595,59 +595,70 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             account,
             address_count,
         } => {
-            let network = parse_network(&network)?;
-            let wallet_type = if hd {
-                let bip_ver = match bip_version {
-                    32 => BipVersion::Bip32,
-                    44 => BipVersion::Bip44,
-                    49 => BipVersion::Bip49,
-                    84 => BipVersion::Bip84,
-                    86 => BipVersion::Bip86,
-                    _ => bail!("Unsupported BIP version: {}", bip_version),
-                };
-
-                WalletType::HierarchicalDeterministic {
-                    bip_version: bip_ver,
-                    address_count,
-                    gap_limit: 20,
-                }
-            } else {
-                WalletType::SingleAddress
+            use persona_core::crypto::{
+                SecureMnemonic, MnemonicWordCount, MasterKey,
+                import_from_mnemonic,
             };
 
+            let network = parse_network(&network)?;
+
+            // Prompt for password
+            formatter.print_info("🔐 Enter a password to encrypt your wallet:");
+            let password = rpassword::read_password()
+                .context("Failed to read password")?;
+
+            if password.len() < 8 {
+                bail!("Password must be at least 8 characters long");
+            }
+
+            // Generate mnemonic
+            formatter.print_info("🎲 Generating new mnemonic phrase...");
+            let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words24)
+                .context("Failed to generate mnemonic")?;
+
+            // Show mnemonic to user (IMPORTANT: they must write this down!)
+            formatter.print_warning("\n⚠️  IMPORTANT: Write down your recovery phrase!");
+            formatter.print_warning("This is the ONLY way to recover your wallet if you lose access.\n");
+            formatter.print_success(&format!("Recovery Phrase:\n{}\n", mnemonic.phrase()));
+            formatter.print_warning("Press Enter after you've written it down securely...");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+
+            // Create wallet using import function
             let derivation_path = if hd {
                 Some(CryptoWallet::recommended_derivation_path(&network, account))
             } else {
                 None
             };
 
-            // For now, create with placeholder encrypted key
-            // In real implementation, this would generate actual cryptographic keys
-            let mut wallet = CryptoWallet::new(
+            let wallet = import_from_mnemonic(
                 uuid::new_v4(), // Would get from current identity
-                name,
+                name.clone(),
+                mnemonic.phrase(),
+                "", // No additional passphrase
                 network,
-                wallet_type,
-                vec![1, 2, 3, 4], // Placeholder encrypted private key
-            );
-
-            wallet.description = description;
-            wallet.derivation_path = derivation_path;
-            wallet.security_level = WalletSecurityLevel::High;
+                derivation_path.clone(),
+                address_count,
+                &password,
+            ).context("Failed to create wallet from mnemonic")?;
 
             let created = repo.create(&wallet).await.into_anyhow()?;
+
             formatter.print_success(&format!(
                 "🔐 Generated new wallet '{}' with ID: {}",
                 created.name, created.id
             ));
+            formatter.print_info(&format!("Network: {}", network));
+            formatter.print_info(&format!("Addresses generated: {}", address_count));
 
-            if hd {
-                formatter.print_info(&format!("Derivation Path: {:?}", created.derivation_path));
-                formatter.print_info(&format!("Address Count: {}", address_count));
+            if let Some(path) = &created.derivation_path {
+                formatter.print_info(&format!("Derivation Path: {}", path));
             }
 
-            formatter.print_warning("⚠️  This is a demo implementation with placeholder keys.");
-            formatter.print_info("In a production environment, actual cryptographic keys would be generated and securely encrypted.");
+            formatter.print_warning("\n⚠️  Security Reminder:");
+            formatter.print_info("- Keep your recovery phrase safe and offline");
+            formatter.print_info("- Never share your recovery phrase with anyone");
+            formatter.print_info("- Your password is required to use this wallet");
         }
 
         WalletCommand::Update {
@@ -837,15 +848,141 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             }
         }
 
-        WalletCommand::Export { wallet_identifier, format: _, include_private: _, output: _ } => {
+        WalletCommand::Export { wallet_identifier, format, include_private, output } => {
+            use persona_core::crypto::{
+                export_mnemonic, export_private_key, export_xpub, export_to_json,
+                parse_export_format, ExportFormat,
+            };
+
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
-            formatter.print_warning("⚠️  Export functionality is not yet implemented");
-            formatter.print_info(&format!("Wallet '{}' found with {} addresses", wallet.name, wallet.addresses.len()));
+            let export_format = parse_export_format(&format)?;
+
+            // Get password if exporting private data
+            let password = if include_private {
+                formatter.print_warning("⚠️  You are about to export private key data!");
+                formatter.print_info("Enter wallet password:");
+                let pwd = rpassword::read_password()
+                    .context("Failed to read password")?;
+                Some(pwd)
+            } else {
+                None
+            };
+
+            let exported_data = match export_format {
+                ExportFormat::Mnemonic => {
+                    let pwd = password.ok_or_else(|| anyhow!("Password required for mnemonic export"))?;
+                    export_mnemonic(&wallet, &pwd)
+                        .context("Failed to export mnemonic")?
+                }
+                ExportFormat::PrivateKey => {
+                    let pwd = password.ok_or_else(|| anyhow!("Password required for private key export"))?;
+                    export_private_key(&wallet, &pwd)
+                        .context("Failed to export private key")?
+                }
+                ExportFormat::Xpub => {
+                    export_xpub(&wallet)
+                        .context("Failed to export xpub")?
+                }
+                ExportFormat::Json => {
+                    export_to_json(&wallet, include_private, password.as_deref())
+                        .context("Failed to export to JSON")?
+                }
+            };
+
+            // Output to file or stdout
+            if let Some(output_path) = output {
+                std::fs::write(&output_path, exported_data.as_bytes())
+                    .context("Failed to write export file")?;
+                formatter.print_success(&format!("✅ Exported wallet to: {}", output_path));
+            } else {
+                formatter.print_success("Wallet Export:");
+                println!("{}", exported_data);
+            }
+
+            if include_private {
+                formatter.print_warning("\n⚠️  Security Warning:");
+                formatter.print_info("- This export contains sensitive private data");
+                formatter.print_info("- Store it securely and delete it when done");
+                formatter.print_info("- Never share this data with anyone");
+            }
         }
 
-        WalletCommand::Import { format: _, data: _, name: _ } => {
-            formatter.print_warning("⚠️  Import functionality is not yet implemented");
-            formatter.print_info("This feature will support importing from various wallet formats");
+        WalletCommand::Import { format, data, name } => {
+            use persona_core::crypto::{
+                import_from_mnemonic, import_from_private_key,
+                parse_import_format, ImportFormat,
+            };
+
+            let import_format = parse_import_format(&format)?;
+
+            formatter.print_info("Enter a password to encrypt the imported wallet:");
+            let password = rpassword::read_password()
+                .context("Failed to read password")?;
+
+            if password.len() < 8 {
+                bail!("Password must be at least 8 characters long");
+            }
+
+            // Read import data (from file or direct input)
+            let import_data = if std::path::Path::new(&data).exists() {
+                std::fs::read_to_string(&data)
+                    .context("Failed to read import file")?
+            } else {
+                data.clone()
+            };
+
+            let wallet = match import_format {
+                ImportFormat::Mnemonic => {
+                    formatter.print_info("Enter network (bitcoin/ethereum/solana):");
+                    let mut network_input = String::new();
+                    std::io::stdin().read_line(&mut network_input)?;
+                    let network = parse_network(network_input.trim())?;
+
+                    formatter.print_info("Enter number of addresses to derive (default: 20):");
+                    let mut count_input = String::new();
+                    std::io::stdin().read_line(&mut count_input)?;
+                    let address_count = count_input.trim().parse().unwrap_or(20);
+
+                    let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
+
+                    import_from_mnemonic(
+                        uuid::new_v4(),
+                        wallet_name,
+                        import_data.trim(),
+                        "",
+                        network,
+                        None,
+                        address_count,
+                        &password,
+                    ).context("Failed to import from mnemonic")?
+                }
+                ImportFormat::PrivateKey => {
+                    formatter.print_info("Enter network (bitcoin/ethereum/solana):");
+                    let mut network_input = String::new();
+                    std::io::stdin().read_line(&mut network_input)?;
+                    let network = parse_network(network_input.trim())?;
+
+                    let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
+
+                    import_from_private_key(
+                        uuid::new_v4(),
+                        wallet_name,
+                        import_data.trim(),
+                        network,
+                        &password,
+                    ).context("Failed to import from private key")?
+                }
+                _ => {
+                    bail!("Import format not yet fully implemented");
+                }
+            };
+
+            let created = repo.create(&wallet).await.into_anyhow()?;
+            formatter.print_success(&format!(
+                "✅ Imported wallet '{}' with ID: {}",
+                created.name, created.id
+            ));
+            formatter.print_info(&format!("Addresses: {}", created.addresses.len()));
         }
 
         WalletCommand::CreateTransaction { wallet_identifier, to, amount, fee, gas_price, gas_limit, nonce, memo, sign: _, broadcast: _, expires_in: _ } => {
