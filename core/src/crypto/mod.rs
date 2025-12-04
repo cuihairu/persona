@@ -4,6 +4,8 @@ pub mod hashing;
 pub mod key_hierarchy;
 pub mod keys;
 pub mod wallet_crypto;
+pub mod wallet_encryption;
+pub mod wallet_import_export;
 
 pub use address_generator::*;
 pub use encryption::*;
@@ -11,3 +13,5 @@ pub use hashing::*;
 pub use key_hierarchy::*;
 pub use keys::*;
 pub use wallet_crypto::*;
+pub use wallet_encryption::*;
+pub use wallet_import_export::*;

@@ -1,6 +1,81 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
+use argon2::{Argon2, PasswordHasher};
+use argon2::password_hash::{SaltString, PasswordHash, PasswordVerifier};
 use rand::{rngs::OsRng, RngCore};
 use zeroize::Zeroize;
+
+/// Encrypted data with metadata
+#[derive(Debug, Clone)]
+pub struct EncryptedData {
+    pub ciphertext: Vec<u8>,
+    pub salt: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+/// Encrypt data with password-derived key
+pub fn encrypt_data(plaintext: &[u8], password: &[u8]) -> Result<EncryptedData, aes_gcm::Error> {
+    // Generate random salt
+    let mut salt = vec![0u8; 16];
+    OsRng.fill_bytes(&mut salt);
+
+    // Derive key from password using Argon2
+    let mut key = [0u8; 32];
+    derive_key_from_password(password, &salt, &mut key);
+
+    // Generate random nonce
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    // Create cipher and encrypt
+    let key_ref = Key::<Aes256Gcm>::from_slice(&key);
+    let cipher = Aes256Gcm::new(key_ref);
+    let ciphertext = cipher.encrypt(nonce, plaintext)?;
+
+    // Zeroize the key
+    key.zeroize();
+
+    Ok(EncryptedData {
+        ciphertext,
+        salt,
+        nonce: nonce_bytes.to_vec(),
+    })
+}
+
+/// Decrypt data with password-derived key
+pub fn decrypt_data(
+    ciphertext: &[u8],
+    password: &[u8],
+    salt: &[u8],
+    nonce_bytes: &[u8],
+) -> Result<Vec<u8>, aes_gcm::Error> {
+    // Derive key from password
+    let mut key = [0u8; 32];
+    derive_key_from_password(password, salt, &mut key);
+
+    // Create cipher and decrypt
+    let key_ref = Key::<Aes256Gcm>::from_slice(&key);
+    let cipher = Aes256Gcm::new(key_ref);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let plaintext = cipher.decrypt(nonce, ciphertext)?;
+
+    // Zeroize the key
+    key.zeroize();
+
+    Ok(plaintext)
+}
+
+/// Derive encryption key from password using Argon2
+fn derive_key_from_password(password: &[u8], salt: &[u8], output: &mut [u8; 32]) {
+    use argon2::Argon2;
+
+    let argon2 = Argon2::default();
+
+    // Use Argon2 to derive key
+    argon2
+        .hash_password_into(password, salt, output)
+        .expect("Failed to derive key from password");
+}
 
 /// AES-256-GCM encryption service
 pub struct EncryptionService {

@@ -17,7 +17,6 @@ zeroize.workspace = true
 
 # 密码学 - BIP/加密货币相关
 bip39.workspace = true
-tiny-bip39.workspace = true
 bip32.workspace = true
 k256.workspace = true
 secp256k1.workspace = true
