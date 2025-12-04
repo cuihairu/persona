@@ -22,7 +22,7 @@ pub enum PasswordCommand {
 #[derive(Args, Clone)]
 pub struct GenerateArgs {
     /// Total password length (characters)
-    #[arg(short, long, default_value_t = 16, value_parser = value_parser!(usize).range(6..=128))]
+    #[arg(short, long, default_value = "16", value_parser = clap::value_parser!(usize).range(6..=128))]
     pub length: usize,
 
     /// Character sets to include (repeat flag or comma separated)
@@ -44,7 +44,7 @@ pub struct GenerateArgs {
     pub pronounceable: bool,
 
     /// Number of passwords to generate
-    #[arg(short, long, default_value_t = 1, value_parser = value_parser!(usize).range(1..=20))]
+    #[arg(short, long, default_value = "1")]
     pub count: usize,
 }
 

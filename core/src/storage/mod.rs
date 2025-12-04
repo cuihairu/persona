@@ -6,6 +6,7 @@ pub mod database;
 pub mod filesystem;
 pub mod repository;
 pub mod user_auth;
+pub mod wallet_repository;
 
 pub use attachment::*;
 pub use auto_lock_policy_repository::*;
@@ -15,3 +16,4 @@ pub use database::*;
 pub use filesystem::*;
 pub use repository::*;
 pub use user_auth::*;
+pub use wallet_repository::*;

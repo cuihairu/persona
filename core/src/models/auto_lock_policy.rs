@@ -58,9 +58,8 @@ pub struct AutoLockPolicy {
 }
 
 /// Security levels for auto-lock policies
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(rename_all = "snake_case")]
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum AutoLockSecurityLevel {
     /// Low security - longer timeouts, more lenient
     Low,

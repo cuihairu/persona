@@ -125,7 +125,7 @@ impl UserAuth {
         match &self.master_password_hash {
             Some(hash) => {
                 let hasher = PasswordHasher::new();
-                hasher.verify_password(password, hash)
+                hasher.verify_password(password, hash).map_err(Into::into)
             }
             None => Ok(false),
         }

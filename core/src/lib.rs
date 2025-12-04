@@ -15,13 +15,30 @@ pub mod storage;
 pub use auth::*;
 pub use crypto::*;
 pub use logging::*;
-pub use models::*;
+
+// Selective re-exports from models to avoid conflicts
+pub use models::identity::*;
+pub use models::credential::*;
+pub use models::workspace::*;
+pub use models::audit_log::*;
+pub use models::auto_lock_policy::*;
+pub use models::change_history::*;
+
+// Selective re-exports from storage to avoid conflicts
+pub use storage::database::*;
+pub use storage::user_auth::*;
+pub use storage::blob::*;
+pub use storage::repository::*;
+pub use storage::filesystem::*;
+
 pub use password::*;
 pub use service::*;
-pub use storage::*;
 
 /// Core result type used throughout the library
-pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
+pub type Result<T> = anyhow::Result<T>;
+
+/// Persona-specific result type for better error handling
+pub type PersonaResult<T> = std::result::Result<T, PersonaError>;
 
 /// Core error type for the Persona system
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +48,9 @@ pub enum PersonaError {
 
     #[error("Cryptographic operation failed: {0}")]
     CryptographicError(String),
+
+    #[error("Cryptographic operation failed: {0}")]
+    Crypto(String),
 
     #[error("Storage operation failed: {0}")]
     StorageError(String),
@@ -56,3 +76,23 @@ pub enum PersonaError {
     #[error("Validation error: {0}")]
     Validation(String),
 }
+
+// Implement From conversions for common error types
+impl From<sqlx::Error> for PersonaError {
+    fn from(err: sqlx::Error) -> Self {
+        PersonaError::Database(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for PersonaError {
+    fn from(err: serde_json::Error) -> Self {
+        PersonaError::InvalidInput(err.to_string())
+    }
+}
+
+impl From<std::io::Error> for PersonaError {
+    fn from(err: std::io::Error) -> Self {
+        PersonaError::Io(err.to_string())
+    }
+}
+
