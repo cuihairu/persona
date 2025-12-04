@@ -1,0 +1,16 @@
+# 忽略编译输出
+/target/
+/pkg/
+/wasm-pack.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Node modules(如果有)
+node_modules/

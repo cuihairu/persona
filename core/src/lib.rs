@@ -52,6 +52,9 @@ pub enum PersonaError {
     #[error("Cryptographic operation failed: {0}")]
     Crypto(String),
 
+    #[error("Cryptographic operation failed: {0}")]
+    Cryptography(String),
+
     #[error("Storage operation failed: {0}")]
     StorageError(String),
 
