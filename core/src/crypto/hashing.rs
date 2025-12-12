@@ -1,4 +1,4 @@
-use crate::{PersonaResult, PersonaError};
+use crate::{PersonaError, PersonaResult};
 use argon2::{
     password_hash::{PasswordHash, SaltString},
     Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier,

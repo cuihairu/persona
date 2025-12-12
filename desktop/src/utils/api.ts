@@ -8,6 +8,8 @@ import type {
   CreateCredentialRequest,
   Statistics,
   InitRequest,
+  SshAgentStatus,
+  SshAgentKey,
 } from '@/types';
 
 class PersonaAPI {
@@ -65,6 +67,22 @@ class PersonaAPI {
 
   async deleteCredential(credentialId: string): Promise<ApiResponse<boolean>> {
     return invoke('delete_credential', { credentialId });
+  }
+
+  async getSshAgentStatus(): Promise<ApiResponse<SshAgentStatus>> {
+    return invoke('get_ssh_agent_status');
+  }
+
+  async startSshAgent(masterPassword?: string): Promise<ApiResponse<SshAgentStatus>> {
+    return invoke('start_ssh_agent', { request: { master_password: masterPassword } });
+  }
+
+  async stopSshAgent(): Promise<ApiResponse<boolean>> {
+    return invoke('stop_ssh_agent');
+  }
+
+  async getSshKeys(): Promise<ApiResponse<SshAgentKey[]>> {
+    return invoke('get_ssh_keys');
   }
 }
 

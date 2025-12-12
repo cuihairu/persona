@@ -4,8 +4,8 @@ use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
     models::wallet::{
-        CryptoWallet, BlockchainNetwork, WalletType, BipVersion, AddressType,
-        WalletAddress, TransactionRequest, WalletSecurityLevel, WalletMetadata,
+        AddressType, BipVersion, BlockchainNetwork, CryptoWallet, TransactionRequest,
+        WalletAddress, WalletMetadata, WalletSecurityLevel, WalletType,
     },
     storage::{CryptoWalletRepository, Database},
 };
@@ -28,7 +28,7 @@ pub enum WalletCommand {
 
         /// Filter by security level (low, medium, high, maximum)
         #[arg(long, short)]
-        security_level: Option<WalletSecurityLevel>,
+        security_level: Option<String>,
 
         /// Show only watch-only wallets
         #[arg(long)]
@@ -79,7 +79,7 @@ pub enum WalletCommand {
 
         /// Security level (low, medium, high, maximum)
         #[arg(long, short)]
-        security_level: Option<WalletSecurityLevel>,
+        security_level: Option<String>,
 
         /// Import from mnemonic phrase
         #[arg(long)]
@@ -160,7 +160,7 @@ pub enum WalletCommand {
 
         /// New security level
         #[arg(long, short)]
-        security_level: Option<WalletSecurityLevel>,
+        security_level: Option<String>,
 
         /// Add tag
         #[arg(long)]
@@ -382,17 +382,21 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             watch_only,
             search,
         } => {
-            let wallets = if let Some(level) = security_level {
+            let wallets = if let Some(level_str) = security_level {
+                let level = parse_wallet_security_level(&level_str)?;
                 repo.find_by_security_level(&level).await.into_anyhow()?
             } else if let Some(net_str) = network {
                 let network = parse_network(&net_str)?;
                 repo.find_by_network(&network).await.into_anyhow()?
             } else if let Some(pattern) = search {
                 repo.find_by_identity(&uuid::Uuid::parse_str(&pattern).unwrap_or_default())
-                    .await.into_anyhow()?
+                    .await
+                    .into_anyhow()?
             } else {
                 // For now, get all wallets (would need current identity in real implementation)
-                repo.find_by_network(&BlockchainNetwork::Bitcoin).await.into_anyhow()?
+                repo.find_by_network(&BlockchainNetwork::Bitcoin)
+                    .await
+                    .into_anyhow()?
             };
 
             if wallets.is_empty() {
@@ -436,9 +440,13 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 repo.find_by_id(&uuid).await.into_anyhow()?
             } else {
                 // Search by name (simplified - in real implementation would query by name)
-                let all_wallets = repo.find_by_network(&BlockchainNetwork::Bitcoin)
-                    .await.into_anyhow()?;
-                all_wallets.into_iter().find(|w| w.name == wallet_identifier)
+                let all_wallets = repo
+                    .find_by_network(&BlockchainNetwork::Bitcoin)
+                    .await
+                    .into_anyhow()?;
+                all_wallets
+                    .into_iter()
+                    .find(|w| w.name == wallet_identifier)
             };
 
             match wallet {
@@ -446,9 +454,15 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     formatter.print_info(&format!("🔐 Crypto Wallet: {}", wallet.name));
                     formatter.print_info(&format!("ID: {}", wallet.id));
                     formatter.print_info(&format!("Network: {}", wallet.network));
-                    formatter.print_info(&format!("Type: {}", format_wallet_type(&wallet.wallet_type)));
+                    formatter.print_info(&format!(
+                        "Type: {}",
+                        format_wallet_type(&wallet.wallet_type)
+                    ));
                     formatter.print_info(&format!("Security Level: {}", wallet.security_level));
-                    formatter.print_info(&format!("Watch-Only: {}", if wallet.watch_only { "Yes" } else { "No" }));
+                    formatter.print_info(&format!(
+                        "Watch-Only: {}",
+                        if wallet.watch_only { "Yes" } else { "No" }
+                    ));
 
                     if let Some(desc) = &wallet.description {
                         formatter.print_info(&format!("Description: {}", desc));
@@ -459,42 +473,65 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     }
 
                     if let Some(xpub) = &wallet.extended_public_key {
-                        formatter.print_info(&format!("Extended Public Key: {}...", &xpub[..std::cmp::min(xpub.len(), 20)]));
+                        formatter.print_info(&format!(
+                            "Extended Public Key: {}...",
+                            &xpub[..std::cmp::min(xpub.len(), 20)]
+                        ));
                     }
 
                     formatter.print_info(&format!("Address Count: {}", wallet.addresses.len()));
-                    formatter.print_info(&format!("Security Score: {}/100", wallet.security_score()));
+                    formatter
+                        .print_info(&format!("Security Score: {}/100", wallet.security_score()));
 
                     let unused_count = wallet.get_unused_addresses().len();
                     formatter.print_info(&format!("Unused Addresses: {}", unused_count));
 
-                    formatter.print_info(&format!("Created: {}", wallet.created_at.format("%Y-%m-%d %H:%M:%S UTC")));
-                    formatter.print_info(&format!("Updated: {}", wallet.updated_at.format("%Y-%m-%d %H:%M:%S UTC")));
+                    formatter.print_info(&format!(
+                        "Created: {}",
+                        wallet.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    ));
+                    formatter.print_info(&format!(
+                        "Updated: {}",
+                        wallet.updated_at.format("%Y-%m-%d %H:%M:%S UTC")
+                    ));
 
                     // Show addresses
                     if !wallet.addresses.is_empty() {
                         formatter.print_info("\n📝 Addresses:");
-                        let address_data: Vec<AddressTable> = wallet.addresses
+                        let address_data: Vec<AddressTable> = wallet
+                            .addresses
                             .iter()
                             .take(10) // Limit to first 10 for readability
                             .map(|addr| AddressTable {
                                 index: addr.index,
-                                address: format!("{}...{}", &addr.address[..std::cmp::min(addr.address.len(), 10)],
-                                    &addr.address[std::cmp::max(addr.address.len().saturating_sub(10), 0)..]),
+                                address: format!(
+                                    "{}...{}",
+                                    &addr.address[..std::cmp::min(addr.address.len(), 10)],
+                                    &addr.address
+                                        [std::cmp::max(addr.address.len().saturating_sub(10), 0)..]
+                                ),
                                 address_type: format_address_type(&addr.address_type),
                                 used: if addr.used { "✓" } else { "✗" }.to_string(),
-                                balance: addr.balance.clone().unwrap_or_else(|| "Unknown".to_string()),
-                                last_activity: addr.last_activity
+                                balance: addr
+                                    .balance
+                                    .clone()
+                                    .unwrap_or_else(|| "Unknown".to_string()),
+                                last_activity: addr
+                                    .last_activity
                                     .map(|dt| dt.format("%Y-%m-%d").to_string())
                                     .unwrap_or_else(|| "Never".to_string()),
                             })
                             .collect();
 
-                        let address_table = Table::new(&address_data).with(Style::modern()).to_string();
+                        let address_table =
+                            Table::new(&address_data).with(Style::modern()).to_string();
                         formatter.print_output(&address_table);
 
                         if wallet.addresses.len() > 10 {
-                            formatter.print_info(&format!("... and {} more addresses", wallet.addresses.len() - 10));
+                            formatter.print_info(&format!(
+                                "... and {} more addresses",
+                                wallet.addresses.len() - 10
+                            ));
                         }
                     }
                 }
@@ -518,7 +555,10 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
         } => {
             let network = parse_network(&network)?;
             let wallet_type = parse_wallet_type(&wallet_type, bip_version, address_count)?;
-            let security_level = security_level.unwrap_or(WalletSecurityLevel::Medium);
+            let security_level = security_level
+                .map(|s| parse_wallet_security_level(&s))
+                .transpose()?
+                .unwrap_or(WalletSecurityLevel::Medium);
 
             if watch_only {
                 if xpub.is_none() {
@@ -526,7 +566,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 }
 
                 let wallet = CryptoWallet::new_watch_only(
-                    uuid::new_v4(), // Would get from current identity
+                    uuid::Uuid::new_v4(), // Would get from current identity
                     name,
                     network,
                     xpub.unwrap(),
@@ -541,7 +581,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 // For now, create with placeholder encrypted key
                 // In real implementation, this would involve key generation and encryption
                 let mut wallet = CryptoWallet::new(
-                    uuid::new_v4(), // Would get from current identity
+                    uuid::Uuid::new_v4(), // Would get from current identity
                     name,
                     network,
                     wallet_type,
@@ -557,8 +597,12 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     "🔐 Created wallet '{}' with ID: {}",
                     created.name, created.id
                 ));
-                formatter.print_warning("⚠️  This is a demo implementation with placeholder encryption.");
-                formatter.print_info("In a production environment, private keys would be securely encrypted.");
+                formatter.print_warning(
+                    "⚠️  This is a demo implementation with placeholder encryption.",
+                );
+                formatter.print_info(
+                    "In a production environment, private keys would be securely encrypted.",
+                );
             }
         }
 
@@ -571,7 +615,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
         } => {
             let network = parse_network(&network)?;
             let mut wallet = CryptoWallet::new_watch_only(
-                uuid::new_v4(), // Would get from current identity
+                uuid::Uuid::new_v4(), // Would get from current identity
                 name,
                 network,
                 xpub,
@@ -596,16 +640,15 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             address_count,
         } => {
             use persona_core::crypto::{
-                SecureMnemonic, MnemonicWordCount, MasterKey,
-                import_from_mnemonic,
+                import_from_mnemonic, MasterKey, MnemonicWordCount, SecureMnemonic,
             };
 
             let network = parse_network(&network)?;
+            let network_str = network.to_string();
 
             // Prompt for password
             formatter.print_info("🔐 Enter a password to encrypt your wallet:");
-            let password = rpassword::read_password()
-                .context("Failed to read password")?;
+            let password = rpassword::read_password().context("Failed to read password")?;
 
             if password.len() < 8 {
                 bail!("Password must be at least 8 characters long");
@@ -615,11 +658,13 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             formatter.print_info("🎲 Generating new mnemonic phrase...");
             let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words24)
                 .context("Failed to generate mnemonic")?;
+            let mnemonic_phrase = mnemonic.phrase();
 
             // Show mnemonic to user (IMPORTANT: they must write this down!)
             formatter.print_warning("\n⚠️  IMPORTANT: Write down your recovery phrase!");
-            formatter.print_warning("This is the ONLY way to recover your wallet if you lose access.\n");
-            formatter.print_success(&format!("Recovery Phrase:\n{}\n", mnemonic.phrase()));
+            formatter
+                .print_warning("This is the ONLY way to recover your wallet if you lose access.\n");
+            formatter.print_success(&format!("Recovery Phrase:\n{}\n", mnemonic_phrase));
             formatter.print_warning("Press Enter after you've written it down securely...");
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
@@ -632,15 +677,16 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             };
 
             let wallet = import_from_mnemonic(
-                uuid::new_v4(), // Would get from current identity
+                uuid::Uuid::new_v4(), // Would get from current identity
                 name.clone(),
-                mnemonic.phrase(),
+                &mnemonic_phrase,
                 "", // No additional passphrase
                 network,
                 derivation_path.clone(),
                 address_count,
                 &password,
-            ).context("Failed to create wallet from mnemonic")?;
+            )
+            .context("Failed to create wallet from mnemonic")?;
 
             let created = repo.create(&wallet).await.into_anyhow()?;
 
@@ -648,7 +694,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 "🔐 Generated new wallet '{}' with ID: {}",
                 created.name, created.id
             ));
-            formatter.print_info(&format!("Network: {}", network));
+            formatter.print_info(&format!("Network: {}", network_str));
             formatter.print_info(&format!("Addresses generated: {}", address_count));
 
             if let Some(path) = &created.derivation_path {
@@ -672,8 +718,10 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             purpose,
             note,
         } => {
-            let mut wallet = repo.find_by_id(&wallet_id)
-                .await.into_anyhow()?
+            let mut wallet = repo
+                .find_by_id(&wallet_id)
+                .await
+                .into_anyhow()?
                 .ok_or_else(|| anyhow!("Wallet with ID {} not found", wallet_id))?;
 
             // Update fields
@@ -683,7 +731,8 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             if let Some(d) = description {
                 wallet.description = Some(d);
             }
-            if let Some(level) = security_level {
+            if let Some(level_str) = security_level {
+                let level = parse_wallet_security_level(&level_str)?;
                 wallet.security_level = level;
             }
 
@@ -713,13 +762,19 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
         }
 
         WalletCommand::Delete { wallet_id, force } => {
-            let wallet = repo.find_by_id(&wallet_id)
-                .await.into_anyhow()?
+            let wallet = repo
+                .find_by_id(&wallet_id)
+                .await
+                .into_anyhow()?
                 .ok_or_else(|| anyhow!("Wallet with ID {} not found", wallet_id))?;
 
             if !force {
-                formatter.print_warning(&format!("This will permanently delete wallet '{}'", wallet.name));
-                formatter.print_warning("All associated addresses and transactions will be removed.");
+                formatter.print_warning(&format!(
+                    "This will permanently delete wallet '{}'",
+                    wallet.name
+                ));
+                formatter
+                    .print_warning("All associated addresses and transactions will be removed.");
                 formatter.print_warning("Use --force to skip this confirmation.");
                 return Ok(());
             }
@@ -739,8 +794,10 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             index,
             derivation_path,
         } => {
-            let wallet = repo.find_by_id(&wallet_id)
-                .await.into_anyhow()?
+            let wallet = repo
+                .find_by_id(&wallet_id)
+                .await
+                .into_anyhow()?
                 .ok_or_else(|| anyhow!("Wallet with ID {} not found", wallet_id))?;
 
             let addr_type = parse_address_type(&address_type)?;
@@ -756,7 +813,9 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 created_at: chrono::Utc::now(),
             };
 
-            repo.add_address(&wallet_id, &wallet_address).await.into_anyhow()?;
+            repo.add_address(&wallet_id, &wallet_address)
+                .await
+                .into_anyhow()?;
             formatter.print_success(&format!("Added address '{}' to wallet", address));
         }
 
@@ -768,7 +827,8 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
         } => {
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
 
-            let mut addresses: Vec<_> = wallet.addresses
+            let mut addresses: Vec<_> = wallet
+                .addresses
                 .iter()
                 .filter(|addr| {
                     let include = true;
@@ -791,12 +851,19 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 .iter()
                 .map(|addr| AddressTable {
                     index: addr.index,
-                    address: format!("{}...{}", &addr.address[..std::cmp::min(addr.address.len(), 15)],
-                        &addr.address[std::cmp::max(addr.address.len().saturating_sub(8), 0)..]),
+                    address: format!(
+                        "{}...{}",
+                        &addr.address[..std::cmp::min(addr.address.len(), 15)],
+                        &addr.address[std::cmp::max(addr.address.len().saturating_sub(8), 0)..]
+                    ),
                     address_type: format_address_type(&addr.address_type),
                     used: if addr.used { "✓" } else { "✗" }.to_string(),
-                    balance: addr.balance.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    last_activity: addr.last_activity
+                    balance: addr
+                        .balance
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    last_activity: addr
+                        .last_activity
                         .map(|dt| dt.format("%Y-%m-%d").to_string())
                         .unwrap_or_else(|| "Never".to_string()),
                 })
@@ -807,7 +874,11 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             formatter.print_output(&table);
 
             if addresses.len() < wallet.addresses.len() {
-                formatter.print_info(&format!("Showing {} of {} addresses", addresses.len(), wallet.addresses.len()));
+                formatter.print_info(&format!(
+                    "Showing {} of {} addresses",
+                    addresses.len(),
+                    wallet.addresses.len()
+                ));
             }
         }
 
@@ -816,7 +887,10 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             address,
         } => {
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
-            let updated = repo.update_address_usage(&wallet.id, &address, true).await.into_anyhow()?;
+            let updated = repo
+                .update_address_usage(&wallet.id, &address, true)
+                .await
+                .into_anyhow()?;
 
             if updated {
                 formatter.print_success(&format!("Marked address '{}' as used", address));
@@ -834,12 +908,24 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 formatter.print_info(&format!("Network: {}", wallet.network));
                 formatter.print_info(&format!("Security Level: {}", wallet.security_level));
                 formatter.print_info(&format!("Total Addresses: {}", wallet.addresses.len()));
-                formatter.print_info(&format!("Unused Addresses: {}", wallet.get_unused_addresses().len()));
+                formatter.print_info(&format!(
+                    "Unused Addresses: {}",
+                    wallet.get_unused_addresses().len()
+                ));
                 formatter.print_info(&format!("Security Score: {}/100", wallet.security_score()));
                 formatter.print_info(&format!("Total Transactions: {}", stats.total_transactions));
-                formatter.print_info(&format!("Successful Transactions: {}", stats.successful_transactions));
-                formatter.print_info(&format!("Failed Transactions: {}", stats.failed_transactions));
-                formatter.print_info(&format!("Total Amount Sent: {} units", stats.total_amount_sent));
+                formatter.print_info(&format!(
+                    "Successful Transactions: {}",
+                    stats.successful_transactions
+                ));
+                formatter.print_info(&format!(
+                    "Failed Transactions: {}",
+                    stats.failed_transactions
+                ));
+                formatter.print_info(&format!(
+                    "Total Amount Sent: {} units",
+                    stats.total_amount_sent
+                ));
             } else {
                 // System-wide statistics (simplified)
                 formatter.print_info("📊 System Wallet Statistics:");
@@ -848,9 +934,14 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             }
         }
 
-        WalletCommand::Export { wallet_identifier, format, include_private, output } => {
+        WalletCommand::Export {
+            wallet_identifier,
+            format,
+            include_private,
+            output,
+        } => {
             use persona_core::crypto::{
-                export_mnemonic, export_private_key, export_xpub, export_to_json,
+                export_mnemonic, export_private_key, export_to_json, export_xpub,
                 parse_export_format, ExportFormat,
             };
 
@@ -861,8 +952,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             let password = if include_private {
                 formatter.print_warning("⚠️  You are about to export private key data!");
                 formatter.print_info("Enter wallet password:");
-                let pwd = rpassword::read_password()
-                    .context("Failed to read password")?;
+                let pwd = rpassword::read_password().context("Failed to read password")?;
                 Some(pwd)
             } else {
                 None
@@ -870,23 +960,18 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             let exported_data = match export_format {
                 ExportFormat::Mnemonic => {
-                    let pwd = password.ok_or_else(|| anyhow!("Password required for mnemonic export"))?;
-                    export_mnemonic(&wallet, &pwd)
-                        .context("Failed to export mnemonic")?
+                    let pwd =
+                        password.ok_or_else(|| anyhow!("Password required for mnemonic export"))?;
+                    export_mnemonic(&wallet, &pwd).context("Failed to export mnemonic")?
                 }
                 ExportFormat::PrivateKey => {
-                    let pwd = password.ok_or_else(|| anyhow!("Password required for private key export"))?;
-                    export_private_key(&wallet, &pwd)
-                        .context("Failed to export private key")?
+                    let pwd = password
+                        .ok_or_else(|| anyhow!("Password required for private key export"))?;
+                    export_private_key(&wallet, &pwd).context("Failed to export private key")?
                 }
-                ExportFormat::Xpub => {
-                    export_xpub(&wallet)
-                        .context("Failed to export xpub")?
-                }
-                ExportFormat::Json => {
-                    export_to_json(&wallet, include_private, password.as_deref())
-                        .context("Failed to export to JSON")?
-                }
+                ExportFormat::Xpub => export_xpub(&wallet).context("Failed to export xpub")?,
+                ExportFormat::Json => export_to_json(&wallet, include_private, password.as_deref())
+                    .context("Failed to export to JSON")?,
             };
 
             // Output to file or stdout
@@ -909,15 +994,13 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
         WalletCommand::Import { format, data, name } => {
             use persona_core::crypto::{
-                import_from_mnemonic, import_from_private_key,
-                parse_import_format, ImportFormat,
+                import_from_mnemonic, import_from_private_key, parse_import_format, ImportFormat,
             };
 
             let import_format = parse_import_format(&format)?;
 
             formatter.print_info("Enter a password to encrypt the imported wallet:");
-            let password = rpassword::read_password()
-                .context("Failed to read password")?;
+            let password = rpassword::read_password().context("Failed to read password")?;
 
             if password.len() < 8 {
                 bail!("Password must be at least 8 characters long");
@@ -925,8 +1008,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             // Read import data (from file or direct input)
             let import_data = if std::path::Path::new(&data).exists() {
-                std::fs::read_to_string(&data)
-                    .context("Failed to read import file")?
+                std::fs::read_to_string(&data).context("Failed to read import file")?
             } else {
                 data.clone()
             };
@@ -946,7 +1028,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
 
                     import_from_mnemonic(
-                        uuid::new_v4(),
+                        uuid::Uuid::new_v4(),
                         wallet_name,
                         import_data.trim(),
                         "",
@@ -954,7 +1036,8 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                         None,
                         address_count,
                         &password,
-                    ).context("Failed to import from mnemonic")?
+                    )
+                    .context("Failed to import from mnemonic")?
                 }
                 ImportFormat::PrivateKey => {
                     formatter.print_info("Enter network (bitcoin/ethereum/solana):");
@@ -965,12 +1048,13 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
 
                     import_from_private_key(
-                        uuid::new_v4(),
+                        uuid::Uuid::new_v4(),
                         wallet_name,
                         import_data.trim(),
                         network,
                         &password,
-                    ).context("Failed to import from private key")?
+                    )
+                    .context("Failed to import from private key")?
                 }
                 _ => {
                     bail!("Import format not yet fully implemented");
@@ -985,14 +1069,30 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             formatter.print_info(&format!("Addresses: {}", created.addresses.len()));
         }
 
-        WalletCommand::CreateTransaction { wallet_identifier, to, amount, fee, gas_price, gas_limit, nonce, memo, sign: _, broadcast: _, expires_in: _ } => {
+        WalletCommand::CreateTransaction {
+            wallet_identifier,
+            to,
+            amount,
+            fee,
+            gas_price,
+            gas_limit,
+            nonce,
+            memo,
+            sign: _,
+            broadcast: _,
+            expires_in,
+        } => {
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
 
             let transaction = TransactionRequest {
-                id: uuid::new_v4(),
+                id: uuid::Uuid::new_v4(),
                 wallet_id: wallet.id,
                 network: wallet.network,
-                from_address: wallet.addresses.first().map(|a| a.address.clone()).unwrap_or_default(),
+                from_address: wallet
+                    .addresses
+                    .first()
+                    .map(|a| a.address.clone())
+                    .unwrap_or_default(),
                 to_address: to,
                 amount,
                 fee,
@@ -1003,19 +1103,31 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 raw_transaction_data: None,
                 required_signatures: 1,
                 created_at: chrono::Utc::now(),
-                expires_at: expires_in.map(|mins| chrono::Utc::now() + chrono::Duration::minutes(mins as i64)),
+                expires_at: expires_in
+                    .map(|mins| chrono::Utc::now() + chrono::Duration::minutes(mins as i64)),
                 metadata: std::collections::HashMap::new(),
             };
 
-            let created = repo.create_transaction_request(&transaction).await.into_anyhow()?;
-            formatter.print_success(&format!("Created transaction request with ID: {}", created.id));
+            let created = repo
+                .create_transaction_request(&transaction)
+                .await
+                .into_anyhow()?;
+            formatter.print_success(&format!(
+                "Created transaction request with ID: {}",
+                created.id
+            ));
             formatter.print_info(&format!("From: {}", created.from_address));
             formatter.print_info(&format!("To: {}", created.to_address));
             formatter.print_info(&format!("Amount: {} units", created.amount));
             formatter.print_info(&format!("Fee: {} units", created.fee));
         }
 
-        WalletCommand::ListTransactions { wallet_identifier, pending: _, signed: _, broadcast: _ } => {
+        WalletCommand::ListTransactions {
+            wallet_identifier,
+            pending: _,
+            signed: _,
+            broadcast: _,
+        } => {
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
             let transactions = repo.get_pending_requests(&wallet.id).await.into_anyhow()?;
 
@@ -1024,13 +1136,19 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 return Ok(());
             }
 
-            formatter.print_info(&format!("💳 Pending transactions for wallet '{}':", wallet.name));
+            formatter.print_info(&format!(
+                "💳 Pending transactions for wallet '{}':",
+                wallet.name
+            ));
             for tx in &transactions {
                 formatter.print_info(&format!("  ID: {}", tx.id));
                 formatter.print_info(&format!("  To: {}", tx.to_address));
                 formatter.print_info(&format!("  Amount: {} units", tx.amount));
                 formatter.print_info(&format!("  Fee: {} units", tx.fee));
-                formatter.print_info(&format!("  Created: {}", tx.created_at.format("%Y-%m-%d %H:%M:%S UTC")));
+                formatter.print_info(&format!(
+                    "  Created: {}",
+                    tx.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+                ));
                 if let Some(memo) = &tx.memo {
                     formatter.print_info(&format!("  Memo: {}", memo));
                 }
@@ -1139,11 +1257,26 @@ fn parse_address_type(type_str: &str) -> Result<AddressType> {
 fn format_wallet_type(wallet_type: &WalletType) -> String {
     match wallet_type {
         WalletType::SingleAddress => "Single".to_string(),
-        WalletType::HierarchicalDeterministic { bip_version, address_count, .. } => {
-            format!("HD (BIP-{}{})", bip_version,
-                if *address_count > 0 { format!(", {} addrs", address_count) } else { String::new() })
+        WalletType::HierarchicalDeterministic {
+            bip_version,
+            address_count,
+            ..
+        } => {
+            format!(
+                "HD (BIP-{}{})",
+                bip_version,
+                if *address_count > 0 {
+                    format!(", {} addrs", address_count)
+                } else {
+                    String::new()
+                }
+            )
         }
-        WalletType::MultiSignature { required_signatures, total_signers, .. } => {
+        WalletType::MultiSignature {
+            required_signatures,
+            total_signers,
+            ..
+        } => {
             format!("Multi-sig ({}/{})", required_signatures, total_signers)
         }
         WalletType::Hardware { device_type, .. } => {
@@ -1161,6 +1294,16 @@ fn format_address_type(address_type: &AddressType) -> String {
         AddressType::Ethereum => "ETH".to_string(),
         AddressType::Solana => "SOL".to_string(),
         AddressType::Custom(name) => name.clone(),
+    }
+}
+
+fn parse_wallet_security_level(level_str: &str) -> Result<WalletSecurityLevel> {
+    match level_str.to_lowercase().as_str() {
+        "maximum" | "max" => Ok(WalletSecurityLevel::Maximum),
+        "high" | "hi" => Ok(WalletSecurityLevel::High),
+        "medium" | "med" | "mid" => Ok(WalletSecurityLevel::Medium),
+        "low" | "lo" => Ok(WalletSecurityLevel::Low),
+        _ => bail!("Invalid security level: {}. Valid options: low, medium, high, maximum", level_str),
     }
 }
 

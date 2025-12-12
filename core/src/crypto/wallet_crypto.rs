@@ -1,11 +1,12 @@
 // Wallet cryptography module for HD wallets and key derivation
 
 use crate::{PersonaError, PersonaResult};
-use bip39::{Language, Mnemonic, MnemonicType};
-use bip32::{ChildNumber, DerivationPath, ExtendedKey, ExtendedKeyAttrs, Prefix, XPrv};
+use bip32::{ChildNumber, DerivationPath, Prefix, XPrv};
+use bip39::Mnemonic;
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
-use std::str::FromStr;
+use rand::RngCore;
+use std::str::{self, FromStr};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Mnemonic phrase wrapper with security features
@@ -18,21 +19,25 @@ pub struct SecureMnemonic {
 impl SecureMnemonic {
     /// Generate a new mnemonic with specified word count
     pub fn generate(word_count: MnemonicWordCount) -> PersonaResult<Self> {
-        let mnemonic_type = word_count.to_bip39_type();
-        let mnemonic = Mnemonic::new(mnemonic_type, Language::English);
+        let mut entropy = vec![0u8; word_count.entropy_bytes()];
+        OsRng.fill_bytes(&mut entropy);
+        let mnemonic = Mnemonic::from_entropy(&entropy).map_err(|e| {
+            PersonaError::Cryptography(format!("Failed to generate mnemonic: {}", e))
+        })?;
         Ok(Self { mnemonic })
     }
 
     /// Create from existing phrase
     pub fn from_phrase(phrase: &str) -> PersonaResult<Self> {
-        let mnemonic = Mnemonic::from_phrase(phrase, Language::English)
+        let mnemonic = phrase
+            .parse::<Mnemonic>()
             .map_err(|e| PersonaError::Cryptography(format!("Invalid mnemonic: {}", e)))?;
         Ok(Self { mnemonic })
     }
 
     /// Get the phrase as string (use with caution!)
-    pub fn phrase(&self) -> &str {
-        self.mnemonic.phrase()
+    pub fn phrase(&self) -> String {
+        self.mnemonic.to_string()
     }
 
     /// Derive seed from mnemonic with optional passphrase
@@ -47,7 +52,7 @@ impl SecureMnemonic {
 
     /// Validate a mnemonic phrase
     pub fn validate(phrase: &str) -> bool {
-        Mnemonic::validate(phrase, Language::English).is_ok()
+        phrase.parse::<Mnemonic>().is_ok()
     }
 }
 
@@ -62,13 +67,24 @@ pub enum MnemonicWordCount {
 }
 
 impl MnemonicWordCount {
-    fn to_bip39_type(self) -> MnemonicType {
+    /// Return the number of words represented by this variant.
+    pub fn as_usize(self) -> usize {
         match self {
-            Self::Words12 => MnemonicType::Words12,
-            Self::Words15 => MnemonicType::Words15,
-            Self::Words18 => MnemonicType::Words18,
-            Self::Words21 => MnemonicType::Words21,
-            Self::Words24 => MnemonicType::Words24,
+            Self::Words12 => 12,
+            Self::Words15 => 15,
+            Self::Words18 => 18,
+            Self::Words21 => 21,
+            Self::Words24 => 24,
+        }
+    }
+
+    fn entropy_bytes(self) -> usize {
+        match self {
+            Self::Words12 => 16,
+            Self::Words15 => 20,
+            Self::Words18 => 24,
+            Self::Words21 => 28,
+            Self::Words24 => 32,
         }
     }
 }
@@ -81,8 +97,9 @@ pub struct MasterKey {
 impl MasterKey {
     /// Create master key from seed
     pub fn from_seed(seed: &[u8]) -> PersonaResult<Self> {
-        let xprv = XPrv::new(seed)
-            .map_err(|e| PersonaError::Cryptography(format!("Failed to derive master key: {}", e)))?;
+        let xprv = XPrv::new(seed).map_err(|e| {
+            PersonaError::Cryptography(format!("Failed to derive master key: {}", e))
+        })?;
         Ok(Self { xprv })
     }
 
@@ -99,7 +116,8 @@ impl MasterKey {
 
         let mut derived_key = self.xprv.clone();
         for child_number in derivation_path {
-            derived_key = derived_key.derive_child(child_number)
+            derived_key = derived_key
+                .derive_child(child_number)
                 .map_err(|e| PersonaError::Cryptography(format!("Derivation failed: {}", e)))?;
         }
 
@@ -112,14 +130,20 @@ impl MasterKey {
     }
 
     /// Export as bytes (private - handle with care!)
-    pub fn to_bytes(&self) -> [u8; 78] {
-        self.xprv.to_bytes()
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.xprv
+            .to_extended_key(Prefix::XPRV)
+            .to_string()
+            .into_bytes()
     }
 
     /// Import from bytes
-    pub fn from_bytes(bytes: &[u8; 78]) -> PersonaResult<Self> {
-        let xprv = XPrv::from_bytes(bytes)
-            .map_err(|e| PersonaError::Cryptography(format!("Invalid key bytes: {}", e)))?;
+    pub fn from_bytes(bytes: &[u8]) -> PersonaResult<Self> {
+        let encoded = str::from_utf8(bytes)
+            .map_err(|e| PersonaError::Cryptography(format!("Invalid key encoding: {}", e)))?;
+        let xprv = encoded
+            .parse::<XPrv>()
+            .map_err(|e| PersonaError::Cryptography(format!("Invalid master key: {}", e)))?;
         Ok(Self { xprv })
     }
 }
@@ -162,7 +186,9 @@ impl DerivedKey {
                 .map_err(|e| PersonaError::Cryptography(format!("Invalid child index: {}", e)))?
         };
 
-        let derived = self.xprv.derive_child(child_number)
+        let derived = self
+            .xprv
+            .derive_child(child_number)
             .map_err(|e| PersonaError::Cryptography(format!("Child derivation failed: {}", e)))?;
 
         Ok(DerivedKey { xprv: derived })
@@ -277,6 +303,17 @@ impl Bip44PathBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::{prelude::*, sample::select};
+
+    fn word_count_strategy() -> impl Strategy<Value = MnemonicWordCount> {
+        select(vec![
+            MnemonicWordCount::Words12,
+            MnemonicWordCount::Words15,
+            MnemonicWordCount::Words18,
+            MnemonicWordCount::Words21,
+            MnemonicWordCount::Words24,
+        ])
+    }
 
     #[test]
     fn test_mnemonic_generation() {
@@ -287,7 +324,7 @@ mod tests {
         assert!(!phrase.is_empty());
 
         // Validate the generated mnemonic
-        assert!(SecureMnemonic::validate(phrase));
+        assert!(SecureMnemonic::validate(&phrase));
     }
 
     #[test]
@@ -339,5 +376,25 @@ mod tests {
 
         // Keys should be different
         assert_ne!(child0.private_key_bytes(), child1.private_key_bytes());
+    }
+
+    proptest! {
+        #[test]
+        fn mnemonic_roundtrip(word_count in word_count_strategy()) {
+            let mnemonic = SecureMnemonic::generate(word_count).unwrap();
+            let phrase = mnemonic.phrase();
+            let parsed = SecureMnemonic::from_phrase(&phrase).unwrap();
+            prop_assert_eq!(parsed.phrase(), phrase);
+            prop_assert_eq!(parsed.word_count(), word_count.as_usize());
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn mnemonic_validation_matches_parse(input in ".*") {
+            let parsed = SecureMnemonic::from_phrase(&input);
+            let is_valid = SecureMnemonic::validate(&input);
+            prop_assert_eq!(parsed.is_ok(), is_valid);
+        }
     }
 }

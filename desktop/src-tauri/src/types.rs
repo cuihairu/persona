@@ -1,6 +1,7 @@
 use persona_core::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
+use tokio::task::JoinHandle;
 use tauri::{State, Manager};
 use uuid::Uuid;
 
@@ -8,6 +9,7 @@ use uuid::Uuid;
 pub struct AppState {
     pub service: Mutex<Option<PersonaService>>,
     pub db_path: Mutex<Option<String>>,
+    pub agent_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Response structure for API calls
@@ -41,6 +43,11 @@ impl<T> ApiResponse<T> {
 pub struct InitRequest {
     pub master_password: String,
     pub db_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StartAgentRequest {
+    pub master_password: Option<String>,
 }
 
 /// Identity creation request
@@ -146,6 +153,26 @@ pub struct SerializableCredentialData {
     pub data: serde_json::Value,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SshAgentStatus {
+    pub running: bool,
+    pub socket_path: Option<String>,
+    pub pid: Option<u32>,
+    pub key_count: Option<usize>,
+    pub state_dir: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SshKeySummary {
+    pub id: String,
+    pub identity_id: String,
+    pub identity_name: String,
+    pub name: String,
+    pub tags: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 impl From<Identity> for SerializableIdentity {
     fn from(identity: Identity) -> Self {
         Self {
@@ -224,6 +251,86 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
             "message": "Unsupported credential type"
         }),
     }
+}
+
+// Wallet types for Tauri commands
+
+/// Wallet summary for listing
+#[derive(Debug, Serialize)]
+pub struct SerializableWallet {
+    pub id: String,
+    pub name: String,
+    pub network: String,
+    pub wallet_type: String,
+    pub balance: String,
+    pub address_count: usize,
+    pub watch_only: bool,
+    pub security_level: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Wallet address for display
+#[derive(Debug, Serialize)]
+pub struct SerializableWalletAddress {
+    pub address: String,
+    pub address_type: String,
+    pub index: u32,
+    pub used: bool,
+    pub balance: String,
+    pub derivation_path: Option<String>,
+}
+
+/// Wallet list response
+#[derive(Debug, Serialize)]
+pub struct WalletListResponse {
+    pub wallets: Vec<SerializableWallet>,
+}
+
+/// Wallet addresses response
+#[derive(Debug, Serialize)]
+pub struct WalletAddressesResponse {
+    pub addresses: Vec<SerializableWalletAddress>,
+}
+
+/// Wallet generation request
+#[derive(Debug, Deserialize)]
+pub struct WalletGenerateRequest {
+    pub name: String,
+    pub network: String,
+    pub wallet_type: String,
+    pub password: String,
+    pub address_count: Option<usize>,
+}
+
+/// Wallet generation response (includes mnemonic)
+#[derive(Debug, Serialize)]
+pub struct WalletGenerateResponse {
+    pub wallet_id: String,
+    pub name: String,
+    pub network: String,
+    pub mnemonic: String,
+    pub first_address: String,
+}
+
+/// Wallet import request
+#[derive(Debug, Deserialize)]
+pub struct WalletImportRequest {
+    pub name: String,
+    pub network: String,
+    pub import_type: String, // "mnemonic" or "private_key"
+    pub data: String,
+    pub password: String,
+    pub address_count: Option<usize>,
+}
+
+/// Wallet export request
+#[derive(Debug, Deserialize)]
+pub struct WalletExportRequest {
+    pub wallet_id: String,
+    pub format: String, // "json", "mnemonic", "xpub"
+    pub include_private: bool,
+    pub password: Option<String>,
 }
 
 impl CredentialDataRequest {

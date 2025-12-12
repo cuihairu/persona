@@ -6,6 +6,7 @@
 //! - Time-based restrictions
 //! - Usage counting and rate limiting
 
+use crate::is_host_in_known_hosts;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,8 +15,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// Policy configuration for SSH key usage
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SigningPolicy {
     /// Global settings
     pub global: GlobalPolicy,
@@ -29,10 +29,8 @@ pub struct SigningPolicy {
     pub host_policies: HashMap<String, HostPolicy>,
 }
 
-
 /// Global agent policy settings
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalPolicy {
     /// Require user confirmation for every signature
     #[serde(default)]
@@ -58,7 +56,6 @@ pub struct GlobalPolicy {
     #[serde(default)]
     pub deny_all: bool,
 }
-
 
 /// Per-key policy settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -230,11 +227,46 @@ impl PolicyEnforcer {
         credential_id: &Uuid,
         hostname: Option<&str>,
     ) -> Result<SignatureDecision> {
+        let hostname = hostname.filter(|h| !h.is_empty());
+        let is_known_host = hostname
+            .map(|host| is_host_in_known_hosts(host))
+            .unwrap_or(false);
+        let mut unknown_host_confirmation: Option<String> = None;
+
         // Global deny all check
         if self.policy.global.deny_all {
             return Ok(SignatureDecision::Denied {
                 reason: "Agent is in lockdown mode".to_string(),
             });
+        }
+
+        if self.policy.global.enforce_known_hosts {
+            match (hostname, is_known_host) {
+                (Some(_), true) => {}
+                (Some(host), false) => {
+                    return Ok(SignatureDecision::Denied {
+                        reason: format!("Host {} is not trusted according to known_hosts", host),
+                    });
+                }
+                (None, _) => {
+                    return Ok(SignatureDecision::Denied {
+                        reason: "Host must be provided when known_hosts enforcement is enabled"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+
+        if self.policy.global.confirm_on_unknown_host {
+            if let Some(host) = hostname {
+                if !is_known_host {
+                    unknown_host_confirmation =
+                        Some(format!("Host {} is not present in known_hosts", host));
+                }
+            } else {
+                unknown_host_confirmation =
+                    Some("Host is unknown; confirmation required".to_string());
+            }
         }
 
         // Rate limiting - global min interval
@@ -278,21 +310,20 @@ impl PolicyEnforcer {
             // Check host restrictions for this key
             if let Some(hostname) = hostname {
                 if !key_policy.denied_hosts.is_empty()
-                    && self.matches_any_pattern(hostname, &key_policy.denied_hosts) {
-                        return Ok(SignatureDecision::Denied {
-                            reason: format!("Host '{}' is denied for this key", hostname),
-                        });
-                    }
+                    && self.matches_any_pattern(hostname, &key_policy.denied_hosts)
+                {
+                    return Ok(SignatureDecision::Denied {
+                        reason: format!("Host '{}' is denied for this key", hostname),
+                    });
+                }
 
                 if !key_policy.allowed_hosts.is_empty()
-                    && !self.matches_any_pattern(hostname, &key_policy.allowed_hosts) {
-                        return Ok(SignatureDecision::Denied {
-                            reason: format!(
-                                "Host '{}' is not in allowed list for this key",
-                                hostname
-                            ),
-                        });
-                    }
+                    && !self.matches_any_pattern(hostname, &key_policy.allowed_hosts)
+                {
+                    return Ok(SignatureDecision::Denied {
+                        reason: format!("Host '{}' is not in allowed list for this key", hostname),
+                    });
+                }
             }
 
             // Check daily usage limit for key
@@ -334,11 +365,12 @@ impl PolicyEnforcer {
 
                 // Check if key is allowed for this host
                 if !host_policy.allowed_keys.is_empty()
-                    && !host_policy.allowed_keys.contains(&key_id) {
-                        return Ok(SignatureDecision::Denied {
-                            reason: format!("Key not allowed for host '{}'", hostname),
-                        });
-                    }
+                    && !host_policy.allowed_keys.contains(&key_id)
+                {
+                    return Ok(SignatureDecision::Denied {
+                        reason: format!("Key not allowed for host '{}'", hostname),
+                    });
+                }
 
                 // Check hourly limit for host (extract values first to avoid borrow conflict)
                 let max_connections = host_policy.max_connections_per_hour;
@@ -386,6 +418,18 @@ impl PolicyEnforcer {
             .map(|p| p.require_biometric)
             .unwrap_or(false);
 
+        let mut require_confirm = self.policy.global.require_confirm || key_requires_confirm;
+        let mut confirm_reason = if self.policy.global.require_confirm || key_requires_confirm {
+            Some("Confirmation required by policy".to_string())
+        } else {
+            None
+        };
+
+        if let Some(reason) = unknown_host_confirmation {
+            require_confirm = true;
+            confirm_reason = Some(reason);
+        }
+
         // Biometric takes precedence over confirmation
         if key_requires_biometric {
             return Ok(SignatureDecision::RequireBiometric {
@@ -393,9 +437,10 @@ impl PolicyEnforcer {
             });
         }
 
-        if self.policy.global.require_confirm || key_requires_confirm {
+        if require_confirm {
             return Ok(SignatureDecision::RequireConfirm {
-                reason: "Confirmation required by policy".to_string(),
+                reason: confirm_reason
+                    .unwrap_or_else(|| "Confirmation required by policy".to_string()),
             });
         }
 

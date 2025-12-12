@@ -1,13 +1,20 @@
 use crate::models::wallet::{
-    CryptoWallet, WalletAddress, TransactionRequest, SignedTransaction,
-    BlockchainNetwork, WalletSecurityLevel, WalletMetadata,
+    BlockchainNetwork, CryptoWallet, SignedTransaction, TransactionRequest, WalletAddress,
+    WalletMetadata, WalletSecurityLevel,
 };
 use crate::storage::Database;
-use crate::{PersonaResult, PersonaError};
+use crate::{PersonaError, PersonaResult};
+use chrono::{DateTime, TimeZone, Utc};
 use serde_json;
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// Helper to convert Unix timestamp to DateTime<Utc>
+#[allow(dead_code)]
+fn timestamp_to_datetime(ts: i64) -> DateTime<Utc> {
+    Utc.timestamp_opt(ts, 0).unwrap()
+}
 
 /// Repository for managing crypto wallets
 pub struct CryptoWalletRepository {
@@ -24,7 +31,7 @@ impl CryptoWalletRepository {
         let mut tx = self.db.pool().begin().await?;
 
         // Insert wallet
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO crypto_wallets (
                 id, identity_id, name, description, network, wallet_type,
@@ -33,42 +40,44 @@ impl CryptoWalletRepository {
                 created_at, updated_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             "#,
-            wallet.id,
-            wallet.identity_id,
-            wallet.name,
-            wallet.description,
-            serde_json::to_string(&wallet.network)?,
-            serde_json::to_string(&wallet.wallet_type)?,
-            wallet.derivation_path,
-            wallet.extended_public_key,
-            wallet.encrypted_private_key,
-            wallet.encrypted_mnemonic,
-            wallet.watch_only,
-            serde_json::to_string(&wallet.security_level)?,
-            wallet.created_at,
-            wallet.updated_at,
         )
+        .bind(wallet.id.to_string())
+        .bind(wallet.identity_id.to_string())
+        .bind(&wallet.name)
+        .bind(&wallet.description)
+        .bind(serde_json::to_string(&wallet.network)?)
+        .bind(serde_json::to_string(&wallet.wallet_type)?)
+        .bind(&wallet.derivation_path)
+        .bind(&wallet.extended_public_key)
+        .bind(&wallet.encrypted_private_key)
+        .bind(&wallet.encrypted_mnemonic)
+        .bind(wallet.watch_only)
+        .bind(serde_json::to_string(&wallet.security_level)?)
+        .bind(wallet.created_at.timestamp())
+        .bind(wallet.updated_at.timestamp())
         .execute(tx.as_mut())
         .await?;
 
         // Insert metadata
-        self.insert_wallet_metadata(tx, &wallet.id, &wallet.metadata).await?;
+        self.insert_wallet_metadata(&mut tx, &wallet.id, &wallet.metadata)
+            .await?;
 
         // Insert addresses
         for address in &wallet.addresses {
-            self.insert_address(tx, &wallet.id, address).await?;
+            self.insert_address(&mut tx, &wallet.id, address).await?;
         }
 
         tx.commit().await?;
 
         // Load and return the created wallet
-        self.find_by_id(&wallet.id).await?
+        self.find_by_id(&wallet.id)
+            .await?
             .ok_or_else(|| PersonaError::NotFound("Wallet".to_string()))
     }
 
     /// Find wallet by ID
     pub async fn find_by_id(&self, id: &Uuid) -> PersonaResult<Option<CryptoWallet>> {
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"
             SELECT id, identity_id, name, description, network, wallet_type,
                    derivation_path, extended_public_key, encrypted_private_key,
@@ -77,8 +86,8 @@ impl CryptoWalletRepository {
             FROM crypto_wallets
             WHERE id = $1
             "#,
-            id,
         )
+        .bind(id.to_string())
         .fetch_optional(self.db.pool())
         .await?;
 
@@ -100,7 +109,7 @@ impl CryptoWalletRepository {
 
     /// Find all wallets for an identity
     pub async fn find_by_identity(&self, identity_id: &Uuid) -> PersonaResult<Vec<CryptoWallet>> {
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, description, network, wallet_type,
                    derivation_path, extended_public_key, encrypted_private_key,
@@ -110,8 +119,8 @@ impl CryptoWalletRepository {
             WHERE identity_id = $1
             ORDER BY created_at DESC
             "#,
-            identity_id,
         )
+        .bind(identity_id.to_string())
         .fetch_all(self.db.pool())
         .await?;
 
@@ -132,9 +141,12 @@ impl CryptoWalletRepository {
     }
 
     /// Find wallets by network
-    pub async fn find_by_network(&self, network: &BlockchainNetwork) -> PersonaResult<Vec<CryptoWallet>> {
+    pub async fn find_by_network(
+        &self,
+        network: &BlockchainNetwork,
+    ) -> PersonaResult<Vec<CryptoWallet>> {
         let network_str = serde_json::to_string(network)?;
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, description, network, wallet_type,
                    derivation_path, extended_public_key, encrypted_private_key,
@@ -144,8 +156,8 @@ impl CryptoWalletRepository {
             WHERE network = $1
             ORDER BY created_at DESC
             "#,
-            network_str,
         )
+        .bind(network_str)
         .fetch_all(self.db.pool())
         .await?;
 
@@ -166,14 +178,23 @@ impl CryptoWalletRepository {
     }
 
     /// Find wallets by security level
-    pub async fn find_by_security_level(&self, security_level: &WalletSecurityLevel) -> PersonaResult<Vec<CryptoWallet>> {
+    pub async fn find_by_security_level(
+        &self,
+        security_level: &WalletSecurityLevel,
+    ) -> PersonaResult<Vec<CryptoWallet>> {
         let level_str = serde_json::to_string(security_level)?;
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
-            SELECT * FROM crypto_wallets WHERE security_level = $1 ORDER BY created_at DESC
+            SELECT id, identity_id, name, description, network, wallet_type,
+                   derivation_path, extended_public_key, encrypted_private_key,
+                   encrypted_mnemonic, watch_only, security_level,
+                   created_at, updated_at
+            FROM crypto_wallets
+            WHERE security_level = $1
+            ORDER BY created_at DESC
             "#,
-            level_str,
         )
+        .bind(level_str)
         .fetch_all(self.db.pool())
         .await?;
 
@@ -195,7 +216,7 @@ impl CryptoWalletRepository {
 
     /// Update wallet
     pub async fn update(&self, wallet: &CryptoWallet) -> PersonaResult<CryptoWallet> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE crypto_wallets SET
                 name = $2, description = $3, network = $4, wallet_type = $5,
@@ -204,24 +225,25 @@ impl CryptoWalletRepository {
                 updated_at = $12
             WHERE id = $1
             "#,
-            wallet.id,
-            wallet.name,
-            wallet.description,
-            serde_json::to_string(&wallet.network)?,
-            serde_json::to_string(&wallet.wallet_type)?,
-            wallet.derivation_path,
-            wallet.extended_public_key,
-            wallet.encrypted_private_key,
-            wallet.encrypted_mnemonic,
-            wallet.watch_only,
-            serde_json::to_string(&wallet.security_level)?,
-            wallet.updated_at,
         )
+        .bind(wallet.id.to_string())
+        .bind(&wallet.name)
+        .bind(&wallet.description)
+        .bind(serde_json::to_string(&wallet.network)?)
+        .bind(serde_json::to_string(&wallet.wallet_type)?)
+        .bind(&wallet.derivation_path)
+        .bind(&wallet.extended_public_key)
+        .bind(&wallet.encrypted_private_key)
+        .bind(&wallet.encrypted_mnemonic)
+        .bind(wallet.watch_only)
+        .bind(serde_json::to_string(&wallet.security_level)?)
+        .bind(wallet.updated_at.timestamp())
         .execute(self.db.pool())
         .await?;
 
         // Delete old addresses and insert new ones
-        sqlx::query!("DELETE FROM wallet_addresses WHERE wallet_id = $1", wallet.id)
+        sqlx::query("DELETE FROM wallet_addresses WHERE wallet_id = $1")
+            .bind(wallet.id.to_string())
             .execute(self.db.pool())
             .await?;
 
@@ -230,32 +252,40 @@ impl CryptoWalletRepository {
         }
 
         // Update metadata
-        self.update_wallet_metadata(&wallet.id, &wallet.metadata).await?;
+        self.update_wallet_metadata(&wallet.id, &wallet.metadata)
+            .await?;
 
         // Return updated wallet
-        self.find_by_id(&wallet.id).await?.ok_or_else(|| PersonaError::NotFound("Failed to find updated wallet".to_string()))
+        self.find_by_id(&wallet.id)
+            .await?
+            .ok_or_else(|| PersonaError::NotFound("Failed to find updated wallet".to_string()))
     }
 
     /// Delete wallet
     pub async fn delete(&self, id: &Uuid) -> PersonaResult<bool> {
-        sqlx::query!("DELETE FROM wallet_addresses WHERE wallet_id = $1", id)
+        sqlx::query("DELETE FROM wallet_addresses WHERE wallet_id = $1")
+            .bind(id.to_string())
             .execute(self.db.pool())
             .await?;
 
-        sqlx::query!("DELETE FROM wallet_metadata WHERE wallet_id = $1", id)
+        sqlx::query("DELETE FROM wallet_metadata WHERE wallet_id = $1")
+            .bind(id.to_string())
             .execute(self.db.pool())
             .await?;
 
-        sqlx::query!("DELETE FROM transaction_requests WHERE wallet_id = $1", id)
+        sqlx::query("DELETE FROM transaction_requests WHERE wallet_id = $1")
+            .bind(id.to_string())
             .execute(self.db.pool())
             .await?;
 
-        sqlx::query!("DELETE FROM signed_transactions WHERE wallet_id = $1", id)
+        sqlx::query("DELETE FROM signed_transactions WHERE wallet_id = $1")
+            .bind(id.to_string())
             .execute(self.db.pool())
             .await?;
 
         // Delete wallet
-        let result = sqlx::query!("DELETE FROM crypto_wallets WHERE id = $1", id)
+        let result = sqlx::query("DELETE FROM crypto_wallets WHERE id = $1")
+            .bind(id.to_string())
             .execute(self.db.pool())
             .await?;
 
@@ -263,26 +293,30 @@ impl CryptoWalletRepository {
     }
 
     /// Add address to wallet
-    pub async fn add_address(&self, wallet_id: &Uuid, address: &WalletAddress) -> PersonaResult<()> {
-        sqlx::query!(
+    pub async fn add_address(
+        &self,
+        wallet_id: &Uuid,
+        address: &WalletAddress,
+    ) -> PersonaResult<()> {
+        sqlx::query(
             r#"
             INSERT INTO wallet_addresses (
-                id, wallet_id, address, address_type, derivation_path, index,
+                id, wallet_id, address, address_type, derivation_path, "index",
                 used, balance, last_activity, metadata, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
-            Uuid::new_v4(),
-            wallet_id,
-            address.address,
-            serde_json::to_string(&address.address_type)?,
-            address.derivation_path,
-            address.index as i64,
-            address.used,
-            address.balance,
-            address.last_activity,
-            serde_json::to_value(&address.metadata)?,
-            address.created_at,
         )
+        .bind(Uuid::new_v4().to_string())
+        .bind(wallet_id.to_string())
+        .bind(&address.address)
+        .bind(serde_json::to_string(&address.address_type)?)
+        .bind(&address.derivation_path)
+        .bind(address.index as i64)
+        .bind(address.used)
+        .bind(&address.balance)
+        .bind(address.last_activity.map(|d| d.timestamp()))
+        .bind(serde_json::to_string(&address.metadata)?)
+        .bind(address.created_at.timestamp())
         .execute(self.db.pool())
         .await?;
 
@@ -290,19 +324,24 @@ impl CryptoWalletRepository {
     }
 
     /// Update address usage
-    pub async fn update_address_usage(&self, wallet_id: &Uuid, address: &str, used: bool) -> PersonaResult<bool> {
-        let result = sqlx::query!(
+    pub async fn update_address_usage(
+        &self,
+        wallet_id: &Uuid,
+        address: &str,
+        used: bool,
+    ) -> PersonaResult<bool> {
+        let result = sqlx::query(
             r#"
             UPDATE wallet_addresses SET
                 used = $2,
                 last_activity = $3
             WHERE wallet_id = $1 AND address = $4
             "#,
-            wallet_id,
-            used,
-            chrono::Utc::now(),
-            address,
         )
+        .bind(wallet_id.to_string())
+        .bind(used)
+        .bind(chrono::Utc::now().timestamp())
+        .bind(address)
         .execute(self.db.pool())
         .await?;
 
@@ -310,76 +349,86 @@ impl CryptoWalletRepository {
     }
 
     /// Create transaction request
-    pub async fn create_transaction_request(&self, request: &TransactionRequest) -> PersonaResult<TransactionRequest> {
-        let row = sqlx::query!(
+    pub async fn create_transaction_request(
+        &self,
+        request: &TransactionRequest,
+    ) -> PersonaResult<TransactionRequest> {
+        sqlx::query(
             r#"
             INSERT INTO transaction_requests (
                 id, wallet_id, network, from_address, to_address, amount, fee,
                 gas_price, gas_limit, nonce, memo, raw_transaction_data,
-                required_signatures, created_at, expires_at, metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-            RETURNING *
+                required_signatures, created_at, expires_at, metadata, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'pending')
             "#,
-            request.id,
-            request.wallet_id,
-            serde_json::to_string(&request.network)?,
-            request.from_address,
-            request.to_address,
-            request.amount,
-            request.fee,
-            request.gas_price,
-            request.gas_limit.map(|v| v as i64),
-            request.nonce.map(|v| v as i64),
-            request.memo,
-            request.raw_transaction_data,
-            request.required_signatures as i32,
-            request.created_at,
-            request.expires_at,
-            serde_json::to_value(&request.metadata)?,
         )
-        .fetch_one(self.db.pool())
+        .bind(request.id.to_string())
+        .bind(request.wallet_id.to_string())
+        .bind(serde_json::to_string(&request.network)?)
+        .bind(&request.from_address)
+        .bind(&request.to_address)
+        .bind(&request.amount)
+        .bind(&request.fee)
+        .bind(&request.gas_price)
+        .bind(request.gas_limit.map(|v| v as i64))
+        .bind(request.nonce.map(|v| v as i64))
+        .bind(&request.memo)
+        .bind(&request.raw_transaction_data)
+        .bind(request.required_signatures as i32)
+        .bind(request.created_at.timestamp())
+        .bind(request.expires_at.map(|d| d.timestamp()))
+        .bind(serde_json::to_string(&request.metadata)?)
+        .execute(self.db.pool())
         .await?;
 
-        self.transaction_request_from_row(&row).await
+        // Return the request as-is since we just inserted it
+        Ok(request.clone())
     }
 
     /// Create signed transaction
-    pub async fn create_signed_transaction(&self, signed_tx: &SignedTransaction) -> PersonaResult<SignedTransaction> {
-        let row = sqlx::query!(
+    pub async fn create_signed_transaction(
+        &self,
+        signed_tx: &SignedTransaction,
+    ) -> PersonaResult<SignedTransaction> {
+        sqlx::query(
             r#"
             INSERT INTO signed_transactions (
-                id, request, signatures, raw_signed_transaction,
-                transaction_hash, signed_at, broadcast_status
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING *
+                id, wallet_id, request, signatures, raw_signed_transaction,
+                transaction_hash, signed_at, broadcast_status, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
-            signed_tx.id,
-            serde_json::to_string(&signed_tx.request)?,
-            serde_json::to_string(&signed_tx.signatures)?,
-            signed_tx.raw_signed_transaction,
-            signed_tx.transaction_hash,
-            signed_tx.signed_at,
-            serde_json::to_string(&signed_tx.broadcast_status)?,
         )
-        .fetch_one(self.db.pool())
+        .bind(signed_tx.id.to_string())
+        .bind(signed_tx.request.wallet_id.to_string())
+        .bind(serde_json::to_string(&signed_tx.request)?)
+        .bind(serde_json::to_string(&signed_tx.signatures)?)
+        .bind(&signed_tx.raw_signed_transaction)
+        .bind(&signed_tx.transaction_hash)
+        .bind(signed_tx.signed_at.timestamp())
+        .bind(serde_json::to_string(&signed_tx.broadcast_status)?)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(self.db.pool())
         .await?;
 
-        self.signed_transaction_from_row(&row).await
+        Ok(signed_tx.clone())
     }
 
     /// Get pending transaction requests for a wallet
-    pub async fn get_pending_requests(&self, wallet_id: &Uuid) -> PersonaResult<Vec<TransactionRequest>> {
-        let rows = sqlx::query!(
+    pub async fn get_pending_requests(
+        &self,
+        wallet_id: &Uuid,
+    ) -> PersonaResult<Vec<TransactionRequest>> {
+        let rows = sqlx::query(
             r#"
-            SELECT * FROM transaction_requests
-            WHERE wallet_id = $1 AND (
-                signed_at IS NULL
-                OR (expires_at IS NOT NULL AND expires_at > NOW())
-            )
+            SELECT id, wallet_id, network, from_address, to_address, amount, fee,
+                   gas_price, gas_limit, nonce, memo, raw_transaction_data,
+                   required_signatures, created_at, signed_at, expires_at, metadata, status
+            FROM transaction_requests
+            WHERE wallet_id = $1 AND signed_at IS NULL
             ORDER BY created_at DESC
             "#,
-            wallet_id,
         )
+        .bind(wallet_id.to_string())
         .fetch_all(self.db.pool())
         .await?;
 
@@ -392,79 +441,94 @@ impl CryptoWalletRepository {
     }
 
     /// Get transaction statistics for a wallet
-    pub async fn get_transaction_stats(&self, wallet_id: &Uuid) -> PersonaResult<WalletTransactionStats> {
-        let stats = sqlx::query!(
+    pub async fn get_transaction_stats(
+        &self,
+        wallet_id: &Uuid,
+    ) -> PersonaResult<WalletTransactionStats> {
+        let row = sqlx::query(
             r#"
             SELECT
                 COUNT(*) as total_transactions,
                 COUNT(CASE WHEN broadcast_status LIKE '%BroadcastSuccess%' THEN 1 END) as successful_transactions,
-                COUNT(CASE WHEN broadcast_status LIKE '%BroadcastFailed%' THEN 1 END) as failed_transactions,
-                SUM(CASE WHEN amount IS NOT NULL THEN CAST(amount AS NUMERIC) ELSE 0 END) as total_amount_sent
+                COUNT(CASE WHEN broadcast_status LIKE '%BroadcastFailed%' THEN 1 END) as failed_transactions
             FROM signed_transactions
             WHERE wallet_id = $1
             "#,
-            wallet_id,
         )
+        .bind(wallet_id.to_string())
         .fetch_one(self.db.pool())
         .await?;
 
         Ok(WalletTransactionStats {
-            total_transactions: stats.total_transactions.unwrap_or(0) as u64,
-            successful_transactions: stats.successful_transactions.unwrap_or(0) as u64,
-            failed_transactions: stats.failed_transactions.unwrap_or(0) as u64,
-            total_amount_sent: stats.total_amount_sent.unwrap_or(0.0),
+            total_transactions: row.get::<i64, _>("total_transactions") as u64,
+            successful_transactions: row.get::<i64, _>("successful_transactions") as u64,
+            failed_transactions: row.get::<i64, _>("failed_transactions") as u64,
+            total_amount_sent: 0.0, // Not easily computed without parsing amounts
         })
     }
 
     // Private helper methods
 
     fn wallet_from_row(&self, row: &sqlx::sqlite::SqliteRow) -> PersonaResult<CryptoWallet> {
+        let id_str: String = row.get("id");
+        let identity_id_str: String = row.get("identity_id");
+        let network_str: String = row.get("network");
+        let wallet_type_str: String = row.get("wallet_type");
+        let security_level_str: String = row.get("security_level");
+        let created_at_ts: i64 = row.get("created_at");
+        let updated_at_ts: i64 = row.get("updated_at");
+
         Ok(CryptoWallet {
-            id: row.get("id"),
-            identity_id: row.get("identity_id"),
+            id: Uuid::parse_str(&id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
+            identity_id: Uuid::parse_str(&identity_id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
             name: row.get("name"),
             description: row.get("description"),
-            network: serde_json::from_str(row.get("network"))?,
-            wallet_type: serde_json::from_str(row.get("wallet_type"))?,
+            network: serde_json::from_str(&network_str)?,
+            wallet_type: serde_json::from_str(&wallet_type_str)?,
             derivation_path: row.get("derivation_path"),
             extended_public_key: row.get("extended_public_key"),
             encrypted_private_key: row.get("encrypted_private_key"),
             encrypted_mnemonic: row.get("encrypted_mnemonic"),
-            addresses: Vec::new(), // Loaded separately
+            addresses: Vec::new(),        // Loaded separately
             metadata: Default::default(), // Loaded separately
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
+            created_at: Utc.timestamp_opt(created_at_ts, 0).unwrap(),
+            updated_at: Utc.timestamp_opt(updated_at_ts, 0).unwrap(),
             watch_only: row.get("watch_only"),
-            security_level: serde_json::from_str(row.get("security_level"))?,
+            security_level: serde_json::from_str(&security_level_str)?,
         })
     }
 
     async fn load_wallet_addresses(&self, wallet_id: &Uuid) -> PersonaResult<Vec<WalletAddress>> {
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
-            SELECT id, wallet_id, address, address_type, derivation_path, index,
+            SELECT id, wallet_id, address, address_type, derivation_path, "index",
                    used, balance, last_activity, metadata, created_at
             FROM wallet_addresses
             WHERE wallet_id = $1
-            ORDER BY index ASC
+            ORDER BY "index" ASC
             "#,
-            wallet_id,
         )
+        .bind(wallet_id.to_string())
         .fetch_all(self.db.pool())
         .await?;
 
         let mut addresses = Vec::new();
         for row in rows {
+            let address_type_str: String = row.get("address_type");
+            let metadata_str: String = row.get("metadata");
+            let created_at_ts: i64 = row.get("created_at");
+            let last_activity_ts: Option<i64> = row.get("last_activity");
+
             addresses.push(WalletAddress {
                 address: row.get("address"),
-                address_type: serde_json::from_str(row.get("address_type"))?,
+                address_type: serde_json::from_str(&address_type_str)?,
                 derivation_path: row.get("derivation_path"),
                 index: row.get::<i64, _>("index") as u32,
                 used: row.get("used"),
                 balance: row.get("balance"),
-                last_activity: row.get("last_activity"),
-                metadata: serde_json::from_value(row.get("metadata"))?,
-                created_at: row.get("created_at"),
+                last_activity: last_activity_ts.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                metadata: serde_json::from_str(&metadata_str)?,
+                created_at: Utc.timestamp_opt(created_at_ts, 0).unwrap(),
             });
         }
 
@@ -478,7 +542,7 @@ impl CryptoWalletRepository {
         metadata: &WalletMetadata,
     ) -> PersonaResult<()> {
         // Insert metadata as JSON in a separate table for better queryability
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO wallet_metadata (
                 wallet_id, tags, notes, platform, purpose,
@@ -486,18 +550,18 @@ impl CryptoWalletRepository {
                 created_at, updated_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
-            wallet_id.to_string(),
-            serde_json::to_string(&metadata.tags)?,
-            metadata.notes,
-            metadata.platform,
-            metadata.purpose,
-            serde_json::to_string(&metadata.associated_services)?,
-            serde_json::to_value(&metadata.backup_info)?,
-            serde_json::to_string(&metadata.security_settings)?,
-            serde_json::to_string(&metadata.custom_data)?,
-            chrono::Utc::now().timestamp(),
-            chrono::Utc::now().timestamp(),
         )
+        .bind(wallet_id.to_string())
+        .bind(serde_json::to_string(&metadata.tags)?)
+        .bind(&metadata.notes)
+        .bind(&metadata.platform)
+        .bind(&metadata.purpose)
+        .bind(serde_json::to_string(&metadata.associated_services)?)
+        .bind(serde_json::to_string(&metadata.backup_info)?)
+        .bind(serde_json::to_string(&metadata.security_settings)?)
+        .bind(serde_json::to_string(&metadata.custom_data)?)
+        .bind(chrono::Utc::now().timestamp())
+        .bind(chrono::Utc::now().timestamp())
         .execute(tx.as_mut())
         .await?;
 
@@ -510,25 +574,25 @@ impl CryptoWalletRepository {
         wallet_id: &Uuid,
         address: &WalletAddress,
     ) -> PersonaResult<()> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO wallet_addresses (
-                id, wallet_id, address, address_type, derivation_path, index,
+                id, wallet_id, address, address_type, derivation_path, "index",
                 used, balance, last_activity, metadata, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             "#,
-            Uuid::new_v4().to_string(),
-            wallet_id.to_string(),
-            address.address,
-            serde_json::to_string(&address.address_type)?,
-            address.derivation_path,
-            address.index as i64,
-            address.used,
-            address.balance,
-            address.last_activity.map(|d| d.timestamp()),
-            serde_json::to_string(&address.metadata)?,
-            address.created_at.timestamp(),
         )
+        .bind(Uuid::new_v4().to_string())
+        .bind(wallet_id.to_string())
+        .bind(&address.address)
+        .bind(serde_json::to_string(&address.address_type)?)
+        .bind(&address.derivation_path)
+        .bind(address.index as i64)
+        .bind(address.used)
+        .bind(&address.balance)
+        .bind(address.last_activity.map(|d| d.timestamp()))
+        .bind(serde_json::to_string(&address.metadata)?)
+        .bind(address.created_at.timestamp())
         .execute(tx.as_mut())
         .await?;
 
@@ -536,29 +600,37 @@ impl CryptoWalletRepository {
     }
 
     async fn load_wallet_metadata(&self, wallet_id: &Uuid) -> PersonaResult<WalletMetadata> {
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"
             SELECT tags, notes, platform, purpose,
                    associated_services, backup_info, security_settings, custom_data
             FROM wallet_metadata
             WHERE wallet_id = $1
             "#,
-            wallet_id,
         )
+        .bind(wallet_id.to_string())
         .fetch_optional(self.db.pool())
         .await?;
 
         match row {
-            Some(row) => Ok(WalletMetadata {
-                tags: serde_json::from_value(row.tags.unwrap_or_else(|| serde_json::json!([])))?,
-                notes: row.notes,
-                platform: row.platform,
-                purpose: row.purpose,
-                associated_services: serde_json::from_value(row.associated_services.unwrap_or_else(|| serde_json::json!([])))?,
-                backup_info: row.backup_info.and_then(|v| serde_json::from_value(v).ok()),
-                security_settings: serde_json::from_value(row.security_settings.unwrap_or_else(|| serde_json::json!({})))?,
-                custom_data: serde_json::from_value(row.custom_data.unwrap_or_else(|| serde_json::json!({})))?,
-            }),
+            Some(row) => {
+                let tags_str: String = row.get("tags");
+                let associated_services_str: String = row.get("associated_services");
+                let backup_info_str: Option<String> = row.get("backup_info");
+                let security_settings_str: String = row.get("security_settings");
+                let custom_data_str: String = row.get("custom_data");
+
+                Ok(WalletMetadata {
+                    tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+                    notes: row.get("notes"),
+                    platform: row.get("platform"),
+                    purpose: row.get("purpose"),
+                    associated_services: serde_json::from_str(&associated_services_str).unwrap_or_default(),
+                    backup_info: backup_info_str.and_then(|s| serde_json::from_str(&s).ok()),
+                    security_settings: serde_json::from_str(&security_settings_str).unwrap_or_default(),
+                    custom_data: serde_json::from_str(&custom_data_str).unwrap_or_default(),
+                })
+            }
             None => Ok(Default::default()),
         }
     }
@@ -568,7 +640,7 @@ impl CryptoWalletRepository {
         wallet_id: &Uuid,
         metadata: &WalletMetadata,
     ) -> PersonaResult<()> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE wallet_metadata SET
                 tags = $2, notes = $3, platform = $4, purpose = $5,
@@ -577,28 +649,38 @@ impl CryptoWalletRepository {
                 updated_at = $10
             WHERE wallet_id = $1
             "#,
-            wallet_id,
-            serde_json::to_value(&metadata.tags)?,
-            metadata.notes,
-            metadata.platform,
-            metadata.purpose,
-            serde_json::to_value(&metadata.associated_services)?,
-            serde_json::to_value(&metadata.backup_info)?,
-            serde_json::to_value(&metadata.security_settings)?,
-            serde_json::to_value(&metadata.custom_data)?,
-            chrono::Utc::now(),
         )
+        .bind(wallet_id.to_string())
+        .bind(serde_json::to_string(&metadata.tags)?)
+        .bind(&metadata.notes)
+        .bind(&metadata.platform)
+        .bind(&metadata.purpose)
+        .bind(serde_json::to_string(&metadata.associated_services)?)
+        .bind(serde_json::to_string(&metadata.backup_info)?)
+        .bind(serde_json::to_string(&metadata.security_settings)?)
+        .bind(serde_json::to_string(&metadata.custom_data)?)
+        .bind(chrono::Utc::now().timestamp())
         .execute(self.db.pool())
         .await?;
 
         Ok(())
     }
 
-    fn transaction_request_from_row(&self, row: &sqlx::sqlite::SqliteRow) -> PersonaResult<TransactionRequest> {
+    fn transaction_request_from_row(
+        &self,
+        row: &sqlx::sqlite::SqliteRow,
+    ) -> PersonaResult<TransactionRequest> {
+        let id_str: String = row.get("id");
+        let wallet_id_str: String = row.get("wallet_id");
+        let network_str: String = row.get("network");
+        let metadata_str: String = row.get("metadata");
+        let created_at_ts: i64 = row.get("created_at");
+        let expires_at_ts: Option<i64> = row.get("expires_at");
+
         Ok(TransactionRequest {
-            id: row.get("id"),
-            wallet_id: row.get("wallet_id"),
-            network: serde_json::from_str(row.get("network"))?,
+            id: Uuid::parse_str(&id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
+            wallet_id: Uuid::parse_str(&wallet_id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
+            network: serde_json::from_str(&network_str)?,
             from_address: row.get("from_address"),
             to_address: row.get("to_address"),
             amount: row.get("amount"),
@@ -609,21 +691,31 @@ impl CryptoWalletRepository {
             memo: row.get("memo"),
             raw_transaction_data: row.get("raw_transaction_data"),
             required_signatures: row.get::<i32, _>("required_signatures") as usize,
-            created_at: row.get("created_at"),
-            expires_at: row.get("expires_at"),
-            metadata: serde_json::from_value(row.get("metadata"))?,
+            created_at: Utc.timestamp_opt(created_at_ts, 0).unwrap(),
+            expires_at: expires_at_ts.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+            metadata: serde_json::from_str(&metadata_str)?,
         })
     }
 
-    fn signed_transaction_from_row(&self, row: &sqlx::sqlite::SqliteRow) -> PersonaResult<SignedTransaction> {
+    #[allow(dead_code)]
+    fn signed_transaction_from_row(
+        &self,
+        row: &sqlx::sqlite::SqliteRow,
+    ) -> PersonaResult<SignedTransaction> {
+        let id_str: String = row.get("id");
+        let request_str: String = row.get("request");
+        let signatures_str: String = row.get("signatures");
+        let broadcast_status_str: String = row.get("broadcast_status");
+        let signed_at_ts: i64 = row.get("signed_at");
+
         Ok(SignedTransaction {
-            id: row.get("id"),
-            request: serde_json::from_str(row.get("request"))?,
-            signatures: serde_json::from_str(row.get("signatures"))?,
+            id: Uuid::parse_str(&id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
+            request: serde_json::from_str(&request_str)?,
+            signatures: serde_json::from_str(&signatures_str)?,
             raw_signed_transaction: row.get("raw_signed_transaction"),
             transaction_hash: row.get("transaction_hash"),
-            signed_at: row.get("signed_at"),
-            broadcast_status: serde_json::from_str(row.get("broadcast_status"))?,
+            signed_at: Utc.timestamp_opt(signed_at_ts, 0).unwrap(),
+            broadcast_status: serde_json::from_str(&broadcast_status_str)?,
         })
     }
 }
@@ -640,14 +732,47 @@ pub struct WalletTransactionStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::wallet::{WalletType, WalletAddress, AddressType};
+    use crate::models::wallet::{AddressType, WalletAddress, WalletType};
     use crate::storage::Database;
+
+    async fn seed_identity(db: &Database) -> Uuid {
+        let identity_id = Uuid::new_v4();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"
+            INSERT INTO identities (
+              id, name, identity_type, description, email, phone, ssh_key, gpg_key,
+              tags, attributes, created_at, updated_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(identity_id.to_string())
+        .bind("Test Identity")
+        .bind("personal")
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind("[]")
+        .bind("{}")
+        .bind(&now)
+        .bind(&now)
+        .bind(true)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        identity_id
+    }
 
     #[tokio::test]
     async fn test_wallet_crud() {
-        let db = Database::in_memory().await;
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let identity_id = seed_identity(&db).await;
         let repo = CryptoWalletRepository::new(Arc::new(db));
-        let identity_id = Uuid::new_v4();
 
         let wallet = CryptoWallet::new(
             identity_id,
@@ -688,9 +813,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_address_management() {
-        let db = Database::in_memory().await;
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let identity_id = seed_identity(&db).await;
         let repo = CryptoWalletRepository::new(Arc::new(db));
-        let identity_id = Uuid::new_v4();
 
         let mut wallet = CryptoWallet::new(
             identity_id,
@@ -720,7 +846,10 @@ mod tests {
         assert_eq!(created.addresses[0].address, address.address);
 
         // Update address usage
-        let updated = repo.update_address_usage(&created.id, &address.address, true).await.unwrap();
+        let updated = repo
+            .update_address_usage(&created.id, &address.address, true)
+            .await
+            .unwrap();
         assert!(updated);
     }
 }

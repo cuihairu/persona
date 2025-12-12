@@ -50,6 +50,9 @@ pub struct AutoLockPolicy {
     /// Whether this policy is active
     pub is_active: bool,
 
+    /// Whether this is the default policy
+    pub is_default: bool,
+
     /// Creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
 
@@ -175,6 +178,7 @@ impl AutoLockPolicy {
             background_check_interval_secs: 30,
             metadata: PolicyMetadata::default(),
             is_active: true,
+            is_default: false,
             created_at: now,
             updated_at: now,
         }
@@ -200,6 +204,7 @@ impl AutoLockPolicy {
             background_check_interval_secs: config.background_check_interval_secs,
             metadata: PolicyMetadata::default(),
             is_active: config.is_active,
+            is_default: false,
             created_at: now,
             updated_at: now,
         }
@@ -275,9 +280,9 @@ impl AutoLockPolicy {
 
         // Session limits
         if self.max_concurrent_sessions <= 2 {
-            score += 10;
+            score += 8;
         } else if self.max_concurrent_sessions <= 5 {
-            score += 5;
+            score += 4;
         }
 
         score.min(100)

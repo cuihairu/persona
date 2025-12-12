@@ -7,6 +7,8 @@ import { IdentitySwitcher, CreateIdentityModal } from '@/components/IdentitySwit
 import CredentialList from '@/components/CredentialList';
 import CreateCredentialModal from '@/components/CreateCredentialModal';
 import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorHandling';
+import SshAgentPanel from '@/components/SshAgentPanel';
+import WalletPanel from '@/components/WalletPanel';
 
 const App: React.FC = () => {
   const {
@@ -21,7 +23,7 @@ const App: React.FC = () => {
 
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateCredential, setShowCreateCredential] = useState(false);
-  const [currentView, setCurrentView] = useState<'credentials' | 'statistics'>('credentials');
+  const [currentView, setCurrentView] = useState<'credentials' | 'statistics' | 'sshAgent' | 'wallets'>('credentials');
 
   // Load credentials when identity changes
   useEffect(() => {
@@ -118,6 +120,26 @@ const App: React.FC = () => {
                   >
                     Statistics
                   </button>
+                  <button
+                    onClick={() => setCurrentView('sshAgent')}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      currentView === 'sshAgent'
+                        ? 'bg-white text-gray-900 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    SSH Agent
+                  </button>
+                  <button
+                    onClick={() => setCurrentView('wallets')}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      currentView === 'wallets'
+                        ? 'bg-white text-gray-900 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Wallets
+                  </button>
                 </div>
 
                 {/* Action Buttons */}
@@ -138,11 +160,12 @@ const App: React.FC = () => {
 
         {/* Main Content */}
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {currentView === 'credentials' ? (
+          {currentView === 'credentials' && (
             <CredentialList onCreateCredential={() => setShowCreateCredential(true)} />
-          ) : (
-            <StatisticsView />
           )}
+          {currentView === 'statistics' && <StatisticsView />}
+          {currentView === 'sshAgent' && <SshAgentPanel />}
+          {currentView === 'wallets' && <WalletPanel />}
         </main>
 
         {/* Modals */}

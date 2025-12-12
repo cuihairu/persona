@@ -502,3 +502,83 @@ async fn resolve_identity(service: &mut PersonaService, name: &str) -> Result<Id
 }
 
 type Identity = persona_core::models::Identity;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use data_encoding::BASE32_NOPAD;
+    use proptest::string::string_regex;
+    use proptest::{collection, prelude::*, sample::select};
+    use url::form_urlencoded;
+
+    const BASE32_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+    fn label_strategy() -> impl Strategy<Value = String> {
+        string_regex("[A-Za-z0-9._-]{1,20}").unwrap()
+    }
+
+    fn base32_secret_strategy() -> impl Strategy<Value = String> {
+        collection::vec(0usize..BASE32_ALPHABET.len(), 16..=40).prop_map(|indices| {
+            indices
+                .into_iter()
+                .map(|i| BASE32_ALPHABET[i] as char)
+                .collect::<String>()
+        })
+    }
+
+    fn encode_component(value: &str) -> String {
+        form_urlencoded::byte_serialize(value.as_bytes()).collect()
+    }
+
+    proptest! {
+        #[test]
+        fn otpauth_uri_roundtrip(
+            issuer in label_strategy(),
+            account in label_strategy(),
+            secret in base32_secret_strategy(),
+            digits in 6u8..=8,
+            period in 15u32..=60,
+            algorithm in select(vec![
+                "SHA1".to_string(),
+                "SHA256".to_string(),
+                "SHA512".to_string()
+            ])
+        ) {
+            let path = format!(
+                "{}:{}",
+                encode_component(&issuer),
+                encode_component(&account)
+            );
+            let uri = format!(
+                "otpauth://totp/{}?secret={}&issuer={}&account={}&algorithm={}&digits={}&period={}",
+                path,
+                secret,
+                encode_component(&issuer),
+                encode_component(&account),
+                algorithm,
+                digits,
+                period
+            );
+
+            let template = parse_otpauth_uri(&uri).unwrap();
+            prop_assert_eq!(template.secret.as_deref(), Some(secret.as_str()));
+            prop_assert_eq!(template.issuer.as_deref(), Some(issuer.as_str()));
+            prop_assert_eq!(template.account.as_deref(), Some(account.as_str()));
+            prop_assert_eq!(
+                template.algorithm.as_deref().map(|s| s.to_ascii_uppercase()),
+                Some(algorithm.clone())
+            );
+            prop_assert_eq!(template.digits, Some(digits));
+            prop_assert_eq!(template.period, Some(period));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn base32_secret_roundtrip(bytes in collection::vec(any::<u8>(), 8..=64)) {
+            let encoded = BASE32_NOPAD.encode(&bytes);
+            let decoded = decode_secret(&encoded).unwrap();
+            prop_assert_eq!(decoded, bytes);
+        }
+    }
+}

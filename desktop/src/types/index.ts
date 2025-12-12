@@ -71,6 +71,24 @@ export interface SecurityQuestion {
   answer: string;
 }
 
+export interface SshAgentStatus {
+  running: boolean;
+  socket_path?: string;
+  pid?: number;
+  key_count?: number;
+  state_dir: string;
+}
+
+export interface SshAgentKey {
+  id: string;
+  identity_id: string;
+  identity_name: string;
+  name: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Statistics {
   total_identities: number;
   total_credentials: number;

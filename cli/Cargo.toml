@@ -87,6 +87,7 @@ tabled = "0.15"
 tempfile = "3.8"
 assert_cmd = "2.0"
 predicates = "3.0"
+proptest = { workspace = true }
 
 [features]
 default = ["interactive"]

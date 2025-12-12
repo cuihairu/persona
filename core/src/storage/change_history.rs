@@ -337,12 +337,9 @@ impl ChangeHistoryRepository {
 mod tests {
     use super::*;
     use crate::models::{ChangeType, EntityType};
-    use tempfile::tempdir;
 
     async fn create_test_db() -> Database {
-        let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Database::from_file(&db_path).await.unwrap();
+        let db = Database::in_memory().await.unwrap();
         db.migrate().await.unwrap();
         db
     }

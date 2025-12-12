@@ -2,6 +2,7 @@
 
 use crate::crypto::wallet_crypto::DerivedKey;
 use crate::{PersonaError, PersonaResult};
+use k256::elliptic_curve::sec1::ToEncodedPoint;
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
@@ -188,8 +189,12 @@ pub fn validate_bitcoin_address(address: &str) -> bool {
     if address.starts_with("bc1") || address.starts_with("tb1") {
         // Bech32 address
         address.len() >= 14 && address.len() <= 90
-    } else if address.starts_with('1') || address.starts_with('3')
-           || address.starts_with('m') || address.starts_with('n') || address.starts_with('2') {
+    } else if address.starts_with('1')
+        || address.starts_with('3')
+        || address.starts_with('m')
+        || address.starts_with('n')
+        || address.starts_with('2')
+    {
         // Base58 address
         address.len() >= 26 && address.len() <= 35
     } else {
@@ -220,7 +225,9 @@ pub fn validate_solana_address(address: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::wallet_crypto::{MasterKey, SecureMnemonic, MnemonicWordCount, Bip44PathBuilder, CoinType};
+    use crate::crypto::wallet_crypto::{
+        Bip44PathBuilder, CoinType, MasterKey, MnemonicWordCount, SecureMnemonic,
+    };
 
     #[test]
     fn test_bitcoin_address_generation() {
@@ -251,12 +258,20 @@ mod tests {
 
     #[test]
     fn test_address_validation() {
-        assert!(validate_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"));
-        assert!(validate_bitcoin_address("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"));
+        assert!(validate_bitcoin_address(
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+        ));
+        assert!(validate_bitcoin_address(
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+        ));
         assert!(!validate_bitcoin_address("invalid"));
 
-        assert!(validate_ethereum_address("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"));
-        assert!(!validate_ethereum_address("742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"));
+        assert!(validate_ethereum_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"
+        ));
+        assert!(!validate_ethereum_address(
+            "742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"
+        ));
         assert!(!validate_ethereum_address("0xInvalid"));
     }
 }

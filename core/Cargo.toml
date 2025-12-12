@@ -61,6 +61,7 @@ regex.workspace = true
 [dev-dependencies]
 mockall.workspace = true
 tokio-test = "0.4"
+proptest.workspace = true
 
 [features]
 default = ["sqlite"]

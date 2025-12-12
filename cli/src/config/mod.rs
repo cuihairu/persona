@@ -102,23 +102,16 @@ impl Default for CliConfig {
 impl CliConfig {
     /// Load configuration from file or create default
     pub fn load(config_override: Option<&Path>) -> Result<Self> {
-        let config_path = match config_override {
-            Some(p) => p.to_path_buf(),
-            None => Self::get_config_path()?,
-        };
+        // If a config path is explicitly provided, be strict: missing file is an error.
+        if let Some(p) = config_override {
+            let mut cfg = Self::load_file(p)?;
+            cfg.apply_env_overrides();
+            return Ok(cfg);
+        }
 
+        let config_path = Self::get_config_path()?;
         let mut config = if config_path.exists() {
-            debug!("Loading configuration from: {}", config_path.display());
-            let content = std::fs::read_to_string(&config_path).with_context(|| {
-                format!("Failed to read config file: {}", config_path.display())
-            })?;
-
-            let config: CliConfig = toml::from_str(&content).with_context(|| {
-                format!("Failed to parse config file: {}", config_path.display())
-            })?;
-
-            info!("Configuration loaded successfully");
-            config
+            Self::load_file(&config_path)?
         } else {
             debug!("Config file not found, using default configuration");
             Self::default()
@@ -130,8 +123,19 @@ impl CliConfig {
         Ok(config)
     }
 
+    /// Load configuration from a TOML file path (strict; no fallback).
+    pub fn load_file(path: &Path) -> Result<Self> {
+        debug!("Loading configuration from: {}", path.display());
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        let config: CliConfig = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
+        info!("Configuration loaded successfully");
+        Ok(config)
+    }
+
     /// Apply environment variable overrides
-    fn apply_env_overrides(&mut self) {
+    pub(crate) fn apply_env_overrides(&mut self) {
         // Non-interactive mode
         if let Ok(val) = std::env::var("PERSONA_NON_INTERACTIVE") {
             if val == "1" || val.to_lowercase() == "true" {

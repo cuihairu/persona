@@ -21,7 +21,11 @@ impl Database {
     /// Create a database from file path
     pub async fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
-        let database_url = format!("sqlite:{}", path.display());
+        // Ensure SQLite creates the DB file when it does not exist.
+        //
+        // Without `mode=rwc`, sqlx/sqlite will default to read-write and fail
+        // with "unable to open database file" if the DB file is missing.
+        let database_url = format!("sqlite:{}?mode=rwc", path.display());
         Self::new(&database_url).await
     }
 

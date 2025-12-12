@@ -73,7 +73,8 @@ pub fn encrypt_private_key(
     private_key: &[u8],
     password: &str,
 ) -> PersonaResult<EncryptedWalletKey> {
-    let encrypted_data = encrypt_data(private_key, password.as_bytes())?;
+    let encrypted_data = encrypt_data(private_key, password.as_bytes())
+        .map_err(|e| PersonaError::Cryptography(format!("Failed to encrypt private key: {}", e)))?;
 
     Ok(EncryptedWalletKey {
         version: 1,
@@ -100,14 +101,16 @@ pub fn decrypt_private_key(
         password.as_bytes(),
         &encrypted_key.salt,
         &encrypted_key.nonce,
-    )?;
+    )
+    .map_err(|e| PersonaError::Cryptography(format!("Failed to decrypt private key: {}", e)))?;
 
     Ok(decrypted)
 }
 
 /// Encrypt mnemonic phrase with user password
 pub fn encrypt_mnemonic(mnemonic: &str, password: &str) -> PersonaResult<EncryptedMnemonic> {
-    let encrypted_data = encrypt_data(mnemonic.as_bytes(), password.as_bytes())?;
+    let encrypted_data = encrypt_data(mnemonic.as_bytes(), password.as_bytes())
+        .map_err(|e| PersonaError::Cryptography(format!("Failed to encrypt mnemonic: {}", e)))?;
 
     Ok(EncryptedMnemonic {
         version: 1,
@@ -134,7 +137,8 @@ pub fn decrypt_mnemonic(
         password.as_bytes(),
         &encrypted_mnemonic.salt,
         &encrypted_mnemonic.nonce,
-    )?;
+    )
+    .map_err(|e| PersonaError::Cryptography(format!("Failed to decrypt mnemonic: {}", e)))?;
 
     String::from_utf8(decrypted)
         .map_err(|e| PersonaError::Cryptography(format!("Invalid UTF-8 in mnemonic: {}", e)))
@@ -156,23 +160,11 @@ pub fn decrypt_master_key(
 ) -> PersonaResult<MasterKey> {
     let key_bytes = decrypt_private_key(encrypted_key, password)?;
 
-    if key_bytes.len() != 78 {
-        return Err(PersonaError::Cryptography(
-            "Invalid key length for master key".to_string(),
-        ));
-    }
-
-    let mut key_array = [0u8; 78];
-    key_array.copy_from_slice(&key_bytes);
-
-    MasterKey::from_bytes(&key_array)
+    MasterKey::from_bytes(&key_bytes)
 }
 
 /// Validate wallet password by attempting decryption
-pub fn validate_wallet_password(
-    encrypted_key: &EncryptedWalletKey,
-    password: &str,
-) -> bool {
+pub fn validate_wallet_password(encrypted_key: &EncryptedWalletKey, password: &str) -> bool {
     decrypt_private_key(encrypted_key, password).is_ok()
 }
 
@@ -192,7 +184,7 @@ pub fn change_wallet_password(
 }
 
 /// Keystore format (Ethereum-compatible JSON keystore)
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeystoreV3 {
     pub version: u32,
     pub id: String,
@@ -200,7 +192,7 @@ pub struct KeystoreV3 {
     pub crypto: KeystoreCrypto,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeystoreCrypto {
     pub cipher: String,
     pub ciphertext: String,
@@ -210,12 +202,12 @@ pub struct KeystoreCrypto {
     pub mac: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CipherParams {
     pub iv: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KdfParams {
     pub dklen: u32,
     pub n: u32,
@@ -225,10 +217,7 @@ pub struct KdfParams {
 }
 
 /// Import from Ethereum keystore JSON
-pub fn import_from_keystore(
-    keystore_json: &str,
-    password: &str,
-) -> PersonaResult<Vec<u8>> {
+pub fn import_from_keystore(keystore_json: &str, password: &str) -> PersonaResult<Vec<u8>> {
     let keystore: KeystoreV3 = serde_json::from_str(keystore_json)
         .map_err(|e| PersonaError::InvalidInput(format!("Invalid keystore format: {}", e)))?;
 
@@ -263,6 +252,9 @@ pub fn export_to_keystore(
 mod tests {
     use super::*;
     use crate::crypto::wallet_crypto::{MnemonicWordCount, SecureMnemonic};
+    use proptest::{collection, prelude::*};
+    use std::ops::RangeInclusive;
+    use uuid::Uuid;
 
     #[test]
     fn test_private_key_encryption() {
@@ -329,5 +321,50 @@ mod tests {
 
         // Verify keys match by comparing xpub
         assert_eq!(master_key.to_xpub(), decrypted.to_xpub());
+    }
+
+    fn hex_string(range: RangeInclusive<usize>) -> impl Strategy<Value = String> {
+        collection::vec(any::<u8>(), range).prop_map(hex::encode)
+    }
+
+    fn keystore_strategy() -> impl Strategy<Value = KeystoreV3> {
+        (
+            proptest::option::of(hex_string(20..=40)),
+            hex_string(32..=64),
+            hex_string(16..=32),
+            hex_string(32..=64),
+            hex_string(32..=64),
+            hex_string(8..=32),
+        )
+            .prop_map(
+                |(address, ciphertext, iv, mac, salt, _id_fragment)| KeystoreV3 {
+                    version: 3,
+                    id: Uuid::new_v4().to_string(),
+                    address,
+                    crypto: KeystoreCrypto {
+                        cipher: "aes-128-ctr".to_string(),
+                        ciphertext,
+                        cipherparams: CipherParams { iv },
+                        kdf: "scrypt".to_string(),
+                        kdfparams: KdfParams {
+                            dklen: 32,
+                            n: 16384,
+                            p: 1,
+                            r: 8,
+                            salt,
+                        },
+                        mac,
+                    },
+                },
+            )
+    }
+
+    proptest! {
+        #[test]
+        fn keystore_json_roundtrip(keystore in keystore_strategy()) {
+            let json = serde_json::to_string(&keystore).unwrap();
+            let parsed: KeystoreV3 = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(parsed, keystore);
+        }
     }
 }

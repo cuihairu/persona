@@ -29,6 +29,12 @@ pub fn validate_workspace_path<P: AsRef<Path>>(path: P) -> Result<()> {
 
     // Check if parent directory exists and is writable
     if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            anyhow::bail!(
+                "Parent directory does not exist: {} (create it first)",
+                parent.display()
+            );
+        }
         if parent.exists() {
             // Check if parent is writable
             let test_file = parent.join(".persona_write_test");

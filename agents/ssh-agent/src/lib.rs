@@ -30,15 +30,7 @@ pub async fn run_agent() -> Result<()> {
         .init()?;
 
     let socket_path = default_agent_path();
-    let db_path = std::env::var("PERSONA_DB_PATH")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".persona")
-                .join("identities.db")
-        });
+    let db_path = resolve_persona_db_path();
 
     // Create listener using cross-platform abstraction
     let mut listener = AgentListener::bind(&socket_path)
@@ -155,10 +147,7 @@ impl Agent {
         }
     }
 
-    pub async fn load_keys_from_persona(
-        &mut self,
-        db_path: &PathBuf,
-    ) -> persona_core::Result<()> {
+    pub async fn load_keys_from_persona(&mut self, db_path: &PathBuf) -> persona_core::Result<()> {
         if self.load_test_key_from_env()? {
             info!("Loaded SSH key from test environment override");
             return Ok(());
@@ -234,12 +223,12 @@ impl Agent {
             Err(_) => return Ok(false),
         };
         let decoded = BASE64.decode(seed_b64.trim()).map_err(|e| {
-            boxed_persona_error(PersonaError::InvalidInput(format!(
+            anyhow!(PersonaError::InvalidInput(format!(
                 "Invalid test key seed: {e}"
             )))
         })?;
         if decoded.len() != 32 {
-            return Err(boxed_persona_error(PersonaError::InvalidInput(
+            return Err(anyhow!(PersonaError::InvalidInput(
                 "Test key seed must be 32 bytes".to_string(),
             )));
         }
@@ -249,10 +238,9 @@ impl Agent {
         let pub_bytes = signing.verifying_key().to_bytes();
         let mut public_blob = Vec::new();
         write_ssh_string(&mut public_blob, b"ssh-ed25519")
-            .map_err(|e| boxed_persona_error(PersonaError::CryptographicError(e.to_string())))?;
-        write_ssh_string(&mut public_blob, &pub_bytes).map_err(|e| {
-            boxed_persona_error(PersonaError::CryptographicError(e.to_string()))
-        })?;
+            .map_err(|e| anyhow!(PersonaError::CryptographicError(e.to_string())))?;
+        write_ssh_string(&mut public_blob, &pub_bytes)
+            .map_err(|e| anyhow!(PersonaError::CryptographicError(e.to_string())))?;
         let comment = std::env::var("PERSONA_AGENT_TEST_KEY_COMMENT")
             .unwrap_or_else(|_| "Test Key".to_string());
         self.keys.push(AgentKey {
@@ -411,28 +399,40 @@ fn audit_sign_with_digest(
     let digest = ring::digest::digest(&ring::digest::SHA256, data);
     let data_sha256 = hex::encode(digest.as_ref());
     // Determine DB path
-    let db_path = std::env::var("PERSONA_DB_PATH")
-        .ok()
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("PERSONA_DB_PATH not set"))?;
-    let rt = tokio::runtime::Handle::try_current().map_err(|_| anyhow!("No runtime"))?;
-    rt.block_on(async move {
-        let db = persona_core::storage::Database::from_file(&db_path)
-            .await
-            .map_err(|e| anyhow!(e))?;
-        db.migrate().await.map_err(|e| anyhow!(e))?;
+    let db_path = resolve_persona_db_path();
+
+    // Best-effort background audit: never block the agent request handler, and avoid
+    // nested `block_on` when running inside an existing Tokio runtime (tests included).
+    let identity_id = *identity_id;
+    let credential_id = *credential_id;
+    let fut = async move {
+        let db = persona_core::storage::Database::from_file(&db_path).await?;
+        db.migrate().await?;
         let repo = AuditLogRepository::new(db);
         let log = AuditLog::new(
             AuditAction::Custom("ssh_sign".to_string()),
             ResourceType::Credential,
             true,
         )
-        .with_identity_id(Some(*identity_id))
-        .with_credential_id(Some(*credential_id))
+        .with_identity_id(Some(identity_id))
+        .with_credential_id(Some(credential_id))
         .with_metadata("data_sha256".to_string(), data_sha256);
         let _ = repo.create(&log).await;
         Ok::<(), anyhow::Error>(())
-    })?;
+    };
+
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.spawn(async move {
+            let _ = fut.await;
+        });
+        return Ok(());
+    }
+
+    // Fallback for synchronous contexts.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let _ = rt.block_on(fut);
     Ok(())
 }
 
@@ -514,13 +514,89 @@ fn prompt_confirm_blocking(prompt: &str) -> Result<bool> {
 }
 
 fn current_target_host() -> Option<String> {
-    std::env::var("PERSONA_AGENT_TARGET_HOST")
-        .ok()
-        .filter(|s| !s.is_empty())
+    fn parse_connection_var(var: &str) -> Option<String> {
+        std::env::var(var)
+            .ok()
+            .and_then(|value| value.split_whitespace().next().map(|s| s.to_string()))
+    }
+
+    fn parse_host_from_command(command: &str) -> Option<String> {
+        let mut fallback = None;
+        for raw_token in command.split_whitespace() {
+            let token = raw_token.trim_matches(|c| c == '"' || c == '\'');
+            if token.is_empty()
+                || token.starts_with('-')
+                || token.eq_ignore_ascii_case("ssh")
+                || token.eq_ignore_ascii_case("ssh.exe")
+                || token.starts_with('$')
+            {
+                continue;
+            }
+
+            let candidate = if let Some(idx) = token.rfind('@') {
+                token[idx + 1..].to_string()
+            } else if token.contains('/') || token.contains('=') {
+                continue;
+            } else {
+                token.to_string()
+            };
+
+            let is_hostname = candidate
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+            if !is_hostname {
+                continue;
+            }
+            if candidate.contains('.') || candidate.contains(':') {
+                return Some(candidate);
+            }
+            if fallback.is_none() {
+                fallback = Some(candidate);
+            }
+        }
+        fallback
+    }
+
+    if let Ok(value) = std::env::var("PERSONA_AGENT_TARGET_HOST") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    for var in ["PERSONA_AGENT_TARGET_HOST_HINT", "PERSONA_AGENT_SSH_DEST"] {
+        if let Ok(value) = std::env::var(var) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    for var in ["SSH_CONNECTION", "SSH_CLIENT"] {
+        if let Some(host) = parse_connection_var(var) {
+            if !host.is_empty() {
+                return Some(host);
+            }
+        }
+    }
+
+    for var in [
+        "PERSONA_AGENT_SSH_COMMAND",
+        "SSH_ORIGINAL_COMMAND",
+        "GIT_SSH_COMMAND",
+    ] {
+        if let Ok(cmd) = std::env::var(var) {
+            if let Some(host) = parse_host_from_command(&cmd) {
+                return Some(host);
+            }
+        }
+    }
+
+    None
 }
 
-#[allow(dead_code)]
-fn is_host_in_known_hosts(host: &str) -> bool {
+pub(crate) fn is_host_in_known_hosts(host: &str) -> bool {
     let custom = std::env::var("PERSONA_KNOWN_HOSTS_FILE").ok();
     let paths = custom
         .into_iter()
@@ -541,6 +617,18 @@ fn is_host_in_known_hosts(host: &str) -> bool {
         }
     }
     false
+}
+
+fn resolve_persona_db_path() -> PathBuf {
+    std::env::var("PERSONA_DB_PATH")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".persona")
+                .join("identities.db")
+        })
 }
 
 fn detect_platform() -> Option<BiometricPlatform> {

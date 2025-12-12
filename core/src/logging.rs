@@ -18,6 +18,7 @@ const DEFAULT_SENSITIVE_FIELDS: &[&str] = &[
     "password",
     "passphrase",
     "secret",
+    "token",
     "secret_key",
     "secret-key",
     "private_key",

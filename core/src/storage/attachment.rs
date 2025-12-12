@@ -320,14 +320,73 @@ impl AttachmentRepository {
 mod tests {
     use super::*;
     use crate::models::Attachment;
-    use tempfile::tempdir;
 
     async fn create_test_db() -> Database {
-        let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Database::from_file(&db_path).await.unwrap();
+        let db = Database::in_memory().await.unwrap();
         db.migrate().await.unwrap();
         db
+    }
+
+    async fn seed_identity_and_credential(db: &Database) -> Uuid {
+        let identity_id = Uuid::new_v4();
+        let credential_id = Uuid::new_v4();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        sqlx::query(
+            r#"
+            INSERT INTO identities (
+              id, name, identity_type, description, email, phone, ssh_key, gpg_key,
+              tags, attributes, created_at, updated_at, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(identity_id.to_string())
+        .bind("Test Identity")
+        .bind("personal")
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind("[]")
+        .bind("{}")
+        .bind(&now)
+        .bind(&now)
+        .bind(true)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        sqlx::query(
+            r#"
+            INSERT INTO credentials (
+              id, identity_id, name, credential_type, security_level, url, username,
+              encrypted_data, notes, tags, metadata, created_at, updated_at, last_accessed,
+              is_active, is_favorite
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(credential_id.to_string())
+        .bind(identity_id.to_string())
+        .bind("Test Credential")
+        .bind("password")
+        .bind("medium")
+        .bind::<Option<String>>(None)
+        .bind::<Option<String>>(None)
+        .bind(vec![0u8; 16])
+        .bind::<Option<String>>(None)
+        .bind("[]")
+        .bind("{}")
+        .bind(&now)
+        .bind(&now)
+        .bind::<Option<String>>(None)
+        .bind(true)
+        .bind(false)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        credential_id
     }
 
     #[tokio::test]
@@ -335,7 +394,7 @@ mod tests {
         let db = create_test_db().await;
         let repo = AttachmentRepository::new(db);
 
-        let credential_id = Uuid::new_v4();
+        let credential_id = seed_identity_and_credential(&repo.db).await;
         let attachment = Attachment::new(
             credential_id,
             "test.pdf".to_string(),
@@ -361,7 +420,7 @@ mod tests {
         let db = create_test_db().await;
         let repo = AttachmentRepository::new(db);
 
-        let credential_id = Uuid::new_v4();
+        let credential_id = seed_identity_and_credential(&repo.db).await;
         let mut attachment = Attachment::new(
             credential_id,
             "test.pdf".to_string(),
@@ -388,7 +447,7 @@ mod tests {
         let db = create_test_db().await;
         let repo = AttachmentRepository::new(db);
 
-        let credential_id = Uuid::new_v4();
+        let credential_id = seed_identity_and_credential(&repo.db).await;
         let attachment = Attachment::new(
             credential_id,
             "test.pdf".to_string(),

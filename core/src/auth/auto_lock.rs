@@ -735,4 +735,33 @@ mod tests {
             .is_err());
         assert!(!manager.is_session_valid(&session_id).await);
     }
+
+    #[tokio::test]
+    async fn test_requires_sensitive_auth_flag() {
+        let mut base = AutoLockConfig::default();
+        base.require_reauth_sensitive = true;
+        base.sensitive_operation_timeout_secs = 1;
+        let mut config = EnhancedAutoLockConfig::default();
+        config.base = base;
+
+        let manager = AutoLockManager::new(config);
+        let session = Session::new("user123".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+
+        manager.add_session(session).await.unwrap();
+
+        // Without any sensitive activity recorded we should require re-auth.
+        assert!(manager.requires_sensitive_auth(&session_id).await);
+
+        // Update sensitive activity to reset timer.
+        manager
+            .update_sensitive_activity(&session_id)
+            .await
+            .unwrap();
+        assert!(!manager.requires_sensitive_auth(&session_id).await);
+
+        // Wait past the sensitive timeout to trigger re-auth again.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(manager.requires_sensitive_auth(&session_id).await);
+    }
 }
