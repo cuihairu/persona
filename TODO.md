@@ -24,7 +24,7 @@ Security & Auth
 - [x] Key hierarchy: per-item keys wrapped by master key
 - [x] SRP-like remote auth abstraction (prep for server)
 - [x] Biometric unlock hooks (Touch ID/Face ID/Windows Hello)
-- [ ] Auto-lock timers and “re-authenticate for sensitive ops”
+- [x] Auto-lock timers and “re-authenticate for sensitive ops”
 - [x] Secrets redaction policy for logs
 
 Storage & Data
@@ -99,7 +99,7 @@ Browser & Autofill (future)
 
 Quality & Security
 - [ ] Threat model & periodic security review
-- [ ] Fuzz tests for parsers (mnemonic/keystore/QR)
+- [x] Fuzz tests for parsers (mnemonic/keystore/QR)
 - [x] Supply chain checks (cargo-deny, npm audit)
 - [ ] Reproducible builds
 

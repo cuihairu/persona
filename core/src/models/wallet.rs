@@ -591,8 +591,8 @@ impl CryptoWallet {
 
         // Security level contribution
         match self.security_level {
-            WalletSecurityLevel::Maximum => score += 30,
-            WalletSecurityLevel::High => score += 20,
+            WalletSecurityLevel::Maximum => score += 35,
+            WalletSecurityLevel::High => score += 25,
             WalletSecurityLevel::Medium => score += 10,
             WalletSecurityLevel::Low => score -= 10,
         }
@@ -641,7 +641,12 @@ impl CryptoWallet {
             return Err("Watch-only wallet must have extended public key".to_string());
         }
 
-        if let WalletType::MultiSignature { required_signatures, total_signers, .. } = &self.wallet_type {
+        if let WalletType::MultiSignature {
+            required_signatures,
+            total_signers,
+            ..
+        } = &self.wallet_type
+        {
             if required_signatures > total_signers {
                 return Err("Required signatures cannot exceed total signers".to_string());
             }

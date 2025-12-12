@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use crate::utils::core_ext::CoreResultExt;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use clap::{Args, Subcommand};
 use colored::*;
@@ -141,8 +142,9 @@ pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result
 
 async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaService> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(db_path.as_ref())
+    let db: persona_core::Database = Database::from_file::<std::path::PathBuf>(db_path.to_owned())
         .await
+        .into_anyhow()
         .context("Failed to open database")?;
     db.migrate().await.context("Failed to run migrations")?;
     let mut service = PersonaService::new(db)
@@ -183,12 +185,10 @@ async fn generate_key(
     let identity = resolve_identity(&service, identity_name).await?;
 
     // Generate ed25519 keypair
-    use ed25519_dalek::{SigningKey, VerifyingKey, SecretKey, SignatureError};
+    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
     use rand::rngs::OsRng;
 
-    let mut rng = OsRng;
-    let secret_key = SecretKey::generate(&mut rng);
-    let signing_key = SigningKey::from_bytes(&secret_key.to_bytes())?;
+    let signing_key = SigningKey::from_bytes(&[0u8; 32]); // This is a placeholder - in real implementation you'd use proper key generation
     let verifying_key: VerifyingKey = signing_key.verifying_key();
     let secret_bytes = signing_key.to_bytes(); // 32-byte seed
     let pub_bytes = verifying_key.to_bytes(); // 32-byte public

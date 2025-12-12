@@ -797,6 +797,29 @@ impl AuditLogRepository {
         Self { db }
     }
 
+    /// Detach audit logs from an identity before deleting the identity.
+    ///
+    /// SQLite enforces the `audit_logs.identity_id -> identities.id` foreign key, and we want to
+    /// keep audit records even after an identity is removed.
+    pub async fn clear_identity_reference(&self, identity_id: &Uuid) -> Result<u64> {
+        let res = sqlx::query("UPDATE audit_logs SET identity_id = NULL WHERE identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(self.db.pool())
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(res.rows_affected())
+    }
+
+    /// Detach audit logs from a credential before deleting the credential.
+    pub async fn clear_credential_reference(&self, credential_id: &Uuid) -> Result<u64> {
+        let res = sqlx::query("UPDATE audit_logs SET credential_id = NULL WHERE credential_id = ?")
+            .bind(credential_id.to_string())
+            .execute(self.db.pool())
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(res.rows_affected())
+    }
+
     /// Find audit logs by user ID
     pub async fn find_by_user(&self, user_id: &str) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(

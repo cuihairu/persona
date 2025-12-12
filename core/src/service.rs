@@ -152,7 +152,7 @@ impl PersonaService {
             *self.current_session_id.write().await = Some(session_id.clone());
 
             // Add session to auto-lock manager
-            self.auto_lock_manager.add_session(session).await?;
+            self.auto_lock_manager.add_session(session).await.map_err(|e| anyhow::anyhow!(e))?;
             self.auto_lock_manager.set_current_user(user_id).await;
         }
 
@@ -245,7 +245,7 @@ impl PersonaService {
         };
 
         if let Some(session_id) = session_id_opt {
-            self.auto_lock_manager.lock_session(&session_id).await?;
+            self.auto_lock_manager.lock_session(&session_id).await.map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -260,7 +260,10 @@ impl PersonaService {
         if let Some(session_id) = session_id_opt {
             !self.auto_lock_manager.is_session_valid(&session_id).await
         } else {
-            true // No session = locked
+            // Legacy/bootstrapping flows can unlock the service without creating a session.
+            // In that case we treat the service as "not auto-locked" and rely on the
+            // in-memory `auto_lock_timeout` + `last_activity` checks.
+            false
         }
     }
 
@@ -272,7 +275,7 @@ impl PersonaService {
         };
 
         if let Some(session_id) = session_id_opt {
-            self.auto_lock_manager.unlock_session(&session_id).await?;
+            self.auto_lock_manager.unlock_session(&session_id).await.map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -303,7 +306,7 @@ impl PersonaService {
         };
 
         if let Some(session_id) = session_id_opt {
-            self.auto_lock_manager.update_activity(&session_id).await?;
+            self.auto_lock_manager.update_activity(&session_id).await.map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -318,7 +321,7 @@ impl PersonaService {
         if let Some(session_id) = session_id_opt {
             self.auto_lock_manager
                 .update_sensitive_activity(&session_id)
-                .await?;
+                .await.map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -339,8 +342,31 @@ impl PersonaService {
     }
 
     /// Whether re-auth is required for a sensitive operation based on inactivity.
-    pub fn needs_reauth(&self) -> bool {
-        !self.is_unlocked()
+    pub async fn needs_reauth(&self) -> bool {
+        let session_id_opt = {
+            let current_session_id = self.current_session_id.read().await;
+            current_session_id.clone()
+        };
+
+        if let Some(session_id) = session_id_opt {
+            self.auto_lock_manager
+                .requires_sensitive_auth(&session_id)
+                .await
+        } else {
+            false
+        }
+    }
+
+    /// Ensure sensitive operations can proceed without re-authentication.
+    async fn ensure_sensitive_operation_allowed(&self) -> Result<()> {
+        self.ensure_unlocked_with_auto_lock().await?;
+        if self.needs_reauth().await {
+            return Err(PersonaError::AuthenticationFailed(
+                "Re-authentication required for sensitive operation".to_string(),
+            )
+            .into());
+        }
+        Ok(())
     }
 
     /// Create a new identity
@@ -453,6 +479,9 @@ impl PersonaService {
     pub async fn delete_identity(&self, id: &Uuid) -> Result<bool> {
         self.ensure_unlocked()?;
         self.touch_activity();
+        // Audit logs reference identities via a strict FK; detach them first so the identity can
+        // be deleted while preserving the audit trail.
+        let _ = self.audit_repo.clear_identity_reference(id).await?;
         let ok = self.identity_repo.delete(id).await?;
         self.log_audit(
             AuditAction::IdentityDeleted,
@@ -531,9 +560,8 @@ impl PersonaService {
         &self,
         credential_id: &Uuid,
     ) -> Result<Option<CredentialData>> {
-        self.ensure_unlocked_with_auto_lock().await?;
+        self.ensure_sensitive_operation_allowed().await?;
         self.touch_activity();
-        self.update_sensitive_auto_lock_activity().await?;
 
         let master_encryption = self.get_master_encryption_service()?;
         let hierarchy = KeyHierarchy::new(master_encryption);
@@ -579,6 +607,7 @@ impl PersonaService {
         )
         .await;
 
+        self.update_sensitive_auto_lock_activity().await?;
         Ok(Some(credential_data))
     }
 
@@ -603,13 +632,21 @@ impl PersonaService {
     pub async fn delete_credential(&self, id: &Uuid) -> Result<bool> {
         self.ensure_unlocked()?;
         self.touch_activity();
+        // Fetch the credential up-front so we can detach audit logs and keep useful context.
+        let existing = self.credential_repo.find_by_id(id).await?;
+        if existing.is_none() {
+            return Ok(false);
+        }
+        let existing = existing.unwrap();
+
+        let _ = self.audit_repo.clear_credential_reference(id).await?;
         let ok = self.credential_repo.delete(id).await?;
         self.log_audit(
             AuditAction::CredentialDeleted,
             ResourceType::Credential,
             ok,
             Some(*id),
-            None,
+            Some(existing.identity_id),
             None,
         )
         .await;
@@ -1055,17 +1092,35 @@ impl PersonaService {
         identity_id: Option<Uuid>,
         error: Option<String>,
     ) {
+        let action_kind = action.clone();
         let mut log = AuditLog::new(action, resource_type, success)
             .with_user_id(self.current_user.map(|u| u.to_string()))
             .with_error_message(error);
         if let Some(id) = identity_or_cred {
-            // If identity_id provided, treat id as credential_id; else treat id as identity_id
-            if let Some(identity_id_val) = identity_id {
-                log = log
-                    .with_identity_id(Some(identity_id_val))
-                    .with_credential_id(Some(id));
-            } else {
-                log = log.with_identity_id(Some(id));
+            // Always store the raw resource identifier so deletion events can still be recorded
+            // without violating foreign key constraints.
+            log = log.with_resource_id(Some(id.to_string()));
+
+            match action_kind {
+                AuditAction::IdentityDeleted => {
+                    // Identity no longer exists; don't set FK-backed fields.
+                }
+                AuditAction::CredentialDeleted => {
+                    // Credential no longer exists; keep identity context if available.
+                    if let Some(identity_id_val) = identity_id {
+                        log = log.with_identity_id(Some(identity_id_val));
+                    }
+                }
+                _ => {
+                    // If identity_id provided, treat `id` as credential_id; else treat `id` as identity_id.
+                    if let Some(identity_id_val) = identity_id {
+                        log = log
+                            .with_identity_id(Some(identity_id_val))
+                            .with_credential_id(Some(id));
+                    } else {
+                        log = log.with_identity_id(Some(id));
+                    }
+                }
             }
         }
         let _ = self.audit_repo.create(&log).await;

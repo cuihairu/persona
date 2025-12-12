@@ -13,11 +13,15 @@ export const usePersonaService = () => {
     credentials,
     isLoading,
     error,
+    sshAgentStatus,
+    sshKeys,
     setUnlocked,
     setInitialized,
     setIdentities,
     setCurrentIdentity,
     setCredentials,
+    setSshAgentStatus,
+    setSshKeys,
     setLoading,
     setError,
     clearError,
@@ -224,6 +228,60 @@ export const usePersonaService = () => {
     }
   };
 
+  const refreshSshAgentStatus = async () => {
+    try {
+      const response = await personaAPI.getSshAgentStatus();
+      if (response.success) {
+        setSshAgentStatus(response.data ?? null);
+      } else {
+        toast.error(response.error || 'Failed to get SSH agent status');
+      }
+    } catch (err) {
+      toast.error('Failed to get SSH agent status');
+    }
+  };
+
+  const startSshAgent = async (masterPassword?: string) => {
+    try {
+      const response = await personaAPI.startSshAgent(masterPassword);
+      if (response.success) {
+        setSshAgentStatus(response.data ?? null);
+        toast.success('SSH agent started');
+      } else {
+        toast.error(response.error || 'Failed to start SSH agent');
+      }
+    } catch (err) {
+      toast.error('Failed to start SSH agent');
+    }
+  };
+
+  const stopSshAgent = async () => {
+    try {
+      const response = await personaAPI.stopSshAgent();
+      if (response.success) {
+        setSshAgentStatus(null);
+        toast.success('SSH agent stopped');
+      } else {
+        toast.error(response.error || 'Failed to stop SSH agent');
+      }
+    } catch (err) {
+      toast.error('Failed to stop SSH agent');
+    }
+  };
+
+  const loadSshKeys = async () => {
+    try {
+      const response = await personaAPI.getSshKeys();
+      if (response.success && response.data) {
+        setSshKeys(response.data);
+      } else {
+        toast.error(response.error || 'Failed to load SSH keys');
+      }
+    } catch (err) {
+      toast.error('Failed to load SSH keys');
+    }
+  };
+
   return {
     // State
     isUnlocked,
@@ -233,6 +291,8 @@ export const usePersonaService = () => {
     credentials,
     isLoading,
     error,
+    sshAgentStatus,
+    sshKeys,
 
     // Actions
     initializeService,
@@ -245,6 +305,10 @@ export const usePersonaService = () => {
     searchCredentials,
     generatePassword,
     getCredentialData,
+    refreshSshAgentStatus,
+    startSshAgent,
+    stopSshAgent,
+    loadSshKeys,
     clearError,
   };
 };

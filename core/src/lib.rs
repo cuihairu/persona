@@ -17,19 +17,19 @@ pub use crypto::*;
 pub use logging::*;
 
 // Selective re-exports from models to avoid conflicts
-pub use models::identity::*;
-pub use models::credential::*;
-pub use models::workspace::*;
 pub use models::audit_log::*;
 pub use models::auto_lock_policy::*;
 pub use models::change_history::*;
+pub use models::credential::*;
+pub use models::identity::*;
+pub use models::workspace::*;
 
 // Selective re-exports from storage to avoid conflicts
-pub use storage::database::*;
-pub use storage::user_auth::*;
 pub use storage::blob::*;
-pub use storage::repository::*;
+pub use storage::database::*;
 pub use storage::filesystem::*;
+pub use storage::repository::*;
+pub use storage::user_auth::*;
 
 pub use password::*;
 pub use service::*;
@@ -98,4 +98,3 @@ impl From<std::io::Error> for PersonaError {
         PersonaError::Io(err.to_string())
     }
 }
-

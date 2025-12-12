@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Identity, Credential } from '@/types';
+import type { Identity, Credential, SshAgentStatus, SshAgentKey } from '@/types';
 
 interface AppState {
   // Authentication state
@@ -10,6 +10,8 @@ interface AppState {
   identities: Identity[];
   currentIdentity: Identity | null;
   credentials: Credential[];
+  sshAgentStatus: SshAgentStatus | null;
+  sshKeys: SshAgentKey[];
 
   // UI state
   isLoading: boolean;
@@ -21,6 +23,8 @@ interface AppState {
   setIdentities: (identities: Identity[]) => void;
   setCurrentIdentity: (identity: Identity | null) => void;
   setCredentials: (credentials: Credential[]) => void;
+  setSshAgentStatus: (status: SshAgentStatus | null) => void;
+  setSshKeys: (keys: SshAgentKey[]) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
@@ -33,6 +37,8 @@ export const useAppStore = create<AppState>((set) => ({
   identities: [],
   currentIdentity: null,
   credentials: [],
+  sshAgentStatus: null,
+  sshKeys: [],
   isLoading: false,
   error: null,
 
@@ -42,6 +48,8 @@ export const useAppStore = create<AppState>((set) => ({
   setIdentities: (identities) => set({ identities }),
   setCurrentIdentity: (identity) => set({ currentIdentity: identity }),
   setCredentials: (credentials) => set({ credentials }),
+  setSshAgentStatus: (status) => set({ sshAgentStatus: status }),
+  setSshKeys: (keys) => set({ sshKeys: keys }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),

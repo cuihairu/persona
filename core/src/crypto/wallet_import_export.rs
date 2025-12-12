@@ -150,10 +150,7 @@ pub fn import_from_private_key(
 }
 
 /// Export wallet mnemonic (requires password)
-pub fn export_mnemonic(
-    wallet: &CryptoWallet,
-    password: &str,
-) -> PersonaResult<String> {
+pub fn export_mnemonic(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
     let encrypted_mnemonic_bytes = wallet
         .encrypted_mnemonic
         .as_ref()
@@ -166,10 +163,7 @@ pub fn export_mnemonic(
 }
 
 /// Export wallet private key (requires password)
-pub fn export_private_key(
-    wallet: &CryptoWallet,
-    password: &str,
-) -> PersonaResult<String> {
+pub fn export_private_key(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
     let encrypted_key_bytes = &wallet.encrypted_private_key;
 
     let encrypted_key: EncryptedWalletKey = serde_json::from_slice(encrypted_key_bytes)
@@ -204,11 +198,7 @@ pub fn export_to_json(
         derivation_path: wallet.derivation_path.clone(),
         mnemonic: None,
         private_keys: None,
-        addresses: wallet
-            .addresses
-            .iter()
-            .map(|a| a.address.clone())
-            .collect(),
+        addresses: wallet.addresses.iter().map(|a| a.address.clone()).collect(),
         created_at: wallet.created_at.to_rfc3339(),
     };
 
@@ -388,9 +378,6 @@ mod tests {
             parse_import_format("private_key").unwrap(),
             ImportFormat::PrivateKey
         );
-        assert_eq!(
-            parse_export_format("json").unwrap(),
-            ExportFormat::Json
-        );
+        assert_eq!(parse_export_format("json").unwrap(), ExportFormat::Json);
     }
 }

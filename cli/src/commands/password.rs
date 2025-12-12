@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use anyhow::Result;
-use clap::{value_parser, Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use persona_core::{PasswordGenerator, PasswordGeneratorOptions};
 
@@ -22,7 +22,7 @@ pub enum PasswordCommand {
 #[derive(Args, Clone)]
 pub struct GenerateArgs {
     /// Total password length (characters)
-    #[arg(short, long, default_value = "16", value_parser = clap::value_parser!(usize).range(6..=128))]
+    #[arg(short, long, default_value = "16")]
     pub length: usize,
 
     /// Character sets to include (repeat flag or comma separated)

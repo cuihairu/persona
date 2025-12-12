@@ -1,4 +1,4 @@
-use crate::config::CliConfig;
+use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use crossterm::{
@@ -54,8 +54,9 @@ pub async fn execute(args: TuiArgs, config: &CliConfig) -> Result<()> {
 
 async fn init_data_provider(config: &CliConfig) -> Result<DataProvider> {
     let db_path = config.get_database_path();
-    let db = Database::from_file(db_path.as_ref())
+    let db: persona_core::Database = Database::from_file::<std::path::PathBuf>(db_path.to_owned())
         .await
+        .into_anyhow()
         .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
     db.migrate()
         .await
@@ -456,11 +457,7 @@ fn render_ui(f: &mut ratatui::Frame, app: &AppState) {
     f.render_widget(status, layout[2]);
 }
 
-fn render_identity_list(
-    f: &mut ratatui::Frame,
-    area: ratatui::prelude::Rect,
-    app: &AppState,
-) {
+fn render_identity_list(f: &mut ratatui::Frame, area: ratatui::prelude::Rect, app: &AppState) {
     let items: Vec<ListItem> = if app.identities.is_empty() {
         vec![ListItem::new("No identities found")]
     } else {
@@ -503,11 +500,7 @@ fn render_identity_list(
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn render_credentials(
-    f: &mut ratatui::Frame,
-    area: ratatui::prelude::Rect,
-    app: &AppState,
-) {
+fn render_credentials(f: &mut ratatui::Frame, area: ratatui::prelude::Rect, app: &AppState) {
     let header = Row::new(vec![
         Cell::from("Name"),
         Cell::from("Type"),
@@ -536,15 +529,18 @@ fn render_credentials(
             .collect()
     };
 
-    let table = Table::new(rows, &[
+    let table = Table::new(
+        rows,
+        &[
             Constraint::Percentage(30),
             Constraint::Percentage(15),
             Constraint::Percentage(25),
             Constraint::Percentage(15),
             Constraint::Percentage(15),
-        ])
-        .header(header)
-        .block(Block::default().title("Credentials").borders(Borders::ALL));
+        ],
+    )
+    .header(header)
+    .block(Block::default().title("Credentials").borders(Borders::ALL));
 
     f.render_widget(table, area);
 }

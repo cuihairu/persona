@@ -1,6 +1,6 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
+use argon2::password_hash::{PasswordHash, PasswordVerifier, SaltString};
 use argon2::{Argon2, PasswordHasher};
-use argon2::password_hash::{SaltString, PasswordHash, PasswordVerifier};
 use rand::{rngs::OsRng, RngCore};
 use zeroize::Zeroize;
 

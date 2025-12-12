@@ -3,7 +3,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
-    auth::session::{SessionManager, AutoLockConfig},
+    auth::session::{AutoLockConfig, SessionManager},
     models::auto_lock_policy::{
         AutoLockPolicy, AutoLockSecurityLevel, AutoLockUseCase, PolicyConfiguration,
     },
@@ -240,7 +240,7 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
                     inactivity: format!("{}s", p.inactivity_timeout_secs),
                     max_sessions: p.max_concurrent_sessions.to_string(),
                     active: if p.is_active { "✓" } else { "✗" }.to_string(),
-                    default: "".to_string(), // TODO: Check if it's default
+                    default: if p.is_default { "★" } else { "" }.to_string(),
                 })
                 .collect();
 
@@ -586,7 +586,10 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
 
                 // Show default policy if exists
                 if let Some(default_policy) = repo.get_default_policy().await.into_anyhow()? {
-                    formatter.print_info(&format!("  Default Policy: {} ({})", default_policy.name, default_policy.security_level));
+                    formatter.print_info(&format!(
+                        "  Default Policy: {} ({})",
+                        default_policy.name, default_policy.security_level
+                    ));
                 } else {
                     formatter.print_warning("  No default policy set");
                 }
@@ -613,10 +616,22 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
             // Show auto-lock configuration
             let config = AutoLockConfig::default();
             formatter.print_info("🔧 Current Auto-Lock Configuration:");
-            formatter.print_info(&format!("  Inactivity Timeout: {}s", config.inactivity_timeout_secs));
-            formatter.print_info(&format!("  Absolute Timeout: {}s", config.absolute_timeout_secs));
-            formatter.print_info(&format!("  Sensitive Op Timeout: {}s", config.sensitive_operation_timeout_secs));
-            formatter.print_info(&format!("  Require Re-auth for Sensitive Ops: {}", config.require_reauth_sensitive));
+            formatter.print_info(&format!(
+                "  Inactivity Timeout: {}s",
+                config.inactivity_timeout_secs
+            ));
+            formatter.print_info(&format!(
+                "  Absolute Timeout: {}s",
+                config.absolute_timeout_secs
+            ));
+            formatter.print_info(&format!(
+                "  Sensitive Op Timeout: {}s",
+                config.sensitive_operation_timeout_secs
+            ));
+            formatter.print_info(&format!(
+                "  Require Re-auth for Sensitive Ops: {}",
+                config.require_reauth_sensitive
+            ));
         }
 
         AutoLockCommand::Lock { session_id } => {
@@ -638,7 +653,9 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
                 formatter.print_info("🔒 Manual Session Lock");
                 formatter.print_info("To lock a specific session, provide --session-id");
                 formatter.print_info("Example: persona auto-lock lock --session-id <session-uuid>");
-                formatter.print_info("Note: In a production setup, this would lock your current session");
+                formatter.print_info(
+                    "Note: In a production setup, this would lock your current session",
+                );
             }
         }
 
@@ -647,11 +664,13 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
 
             match session_manager.unlock_session(&session_id).await {
                 Ok(()) => {
-                    formatter.print_success(&format!("🔓 Session {} unlocked successfully", session_id));
+                    formatter
+                        .print_success(&format!("🔓 Session {} unlocked successfully", session_id));
                     formatter.print_info("Session timers have been reset and activity updated");
                 }
                 Err(e) => {
-                    formatter.print_error(&format!("Failed to unlock session {}: {}", session_id, e));
+                    formatter
+                        .print_error(&format!("Failed to unlock session {}: {}", session_id, e));
                     formatter.print_info("Make sure the session ID is correct and exists");
                 }
             }

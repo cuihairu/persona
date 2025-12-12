@@ -1,8 +1,13 @@
 use crate::types::*;
 use persona_core::*;
+use persona_core::models::CredentialType;
 use tauri::{command, State};
+use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 use std::str::FromStr;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::fs;
 
 /// Initialize the Persona service with master password
 #[command]
@@ -429,4 +434,207 @@ pub async fn delete_credential(
         }
         None => Ok(ApiResponse::error("Service not initialized".to_string())),
     }
+}
+
+/// Get SSH agent runtime status
+#[command]
+pub async fn get_ssh_agent_status(
+    state: State<'_, AppState>,
+) -> Result<ApiResponse<SshAgentStatus>, String> {
+    let running = {
+        let guard = state.agent_handle.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|handle| !handle.is_finished())
+            .unwrap_or(false)
+    };
+    let status = read_agent_status(running);
+    Ok(ApiResponse::success(status))
+}
+
+/// Start the embedded SSH agent
+#[command]
+pub async fn start_ssh_agent(
+    request: StartAgentRequest,
+    state: State<'_, AppState>,
+) -> Result<ApiResponse<SshAgentStatus>, String> {
+    let db_path = {
+        let guard = state.db_path.lock().unwrap();
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    {
+        let guard = state.agent_handle.lock().unwrap();
+        if let Some(handle) = guard.as_ref() {
+            if !handle.is_finished() {
+                drop(guard);
+                return get_ssh_agent_status(state).await;
+            }
+        }
+    }
+
+    let mut handle_guard = state.agent_handle.lock().unwrap();
+    let password = request.master_password.clone();
+    let db_path_clone = db_path.clone();
+    let state_dir = agent_state_dir().to_string_lossy().to_string();
+    let handle = tokio::spawn(async move {
+        if let Some(pass) = password {
+            std::env::set_var("PERSONA_MASTER_PASSWORD", pass);
+        } else {
+            std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        }
+        std::env::set_var("PERSONA_DB_PATH", &db_path_clone);
+        std::env::set_var("PERSONA_AGENT_STATE_DIR", &state_dir);
+        if let Err(err) = persona_ssh_agent::run_agent().await {
+            eprintln!("SSH agent exited: {}", err);
+        }
+        let _ = std::env::remove_var("PERSONA_AGENT_STATE_DIR");
+    });
+    *handle_guard = Some(handle);
+    drop(handle_guard);
+
+    sleep(Duration::from_millis(400)).await;
+    let status = read_agent_status(true);
+    Ok(ApiResponse::success(status))
+}
+
+/// Stop the embedded SSH agent
+#[command]
+pub async fn stop_ssh_agent(state: State<'_, AppState>) -> Result<ApiResponse<bool>, String> {
+    if let Some(handle) = state.agent_handle.lock().unwrap().take() {
+        handle.abort();
+    }
+    cleanup_agent_state_files();
+    Ok(ApiResponse::success(true))
+}
+
+/// List stored SSH key credentials
+#[command]
+pub async fn get_ssh_keys(
+    state: State<'_, AppState>,
+) -> Result<ApiResponse<Vec<SshKeySummary>>, String> {
+    let service_guard = state.service.lock().unwrap();
+    let service = match service_guard.as_ref() {
+        Some(service) => service,
+        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+    };
+
+    let identities = service
+        .get_identities()
+        .await
+        .map_err(|e| format!("Failed to load identities: {}", e))?;
+    let mut identity_map: HashMap<Uuid, String> = HashMap::new();
+    for identity in &identities {
+        identity_map.insert(identity.id, identity.name.clone());
+    }
+
+    let mut summaries = Vec::new();
+    for identity in identities {
+        let creds = service
+            .get_credentials_for_identity(&identity.id)
+            .await
+            .map_err(|e| format!("Failed to load credentials: {}", e))?;
+        for credential in creds {
+            if credential.credential_type == CredentialType::SshKey {
+                summaries.push(SshKeySummary {
+                    id: credential.id.to_string(),
+                    identity_id: credential.identity_id.to_string(),
+                    identity_name: identity_map
+                        .get(&credential.identity_id)
+                        .cloned()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    name: credential.name,
+                    tags: credential.tags,
+                    created_at: credential.created_at.to_rfc3339(),
+                    updated_at: credential.updated_at.to_rfc3339(),
+                });
+            }
+        }
+    }
+
+    Ok(ApiResponse::success(summaries))
+}
+
+fn agent_state_dir() -> PathBuf {
+    std::env::var("PERSONA_AGENT_STATE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".persona")
+        })
+}
+
+fn cleanup_agent_state_files() {
+    let dir = agent_state_dir();
+    for name in &["ssh-agent.sock", "ssh-agent.pid"] {
+        let path = dir.join(name);
+        if path.exists() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+fn read_agent_status(running_hint: bool) -> SshAgentStatus {
+    let dir = agent_state_dir();
+    let sock_path = dir.join("ssh-agent.sock");
+    let pid_path = dir.join("ssh-agent.pid");
+    let socket_value = if sock_path.exists() {
+        fs::read_to_string(&sock_path).ok().map(|s| s.trim().to_string())
+    } else {
+        None
+    };
+    let pid_value = if pid_path.exists() {
+        fs::read_to_string(&pid_path)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+    } else {
+        None
+    };
+    let key_count = socket_value
+        .as_deref()
+        .and_then(|sock| query_agent_key_count(sock).ok());
+
+    SshAgentStatus {
+        running: running_hint || socket_value.is_some() || pid_value.is_some(),
+        socket_path: socket_value,
+        pid: pid_value,
+        key_count,
+        state_dir: dir.to_string_lossy().to_string(),
+    }
+}
+
+#[cfg(unix)]
+fn query_agent_key_count(sock_path: &str) -> Result<usize, String> {
+    use byteorder::{BigEndian, ByteOrder};
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixStream;
+
+    let mut stream = UnixStream::connect(sock_path)
+        .map_err(|e| format!("Failed to connect to agent: {}", e))?;
+    // request identities: len=1 payload 11
+    let mut pkt = vec![0u8; 5];
+    BigEndian::write_u32(&mut pkt[0..4], 1);
+    pkt[4] = 11;
+    stream.write_all(&pkt).map_err(|e| e.to_string())?;
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).map_err(|e| e.to_string())?;
+    let resp_len = BigEndian::read_u32(&len_buf) as usize;
+    let mut resp = vec![0u8; resp_len];
+    stream.read_exact(&mut resp).map_err(|e| e.to_string())?;
+    if resp.is_empty() || resp[0] != 12 {
+        return Err("Unexpected agent response".to_string());
+    }
+    if resp.len() < 5 {
+        return Err("Malformed agent response".to_string());
+    }
+    let count = BigEndian::read_u32(&resp[1..5]) as usize;
+    Ok(count)
+}
+
+#[cfg(not(unix))]
+fn query_agent_key_count(_sock_path: &str) -> Result<usize, String> {
+    Err("Agent key count not supported on this platform".to_string())
 }

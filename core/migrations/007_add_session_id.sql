@@ -7,5 +7,4 @@ ADD COLUMN session_id TEXT;
 -- Create index for session_id to improve query performance
 CREATE INDEX idx_audit_logs_session_id ON audit_logs(session_id);
 
--- Add comment for documentation
-COMMENT ON COLUMN audit_logs.session_id IS 'Session identifier for auto-lock tracking';
+-- COMMENT ON statements are not supported in SQLite; documentation is kept in schema files.

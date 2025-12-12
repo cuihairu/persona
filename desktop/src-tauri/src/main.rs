@@ -12,6 +12,7 @@ fn main() {
         .manage(AppState {
             service: Mutex::new(None),
             db_path: Mutex::new(None),
+            agent_handle: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             commands::init_service,
@@ -28,6 +29,10 @@ fn main() {
             commands::get_statistics,
             commands::toggle_credential_favorite,
             commands::delete_credential,
+            commands::get_ssh_agent_status,
+            commands::start_ssh_agent,
+            commands::stop_ssh_agent,
+            commands::get_ssh_keys,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

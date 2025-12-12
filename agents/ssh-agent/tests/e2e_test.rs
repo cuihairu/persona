@@ -188,11 +188,11 @@ fn test_agent_request_identities() {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
 
-    let sock_path = std::env::var("SSH_AUTH_SOCK")
-        .expect("SSH_AUTH_SOCK not set. Start agent first.");
+    let sock_path =
+        std::env::var("SSH_AUTH_SOCK").expect("SSH_AUTH_SOCK not set. Start agent first.");
 
-    let mut stream = UnixStream::connect(&sock_path)
-        .expect("Failed to connect to agent. Is it running?");
+    let mut stream =
+        UnixStream::connect(&sock_path).expect("Failed to connect to agent. Is it running?");
 
     // Send SSH_AGENTC_REQUEST_IDENTITIES (type 11)
     let mut request = Vec::new();
@@ -211,10 +211,7 @@ fn test_agent_request_identities() {
     stream.read_exact(&mut response).unwrap();
 
     // Verify response type
-    assert!(
-        !response.is_empty(),
-        "Response should not be empty"
-    );
+    assert!(!response.is_empty(), "Response should not be empty");
     assert_eq!(
         response[0], 12,
         "Response should be SSH_AGENT_IDENTITIES_ANSWER (12)"
@@ -240,8 +237,8 @@ fn test_ssh_github_connection() {
 
     use std::process::Command;
 
-    let sock_path = std::env::var("SSH_AUTH_SOCK")
-        .expect("SSH_AUTH_SOCK not set. Start agent first.");
+    let sock_path =
+        std::env::var("SSH_AUTH_SOCK").expect("SSH_AUTH_SOCK not set. Start agent first.");
 
     println!("Using agent at: {}", sock_path);
 
@@ -278,7 +275,9 @@ fn test_sign_request_format() {
 
     // Key blob
     let key_blob = encode_ssh_ed25519_public(&[0x42; 32]);
-    request.write_u32::<BigEndian>(key_blob.len() as u32).unwrap();
+    request
+        .write_u32::<BigEndian>(key_blob.len() as u32)
+        .unwrap();
     request.extend_from_slice(&key_blob);
 
     // Data to sign
@@ -346,9 +345,7 @@ mod unix_e2e {
         server_std
             .set_nonblocking(true)
             .expect("server nonblocking");
-        client
-            .set_nonblocking(false)
-            .expect("client blocking");
+        client.set_nonblocking(false).expect("client blocking");
         let mut agent_clone = agent.clone_shallow();
         let agent_thread = thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -358,8 +355,7 @@ mod unix_e2e {
                 .build()
                 .expect("agent runtime");
             runtime.block_on(async move {
-                let server_stream =
-                    UnixStream::from_std(server_std).expect("to tokio stream");
+                let server_stream = UnixStream::from_std(server_std).expect("to tokio stream");
                 handle_connection(&mut agent_clone, AgentStream::Unix(server_stream))
                     .await
                     .expect("handle connection");
@@ -434,9 +430,7 @@ mod unix_e2e {
 
     fn verify_signature(signature: &[u8], key_bytes: &[u8; 32], data: &[u8]) {
         let verifying_key = VerifyingKey::from_bytes(key_bytes).expect("verifying key");
-        let sig_array: [u8; 64] = signature
-            .try_into()
-            .expect("signature must be 64 bytes");
+        let sig_array: [u8; 64] = signature.try_into().expect("signature must be 64 bytes");
         let sig = Signature::from_bytes(&sig_array);
         verifying_key
             .verify(data, &sig)

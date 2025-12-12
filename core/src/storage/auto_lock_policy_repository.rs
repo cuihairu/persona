@@ -28,8 +28,8 @@ impl AutoLockPolicyRepository {
                 sensitive_operation_timeout_secs, max_concurrent_sessions,
                 enable_warnings, warning_time_secs, force_lock_sensitive,
                 activity_grace_period_secs, background_check_interval_secs,
-                metadata, is_active, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                metadata, is_active, is_default, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(policy.id.to_string())
@@ -47,6 +47,7 @@ impl AutoLockPolicyRepository {
         .bind(policy.background_check_interval_secs as i64)
         .bind(serde_json::to_string(&policy.metadata)?)
         .bind(policy.is_active)
+        .bind(policy.is_default)
         .bind(policy.created_at.to_rfc3339())
         .bind(policy.updated_at.to_rfc3339())
         .execute(&mut *tx)
@@ -73,7 +74,8 @@ impl AutoLockPolicyRepository {
                 absolute_timeout_secs = ?, sensitive_operation_timeout_secs = ?,
                 max_concurrent_sessions = ?, enable_warnings = ?, warning_time_secs = ?,
                 force_lock_sensitive = ?, activity_grace_period_secs = ?,
-                background_check_interval_secs = ?, metadata = ?, is_active = ?, updated_at = ?
+                background_check_interval_secs = ?, metadata = ?, is_active = ?,
+                is_default = ?, updated_at = ?
             WHERE id = ?
             "#,
         )
@@ -91,6 +93,7 @@ impl AutoLockPolicyRepository {
         .bind(policy.background_check_interval_secs as i64)
         .bind(serde_json::to_string(&policy.metadata)?)
         .bind(policy.is_active)
+        .bind(policy.is_default)
         .bind(updated_at.to_rfc3339())
         .bind(policy.id.to_string())
         .execute(self.db.pool())
@@ -294,6 +297,7 @@ impl AutoLockPolicyRepository {
                 as u64,
             metadata,
             is_active: row.get("is_active"),
+            is_default: row.get("is_default"),
             created_at,
             updated_at,
         })

@@ -11,7 +11,7 @@ use persona_core::RedactedLoggerBuilder;
 
 #[derive(Parser)]
 #[command(name = "persona")]
-#[command(about = "A digital identity management CLI tool")]
+#[command(about = "Master your digital identity. Switch freely with one click.")]
 #[command(version = "0.1.0")]
 struct Cli {
     #[command(subcommand)]
@@ -87,10 +87,29 @@ async fn main() -> Result<()> {
     // Initialize logging
     init_logging(cli.verbose)?;
 
-    // Load configuration
-    let mut config = CliConfig::load(cli.config.as_deref())?;
-    // Try to merge workspace config if present
-    let _ = config.load_workspace_config();
+    // Load configuration.
+    //
+    // Workspace commands are intentionally "local by default": they require a
+    // `config.toml` in the current working directory (or an explicit `--config`)
+    // so tests and automation don't accidentally operate on a user's global
+    // `~/.persona` workspace.
+    let requires_workspace = command_requires_workspace(&cli.command);
+    let config = if requires_workspace {
+        let config_path = match cli.config.as_deref() {
+            Some(p) => p.to_path_buf(),
+            None => std::env::current_dir()?.join("config.toml"),
+        };
+        if !config_path.exists() {
+            anyhow::bail!(
+                "Workspace not initialized in this directory. Run `persona init` first (or pass --config)."
+            );
+        }
+        let mut cfg = CliConfig::load_file(&config_path)?;
+        cfg.apply_env_overrides();
+        cfg
+    } else {
+        CliConfig::load(cli.config.as_deref())?
+    };
 
     // Execute command
     match cli.command {
@@ -111,6 +130,14 @@ async fn main() -> Result<()> {
         Commands::Totp(args) => commands::totp::execute(args, &config).await,
         Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
         Commands::Wallet(args) => commands::wallet::handle_wallet(args, &config).await,
+    }
+}
+
+fn command_requires_workspace(cmd: &Commands) -> bool {
+    match cmd {
+        Commands::Init(_) => false,
+        Commands::Password(_) => false,
+        _ => true,
     }
 }
 
