@@ -18,6 +18,9 @@ const pairingCodeInput = document.getElementById('pairingCode') as HTMLInputElem
 const pairingHintEl = document.getElementById('pairingHint');
 const finalizePairingButton = document.getElementById('finalizePairing');
 
+const autofillStatusEl = document.getElementById('autofillStatus');
+const suggestionsEl = document.getElementById('suggestions');
+
 let currentAssessment: DomainAssessment | undefined;
 let currentHost: string | undefined;
 
@@ -236,4 +239,82 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshStoredStatus();
     refreshForms();
     refreshPairing().catch(() => null);
+    refreshAutofill().catch(() => null);
 });
+
+async function getActiveTabOrigin(): Promise<{ tabId: number; origin: string } | null> {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs?.[0];
+    if (!tab?.id || !tab.url) return null;
+    try {
+        const url = new URL(tab.url);
+        return { tabId: tab.id, origin: url.origin };
+    } catch {
+        return null;
+    }
+}
+
+function renderSuggestions(items: any[], tabId: number) {
+    if (!suggestionsEl) return;
+    suggestionsEl.textContent = '';
+
+    if (!items?.length) {
+        const empty = document.createElement('div');
+        empty.className = 'status';
+        empty.textContent = 'No suggestions for this page.';
+        suggestionsEl.appendChild(empty);
+        return;
+    }
+
+    for (const item of items) {
+        const kind = (item.credential_type ?? 'password') as string;
+        const row = document.createElement('div');
+        row.style.cssText =
+            'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:600;color:#111827;';
+        title.textContent = item.title ?? item.item_id;
+
+        const meta = document.createElement('div');
+        meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
+        meta.textContent = `${kind.toUpperCase()}${item.username_hint ? ` • ${item.username_hint}` : ''}`;
+
+        const btn = document.createElement('button');
+        btn.className = 'secondary';
+        btn.textContent = kind === 'totp' ? 'Fill 2FA code' : 'Fill login';
+        btn.addEventListener('click', async () => {
+            const messageType = kind === 'totp' ? 'persona_popup_fill_totp' : 'persona_popup_fill_password';
+            await chrome.tabs.sendMessage(tabId, { type: messageType, itemId: item.item_id }).catch(() => null);
+        });
+
+        row.appendChild(title);
+        row.appendChild(meta);
+        row.appendChild(btn);
+        suggestionsEl.appendChild(row);
+    }
+}
+
+async function refreshAutofill() {
+    if (!autofillStatusEl) return;
+    const active = await getActiveTabOrigin();
+    if (!active) {
+        autofillStatusEl.textContent = 'Open a normal web page to see suggestions.';
+        return;
+    }
+
+    autofillStatusEl.textContent = `Origin: ${active.origin}`;
+
+    const resp = await chrome.runtime
+        .sendMessage({ type: 'persona_get_suggestions', origin: active.origin })
+        .catch(() => null);
+
+    if (!resp?.success) {
+        autofillStatusEl.textContent = `Suggestions unavailable – ${resp?.error ?? 'bridge not connected'}`;
+        renderSuggestions([], active.tabId);
+        return;
+    }
+
+    const items = resp?.data?.items ?? resp?.data?.payload?.items ?? resp?.data?.items;
+    renderSuggestions(items ?? [], active.tabId);
+}
