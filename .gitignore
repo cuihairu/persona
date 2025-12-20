@@ -38,3 +38,8 @@ go.work.sum
 # .vscode/
 # Node
 node_modules/
+
+# Website (UmiJS)
+website/dist/
+website/src/.umi/
+website/src/.umi-production/

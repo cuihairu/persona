@@ -1,0 +1,143 @@
+.page {
+  background: #fff;
+}
+
+// Hero
+.hero {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  padding: 100px 24px 80px;
+  text-align: center;
+}
+
+.heroContent {
+  max-width: 800px;
+  margin: 0 auto;
+
+  h1 {
+    color: #fff !important;
+    font-size: 48px !important;
+    margin-bottom: 16px !important;
+  }
+}
+
+.heroDesc {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+// Quick Links
+.quickLinks {
+  padding: 60px 24px;
+  background: #f8fafc;
+  margin-top: -40px;
+  position: relative;
+}
+
+.sectionContent {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.quickCard {
+  text-align: center;
+  height: 100%;
+  border: 1px solid #e2e8f0;
+
+  &:hover {
+    border-color: #6366f1;
+    box-shadow: 0 10px 40px rgba(99, 102, 241, 0.15);
+  }
+
+  h4 {
+    margin-bottom: 8px !important;
+  }
+
+  p {
+    color: #64748b;
+    margin-bottom: 16px !important;
+  }
+}
+
+.quickIcon {
+  font-size: 40px;
+  color: #6366f1;
+  margin-bottom: 16px;
+}
+
+// Sections
+.sections {
+  padding: 80px 24px;
+}
+
+.sectionCard {
+  height: 100%;
+  border: 1px solid #e2e8f0;
+
+  h4 {
+    margin-bottom: 8px !important;
+  }
+}
+
+.sectionIcon {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+
+  :global(.anticon) {
+    font-size: 24px;
+    color: #6366f1;
+  }
+}
+
+.sectionDesc {
+  color: #64748b;
+  margin-bottom: 16px !important;
+}
+
+.sectionLinks {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+
+  li {
+    padding: 6px 0;
+
+    a {
+      color: #334155;
+      text-decoration: none;
+      transition: color 0.2s;
+
+      &:hover {
+        color: #6366f1;
+      }
+
+      &::before {
+        content: '→ ';
+        color: #94a3b8;
+      }
+    }
+  }
+}
+
+// Community
+.community {
+  padding: 80px 24px;
+  background: #f8fafc;
+  text-align: center;
+}
+
+.communityTitle {
+  margin-bottom: 16px !important;
+}
+
+.communityDesc {
+  color: #64748b;
+  font-size: 18px;
+  margin-bottom: 32px !important;
+}

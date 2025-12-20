@@ -1,0 +1,26 @@
+{
+  "name": "persona-website",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Persona - Your Digital Identity Guardian",
+  "scripts": {
+    "dev": "umi dev",
+    "build": "umi build",
+    "preview": "umi preview",
+    "postinstall": "umi setup",
+    "lint": "eslint --ext .js,.jsx,.ts,.tsx ./src"
+  },
+  "dependencies": {
+    "antd": "^5.22.0",
+    "@ant-design/icons": "^5.5.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "umi": "^4.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@umijs/plugins": "^4.6.0",
+    "typescript": "^5.0.0"
+  }
+}
