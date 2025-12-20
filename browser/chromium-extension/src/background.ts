@@ -318,10 +318,11 @@ async function handleRequestFill(
             };
         }
 
-        // For suspicious/unknown domains, log a warning
-        if (assessment.risk === 'suspicious' || assessment.risk === 'unknown') {
-            // In future: show confirmation dialog
-            console.warn('[Persona] Fill request for untrusted domain:', host, assessment.reasons);
+        if (assessment.risk === 'suspicious') {
+            return {
+                success: false,
+                error: `user_confirmation_required: domain flagged as suspicious (${assessment.reasons.join('; ') || host})`
+            };
         }
 
         const response = await requestFill(origin, itemId, userGesture);
@@ -354,6 +355,20 @@ async function handleGetTotp(
     userGesture = true
 ): Promise<AutofillResult<{ code: string; remaining_seconds: number; period: number }>> {
     try {
+        const policies = await getPolicies();
+        const host = new URL(origin).hostname;
+        const assessment = evaluateDomain(host, policies);
+
+        if (assessment.risk === 'blocked') {
+            return { success: false, error: 'Domain is blocked by policy' };
+        }
+        if (assessment.risk === 'suspicious') {
+            return {
+                success: false,
+                error: `user_confirmation_required: domain flagged as suspicious (${assessment.reasons.join('; ') || host})`
+            };
+        }
+
         const response = await getTotp(origin, itemId, userGesture);
 
         if (!response.ok) {
@@ -387,6 +402,20 @@ async function handleCopy(
     try {
         if (!origin) {
             return { success: false, error: 'Origin is required for copy requests' };
+        }
+
+        const policies = await getPolicies();
+        const host = new URL(origin).hostname;
+        const assessment = evaluateDomain(host, policies);
+
+        if (assessment.risk === 'blocked') {
+            return { success: false, error: 'Domain is blocked by policy' };
+        }
+        if (assessment.risk === 'suspicious') {
+            return {
+                success: false,
+                error: `user_confirmation_required: domain flagged as suspicious (${assessment.reasons.join('; ') || host})`
+            };
         }
 
         const response = await copyToClipboard(origin, itemId, field, userGesture);
