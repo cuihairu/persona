@@ -43,3 +43,7 @@ node_modules/
 website/dist/
 website/src/.umi/
 website/src/.umi-production/
+
+# Docs (mdBook output)
+docs/book/
+docs/dist/
