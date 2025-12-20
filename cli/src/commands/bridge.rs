@@ -354,6 +354,7 @@ async fn handle_request(
 
             // Open DB + unlock.
             let db = open_db(db_path).await?;
+            let active_identity_id = get_active_identity_id(&db).await;
             let mut service = PersonaService::new(db)
                 .await
                 .map_err(|e| anyhow!("failed to create service: {e}"))?;
@@ -375,6 +376,11 @@ async fn handle_request(
                 .get_credential(&item_id)
                 .await?
                 .ok_or_else(|| anyhow!("not_found"))?;
+            if let Some(active) = active_identity_id {
+                if cred.identity_id != active {
+                    return Err(anyhow!("wrong_identity: switch active identity to access this credential"));
+                }
+            }
             if cred.credential_type != CredentialType::Password {
                 return Err(anyhow!("unsupported_credential_type"));
             }
@@ -447,6 +453,7 @@ async fn handle_request(
                 .ok_or_else(|| anyhow!("locked: PERSONA_MASTER_PASSWORD not set"))?;
 
             let db = open_db(db_path).await?;
+            let active_identity_id = get_active_identity_id(&db).await;
             let mut service = PersonaService::new(db)
                 .await
                 .map_err(|e| anyhow!("failed to create service: {e}"))?;
@@ -462,6 +469,11 @@ async fn handle_request(
                 .get_credential(&item_id)
                 .await?
                 .ok_or_else(|| anyhow!("not_found"))?;
+            if let Some(active) = active_identity_id {
+                if cred.identity_id != active {
+                    return Err(anyhow!("wrong_identity: switch active identity to access this credential"));
+                }
+            }
             if cred.credential_type != CredentialType::TwoFactor {
                 return Err(anyhow!("unsupported_credential_type"));
             }
@@ -542,6 +554,7 @@ async fn handle_request(
                 .ok_or_else(|| anyhow!("locked: PERSONA_MASTER_PASSWORD not set"))?;
 
             let db = open_db(db_path).await?;
+            let active_identity_id = get_active_identity_id(&db).await;
             let mut service = PersonaService::new(db)
                 .await
                 .map_err(|e| anyhow!("failed to create service: {e}"))?;
@@ -556,6 +569,11 @@ async fn handle_request(
                 .get_credential(&item_id)
                 .await?
                 .ok_or_else(|| anyhow!("not_found"))?;
+            if let Some(active) = active_identity_id {
+                if cred.identity_id != active {
+                    return Err(anyhow!("wrong_identity: switch active identity to access this credential"));
+                }
+            }
 
             if !validate_origin_binding(&host, cred.url.as_deref()) {
                 warn!(
@@ -1070,8 +1088,12 @@ async fn compute_status(db_path: &PathBuf) -> Result<(bool, Option<String>)> {
 
 async fn get_credential_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec<SuggestionItem>> {
     let db = open_db(db_path).await?;
+    let active_identity_id = get_active_identity_id(&db).await;
     let repo = CredentialRepository::new(db);
-    let all = repo.find_all().await?;
+    let all = match active_identity_id {
+        Some(identity_id) => repo.find_by_identity(&identity_id).await?,
+        None => repo.find_all().await?,
+    };
 
     let mut out = Vec::new();
     for cred in all {
@@ -1114,6 +1136,14 @@ async fn get_credential_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec
     );
 
     Ok(out)
+}
+
+async fn get_active_identity_id(db: &Database) -> Option<uuid::Uuid> {
+    let repo = WorkspaceRepository::new(db.clone());
+    match repo.find_all().await {
+        Ok(mut rows) => rows.pop().and_then(|ws| ws.active_identity_id),
+        Err(_) => None,
+    }
 }
 
 /// Compute match strength between request host and credential URL.

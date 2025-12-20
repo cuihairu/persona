@@ -208,6 +208,8 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 
 根据当前页面 origin 获取匹配的凭证建议。
 
+> 备注：建议默认基于当前 workspace 的 `active_identity_id` 过滤（可通过 `persona switch` 切换）。
+
 **请求：**
 ```json
 {
@@ -426,6 +428,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 | `origin_mismatch` | Origin 不匹配 |
 | `origin_binding_required` | 条目未设置 URL，无法进行 Origin 绑定 |
 | `authentication_failed` | 认证失败 |
+| `wrong_identity` | 当前 active identity 不匹配 |
 | `user_confirmation_required` | 需要用户确认 |
 | `session_expired` | 会话已过期 |
 | `rate_limited` | 请求过于频繁 |
