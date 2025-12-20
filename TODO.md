@@ -103,7 +103,7 @@ Browser & Autofill (future)
   - [x] Policy integration: domain trust/blocked + confirm-on-unknown
   - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
 - [ ] Passkeys (WebAuthn) storage + autofill
-- [ ] Phishing protections; identity-based context switching
+- [x] Phishing protections; identity-based context switching
 
 Quality & Security
 - [ ] Threat model & periodic security review
