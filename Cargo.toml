@@ -13,7 +13,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Persona Team"]
 license = "MIT"
-repository = "https://github.com/your-username/persona"
+repository = "https://github.com/cuihairu/persona"
 description = "Master your digital identity. Switch freely with one click."
 
 [workspace.dependencies]

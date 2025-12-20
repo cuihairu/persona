@@ -28,8 +28,8 @@ copy-fonts = true
 google-analytics = ""
 site-url = "/persona/"
 cname = ""
-edit-url-template = "https://github.com/your-username/persona/edit/main/docs/{path}"
-git-repository-url = "https://github.com/your-username/persona"
+edit-url-template = "https://github.com/cuihairu/persona/edit/main/docs/{path}"
+git-repository-url = "https://github.com/cuihairu/persona"
 git-repository-icon = "fa-github"
 
 [output.html.fold]
