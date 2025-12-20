@@ -16,6 +16,14 @@ function init() {
             handleFillCommand(message.credential);
             sendResponse({ ok: true });
         }
+        if (message?.type === 'persona_popup_fill_password') {
+            void requestFill(message.itemId);
+            sendResponse({ ok: true });
+        }
+        if (message?.type === 'persona_popup_fill_totp') {
+            void requestTotp(message.itemId);
+            sendResponse({ ok: true });
+        }
         // Handle show suggestions command
         if (message?.type === 'persona_show_suggestions') {
             showSuggestionsOverlay(message.suggestions);
