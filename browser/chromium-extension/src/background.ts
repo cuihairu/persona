@@ -93,7 +93,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // Get TOTP code
     if (message?.type === 'persona_get_totp') {
-        handleGetTotp(message.origin, message.itemId).then(sendResponse);
+        handleGetTotp(message.origin, message.itemId, message.userGesture).then(sendResponse);
         return true;
     }
 
@@ -350,10 +350,11 @@ async function handleRequestFill(
  */
 async function handleGetTotp(
     origin: string,
-    itemId: string
+    itemId: string,
+    userGesture = true
 ): Promise<AutofillResult<{ code: string; remaining_seconds: number; period: number }>> {
     try {
-        const response = await getTotp(origin, itemId);
+        const response = await getTotp(origin, itemId, userGesture);
 
         if (!response.ok) {
             return {

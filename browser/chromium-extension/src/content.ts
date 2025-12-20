@@ -5,6 +5,7 @@ interface SuggestionItem {
     title: string;
     username_hint?: string;
     match_strength: number;
+    credential_type?: string;
 }
 
 interface FillCredential {
@@ -51,7 +52,7 @@ function init() {
         });
 
         // If we have login forms, fetch suggestions
-        if (forms.some(f => f.fields.some(field => field.type === 'password'))) {
+        if (forms.some(f => f.fields.some(field => field.type === 'password' || field.type === 'totp'))) {
             fetchSuggestions();
         }
     });
@@ -108,14 +109,20 @@ function handleInputFocus(event: FocusEvent) {
     const isPasswordField = fieldType === 'password';
     const isUsernameField = fieldType === 'text' || fieldType === 'email' ||
         ['user', 'login', 'email', 'identifier'].some(hint => fieldName.includes(hint));
+    const isTotpField =
+        target.autocomplete === 'one-time-code' ||
+        ['otp', 'totp', '2fa', 'twofactor', 'verification', 'code', 'token'].some((hint) => fieldName.includes(hint));
 
-    if ((isPasswordField || isUsernameField) && currentSuggestions.length > 0) {
-        showInlineIcon(target);
+    if ((isPasswordField || isUsernameField) && currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'password')) {
+        showInlineIcon(target, 'password');
+    }
+    if (isTotpField && currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'totp')) {
+        showInlineIcon(target, 'totp');
     }
 }
 
 // Show inline Persona icon next to input field
-function showInlineIcon(input: HTMLInputElement) {
+function showInlineIcon(input: HTMLInputElement, mode: 'password' | 'totp') {
     // Remove existing icon
     const existingIcon = document.querySelector('.persona-inline-icon');
     if (existingIcon) {
@@ -150,7 +157,7 @@ function showInlineIcon(input: HTMLInputElement) {
     icon.addEventListener('click', (e) => {
         e.preventDefault();
         e.stopPropagation();
-        showSuggestionsDropdown(input);
+        showSuggestionsDropdown(input, mode);
     });
 
     document.body.appendChild(icon);
@@ -167,10 +174,11 @@ function showInlineIcon(input: HTMLInputElement) {
 }
 
 // Show suggestions dropdown near input
-function showSuggestionsDropdown(input: HTMLInputElement) {
+function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password' | 'totp') {
     hideOverlay();
 
-    if (currentSuggestions.length === 0) {
+    const filtered = currentSuggestions.filter((s) => (s.credential_type ?? 'password') === mode);
+    if (filtered.length === 0) {
         console.debug('[Persona] No suggestions available');
         return;
     }
@@ -210,7 +218,7 @@ function showSuggestionsDropdown(input: HTMLInputElement) {
     dropdown.appendChild(header);
 
     // Add suggestions
-    currentSuggestions.forEach((suggestion) => {
+    filtered.forEach((suggestion) => {
         const item = document.createElement('div');
         item.style.cssText = `
             padding: 12px 16px;
@@ -231,7 +239,11 @@ function showSuggestionsDropdown(input: HTMLInputElement) {
         });
 
         item.addEventListener('click', () => {
-            requestFill(suggestion.item_id, input);
+            if ((suggestion.credential_type ?? 'password') === 'totp') {
+                requestTotp(suggestion.item_id, input);
+            } else {
+                requestFill(suggestion.item_id, input);
+            }
             dropdown.remove();
         });
 
@@ -272,6 +284,47 @@ async function requestFill(itemId: string, targetInput?: HTMLInputElement) {
     } catch (error) {
         console.error('[Persona] Fill request error:', error);
     }
+}
+
+async function requestTotp(itemId: string, targetInput?: HTMLInputElement) {
+    try {
+        const response = await chrome.runtime.sendMessage({
+            type: 'persona_get_totp',
+            origin: location.origin,
+            itemId,
+            userGesture: true
+        });
+
+        if (response?.success && response.data?.code) {
+            const code = String(response.data.code);
+            const input = targetInput ?? findTotpInput();
+            if (input) {
+                fillInput(input, code);
+                showNotification('2FA code filled', 'success');
+            } else {
+                await copyToClipboard(code);
+                showNotification('2FA code copied', 'success');
+            }
+        } else {
+            console.error('[Persona] TOTP failed:', response?.error);
+            showNotification('Failed to get 2FA code: ' + (response?.error || 'Unknown error'), 'error');
+        }
+    } catch (error) {
+        console.error('[Persona] TOTP request error:', error);
+        showNotification('Failed to get 2FA code', 'error');
+    }
+}
+
+function findTotpInput(): HTMLInputElement | null {
+    const form = currentForms[0];
+    const totpField = form?.fields?.find((f) => f.type === 'totp');
+    if (totpField?.selector) {
+        const el = document.querySelector(totpField.selector);
+        if (el instanceof HTMLInputElement) return el;
+    }
+
+    const fallback = document.querySelector('input[autocomplete="one-time-code"]');
+    return fallback instanceof HTMLInputElement ? fallback : null;
 }
 
 // Fill credential into form
@@ -333,6 +386,32 @@ function fillInput(input: HTMLInputElement, value: string) {
 // Handle fill command from popup
 function handleFillCommand(credential: FillCredential) {
     fillCredential(credential);
+}
+
+async function copyToClipboard(text: string): Promise<boolean> {
+    try {
+        if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(text);
+            return true;
+        }
+    } catch {
+        // fall through
+    }
+
+    try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const ok = document.execCommand('copy');
+        textarea.remove();
+        return ok;
+    } catch {
+        return false;
+    }
 }
 
 // Toggle main overlay
@@ -415,7 +494,11 @@ function showSuggestionsOverlay(suggestions: SuggestionItem[]) {
             item.addEventListener('mouseenter', () => item.style.background = '#f8fafc');
             item.addEventListener('mouseleave', () => item.style.background = 'white');
             item.addEventListener('click', () => {
-                requestFill(suggestion.item_id);
+                if ((suggestion.credential_type ?? 'password') === 'totp') {
+                    requestTotp(suggestion.item_id);
+                } else {
+                    requestFill(suggestion.item_id);
+                }
                 hideOverlay();
             });
 
