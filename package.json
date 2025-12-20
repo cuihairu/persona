@@ -4,12 +4,18 @@
   "packageManager": "pnpm@10.22.0",
   "workspaces": [
     "desktop",
-    "browser/chromium-extension"
+    "browser/chromium-extension",
+    "website"
   ],
-  "description": "Persona monorepo: core (Rust), CLI (Rust), desktop (Tauri+React), server (Rust), agents, docs",
+  "description": "Persona monorepo: core (Rust), CLI (Rust), desktop (Tauri+React), browser extension, website, server (Rust), agents, docs",
   "scripts": {
-    "build": "echo \"Use 'cargo build' for Rust crates and 'npm -w desktop run build' for desktop\"",
-    "dev:desktop": "npm -w desktop run dev",
-    "test:desktop": "npm -w desktop run test"
+    "build": "echo \"Use 'cargo build' for Rust crates; use pnpm scripts for JS packages.\"",
+    "dev:desktop": "pnpm --filter persona-desktop run dev",
+    "build:desktop": "pnpm --filter persona-desktop run build",
+    "test:desktop": "pnpm --filter persona-desktop run test",
+    "dev:extension": "pnpm --filter persona-chromium-extension run build --watch",
+    "build:extension": "pnpm --filter persona-chromium-extension run build",
+    "dev:website": "pnpm --filter persona-website run dev",
+    "build:website": "pnpm --filter persona-website run build"
   }
 }
