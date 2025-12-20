@@ -46,6 +46,11 @@ pub enum TotpCommand {
         /// Account name override
         #[arg(long)]
         account: Option<String>,
+        /// Associate this TOTP with a website origin (enables browser extension matching)
+        ///
+        /// Accepts full URL (https://github.com) or a bare host (github.com).
+        #[arg(long)]
+        url: Option<String>,
         /// Digits override
         #[arg(long)]
         digits: Option<u8>,
@@ -77,12 +82,13 @@ pub async fn execute(args: TotpArgs, config: &CliConfig) -> Result<()> {
             secret,
             issuer,
             account,
+            url,
             digits,
             period,
             algorithm,
         } => {
             setup_totp(
-                config, identity, name, qr, otpauth, secret, issuer, account, digits, period,
+                config, identity, name, qr, otpauth, secret, issuer, account, url, digits, period,
                 algorithm,
             )
             .await?
@@ -101,6 +107,7 @@ async fn setup_totp(
     secret: Option<String>,
     issuer_override: Option<String>,
     account_override: Option<String>,
+    url: Option<String>,
     digits_override: Option<u8>,
     period_override: Option<u32>,
     algorithm_override: Option<String>,
@@ -137,6 +144,7 @@ async fn setup_totp(
     }
 
     let final_template = template.finalize()?;
+    let origin_url = url.map(|s| normalize_origin_url(&s)).transpose()?;
 
     let credential_name = display_name
         .or_else(|| {
@@ -173,6 +181,9 @@ async fn setup_totp(
         .context("Failed to create TOTP credential")?;
 
     credential.username = Some(final_template.account.clone());
+    if let Some(url) = origin_url {
+        credential.url = Some(url);
+    }
     credential
         .metadata
         .insert("issuer".into(), final_template.issuer.clone());
@@ -203,6 +214,21 @@ async fn setup_totp(
     );
 
     Ok(())
+}
+
+fn normalize_origin_url(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        bail!("URL cannot be empty");
+    }
+
+    let url = url::Url::parse(trimmed).or_else(|_| url::Url::parse(&format!("https://{trimmed}")))?;
+    let scheme = url.scheme();
+    let host = url
+        .host_str()
+        .ok_or_else(|| anyhow!("Invalid URL: missing host"))?;
+
+    Ok(format!("{scheme}://{host}"))
 }
 
 async fn generate_codes(config: &CliConfig, id: Uuid, watch: bool) -> Result<()> {

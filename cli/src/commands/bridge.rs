@@ -125,6 +125,7 @@ struct SuggestionItem {
     title: String,
     username_hint: Option<String>,
     match_strength: u8,
+    credential_type: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +158,9 @@ struct FillResponse {
 struct TotpPayload {
     origin: String,
     item_id: String,
+    /// Indicates this request was triggered by an explicit user action (click, keyboard).
+    #[serde(default)]
+    user_gesture: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -313,7 +317,7 @@ async fn handle_request(
             let parsed: SuggestionsPayload = serde_json::from_value(req.payload)
                 .context("invalid payload for get_suggestions")?;
             let host = origin_to_host(&parsed.origin)?;
-            let items = get_password_suggestions(db_path, &host).await?;
+            let items = get_credential_suggestions(db_path, &host).await?;
             let payload = serde_json::to_value(SuggestionsResponse {
                 items,
                 suggesting_for: host,
@@ -425,6 +429,18 @@ async fn handle_request(
                 serde_json::from_value(req.payload).context("invalid payload for get_totp")?;
             let host = origin_to_host(&parsed.origin)?;
 
+            let require_gesture = std::env::var("PERSONA_BRIDGE_REQUIRE_GESTURE")
+                .map(|v| v != "0" && v.to_lowercase() != "false")
+                .unwrap_or(true);
+            if require_gesture && !parsed.user_gesture {
+                warn!(
+                    origin = %parsed.origin,
+                    item_id = %parsed.item_id,
+                    "totp request rejected: user_gesture required but not provided"
+                );
+                return Err(anyhow!("user_gesture_required: totp must be triggered by explicit user action"));
+            }
+
             let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
@@ -448,6 +464,10 @@ async fn handle_request(
                 .ok_or_else(|| anyhow!("not_found"))?;
             if cred.credential_type != CredentialType::TwoFactor {
                 return Err(anyhow!("unsupported_credential_type"));
+            }
+
+            if cred.url.is_none() {
+                return Err(anyhow!("origin_binding_required: totp entries must have a URL set"));
             }
 
             if !validate_origin_binding(&host, cred.url.as_deref()) {
@@ -1048,7 +1068,7 @@ async fn compute_status(db_path: &PathBuf) -> Result<(bool, Option<String>)> {
     Ok((locked, active_identity))
 }
 
-async fn get_password_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec<SuggestionItem>> {
+async fn get_credential_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec<SuggestionItem>> {
     let db = open_db(db_path).await?;
     let repo = CredentialRepository::new(db);
     let all = repo.find_all().await?;
@@ -1058,15 +1078,18 @@ async fn get_password_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec<S
         if !cred.is_active {
             continue;
         }
-        if cred.credential_type != CredentialType::Password {
+        let kind = match cred.credential_type {
+            CredentialType::Password => "password",
+            CredentialType::TwoFactor => "totp",
+            _ => continue,
+        };
+
+        if cred.url.is_none() {
             continue;
         }
 
         // Calculate match strength based on URL similarity.
-        let match_strength = match cred.url.as_deref() {
-            Some(url) => compute_match_strength(host, url),
-            None => 0,
-        };
+        let match_strength = compute_match_strength(host, cred.url.as_deref().unwrap_or_default());
 
         if match_strength == 0 {
             continue;
@@ -1077,6 +1100,7 @@ async fn get_password_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec<S
             title: cred.name,
             username_hint: cred.username,
             match_strength,
+            credential_type: kind.to_string(),
         });
     }
 

@@ -110,7 +110,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "ok": true,
   "payload": {
     "server_version": "0.1.0",
-    "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill"],
+    "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy"],
     "pairing_required": true,
     "paired": false,
     "session_id": null,
@@ -231,7 +231,8 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
         "item_id": "uuid-v4",
         "title": "GitHub (Work)",
         "username_hint": "user@example.com",
-        "match_strength": 100
+        "match_strength": 100,
+        "credential_type": "password"
       }
     ]
   }
@@ -241,9 +242,9 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 | match_strength | 含义 |
 |----------------|------|
 | 100 | 精确域名匹配 |
+| 90 | 子域名匹配 |
 | 80 | 域名包含匹配 |
 | 60 | 顶级域名匹配 |
-| 40 | 手动关联 |
 
 ### 6. request_fill - 请求填充
 
@@ -284,13 +285,16 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 
 获取关联凭证的当前 TOTP 代码。
 
+> 注意：为了进行 Origin 绑定，TOTP 条目必须设置 URL（否则返回 `origin_binding_required`）。
+
 **请求：**
 ```json
 {
   "type": "get_totp",
   "payload": {
     "origin": "https://github.com",
-    "item_id": "uuid-v4"
+    "item_id": "uuid-v4",
+    "user_gesture": true
   }
 }
 ```
@@ -349,7 +353,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 
 ### User Gesture 要求
 
-`request_fill` 和 `copy` 操作要求：
+`request_fill` / `get_totp` / `copy` 操作要求：
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
 2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作
@@ -420,6 +424,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 | `locked` | 保险库已锁定，需要解锁 |
 | `not_found` | 请求的资源不存在 |
 | `origin_mismatch` | Origin 不匹配 |
+| `origin_binding_required` | 条目未设置 URL，无法进行 Origin 绑定 |
 | `authentication_failed` | 认证失败 |
 | `user_confirmation_required` | 需要用户确认 |
 | `session_expired` | 会话已过期 |
@@ -435,7 +440,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 | `PERSONA_DB_PATH` | 数据库路径 | `~/.persona/identities.db` |
 | `PERSONA_BRIDGE_STATE_DIR` | Bridge 状态目录（pairing/session） | `~/.persona/bridge` |
 | `PERSONA_BRIDGE_REQUIRE_PAIRING` | 是否强制 pairing + HMAC | `true` |
-| `PERSONA_BRIDGE_REQUIRE_GESTURE` | 是否强制 user_gesture（fill/copy） | `true` |
+| `PERSONA_BRIDGE_REQUIRE_GESTURE` | 是否强制 user_gesture（fill/totp/copy） | `true` |
 | `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | HMAC 时间戳最大偏移（防重放） | `300000` |
 
 ### CLI 参数
