@@ -225,10 +225,11 @@ export async function requestFill(origin, itemId, userGesture = true, host = DEF
 /**
  * Request TOTP code for a specific item.
  */
-export async function getTotp(origin, itemId, host = DEFAULT_NATIVE_HOST) {
+export async function getTotp(origin, itemId, userGesture = true, host = DEFAULT_NATIVE_HOST) {
     return sendAuthedNativeMessage('get_totp', {
         origin,
-        item_id: itemId
+        item_id: itemId,
+        user_gesture: userGesture
     }, host);
 }
 /**

@@ -29,6 +29,11 @@ When pairing is enabled (default), request a pairing code from the popup and app
 
 `persona bridge --approve-code <CODE>`
 
+TOTP/2FA support:
+
+- Create a TOTP credential with an associated URL (e.g. `persona totp setup --identity <name> --url https://github.com ...`)
+- On pages with 2FA inputs (e.g. GitHub), focus the code field and click the inline icon to fill the TOTP
+
 For Native Messaging host installation and protocol details, see:
 
 - `scripts/native-messaging/install-native-host.sh`

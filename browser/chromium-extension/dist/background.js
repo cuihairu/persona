@@ -65,7 +65,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     }
     // Get TOTP code
     if (message?.type === 'persona_get_totp') {
-        handleGetTotp(message.origin, message.itemId).then(sendResponse);
+        handleGetTotp(message.origin, message.itemId, message.userGesture).then(sendResponse);
         return true;
     }
     // Copy to clipboard
@@ -271,9 +271,9 @@ async function handleRequestFill(origin, itemId, userGesture = true) {
 /**
  * Get TOTP code for a credential.
  */
-async function handleGetTotp(origin, itemId) {
+async function handleGetTotp(origin, itemId, userGesture = true) {
     try {
-        const response = await getTotp(origin, itemId);
+        const response = await getTotp(origin, itemId, userGesture);
         if (!response.ok) {
             return {
                 success: false,

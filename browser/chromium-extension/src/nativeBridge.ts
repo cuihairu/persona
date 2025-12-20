@@ -20,6 +20,7 @@ export interface SuggestionItem {
     title: string;
     username_hint?: string;
     match_strength: number;
+    credential_type?: string;
 }
 
 export interface SuggestionsPayload {
@@ -352,13 +353,15 @@ export async function requestFill(
 export async function getTotp(
     origin: string,
     itemId: string,
+    userGesture = true,
     host = DEFAULT_NATIVE_HOST
 ): Promise<NativeBridgeResponse<{ code: string; remaining_seconds: number; period: number }>> {
     return sendAuthedNativeMessage(
         'get_totp',
         {
             origin,
-            item_id: itemId
+            item_id: itemId,
+            user_gesture: userGesture
         },
         host
     );
