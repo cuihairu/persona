@@ -271,16 +271,44 @@ function renderSuggestions(items, tabId) {
         const meta = document.createElement('div');
         meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
         meta.textContent = `${kind.toUpperCase()}${item.username_hint ? ` • ${item.username_hint}` : ''}`;
-        const btn = document.createElement('button');
-        btn.className = 'secondary';
-        btn.textContent = kind === 'totp' ? 'Fill 2FA code' : 'Fill login';
-        btn.addEventListener('click', async () => {
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+        const fillBtn = document.createElement('button');
+        fillBtn.className = 'secondary';
+        fillBtn.style.width = 'auto';
+        fillBtn.textContent = kind === 'totp' ? 'Fill 2FA code' : 'Fill login';
+        fillBtn.addEventListener('click', async () => {
             const messageType = kind === 'totp' ? 'persona_popup_fill_totp' : 'persona_popup_fill_password';
             await chrome.tabs.sendMessage(tabId, { type: messageType, itemId: item.item_id }).catch(() => null);
         });
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'secondary';
+        copyBtn.style.width = 'auto';
+        copyBtn.textContent = kind === 'totp' ? 'Copy 2FA code' : 'Copy password';
+        copyBtn.addEventListener('click', async () => {
+            const active = await getActiveTabOrigin();
+            if (!active)
+                return;
+            await requestCopy(active.origin, item.item_id, kind === 'totp' ? 'totp' : 'password');
+        });
+        actions.appendChild(fillBtn);
+        actions.appendChild(copyBtn);
+        if (kind !== 'totp' && item.username_hint) {
+            const copyUserBtn = document.createElement('button');
+            copyUserBtn.className = 'secondary';
+            copyUserBtn.style.width = 'auto';
+            copyUserBtn.textContent = 'Copy username';
+            copyUserBtn.addEventListener('click', async () => {
+                const active = await getActiveTabOrigin();
+                if (!active)
+                    return;
+                await requestCopy(active.origin, item.item_id, 'username');
+            });
+            actions.appendChild(copyUserBtn);
+        }
         row.appendChild(title);
         row.appendChild(meta);
-        row.appendChild(btn);
+        row.appendChild(actions);
         suggestionsEl.appendChild(row);
     }
 }
@@ -303,5 +331,25 @@ async function refreshAutofill() {
     }
     const items = resp?.data?.items ?? resp?.data?.payload?.items ?? resp?.data?.items;
     renderSuggestions(items ?? [], active.tabId);
+}
+async function requestCopy(origin, itemId, field) {
+    if (!autofillStatusEl)
+        return;
+    autofillStatusEl.textContent = `Copying ${field}...`;
+    const resp = await chrome.runtime
+        .sendMessage({
+        type: 'persona_copy',
+        origin,
+        itemId,
+        field,
+        userGesture: true
+    })
+        .catch(() => null);
+    if (!resp?.success) {
+        autofillStatusEl.textContent = `Copy failed – ${resp?.error ?? 'unknown error'}`;
+        return;
+    }
+    const copied = Boolean(resp?.data?.copied);
+    autofillStatusEl.textContent = copied ? `Copied ${field}` : `Copy failed`;
 }
 //# sourceMappingURL=popup.js.map
