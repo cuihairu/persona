@@ -263,8 +263,23 @@ async function requestTotp(itemId, targetInput) {
                 showNotification('2FA code filled', 'success');
             }
             else {
-                await copyToClipboard(code);
-                showNotification('2FA code copied', 'success');
+                const copied = await chrome.runtime
+                    .sendMessage({
+                    type: 'persona_copy',
+                    origin: location.origin,
+                    itemId,
+                    field: 'totp',
+                    userGesture: true
+                })
+                    .then((r) => Boolean(r?.success && r?.data?.copied))
+                    .catch(() => false);
+                if (copied) {
+                    showNotification('2FA code copied', 'success');
+                }
+                else {
+                    await copyToClipboard(code);
+                    showNotification('2FA code copied (fallback)', 'success');
+                }
             }
         }
         else {
