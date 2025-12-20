@@ -86,7 +86,7 @@ Persona 采用现代化的技术栈，确保性能、安全性和可维护性：
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-username/persona.git
+git clone https://github.com/cuihairu/persona.git
 cd persona
 
 # 构建核心库
@@ -121,10 +121,10 @@ flutter build ios  # iOS
 
 ## 🔗 相关链接
 
-- [GitHub 仓库](https://github.com/your-username/persona)
-- [问题追踪](https://github.com/your-username/persona/issues)
-- [讨论区](https://github.com/your-username/persona/discussions)
-- [发布页面](https://github.com/your-username/persona/releases)
+- [GitHub 仓库](https://github.com/cuihairu/persona)
+- [问题追踪](https://github.com/cuihairu/persona/issues)
+- [讨论区](https://github.com/cuihairu/persona/discussions)
+- [发布页面](https://github.com/cuihairu/persona/releases)
 
 ## ⚠️ 安全提醒
 

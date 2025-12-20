@@ -193,7 +193,7 @@ You can specify a custom database path during initialization for:
 - Consider database vacuum if very large
 
 ### Getting Help
-- Check the [GitHub Issues](https://github.com/your-username/persona/issues)
+- Check the [GitHub Issues](https://github.com/cuihairu/persona/issues)
 - Review the [Core Library Documentation](../core/examples/README.md)
 - Join our community discussions
 
