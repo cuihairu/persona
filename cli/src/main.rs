@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
+use std::ffi::OsString;
+use std::path::Path;
 
 mod commands;
 mod config;
@@ -30,6 +32,9 @@ struct Cli {
 enum Commands {
     /// Initialize a new persona workspace
     Init(commands::init::InitArgs),
+
+    /// Browser extension bridge (Chrome Native Messaging host)
+    Bridge(commands::bridge::BridgeArgs),
 
     /// Add a new identity
     Add(commands::add::AddArgs),
@@ -82,7 +87,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let args = maybe_inject_bridge_subcommand(std::env::args_os().collect());
+    let cli = Cli::parse_from(args);
 
     // Initialize logging
     init_logging(cli.verbose)?;
@@ -114,6 +120,7 @@ async fn main() -> Result<()> {
     // Execute command
     match cli.command {
         Commands::Init(args) => commands::init::execute(args, &config).await,
+        Commands::Bridge(args) => commands::bridge::execute(args).await,
         Commands::Add(args) => commands::add::execute(args, &config).await,
         Commands::List(args) => commands::list::execute(args, &config).await,
         Commands::Switch(args) => commands::switch::execute(args, &config).await,
@@ -133,9 +140,32 @@ async fn main() -> Result<()> {
     }
 }
 
+fn maybe_inject_bridge_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
+    if args.len() != 1 {
+        return args;
+    }
+
+    let Some(exe) = args
+        .first()
+        .and_then(|s| s.to_str())
+        .and_then(|p| Path::new(p).file_stem().and_then(|s| s.to_str()))
+    else {
+        return args;
+    };
+
+    // Native Messaging hosts are launched with no args; allow installing a copy of the
+    // binary as `persona-bridge(.exe)` that defaults to `persona bridge`.
+    if exe.eq_ignore_ascii_case("persona-bridge") {
+        args.push(OsString::from("bridge"));
+    }
+
+    args
+}
+
 fn command_requires_workspace(cmd: &Commands) -> bool {
     match cmd {
         Commands::Init(_) => false,
+        Commands::Bridge(_) => false,
         Commands::Password(_) => false,
         _ => true,
     }

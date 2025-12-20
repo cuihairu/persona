@@ -94,6 +94,14 @@ Browser & Autofill (future)
   - [x] Form detection + autofill heuristics (passwords, TOTP, address)
   - [x] Domain policies + phishing protections
 - [x] Safari WebExtension host shell (Swift bridge + manifest sync)
+- [x] Chrome/Chromium extension "1Password-like" bridge (Native Messaging + local service)
+  - [x] Define Persona Bridge Protocol v1 (hello/status/get_suggestions/request_fill/copy/totp)
+  - [x] Pairing + message authentication (bind to extension instance; short-lived session)
+  - [x] Implement CLI native host: `persona bridge` (stdio JSON loop) + audit logging
+  - [x] Enforce origin binding + user-gesture requirement for fill/copy/reveal
+  - [x] Minimal autofill MVP: username/password fill on matched domain
+  - [x] Policy integration: domain trust/blocked + confirm-on-unknown
+  - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
 - [ ] Passkeys (WebAuthn) storage + autofill
 - [ ] Phishing protections; identity-based context switching
 
