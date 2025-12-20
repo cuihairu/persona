@@ -6,9 +6,7 @@ import {
   ArrowDownTrayIcon,
   ArrowUpTrayIcon,
   QrCodeIcon,
-  CurrencyDollarIcon,
   ArrowTrendingUpIcon,
-  ArrowTrendingDownIcon,
 } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { LoadingSpinner, ErrorDisplay, ErrorBoundary } from '@/components/ErrorHandling';
@@ -74,43 +72,6 @@ const WalletPanel: React.FC = () => {
       setAddresses(result.addresses || []);
     } catch (err: any) {
       console.error('Failed to load addresses:', err);
-    }
-  };
-
-  const generateNewWallet = async (params: {
-    name: string;
-    network: string;
-    type: string;
-    mnemonic?: string;
-  }) => {
-    try {
-      setIsLoading(true);
-      await invoke('wallet_generate', params);
-      await loadWallets();
-      setShowCreateModal(false);
-    } catch (err: any) {
-      setError(err.message || 'Failed to generate wallet');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const importWallet = async (params: {
-    name: string;
-    network: string;
-    type: string;
-    mnemonic?: string;
-    privateKey?: string;
-  }) => {
-    try {
-      setIsLoading(true);
-      await invoke('wallet_import', params);
-      await loadWallets();
-      setShowImportModal(false);
-    } catch (err: any) {
-      setError(err.message || 'Failed to import wallet');
-    } finally {
-      setIsLoading(false);
     }
   };
 

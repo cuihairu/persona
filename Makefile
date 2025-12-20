@@ -13,8 +13,8 @@ help: ## 显示帮助信息
 install: ## 安装所有依赖
 	@echo "安装 Rust 依赖..."
 	cargo fetch
-	@echo "安装桌面应用依赖..."
-	cd desktop && npm install
+	@echo "安装 JS 依赖 (pnpm workspace)..."
+	pnpm install
 	@echo "安装移动应用依赖..."
 	cd mobile && flutter pub get
 	@echo "依赖安装完成!"
@@ -45,7 +45,7 @@ build: ## 构建所有组件
 	@echo "构建核心库 (workspace)..."
 	cargo build --workspace --release
 	@echo "构建桌面应用..."
-	cd desktop && npm run tauri build
+	pnpm --filter persona-desktop run tauri:build
 	@echo "构建移动应用..."
 	cd mobile && flutter build apk
 	@echo "构建完成!"
@@ -61,7 +61,7 @@ dev: ## 启动开发模式
 	make docs-serve
 
 dev-desktop: ## 启动桌面应用开发模式
-	cd desktop && npm run tauri dev
+	pnpm --filter persona-desktop run tauri:dev
 
 dev-mobile: ## 启动移动应用开发模式
 	cd mobile && flutter run
@@ -71,7 +71,7 @@ test: ## 运行所有测试
 	@echo "运行 Rust 测试 (workspace, all features)..."
 	cargo test --workspace --all-features
 	@echo "运行桌面应用测试..."
-	cd desktop && npm test
+	pnpm --filter persona-desktop run test
 	@echo "运行移动应用测试..."
 	cd mobile && flutter test
 	@echo "测试完成!"
@@ -82,7 +82,7 @@ test-rust: ## 运行 Rust 测试
 	cargo test
 
 test-desktop: ## 运行桌面应用测试
-	cd desktop && npm test
+	pnpm --filter persona-desktop run test
 
 test-mobile: ## 运行移动应用测试
 	cd mobile && flutter test
@@ -92,7 +92,7 @@ lint: ## 运行代码检查
 	@echo "检查 Rust 代码 (workspace, all targets/features)..."
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 	@echo "检查桌面应用代码..."
-	cd desktop && npm run lint
+	pnpm --filter persona-desktop run lint
 	@echo "检查移动应用代码..."
 	cd mobile && flutter analyze
 	@echo "代码检查完成!"
@@ -104,7 +104,7 @@ format: ## 格式化代码
 	@echo "格式化 Rust 代码 (workspace)..."
 	cargo fmt --all
 	@echo "格式化桌面应用代码..."
-	cd desktop && npm run format
+	pnpm --filter persona-desktop run format
 	@echo "格式化移动应用代码..."
 	cd mobile && dart format .
 	@echo "代码格式化完成!"
@@ -156,7 +156,7 @@ security-audit: ## 运行安全审计
 	@echo "运行 Rust 安全审计..."
 	cargo audit
 	@echo "运行 Node.js 安全审计..."
-	cd desktop && npm audit
+	pnpm --filter persona-desktop audit
 	@echo "安全审计完成!"
 
 security-check: ## 运行完整安全检查（audit + deny）
@@ -167,7 +167,7 @@ security-check: ## 运行完整安全检查（audit + deny）
 	cargo audit
 	@echo ""
 	@echo "=== 运行 npm audit ==="
-	cd desktop && npm audit || true
+	pnpm --filter persona-desktop audit || true
 	@echo ""
 	@echo "安全检查完成!"
 
@@ -223,7 +223,7 @@ check-deps: ## 检查依赖更新
 	@echo "检查 Rust 依赖更新..."
 	cargo outdated
 	@echo "检查 Node.js 依赖更新..."
-	cd desktop && npm outdated
+	pnpm --filter persona-desktop outdated
 	@echo "检查 Flutter 依赖更新..."
 	cd mobile && flutter pub outdated
 
@@ -231,13 +231,12 @@ check-deps: ## 检查依赖更新
 generate-docs: ## 生成 API 文档
 	@echo "生成 Rust API 文档..."
 	cargo doc --no-deps --open
-	@echo "生成 TypeScript 文档..."
-	cd desktop && npm run docs
+	@echo "跳过桌面 TypeScript 文档（未配置）"
 
 # 国际化
 i18n-extract: ## 提取国际化字符串
 	@echo "提取国际化字符串..."
-	cd desktop && npm run i18n:extract
+	@echo "跳过桌面 i18n 提取（未配置）"
 	cd mobile && flutter gen-l10n
 
 # 全面检查
