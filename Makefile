@@ -1,6 +1,6 @@
 # Persona 数字身份管理系统 Makefile
 
-.PHONY: help build test clean docs docs-serve docs-build docs-deploy install dev setup
+.PHONY: help build test clean docs docs-serve docs-build docs-deploy install dev setup js-install extension-build web-dev web-build
 
 # 默认目标
 help: ## 显示帮助信息
@@ -18,6 +18,18 @@ install: ## 安装所有依赖
 	@echo "安装移动应用依赖..."
 	cd mobile && flutter pub get
 	@echo "依赖安装完成!"
+
+js-install: ## 安装 JS 依赖（pnpm workspace）
+	pnpm install
+
+extension-build: ## 构建 Chromium 浏览器扩展
+	pnpm --filter persona-chromium-extension run build
+
+web-dev: ## 启动网站开发服务器
+	pnpm --filter persona-website run dev
+
+web-build: ## 构建网站
+	pnpm --filter persona-website run build
 
 # 开发环境设置
 setup: install ## 设置开发环境
