@@ -49,9 +49,17 @@
   <body>
     <h2>Persona</h2>
     <label for="endpoint">Bridge endpoint</label>
-    <input id="endpoint" type="text" value="http://127.0.0.1:19945/status" style="width:100%;padding:6px;margin-bottom:12px;" />
+    <input id="endpoint" type="text" value="native:com.persona.native" style="width:100%;padding:6px;margin-bottom:12px;" />
     <p class="status" id="status">Bridge not contacted yet</p>
-    <button id="toggle">Connect to desktop agent</button>
+    <button id="toggle">Connect to bridge</button>
+
+    <h3 style="margin-top:16px;">Pairing</h3>
+    <p id="pairingStatus" class="status">Pairing status unknown</p>
+    <button id="requestPairing" class="secondary">Request pairing code</button>
+    <label for="pairingCode" style="display:block;margin-top:12px;">Pairing code</label>
+    <input id="pairingCode" type="text" placeholder="123-456" style="width:100%;padding:6px;" />
+    <pre id="pairingHint">Run `persona bridge --approve-code <CODE>` then click Finalize.</pre>
+    <button id="finalizePairing">Finalize pairing</button>
 
     <h3 style="margin-top:16px;">Domain security</h3>
     <p id="domainStatus" class="status">No domain data yet</p>

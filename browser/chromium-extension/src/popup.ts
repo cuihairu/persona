@@ -1,5 +1,6 @@
 import type { BridgeStatus } from './bridge';
 import type { DomainAssessment } from './domainPolicy';
+import { hello, requestPairingCode, finalizePairing, getPairingState } from './nativeBridge';
 
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
@@ -10,6 +11,12 @@ const domainReasonsEl = document.getElementById('domainReasons');
 const trustButton = document.getElementById('trustDomain');
 const blockButton = document.getElementById('blockDomain');
 const clearPolicyButton = document.getElementById('clearDomainPolicy');
+
+const pairingStatusEl = document.getElementById('pairingStatus');
+const requestPairingButton = document.getElementById('requestPairing');
+const pairingCodeInput = document.getElementById('pairingCode') as HTMLInputElement | null;
+const pairingHintEl = document.getElementById('pairingHint');
+const finalizePairingButton = document.getElementById('finalizePairing');
 
 let currentAssessment: DomainAssessment | undefined;
 let currentHost: string | undefined;
@@ -34,6 +41,42 @@ function updateStatus(status?: BridgeStatus | null) {
 async function refreshStoredStatus() {
     const status = await chrome.runtime.sendMessage({ type: 'persona_status_request' }).catch(() => null);
     updateStatus(status);
+}
+
+function normalizeNativeHost(endpoint: string | undefined): string | undefined | null {
+    if (!endpoint) return undefined;
+    const trimmed = endpoint.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith('native:')) return trimmed.slice('native:'.length);
+    if (trimmed === 'native') return undefined;
+    return null;
+}
+
+async function refreshPairing() {
+    if (!pairingStatusEl) return;
+
+    const host = normalizeNativeHost(endpointInput?.value);
+    if (host === null) {
+        pairingStatusEl.textContent = 'Pairing only works with native: endpoints';
+        return;
+    }
+    const [state, helloResp] = await Promise.all([getPairingState(), hello(host)]);
+
+    if (!helloResp?.ok) {
+        pairingStatusEl.textContent = `Pairing unavailable – ${helloResp?.error ?? 'bridge not reachable'}`;
+        return;
+    }
+
+    const pairingRequired = Boolean(helloResp.payload?.pairing_required);
+    const paired = Boolean(state?.pairingKeyB64);
+
+    if (paired) {
+        pairingStatusEl.textContent = 'Paired (authenticated)';
+    } else if (pairingRequired) {
+        pairingStatusEl.textContent = 'Pairing required';
+    } else {
+        pairingStatusEl.textContent = 'Not paired';
+    }
 }
 
 function renderForms(snapshot: any) {
@@ -131,6 +174,49 @@ if (toggleButton) {
             })
             .catch(() => null);
         updateStatus(result);
+        await refreshPairing().catch(() => null);
+    });
+}
+
+if (requestPairingButton) {
+    requestPairingButton.addEventListener('click', async () => {
+        const host = normalizeNativeHost(endpointInput?.value);
+        if (host === null) {
+            if (pairingHintEl) pairingHintEl.textContent = 'Set endpoint to native:com.persona.native first.';
+            await refreshPairing().catch(() => null);
+            return;
+        }
+        const resp = await requestPairingCode(host).catch((e) => ({ ok: false, error: String(e) }) as any);
+        if (!resp?.ok) {
+            if (pairingHintEl) pairingHintEl.textContent = `Pairing request failed: ${resp?.error ?? 'unknown error'}`;
+            await refreshPairing().catch(() => null);
+            return;
+        }
+        const code = (resp as any).payload?.code;
+        const approval = (resp as any).payload?.approval_command;
+        if (pairingCodeInput && code) pairingCodeInput.value = code;
+        if (pairingHintEl) pairingHintEl.textContent = approval ?? 'Run `persona bridge --approve-code <CODE>` then click Finalize.';
+        await refreshPairing().catch(() => null);
+    });
+}
+
+if (finalizePairingButton) {
+    finalizePairingButton.addEventListener('click', async () => {
+        const code = pairingCodeInput?.value?.trim();
+        if (!code) return;
+        const host = normalizeNativeHost(endpointInput?.value);
+        if (host === null) {
+            if (pairingHintEl) pairingHintEl.textContent = 'Set endpoint to native:com.persona.native first.';
+            await refreshPairing().catch(() => null);
+            return;
+        }
+        const resp = await finalizePairing(code, host).catch((e) => ({ ok: false, error: String(e) }) as any);
+        if (!resp?.ok) {
+            if (pairingHintEl) pairingHintEl.textContent = `Finalize failed: ${resp?.error ?? 'unknown error'}`;
+        } else {
+            if (pairingHintEl) pairingHintEl.textContent = 'Paired successfully.';
+        }
+        await refreshPairing().catch(() => null);
     });
 }
 
@@ -149,4 +235,5 @@ if (clearPolicyButton) {
 document.addEventListener('DOMContentLoaded', () => {
     refreshStoredStatus();
     refreshForms();
+    refreshPairing().catch(() => null);
 });

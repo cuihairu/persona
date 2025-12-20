@@ -6,7 +6,7 @@ TOTP display, and SSH-agent workflows in Chromium-based browsers. It is intentio
 - `src/background.ts` hosts the service worker glue to the local Persona core/CLI.
 - `src/formScanner.ts` contains heuristic form detection for passwords/usernames/TOTP.
 - `src/content.ts` injects the scanner, streams snapshots to the background script, and listens for popup requests.
-- `src/bridge.ts` implements the HTTP probe against the Persona desktop/CLI bridge.
+- `src/nativeBridge.ts` implements the Native Messaging bridge to `persona bridge` (stdio JSON frames).
 - `src/popup.ts` renders the popup UI, wires the “Connect” button, and displays detected form metadata.
 - `public/manifest.json` declares MV3 permissions for scripting, storage, and action popup.
 
@@ -19,6 +19,18 @@ npm run build
 
 Outputs are written to `dist/` and referenced from the static popup HTML. During active development we
 will likely switch to Vite or another bundler, but keeping plain TypeScript reduces moving pieces until
-we hook the extension to the desktop/client runtimes. The popup input allows overriding the bridge
-endpoint so QA can point to staging builds of the forthcoming `persona bridge` command, and the form
-panel (plus domain security warnings) surfaces the heuristics’ view of the active page before autofill ships.
+we hook the extension to the desktop/client runtimes.
+
+The popup supports both legacy HTTP probes (future) and Native Messaging endpoints via:
+
+- `native:com.persona.native` (default)
+
+When pairing is enabled (default), request a pairing code from the popup and approve it via:
+
+`persona bridge --approve-code <CODE>`
+
+For Native Messaging host installation and protocol details, see:
+
+- `scripts/native-messaging/install-native-host.sh`
+- `scripts/native-messaging/install-native-host.ps1`
+- `docs/BRIDGE_PROTOCOL.md`
