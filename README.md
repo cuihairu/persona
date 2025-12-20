@@ -29,8 +29,11 @@ persona/
 ├── cli/                # Persona CLI: init/add/list/show/switch/export/import/ssh/...
 ├── agents/ssh-agent/   # Built-in SSH agent (UNIX socket, ed25519)
 ├── desktop/            # Tauri + React desktop client (prototype)
+├── browser/            # Browser clients (Chromium extension, etc.)
+│   └── chromium-extension/ # Chrome/Edge extension (Native Messaging bridge)
 ├── mobile/             # Mobile placeholder
 ├── server/             # Optional sync/automation service (prototype)
+├── website/            # Marketing site (UmiJS)
 └── docs/               # Documentation and roadmap
 ```
 
@@ -69,7 +72,7 @@ make ci
 
 ### JS/Desktop Dependencies (pnpm)
 ```bash
-# Install workspace dependencies (desktop + browser extension)
+# Install workspace dependencies (desktop + browser extension + website)
 pnpm install
 
 # Run the desktop client in dev mode
@@ -77,6 +80,9 @@ pnpm --filter desktop run dev
 
 # Build the browser extension bundle
 pnpm --filter persona-chromium-extension run build
+
+# Run the website in dev mode
+pnpm --filter persona-website run dev
 ```
 
 ### Initialize a Workspace and Perform Basic Actions
@@ -160,6 +166,7 @@ persona ssh stop-agent
 - [MONOREPO](./docs/MONOREPO.md) – monorepo rationale and tooling
 - [ROADMAP](./docs/ROADMAP.md) – roadmap and detailed TODO items
 - [TODO](./TODO.md) – daily-maintained task list
+- [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – browser extension native messaging protocol
 - [Brand assets](./docs/branding/README.md) – logos, wordmarks, colors, and guidelines
 
 ### Architecture & Design
