@@ -1,0 +1,212 @@
+.page {
+  background: #fff;
+}
+
+// Hero
+.hero {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  padding: 100px 24px 80px;
+  text-align: center;
+}
+
+.heroContent {
+  max-width: 800px;
+  margin: 0 auto;
+
+  h1 {
+    color: #fff !important;
+    font-size: 48px !important;
+    margin-bottom: 16px !important;
+  }
+}
+
+.heroDesc {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 18px;
+  line-height: 1.7;
+}
+
+// Feature Tabs
+.featureTabs {
+  padding: 80px 24px;
+}
+
+.sectionContent {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.tabs {
+  :global(.ant-tabs-nav) {
+    margin-bottom: 40px;
+
+    &::before {
+      display: none;
+    }
+  }
+
+  :global(.ant-tabs-tab) {
+    padding: 12px 24px;
+    font-size: 16px;
+  }
+}
+
+.featureCard {
+  height: 100%;
+  border: 1px solid #e2e8f0;
+  transition: all 0.3s;
+
+  &:hover {
+    border-color: #6366f1;
+    box-shadow: 0 10px 40px rgba(99, 102, 241, 0.15);
+  }
+}
+
+.featureIcon {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+
+  :global(.anticon) {
+    font-size: 24px;
+    color: #6366f1;
+  }
+}
+
+.featureDesc {
+  color: #64748b;
+  margin-bottom: 0 !important;
+}
+
+// Platform Support
+.platforms {
+  padding: 80px 24px;
+  background: #f8fafc;
+}
+
+.sectionTitle {
+  text-align: center;
+  font-size: 36px !important;
+  margin-bottom: 16px !important;
+}
+
+.sectionDesc {
+  text-align: center;
+  color: #64748b;
+  font-size: 18px;
+  max-width: 600px;
+  margin: 0 auto 60px !important;
+}
+
+.platformCard {
+  height: 100%;
+  text-align: center;
+  border: 1px solid #e2e8f0;
+}
+
+.platformIcon {
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px;
+
+  :global(.anticon) {
+    font-size: 32px;
+    color: #fff;
+  }
+}
+
+.platformDesc {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.platformTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.platformTag {
+  background: #f1f5f9;
+  color: #64748b;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+// Security
+.security {
+  padding: 80px 24px;
+}
+
+.securityItem {
+  display: flex;
+  gap: 24px;
+}
+
+.securityNumber {
+  font-size: 48px;
+  font-weight: 700;
+  color: #e2e8f0;
+  line-height: 1;
+}
+
+.securityText {
+  flex: 1;
+
+  h4 {
+    margin-bottom: 8px !important;
+  }
+
+  p {
+    color: #64748b;
+    margin-bottom: 0 !important;
+  }
+}
+
+// CLI Preview
+.cliPreview {
+  padding: 80px 24px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+
+  .sectionTitle {
+    color: #fff;
+  }
+
+  .sectionDesc {
+    color: rgba(255, 255, 255, 0.7);
+  }
+}
+
+.cliCode {
+  background: #0d1117;
+  border-radius: 16px;
+  padding: 32px;
+  overflow: hidden;
+  max-width: 800px;
+  margin: 0 auto;
+
+  pre {
+    margin: 0;
+    overflow-x: auto;
+  }
+
+  code {
+    color: #e6edf3;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+}

@@ -1,0 +1,290 @@
+.page {
+  background: #fff;
+}
+
+// Hero
+.hero {
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  padding: 100px 24px 80px;
+  text-align: center;
+}
+
+.heroContent {
+  max-width: 800px;
+  margin: 0 auto;
+
+  h1 {
+    color: #fff !important;
+    font-size: 48px !important;
+    margin-bottom: 16px !important;
+  }
+}
+
+.heroDesc {
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 18px;
+  line-height: 1.7;
+  margin-bottom: 24px !important;
+}
+
+.versionBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  padding: 8px 20px;
+  border-radius: 20px;
+  font-size: 14px;
+}
+
+// Main Download
+.mainDownload {
+  padding: 60px 24px 80px;
+  background: #f8fafc;
+}
+
+.sectionContent {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.platformTabs {
+  margin-bottom: 32px;
+
+  :global(.ant-tabs-nav) {
+    &::before {
+      display: none;
+    }
+  }
+
+  :global(.ant-tabs-tab) {
+    padding: 12px 32px;
+    font-size: 16px;
+
+    :global(.anticon) {
+      margin-right: 8px;
+      font-size: 18px;
+    }
+  }
+}
+
+.downloadCard {
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+}
+
+.downloadHeader {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 32px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid #e2e8f0;
+
+  h3 {
+    margin-bottom: 4px !important;
+  }
+}
+
+.platformIcon {
+  width: 64px;
+  height: 64px;
+  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  :global(.anticon) {
+    font-size: 32px;
+    color: #fff;
+  }
+}
+
+.downloadList {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.downloadItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  background: #f8fafc;
+  border-radius: 12px;
+  transition: background 0.2s;
+
+  &:hover {
+    background: #f1f5f9;
+  }
+}
+
+.downloadInfo {
+  flex: 1;
+}
+
+.downloadLabel {
+  font-weight: 500;
+  margin-bottom: 4px;
+}
+
+.downloadMeta {
+  font-size: 13px;
+}
+
+.requirements {
+  background: #f8fafc;
+  padding: 20px;
+  border-radius: 12px;
+
+  h5 {
+    margin-bottom: 12px !important;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 20px;
+
+    li {
+      color: #64748b;
+      margin-bottom: 4px;
+    }
+  }
+}
+
+// CLI Section
+.cliSection {
+  padding: 80px 24px;
+
+  .sectionContent {
+    max-width: 1200px;
+  }
+}
+
+.sectionTitle {
+  text-align: center;
+  font-size: 32px !important;
+  margin-bottom: 16px !important;
+
+  :global(.anticon) {
+    margin-right: 12px;
+  }
+}
+
+.sectionDesc {
+  text-align: center;
+  color: #64748b;
+  font-size: 18px;
+  max-width: 600px;
+  margin: 0 auto 40px !important;
+}
+
+.cliCard {
+  height: 100%;
+  border: 1px solid #e2e8f0;
+
+  h4 {
+    margin-bottom: 16px !important;
+
+    :global(.anticon) {
+      margin-right: 8px;
+    }
+  }
+}
+
+.cliCode {
+  background: #1e293b;
+  padding: 16px;
+  border-radius: 8px;
+
+  code {
+    display: block;
+    color: #e2e8f0;
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+
+    &::before {
+      content: '$ ';
+      color: #64748b;
+    }
+
+    & + code {
+      margin-top: 8px;
+    }
+  }
+}
+
+// Browser Section
+.browserSection {
+  padding: 80px 24px;
+  background: #f8fafc;
+
+  .sectionContent {
+    max-width: 800px;
+  }
+}
+
+.alert {
+  margin-bottom: 32px;
+}
+
+.browserCard {
+  text-align: center;
+  border: 1px solid #e2e8f0;
+
+  h5 {
+    margin-bottom: 4px !important;
+  }
+}
+
+.browserIcon {
+  width: 48px;
+  height: 48px;
+  background: #f1f5f9;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 12px;
+
+  :global(.anticon) {
+    font-size: 24px;
+    color: #64748b;
+  }
+}
+
+// Source Section
+.sourceSection {
+  padding: 80px 24px;
+}
+
+.sourceCard {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: none;
+  border-radius: 16px;
+
+  h3 {
+    color: #fff !important;
+    margin-bottom: 12px !important;
+  }
+
+  p {
+    color: rgba(255, 255, 255, 0.8);
+    margin-bottom: 24px !important;
+  }
+
+  .cliCode {
+    background: rgba(0, 0, 0, 0.3);
+  }
+}
+
+.sourceActions {
+  @media (max-width: 768px) {
+    margin-top: 24px;
+  }
+}
