@@ -1,9 +1,7 @@
 use persona_core::*;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
 use tokio::task::JoinHandle;
-use tauri::{State, Manager};
-use uuid::Uuid;
+use tokio::sync::Mutex;
 
 /// Application state that holds the Persona service
 pub struct AppState {

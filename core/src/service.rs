@@ -20,10 +20,9 @@ use crate::{
     PersonaError, Result,
 };
 use std::{
-    cell::Cell,
     collections::HashMap,
     path::Path,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
@@ -44,7 +43,7 @@ pub struct PersonaService {
     biometric_provider: Arc<dyn BiometricProvider>,
     remote_auth_provider: Arc<dyn RemoteAuthProvider>,
     auto_lock_timeout: Duration,
-    last_activity: Cell<Option<Instant>>,
+    last_activity: Mutex<Option<Instant>>,
     current_user: Option<Uuid>,
     /// Enhanced auto-lock manager
     auto_lock_manager: AutoLockManager,
@@ -73,7 +72,7 @@ impl PersonaService {
             biometric_provider: Arc::new(MockBiometricProvider::default()),
             remote_auth_provider: Arc::new(MockRemoteAuthProvider),
             auto_lock_timeout: Duration::from_secs(300),
-            last_activity: Cell::new(None),
+            last_activity: Mutex::new(None),
             current_user: None,
             auto_lock_manager,
             current_session_id: Arc::new(RwLock::new(None)),
@@ -100,7 +99,7 @@ impl PersonaService {
             .master_key_service
             .create_encryption_service(master_password, salt);
         self.master_encryption = Some(encryption_service);
-        self.last_activity.set(Some(std::time::Instant::now()));
+        *self.last_activity.lock().unwrap() = Some(std::time::Instant::now());
 
         // Session management will be handled in authenticate method
         // For direct unlock, we don't create a session
@@ -111,7 +110,7 @@ impl PersonaService {
     /// Lock the service and clear encryption keys
     pub fn lock(&mut self) {
         self.master_encryption = None;
-        self.last_activity.set(None);
+        *self.last_activity.lock().unwrap() = None;
         self.current_user = None;
 
         // Note: In async context, this should be handled differently
@@ -121,7 +120,7 @@ impl PersonaService {
 
     /// Check if the service is unlocked
     pub fn is_unlocked(&self) -> bool {
-        if let (Some(_), Some(last)) = (&self.master_encryption, self.last_activity.get()) {
+        if let (Some(_), Some(last)) = (&self.master_encryption, *self.last_activity.lock().unwrap()) {
             return last.elapsed() < self.auto_lock_timeout;
         }
         false
@@ -201,7 +200,7 @@ impl PersonaService {
 
     /// Reset inactivity timer; call this after sensitive operations to keep the session alive.
     pub fn touch_activity(&self) {
-        self.last_activity.set(Some(std::time::Instant::now()));
+        *self.last_activity.lock().unwrap() = Some(std::time::Instant::now());
     }
 
     /// Enhanced auto-lock management methods

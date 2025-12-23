@@ -1,6 +1,9 @@
 use crate::types::*;
 use persona_core::*;
 use persona_core::models::CredentialType;
+use persona_core::models::wallet::CryptoWallet;
+use persona_core::models::wallet::BlockchainNetwork;
+use persona_core::storage::{CryptoWalletRepository, Database};
 use tauri::{command, State};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
@@ -8,13 +11,14 @@ use std::str::FromStr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
+use std::sync::Arc;
 
 /// Initialize the Persona service with master password
 #[command]
 pub async fn init_service(
     request: InitRequest,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<bool>, String> {
+) -> std::result::Result<ApiResponse<bool>, String> {
     let db_path = request.db_path.unwrap_or_else(|| {
         let app_data_dir = dirs::data_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
@@ -25,7 +29,7 @@ pub async fn init_service(
 
     // Store db_path
     {
-        let mut db_path_guard = state.db_path.lock().unwrap();
+        let mut db_path_guard = state.db_path.lock().await;
         *db_path_guard = Some(db_path.clone());
     }
 
@@ -44,7 +48,7 @@ pub async fn init_service(
                         // First-time setup: initialize user with master password
                         match service.initialize_user(&request.master_password).await {
                             Ok(_user_id) => {
-                                let mut service_guard = state.service.lock().unwrap();
+                                let mut service_guard = state.service.lock().await;
                                 *service_guard = Some(service);
                                 Ok(ApiResponse::success(true))
                             }
@@ -56,7 +60,7 @@ pub async fn init_service(
                             Ok(auth_result) => {
                                 match auth_result {
                                     persona_core::AuthResult::Success => {
-                                        let mut service_guard = state.service.lock().unwrap();
+                                        let mut service_guard = state.service.lock().await;
                                         *service_guard = Some(service);
                                         Ok(ApiResponse::success(true))
                                     }
@@ -87,8 +91,8 @@ pub async fn init_service(
 
 /// Lock the service
 #[command]
-pub async fn lock_service(state: State<'_, AppState>) -> Result<ApiResponse<bool>, String> {
-    let mut service_guard = state.service.lock().unwrap();
+pub async fn lock_service(state: State<'_, AppState>) -> std::result::Result<ApiResponse<bool>, String> {
+    let mut service_guard = state.service.lock().await;
     if let Some(service) = service_guard.as_mut() {
         service.lock();
         Ok(ApiResponse::success(true))
@@ -99,8 +103,8 @@ pub async fn lock_service(state: State<'_, AppState>) -> Result<ApiResponse<bool
 
 /// Check if service is unlocked
 #[command]
-pub async fn is_service_unlocked(state: State<'_, AppState>) -> Result<ApiResponse<bool>, String> {
-    let service_guard = state.service.lock().unwrap();
+pub async fn is_service_unlocked(state: State<'_, AppState>) -> std::result::Result<ApiResponse<bool>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => Ok(ApiResponse::success(service.is_unlocked())),
         None => Ok(ApiResponse::success(false)),
@@ -112,8 +116,8 @@ pub async fn is_service_unlocked(state: State<'_, AppState>) -> Result<ApiRespon
 pub async fn create_identity(
     request: CreateIdentityRequest,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<SerializableIdentity>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<SerializableIdentity>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             let identity_type = match request.identity_type.as_str() {
@@ -153,8 +157,8 @@ pub async fn create_identity(
 #[command]
 pub async fn get_identities(
     state: State<'_, AppState>,
-) -> Result<ApiResponse<Vec<SerializableIdentity>>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<Vec<SerializableIdentity>>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match service.get_identities().await {
@@ -174,8 +178,8 @@ pub async fn get_identities(
 pub async fn get_identity(
     id: String,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<Option<SerializableIdentity>>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<Option<SerializableIdentity>>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match Uuid::from_str(&id) {
@@ -197,8 +201,8 @@ pub async fn get_identity(
 pub async fn create_credential(
     request: CreateCredentialRequest,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<SerializableCredential>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<SerializableCredential>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match Uuid::from_str(&request.identity_id) {
@@ -261,8 +265,8 @@ pub async fn create_credential(
 pub async fn get_credentials_for_identity(
     identity_id: String,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<Vec<SerializableCredential>>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<Vec<SerializableCredential>>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match Uuid::from_str(&identity_id) {
@@ -287,8 +291,8 @@ pub async fn get_credentials_for_identity(
 pub async fn get_credential_data(
     credential_id: String,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<Option<SerializableCredentialData>>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<Option<SerializableCredentialData>>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match Uuid::from_str(&credential_id) {
@@ -323,8 +327,8 @@ pub async fn get_credential_data(
 pub async fn search_credentials(
     query: String,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<Vec<SerializableCredential>>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<Vec<SerializableCredential>>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match service.search_credentials(&query).await {
@@ -345,8 +349,8 @@ pub async fn generate_password(
     length: usize,
     include_symbols: bool,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<String>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<String>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             let password = service.generate_password(length, include_symbols);
@@ -360,8 +364,8 @@ pub async fn generate_password(
 #[command]
 pub async fn get_statistics(
     state: State<'_, AppState>,
-) -> Result<ApiResponse<serde_json::Value>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<serde_json::Value>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match service.get_statistics().await {
@@ -388,8 +392,8 @@ pub async fn get_statistics(
 pub async fn toggle_credential_favorite(
     credential_id: String,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<SerializableCredential>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<SerializableCredential>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match Uuid::from_str(&credential_id) {
@@ -418,8 +422,8 @@ pub async fn toggle_credential_favorite(
 pub async fn delete_credential(
     credential_id: String,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<bool>, String> {
-    let service_guard = state.service.lock().unwrap();
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => {
             match Uuid::from_str(&credential_id) {
@@ -440,14 +444,14 @@ pub async fn delete_credential(
 #[command]
 pub async fn get_ssh_agent_status(
     state: State<'_, AppState>,
-) -> Result<ApiResponse<SshAgentStatus>, String> {
-    let running = {
-        let guard = state.agent_handle.lock().unwrap();
-        guard
-            .as_ref()
-            .map(|handle| !handle.is_finished())
-            .unwrap_or(false)
-    };
+) -> std::result::Result<ApiResponse<SshAgentStatus>, String> {
+    let running = state
+        .agent_handle
+        .lock()
+        .await
+        .as_ref()
+        .map(|handle| !handle.is_finished())
+        .unwrap_or(false);
     let status = read_agent_status(running);
     Ok(ApiResponse::success(status))
 }
@@ -457,25 +461,26 @@ pub async fn get_ssh_agent_status(
 pub async fn start_ssh_agent(
     request: StartAgentRequest,
     state: State<'_, AppState>,
-) -> Result<ApiResponse<SshAgentStatus>, String> {
+) -> std::result::Result<ApiResponse<SshAgentStatus>, String> {
     let db_path = {
-        let guard = state.db_path.lock().unwrap();
+        let guard = state.db_path.lock().await;
         guard
             .clone()
             .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
     };
 
-    {
-        let guard = state.agent_handle.lock().unwrap();
-        if let Some(handle) = guard.as_ref() {
-            if !handle.is_finished() {
-                drop(guard);
-                return get_ssh_agent_status(state).await;
-            }
-        }
+    let already_running = state
+        .agent_handle
+        .lock()
+        .await
+        .as_ref()
+        .map(|handle| !handle.is_finished())
+        .unwrap_or(false);
+    if already_running {
+        return get_ssh_agent_status(state).await;
     }
 
-    let mut handle_guard = state.agent_handle.lock().unwrap();
+    let mut handle_guard = state.agent_handle.lock().await;
     let password = request.master_password.clone();
     let db_path_clone = db_path.clone();
     let state_dir = agent_state_dir().to_string_lossy().to_string();
@@ -502,8 +507,8 @@ pub async fn start_ssh_agent(
 
 /// Stop the embedded SSH agent
 #[command]
-pub async fn stop_ssh_agent(state: State<'_, AppState>) -> Result<ApiResponse<bool>, String> {
-    if let Some(handle) = state.agent_handle.lock().unwrap().take() {
+pub async fn stop_ssh_agent(state: State<'_, AppState>) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(handle) = state.agent_handle.lock().await.take() {
         handle.abort();
     }
     cleanup_agent_state_files();
@@ -514,17 +519,18 @@ pub async fn stop_ssh_agent(state: State<'_, AppState>) -> Result<ApiResponse<bo
 #[command]
 pub async fn get_ssh_keys(
     state: State<'_, AppState>,
-) -> Result<ApiResponse<Vec<SshKeySummary>>, String> {
-    let service_guard = state.service.lock().unwrap();
-    let service = match service_guard.as_ref() {
-        Some(service) => service,
-        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+) -> std::result::Result<ApiResponse<Vec<SshKeySummary>>, String> {
+    let identities = {
+        let service_guard = state.service.lock().await;
+        let service = match service_guard.as_ref() {
+            Some(service) => service,
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        };
+        service
+            .get_identities()
+            .await
+            .map_err(|e| format!("Failed to load identities: {}", e))?
     };
-
-    let identities = service
-        .get_identities()
-        .await
-        .map_err(|e| format!("Failed to load identities: {}", e))?;
     let mut identity_map: HashMap<Uuid, String> = HashMap::new();
     for identity in &identities {
         identity_map.insert(identity.id, identity.name.clone());
@@ -532,10 +538,17 @@ pub async fn get_ssh_keys(
 
     let mut summaries = Vec::new();
     for identity in identities {
-        let creds = service
-            .get_credentials_for_identity(&identity.id)
-            .await
-            .map_err(|e| format!("Failed to load credentials: {}", e))?;
+        let creds = {
+            let service_guard = state.service.lock().await;
+            let service = match service_guard.as_ref() {
+                Some(service) => service,
+                None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+            };
+            service
+                .get_credentials_for_identity(&identity.id)
+                .await
+                .map_err(|e| format!("Failed to load credentials: {}", e))?
+        };
         for credential in creds {
             if credential.credential_type == CredentialType::SshKey {
                 summaries.push(SshKeySummary {
@@ -555,6 +568,551 @@ pub async fn get_ssh_keys(
     }
 
     Ok(ApiResponse::success(summaries))
+}
+
+#[command]
+pub async fn wallet_list(
+    identity_id: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WalletListResponse>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let wallets = match identity_id {
+        Some(identity_id) => {
+            let uuid = Uuid::from_str(&identity_id)
+                .map_err(|_| "Invalid identity UUID format".to_string())?;
+            repo.find_by_identity(&uuid).await.map_err(|e| e.to_string())?
+        }
+        None => repo.find_all().await.map_err(|e| e.to_string())?,
+    };
+
+    let serializable = wallets
+        .into_iter()
+        .map(|wallet| SerializableWallet {
+            id: wallet.id.to_string(),
+            name: wallet.name,
+            network: wallet.network.to_string(),
+            wallet_type: format!("{:?}", wallet.wallet_type),
+            balance: "-".to_string(),
+            address_count: wallet.addresses.len(),
+            watch_only: wallet.watch_only,
+            security_level: wallet.security_level.to_string(),
+            created_at: wallet.created_at.to_rfc3339(),
+            updated_at: wallet.updated_at.to_rfc3339(),
+        })
+        .collect();
+
+    Ok(ApiResponse::success(WalletListResponse { wallets: serializable }))
+}
+
+#[command]
+pub async fn wallet_list_addresses(
+    wallet_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WalletAddressesResponse>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let uuid = Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+    let wallet: CryptoWallet = match repo.find_by_id(&uuid).await.map_err(|e| e.to_string())? {
+        Some(wallet) => wallet,
+        None => return Ok(ApiResponse::error("Wallet not found".to_string())),
+    };
+
+    let addresses = wallet
+        .addresses
+        .into_iter()
+        .map(|addr| SerializableWalletAddress {
+            address: addr.address,
+            address_type: match addr.address_type {
+                persona_core::models::wallet::AddressType::P2PKH => "P2PKH".to_string(),
+                persona_core::models::wallet::AddressType::P2SH => "P2SH".to_string(),
+                persona_core::models::wallet::AddressType::P2WPKH => "P2WPKH".to_string(),
+                persona_core::models::wallet::AddressType::P2TR => "P2TR".to_string(),
+                persona_core::models::wallet::AddressType::Ethereum => "ETH".to_string(),
+                persona_core::models::wallet::AddressType::Solana => "SOL".to_string(),
+                persona_core::models::wallet::AddressType::Custom(name) => name,
+            },
+            index: addr.index,
+            used: addr.used,
+            balance: addr.balance.unwrap_or_else(|| "-".to_string()),
+            derivation_path: addr.derivation_path,
+        })
+        .collect();
+
+    Ok(ApiResponse::success(WalletAddressesResponse { addresses }))
+}
+
+#[command]
+pub async fn wallet_generate(
+    identity_id: String,
+    request: WalletGenerateRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WalletGenerateResponse>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let identity_id = Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
+    let network = parse_network(&request.network)?;
+    let address_count = request.address_count.unwrap_or(5);
+
+    if request.password.len() < 8 {
+        return Ok(ApiResponse::error(
+            "Wallet password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    let mnemonic = persona_core::crypto::wallet_crypto::SecureMnemonic::generate(
+        persona_core::crypto::wallet_crypto::MnemonicWordCount::Words24,
+    )
+    .map_err(|e| e.to_string())?;
+    let mnemonic_phrase = mnemonic.phrase();
+
+    let derivation_path = match request.wallet_type.to_lowercase().as_str() {
+        "hd" | "hierarchical" | "hierarchical_deterministic" => None,
+        other => {
+            return Ok(ApiResponse::error(format!(
+                "Unsupported wallet_type '{}'. Use 'hd'.",
+                other
+            )))
+        }
+    };
+
+    let wallet = persona_core::crypto::wallet_import_export::import_from_mnemonic(
+        identity_id,
+        request.name.clone(),
+        &mnemonic_phrase,
+        "",
+        network,
+        derivation_path,
+        address_count,
+        &request.password,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let created = repo.create(&wallet).await.map_err(|e| e.to_string())?;
+    let first_address = created
+        .addresses
+        .first()
+        .map(|addr| addr.address.clone())
+        .unwrap_or_else(|| "-".to_string());
+
+    Ok(ApiResponse::success(WalletGenerateResponse {
+        wallet_id: created.id.to_string(),
+        name: created.name,
+        network: created.network.to_string(),
+        mnemonic: mnemonic_phrase,
+        first_address,
+    }))
+}
+
+#[command]
+pub async fn wallet_import(
+    identity_id: String,
+    request: WalletImportRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableWallet>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let identity_id = Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
+    let network = parse_network(&request.network)?;
+
+    if request.password.len() < 8 {
+        return Ok(ApiResponse::error(
+            "Wallet password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    let address_count = request.address_count.unwrap_or(5);
+    let wallet = match request.import_type.to_lowercase().as_str() {
+        "mnemonic" | "phrase" | "seed" => persona_core::crypto::wallet_import_export::import_from_mnemonic(
+            identity_id,
+            request.name.clone(),
+            request.data.trim(),
+            "",
+            network,
+            None,
+            address_count,
+            &request.password,
+        )
+        .map_err(|e| e.to_string())?,
+        "private_key" | "privatekey" | "key" => persona_core::crypto::wallet_import_export::import_from_private_key(
+            identity_id,
+            request.name.clone(),
+            request.data.trim(),
+            network,
+            &request.password,
+        )
+        .map_err(|e| e.to_string())?,
+        other => {
+            return Ok(ApiResponse::error(format!(
+                "Unsupported import_type '{}'. Use 'mnemonic' or 'private_key'.",
+                other
+            )))
+        }
+    };
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let created = repo.create(&wallet).await.map_err(|e| e.to_string())?;
+    Ok(ApiResponse::success(SerializableWallet {
+        id: created.id.to_string(),
+        name: created.name,
+        network: created.network.to_string(),
+        wallet_type: format!("{:?}", created.wallet_type),
+        balance: "-".to_string(),
+        address_count: created.addresses.len(),
+        watch_only: created.watch_only,
+        security_level: created.security_level.to_string(),
+        created_at: created.created_at.to_rfc3339(),
+        updated_at: created.updated_at.to_rfc3339(),
+    }))
+}
+
+#[command]
+pub async fn wallet_add_address(
+    wallet_id: String,
+    password: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableWalletAddress>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let wallet_id = Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+    if password.len() < 8 {
+        return Ok(ApiResponse::error(
+            "Wallet password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let wallet: CryptoWallet = match repo.find_by_id(&wallet_id).await.map_err(|e| e.to_string())? {
+        Some(wallet) => wallet,
+        None => return Ok(ApiResponse::error("Wallet not found".to_string())),
+    };
+
+    if wallet.watch_only {
+        return Ok(ApiResponse::error(
+            "Address generation for watch-only wallets is not implemented yet.".to_string(),
+        ));
+    }
+
+    if !matches!(
+        wallet.wallet_type,
+        persona_core::models::wallet::WalletType::HierarchicalDeterministic { .. }
+    ) {
+        return Ok(ApiResponse::error(
+            "Address generation is only supported for HD wallets.".to_string(),
+        ));
+    }
+
+    let derivation_path =
+        wallet
+            .derivation_path
+            .clone()
+            .unwrap_or_else(|| CryptoWallet::recommended_derivation_path(&wallet.network, 0));
+
+    let next_index = wallet
+        .addresses
+        .iter()
+        .map(|addr| addr.index)
+        .max()
+        .map(|v| v + 1)
+        .unwrap_or(0);
+
+    let encrypted_key: persona_core::crypto::wallet_encryption::EncryptedWalletKey =
+        serde_json::from_slice(&wallet.encrypted_private_key)
+            .map_err(|e| format!("Invalid wallet key encoding: {}", e))?;
+    let master_key = persona_core::crypto::wallet_encryption::decrypt_master_key(&encrypted_key, &password)
+        .map_err(|e| e.to_string())?;
+
+    let parent = master_key
+        .derive_path(&derivation_path)
+        .map_err(|e| e.to_string())?;
+    let child = parent
+        .derive_child(next_index, false)
+        .map_err(|e| e.to_string())?;
+
+    let (address_string, address_type) = match wallet.network {
+        BlockchainNetwork::Bitcoin => (
+            persona_core::crypto::address_generator::generate_bitcoin_address(
+                &child,
+                persona_core::crypto::address_generator::BitcoinAddressType::P2WPKH,
+                false,
+            )
+            .map_err(|e| e.to_string())?,
+            persona_core::models::wallet::AddressType::P2WPKH,
+        ),
+        BlockchainNetwork::Ethereum
+        | BlockchainNetwork::Polygon
+        | BlockchainNetwork::Arbitrum
+        | BlockchainNetwork::Optimism
+        | BlockchainNetwork::BinanceSmartChain => (
+            persona_core::crypto::address_generator::generate_ethereum_address_checksummed(&child)
+                .map_err(|e| e.to_string())?,
+            persona_core::models::wallet::AddressType::Ethereum,
+        ),
+        other => {
+            return Ok(ApiResponse::error(format!(
+                "Address generation not implemented for {}",
+                other
+            )))
+        }
+    };
+
+    let wallet_address = persona_core::models::wallet::WalletAddress {
+        address: address_string,
+        address_type,
+        derivation_path: Some(format!("{}/{}", derivation_path, next_index)),
+        index: next_index,
+        used: false,
+        balance: None,
+        last_activity: None,
+        metadata: HashMap::new(),
+        created_at: chrono::Utc::now(),
+    };
+
+    repo.add_address(&wallet_id, &wallet_address)
+        .await
+        .map_err(|e| e.to_string())?;
+    repo.touch(&wallet_id).await.map_err(|e| e.to_string())?;
+
+    Ok(ApiResponse::success(serialize_wallet_address(wallet_address)))
+}
+
+#[command]
+pub async fn wallet_export(
+    request: WalletExportRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<String>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+
+    let wallet_id =
+        Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+    let wallet = match repo
+        .find_by_id(&wallet_id)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(wallet) => wallet,
+        None => return Ok(ApiResponse::error("Wallet not found".to_string())),
+    };
+
+    let format = persona_core::crypto::wallet_import_export::parse_export_format(&request.format)
+        .map_err(|e| e.to_string())?;
+
+    let exported = match format {
+        persona_core::crypto::wallet_import_export::ExportFormat::Json => {
+            persona_core::crypto::wallet_import_export::export_to_json(
+                &wallet,
+                request.include_private,
+                request.password.as_deref(),
+            )
+            .map_err(|e| e.to_string())?
+        }
+        persona_core::crypto::wallet_import_export::ExportFormat::Mnemonic => {
+            persona_core::crypto::wallet_import_export::export_mnemonic(
+                &wallet,
+                request
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| "Password required for mnemonic export".to_string())?,
+            )
+            .map_err(|e| e.to_string())?
+        }
+        persona_core::crypto::wallet_import_export::ExportFormat::Xpub => {
+            persona_core::crypto::wallet_import_export::export_xpub(&wallet)
+                .map_err(|e| e.to_string())?
+        }
+        persona_core::crypto::wallet_import_export::ExportFormat::PrivateKey => {
+            persona_core::crypto::wallet_import_export::export_private_key(
+                &wallet,
+                request
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| "Password required for private key export".to_string())?,
+            )
+            .map_err(|e| e.to_string())?
+        }
+    };
+
+    Ok(ApiResponse::success(exported))
+}
+
+fn parse_network(network_str: &str) -> std::result::Result<BlockchainNetwork, String> {
+    match network_str.to_lowercase().as_str() {
+        "bitcoin" | "btc" => Ok(BlockchainNetwork::Bitcoin),
+        "ethereum" | "eth" => Ok(BlockchainNetwork::Ethereum),
+        "solana" | "sol" => Ok(BlockchainNetwork::Solana),
+        "bitcoin-cash" | "bitcoin cash" | "bitcoincash" | "bch" => Ok(BlockchainNetwork::BitcoinCash),
+        "litecoin" | "ltc" => Ok(BlockchainNetwork::Litecoin),
+        "dogecoin" | "doge" => Ok(BlockchainNetwork::Dogecoin),
+        "polygon" | "matic" => Ok(BlockchainNetwork::Polygon),
+        "arbitrum" | "arb" => Ok(BlockchainNetwork::Arbitrum),
+        "optimism" | "op" => Ok(BlockchainNetwork::Optimism),
+        "binance" | "bsc" | "bnb" | "binance smart chain" => Ok(BlockchainNetwork::BinanceSmartChain),
+        other => Ok(BlockchainNetwork::Custom(other.to_string())),
+    }
+}
+
+fn serialize_wallet_address(addr: persona_core::models::wallet::WalletAddress) -> SerializableWalletAddress {
+    SerializableWalletAddress {
+        address: addr.address,
+        address_type: match addr.address_type {
+            persona_core::models::wallet::AddressType::P2PKH => "P2PKH".to_string(),
+            persona_core::models::wallet::AddressType::P2SH => "P2SH".to_string(),
+            persona_core::models::wallet::AddressType::P2WPKH => "P2WPKH".to_string(),
+            persona_core::models::wallet::AddressType::P2TR => "P2TR".to_string(),
+            persona_core::models::wallet::AddressType::Ethereum => "ETH".to_string(),
+            persona_core::models::wallet::AddressType::Solana => "SOL".to_string(),
+            persona_core::models::wallet::AddressType::Custom(name) => name,
+        },
+        index: addr.index,
+        used: addr.used,
+        balance: addr.balance.unwrap_or_else(|| "-".to_string()),
+        derivation_path: addr.derivation_path,
+    }
 }
 
 fn agent_state_dir() -> PathBuf {
@@ -607,7 +1165,7 @@ fn read_agent_status(running_hint: bool) -> SshAgentStatus {
 }
 
 #[cfg(unix)]
-fn query_agent_key_count(sock_path: &str) -> Result<usize, String> {
+fn query_agent_key_count(sock_path: &str) -> std::result::Result<usize, String> {
     use byteorder::{BigEndian, ByteOrder};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
@@ -635,6 +1193,6 @@ fn query_agent_key_count(sock_path: &str) -> Result<usize, String> {
 }
 
 #[cfg(not(unix))]
-fn query_agent_key_count(_sock_path: &str) -> Result<usize, String> {
+fn query_agent_key_count(_sock_path: &str) -> std::result::Result<usize, String> {
     Err("Agent key count not supported on this platform".to_string())
 }

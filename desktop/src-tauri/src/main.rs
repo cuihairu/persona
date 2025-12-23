@@ -5,7 +5,7 @@ mod commands;
 mod types;
 
 use types::AppState;
-use std::sync::Mutex;
+use tokio::sync::Mutex;
 
 fn main() {
     tauri::Builder::default()
@@ -33,6 +33,12 @@ fn main() {
             commands::start_ssh_agent,
             commands::stop_ssh_agent,
             commands::get_ssh_keys,
+            commands::wallet_list,
+            commands::wallet_list_addresses,
+            commands::wallet_generate,
+            commands::wallet_import,
+            commands::wallet_add_address,
+            commands::wallet_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

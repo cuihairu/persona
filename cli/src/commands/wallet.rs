@@ -382,22 +382,23 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             watch_only,
             search,
         } => {
-            let wallets = if let Some(level_str) = security_level {
+            let mut wallets = if let Some(level_str) = security_level {
                 let level = parse_wallet_security_level(&level_str)?;
                 repo.find_by_security_level(&level).await.into_anyhow()?
             } else if let Some(net_str) = network {
                 let network = parse_network(&net_str)?;
                 repo.find_by_network(&network).await.into_anyhow()?
-            } else if let Some(pattern) = search {
-                repo.find_by_identity(&uuid::Uuid::parse_str(&pattern).unwrap_or_default())
-                    .await
-                    .into_anyhow()?
             } else {
-                // For now, get all wallets (would need current identity in real implementation)
-                repo.find_by_network(&BlockchainNetwork::Bitcoin)
-                    .await
-                    .into_anyhow()?
+                repo.find_all().await.into_anyhow()?
             };
+
+            if let Some(pattern) = search {
+                let needle = pattern.to_lowercase();
+                wallets = wallets
+                    .into_iter()
+                    .filter(|wallet| wallet.name.to_lowercase().contains(&needle))
+                    .collect();
+            }
 
             if wallets.is_empty() {
                 formatter.print_info("No wallets found.");

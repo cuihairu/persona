@@ -6,13 +6,17 @@
  */
 
 import { invoke } from '@tauri-apps/api/tauri';
-import type { ApiResponse, Identity, Credential } from '../src/types';
+import type { ApiResponse, Identity, Credential } from '@/types';
+import { personaAPI } from '@/utils/api';
 
 // Mock Tauri invoke for testing
 const mockInvoke = jest.fn();
 jest.mock('@tauri-apps/api/tauri', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
+
+const invokeApi = <T>(command: string, args?: Record<string, unknown>) =>
+  args ? invoke<ApiResponse<T>>(command, args) : invoke<ApiResponse<T>>(command);
 
 describe('Desktop Application Integration Tests', () => {
   beforeEach(() => {
@@ -29,7 +33,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('init_service', {
+      const result = await invokeApi<boolean>('init_service', {
         request: {
           master_password: 'test_password_123',
           db_path: undefined,
@@ -55,7 +59,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('init_service', {
+      const result = await invokeApi<boolean>('init_service', {
         request: {
           master_password: 'wrong_password',
           db_path: undefined,
@@ -92,7 +96,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('create_identity', {
+      const result = await invokeApi<Identity>('create_identity', {
         request: {
           name: 'Test Identity',
           identity_type: 'Personal',
@@ -122,7 +126,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('get_identities');
+      const result = await invokeApi<Identity[]>('get_identities');
 
       expect(mockInvoke).toHaveBeenCalledWith('get_identities');
       expect(result.data).toHaveLength(1);
@@ -157,7 +161,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('create_credential', {
+      const result = await invokeApi<Credential>('create_credential', {
         request: {
           identity_id: '123e4567-e89b-12d3-a456-426614174000',
           name: 'Test Website',
@@ -186,8 +190,8 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('get_credentials_for_identity', {
-        identityId: '123e4567-e89b-12d3-a456-426614174000',
+      const result = await invokeApi<Credential[]>('get_credentials_for_identity', {
+        identity_id: '123e4567-e89b-12d3-a456-426614174000',
       });
 
       expect(result.data).toHaveLength(1);
@@ -203,7 +207,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('search_credentials', {
+      const result = await invokeApi<Credential[]>('search_credentials', {
         query: 'Test',
       });
 
@@ -223,8 +227,8 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('toggle_credential_favorite', {
-        credentialId: mockCredential.id,
+      const result = await invokeApi<Credential>('toggle_credential_favorite', {
+        credential_id: mockCredential.id,
       });
 
       expect(result.data!.is_favorite).toBe(true);
@@ -239,8 +243,8 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('delete_credential', {
-        credentialId: mockCredential.id,
+      const result = await invokeApi<boolean>('delete_credential', {
+        credential_id: mockCredential.id,
       });
 
       expect(result.data).toBe(true);
@@ -257,14 +261,14 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('generate_password', {
+      const result = await invokeApi<string>('generate_password', {
         length: 16,
-        includeSymbols: true,
+        include_symbols: true,
       });
 
       expect(mockInvoke).toHaveBeenCalledWith('generate_password', {
         length: 16,
-        includeSymbols: true,
+        include_symbols: true,
       });
 
       expect(result.data).toBe('GeneratedPassword123!');
@@ -288,7 +292,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('get_statistics');
+      const result = await invokeApi<typeof mockStats>('get_statistics');
 
       expect(result.data).toEqual(mockStats);
     });
@@ -304,7 +308,7 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('is_service_unlocked');
+      const result = await invokeApi<boolean>('is_service_unlocked');
 
       expect(result.data).toBe(true);
     });
@@ -318,9 +322,126 @@ describe('Desktop Application Integration Tests', () => {
 
       mockInvoke.mockResolvedValue(mockResponse);
 
-      const result = await invoke('lock_service');
+      const result = await invokeApi<boolean>('lock_service');
 
       expect(result.data).toBe(true);
+    });
+  });
+
+  describe('Wallet Management', () => {
+    it('should list wallets for an identity', async () => {
+      const mockResponse: ApiResponse<{ wallets: any[] }> = {
+        success: true,
+        data: { wallets: [] },
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      await personaAPI.walletList('123e4567-e89b-12d3-a456-426614174000');
+
+      expect(mockInvoke).toHaveBeenCalledWith('wallet_list', {
+        identity_id: '123e4567-e89b-12d3-a456-426614174000',
+      });
+    });
+
+    it('should generate a wallet for an identity', async () => {
+      const mockResponse: ApiResponse<any> = {
+        success: true,
+        data: {
+          wallet_id: '11111111-1111-1111-1111-111111111111',
+          name: 'My Wallet',
+          network: 'Ethereum',
+          mnemonic: 'word1 word2 word3',
+          first_address: '0xabc',
+        },
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      await personaAPI.walletGenerate('123e4567-e89b-12d3-a456-426614174000', {
+        name: 'My Wallet',
+        network: 'Ethereum',
+        wallet_type: 'hd',
+        password: 'password123',
+        address_count: 5,
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith('wallet_generate', {
+        identity_id: '123e4567-e89b-12d3-a456-426614174000',
+        request: {
+          name: 'My Wallet',
+          network: 'Ethereum',
+          wallet_type: 'hd',
+          password: 'password123',
+          address_count: 5,
+        },
+      });
+    });
+
+    it('should import a wallet for an identity', async () => {
+      const mockResponse: ApiResponse<any> = {
+        success: true,
+        data: {
+          id: '11111111-1111-1111-1111-111111111111',
+          name: 'Imported Wallet',
+          network: 'Ethereum',
+          wallet_type: 'SingleAddress',
+          balance: '-',
+          address_count: 1,
+          watch_only: false,
+          security_level: 'Medium',
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      await personaAPI.walletImport('123e4567-e89b-12d3-a456-426614174000', {
+        name: 'Imported Wallet',
+        network: 'Ethereum',
+        import_type: 'private_key',
+        data: '0xdeadbeef',
+        password: 'password123',
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith('wallet_import', {
+        identity_id: '123e4567-e89b-12d3-a456-426614174000',
+        request: {
+          name: 'Imported Wallet',
+          network: 'Ethereum',
+          import_type: 'private_key',
+          data: '0xdeadbeef',
+          password: 'password123',
+        },
+      });
+    });
+
+    it('should add an address for a wallet', async () => {
+      const mockResponse: ApiResponse<any> = {
+        success: true,
+        data: {
+          address: '0xabc',
+          address_type: 'ETH',
+          index: 0,
+          used: false,
+          balance: '-',
+          derivation_path: null,
+        },
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      await personaAPI.walletAddAddress('11111111-1111-1111-1111-111111111111', 'password123');
+
+      expect(mockInvoke).toHaveBeenCalledWith('wallet_add_address', {
+        wallet_id: '11111111-1111-1111-1111-111111111111',
+        password: 'password123',
+      });
     });
   });
 });

@@ -36,6 +36,20 @@ pub fn generate_bitcoin_address(
     }
 }
 
+/// Generate Bitcoin address directly from a compressed secp256k1 public key.
+pub fn generate_bitcoin_address_from_compressed_pubkey(
+    pubkey: &[u8; 33],
+    address_type: BitcoinAddressType,
+    testnet: bool,
+) -> PersonaResult<String> {
+    match address_type {
+        BitcoinAddressType::P2PKH => generate_p2pkh_address(pubkey, testnet),
+        BitcoinAddressType::P2SH => generate_p2sh_address(pubkey, testnet),
+        BitcoinAddressType::P2WPKH => generate_p2wpkh_address(pubkey, testnet),
+        BitcoinAddressType::P2TR => generate_p2tr_address(pubkey, testnet),
+    }
+}
+
 /// Generate P2PKH (Pay-to-Public-Key-Hash) address
 fn generate_p2pkh_address(pubkey: &[u8; 33], testnet: bool) -> PersonaResult<String> {
     // SHA256 then RIPEMD160
@@ -98,18 +112,38 @@ pub fn generate_ethereum_address(key: &DerivedKey) -> PersonaResult<String> {
     // This is simplified - real implementation needs proper uncompression
     let uncompressed = uncompress_secp256k1_pubkey(&pubkey_bytes)?;
 
-    // Keccak256 hash of the uncompressed public key (excluding 0x04 prefix)
-    let hash = Keccak256::digest(&uncompressed[1..]);
-
-    // Take last 20 bytes and add 0x prefix
-    let address_bytes = &hash[12..];
-    Ok(format!("0x{}", hex::encode(address_bytes)))
+    generate_ethereum_address_from_uncompressed_pubkey(&uncompressed)
 }
 
 /// Generate EIP-55 checksummed Ethereum address
 pub fn generate_ethereum_address_checksummed(key: &DerivedKey) -> PersonaResult<String> {
     let address = generate_ethereum_address(key)?;
-    let address_lower = address[2..].to_lowercase(); // Remove 0x prefix
+    Ok(apply_eip55_checksum(&address))
+}
+
+/// Generate EIP-55 checksummed Ethereum address from a compressed secp256k1 public key.
+pub fn generate_ethereum_address_checksummed_from_compressed_pubkey(
+    compressed: &[u8; 33],
+) -> PersonaResult<String> {
+    let uncompressed = uncompress_secp256k1_pubkey(compressed)?;
+    let address = generate_ethereum_address_from_uncompressed_pubkey(&uncompressed)?;
+    Ok(apply_eip55_checksum(&address))
+}
+
+fn generate_ethereum_address_from_uncompressed_pubkey(uncompressed: &[u8]) -> PersonaResult<String> {
+    if uncompressed.len() != 65 || uncompressed[0] != 0x04 {
+        return Err(PersonaError::Cryptography(
+            "Invalid uncompressed secp256k1 pubkey".to_string(),
+        ));
+    }
+
+    let hash = Keccak256::digest(&uncompressed[1..]);
+    let address_bytes = &hash[12..];
+    Ok(format!("0x{}", hex::encode(address_bytes)))
+}
+
+fn apply_eip55_checksum(address: &str) -> String {
+    let address_lower = address.trim_start_matches("0x").to_lowercase();
 
     // Keccak256 hash of lowercase address
     let hash = Keccak256::digest(address_lower.as_bytes());
@@ -130,7 +164,7 @@ pub fn generate_ethereum_address_checksummed(key: &DerivedKey) -> PersonaResult<
         }
     }
 
-    Ok(checksummed)
+    checksummed
 }
 
 /// Generate Solana address (base58-encoded Ed25519 public key)

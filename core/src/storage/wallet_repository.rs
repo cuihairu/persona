@@ -26,6 +26,44 @@ impl CryptoWalletRepository {
         Self { db }
     }
 
+    /// Find all wallets
+    pub async fn find_all(&self) -> PersonaResult<Vec<CryptoWallet>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, identity_id, name, description, network, wallet_type,
+                   derivation_path, extended_public_key, encrypted_private_key,
+                   encrypted_mnemonic, watch_only, security_level,
+                   created_at, updated_at
+            FROM crypto_wallets
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut wallets = Vec::new();
+        for row in rows {
+            let mut wallet = self.wallet_from_row(&row)?;
+
+            wallet.addresses = self.load_wallet_addresses(&wallet.id).await?;
+            wallet.metadata = self.load_wallet_metadata(&wallet.id).await?;
+
+            wallets.push(wallet);
+        }
+
+        Ok(wallets)
+    }
+
+    /// Update the wallet `updated_at` timestamp to now.
+    pub async fn touch(&self, wallet_id: &Uuid) -> PersonaResult<()> {
+        sqlx::query("UPDATE crypto_wallets SET updated_at = $2 WHERE id = $1")
+            .bind(wallet_id.to_string())
+            .bind(chrono::Utc::now().timestamp())
+            .execute(self.db.pool())
+            .await?;
+        Ok(())
+    }
+
     /// Create a new crypto wallet
     pub async fn create(&self, wallet: &CryptoWallet) -> PersonaResult<CryptoWallet> {
         let mut tx = self.db.pool().begin().await?;
