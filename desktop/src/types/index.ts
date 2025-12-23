@@ -98,6 +98,68 @@ export interface Statistics {
   security_levels: Record<string, number>;
 }
 
+export interface WalletSummary {
+  id: string;
+  name: string;
+  network: string;
+  wallet_type: string;
+  balance: string;
+  address_count: number;
+  watch_only: boolean;
+  security_level: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WalletAddress {
+  address: string;
+  address_type: string;
+  index: number;
+  used: boolean;
+  balance: string;
+  derivation_path?: string | null;
+}
+
+export interface WalletListResponse {
+  wallets: WalletSummary[];
+}
+
+export interface WalletAddressesResponse {
+  addresses: WalletAddress[];
+}
+
+export interface WalletGenerateRequest {
+  name: string;
+  network: string;
+  wallet_type: 'hd';
+  password: string;
+  address_count?: number;
+}
+
+export interface WalletGenerateResponse {
+  wallet_id: string;
+  name: string;
+  network: string;
+  mnemonic: string;
+  first_address: string;
+}
+
+export interface WalletImportRequest {
+  name: string;
+  network: string;
+  import_type: 'mnemonic' | 'private_key';
+  data: string;
+  password: string;
+  address_count?: number;
+}
+
+export interface WalletExportRequest {
+  wallet_id: string;
+  format: 'json' | 'mnemonic' | 'xpub' | 'private_key';
+  include_private: boolean;
+  password?: string;
+}
+
 export type IdentityType = 'Personal' | 'Work' | 'Social' | 'Financial' | 'Gaming';
 export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' | 'BankCard' | 'GameAccount' | 'ServerConfig' | 'Certificate' | 'TwoFactor';
 export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';

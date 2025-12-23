@@ -1,7 +1,9 @@
 // Wallet import/export utilities
 
 use crate::crypto::address_generator::{
-    generate_bitcoin_address, generate_ethereum_address_checksummed, BitcoinAddressType,
+    generate_bitcoin_address, generate_bitcoin_address_from_compressed_pubkey,
+    generate_ethereum_address_checksummed, generate_ethereum_address_checksummed_from_compressed_pubkey,
+    BitcoinAddressType,
 };
 use crate::crypto::wallet_crypto::{
     Bip44PathBuilder, CoinType, DerivedKey, MasterKey, MnemonicWordCount, SecureMnemonic,
@@ -137,7 +139,7 @@ pub fn import_from_private_key(
         crate::crypto::wallet_encryption::encrypt_private_key(&private_key_bytes, password)?;
 
     // Create wallet
-    let wallet = CryptoWallet::new(
+    let mut wallet = CryptoWallet::new(
         identity_id,
         name,
         network,
@@ -145,6 +147,53 @@ pub fn import_from_private_key(
         serde_json::to_vec(&encrypted_key)
             .map_err(|e| PersonaError::Cryptography(format!("Serialization error: {}", e)))?,
     );
+
+    // Derive address from private key (secp256k1)
+    let signing_key = k256::ecdsa::SigningKey::from_bytes(private_key_bytes.as_slice().into())
+        .map_err(|e| PersonaError::Cryptography(format!("Invalid secp256k1 private key: {}", e)))?;
+    let verifying_key = signing_key.verifying_key();
+    let encoded = verifying_key.to_encoded_point(true);
+    let compressed_bytes = encoded.as_bytes();
+    let compressed: [u8; 33] = compressed_bytes
+        .try_into()
+        .map_err(|_| PersonaError::Cryptography("Invalid compressed pubkey".to_string()))?;
+
+    let (address_string, address_type) = match wallet.network {
+        BlockchainNetwork::Bitcoin => (
+            generate_bitcoin_address_from_compressed_pubkey(
+                &compressed,
+                BitcoinAddressType::P2WPKH,
+                false,
+            )?,
+            crate::models::wallet::AddressType::P2WPKH,
+        ),
+        BlockchainNetwork::Ethereum
+        | BlockchainNetwork::Polygon
+        | BlockchainNetwork::Arbitrum
+        | BlockchainNetwork::Optimism
+        | BlockchainNetwork::BinanceSmartChain => (
+            generate_ethereum_address_checksummed_from_compressed_pubkey(&compressed)?,
+            crate::models::wallet::AddressType::Ethereum,
+        ),
+        other => {
+            return Err(PersonaError::Cryptography(format!(
+                "Address generation not implemented for {:?}",
+                other
+            )))
+        }
+    };
+
+    wallet.addresses.push(crate::models::wallet::WalletAddress {
+        address: address_string,
+        address_type,
+        derivation_path: None,
+        index: 0,
+        used: false,
+        balance: None,
+        last_activity: None,
+        metadata: HashMap::new(),
+        created_at: chrono::Utc::now(),
+    });
 
     Ok(wallet)
 }
