@@ -36,8 +36,12 @@ pub async fn run_agent() -> Result<()> {
     let mut listener = AgentListener::bind(&socket_path)
         .await
         .with_context(|| format!("Failed to bind socket {}", socket_path.display()))?;
-    info!("persona-ssh-agent listening at {}", socket_path.display());
-    println!("SSH_AUTH_SOCK={}", socket_path.display());
+    let mut endpoint = listener.address();
+    if endpoint == "unknown" {
+        endpoint = socket_path.display().to_string();
+    }
+    info!("persona-ssh-agent listening at {}", endpoint);
+    println!("SSH_AUTH_SOCK={}", endpoint);
 
     // Write state files
     let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
@@ -51,7 +55,7 @@ pub async fn run_agent() -> Result<()> {
     let _ = std::fs::create_dir_all(&state_dir);
     let sock_file = state_dir.join("ssh-agent.sock");
     let pid_file = state_dir.join("ssh-agent.pid");
-    let _ = std::fs::write(&sock_file, socket_path.display().to_string());
+    let _ = std::fs::write(&sock_file, &endpoint);
     let _ = std::fs::write(&pid_file, std::process::id().to_string());
 
     // Load keys from Persona
