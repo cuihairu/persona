@@ -437,106 +437,81 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
         }
 
         WalletCommand::Show { wallet_identifier } => {
-            let wallet = if let Ok(uuid) = uuid::Uuid::parse_str(&wallet_identifier) {
-                repo.find_by_id(&uuid).await.into_anyhow()?
-            } else {
-                // Search by name (simplified - in real implementation would query by name)
-                let all_wallets = repo
-                    .find_by_network(&BlockchainNetwork::Bitcoin)
-                    .await
-                    .into_anyhow()?;
-                all_wallets
-                    .into_iter()
-                    .find(|w| w.name == wallet_identifier)
-            };
+            let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
 
-            match wallet {
-                Some(wallet) => {
-                    formatter.print_info(&format!("🔐 Crypto Wallet: {}", wallet.name));
-                    formatter.print_info(&format!("ID: {}", wallet.id));
-                    formatter.print_info(&format!("Network: {}", wallet.network));
+            formatter.print_info(&format!("🔐 Crypto Wallet: {}", wallet.name));
+            formatter.print_info(&format!("ID: {}", wallet.id));
+            formatter.print_info(&format!("Network: {}", wallet.network));
+            formatter.print_info(&format!("Type: {}", format_wallet_type(&wallet.wallet_type)));
+            formatter.print_info(&format!("Security Level: {}", wallet.security_level));
+            formatter.print_info(&format!(
+                "Watch-Only: {}",
+                if wallet.watch_only { "Yes" } else { "No" }
+            ));
+
+            if let Some(desc) = &wallet.description {
+                formatter.print_info(&format!("Description: {}", desc));
+            }
+
+            if let Some(path) = &wallet.derivation_path {
+                formatter.print_info(&format!("Derivation Path: {}", path));
+            }
+
+            if let Some(xpub) = &wallet.extended_public_key {
+                formatter.print_info(&format!(
+                    "Extended Public Key: {}...",
+                    &xpub[..std::cmp::min(xpub.len(), 20)]
+                ));
+            }
+
+            formatter.print_info(&format!("Address Count: {}", wallet.addresses.len()));
+            formatter.print_info(&format!("Security Score: {}/100", wallet.security_score()));
+
+            let unused_count = wallet.get_unused_addresses().len();
+            formatter.print_info(&format!("Unused Addresses: {}", unused_count));
+
+            formatter.print_info(&format!(
+                "Created: {}",
+                wallet.created_at.format("%Y-%m-%d %H:%M:%S UTC")
+            ));
+            formatter.print_info(&format!(
+                "Updated: {}",
+                wallet.updated_at.format("%Y-%m-%d %H:%M:%S UTC")
+            ));
+
+            // Show addresses
+            if !wallet.addresses.is_empty() {
+                formatter.print_info("\n📝 Addresses:");
+                let address_data: Vec<AddressTable> = wallet
+                    .addresses
+                    .iter()
+                    .take(10) // Limit to first 10 for readability
+                    .map(|addr| AddressTable {
+                        index: addr.index,
+                        address: format!(
+                            "{}...{}",
+                            &addr.address[..std::cmp::min(addr.address.len(), 10)],
+                            &addr.address[std::cmp::max(addr.address.len().saturating_sub(10), 0)..]
+                        ),
+                        address_type: format_address_type(&addr.address_type),
+                        used: if addr.used { "✓" } else { "✗" }.to_string(),
+                        balance: addr.balance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                        last_activity: addr
+                            .last_activity
+                            .map(|dt| dt.format("%Y-%m-%d").to_string())
+                            .unwrap_or_else(|| "Never".to_string()),
+                    })
+                    .collect();
+
+                let address_table = Table::new(&address_data).with(Style::modern()).to_string();
+                formatter.print_output(&address_table);
+
+                if wallet.addresses.len() > 10 {
                     formatter.print_info(&format!(
-                        "Type: {}",
-                        format_wallet_type(&wallet.wallet_type)
+                        "... and {} more addresses",
+                        wallet.addresses.len() - 10
                     ));
-                    formatter.print_info(&format!("Security Level: {}", wallet.security_level));
-                    formatter.print_info(&format!(
-                        "Watch-Only: {}",
-                        if wallet.watch_only { "Yes" } else { "No" }
-                    ));
-
-                    if let Some(desc) = &wallet.description {
-                        formatter.print_info(&format!("Description: {}", desc));
-                    }
-
-                    if let Some(path) = &wallet.derivation_path {
-                        formatter.print_info(&format!("Derivation Path: {}", path));
-                    }
-
-                    if let Some(xpub) = &wallet.extended_public_key {
-                        formatter.print_info(&format!(
-                            "Extended Public Key: {}...",
-                            &xpub[..std::cmp::min(xpub.len(), 20)]
-                        ));
-                    }
-
-                    formatter.print_info(&format!("Address Count: {}", wallet.addresses.len()));
-                    formatter
-                        .print_info(&format!("Security Score: {}/100", wallet.security_score()));
-
-                    let unused_count = wallet.get_unused_addresses().len();
-                    formatter.print_info(&format!("Unused Addresses: {}", unused_count));
-
-                    formatter.print_info(&format!(
-                        "Created: {}",
-                        wallet.created_at.format("%Y-%m-%d %H:%M:%S UTC")
-                    ));
-                    formatter.print_info(&format!(
-                        "Updated: {}",
-                        wallet.updated_at.format("%Y-%m-%d %H:%M:%S UTC")
-                    ));
-
-                    // Show addresses
-                    if !wallet.addresses.is_empty() {
-                        formatter.print_info("\n📝 Addresses:");
-                        let address_data: Vec<AddressTable> = wallet
-                            .addresses
-                            .iter()
-                            .take(10) // Limit to first 10 for readability
-                            .map(|addr| AddressTable {
-                                index: addr.index,
-                                address: format!(
-                                    "{}...{}",
-                                    &addr.address[..std::cmp::min(addr.address.len(), 10)],
-                                    &addr.address
-                                        [std::cmp::max(addr.address.len().saturating_sub(10), 0)..]
-                                ),
-                                address_type: format_address_type(&addr.address_type),
-                                used: if addr.used { "✓" } else { "✗" }.to_string(),
-                                balance: addr
-                                    .balance
-                                    .clone()
-                                    .unwrap_or_else(|| "Unknown".to_string()),
-                                last_activity: addr
-                                    .last_activity
-                                    .map(|dt| dt.format("%Y-%m-%d").to_string())
-                                    .unwrap_or_else(|| "Never".to_string()),
-                            })
-                            .collect();
-
-                        let address_table =
-                            Table::new(&address_data).with(Style::modern()).to_string();
-                        formatter.print_output(&address_table);
-
-                        if wallet.addresses.len() > 10 {
-                            formatter.print_info(&format!(
-                                "... and {} more addresses",
-                                wallet.addresses.len() - 10
-                            ));
-                        }
-                    }
                 }
-                None => bail!("Wallet '{}' not found", wallet_identifier),
             }
         }
 
@@ -1180,14 +1155,86 @@ async fn find_wallet_by_identifier(
     repo: &CryptoWalletRepository,
     identifier: &str,
 ) -> Result<CryptoWallet> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() {
+        bail!("Wallet identifier cannot be empty");
+    }
+
     if let Ok(uuid) = uuid::Uuid::parse_str(identifier) {
-        repo.find_by_id(&uuid)
+        return repo
+            .find_by_id(&uuid)
             .await
             .into_anyhow()?
-            .ok_or_else(|| anyhow!("Wallet with ID {} not found", uuid))
-    } else {
-        // Search by name (simplified - in real implementation would have proper name search)
-        bail!("Wallet lookup by name is not implemented in this demo. Please use wallet ID.");
+            .ok_or_else(|| anyhow!("Wallet with ID {} not found", uuid));
+    }
+
+    // Allow shortened IDs (CLI list shows first 8 chars).
+    let looks_like_id_prefix = identifier.len() >= 8
+        && identifier.len() <= 32
+        && identifier.chars().all(|c| c.is_ascii_hexdigit());
+    if looks_like_id_prefix {
+        let matches = repo
+            .find_by_id_prefix(identifier)
+            .await
+            .into_anyhow()?;
+
+        match matches.len() {
+            0 => { /* fall through to name search */ }
+            1 => return Ok(matches.into_iter().next().unwrap()),
+            _ => {
+                let listed = matches
+                    .iter()
+                    .take(10)
+                    .map(|w| format!("- {} ({})", w.name, w.id))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                bail!(
+                    "Multiple wallets match ID prefix '{}':\n{}\nPlease use the full wallet ID.",
+                    identifier,
+                    listed
+                );
+            }
+        }
+    }
+
+    // Case-insensitive exact name match.
+    let exact = repo.find_by_name(identifier).await.into_anyhow()?;
+    match exact.len() {
+        0 => { /* fall through to fuzzy */ }
+        1 => return Ok(exact.into_iter().next().unwrap()),
+        _ => {
+            let listed = exact
+                .iter()
+                .take(10)
+                .map(|w| format!("- {} ({})", w.name, w.id))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "Multiple wallets are named '{}':\n{}\nPlease use the wallet ID.",
+                identifier,
+                listed
+            );
+        }
+    }
+
+    // Fuzzy name search (substring).
+    let matches = repo.find_by_name_like(identifier).await.into_anyhow()?;
+    match matches.len() {
+        0 => bail!("Wallet '{}' not found", identifier),
+        1 => Ok(matches.into_iter().next().unwrap()),
+        _ => {
+            let listed = matches
+                .iter()
+                .take(10)
+                .map(|w| format!("- {} ({})", w.name, w.id))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "Multiple wallets match '{}':\n{}\nPlease use the wallet ID.",
+                identifier,
+                listed
+            );
+        }
     }
 }
 
