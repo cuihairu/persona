@@ -252,6 +252,92 @@ impl CryptoWalletRepository {
         Ok(wallets)
     }
 
+    /// Find wallets by name (case-insensitive exact match).
+    pub async fn find_by_name(&self, name: &str) -> PersonaResult<Vec<CryptoWallet>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, identity_id, name, description, network, wallet_type,
+                   derivation_path, extended_public_key, encrypted_private_key,
+                   encrypted_mnemonic, watch_only, security_level,
+                   created_at, updated_at
+            FROM crypto_wallets
+            WHERE LOWER(name) = LOWER($1)
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(name)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut wallets = Vec::new();
+        for row in rows {
+            let mut wallet = self.wallet_from_row(&row)?;
+            wallet.addresses = self.load_wallet_addresses(&wallet.id).await?;
+            wallet.metadata = self.load_wallet_metadata(&wallet.id).await?;
+            wallets.push(wallet);
+        }
+
+        Ok(wallets)
+    }
+
+    /// Find wallets by name substring (case-insensitive).
+    pub async fn find_by_name_like(&self, name_pattern: &str) -> PersonaResult<Vec<CryptoWallet>> {
+        let like = format!("%{}%", name_pattern.to_lowercase());
+        let rows = sqlx::query(
+            r#"
+            SELECT id, identity_id, name, description, network, wallet_type,
+                   derivation_path, extended_public_key, encrypted_private_key,
+                   encrypted_mnemonic, watch_only, security_level,
+                   created_at, updated_at
+            FROM crypto_wallets
+            WHERE LOWER(name) LIKE $1
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(like)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut wallets = Vec::new();
+        for row in rows {
+            let mut wallet = self.wallet_from_row(&row)?;
+            wallet.addresses = self.load_wallet_addresses(&wallet.id).await?;
+            wallet.metadata = self.load_wallet_metadata(&wallet.id).await?;
+            wallets.push(wallet);
+        }
+
+        Ok(wallets)
+    }
+
+    /// Find wallets by ID prefix (useful when CLI shows shortened IDs).
+    pub async fn find_by_id_prefix(&self, id_prefix: &str) -> PersonaResult<Vec<CryptoWallet>> {
+        let like = format!("{}%", id_prefix);
+        let rows = sqlx::query(
+            r#"
+            SELECT id, identity_id, name, description, network, wallet_type,
+                   derivation_path, extended_public_key, encrypted_private_key,
+                   encrypted_mnemonic, watch_only, security_level,
+                   created_at, updated_at
+            FROM crypto_wallets
+            WHERE id LIKE $1
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(like)
+        .fetch_all(self.db.pool())
+        .await?;
+
+        let mut wallets = Vec::new();
+        for row in rows {
+            let mut wallet = self.wallet_from_row(&row)?;
+            wallet.addresses = self.load_wallet_addresses(&wallet.id).await?;
+            wallet.metadata = self.load_wallet_metadata(&wallet.id).await?;
+            wallets.push(wallet);
+        }
+
+        Ok(wallets)
+    }
+
     /// Update wallet
     pub async fn update(&self, wallet: &CryptoWallet) -> PersonaResult<CryptoWallet> {
         sqlx::query(
