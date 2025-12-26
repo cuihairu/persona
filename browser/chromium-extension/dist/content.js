@@ -1,6 +1,7 @@
 import { observeForms } from './formScanner';
 import { evaluateDomain } from './domainPolicy';
 import { DEFAULT_AUTOFILL_SETTINGS, getAutofillSettings, onAutofillSettingsChanged } from './settings';
+import { getAutofillDefaultsForOrigin, onAutofillDefaultsChanged } from './autofillDefaults';
 // Current page state
 let currentForms = [];
 let currentSuggestions = [];
@@ -12,6 +13,7 @@ let lastLoginAutofillAttemptAt = 0;
 let lastTotpAutofillAttemptAt = 0;
 let lastSuggestionsFetchAt = 0;
 let suggestionsFetchInFlight = null;
+let currentOriginDefaults = null;
 // Initialize content script
 function init() {
     void getAutofillSettings().then((settings) => {
@@ -19,6 +21,10 @@ function init() {
     });
     onAutofillSettingsChanged((settings) => {
         currentSettings = settings;
+    });
+    void refreshOriginDefaults();
+    onAutofillDefaultsChanged(() => {
+        void refreshOriginDefaults();
     });
     // Listen for status updates from background
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -66,6 +72,9 @@ function init() {
     // Add focus listener for input fields
     document.addEventListener('focusin', handleInputFocus);
     console.debug('[Persona] Content script initialized');
+}
+async function refreshOriginDefaults() {
+    currentOriginDefaults = await getAutofillDefaultsForOrigin(location.origin).catch(() => null);
 }
 // Fetch suggestions from background
 async function fetchSuggestions() {
@@ -128,14 +137,19 @@ function isFillableInput(input) {
         return false;
     return true;
 }
-function selectSingleBestSuggestion(mode, minStrength) {
+async function selectSuggestionWithDefault(mode, minStrength) {
     const filtered = currentSuggestions
         .filter((s) => (s.credential_type ?? 'password') === mode)
         .filter((s) => (typeof s.match_strength === 'number' ? s.match_strength : 0) >= minStrength)
         .sort((a, b) => b.match_strength - a.match_strength);
-    if (filtered.length !== 1)
+    if (filtered.length === 0)
         return null;
-    return filtered[0];
+    if (filtered.length === 1)
+        return filtered[0];
+    const wantedId = mode === 'totp' ? currentOriginDefaults?.totpItemId : currentOriginDefaults?.passwordItemId;
+    if (!wantedId)
+        return null;
+    return filtered.find((s) => s.item_id === wantedId) ?? null;
 }
 function getBestLoginInputs() {
     for (const form of currentForms) {
@@ -162,7 +176,7 @@ async function maybeAutoFillLogin(trigger, focusedInput) {
         return;
     if (!(await isDomainAllowedForAutoFill()))
         return;
-    const suggestion = selectSingleBestSuggestion('password', currentSettings.minMatchStrengthLogin);
+    const suggestion = await selectSuggestionWithDefault('password', currentSettings.minMatchStrengthLogin);
     if (!suggestion)
         return;
     const { usernameInput, passwordInput } = getBestLoginInputs();
@@ -184,7 +198,7 @@ async function maybeAutoFillTotp(_trigger, focusedInput) {
         return;
     if (!(await isDomainAllowedForAutoFill()))
         return;
-    const suggestion = selectSingleBestSuggestion('totp', currentSettings.minMatchStrengthTotp);
+    const suggestion = await selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
     if (!suggestion)
         return;
     if (focusedInput && hasValue(focusedInput))
