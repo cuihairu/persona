@@ -2,6 +2,7 @@ import type { BridgeStatus } from './bridge';
 import type { DomainAssessment } from './domainPolicy';
 import { hello, requestPairingCode, finalizePairing, getPairingState } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';
+import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults';
 
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
@@ -263,7 +264,7 @@ async function getActiveTabOrigin(): Promise<{ tabId: number; origin: string } |
     }
 }
 
-function renderSuggestions(items: any[], tabId: number) {
+function renderSuggestions(items: any[], tabId: number, origin: string, defaults: OriginAutofillDefaults | null) {
     if (!suggestionsEl) return;
     suggestionsEl.textContent = '';
 
@@ -277,17 +278,21 @@ function renderSuggestions(items: any[], tabId: number) {
 
     for (const item of items) {
         const kind = (item.credential_type ?? 'password') as string;
+        const isDefault =
+            kind === 'totp'
+                ? defaults?.totpItemId === item.item_id
+                : defaults?.passwordItemId === item.item_id;
         const row = document.createElement('div');
         row.style.cssText =
             'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
 
         const title = document.createElement('div');
         title.style.cssText = 'font-weight:600;color:#111827;';
-        title.textContent = item.title ?? item.item_id;
+        title.textContent = `${item.title ?? item.item_id}${isDefault ? ' (Default)' : ''}`;
 
         const meta = document.createElement('div');
         meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
-        meta.textContent = `${kind.toUpperCase()}${item.username_hint ? ` • ${item.username_hint}` : ''}`;
+        meta.textContent = `${kind.toUpperCase()} • match ${item.match_strength ?? '?'}${item.username_hint ? ` • ${item.username_hint}` : ''}`;
 
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
@@ -313,6 +318,20 @@ function renderSuggestions(items: any[], tabId: number) {
 
         actions.appendChild(fillBtn);
         actions.appendChild(copyBtn);
+
+        const defaultBtn = document.createElement('button');
+        defaultBtn.className = 'secondary';
+        defaultBtn.style.width = 'auto';
+        defaultBtn.textContent = isDefault ? 'Clear default' : 'Set default';
+        defaultBtn.addEventListener('click', async () => {
+            const patch =
+                kind === 'totp'
+                    ? { totpItemId: isDefault ? undefined : item.item_id }
+                    : { passwordItemId: isDefault ? undefined : item.item_id };
+            await setAutofillDefaultsForOrigin(origin, patch as any).catch(() => null);
+            await refreshAutofill().catch(() => null);
+        });
+        actions.appendChild(defaultBtn);
 
         if (kind !== 'totp' && item.username_hint) {
             const copyUserBtn = document.createElement('button');
@@ -350,12 +369,13 @@ async function refreshAutofill() {
 
     if (!resp?.success) {
         autofillStatusEl.textContent = `Suggestions unavailable – ${resp?.error ?? 'bridge not connected'}`;
-        renderSuggestions([], active.tabId);
+        renderSuggestions([], active.tabId, active.origin, null);
         return;
     }
 
     const items = resp?.data?.items ?? resp?.data?.payload?.items ?? resp?.data?.items;
-    renderSuggestions(items ?? [], active.tabId);
+    const defaults = await getAutofillDefaultsForOrigin(active.origin).catch(() => null);
+    renderSuggestions(items ?? [], active.tabId, active.origin, defaults);
 }
 
 async function requestCopy(origin: string, itemId: string, field: 'password' | 'username' | 'totp') {
