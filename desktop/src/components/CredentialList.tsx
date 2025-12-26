@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   KeyIcon,
   WalletIcon,
@@ -10,12 +10,15 @@ import {
   EyeIcon,
   EyeSlashIcon,
   DocumentDuplicateIcon,
+  HeartIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import type { Credential } from '@/types';
 import { clsx } from 'clsx';
 import toast from 'react-hot-toast';
+import { copyWithAutoClear } from '@/utils/clipboard';
 
 const getCredentialIcon = (type: string) => {
   switch (type) {
@@ -51,6 +54,14 @@ const getSecurityColor = (level: string) => {
   }
 };
 
+const getSafeHostname = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+};
+
 interface CredentialListProps {
   onCreateCredential: () => void;
 }
@@ -75,10 +86,10 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   };
 
   const copyToClipboard = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success(`${label} copied to clipboard`);
-    } catch (err) {
+    const ok = await copyWithAutoClear(text, 30_000);
+    if (ok) {
+      toast.success(`${label} copied (clears in 30s)`);
+    } else {
       toast.error('Failed to copy to clipboard');
     }
   };
@@ -179,7 +190,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                   </span>
                   {credential.url && (
                     <span className="text-xs text-gray-400 truncate ml-2">
-                      {new URL(credential.url).hostname}
+                      {getSafeHostname(credential.url)}
                     </span>
                   )}
                 </div>
@@ -225,8 +236,81 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
   onClose,
   onCopy,
 }) => {
+  const { toggleCredentialFavorite, deleteCredential, getTotpCode } = usePersonaService();
   const [showSensitive, setShowSensitive] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(credential.is_favorite);
+  const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [totpCode, setTotpCode] = useState<string | null>(null);
+  const [totpRemaining, setTotpRemaining] = useState<number | null>(null);
+  const [isTotpLoading, setIsTotpLoading] = useState(false);
   const IconComponent = getCredentialIcon(credential.credential_type);
+
+  useEffect(() => {
+    setIsFavorite(credential.is_favorite);
+  }, [credential.id, credential.is_favorite]);
+
+  const refreshTotp = useCallback(async () => {
+    if (credential.credential_type !== 'TwoFactor') return;
+    setIsTotpLoading(true);
+    try {
+      const res = await getTotpCode(credential.id);
+      if (res) {
+        setTotpCode(res.code);
+        setTotpRemaining(res.remaining_seconds);
+      }
+    } finally {
+      setIsTotpLoading(false);
+    }
+  }, [credential.credential_type, credential.id, getTotpCode]);
+
+  useEffect(() => {
+    if (credential.credential_type !== 'TwoFactor') {
+      setTotpCode(null);
+      setTotpRemaining(null);
+      return;
+    }
+    refreshTotp();
+  }, [credential.id, credential.credential_type, refreshTotp]);
+
+  useEffect(() => {
+    if (credential.credential_type !== 'TwoFactor') return;
+    if (totpRemaining === null) return;
+    const interval = window.setInterval(() => {
+      setTotpRemaining((prev) => (prev === null ? null : Math.max(prev - 1, 0)));
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [credential.id, credential.credential_type, totpCode]);
+
+  useEffect(() => {
+    if (credential.credential_type !== 'TwoFactor') return;
+    if (totpRemaining !== 0) return;
+    refreshTotp();
+  }, [credential.credential_type, refreshTotp, totpRemaining]);
+
+  const handleToggleFavorite = async () => {
+    if (isTogglingFavorite) return;
+    setIsTogglingFavorite(true);
+    try {
+      const updated = await toggleCredentialFavorite(credential.id);
+      if (updated) setIsFavorite(updated.is_favorite);
+    } finally {
+      setIsTogglingFavorite(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (isDeleting) return;
+    const confirmed = window.confirm(`Delete "${credential.name}"? This cannot be undone.`);
+    if (!confirmed) return;
+    setIsDeleting(true);
+    try {
+      const ok = await deleteCredential(credential.id);
+      if (ok) onClose();
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const renderCredentialData = () => {
     if (!credentialData?.data) return null;
@@ -304,6 +388,52 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
           </div>
         );
 
+      case 'TwoFactor':
+        return (
+          <div className="space-y-3">
+            {credentialData?.data?.issuer && (
+              <div>
+                <label className="label text-gray-600">Issuer</label>
+                <span className="text-sm">{credentialData.data.issuer}</span>
+              </div>
+            )}
+            {credentialData?.data?.account_name && (
+              <div>
+                <label className="label text-gray-600">Account</label>
+                <span className="text-sm">{credentialData.data.account_name}</span>
+              </div>
+            )}
+            <div>
+              <label className="label text-gray-600">TOTP Code</label>
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-mono tracking-widest">
+                  {totpCode ?? '------'}
+                </span>
+                <button
+                  onClick={() => totpCode && onCopy(totpCode, 'TOTP')}
+                  disabled={!totpCode}
+                  className="p-1 hover:bg-gray-100 rounded disabled:opacity-50"
+                  title="Copy code"
+                >
+                  <DocumentDuplicateIcon className="w-4 h-4 text-gray-400" />
+                </button>
+                <button
+                  onClick={refreshTotp}
+                  disabled={isTotpLoading}
+                  className="px-2 py-1 text-xs rounded bg-gray-100 hover:bg-gray-200 disabled:opacity-50"
+                >
+                  {isTotpLoading ? 'Refreshing…' : 'Refresh'}
+                </button>
+              </div>
+              {totpRemaining !== null && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Expires in {totpRemaining}s
+                </p>
+              )}
+            </div>
+          </div>
+        );
+
       default:
         return (
           <div className="text-sm text-gray-500">
@@ -326,12 +456,31 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
               <p className="text-sm text-gray-500">{credential.credential_type}</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleToggleFavorite}
+              disabled={isTogglingFavorite}
+              className="p-2 hover:bg-gray-100 rounded-lg"
+              title={isFavorite ? 'Unfavorite' : 'Favorite'}
+            >
+              {isFavorite ? (
+                <HeartSolidIcon className="w-5 h-5 text-red-500" />
+              ) : (
+                <HeartIcon className="w-5 h-5 text-gray-400" />
+              )}
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={isDeleting}
+              className="p-2 hover:bg-red-50 rounded-lg"
+              title="Delete"
+            >
+              <TrashIcon className="w-5 h-5 text-red-600" />
+            </button>
+            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg" title="Close">
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="space-y-4">
@@ -371,6 +520,22 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
             <div>
               <label className="label text-gray-600">Notes</label>
               <p className="text-sm text-gray-700">{credential.notes}</p>
+            </div>
+          )}
+
+          {credential.tags?.length > 0 && (
+            <div>
+              <label className="label text-gray-600">Tags</label>
+              <div className="flex flex-wrap gap-1">
+                {credential.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-700 rounded-full"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
             </div>
           )}
 

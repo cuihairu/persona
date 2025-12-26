@@ -8,6 +8,35 @@ interface CreateCredentialModalProps {
   onClose: () => void;
 }
 
+const parseOtpauthUri = (uri: string) => {
+  try {
+    const url = new URL(uri);
+    if (url.protocol !== 'otpauth:' || url.hostname !== 'totp') return null;
+
+    const secret = url.searchParams.get('secret') || '';
+    const issuer = url.searchParams.get('issuer') || '';
+    const algorithm = (url.searchParams.get('algorithm') || 'SHA1').toUpperCase();
+    const digits = Number(url.searchParams.get('digits') || '6');
+    const period = Number(url.searchParams.get('period') || '30');
+
+    const rawLabel = decodeURIComponent(url.pathname.replace(/^\//, ''));
+    const labelParts = rawLabel.split(':');
+    const accountFromLabel = labelParts.length > 1 ? labelParts.slice(1).join(':') : rawLabel;
+    const issuerFromLabel = labelParts.length > 1 ? labelParts[0] : '';
+
+    return {
+      secret_key: secret,
+      issuer: issuer || issuerFromLabel,
+      account_name: url.searchParams.get('account') || accountFromLabel,
+      algorithm,
+      digits: Number.isFinite(digits) ? digits : 6,
+      period: Number.isFinite(period) ? period : 30,
+    };
+  } catch {
+    return null;
+  }
+};
+
 const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, onClose }) => {
   const { currentIdentity, createCredential, generatePassword, isLoading } = usePersonaService();
   const [formData, setFormData] = useState({
@@ -17,6 +46,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     url: '',
     username: '',
     notes: '',
+    tags: '',
   });
 
   const [credentialData, setCredentialData] = useState<any>({
@@ -51,6 +81,15 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     e.preventDefault();
     if (!currentIdentity || !formData.name.trim()) return;
 
+    const tags = Array.from(
+      new Set(
+        formData.tags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      ),
+    );
+
     let credentialDataRequest: CredentialDataRequest;
 
     switch (formData.credential_type) {
@@ -60,6 +99,18 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
           password: credentialData.password,
           email: credentialData.email || undefined,
           security_questions: credentialData.security_questions || [],
+        };
+        break;
+
+      case 'TwoFactor':
+        credentialDataRequest = {
+          type: 'TwoFactor',
+          secret_key: (credentialData.secret_key || '').trim(),
+          issuer: (credentialData.issuer || '').trim(),
+          account_name: (credentialData.account_name || '').trim(),
+          algorithm: (credentialData.algorithm || 'SHA1').toString(),
+          digits: Number(credentialData.digits || 6),
+          period: Number(credentialData.period || 30),
         };
         break;
 
@@ -111,6 +162,8 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
       security_level: formData.security_level,
       url: formData.url || undefined,
       username: formData.username || undefined,
+      notes: formData.notes.trim() || undefined,
+      tags: tags.length ? tags : undefined,
       credential_data: credentialDataRequest,
     });
 
@@ -123,6 +176,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
         url: '',
         username: '',
         notes: '',
+        tags: '',
       });
       setCredentialData({
         password: '',
@@ -322,6 +376,102 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
           </div>
         );
 
+      case 'TwoFactor':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="label mb-2 block">otpauth URI (Optional)</label>
+              <input
+                type="text"
+                value={credentialData.otpauth_uri || ''}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  const parsed = value.trim() ? parseOtpauthUri(value.trim()) : null;
+                  if (parsed) {
+                    setCredentialData({ ...credentialData, ...parsed, otpauth_uri: value });
+                  } else {
+                    setCredentialData({ ...credentialData, otpauth_uri: value });
+                  }
+                }}
+                className="input font-mono text-xs"
+                placeholder="otpauth://totp/Issuer:account?secret=BASE32&issuer=Issuer&digits=6&period=30"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Paste from QR export; fields auto-fill when valid.
+              </p>
+            </div>
+            <div>
+              <label className="label mb-2 block">Secret (Base32) *</label>
+              <input
+                type="text"
+                value={credentialData.secret_key || ''}
+                onChange={(e) => setCredentialData({ ...credentialData, secret_key: e.target.value })}
+                className="input font-mono"
+                placeholder="JBSWY3DPEHPK3PXP"
+                required
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block">Issuer</label>
+                <input
+                  type="text"
+                  value={credentialData.issuer || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, issuer: e.target.value })}
+                  className="input"
+                  placeholder="GitHub"
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block">Account</label>
+                <input
+                  type="text"
+                  value={credentialData.account_name || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, account_name: e.target.value })}
+                  className="input"
+                  placeholder="user@example.com"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <label className="label mb-2 block">Algorithm</label>
+                <select
+                  value={credentialData.algorithm || 'SHA1'}
+                  onChange={(e) => setCredentialData({ ...credentialData, algorithm: e.target.value })}
+                  className="input"
+                >
+                  <option value="SHA1">SHA1</option>
+                  <option value="SHA256">SHA256</option>
+                  <option value="SHA512">SHA512</option>
+                </select>
+              </div>
+              <div>
+                <label className="label mb-2 block">Digits</label>
+                <select
+                  value={String(credentialData.digits || 6)}
+                  onChange={(e) => setCredentialData({ ...credentialData, digits: Number(e.target.value) })}
+                  className="input"
+                >
+                  <option value="6">6</option>
+                  <option value="8">8</option>
+                </select>
+              </div>
+              <div>
+                <label className="label mb-2 block">Period (s)</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={120}
+                  value={credentialData.period || 30}
+                  onChange={(e) => setCredentialData({ ...credentialData, period: Number(e.target.value) })}
+                  className="input"
+                />
+              </div>
+            </div>
+          </div>
+        );
+
       default:
         return (
           <div>
@@ -424,6 +574,18 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
               className="input h-20 resize-none"
               placeholder="Additional notes or information"
             />
+          </div>
+
+          <div>
+            <label className="label mb-2 block">Tags</label>
+            <input
+              type="text"
+              value={formData.tags}
+              onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
+              className="input"
+              placeholder="e.g. work, github, prod"
+            />
+            <p className="mt-1 text-xs text-gray-500">Comma-separated</p>
           </div>
 
           <div className="flex gap-3 pt-4">

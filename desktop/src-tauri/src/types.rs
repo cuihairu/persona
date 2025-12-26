@@ -58,6 +58,18 @@ pub struct CreateIdentityRequest {
     pub phone: Option<String>,
 }
 
+/// Identity update request
+#[derive(Debug, Deserialize)]
+pub struct UpdateIdentityRequest {
+    pub id: String,
+    pub name: String,
+    pub identity_type: String,
+    pub description: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
 /// Credential creation request
 #[derive(Debug, Deserialize)]
 pub struct CreateCredentialRequest {
@@ -67,6 +79,8 @@ pub struct CreateCredentialRequest {
     pub security_level: String,
     pub url: Option<String>,
     pub username: Option<String>,
+    pub notes: Option<String>,
+    pub tags: Option<Vec<String>>,
     pub credential_data: CredentialDataRequest,
 }
 
@@ -98,6 +112,14 @@ pub enum CredentialDataRequest {
         token: Option<String>,
         permissions: Vec<String>,
         expires_at: Option<String>,
+    },
+    TwoFactor {
+        secret_key: String,
+        issuer: String,
+        account_name: String,
+        algorithm: String,
+        digits: u8,
+        period: u32,
     },
     Raw {
         data: Vec<u8>,
@@ -226,29 +248,59 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
             "public_key": wallet_data.public_key,
             "address": wallet_data.address,
             "network": wallet_data.network
-            // Note: We don't expose private keys in the JSON for security
         }),
         CredentialData::SshKey(ssh_data) => serde_json::json!({
             "type": "SshKey",
             "public_key": ssh_data.public_key,
             "key_type": ssh_data.key_type
-            // Note: We don't expose private keys in the JSON for security
         }),
         CredentialData::ApiKey(api_data) => serde_json::json!({
             "type": "ApiKey",
             "permissions": api_data.permissions,
             "expires_at": api_data.expires_at
-            // Note: We don't expose API keys in the JSON for security
+        }),
+        CredentialData::BankCard(card_data) => serde_json::json!({
+            "type": "BankCard",
+            "cardholder_name": card_data.cardholder_name,
+            "expiry_date": card_data.expiry_date,
+            "bank_name": card_data.bank_name,
+            "card_type": card_data.card_type,
+            "last4": card_data.card_number.chars().filter(|c| c.is_ascii_digit()).collect::<String>().chars().rev().take(4).collect::<String>().chars().rev().collect::<String>(),
+        }),
+        CredentialData::ServerConfig(server_data) => serde_json::json!({
+            "type": "ServerConfig",
+            "hostname": server_data.hostname,
+            "ip_address": server_data.ip_address,
+            "port": server_data.port,
+            "protocol": server_data.protocol,
+            "username": server_data.username,
+            "ssh_key_id": server_data.ssh_key_id,
+            "additional_config": server_data.additional_config
+        }),
+        CredentialData::TwoFactor(tf_data) => serde_json::json!({
+            "type": "TwoFactor",
+            "issuer": tf_data.issuer,
+            "account_name": tf_data.account_name,
+            "algorithm": tf_data.algorithm,
+            "digits": tf_data.digits,
+            "period": tf_data.period
         }),
         CredentialData::Raw(_) => serde_json::json!({
             "type": "Raw",
             "message": "Binary data"
         }),
-        _ => serde_json::json!({
-            "type": "Unknown",
-            "message": "Unsupported credential type"
-        }),
     }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TotpCodeResponse {
+    pub code: String,
+    pub remaining_seconds: u32,
+    pub period: u32,
+    pub digits: u8,
+    pub algorithm: String,
+    pub issuer: String,
+    pub account_name: String,
 }
 
 // Wallet types for Tauri commands
@@ -373,6 +425,21 @@ impl CredentialDataRequest {
                     expires_at: expires_at.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|dt| dt.with_timezone(&chrono::Utc)),
                 })
             }
+            CredentialDataRequest::TwoFactor {
+                secret_key,
+                issuer,
+                account_name,
+                algorithm,
+                digits,
+                period,
+            } => CredentialData::TwoFactor(TwoFactorData {
+                secret_key: secret_key.clone(),
+                issuer: issuer.clone(),
+                account_name: account_name.clone(),
+                algorithm: algorithm.clone(),
+                digits: *digits,
+                period: *period,
+            }),
             CredentialDataRequest::Raw { data } => {
                 CredentialData::Raw(data.clone())
             }

@@ -12,6 +12,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::fs;
 use std::sync::Arc;
+use data_encoding::{BASE32, BASE32_NOPAD};
+use hmac::{Hmac, Mac};
+use sha1::Sha1;
+use sha2::{Sha256, Sha512};
 
 /// Initialize the Persona service with master password
 #[command]
@@ -196,6 +200,85 @@ pub async fn get_identity(
     }
 }
 
+/// Update an existing identity
+#[command]
+pub async fn update_identity(
+    request: UpdateIdentityRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableIdentity>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => {
+            let uuid = match Uuid::from_str(&request.id) {
+                Ok(uuid) => uuid,
+                Err(_) => return Ok(ApiResponse::error("Invalid UUID format".to_string())),
+            };
+
+            match service.get_identity(&uuid).await {
+                Ok(Some(mut identity)) => {
+                    let identity_type = match request.identity_type.as_str() {
+                        "Personal" => IdentityType::Personal,
+                        "Work" => IdentityType::Work,
+                        "Social" => IdentityType::Social,
+                        "Financial" => IdentityType::Financial,
+                        "Gaming" => IdentityType::Gaming,
+                        custom => IdentityType::Custom(custom.to_string()),
+                    };
+
+                    identity.name = request.name.trim().to_string();
+                    identity.identity_type = identity_type;
+                    identity.description = request.description.and_then(|s| {
+                        let trimmed = s.trim().to_string();
+                        if trimmed.is_empty() { None } else { Some(trimmed) }
+                    });
+                    identity.email = request.email.and_then(|s| {
+                        let trimmed = s.trim().to_string();
+                        if trimmed.is_empty() { None } else { Some(trimmed) }
+                    });
+                    identity.phone = request.phone.and_then(|s| {
+                        let trimmed = s.trim().to_string();
+                        if trimmed.is_empty() { None } else { Some(trimmed) }
+                    });
+                    if let Some(tags) = request.tags {
+                        identity.tags = tags
+                            .into_iter()
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
+                    }
+
+                    match service.update_identity(&identity).await {
+                        Ok(updated_identity) => Ok(ApiResponse::success(updated_identity.into())),
+                        Err(e) => Ok(ApiResponse::error(format!("Failed to update identity: {}", e))),
+                    }
+                }
+                Ok(None) => Ok(ApiResponse::error("Identity not found".to_string())),
+                Err(e) => Ok(ApiResponse::error(format!("Failed to get identity: {}", e))),
+            }
+        }
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+/// Delete an identity
+#[command]
+pub async fn delete_identity(
+    identity_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&identity_id) {
+            Ok(uuid) => match service.delete_identity(&uuid).await {
+                Ok(ok) => Ok(ApiResponse::success(ok)),
+                Err(e) => Ok(ApiResponse::error(format!("Failed to delete identity: {}", e))),
+            },
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
 /// Create a new credential
 #[command]
 pub async fn create_credential(
@@ -243,6 +326,17 @@ pub async fn create_credential(
                             }
                             if let Some(username) = request.username {
                                 credential.username = Some(username);
+                            }
+                            if let Some(notes) = request.notes {
+                                let trimmed = notes.trim().to_string();
+                                credential.notes = if trimmed.is_empty() { None } else { Some(trimmed) };
+                            }
+                            if let Some(tags) = request.tags {
+                                credential.tags = tags
+                                    .into_iter()
+                                    .map(|t| t.trim().to_string())
+                                    .filter(|t| !t.is_empty())
+                                    .collect();
                             }
 
                             match service.update_credential(&credential).await {
@@ -305,8 +399,10 @@ pub async fn get_credential_data(
                                     CredentialData::CryptoWallet(_) => "CryptoWallet".to_string(),
                                     CredentialData::SshKey(_) => "SshKey".to_string(),
                                     CredentialData::ApiKey(_) => "ApiKey".to_string(),
+                                    CredentialData::BankCard(_) => "BankCard".to_string(),
+                                    CredentialData::ServerConfig(_) => "ServerConfig".to_string(),
+                                    CredentialData::TwoFactor(_) => "TwoFactor".to_string(),
                                     CredentialData::Raw(_) => "Raw".to_string(),
-                                    _ => "Unknown".to_string(),
                                 },
                                 data: credential_data_to_json(&data),
                             });
@@ -319,6 +415,52 @@ pub async fn get_credential_data(
             }
         }
         None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+/// Generate a TOTP code for a TwoFactor credential (without exposing the secret)
+#[command]
+pub async fn get_totp_code(
+    credential_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<TotpCodeResponse>, String> {
+    let service_guard = state.service.lock().await;
+    let service = service_guard
+        .as_ref()
+        .ok_or_else(|| "Service not initialized".to_string())?;
+
+    let uuid = Uuid::from_str(&credential_id).map_err(|_| "Invalid UUID format".to_string())?;
+    let credential_data = service
+        .get_credential_data(&uuid)
+        .await
+        .map_err(|e| format!("Failed to get credential data: {}", e))?;
+
+    let data = credential_data.ok_or_else(|| "Credential not found".to_string())?;
+    match data {
+        CredentialData::TwoFactor(tf) => {
+            let secret_bytes = decode_totp_secret(&tf.secret_key)?;
+            let now = chrono::Utc::now();
+            let period = tf.period.max(1) as u64;
+            let timestamp = now.timestamp().max(0) as u64;
+            let counter = timestamp / period;
+            let digits = tf.digits.clamp(4, 10) as u32;
+            let code_num = hotp(&secret_bytes, counter, &tf.algorithm)?;
+            let modulo = 10_u32.pow(digits);
+            let value = code_num % modulo;
+            let code = format!("{:0width$}", value, width = digits as usize);
+            let remaining = (period - (timestamp % period)) as u32;
+
+            Ok(ApiResponse::success(TotpCodeResponse {
+                code,
+                remaining_seconds: remaining,
+                period: tf.period.max(1),
+                digits: tf.digits.clamp(4, 10),
+                algorithm: tf.algorithm,
+                issuer: tf.issuer,
+                account_name: tf.account_name,
+            }))
+        }
+        _ => Ok(ApiResponse::error("Credential is not a TwoFactor entry".to_string())),
     }
 }
 
@@ -341,6 +483,54 @@ pub async fn search_credentials(
         }
         None => Ok(ApiResponse::error("Service not initialized".to_string())),
     }
+}
+
+fn hotp(secret: &[u8], counter: u64, algorithm: &str) -> std::result::Result<u32, String> {
+    let msg = counter.to_be_bytes();
+    let algo = algorithm.to_ascii_uppercase();
+
+    let hash = if algo == "SHA256" {
+        type HmacSha256 = Hmac<Sha256>;
+        let mut mac = HmacSha256::new_from_slice(secret).map_err(|_| "Invalid secret".to_string())?;
+        mac.update(&msg);
+        mac.finalize().into_bytes().to_vec()
+    } else if algo == "SHA512" {
+        type HmacSha512 = Hmac<Sha512>;
+        let mut mac = HmacSha512::new_from_slice(secret).map_err(|_| "Invalid secret".to_string())?;
+        mac.update(&msg);
+        mac.finalize().into_bytes().to_vec()
+    } else {
+        type HmacSha1 = Hmac<Sha1>;
+        let mut mac = HmacSha1::new_from_slice(secret).map_err(|_| "Invalid secret".to_string())?;
+        mac.update(&msg);
+        mac.finalize().into_bytes().to_vec()
+    };
+
+    let offset = (hash.last().copied().unwrap_or(0) & 0x0f) as usize;
+    if offset + 4 > hash.len() {
+        return Err("Invalid HMAC output".to_string());
+    }
+    let slice = &hash[offset..offset + 4];
+    let binary = ((slice[0] as u32 & 0x7f) << 24)
+        | ((slice[1] as u32) << 16)
+        | ((slice[2] as u32) << 8)
+        | slice[3] as u32;
+    Ok(binary)
+}
+
+fn decode_totp_secret(secret: &str) -> std::result::Result<Vec<u8>, String> {
+    let normalized: String = secret
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| c.to_ascii_uppercase())
+        .collect::<String>()
+        .trim_matches('=')
+        .to_string();
+
+    BASE32_NOPAD
+        .decode(normalized.as_bytes())
+        .or_else(|_| BASE32.decode(normalized.as_bytes()))
+        .map_err(|e| format!("Invalid base32 secret: {}", e))
 }
 
 /// Generate password

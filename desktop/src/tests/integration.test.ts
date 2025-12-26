@@ -132,6 +132,71 @@ describe('Desktop Application Integration Tests', () => {
       expect(result.data).toHaveLength(1);
       expect(result.data![0]).toEqual(mockIdentity);
     });
+
+    it('should update an identity', async () => {
+      const mockIdentity: Identity = {
+        id: '123e4567-e89b-12d3-a456-426614174000',
+        name: 'Updated Identity',
+        identity_type: 'Work',
+        description: 'Updated description',
+        email: 'updated@example.com',
+        phone: '123456789',
+        ssh_key: undefined,
+        gpg_key: undefined,
+        tags: ['work'],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        is_active: true,
+      };
+
+      const mockResponse: ApiResponse<Identity> = {
+        success: true,
+        data: mockIdentity,
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      const result = await personaAPI.updateIdentity({
+        id: mockIdentity.id,
+        name: mockIdentity.name,
+        identity_type: mockIdentity.identity_type,
+        description: mockIdentity.description,
+        email: mockIdentity.email,
+        phone: mockIdentity.phone,
+        tags: mockIdentity.tags,
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith('update_identity', {
+        request: {
+          id: mockIdentity.id,
+          name: mockIdentity.name,
+          identity_type: mockIdentity.identity_type,
+          description: mockIdentity.description,
+          email: mockIdentity.email,
+          phone: mockIdentity.phone,
+          tags: mockIdentity.tags,
+        },
+      });
+      expect(result).toEqual(mockResponse);
+    });
+
+    it('should delete an identity', async () => {
+      const mockResponse: ApiResponse<boolean> = {
+        success: true,
+        data: true,
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      const result = await personaAPI.deleteIdentity('123e4567-e89b-12d3-a456-426614174000');
+
+      expect(mockInvoke).toHaveBeenCalledWith('delete_identity', {
+        identity_id: '123e4567-e89b-12d3-a456-426614174000',
+      });
+      expect(result).toEqual(mockResponse);
+    });
   });
 
   describe('Credential Management', () => {
@@ -248,6 +313,31 @@ describe('Desktop Application Integration Tests', () => {
       });
 
       expect(result.data).toBe(true);
+    });
+
+    it('should request a TOTP code for a credential', async () => {
+      const mockResponse: ApiResponse<any> = {
+        success: true,
+        data: {
+          code: '123456',
+          remaining_seconds: 12,
+          period: 30,
+          digits: 6,
+          algorithm: 'SHA1',
+          issuer: 'GitHub',
+          account_name: 'user@example.com',
+        },
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      const result = await personaAPI.getTotpCode('123e4567-e89b-12d3-a456-426614174000');
+
+      expect(mockInvoke).toHaveBeenCalledWith('get_totp_code', {
+        credential_id: '123e4567-e89b-12d3-a456-426614174000',
+      });
+      expect(result).toEqual(mockResponse);
     });
   });
 

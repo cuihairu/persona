@@ -49,6 +49,16 @@ export interface CreateIdentityRequest {
   phone?: string;
 }
 
+export interface UpdateIdentityRequest {
+  id: string;
+  name: string;
+  identity_type: string;
+  description?: string;
+  email?: string;
+  phone?: string;
+  tags?: string[];
+}
+
 export interface CreateCredentialRequest {
   identity_id: string;
   name: string;
@@ -56,6 +66,8 @@ export interface CreateCredentialRequest {
   security_level: string;
   url?: string;
   username?: string;
+  notes?: string;
+  tags?: string[];
   credential_data: CredentialDataRequest;
 }
 
@@ -64,6 +76,7 @@ export type CredentialDataRequest =
   | { type: 'CryptoWallet'; wallet_type: string; mnemonic_phrase?: string; private_key?: string; public_key: string; address: string; network: string }
   | { type: 'SshKey'; private_key: string; public_key: string; key_type: string; passphrase?: string }
   | { type: 'ApiKey'; api_key: string; api_secret?: string; token?: string; permissions: string[]; expires_at?: string }
+  | { type: 'TwoFactor'; secret_key: string; issuer: string; account_name: string; algorithm: string; digits: number; period: number }
   | { type: 'Raw'; data: number[] };
 
 export interface SecurityQuestion {
@@ -96,6 +109,16 @@ export interface Statistics {
   favorite_credentials: number;
   credential_types: Record<string, number>;
   security_levels: Record<string, number>;
+}
+
+export interface TotpCodeResponse {
+  code: string;
+  remaining_seconds: number;
+  period: number;
+  digits: number;
+  algorithm: string;
+  issuer: string;
+  account_name: string;
 }
 
 export interface WalletSummary {
