@@ -1,6 +1,14 @@
 const USERNAME_HINTS = ['user', 'login', 'identifier'];
 const EMAIL_HINTS = ['email', 'mail'];
 const TOTP_HINTS = ['otp', 'totp', '2fa', 'mfa', 'token', 'one-time', 'onetime', 'verification', 'auth', 'security code'];
+function isVisibleInput(input) {
+    if (input.disabled)
+        return false;
+    const style = window.getComputedStyle(input);
+    if (style.display === 'none' || style.visibility === 'hidden')
+        return false;
+    return true;
+}
 function isLikelyTotp(input) {
     if (input.autocomplete === 'one-time-code')
         return true;
@@ -80,6 +88,43 @@ function scoreForm(fields) {
     });
     return score;
 }
+function findVirtualFormRoot(input) {
+    const MAX_INPUTS = 10;
+    const MIN_INPUTS = 2;
+    const candidateTypes = new Set(['text', 'search', 'email', 'tel', 'password', 'number']);
+    let node = input.parentElement;
+    for (let depth = 0; depth < 6 && node; depth++) {
+        const inputs = Array.from(node.querySelectorAll('input'))
+            .filter((el) => el instanceof HTMLInputElement)
+            .filter((el) => candidateTypes.has(el.type.toLowerCase()))
+            .filter(isVisibleInput);
+        if (inputs.includes(input) && inputs.length >= MIN_INPUTS && inputs.length <= MAX_INPUTS) {
+            return node;
+        }
+        node = node.parentElement;
+    }
+    return input.closest('main') ?? input.closest('section') ?? input.closest('div') ?? document.body;
+}
+function buildDetectedFormFromInputs(inputs, root) {
+    const fields = inputs
+        .filter((input) => !!input.type)
+        .map((input) => ({
+        name: input.name || input.id || input.getAttribute('aria-label') || 'field',
+        type: classifyField(input),
+        selector: selectorFor(input)
+    }));
+    if (!fields.length)
+        return null;
+    const score = scoreForm(fields);
+    if (score === 0)
+        return null;
+    return {
+        action: root.location.href,
+        method: 'POST',
+        fields,
+        score
+    };
+}
 export function scanForms(root = document) {
     const forms = Array.from(root.forms);
     const detected = [];
@@ -103,6 +148,28 @@ export function scanForms(root = document) {
             fields,
             score
         });
+    }
+    // Some modern sites don't use <form>. Build "virtual forms" from grouped inputs.
+    const allInputs = Array.from(root.querySelectorAll('input'))
+        .filter((el) => el instanceof HTMLInputElement)
+        .filter(isVisibleInput);
+    const seenRoots = new Set();
+    for (const input of allInputs) {
+        if (input.form)
+            continue;
+        const kind = classifyField(input);
+        if (kind !== 'password' && kind !== 'totp')
+            continue;
+        const groupRoot = findVirtualFormRoot(input);
+        if (seenRoots.has(groupRoot))
+            continue;
+        seenRoots.add(groupRoot);
+        const groupedInputs = Array.from(groupRoot.querySelectorAll('input'))
+            .filter((el) => el instanceof HTMLInputElement)
+            .filter(isVisibleInput);
+        const virtual = buildDetectedFormFromInputs(groupedInputs, root);
+        if (virtual)
+            detected.push(virtual);
     }
     return detected;
 }
