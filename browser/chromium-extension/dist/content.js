@@ -151,6 +151,40 @@ async function selectSuggestionWithDefault(mode, minStrength) {
         return null;
     return filtered.find((s) => s.item_id === wantedId) ?? null;
 }
+function normalizeUsername(value) {
+    return value.trim().toLowerCase();
+}
+function doesUsernameMatchHint(typedUsername, hint) {
+    const typed = normalizeUsername(typedUsername);
+    const candidate = normalizeUsername(hint);
+    if (!typed || !candidate)
+        return false;
+    if (typed === candidate)
+        return true;
+    if (typed.includes(candidate) || candidate.includes(typed))
+        return true;
+    return false;
+}
+async function selectLoginSuggestion(minStrength, typedUsername) {
+    const filtered = currentSuggestions
+        .filter((s) => (s.credential_type ?? 'password') === 'password')
+        .filter((s) => (typeof s.match_strength === 'number' ? s.match_strength : 0) >= minStrength)
+        .sort((a, b) => b.match_strength - a.match_strength);
+    if (filtered.length === 0)
+        return null;
+    if (filtered.length === 1)
+        return filtered[0];
+    const typed = (typedUsername ?? '').trim();
+    if (typed) {
+        const matches = filtered.filter((s) => s.username_hint && doesUsernameMatchHint(typed, s.username_hint));
+        if (matches.length === 1)
+            return matches[0];
+    }
+    const wantedId = currentOriginDefaults?.passwordItemId;
+    if (!wantedId)
+        return null;
+    return filtered.find((s) => s.item_id === wantedId) ?? null;
+}
 function getBestLoginInputs() {
     for (const form of currentForms) {
         const passwordField = form.fields.find((f) => f.type === 'password');
@@ -176,13 +210,14 @@ async function maybeAutoFillLogin(trigger, focusedInput) {
         return;
     if (!(await isDomainAllowedForAutoFill()))
         return;
-    const suggestion = await selectSuggestionWithDefault('password', currentSettings.minMatchStrengthLogin);
-    if (!suggestion)
-        return;
     const { usernameInput, passwordInput } = getBestLoginInputs();
     if (!passwordInput)
         return;
     if (hasValue(passwordInput))
+        return;
+    const typedUsername = usernameInput?.value?.trim();
+    const suggestion = await selectLoginSuggestion(currentSettings.minMatchStrengthLogin, typedUsername);
+    if (!suggestion)
         return;
     if (focusedInput && focusedInput.type === 'password' && focusedInput !== passwordInput) {
         return;
@@ -534,9 +569,47 @@ function fillTotpCode(target, code) {
         return;
     fillInput(target, code);
 }
+function selectFormForTarget(targetInput) {
+    if (!currentForms.length)
+        return null;
+    if (!targetInput)
+        return currentForms[0];
+    for (const form of currentForms) {
+        for (const field of form.fields) {
+            if (!field.selector)
+                continue;
+            try {
+                const el = document.querySelector(field.selector);
+                if (el === targetInput)
+                    return form;
+            }
+            catch {
+                // ignore
+            }
+        }
+    }
+    const targetForm = targetInput.form ?? targetInput.closest('form');
+    if (targetForm) {
+        for (const form of currentForms) {
+            for (const field of form.fields) {
+                if (!field.selector)
+                    continue;
+                try {
+                    const el = document.querySelector(field.selector);
+                    if (el instanceof HTMLElement && el.closest('form') === targetForm)
+                        return form;
+                }
+                catch {
+                    // ignore
+                }
+            }
+        }
+    }
+    return currentForms[0];
+}
 // Fill credential into form
 function fillCredential(credential, targetInput) {
-    const form = currentForms[0]; // Use first detected form
+    const form = selectFormForTarget(targetInput);
     if (!form) {
         console.warn('[Persona] No form detected');
         return;
