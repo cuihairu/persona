@@ -1,10 +1,25 @@
 import { observeForms } from './formScanner';
+import { evaluateDomain } from './domainPolicy';
+import { DEFAULT_AUTOFILL_SETTINGS, getAutofillSettings, onAutofillSettingsChanged } from './settings';
 // Current page state
 let currentForms = [];
 let currentSuggestions = [];
 let autofillOverlay = null;
+let currentSettings = DEFAULT_AUTOFILL_SETTINGS;
+const POLICY_MESSAGE_CACHE_MS = 10000;
+let cachedAssessment = null;
+let lastLoginAutofillAttemptAt = 0;
+let lastTotpAutofillAttemptAt = 0;
+let lastSuggestionsFetchAt = 0;
+let suggestionsFetchInFlight = null;
 // Initialize content script
 function init() {
+    void getAutofillSettings().then((settings) => {
+        currentSettings = settings;
+    });
+    onAutofillSettingsChanged((settings) => {
+        currentSettings = settings;
+    });
     // Listen for status updates from background
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (message?.type === 'persona_status') {
@@ -33,15 +48,17 @@ function init() {
     });
     // Observe forms and report to background
     observeForms((forms) => {
-        currentForms = forms;
+        currentForms = [...forms].sort((a, b) => b.score - a.score);
         chrome.runtime.sendMessage({
             type: 'persona_forms_snapshot',
             host: location.host,
             forms
         });
         // If we have login forms, fetch suggestions
-        if (forms.some(f => f.fields.some(field => field.type === 'password' || field.type === 'totp'))) {
-            fetchSuggestions();
+        if (forms.some((f) => f.fields.some((field) => field.type === 'password' || field.type === 'totp'))) {
+            void fetchSuggestions().then(() => {
+                void maybeAutoFillLogin('load');
+            });
         }
     });
     // Add keyboard shortcut listener
@@ -52,19 +69,128 @@ function init() {
 }
 // Fetch suggestions from background
 async function fetchSuggestions() {
-    try {
-        const response = await chrome.runtime.sendMessage({
-            type: 'persona_get_suggestions',
-            origin: location.origin
-        });
-        if (response?.success && response.data?.items) {
-            currentSuggestions = response.data.items;
-            console.debug('[Persona] Got suggestions:', currentSuggestions.length);
+    const now = Date.now();
+    if (suggestionsFetchInFlight)
+        return suggestionsFetchInFlight;
+    if (now - lastSuggestionsFetchAt < 1500)
+        return;
+    suggestionsFetchInFlight = (async () => {
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'persona_get_suggestions',
+                origin: location.origin
+            });
+            if (response?.success && response.data?.items) {
+                currentSuggestions = response.data.items;
+                console.debug('[Persona] Got suggestions:', currentSuggestions.length);
+            }
         }
+        catch (error) {
+            console.error('[Persona] Failed to fetch suggestions:', error);
+        }
+        finally {
+            lastSuggestionsFetchAt = Date.now();
+            suggestionsFetchInFlight = null;
+        }
+    })();
+    return suggestionsFetchInFlight;
+}
+async function getDomainAssessmentCached() {
+    const now = Date.now();
+    if (cachedAssessment && now - cachedAssessment.at < POLICY_MESSAGE_CACHE_MS) {
+        return cachedAssessment.value;
     }
-    catch (error) {
-        console.error('[Persona] Failed to fetch suggestions:', error);
+    const policies = await chrome.runtime
+        .sendMessage({ type: 'persona_domain_policies_get' })
+        .then((value) => (Array.isArray(value) ? value : []))
+        .catch(() => []);
+    const assessment = evaluateDomain(location.host, policies);
+    cachedAssessment = { at: now, value: assessment };
+    return assessment;
+}
+async function isDomainAllowedForAutoFill() {
+    const assessment = await getDomainAssessmentCached();
+    if (!assessment)
+        return false;
+    if (assessment.risk === 'blocked' || assessment.risk === 'suspicious')
+        return false;
+    if (currentSettings.requireTrustedDomain && assessment.risk !== 'trusted')
+        return false;
+    return true;
+}
+function isFillableInput(input) {
+    if (input.disabled || input.readOnly)
+        return false;
+    const style = window.getComputedStyle(input);
+    if (style.display === 'none' || style.visibility === 'hidden')
+        return false;
+    if (input.getClientRects().length === 0)
+        return false;
+    return true;
+}
+function selectSingleBestSuggestion(mode, minStrength) {
+    const filtered = currentSuggestions
+        .filter((s) => (s.credential_type ?? 'password') === mode)
+        .filter((s) => (typeof s.match_strength === 'number' ? s.match_strength : 0) >= minStrength)
+        .sort((a, b) => b.match_strength - a.match_strength);
+    if (filtered.length !== 1)
+        return null;
+    return filtered[0];
+}
+function getBestLoginInputs() {
+    for (const form of currentForms) {
+        const passwordField = form.fields.find((f) => f.type === 'password');
+        if (!passwordField?.selector)
+            continue;
+        const passwordEl = document.querySelector(passwordField.selector);
+        if (!(passwordEl instanceof HTMLInputElement) || !isFillableInput(passwordEl))
+            continue;
+        const usernameField = form.fields.find((f) => f.type === 'username' || f.type === 'email' || f.type === 'text');
+        const usernameEl = usernameField?.selector ? document.querySelector(usernameField.selector) : null;
+        const usernameInput = usernameEl instanceof HTMLInputElement && isFillableInput(usernameEl) ? usernameEl : undefined;
+        return { usernameInput, passwordInput: passwordEl };
     }
+    return {};
+}
+async function maybeAutoFillLogin(trigger, focusedInput) {
+    if (trigger === 'load' && !currentSettings.autoFillLoginOnLoad)
+        return;
+    if (trigger === 'focus' && !currentSettings.autoFillLoginOnFocus)
+        return;
+    const now = Date.now();
+    if (now - lastLoginAutofillAttemptAt < 1500)
+        return;
+    if (!(await isDomainAllowedForAutoFill()))
+        return;
+    const suggestion = selectSingleBestSuggestion('password', currentSettings.minMatchStrengthLogin);
+    if (!suggestion)
+        return;
+    const { usernameInput, passwordInput } = getBestLoginInputs();
+    if (!passwordInput)
+        return;
+    if (hasValue(passwordInput))
+        return;
+    if (focusedInput && focusedInput.type === 'password' && focusedInput !== passwordInput) {
+        return;
+    }
+    lastLoginAutofillAttemptAt = now;
+    await requestFill(suggestion.item_id, usernameInput ?? passwordInput, trigger === 'focus');
+}
+async function maybeAutoFillTotp(_trigger, focusedInput) {
+    if (!currentSettings.autoFillTotpOnFocus)
+        return;
+    const now = Date.now();
+    if (now - lastTotpAutofillAttemptAt < 1500)
+        return;
+    if (!(await isDomainAllowedForAutoFill()))
+        return;
+    const suggestion = selectSingleBestSuggestion('totp', currentSettings.minMatchStrengthTotp);
+    if (!suggestion)
+        return;
+    if (focusedInput && hasValue(focusedInput))
+        return;
+    lastTotpAutofillAttemptAt = now;
+    await requestTotp(suggestion.item_id, focusedInput, true);
 }
 // Handle keyboard shortcuts
 function handleKeydown(event) {
@@ -89,14 +215,36 @@ function handleInputFocus(event) {
     const isPasswordField = fieldType === 'password';
     const isUsernameField = fieldType === 'text' || fieldType === 'email' ||
         ['user', 'login', 'email', 'identifier'].some(hint => fieldName.includes(hint));
-    const isTotpField = target.autocomplete === 'one-time-code' ||
-        ['otp', 'totp', '2fa', 'twofactor', 'verification', 'code', 'token'].some((hint) => fieldName.includes(hint));
+    const isTotpField = isLikelyTotpInput(target, fieldName);
     if ((isPasswordField || isUsernameField) && currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'password')) {
         showInlineIcon(target, 'password');
+        void maybeAutoFillLogin('focus', target);
     }
     if (isTotpField && currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'totp')) {
         showInlineIcon(target, 'totp');
+        void maybeAutoFillTotp('focus', target);
     }
+}
+function isLikelyTotpInput(input, cachedFieldName) {
+    if (input.autocomplete === 'one-time-code')
+        return true;
+    const fieldName = (cachedFieldName ?? input.name ?? input.id ?? '').toLowerCase();
+    if (['otp', 'totp', '2fa', 'twofactor', 'verification', 'token', 'mfa'].some((hint) => fieldName.includes(hint))) {
+        return true;
+    }
+    const inputMode = (input.inputMode || '').toLowerCase();
+    if (inputMode === 'numeric') {
+        const maxLen = input.maxLength;
+        if (maxLen >= 4 && maxLen <= 10)
+            return true;
+        if (maxLen === 1)
+            return true;
+    }
+    const aria = (input.getAttribute('aria-label') || '').toLowerCase();
+    if (aria.includes('verification') || aria.includes('authenticator') || aria.includes('code') || aria.includes('digit')) {
+        return true;
+    }
+    return false;
 }
 // Show inline Persona icon next to input field
 function showInlineIcon(input, mode) {
@@ -227,19 +375,23 @@ function showSuggestionsDropdown(input, mode) {
     }, 100);
 }
 // Request fill from background
-async function requestFill(itemId, targetInput) {
+async function requestFill(itemId, targetInput, userGesture = true) {
     try {
         const response = await chrome.runtime.sendMessage({
             type: 'persona_request_fill',
             origin: location.origin,
             itemId,
-            userGesture: true
+            userGesture
         });
         if (response?.success && response.data) {
             fillCredential(response.data, targetInput);
         }
         else {
             console.error('[Persona] Fill failed:', response?.error);
+            if (String(response?.error || '').startsWith('user_confirmation_required')) {
+                showNotification('Needs confirmation: open Persona popup and trust this domain', 'error');
+                return;
+            }
             showNotification('Failed to fill: ' + (response?.error || 'Unknown error'), 'error');
         }
     }
@@ -247,19 +399,19 @@ async function requestFill(itemId, targetInput) {
         console.error('[Persona] Fill request error:', error);
     }
 }
-async function requestTotp(itemId, targetInput) {
+async function requestTotp(itemId, targetInput, userGesture = true) {
     try {
         const response = await chrome.runtime.sendMessage({
             type: 'persona_get_totp',
             origin: location.origin,
             itemId,
-            userGesture: true
+            userGesture
         });
         if (response?.success && response.data?.code) {
             const code = String(response.data.code);
             const input = targetInput ?? findTotpInput();
             if (input) {
-                fillInput(input, code);
+                fillTotpCode(input, code);
                 showNotification('2FA code filled', 'success');
             }
             else {
@@ -284,6 +436,10 @@ async function requestTotp(itemId, targetInput) {
         }
         else {
             console.error('[Persona] TOTP failed:', response?.error);
+            if (String(response?.error || '').startsWith('user_confirmation_required')) {
+                showNotification('Needs confirmation: open Persona popup and trust this domain', 'error');
+                return;
+            }
             showNotification('Failed to get 2FA code: ' + (response?.error || 'Unknown error'), 'error');
         }
     }
@@ -303,6 +459,67 @@ function findTotpInput() {
     const fallback = document.querySelector('input[autocomplete="one-time-code"]');
     return fallback instanceof HTMLInputElement ? fallback : null;
 }
+function hasValue(input) {
+    return Boolean(input?.value?.trim());
+}
+function isOtpDigitInput(input) {
+    if (input.disabled || input.readOnly)
+        return false;
+    const type = input.type.toLowerCase();
+    if (!['text', 'tel', 'number'].includes(type))
+        return false;
+    const maxLen = input.maxLength;
+    if (maxLen === 1)
+        return true;
+    const inputMode = (input.inputMode || '').toLowerCase();
+    if (inputMode === 'numeric' && maxLen === 0) {
+        const aria = (input.getAttribute('aria-label') || '').toLowerCase();
+        if (aria.includes('digit'))
+            return true;
+    }
+    return false;
+}
+function findOtpGroupInputs(target) {
+    const ancestors = [];
+    let node = target;
+    for (let i = 0; i < 4 && node; i++) {
+        ancestors.push(node);
+        node = node.parentElement;
+    }
+    for (const container of ancestors) {
+        const inputs = Array.from(container.querySelectorAll('input'))
+            .filter((el) => el instanceof HTMLInputElement)
+            .filter(isOtpDigitInput);
+        if (inputs.length >= 4 && inputs.length <= 10 && inputs.includes(target)) {
+            return inputs;
+        }
+    }
+    const formRoot = target.form ?? target.closest('form');
+    if (formRoot) {
+        const inputs = Array.from(formRoot.querySelectorAll('input'))
+            .filter((el) => el instanceof HTMLInputElement)
+            .filter(isOtpDigitInput);
+        if (inputs.length >= 4 && inputs.length <= 10 && inputs.includes(target)) {
+            return inputs;
+        }
+    }
+    return [];
+}
+function fillTotpCode(target, code) {
+    const group = findOtpGroupInputs(target);
+    if (group.length >= 4) {
+        const digits = code.split('');
+        for (let i = 0; i < group.length && i < digits.length; i++) {
+            if (hasValue(group[i]))
+                continue;
+            fillInput(group[i], digits[i]);
+        }
+        return;
+    }
+    if (hasValue(target))
+        return;
+    fillInput(target, code);
+}
 // Fill credential into form
 function fillCredential(credential, targetInput) {
     const form = currentForms[0]; // Use first detected form
@@ -318,14 +535,16 @@ function fillCredential(credential, targetInput) {
     if (credential.username && usernameField) {
         const input = document.querySelector(usernameField.selector);
         if (input) {
-            fillInput(input, credential.username);
+            if (!hasValue(input))
+                fillInput(input, credential.username);
         }
     }
     // Fill password
     if (credential.password && passwordField) {
         const input = document.querySelector(passwordField.selector);
         if (input) {
-            fillInput(input, credential.password);
+            if (!hasValue(input))
+                fillInput(input, credential.password);
         }
     }
     showNotification('Credentials filled successfully!', 'success');

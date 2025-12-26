@@ -65,6 +65,35 @@
     <p id="autofillStatus" class="status">Suggestions unavailable</p>
     <div id="suggestions" style="display:flex;flex-direction:column;gap:8px;"></div>
 
+    <h3 style="margin-top:16px;">Autofill settings</h3>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <label style="display:flex;gap:8px;align-items:center;">
+        <input id="autoFillLoginOnFocus" type="checkbox" />
+        Auto-fill login when focusing inputs
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;">
+        <input id="autoFillLoginOnLoad" type="checkbox" />
+        Auto-fill login on page load
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;">
+        <input id="autoFillTotpOnFocus" type="checkbox" />
+        Auto-fill 2FA/OTP when focusing code field
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;">
+        <input id="requireTrustedDomain" type="checkbox" />
+        Only auto-fill on trusted domains
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
+        Min match (login)
+        <input id="minMatchStrengthLogin" type="number" min="0" max="100" step="10" style="width:84px;padding:6px;" />
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;justify-content:space-between;">
+        Min match (2FA)
+        <input id="minMatchStrengthTotp" type="number" min="0" max="100" step="10" style="width:84px;padding:6px;" />
+      </label>
+      <p class="status" style="margin:0;">Tip: mark a domain as trusted before enabling aggressive auto-fill.</p>
+    </div>
+
     <h3 style="margin-top:16px;">Domain security</h3>
     <p id="domainStatus" class="status">No domain data yet</p>
     <pre id="domainReasons">Waiting for form detection…</pre>
