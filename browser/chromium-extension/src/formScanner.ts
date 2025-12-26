@@ -15,22 +15,55 @@ export interface DetectedForm {
 
 const USERNAME_HINTS = ['user', 'login', 'identifier'];
 const EMAIL_HINTS = ['email', 'mail'];
-const TOTP_HINTS = ['otp', 'totp', 'code', 'token', '2fa'];
+const TOTP_HINTS = ['otp', 'totp', '2fa', 'mfa', 'token', 'one-time', 'onetime', 'verification', 'auth', 'security code'];
+
+function isLikelyTotp(input: HTMLInputElement): boolean {
+    if (input.autocomplete === 'one-time-code') return true;
+
+    const haystack = [
+        input.name,
+        input.id,
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.getAttribute('data-testid')
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+    if (TOTP_HINTS.some((hint) => haystack.includes(hint))) return true;
+
+    const maxLen = input.maxLength;
+    const inputMode = (input.inputMode || '').toLowerCase();
+    const pattern = (input.getAttribute('pattern') || '').toLowerCase();
+
+    const looksNumeric =
+        inputMode === 'numeric' ||
+        pattern.includes('[0-9]') ||
+        pattern.includes('\\d') ||
+        input.type.toLowerCase() === 'number';
+
+    if (looksNumeric && maxLen >= 4 && maxLen <= 10) return true;
+
+    // Many OTP UIs use 6 separate inputs, one digit each.
+    if (looksNumeric && maxLen === 1) return true;
+
+    return false;
+}
 
 function classifyField(input: HTMLInputElement): FieldKind {
     const type = input.type.toLowerCase();
     if (type === 'password') return 'password';
     if (type === 'email') return 'email';
+    if (isLikelyTotp(input)) return 'totp';
     if (type === 'text' || type === 'search' || type === 'tel') {
         const name = (input.name || input.id || '').toLowerCase();
         if (USERNAME_HINTS.some((hint) => name.includes(hint))) return 'username';
         if (EMAIL_HINTS.some((hint) => name.includes(hint))) return 'email';
-        if (TOTP_HINTS.some((hint) => name.includes(hint))) return 'totp';
         return 'text';
     }
     if (type === 'number') {
-        const name = (input.name || input.id || '').toLowerCase();
-        if (TOTP_HINTS.some((hint) => name.includes(hint))) return 'totp';
+        if (isLikelyTotp(input)) return 'totp';
     }
     return 'text';
 }

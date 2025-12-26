@@ -8,7 +8,8 @@ TOTP display, and SSH-agent workflows in Chromium-based browsers. It is intentio
 - `src/content.ts` injects the scanner, streams snapshots to the background script, and listens for popup requests.
 - `src/nativeBridge.ts` implements the Native Messaging bridge to `persona bridge` (stdio JSON frames).
 - `src/popup.ts` renders the popup UI, wires the “Connect” button, and displays detected form metadata.
-- `public/manifest.json` declares MV3 permissions for scripting, storage, and action popup.
+- `manifest.json` is the loadable MV3 manifest (points at `dist/*` + `public/popup.html`).
+- `public/manifest.json` is kept as a reference/template while the packaging flow evolves.
 
 ## Scripts
 

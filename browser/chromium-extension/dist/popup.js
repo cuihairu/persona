@@ -1,4 +1,5 @@
 import { hello, requestPairingCode, finalizePairing, getPairingState } from './nativeBridge';
+import { getAutofillSettings, setAutofillSettings } from './settings';
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
 const endpointInput = document.getElementById('endpoint');
@@ -15,6 +16,12 @@ const pairingHintEl = document.getElementById('pairingHint');
 const finalizePairingButton = document.getElementById('finalizePairing');
 const autofillStatusEl = document.getElementById('autofillStatus');
 const suggestionsEl = document.getElementById('suggestions');
+const autoFillLoginOnFocusEl = document.getElementById('autoFillLoginOnFocus');
+const autoFillLoginOnLoadEl = document.getElementById('autoFillLoginOnLoad');
+const autoFillTotpOnFocusEl = document.getElementById('autoFillTotpOnFocus');
+const requireTrustedDomainEl = document.getElementById('requireTrustedDomain');
+const minMatchStrengthLoginEl = document.getElementById('minMatchStrengthLogin');
+const minMatchStrengthTotpEl = document.getElementById('minMatchStrengthTotp');
 let currentAssessment;
 let currentHost;
 function describeStatus(status) {
@@ -235,6 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshForms();
     refreshPairing().catch(() => null);
     refreshAutofill().catch(() => null);
+    refreshSettings().catch(() => null);
 });
 async function getActiveTabOrigin() {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -352,4 +360,47 @@ async function requestCopy(origin, itemId, field) {
     const copied = Boolean(resp?.data?.copied);
     autofillStatusEl.textContent = copied ? `Copied ${field}` : `Copy failed`;
 }
+function clampMatchStrength(value) {
+    if (!Number.isFinite(value))
+        return 90;
+    return Math.max(0, Math.min(100, Math.round(value)));
+}
+async function refreshSettings() {
+    const settings = await getAutofillSettings();
+    if (autoFillLoginOnFocusEl)
+        autoFillLoginOnFocusEl.checked = settings.autoFillLoginOnFocus;
+    if (autoFillLoginOnLoadEl)
+        autoFillLoginOnLoadEl.checked = settings.autoFillLoginOnLoad;
+    if (autoFillTotpOnFocusEl)
+        autoFillTotpOnFocusEl.checked = settings.autoFillTotpOnFocus;
+    if (requireTrustedDomainEl)
+        requireTrustedDomainEl.checked = settings.requireTrustedDomain;
+    if (minMatchStrengthLoginEl)
+        minMatchStrengthLoginEl.value = String(settings.minMatchStrengthLogin);
+    if (minMatchStrengthTotpEl)
+        minMatchStrengthTotpEl.value = String(settings.minMatchStrengthTotp);
+}
+function bindSettings() {
+    autoFillLoginOnFocusEl?.addEventListener('change', () => {
+        void setAutofillSettings({ autoFillLoginOnFocus: Boolean(autoFillLoginOnFocusEl.checked) });
+    });
+    autoFillLoginOnLoadEl?.addEventListener('change', () => {
+        void setAutofillSettings({ autoFillLoginOnLoad: Boolean(autoFillLoginOnLoadEl.checked) });
+    });
+    autoFillTotpOnFocusEl?.addEventListener('change', () => {
+        void setAutofillSettings({ autoFillTotpOnFocus: Boolean(autoFillTotpOnFocusEl.checked) });
+    });
+    requireTrustedDomainEl?.addEventListener('change', () => {
+        void setAutofillSettings({ requireTrustedDomain: Boolean(requireTrustedDomainEl.checked) });
+    });
+    minMatchStrengthLoginEl?.addEventListener('change', () => {
+        const raw = Number(minMatchStrengthLoginEl.value);
+        void setAutofillSettings({ minMatchStrengthLogin: clampMatchStrength(raw) });
+    });
+    minMatchStrengthTotpEl?.addEventListener('change', () => {
+        const raw = Number(minMatchStrengthTotpEl.value);
+        void setAutofillSettings({ minMatchStrengthTotp: clampMatchStrength(raw) });
+    });
+}
+bindSettings();
 //# sourceMappingURL=popup.js.map

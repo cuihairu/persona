@@ -1,6 +1,7 @@
 import { pingBridge } from './bridge';
 import { sendNativeMessage, getSuggestions, requestFill, getTotp, copyToClipboard } from './nativeBridge';
 import { evaluateDomain, upsertPolicy, removePolicy } from './domainPolicy';
+import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings';
 const STORAGE_KEY = 'persona_bridge_status';
 const FORMS_KEY = 'persona_forms';
 const POLICY_KEY = 'persona_domain_policies';
@@ -17,6 +18,11 @@ chrome.runtime.onInstalled.addListener(() => {
             message: 'Bridge not contacted yet'
         },
         [POLICY_KEY]: []
+    });
+    chrome.storage.local.get(AUTOFILL_SETTINGS_KEY, (value) => {
+        if (value?.[AUTOFILL_SETTINGS_KEY])
+            return;
+        chrome.storage.local.set({ [AUTOFILL_SETTINGS_KEY]: DEFAULT_AUTOFILL_SETTINGS });
     });
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
