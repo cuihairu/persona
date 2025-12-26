@@ -5,6 +5,7 @@ import type {
   Credential,
   CredentialData,
   CreateIdentityRequest,
+  UpdateIdentityRequest,
   CreateCredentialRequest,
   Statistics,
   InitRequest,
@@ -18,6 +19,7 @@ import type {
   WalletExportRequest,
   WalletSummary,
   WalletAddress,
+  TotpCodeResponse,
 } from '@/types';
 
 class PersonaAPI {
@@ -35,6 +37,14 @@ class PersonaAPI {
 
   async createIdentity(request: CreateIdentityRequest): Promise<ApiResponse<Identity>> {
     return invoke('create_identity', { request });
+  }
+
+  async updateIdentity(request: UpdateIdentityRequest): Promise<ApiResponse<Identity>> {
+    return invoke('update_identity', { request });
+  }
+
+  async deleteIdentity(identityId: string): Promise<ApiResponse<boolean>> {
+    return invoke('delete_identity', { identity_id: identityId });
   }
 
   async getIdentities(): Promise<ApiResponse<Identity[]>> {
@@ -55,6 +65,10 @@ class PersonaAPI {
 
   async getCredentialData(credentialId: string): Promise<ApiResponse<CredentialData | null>> {
     return invoke('get_credential_data', { credential_id: credentialId });
+  }
+
+  async getTotpCode(credentialId: string): Promise<ApiResponse<TotpCodeResponse>> {
+    return invoke('get_totp_code', { credential_id: credentialId });
   }
 
   async searchCredentials(query: string): Promise<ApiResponse<Credential[]>> {

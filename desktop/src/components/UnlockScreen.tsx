@@ -18,8 +18,8 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
     e.preventDefault();
     if (!masterPassword.trim()) return;
 
-    await initializeService(masterPassword, useCustomPath ? dbPath : undefined);
-    if (!error) {
+    const ok = await initializeService(masterPassword, useCustomPath ? dbPath : undefined);
+    if (ok) {
       onUnlock();
     }
   };

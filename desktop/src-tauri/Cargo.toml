@@ -24,6 +24,10 @@ tracing = "0.1"
 dirs = "5.0"
 byteorder = "1.5"
 chrono = { version = "0.4", features = ["serde"] }
+data-encoding = "2.5"
+hmac = "0.12"
+sha1 = "0.10"
+sha2 = "0.10"
 
 [features]
 default = ["custom-protocol"]

@@ -9,6 +9,7 @@ import CreateCredentialModal from '@/components/CreateCredentialModal';
 import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorHandling';
 import SshAgentPanel from '@/components/SshAgentPanel';
 import WalletPanel from '@/components/WalletPanel';
+import SettingsModal from '@/components/SettingsModal';
 
 const App: React.FC = () => {
   const {
@@ -23,6 +24,7 @@ const App: React.FC = () => {
 
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateCredential, setShowCreateCredential] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [currentView, setCurrentView] = useState<'credentials' | 'statistics' | 'sshAgent' | 'wallets'>('credentials');
 
   // Load credentials when identity changes
@@ -143,7 +145,7 @@ const App: React.FC = () => {
                 </div>
 
                 {/* Action Buttons */}
-                <button className="btn-ghost">
+                <button className="btn-ghost" onClick={() => setShowSettings(true)}>
                   <Cog6ToothIcon className="w-4 h-4" />
                 </button>
 
@@ -177,6 +179,11 @@ const App: React.FC = () => {
         <CreateCredentialModal
           isOpen={showCreateCredential}
           onClose={() => setShowCreateCredential(false)}
+        />
+
+        <SettingsModal
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
         />
 
         {/* Toast Notifications */}
