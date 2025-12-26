@@ -1,7 +1,7 @@
 import { observeForms } from './formScanner';
 import { evaluateDomain } from './domainPolicy';
 import { DEFAULT_AUTOFILL_SETTINGS, getAutofillSettings, onAutofillSettingsChanged } from './settings';
-import { getAutofillDefaultsForOrigin, onAutofillDefaultsChanged } from './autofillDefaults';
+import { getAutofillDefaultsForOrigin, onAutofillDefaultsChanged, setAutofillDefaultsForOrigin } from './autofillDefaults';
 // Current page state
 let currentForms = [];
 let currentSuggestions = [];
@@ -75,6 +75,19 @@ function init() {
 }
 async function refreshOriginDefaults() {
     currentOriginDefaults = await getAutofillDefaultsForOrigin(location.origin).catch(() => null);
+}
+async function maybeRememberDefault(mode, itemId) {
+    const suggestionsForKind = currentSuggestions.filter((s) => (s.credential_type ?? 'password') === mode);
+    if (suggestionsForKind.length <= 1)
+        return;
+    const already = mode === 'totp'
+        ? currentOriginDefaults?.totpItemId === itemId
+        : currentOriginDefaults?.passwordItemId === itemId;
+    if (already)
+        return;
+    const patch = mode === 'totp' ? { totpItemId: itemId } : { passwordItemId: itemId };
+    await setAutofillDefaultsForOrigin(location.origin, patch).catch(() => null);
+    void refreshOriginDefaults();
 }
 // Fetch suggestions from background
 async function fetchSuggestions() {
@@ -401,9 +414,11 @@ function showSuggestionsDropdown(input, mode) {
         });
         item.addEventListener('click', () => {
             if ((suggestion.credential_type ?? 'password') === 'totp') {
+                void maybeRememberDefault('totp', suggestion.item_id);
                 requestTotp(suggestion.item_id, input);
             }
             else {
+                void maybeRememberDefault('password', suggestion.item_id);
                 requestFill(suggestion.item_id, input);
             }
             dropdown.remove();
@@ -759,9 +774,11 @@ function showSuggestionsOverlay(suggestions) {
             item.addEventListener('mouseleave', () => item.style.background = 'white');
             item.addEventListener('click', () => {
                 if ((suggestion.credential_type ?? 'password') === 'totp') {
+                    void maybeRememberDefault('totp', suggestion.item_id);
                     requestTotp(suggestion.item_id);
                 }
                 else {
+                    void maybeRememberDefault('password', suggestion.item_id);
                     requestFill(suggestion.item_id);
                 }
                 hideOverlay();
