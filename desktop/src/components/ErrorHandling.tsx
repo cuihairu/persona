@@ -1,4 +1,4 @@
-import React from 'react';
+import * as React from 'react';
 import { XCircleIcon, ExclamationTriangleIcon, InformationCircleIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 
 interface ErrorBoundaryState {

@@ -19,7 +19,7 @@ jobs:
         with:
           toolchain: stable
           override: true
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
       - name: Cache cargo
         uses: actions/cache@v4
         with:
@@ -28,12 +28,24 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: test
-        run: cargo test --workspace --all-features
+      - name: coverage
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov --workspace --all-features --lcov --output-path coverage/rust-lcov.info
+      - name: Upload coverage (rust) to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage/rust-lcov.info
+          flags: rust
+          fail_ci_if_error: false
 
   security:
     name: Security Audit
@@ -75,7 +87,13 @@ jobs:
       - name: Lint
         run: pnpm --filter persona-desktop run lint
       - name: Tests
-        run: pnpm --filter persona-desktop run test -- --ci --reporters=default --reporters=jest-junit
+        run: pnpm --filter persona-desktop run test:ci:coverage
+      - name: Upload coverage (desktop) to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: desktop/coverage/lcov.info
+          flags: desktop
+          fail_ci_if_error: false
       - name: Security Audit
         run: pnpm --filter persona-desktop audit --audit-level=moderate
         continue-on-error: true # Don't fail CI on moderate vulnerabilities

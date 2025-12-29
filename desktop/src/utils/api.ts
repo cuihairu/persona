@@ -55,6 +55,18 @@ class PersonaAPI {
     return invoke('get_identity', { id });
   }
 
+  async getActiveIdentity(): Promise<ApiResponse<string | null>> {
+    return invoke('get_active_identity');
+  }
+
+  async setActiveIdentity(identityId: string): Promise<ApiResponse<boolean>> {
+    return invoke('set_active_identity', { identity_id: identityId });
+  }
+
+  async clearActiveIdentity(): Promise<ApiResponse<boolean>> {
+    return invoke('clear_active_identity');
+  }
+
   async createCredential(request: CreateCredentialRequest): Promise<ApiResponse<Credential>> {
     return invoke('create_credential', { request });
   }
