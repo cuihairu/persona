@@ -3,19 +3,61 @@ use persona_core::*;
 use persona_core::models::CredentialType;
 use persona_core::models::wallet::CryptoWallet;
 use persona_core::models::wallet::BlockchainNetwork;
-use persona_core::storage::{CryptoWalletRepository, Database};
+use persona_core::storage::{CryptoWalletRepository, Database, WorkspaceRepository};
 use tauri::{command, State};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 use std::str::FromStr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::path::Path;
 use std::fs;
 use std::sync::Arc;
 use data_encoding::{BASE32, BASE32_NOPAD};
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};
+
+fn workspace_path_for_db_path(db_path: &str) -> String {
+    Path::new(db_path)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .to_string()
+}
+
+async fn ensure_workspace_for_path(
+    db: &Database,
+    workspace_path: &str,
+) -> std::result::Result<persona_core::models::Workspace, String> {
+    let repo = WorkspaceRepository::new(db.clone());
+
+    if let Some(ws) = repo
+        .find_by_path(workspace_path)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(ws);
+    }
+
+    let mut all = repo.find_all().await.map_err(|e| e.to_string())?;
+    if all.len() == 1 {
+        let mut ws = all.remove(0);
+        ws.path = PathBuf::from(workspace_path);
+        ws.touch();
+        let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+        return Ok(updated);
+    }
+
+    let name = PathBuf::from(workspace_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Persona".to_string());
+
+    let ws = persona_core::models::Workspace::new(PathBuf::from(workspace_path), name);
+    repo.create(&ws).await.map_err(|e| e.to_string())
+}
 
 /// Initialize the Persona service with master password
 #[command]
@@ -41,6 +83,14 @@ pub async fn init_service(
         Ok(db) => {
             if let Err(e) = db.migrate().await {
                 return Ok(ApiResponse::error(format!("Database migration failed: {}", e)));
+            }
+
+            let workspace_path = workspace_path_for_db_path(&db_path);
+            if let Err(e) = ensure_workspace_for_path(&db, &workspace_path).await {
+                return Ok(ApiResponse::error(format!(
+                    "Failed to initialize workspace metadata: {}",
+                    e
+                )));
             }
 
             match PersonaService::new(db).await {
@@ -115,6 +165,117 @@ pub async fn is_service_unlocked(state: State<'_, AppState>) -> std::result::Res
     }
 }
 
+/// Get the active identity ID for this workspace (if any).
+#[command]
+pub async fn get_active_identity(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Option<String>>, String> {
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        match guard.clone() {
+            Some(p) => p,
+            None => {
+                return Ok(ApiResponse::error(
+                    "Database path unavailable. Initialize the service first.".to_string(),
+                ))
+            }
+        }
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    Ok(ApiResponse::success(ws.active_identity_id.map(|id| id.to_string())))
+}
+
+/// Set the active identity ID for this workspace.
+#[command]
+pub async fn set_active_identity(
+    identity_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let identity_id =
+        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    ws.switch_identity(identity_id);
+    repo.update(&ws).await.map_err(|e| e.to_string())?;
+
+    Ok(ApiResponse::success(true))
+}
+
+/// Clear the active identity for this workspace.
+#[command]
+pub async fn clear_active_identity(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    ws.clear_active_identity();
+    repo.update(&ws).await.map_err(|e| e.to_string())?;
+
+    Ok(ApiResponse::success(true))
+}
+
 /// Create a new identity
 #[command]
 pub async fn create_identity(
@@ -146,7 +307,25 @@ pub async fn create_identity(
                     }
 
                     match service.update_identity(&identity).await {
-                        Ok(updated_identity) => Ok(ApiResponse::success(updated_identity.into())),
+                        Ok(updated_identity) => {
+                            // If this is the first identity, make it the active one for this workspace.
+                            if let Some(db_path) = state.db_path.lock().await.clone() {
+                                if let Ok(db) = Database::from_file(&db_path).await {
+                                    let _ = db.migrate().await;
+                                    let workspace_path = workspace_path_for_db_path(&db_path);
+                                    if let Ok(ws) = ensure_workspace_for_path(&db, &workspace_path).await {
+                                        if ws.active_identity_id.is_none() {
+                                            let repo = WorkspaceRepository::new(db.clone());
+                                            let mut ws = ws;
+                                            ws.switch_identity(updated_identity.id);
+                                            let _ = repo.update(&ws).await;
+                                        }
+                                    }
+                                }
+                            }
+
+                            Ok(ApiResponse::success(updated_identity.into()))
+                        }
                         Err(e) => Ok(ApiResponse::error(format!("Failed to update identity: {}", e))),
                     }
                 }
@@ -270,7 +449,26 @@ pub async fn delete_identity(
     match service_guard.as_ref() {
         Some(service) => match Uuid::from_str(&identity_id) {
             Ok(uuid) => match service.delete_identity(&uuid).await {
-                Ok(ok) => Ok(ApiResponse::success(ok)),
+                Ok(ok) => {
+                    if ok {
+                        if let Some(db_path) = state.db_path.lock().await.clone() {
+                            if let Ok(db) = Database::from_file(&db_path).await {
+                                let _ = db.migrate().await;
+                                let workspace_path = workspace_path_for_db_path(&db_path);
+                                if let Ok(ws) = ensure_workspace_for_path(&db, &workspace_path).await
+                                {
+                                    if ws.active_identity_id == Some(uuid) {
+                                        let repo = WorkspaceRepository::new(db.clone());
+                                        let mut ws = ws;
+                                        ws.clear_active_identity();
+                                        let _ = repo.update(&ws).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(ApiResponse::success(ok))
+                }
                 Err(e) => Ok(ApiResponse::error(format!("Failed to delete identity: {}", e))),
             },
             Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),

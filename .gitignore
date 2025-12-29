@@ -14,6 +14,10 @@
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
+coverage/
+**/coverage/
+**/lcov-report/
+lcov.info
 *.coverprofile
 profile.cov
 

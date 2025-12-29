@@ -1,6 +1,7 @@
 # Persona – Digital Identity and Developer Credential Manager
 
 [![CI](https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI)](https://github.com/cuihairu/persona/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/persona)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Chinese brand name: "Shuyao" (数钥, pronounced "shu yao"). It captures the idea of "digital keys" in a short, memorable word. We generally refer to the product as "Persona (数钥)" or "Shuyao Persona" in brand materials.

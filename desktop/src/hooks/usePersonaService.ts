@@ -101,10 +101,26 @@ export const usePersonaService = () => {
       const response = await personaAPI.getIdentities();
       if (response.success && response.data) {
         setIdentities(response.data);
-        // Set first identity as current if none selected
+        // Select current identity: prefer workspace active identity, fall back to first.
         const storedCurrentIdentity = useAppStore.getState().currentIdentity;
         if (!storedCurrentIdentity && response.data.length > 0) {
-          setCurrentIdentity(response.data[0]);
+          try {
+            const active = await personaAPI.getActiveIdentity();
+            const activeId = active.success ? (active.data ?? null) : null;
+            const match = activeId
+              ? response.data.find((id) => id.id === activeId) ?? null
+              : null;
+
+            const selected = match ?? response.data[0];
+            setCurrentIdentity(selected);
+
+            if (!match) {
+              // Keep workspace state consistent so other clients (bridge/CLI) can reuse it.
+              await personaAPI.setActiveIdentity(selected.id);
+            }
+          } catch {
+            setCurrentIdentity(response.data[0]);
+          }
         }
       } else {
         setError(response.error || 'Failed to load identities');
@@ -128,6 +144,11 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         await loadIdentities();
         setCurrentIdentity(response.data);
+        try {
+          await personaAPI.setActiveIdentity(response.data.id);
+        } catch {
+          // ignore
+        }
         toast.success('Identity created successfully');
         return response.data;
       } else {
@@ -200,6 +221,11 @@ export const usePersonaService = () => {
 
   const switchIdentity = async (identity: Identity) => {
     setCurrentIdentity(identity);
+    try {
+      await personaAPI.setActiveIdentity(identity.id);
+    } catch {
+      // ignore
+    }
     await loadCredentialsForIdentity(identity.id);
     toast.success(`Switched to ${identity.name}`);
   };
