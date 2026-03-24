@@ -298,3 +298,125 @@ impl CredentialData {
         bincode::deserialize(data)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_type_display_values() {
+        assert_eq!(CredentialType::Password.to_string(), "Password");
+        assert_eq!(CredentialType::CryptoWallet.to_string(), "CryptoWallet");
+        assert_eq!(CredentialType::SshKey.to_string(), "SshKey");
+        assert_eq!(CredentialType::TwoFactor.to_string(), "TwoFactor");
+        assert_eq!(
+            CredentialType::Custom("X".to_string()).to_string(),
+            "X".to_string()
+        );
+    }
+
+    #[test]
+    fn security_level_display_values() {
+        assert_eq!(SecurityLevel::Critical.to_string(), "Critical");
+        assert_eq!(SecurityLevel::High.to_string(), "High");
+        assert_eq!(SecurityLevel::Medium.to_string(), "Medium");
+        assert_eq!(SecurityLevel::Low.to_string(), "Low");
+    }
+
+    #[test]
+    fn credential_new_sets_required_fields() {
+        let identity_id = Uuid::new_v4();
+        let cred = Credential::new(
+            identity_id,
+            "GitHub".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            vec![1, 2, 3],
+            None,
+        );
+
+        assert_eq!(cred.identity_id, identity_id);
+        assert_eq!(cred.name, "GitHub");
+        assert_eq!(cred.credential_type, CredentialType::Password);
+        assert_eq!(cred.security_level, SecurityLevel::High);
+        assert_eq!(cred.encrypted_data, vec![1, 2, 3]);
+        assert!(cred.is_active);
+        assert!(!cred.is_favorite);
+        assert!(cred.tags.is_empty());
+        assert!(cred.metadata.is_empty());
+    }
+
+    #[test]
+    fn credential_tag_operations_are_idempotent() {
+        let identity_id = Uuid::new_v4();
+        let mut cred = Credential::new(
+            identity_id,
+            "GitHub".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            vec![1],
+            None,
+        );
+        cred.tags.clear();
+
+        cred.add_tag("work".to_string());
+        cred.add_tag("work".to_string());
+        assert_eq!(cred.tags, vec!["work".to_string()]);
+
+        cred.remove_tag("work");
+        assert!(cred.tags.is_empty());
+    }
+
+    #[test]
+    fn credential_metadata_roundtrip() {
+        let identity_id = Uuid::new_v4();
+        let mut cred = Credential::new(
+            identity_id,
+            "GitHub".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            vec![1],
+            None,
+        );
+        cred.metadata.clear();
+
+        cred.set_metadata("env".to_string(), "prod".to_string());
+        assert_eq!(cred.get_metadata("env").map(|s| s.as_str()), Some("prod"));
+
+        cred.remove_metadata("env");
+        assert!(cred.get_metadata("env").is_none());
+    }
+
+    #[test]
+    fn credential_mark_accessed_sets_timestamp() {
+        let identity_id = Uuid::new_v4();
+        let mut cred = Credential::new(
+            identity_id,
+            "GitHub".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            vec![1],
+            None,
+        );
+
+        assert!(cred.last_accessed.is_none());
+        cred.mark_accessed();
+        assert!(cred.last_accessed.is_some());
+    }
+
+    #[test]
+    fn credential_data_bincode_roundtrip() {
+        let data = CredentialData::Password(PasswordCredentialData {
+            password: "p@ss".to_string(),
+            email: Some("alice@example.com".to_string()),
+            security_questions: vec![SecurityQuestion {
+                question: "q".to_string(),
+                answer: "a".to_string(),
+            }],
+        });
+
+        let bytes = data.to_bytes().unwrap();
+        let decoded = CredentialData::from_bytes(&bytes).unwrap();
+        assert!(matches!(decoded, CredentialData::Password(_)));
+    }
+}

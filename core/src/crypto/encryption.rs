@@ -1,6 +1,4 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-use argon2::password_hash::{PasswordHash, PasswordVerifier, SaltString};
-use argon2::{Argon2, PasswordHasher};
 use rand::{rngs::OsRng, RngCore};
 use zeroize::Zeroize;
 
@@ -49,6 +47,10 @@ pub fn decrypt_data(
     salt: &[u8],
     nonce_bytes: &[u8],
 ) -> Result<Vec<u8>, aes_gcm::Error> {
+    if nonce_bytes.len() != 12 {
+        return Err(aes_gcm::Error);
+    }
+
     // Derive key from password
     let mut key = [0u8; 32];
     derive_key_from_password(password, salt, &mut key);
@@ -198,5 +200,64 @@ mod tests {
         let secure = SecureString::from_string("secret".to_string());
         assert_eq!(secure.len(), 6);
         assert_eq!(secure.to_string_lossy(), "secret");
+    }
+
+    #[test]
+    fn test_encrypt_data_roundtrip_with_password() {
+        let plaintext = b"top secret payload";
+        let password = b"correct horse battery staple";
+
+        let encrypted = encrypt_data(plaintext, password).unwrap();
+        let decrypted =
+            decrypt_data(&encrypted.ciphertext, password, &encrypted.salt, &encrypted.nonce)
+                .unwrap();
+
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_encrypt_data_metadata_lengths() {
+        let encrypted = encrypt_data(b"hello", b"pw").unwrap();
+        assert_eq!(encrypted.salt.len(), 16);
+        assert_eq!(encrypted.nonce.len(), 12);
+        assert!(!encrypted.ciphertext.is_empty());
+    }
+
+    #[test]
+    fn test_decrypt_data_wrong_password_fails() {
+        let encrypted = encrypt_data(b"hello", b"pw").unwrap();
+        let decrypted = decrypt_data(
+            &encrypted.ciphertext,
+            b"wrong",
+            &encrypted.salt,
+            &encrypted.nonce,
+        );
+        assert!(decrypted.is_err());
+    }
+
+    #[test]
+    fn test_decrypt_data_rejects_invalid_nonce_length() {
+        let encrypted = encrypt_data(b"hello", b"pw").unwrap();
+        let decrypted = decrypt_data(
+            &encrypted.ciphertext,
+            b"pw",
+            &encrypted.salt,
+            &[0u8; 8],
+        );
+        assert!(decrypted.is_err());
+    }
+
+    #[test]
+    fn test_encryption_service_rejects_too_short_ciphertext() {
+        let key = EncryptionService::generate_key();
+        let service = EncryptionService::new(&key);
+        assert!(service.decrypt(&[0u8; 11]).is_err());
+    }
+
+    #[test]
+    fn test_secure_string_zeroize_explicit() {
+        let mut secure = SecureString::from_bytes(b"secret".to_vec());
+        secure.zeroize();
+        assert!(secure.as_bytes().iter().all(|b| *b == 0));
     }
 }

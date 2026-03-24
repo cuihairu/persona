@@ -64,6 +64,7 @@ SSH Agent (developer focus)
 - [x] CLI commands: `persona ssh import|generate|list|list-all|export-pub|add-to-agent|start-agent|stop-agent|agent-status|run|remove`
 - [x] Complete README documentation with usage examples
 - [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
+- [x] Windows CI: build/test Rust workspace (basic validation)
 - [ ] Windows-specific testing and optimization
 
 Digital Wallet (Persona enhancement)

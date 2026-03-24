@@ -153,7 +153,7 @@ impl AgentListener {
 pub fn default_agent_path() -> std::path::PathBuf {
     #[cfg(unix)]
     {
-        std::env::var("SSH_AUTH_SOCK")
+        std::env::var("PERSONA_AGENT_SOCKET_PATH")
             .ok()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| {
@@ -199,5 +199,73 @@ mod tests {
     fn test_env_var_name() {
         let var = agent_socket_env_var();
         assert_eq!(var, "SSH_AUTH_SOCK");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_bind_removes_existing_path_and_accepts_connection() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("persona-ssh-agent-test.sock");
+
+        // Pre-create a file to ensure bind removes it.
+        std::fs::write(&sock_path, b"not a socket").unwrap();
+
+        let mut listener = AgentListener::bind(&sock_path).await.unwrap();
+        let addr = listener.address();
+        assert!(addr.ends_with("persona-ssh-agent-test.sock"));
+
+        let client_task = tokio::spawn(async move {
+            let mut client = tokio::net::UnixStream::connect(&sock_path).await.unwrap();
+            client.write_all(b"ping").await.unwrap();
+            let mut buf = [0u8; 4];
+            client.read_exact(&mut buf).await.unwrap();
+            buf
+        });
+
+        let mut stream = listener.accept().await.unwrap();
+        let mut in_buf = [0u8; 4];
+        stream.read_exact(&mut in_buf).await.unwrap();
+        assert_eq!(&in_buf, b"ping");
+
+        stream.write_all(b"pong").await.unwrap();
+
+        let out_buf = client_task.await.unwrap();
+        assert_eq!(&out_buf, b"pong");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_bind_and_accept_named_pipe() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::windows::named_pipe::ClientOptions;
+
+        let name = format!("persona-ssh-agent-test-{}", std::process::id());
+        let path = std::path::PathBuf::from(&name);
+        let mut listener = AgentListener::bind(&path).await.unwrap();
+        let pipe_name = listener.address();
+        assert!(pipe_name.starts_with(r"\\.\pipe\"));
+
+        let client_task = tokio::spawn({
+            let pipe_name = pipe_name.clone();
+            async move {
+                let mut client = ClientOptions::new().open(&pipe_name).unwrap();
+                client.write_all(b"ping").await.unwrap();
+                let mut buf = [0u8; 4];
+                client.read_exact(&mut buf).await.unwrap();
+                buf
+            }
+        });
+
+        let mut stream = listener.accept().await.unwrap();
+        let mut in_buf = [0u8; 4];
+        stream.read_exact(&mut in_buf).await.unwrap();
+        assert_eq!(&in_buf, b"ping");
+
+        stream.write_all(b"pong").await.unwrap();
+
+        let out_buf = client_task.await.unwrap();
+        assert_eq!(&out_buf, b"pong");
     }
 }

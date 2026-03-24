@@ -203,6 +203,67 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     Ok(identity)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_args() -> AddArgs {
+        AddArgs {
+            name: None,
+            identity_type: None,
+            description: None,
+            email: None,
+            phone: None,
+            yes: true,
+            from_file: None,
+            set_active: false,
+        }
+    }
+
+    #[test]
+    fn create_identity_non_interactive_requires_name() {
+        let args = base_args();
+        assert!(create_identity_non_interactive(&args).is_err());
+    }
+
+    #[test]
+    fn create_identity_non_interactive_defaults_type_to_personal() {
+        let mut args = base_args();
+        args.name = Some("Alice".to_string());
+        let identity = create_identity_non_interactive(&args).unwrap();
+        assert_eq!(identity.name, "Alice");
+        assert!(matches!(identity.identity_type, IdentityType::Personal));
+    }
+
+    #[test]
+    fn validate_identity_rejects_empty_name() {
+        let identity = Identity::new("".to_string(), IdentityType::Personal);
+        assert!(validate_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn validate_identity_rejects_invalid_email() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.email = Some("invalid".to_string());
+        assert!(validate_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn validate_identity_rejects_short_phone() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.phone = Some("123".to_string());
+        assert!(validate_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn validate_identity_accepts_basic_identity() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.email = Some("alice@example.com".to_string());
+        identity.phone = Some("1234567890".to_string());
+        validate_identity(&identity).unwrap();
+    }
+}
+
 fn create_identity_non_interactive(args: &AddArgs) -> Result<Identity> {
     let name = args
         .name
@@ -339,9 +400,17 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = if config.ui.interactive {
+            Password::new()
+                .with_prompt("Enter master password to unlock")
+                .interact()?
+        } else {
+            std::env::var("PERSONA_MASTER_PASSWORD").map_err(|_| {
+                anyhow!(
+                    "IO error: not a terminal\n\nCaused by:\n    Master password required but PERSONA_MASTER_PASSWORD not set"
+                )
+            })?
+        };
         match service
             .authenticate_user(&password)
             .await
@@ -353,10 +422,18 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
-        let password = Password::new()
-            .with_prompt("Set a new master password")
-            .with_confirmation("Confirm master password", "Passwords don't match")
-            .interact()?;
+        let password = if config.ui.interactive {
+            Password::new()
+                .with_prompt("Set a new master password")
+                .with_confirmation("Confirm master password", "Passwords don't match")
+                .interact()?
+        } else {
+            std::env::var("PERSONA_MASTER_PASSWORD").map_err(|_| {
+                anyhow!(
+                    "IO error: not a terminal\n\nCaused by:\n    Master password required but PERSONA_MASTER_PASSWORD not set"
+                )
+            })?
+        };
         let _ = service
             .initialize_user(&password)
             .await

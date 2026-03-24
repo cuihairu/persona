@@ -22,11 +22,12 @@ Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安
 ### 2. 跨平台传输层
 
 - **UNIX 域套接字** (macOS/Linux):
-  - 默认路径: `/tmp/persona-ssh-agent.sock`
-  - 可通过环境变量 `SSH_AUTH_SOCK` 自定义
+  - 默认路径: 系统临时目录下的 `persona-ssh-agent-<pid>.sock`
+  - CLI 启动时会固定到 `PERSONA_AGENT_STATE_DIR/agent.socket`
+  - 可通过环境变量 `PERSONA_AGENT_SOCKET_PATH` 自定义 Agent 监听地址
 
 - **Windows 命名管道** (Windows):
-  - 默认路径: `\\\\.\\pipe\\persona-ssh-agent`
+  - 默认名称: `persona-ssh-agent-<pid>`
   - 完整的跨平台抽象层 (`AgentStream`, `AgentListener`)
 
 - **自动平台检测**: 根据目标操作系统自动选择合适的传输机制
@@ -240,8 +241,8 @@ PERSONA_DB_PATH=~/.persona/identities.db
 # Agent 状态目录
 PERSONA_AGENT_STATE_DIR=~/.persona
 
-# 套接字路径(覆盖默认值)
-SSH_AUTH_SOCK=/custom/path/to/agent.sock
+# Agent 监听路径(覆盖默认值)
+PERSONA_AGENT_SOCKET_PATH=/custom/path/to/agent.sock
 
 # 主密码(用于自动解锁)
 PERSONA_MASTER_PASSWORD=your-master-password
@@ -332,16 +333,16 @@ export PERSONA_MASTER_PASSWORD=your-password
 cargo run -p persona-ssh-agent
 
 # 输出:
-# INFO persona-ssh-agent listening at /tmp/persona-ssh-agent.sock
+# INFO persona-ssh-agent listening at /tmp/persona-ssh-agent-12345.sock
 # INFO Loaded 3 SSH keys from Persona
-# SSH_AUTH_SOCK=/tmp/persona-ssh-agent.sock
+# SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
 ```
 
 ### 2. 配置 SSH 客户端
 
 ```bash
 # 设置 SSH_AUTH_SOCK
-export SSH_AUTH_SOCK=/tmp/persona-ssh-agent.sock
+export SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
 
 # 测试连接
 ssh -T git@github.com
