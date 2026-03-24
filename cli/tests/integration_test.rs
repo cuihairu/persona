@@ -2,6 +2,7 @@ use anyhow::Result;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+use std::process::Command as StdCommand;
 use tempfile::tempdir;
 
 /// CLI integration tests
@@ -226,6 +227,322 @@ fn test_missing_config() -> Result<()> {
         .assert()
         .failure();
     // Should fail because no workspace is configured
+
+    Ok(())
+}
+
+#[test]
+fn test_ssh_agent_status_and_stop_agent_without_running_agent() -> Result<()> {
+    let workspace_dir = tempdir()?;
+    let state_dir = tempdir()?;
+
+    let mut init_cmd = Command::cargo_bin("persona")?;
+    init_cmd
+        .arg("init")
+        .arg("--path")
+        .arg(workspace_dir.path())
+        .arg("--yes")
+        .assert()
+        .success();
+
+    let mut status_cmd = Command::cargo_bin("persona")?;
+    status_cmd
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("agent-status")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("persona-ssh-agent is not running"));
+
+    let mut legacy_status_cmd = Command::cargo_bin("persona")?;
+    legacy_status_cmd
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("status")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("persona-ssh-agent is not running"));
+
+    let mut stop_cmd = Command::cargo_bin("persona")?;
+    stop_cmd
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("stop-agent")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No agent PID file found"));
+
+    Ok(())
+}
+
+#[test]
+fn test_ssh_generate_export_remove_roundtrip() -> Result<()> {
+    let workspace_dir = tempdir()?;
+    let master_password = "test_password_123";
+
+    let mut init_cmd = Command::cargo_bin("persona")?;
+    init_cmd
+        .arg("init")
+        .arg("--path")
+        .arg(workspace_dir.path())
+        .arg("--yes")
+        .assert()
+        .success();
+
+    let mut add_cmd = Command::cargo_bin("persona")?;
+    add_cmd
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("add")
+        .arg("Alice")
+        .arg("--yes")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    let output = Command::cargo_bin("persona")?
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("generate")
+        .arg("--identity")
+        .arg("Alice")
+        .arg("--name")
+        .arg("Test Key")
+        .current_dir(workspace_dir.path())
+        .output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let id_line = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("ID:"))
+        .ok_or_else(|| anyhow::anyhow!("Expected an 'ID:' line in ssh generate output"))?;
+    let id_str = id_line
+        .splitn(2, ':')
+        .nth(1)
+        .unwrap_or("")
+        .trim();
+    let id = uuid::Uuid::parse_str(id_str)?;
+
+    let mut export_cmd = Command::cargo_bin("persona")?;
+    export_cmd
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("export-pub")
+        .arg("--id")
+        .arg(id.to_string())
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ssh-ed25519 "));
+
+    let mut list_cmd = Command::cargo_bin("persona")?;
+    list_cmd
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("list")
+        .arg("--identity")
+        .arg("Alice")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(id.to_string()));
+
+    let mut list_all_cmd = Command::cargo_bin("persona")?;
+    list_all_cmd
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("list-all")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Identity: Alice"))
+        .stdout(predicate::str::contains(id.to_string()));
+
+    let mut remove_cmd = Command::cargo_bin("persona")?;
+    remove_cmd
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("remove")
+        .arg("--id")
+        .arg(id.to_string())
+        .arg("--yes")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    let mut list_cmd = Command::cargo_bin("persona")?;
+    list_cmd
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("list")
+        .arg("--identity")
+        .arg("Alice")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No SSH keys for this identity"));
+
+    Ok(())
+}
+
+#[test]
+fn test_ssh_start_agent_resolves_local_binary_without_path_entry() -> Result<()> {
+    let workspace_dir = tempdir()?;
+    let state_dir = tempdir()?;
+    let master_password = "test_password_123";
+
+    Command::cargo_bin("persona")?
+        .arg("init")
+        .arg("--path")
+        .arg(workspace_dir.path())
+        .arg("--yes")
+        .assert()
+        .success();
+
+    Command::cargo_bin("persona")?
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("add")
+        .arg("Alice")
+        .arg("--yes")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("persona")?
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("generate")
+        .arg("--identity")
+        .arg("Alice")
+        .arg("--name")
+        .arg("Agent Key")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    let original_path = std::env::var("PATH").unwrap_or_default();
+    let filtered_path = original_path
+        .split(':')
+        .filter(|entry| !entry.contains("/Users/cui/Workspaces/persona/target"))
+        .collect::<Vec<_>>()
+        .join(":");
+
+    let build_status = StdCommand::new("cargo")
+        .args(["build", "-p", "persona-ssh-agent"])
+        .status()?;
+    assert!(build_status.success(), "failed to build persona-ssh-agent");
+
+    Command::cargo_bin("persona")?
+        .env("PATH", filtered_path)
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("start-agent")
+        .arg("--print-export")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Agent socket:"));
+
+    Command::cargo_bin("persona")?
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("stop-agent")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    Ok(())
+}
+
+#[test]
+fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
+    let workspace_dir = tempdir()?;
+    let state_dir = tempdir()?;
+    let master_password = "test_password_123";
+
+    Command::cargo_bin("persona")?
+        .arg("init")
+        .arg("--path")
+        .arg(workspace_dir.path())
+        .arg("--yes")
+        .assert()
+        .success();
+
+    Command::cargo_bin("persona")?
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("add")
+        .arg("Alice")
+        .arg("--yes")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("persona")?
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .arg("ssh")
+        .arg("generate")
+        .arg("--identity")
+        .arg("Alice")
+        .arg("--name")
+        .arg("Run Key")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    let build_status = StdCommand::new("cargo")
+        .args(["build", "-p", "persona-ssh-agent"])
+        .status()?;
+    assert!(build_status.success(), "failed to build persona-ssh-agent");
+
+    Command::cargo_bin("persona")?
+        .env_remove("SSH_AUTH_SOCK")
+        .env("PERSONA_NON_INTERACTIVE", "1")
+        .env("PERSONA_MASTER_PASSWORD", master_password)
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("start-agent")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("persona")?
+        .env_remove("SSH_AUTH_SOCK")
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("run")
+        .arg("--host")
+        .arg("github.com")
+        .arg("--")
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg("test -S \"$SSH_AUTH_SOCK\"")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
+
+    Command::cargo_bin("persona")?
+        .env("PERSONA_AGENT_STATE_DIR", state_dir.path())
+        .arg("ssh")
+        .arg("stop-agent")
+        .current_dir(workspace_dir.path())
+        .assert()
+        .success();
 
     Ok(())
 }

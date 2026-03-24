@@ -144,3 +144,52 @@ impl Identity {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identity_type_parse_and_display_roundtrip() {
+        let parsed: IdentityType = "Personal".parse().unwrap();
+        assert_eq!(parsed, IdentityType::Personal);
+        assert_eq!(parsed.to_string(), "Personal");
+
+        let parsed: IdentityType = "Work".parse().unwrap();
+        assert_eq!(parsed, IdentityType::Work);
+
+        let parsed: IdentityType = "CustomType".parse().unwrap();
+        assert_eq!(parsed, IdentityType::Custom("CustomType".to_string()));
+        assert_eq!(parsed.to_string(), "CustomType");
+    }
+
+    #[test]
+    fn identity_tag_operations_are_idempotent() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.tags.clear();
+
+        identity.add_tag("dev".to_string());
+        identity.add_tag("dev".to_string());
+        assert_eq!(identity.tags, vec!["dev".to_string()]);
+
+        identity.remove_tag("dev");
+        assert!(identity.tags.is_empty());
+
+        // Removing non-existent tag should not panic.
+        identity.remove_tag("missing");
+    }
+
+    #[test]
+    fn identity_attributes_roundtrip() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.attributes.clear();
+
+        let old_updated = identity.updated_at;
+        identity.set_attribute("team".to_string(), "core".to_string());
+        assert_eq!(identity.get_attribute("team").map(|s| s.as_str()), Some("core"));
+        assert!(identity.updated_at >= old_updated);
+
+        identity.remove_attribute("team");
+        assert!(identity.get_attribute("team").is_none());
+    }
+}

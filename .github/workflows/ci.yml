@@ -47,6 +47,31 @@ jobs:
           flags: rust
           fail_ci_if_error: false
 
+  rust-windows:
+    name: Rust (Windows build/test)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: clippy
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: build
+        run: cargo build --workspace --all-features
+      - name: test
+        run: cargo test --workspace --all-features
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest

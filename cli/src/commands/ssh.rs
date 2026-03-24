@@ -4,6 +4,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use clap::{Args, Subcommand};
 use colored::*;
 use dialoguer::{Confirm, Password};
+use std::path::{Path, PathBuf};
 use persona_core::{
     models::{CredentialData, CredentialType, Identity as CoreIdentity, SecurityLevel, SshKeyData},
     Database, PersonaService,
@@ -48,11 +49,11 @@ pub enum SshSubcommand {
         #[arg(short, long)]
         yes: bool,
     },
-    /// Show agent status (placeholder)
+    /// Show agent running status
     Status,
-    /// Add keys to agent (placeholder)
+    /// Start persona-ssh-agent and optionally print shell export commands
     AddToAgent {
-        /// Optional: identity name to filter (ignored in MVP)
+        /// Optional: identity name to filter (reserved for future use)
         #[arg(short, long)]
         identity: Option<String>,
         /// Print shell export command
@@ -113,21 +114,14 @@ pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result
         } => generate_key(&identity, name, &key_type, favorite, config).await,
         SshSubcommand::List { identity } => list_keys(&identity, config).await,
         SshSubcommand::Remove { id, yes } => remove_key(id, yes, config).await,
-        SshSubcommand::Status => {
-            println!("{}", "SSH Agent status (placeholder):".yellow().bold());
-            println!(
-                "  {}",
-                "Not implemented yet. Use your system ssh-agent temporarily.".dimmed()
-            );
-            Ok(())
-        }
+        SshSubcommand::Status => agent_status(config).await,
         SshSubcommand::AddToAgent {
             identity: _,
             print_export,
         } => start_agent(config, print_export).await,
-        SshSubcommand::AgentStatus => agent_status(config),
+        SshSubcommand::AgentStatus => agent_status(config).await,
         SshSubcommand::StartAgent { print_export } => start_agent(config, print_export).await,
-        SshSubcommand::ListAll => list_keys("", config).await,
+        SshSubcommand::ListAll => list_all_keys(config).await,
         SshSubcommand::Import {
             identity,
             name,
@@ -151,9 +145,14 @@ async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaServ
         .await
         .context("Failed to create PersonaService")?;
     if service.has_users().await? {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = if config.ui.interactive {
+            Password::new()
+                .with_prompt("Enter master password to unlock")
+                .interact()?
+        } else {
+            std::env::var("PERSONA_MASTER_PASSWORD")
+                .context("Master password required but PERSONA_MASTER_PASSWORD not set")?
+        };
         match service.authenticate_user(&password).await? {
             persona_core::auth::authentication::AuthResult::Success => {}
             other => anyhow::bail!("Authentication failed: {:?}", other),
@@ -185,11 +184,14 @@ async fn generate_key(
     let identity = resolve_identity(&service, identity_name).await?;
 
     // Generate ed25519 keypair
-    use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-    use rand::rngs::OsRng;
+    use ed25519_dalek::SigningKey;
+    use rand::{rngs::OsRng, RngCore};
 
-    let signing_key = SigningKey::from_bytes(&[0u8; 32]); // This is a placeholder - in real implementation you'd use proper key generation
-    let verifying_key: VerifyingKey = signing_key.verifying_key();
+    let mut rng = OsRng;
+    let mut seed = [0u8; 32];
+    rng.fill_bytes(&mut seed);
+    let signing_key = SigningKey::from_bytes(&seed);
+    let verifying_key = signing_key.verifying_key();
     let secret_bytes = signing_key.to_bytes(); // 32-byte seed
     let pub_bytes = verifying_key.to_bytes(); // 32-byte public
 
@@ -198,13 +200,13 @@ async fn generate_key(
     let private_b64 = BASE64.encode(secret_bytes);
 
     let name = label.unwrap_or_else(|| format!("SSH Key ({})", identity.name));
-    let mut data = SshKeyData {
+    let data = SshKeyData {
         private_key: private_b64,
         public_key: openssh_pub.clone(),
         key_type: "ed25519".to_string(),
         passphrase: None,
     };
-    let cred = service
+    let mut cred = service
         .create_credential(
             identity.id,
             name.clone(),
@@ -220,7 +222,9 @@ async fn generate_key(
     println!("  Public: {}", openssh_pub);
     println!("  ID: {}", cred.id);
     if favorite {
-        println!("  {}", "Mark as favorite: TODO".dimmed());
+        cred.is_favorite = true;
+        service.update_credential(&cred).await?;
+        println!("  Favorite: {}", "yes".green());
     }
     Ok(())
 }
@@ -250,6 +254,40 @@ async fn list_keys(identity_name: &str, config: &crate::config::CliConfig) -> Re
     if count == 0 {
         println!("{}", "No SSH keys for this identity.".yellow());
     }
+    Ok(())
+}
+
+async fn list_all_keys(config: &crate::config::CliConfig) -> Result<()> {
+    let mut service = ensure_service(config).await?;
+    let identities = service.get_identities().await?;
+    let mut count = 0usize;
+
+    for identity in identities {
+        let creds = service.get_credentials_for_identity(&identity.id).await?;
+        for cred in creds {
+            if matches!(cred.credential_type, CredentialType::SshKey) {
+                count += 1;
+                println!("{} {}", "#".dimmed(), count);
+                println!("  ID: {}", cred.id);
+                println!("  Name: {}", cred.name.cyan());
+                println!("  Identity: {}", identity.name.cyan());
+                println!("  Created: {}", cred.created_at.format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "  Favorite: {}",
+                    if cred.is_favorite {
+                        "yes".green()
+                    } else {
+                        "no".dimmed()
+                    }
+                );
+            }
+        }
+    }
+
+    if count == 0 {
+        println!("{}", "No SSH keys found.".yellow());
+    }
+
     Ok(())
 }
 
@@ -287,49 +325,75 @@ fn encode_ssh_ed25519_public(pubkey: &[u8; 32], comment: Option<&str>) -> String
 }
 
 async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     use tokio::process::Command;
     println!("{}", "Starting persona-ssh-agent...".cyan().bold());
     let db_path = config.get_database_path();
-    let mut cmd = Command::new("persona-ssh-agent");
+    let agent_bin = resolve_agent_binary()?;
+    let state_dir = agent_state_dir();
+    std::fs::create_dir_all(&state_dir).context("Failed to create agent state directory")?;
+    let socket_path = state_dir.join("agent.socket");
+    let mut cmd = Command::new(&agent_bin);
     cmd.env("PERSONA_DB_PATH", db_path.to_string_lossy().to_string());
+    cmd.env("PERSONA_AGENT_SOCKET_PATH", &socket_path);
     // if vault encrypted, prompt for master password and pass via env
     let mut tmp_service = ensure_service(config).await?; // ensure migrations; may prompt
                                                          // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
                                                          // Here we conservatively ask user again (not stored from ensure_service)
-    let pass = Password::new()
-        .with_prompt("Enter master password for agent (leave empty if not set)")
-        .allow_empty_password(true)
-        .interact()?;
+    let pass = if config.ui.interactive {
+        Password::new()
+            .with_prompt("Enter master password for agent (leave empty if not set)")
+            .allow_empty_password(true)
+            .interact()?
+    } else {
+        std::env::var("PERSONA_MASTER_PASSWORD").unwrap_or_default()
+    };
     if !pass.is_empty() {
         cmd.env("PERSONA_MASTER_PASSWORD", pass);
     }
     // forward stdout to capture SSH_AUTH_SOCK
     cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::piped());
     let mut child = cmd.spawn().context("Failed to start persona-ssh-agent")?;
     let stdout = child.stdout.take().context("No stdout from agent")?;
     let mut reader = BufReader::new(stdout).lines();
     let mut sock_line = None;
-    if let Some(line) = reader.next_line().await? {
+    for _ in 0..8 {
+        let Some(line) = reader.next_line().await? else {
+            break;
+        };
         if line.starts_with("SSH_AUTH_SOCK=") {
             sock_line = Some(line);
-        } else {
-            println!("{}", line);
+            break;
         }
+        println!("{}", line);
     }
     if let Some(sock) = sock_line {
-        println!(
-            "{} {}",
-            "Agent socket:".yellow(),
-            sock.split('=').nth(1).unwrap_or("").cyan()
-        );
+        let sock_value = sock.splitn(2, '=').nth(1).unwrap_or("").trim();
+        println!("{} {}", "Agent socket:".yellow(), sock_value.cyan());
         if print_export {
             println!();
             println!("{}", "Run the following in your shell:".dimmed());
-            println!("  export {}", sock);
+            print_sock_export(sock_value);
         }
     } else {
+        if let Some(status) = child.try_wait()? {
+            let mut stderr_output = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                let _ = stderr.read_to_string(&mut stderr_output).await;
+            }
+            if !status.success() {
+                let stderr_output = stderr_output.trim();
+                if stderr_output.is_empty() {
+                    anyhow::bail!("persona-ssh-agent exited early with status {}", status);
+                }
+                anyhow::bail!(
+                    "persona-ssh-agent exited early with status {}: {}",
+                    status,
+                    stderr_output
+                );
+            }
+        }
         println!(
             "{}",
             "Could not detect SSH_AUTH_SOCK from agent output.".yellow()
@@ -339,15 +403,85 @@ async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> R
     Ok(())
 }
 
-fn agent_status(config: &crate::config::CliConfig) -> Result<()> {
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
+fn resolve_agent_binary() -> Result<PathBuf> {
+    if let Ok(path) = std::env::var("PERSONA_SSH_AGENT_BIN") {
+        let candidate = PathBuf::from(path);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        anyhow::bail!(
+            "PERSONA_SSH_AGENT_BIN is set but does not point to a file: {}",
+            candidate.display()
+        );
+    }
+
+    let binary_name = agent_binary_name();
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(resolved) = find_agent_binary_near(&current_exe, binary_name) {
+            return Ok(resolved);
+        }
+    }
+
+    Ok(PathBuf::from(binary_name))
+}
+
+fn agent_state_dir() -> PathBuf {
+    std::env::var("PERSONA_AGENT_STATE_DIR")
         .ok()
-        .map(std::path::PathBuf::from)
+        .map(PathBuf::from)
         .unwrap_or_else(|| {
             dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .unwrap_or_else(|| PathBuf::from("."))
                 .join(".persona")
-        });
+        })
+}
+
+fn find_agent_binary_near(current_exe: &Path, binary_name: &str) -> Option<PathBuf> {
+    let current_dir = current_exe.parent()?;
+    let candidates = [
+        current_dir.join(binary_name),
+        current_dir.join("deps").join(binary_name),
+        current_dir.parent().map(|dir| dir.join(binary_name))?,
+        current_dir.parent().map(|dir| dir.join("deps").join(binary_name))?,
+    ];
+
+    candidates.into_iter().find(|candidate| candidate.is_file())
+}
+
+#[cfg(unix)]
+fn agent_binary_name() -> &'static str {
+    "persona-ssh-agent"
+}
+
+#[cfg(windows)]
+fn agent_binary_name() -> &'static str {
+    "persona-ssh-agent.exe"
+}
+
+fn print_sock_export(sock_value: &str) {
+    for line in format_sock_export_lines(sock_value) {
+        println!("{line}");
+    }
+}
+
+fn format_sock_export_lines(sock_value: &str) -> Vec<String> {
+    #[cfg(unix)]
+    {
+        return vec![format!("  export SSH_AUTH_SOCK={}", sock_value)];
+    }
+    #[cfg(windows)]
+    {
+        return vec![
+            "  # PowerShell".to_string(),
+            format!("  $env:SSH_AUTH_SOCK = '{}'", sock_value),
+            "  # cmd.exe".to_string(),
+            format!("  set SSH_AUTH_SOCK={}", sock_value),
+        ];
+    }
+}
+
+async fn agent_status(_config: &crate::config::CliConfig) -> Result<()> {
+    let state_dir = agent_state_dir();
     let sock_file = state_dir.join("ssh-agent.sock");
     let pid_file = state_dir.join("ssh-agent.pid");
     let mut running = false;
@@ -363,12 +497,12 @@ fn agent_status(config: &crate::config::CliConfig) -> Result<()> {
     }
     // Try to query agent identities
     if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
-        if let Ok(count) = query_agent_identities(&sock) {
+        if let Ok(count) = query_agent_identities(&sock).await {
             println!("{} {}", "Agent keys:".yellow(), count.to_string().cyan());
         }
     } else if sock_file.exists() {
         let sock = std::fs::read_to_string(&sock_file).unwrap_or_default();
-        if let Ok(count) = query_agent_identities(sock.trim()) {
+        if let Ok(count) = query_agent_identities(sock.trim()).await {
             println!("{} {}", "Agent keys:".yellow(), count.to_string().cyan());
         }
     }
@@ -378,23 +512,26 @@ fn agent_status(config: &crate::config::CliConfig) -> Result<()> {
     Ok(())
 }
 
-fn query_agent_identities(sock_path: &str) -> Result<usize> {
-    use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
-    use std::io::{Read, Write};
-    use std::os::unix::net::UnixStream;
+#[cfg(unix)]
+async fn query_agent_identities(sock_path: &str) -> Result<usize> {
+    use byteorder::{BigEndian, ByteOrder};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::UnixStream;
+
     let mut stream = UnixStream::connect(sock_path)
+        .await
         .with_context(|| format!("Failed to connect to agent at {}", sock_path))?;
     // Build request: len(4) + type(1)=11
     let mut pkt = vec![0u8; 5];
     BigEndian::write_u32(&mut pkt[0..4], 1);
     pkt[4] = 11u8;
-    stream.write_all(&pkt)?;
+    stream.write_all(&pkt).await?;
     // Read response len
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
+    stream.read_exact(&mut len_buf).await?;
     let resp_len = BigEndian::read_u32(&len_buf) as usize;
     let mut resp = vec![0u8; resp_len];
-    stream.read_exact(&mut resp)?;
+    stream.read_exact(&mut resp).await?;
     if resp.is_empty() || resp[0] != 12 {
         anyhow::bail!("Unexpected agent response");
     }
@@ -404,6 +541,78 @@ fn query_agent_identities(sock_path: &str) -> Result<usize> {
     }
     let count = BigEndian::read_u32(&resp[1..5]) as usize;
     Ok(count)
+}
+
+#[cfg(windows)]
+async fn query_agent_identities(sock_path: &str) -> Result<usize> {
+    use byteorder::{BigEndian, ByteOrder};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let pipe_name = if sock_path.starts_with(r"\\.\pipe\") {
+        sock_path.to_string()
+    } else {
+        format!(r"\\.\pipe\{}", sock_path)
+    };
+
+    let mut stream = open_named_pipe_with_retry(&pipe_name, 10, Duration::from_millis(50))
+        .await
+        .with_context(|| format!("Failed to connect to agent at {}", pipe_name))?;
+
+    // Build request: len(4) + type(1)=11
+    let mut pkt = vec![0u8; 5];
+    BigEndian::write_u32(&mut pkt[0..4], 1);
+    pkt[4] = 11u8;
+    stream.write_all(&pkt).await?;
+
+    // Read response len
+    let mut len_buf = [0u8; 4];
+    stream.read_exact(&mut len_buf).await?;
+    let resp_len = BigEndian::read_u32(&len_buf) as usize;
+    let mut resp = vec![0u8; resp_len];
+    stream.read_exact(&mut resp).await?;
+    if resp.is_empty() || resp[0] != 12 {
+        anyhow::bail!("Unexpected agent response");
+    }
+    // parse count
+    if resp.len() < 5 {
+        anyhow::bail!("Malformed agent response");
+    }
+    let count = BigEndian::read_u32(&resp[1..5]) as usize;
+    Ok(count)
+}
+
+#[cfg(windows)]
+async fn open_named_pipe_with_retry(
+    pipe_name: &str,
+    attempts: usize,
+    delay: std::time::Duration,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeClient> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
+    let mut last_err: Option<std::io::Error> = None;
+    for _ in 0..attempts {
+        match ClientOptions::new().open(pipe_name) {
+            Ok(client) => return Ok(client),
+            Err(err) => {
+                let retryable = matches!(err.raw_os_error(), Some(231)) // ERROR_PIPE_BUSY
+                    || err.kind() == std::io::ErrorKind::NotFound;
+                last_err = Some(err);
+                if !retryable {
+                    break;
+                }
+            }
+        }
+        tokio::time::sleep(delay).await;
+    }
+
+    Err(anyhow::anyhow!(
+        "Failed to open named pipe {}: {}",
+        pipe_name,
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
+    ))
 }
 
 async fn run_with_host(
@@ -416,14 +625,7 @@ async fn run_with_host(
         anyhow::bail!("Provide a command after --");
     }
     // Write host to state file
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".persona")
-        });
+    let state_dir = agent_state_dir();
     std::fs::create_dir_all(&state_dir).ok();
     let host_file = state_dir.join("agent-target-host");
     std::fs::write(&host_file, host).context("Failed to write agent target host")?;
@@ -431,6 +633,9 @@ async fn run_with_host(
     let mut cmd = Command::new(&command[0]);
     if command.len() > 1 {
         cmd.args(&command[1..]);
+    }
+    if let Some(sock) = current_or_stored_agent_socket(&state_dir) {
+        cmd.env("SSH_AUTH_SOCK", sock);
     }
     cmd.stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
@@ -442,6 +647,24 @@ async fn run_with_host(
         Ok(())
     } else {
         anyhow::bail!("Command exited with status {}", status)
+    }
+}
+
+fn current_or_stored_agent_socket(state_dir: &Path) -> Option<String> {
+    if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
+        let trimmed = sock.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    let sock_file = state_dir.join("ssh-agent.sock");
+    let sock = std::fs::read_to_string(sock_file).ok()?;
+    let trimmed = sock.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -517,15 +740,7 @@ async fn export_pubkey(id: uuid::Uuid, config: &crate::config::CliConfig) -> Res
 }
 
 fn stop_agent() -> Result<()> {
-    use std::process::Command;
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
-        .ok()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".persona")
-        });
+    let state_dir = agent_state_dir();
     let pid_file = state_dir.join("ssh-agent.pid");
     if !pid_file.exists() {
         println!("{}", "No agent PID file found.".yellow());
@@ -537,20 +752,193 @@ fn stop_agent() -> Result<()> {
         println!("{}", "Empty PID file.".yellow());
         return Ok(());
     }
-    match Command::new("kill").arg(pid).status() {
-        Ok(status) if status.success() => {
-            println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
-            // Cleanup sock/pid files
-            let _ = std::fs::remove_file(pid_file);
-            let sock_file = state_dir.join("ssh-agent.sock");
-            let _ = std::fs::remove_file(sock_file);
-        }
-        Ok(_) => {
-            println!("{}", "Failed to stop agent (kill)".red());
-        }
-        Err(err) => {
-            println!("{} Failed to execute kill: {}", "✗".red(), err);
-        }
+    let stopped = stop_agent_pid(pid)?;
+    if stopped {
+        println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
+        // Cleanup sock/pid files
+        let _ = std::fs::remove_file(pid_file);
+        let sock_file = state_dir.join("ssh-agent.sock");
+        let _ = std::fs::remove_file(sock_file);
+    } else {
+        println!("{}", "Failed to stop agent".red());
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn stop_agent_pid(pid: &str) -> Result<bool> {
+    use std::process::Command;
+    Ok(matches!(Command::new("kill").arg(pid).status(), Ok(s) if s.success()))
+}
+
+#[cfg(windows)]
+fn stop_agent_pid(pid: &str) -> Result<bool> {
+    use std::process::Command;
+
+    let status = Command::new("taskkill")
+        .args(["/PID", pid, "/T"])
+        .status();
+    if matches!(status, Ok(s) if s.success()) {
+        return Ok(true);
+    }
+
+    let status_force = Command::new("taskkill")
+        .args(["/PID", pid, "/T", "/F"])
+        .status();
+    Ok(matches!(status_force, Ok(s) if s.success()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_identities_answer(count: u32) -> Vec<u8> {
+        use byteorder::{BigEndian, ByteOrder};
+        let mut payload = Vec::with_capacity(1 + 4);
+        payload.push(12u8);
+        let mut count_buf = [0u8; 4];
+        BigEndian::write_u32(&mut count_buf, count);
+        payload.extend_from_slice(&count_buf);
+
+        let mut out = Vec::with_capacity(4 + payload.len());
+        let mut len_buf = [0u8; 4];
+        BigEndian::write_u32(&mut len_buf, payload.len() as u32);
+        out.extend_from_slice(&len_buf);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    #[test]
+    fn encode_ssh_ed25519_public_has_expected_prefix_and_blob() {
+        let pubkey = [7u8; 32];
+        let line = encode_ssh_ed25519_public(&pubkey, Some("comment"));
+        assert!(line.starts_with("ssh-ed25519 "));
+        assert!(line.ends_with(" comment"));
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(parts.len(), 3);
+
+        let decoded = BASE64.decode(parts[1]).unwrap();
+        assert!(decoded.len() >= 4 + b"ssh-ed25519".len() + 4 + 32);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn format_sock_export_lines_unix() {
+        let lines = format_sock_export_lines("/tmp/persona.sock");
+        assert_eq!(lines, vec!["  export SSH_AUTH_SOCK=/tmp/persona.sock".to_string()]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn format_sock_export_lines_windows() {
+        let lines = format_sock_export_lines(r"\\.\pipe\persona-test");
+        assert_eq!(
+            lines,
+            vec![
+                "  # PowerShell".to_string(),
+                "  $env:SSH_AUTH_SOCK = '\\\\.\\pipe\\persona-test'".to_string(),
+                "  # cmd.exe".to_string(),
+                "  set SSH_AUTH_SOCK=\\\\.\\pipe\\persona-test".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn query_agent_identities_unix_mock_server() {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("persona-test-agent.sock");
+        let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).await.unwrap();
+            let req_len = BigEndian::read_u32(&len_buf) as usize;
+            let mut req = vec![0u8; req_len];
+            stream.read_exact(&mut req).await.unwrap();
+            assert_eq!(req, vec![11u8]);
+
+            let resp = build_identities_answer(0);
+            stream.write_all(&resp).await.unwrap();
+        });
+
+        let count = query_agent_identities(sock_path.to_str().unwrap()).await.unwrap();
+        assert_eq!(count, 0);
+        server_task.await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn query_agent_identities_windows_mock_server() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::windows::named_pipe::ServerOptions;
+
+        let pipe_name = format!(r"\\.\pipe\persona-test-agent-{}", Uuid::new_v4());
+        let mut server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .unwrap();
+
+        let server_task = tokio::spawn(async move {
+            server.connect().await.unwrap();
+
+            let mut len_buf = [0u8; 4];
+            server.read_exact(&mut len_buf).await.unwrap();
+            let req_len = u32::from_be_bytes(len_buf) as usize;
+            let mut req = vec![0u8; req_len];
+            server.read_exact(&mut req).await.unwrap();
+            assert_eq!(req, vec![11u8]);
+
+            let resp = build_identities_answer(0);
+            server.write_all(&resp).await.unwrap();
+        });
+
+        let count = query_agent_identities(&pipe_name).await.unwrap();
+        assert_eq!(count, 0);
+        server_task.await.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn open_named_pipe_with_retry_waits_for_server() {
+        use std::time::Duration;
+        use tokio::net::windows::named_pipe::ServerOptions;
+
+        let pipe_name = format!(r"\\.\pipe\persona-test-retry-{}", Uuid::new_v4());
+
+        let pipe_name_for_client = pipe_name.clone();
+        let client_task = tokio::spawn(async move {
+            open_named_pipe_with_retry(&pipe_name_for_client, 50, Duration::from_millis(10))
+                .await
+                .unwrap()
+        });
+
+        tokio::time::sleep(Duration::from_millis(80)).await;
+
+        let mut server = ServerOptions::new()
+            .first_pipe_instance(true)
+            .create(&pipe_name)
+            .unwrap();
+        server.connect().await.unwrap();
+
+        let _client = client_task.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_agent_pid_nonexistent_returns_false() {
+        assert!(!stop_agent_pid("99999999").unwrap());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stop_agent_pid_nonexistent_returns_false() {
+        assert!(!stop_agent_pid("99999999").unwrap());
+    }
 }

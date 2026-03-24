@@ -145,7 +145,8 @@ persona ssh generate --identity <name> --name "GitHub Key"
 persona ssh start-agent --print-export
 export SSH_AUTH_SOCK=...   # Copy to the current shell
 
-# Provide the destination host and run a command
+# Provide the destination host and run a command.
+# `persona ssh run` will inject the agent socket automatically.
 persona ssh run --host github.com -- ssh -T git@github.com
 
 # Optional agent policies

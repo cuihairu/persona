@@ -202,11 +202,12 @@ persona ssh generate \
 # Start agent in background
 persona ssh start-agent &
 
-# Export socket path
+# Option 1: export the socket for generic ssh tooling
 export SSH_AUTH_SOCK=$(cat ~/.persona/ssh-agent.sock)
-
-# Use SSH
 ssh git@github.com
+
+# Option 2: use Persona's wrapper, which injects SSH_AUTH_SOCK automatically
+persona ssh run --host github.com -- ssh git@github.com
 ```
 
 ## Docker Integration

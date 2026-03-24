@@ -168,3 +168,66 @@ fn rfc3339_to_system_time(opt: Option<String>) -> Option<SystemTime> {
     opt.and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc).into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::auth::authentication::{AuthFactor, BiometricType, UserAuth};
+
+    #[tokio::test]
+    async fn user_auth_repository_create_get_update_roundtrip() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let repo = UserAuthRepository::new(db.clone());
+        assert!(!repo.has_any().await.unwrap());
+        assert!(repo.get_first().await.unwrap().is_none());
+
+        let user_id = Uuid::new_v4();
+        let mut auth = UserAuth::new(user_id);
+        auth.master_password_hash = Some("hash".to_string());
+        auth.master_key_salt = Some(hex::encode([1u8; 32]));
+        auth.enabled_factors = vec![
+            AuthFactor::MasterPassword,
+            AuthFactor::Biometric(BiometricType::TouchId),
+        ];
+        auth.failed_attempts = 2;
+        auth.password_change_required = true;
+        auth.locked_until = Some(SystemTime::now());
+        auth.last_auth = Some(SystemTime::now());
+
+        repo.create(&auth).await.unwrap();
+
+        assert!(repo.has_any().await.unwrap());
+        let fetched_first = repo.get_first().await.unwrap().unwrap();
+        assert_eq!(fetched_first.user_id, user_id);
+        assert_eq!(fetched_first.master_password_hash.as_deref(), Some("hash"));
+        assert_eq!(fetched_first.master_key_salt, auth.master_key_salt);
+        assert_eq!(fetched_first.failed_attempts, 2);
+        assert!(fetched_first.password_change_required);
+        assert!(fetched_first.locked_until.is_some());
+        assert!(fetched_first.last_auth.is_some());
+        assert!(fetched_first
+            .enabled_factors
+            .contains(&AuthFactor::MasterPassword));
+
+        let fetched = repo.get_by_id(&user_id).await.unwrap().unwrap();
+        assert_eq!(fetched.user_id, user_id);
+
+        let mut updated = auth.clone();
+        updated.failed_attempts = 9;
+        updated.password_change_required = false;
+        updated.enabled_factors = vec![AuthFactor::MasterPassword];
+        updated.updated_at = SystemTime::now();
+        repo.update(&updated).await.unwrap();
+
+        let fetched_after_update = repo.get_by_id(&user_id).await.unwrap().unwrap();
+        assert_eq!(fetched_after_update.failed_attempts, 9);
+        assert!(!fetched_after_update.password_change_required);
+        assert_eq!(fetched_after_update.enabled_factors.len(), 1);
+        assert_eq!(
+            fetched_after_update.enabled_factors[0],
+            AuthFactor::MasterPassword
+        );
+    }
+}

@@ -51,6 +51,11 @@ persona ssh start-agent --print-export
 
 # Copy the export command (example):
 export SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
+
+# Notes:
+# - `persona ssh agent-status` can read the socket from Persona state files.
+# - `persona ssh run --host ... -- <cmd>` injects the agent socket automatically,
+#   so you do not need to export `SSH_AUTH_SOCK` for that wrapper path.
 ```
 
 2. **Verify Agent Status**
