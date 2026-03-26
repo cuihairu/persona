@@ -13,6 +13,8 @@ import { personaAPI } from '@/utils/api';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import type { WalletAddress, WalletGenerateResponse, WalletSummary } from '@/types';
 
+type WalletExportFormat = 'json' | 'xpub' | 'mnemonic' | 'private_key' | 'wif';
+
 const WalletPanel: React.FC = () => {
   const { currentIdentity } = usePersonaService();
   const [wallets, setWallets] = useState<WalletSummary[]>([]);
@@ -28,9 +30,7 @@ const WalletPanel: React.FC = () => {
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportWalletId, setExportWalletId] = useState<string | null>(null);
   const [exportWalletName, setExportWalletName] = useState<string | null>(null);
-  const [exportFormat, setExportFormat] = useState<'json' | 'xpub' | 'mnemonic' | 'private_key'>(
-    'json',
-  );
+  const [exportFormat, setExportFormat] = useState<WalletExportFormat>('json');
   const [exportIncludePrivate, setExportIncludePrivate] = useState(false);
   const [exportPassword, setExportPassword] = useState('');
   const [exportOutput, setExportOutput] = useState<string | null>(null);
@@ -44,7 +44,7 @@ const WalletPanel: React.FC = () => {
   const [importForm, setImportForm] = useState({
     name: '',
     network: 'Ethereum',
-    importType: 'mnemonic' as 'mnemonic' | 'private_key',
+    importType: 'mnemonic' as 'mnemonic' | 'private_key' | 'wif',
     data: '',
     password: '',
     addressCount: 5,
@@ -116,6 +116,19 @@ const WalletPanel: React.FC = () => {
     setExportOutput(null);
   };
 
+  const exportTargetWallet = wallets.find((wallet) => wallet.id === exportWalletId) ?? null;
+  const availableExportFormats = getAvailableExportFormats(exportTargetWallet);
+
+  useEffect(() => {
+    if (!availableExportFormats.includes(exportFormat)) {
+      setExportFormat(availableExportFormats[0] ?? 'json');
+      setExportIncludePrivate(false);
+      setExportOutput(null);
+    }
+  }, [availableExportFormats, exportFormat]);
+
+  const exportRestrictionHint = getExportRestrictionHint(exportTargetWallet, exportFormat);
+
   const performExport = async () => {
     try {
       if (!exportWalletId) {
@@ -126,6 +139,7 @@ const WalletPanel: React.FC = () => {
       const needsPassword =
         exportFormat === 'mnemonic' ||
         exportFormat === 'private_key' ||
+        exportFormat === 'wif' ||
         (exportFormat === 'json' && exportIncludePrivate);
       if (needsPassword && !exportPassword) {
         throw new Error('Password required');
@@ -685,6 +699,7 @@ const WalletPanel: React.FC = () => {
                       value={importForm.network}
                       onChange={(e) => setImportForm({ ...importForm, network: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      disabled={importForm.importType === 'wif'}
                     >
                       <option>Ethereum</option>
                       <option>Bitcoin</option>
@@ -701,13 +716,15 @@ const WalletPanel: React.FC = () => {
                       onChange={(e) =>
                         setImportForm({
                           ...importForm,
-                          importType: e.target.value as 'mnemonic' | 'private_key',
+                          importType: e.target.value as 'mnemonic' | 'private_key' | 'wif',
+                          network: e.target.value === 'wif' ? 'Bitcoin' : importForm.network,
                         })
                       }
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                     >
                       <option value="mnemonic">Mnemonic</option>
                       <option value="private_key">Private Key</option>
+                      <option value="wif">Bitcoin WIF</option>
                     </select>
                   </div>
                 </div>
@@ -731,7 +748,11 @@ const WalletPanel: React.FC = () => {
                 )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    {importForm.importType === 'mnemonic' ? 'Mnemonic Phrase' : 'Private Key'}
+                    {importForm.importType === 'mnemonic'
+                      ? 'Mnemonic Phrase'
+                      : importForm.importType === 'wif'
+                        ? 'Bitcoin WIF'
+                        : 'Private Key'}
                   </label>
                   <textarea
                     value={importForm.data}
@@ -740,7 +761,9 @@ const WalletPanel: React.FC = () => {
                     placeholder={
                       importForm.importType === 'mnemonic'
                         ? 'word1 word2 word3 ...'
-                        : '0x... / hex'
+                        : importForm.importType === 'wif'
+                          ? 'K... / L...'
+                          : '0x... / hex'
                     }
                   />
                 </div>
@@ -844,7 +867,7 @@ const WalletPanel: React.FC = () => {
                   <select
                     value={exportFormat}
                     onChange={(e) => {
-                      const value = e.target.value as typeof exportFormat;
+                      const value = e.target.value as WalletExportFormat;
                       setExportFormat(value);
                       setExportOutput(null);
                       if (value !== 'json') {
@@ -853,12 +876,19 @@ const WalletPanel: React.FC = () => {
                     }}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   >
-                    <option value="json">JSON</option>
-                    <option value="xpub">XPUB</option>
-                    <option value="mnemonic">Mnemonic</option>
-                    <option value="private_key">Private Key</option>
+                    {availableExportFormats.map((format) => (
+                      <option key={format} value={format}>
+                        {formatLabel(format)}
+                      </option>
+                    ))}
                   </select>
                 </div>
+
+                {exportRestrictionHint && (
+                  <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                    {exportRestrictionHint}
+                  </div>
+                )}
 
                 {exportFormat === 'json' && (
                   <label className="flex items-center gap-2 text-sm text-gray-700">
@@ -873,6 +903,7 @@ const WalletPanel: React.FC = () => {
 
                 {(exportFormat === 'mnemonic' ||
                   exportFormat === 'private_key' ||
+                  exportFormat === 'wif' ||
                   (exportFormat === 'json' && exportIncludePrivate)) && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Wallet Password</label>
@@ -926,6 +957,66 @@ const WalletPanel: React.FC = () => {
       </div>
     </ErrorBoundary>
   );
+};
+
+const formatLabel = (format: WalletExportFormat): string => {
+  switch (format) {
+    case 'json':
+      return 'JSON';
+    case 'xpub':
+      return 'XPUB';
+    case 'mnemonic':
+      return 'Mnemonic';
+    case 'private_key':
+      return 'Private Key';
+    case 'wif':
+      return 'Bitcoin WIF';
+  }
+};
+
+const getAvailableExportFormats = (wallet: WalletSummary | null): WalletExportFormat[] => {
+  if (!wallet) {
+    return ['json'];
+  }
+
+  const formats: WalletExportFormat[] = ['json'];
+
+  if (wallet.wallet_type.includes('HierarchicalDeterministic') || wallet.wallet_type.includes('HD')) {
+    formats.push('xpub');
+  }
+
+  if (!wallet.watch_only) {
+    formats.push('private_key');
+  }
+
+  if (!wallet.watch_only && wallet.wallet_type.includes('HierarchicalDeterministic')) {
+    formats.push('mnemonic');
+  }
+
+  if (!wallet.watch_only && wallet.network.toLowerCase() === 'bitcoin' && wallet.wallet_type === 'SingleAddress') {
+    formats.push('wif');
+  }
+
+  return formats;
+};
+
+const getExportRestrictionHint = (
+  wallet: WalletSummary | null,
+  format: WalletExportFormat,
+): string | null => {
+  if (!wallet || format !== 'json') {
+    return null;
+  }
+
+  if (wallet.watch_only) {
+    return 'Watch-only wallets can only export public data.';
+  }
+
+  if (wallet.wallet_type === 'SingleAddress' && wallet.network.toLowerCase() === 'bitcoin') {
+    return 'Bitcoin single-address wallets can also export a WIF backup.';
+  }
+
+  return null;
 };
 
 export default WalletPanel;

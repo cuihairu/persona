@@ -170,7 +170,7 @@ export interface WalletGenerateResponse {
 export interface WalletImportRequest {
   name: string;
   network: string;
-  import_type: 'mnemonic' | 'private_key';
+  import_type: 'mnemonic' | 'private_key' | 'wif';
   data: string;
   password: string;
   address_count?: number;
@@ -178,7 +178,7 @@ export interface WalletImportRequest {
 
 export interface WalletExportRequest {
   wallet_id: string;
-  format: 'json' | 'mnemonic' | 'xpub' | 'private_key';
+  format: 'json' | 'mnemonic' | 'xpub' | 'private_key' | 'wif';
   include_private: boolean;
   password?: string;
 }

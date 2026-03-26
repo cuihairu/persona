@@ -442,7 +442,10 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             formatter.print_info(&format!("🔐 Crypto Wallet: {}", wallet.name));
             formatter.print_info(&format!("ID: {}", wallet.id));
             formatter.print_info(&format!("Network: {}", wallet.network));
-            formatter.print_info(&format!("Type: {}", format_wallet_type(&wallet.wallet_type)));
+            formatter.print_info(&format!(
+                "Type: {}",
+                format_wallet_type(&wallet.wallet_type)
+            ));
             formatter.print_info(&format!("Security Level: {}", wallet.security_level));
             formatter.print_info(&format!(
                 "Watch-Only: {}",
@@ -491,11 +494,15 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                         address: format!(
                             "{}...{}",
                             &addr.address[..std::cmp::min(addr.address.len(), 10)],
-                            &addr.address[std::cmp::max(addr.address.len().saturating_sub(10), 0)..]
+                            &addr.address
+                                [std::cmp::max(addr.address.len().saturating_sub(10), 0)..]
                         ),
                         address_type: format_address_type(&addr.address_type),
                         used: if addr.used { "✓" } else { "✗" }.to_string(),
-                        balance: addr.balance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                        balance: addr
+                            .balance
+                            .clone()
+                            .unwrap_or_else(|| "Unknown".to_string()),
                         last_activity: addr
                             .last_activity
                             .map(|dt| dt.format("%Y-%m-%d").to_string())
@@ -917,15 +924,16 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             output,
         } => {
             use persona_core::crypto::{
-                export_mnemonic, export_private_key, export_to_json, export_xpub,
+                export_mnemonic, export_private_key, export_to_json, export_to_wif, export_xpub,
                 parse_export_format, ExportFormat,
             };
 
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
             let export_format = parse_export_format(&format)?;
+            let requires_password = export_requires_password(export_format, include_private);
 
             // Get password if exporting private data
-            let password = if include_private {
+            let password = if requires_password {
                 formatter.print_warning("⚠️  You are about to export private key data!");
                 formatter.print_info("Enter wallet password:");
                 let pwd = rpassword::read_password().context("Failed to read password")?;
@@ -944,6 +952,11 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     let pwd = password
                         .ok_or_else(|| anyhow!("Password required for private key export"))?;
                     export_private_key(&wallet, &pwd).context("Failed to export private key")?
+                }
+                ExportFormat::Wif => {
+                    let pwd =
+                        password.ok_or_else(|| anyhow!("Password required for WIF export"))?;
+                    export_to_wif(&wallet, &pwd).context("Failed to export WIF")?
                 }
                 ExportFormat::Xpub => export_xpub(&wallet).context("Failed to export xpub")?,
                 ExportFormat::Json => export_to_json(&wallet, include_private, password.as_deref())
@@ -970,7 +983,8 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
         WalletCommand::Import { format, data, name } => {
             use persona_core::crypto::{
-                import_from_mnemonic, import_from_private_key, parse_import_format, ImportFormat,
+                import_from_mnemonic, import_from_private_key, import_from_wif,
+                parse_import_format, ImportFormat,
             };
 
             let import_format = parse_import_format(&format)?;
@@ -1031,6 +1045,17 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                         &password,
                     )
                     .context("Failed to import from private key")?
+                }
+                ImportFormat::Wif => {
+                    let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
+
+                    import_from_wif(
+                        uuid::Uuid::new_v4(),
+                        wallet_name,
+                        import_data.trim(),
+                        &password,
+                    )
+                    .context("Failed to import from WIF")?
                 }
                 _ => {
                     bail!("Import format not yet fully implemented");
@@ -1173,10 +1198,7 @@ async fn find_wallet_by_identifier(
         && identifier.len() <= 32
         && identifier.chars().all(|c| c.is_ascii_hexdigit());
     if looks_like_id_prefix {
-        let matches = repo
-            .find_by_id_prefix(identifier)
-            .await
-            .into_anyhow()?;
+        let matches = repo.find_by_id_prefix(identifier).await.into_anyhow()?;
 
         match matches.len() {
             0 => { /* fall through to name search */ }
@@ -1236,6 +1258,18 @@ async fn find_wallet_by_identifier(
             );
         }
     }
+}
+
+fn export_requires_password(
+    format: persona_core::crypto::ExportFormat,
+    include_private: bool,
+) -> bool {
+    matches!(
+        format,
+        persona_core::crypto::ExportFormat::Mnemonic
+            | persona_core::crypto::ExportFormat::PrivateKey
+            | persona_core::crypto::ExportFormat::Wif
+    ) || include_private
 }
 
 fn parse_network(network_str: &str) -> Result<BlockchainNetwork> {
@@ -1351,7 +1385,10 @@ fn parse_wallet_security_level(level_str: &str) -> Result<WalletSecurityLevel> {
         "high" | "hi" => Ok(WalletSecurityLevel::High),
         "medium" | "med" | "mid" => Ok(WalletSecurityLevel::Medium),
         "low" | "lo" => Ok(WalletSecurityLevel::Low),
-        _ => bail!("Invalid security level: {}. Valid options: low, medium, high, maximum", level_str),
+        _ => bail!(
+            "Invalid security level: {}. Valid options: low, medium, high, maximum",
+            level_str
+        ),
     }
 }
 
@@ -1377,5 +1414,37 @@ impl OutputFormatter {
 
     fn print_error(&self, message: &str) {
         println!("{} {}", "✗".red().bold(), message.red());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::export_requires_password;
+    use persona_core::crypto::ExportFormat;
+
+    #[test]
+    fn mnemonic_export_requires_password_without_include_private() {
+        assert!(export_requires_password(ExportFormat::Mnemonic, false));
+    }
+
+    #[test]
+    fn private_key_export_requires_password_without_include_private() {
+        assert!(export_requires_password(ExportFormat::PrivateKey, false));
+    }
+
+    #[test]
+    fn wif_export_requires_password_without_include_private() {
+        assert!(export_requires_password(ExportFormat::Wif, false));
+    }
+
+    #[test]
+    fn json_export_requires_password_only_when_private_data_is_requested() {
+        assert!(!export_requires_password(ExportFormat::Json, false));
+        assert!(export_requires_password(ExportFormat::Json, true));
+    }
+
+    #[test]
+    fn xpub_export_does_not_require_password() {
+        assert!(!export_requires_password(ExportFormat::Xpub, false));
     }
 }

@@ -510,6 +510,46 @@ describe('Desktop Application Integration Tests', () => {
       });
     });
 
+    it('should import a WIF wallet for an identity', async () => {
+      const mockResponse: ApiResponse<any> = {
+        success: true,
+        data: {
+          id: '22222222-2222-2222-2222-222222222222',
+          name: 'BTC WIF',
+          network: 'Bitcoin',
+          wallet_type: 'SingleAddress',
+          balance: '-',
+          address_count: 1,
+          watch_only: false,
+          security_level: 'Medium',
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+        },
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      await personaAPI.walletImport('123e4567-e89b-12d3-a456-426614174000', {
+        name: 'BTC WIF',
+        network: 'Bitcoin',
+        import_type: 'wif',
+        data: 'L4xVnV1x...',
+        password: 'password123',
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith('wallet_import', {
+        identity_id: '123e4567-e89b-12d3-a456-426614174000',
+        request: {
+          name: 'BTC WIF',
+          network: 'Bitcoin',
+          import_type: 'wif',
+          data: 'L4xVnV1x...',
+          password: 'password123',
+        },
+      });
+    });
+
     it('should add an address for a wallet', async () => {
       const mockResponse: ApiResponse<any> = {
         success: true,
@@ -531,6 +571,32 @@ describe('Desktop Application Integration Tests', () => {
       expect(mockInvoke).toHaveBeenCalledWith('wallet_add_address', {
         wallet_id: '11111111-1111-1111-1111-111111111111',
         password: 'password123',
+      });
+    });
+
+    it('should export a wallet as WIF', async () => {
+      const mockResponse: ApiResponse<string> = {
+        success: true,
+        data: 'L4xVnV1x...',
+        error: undefined,
+      };
+
+      mockInvoke.mockResolvedValue(mockResponse);
+
+      await personaAPI.walletExport({
+        wallet_id: '11111111-1111-1111-1111-111111111111',
+        format: 'wif',
+        include_private: false,
+        password: 'password123',
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith('wallet_export', {
+        request: {
+          wallet_id: '11111111-1111-1111-1111-111111111111',
+          format: 'wif',
+          include_private: false,
+          password: 'password123',
+        },
       });
     });
   });
