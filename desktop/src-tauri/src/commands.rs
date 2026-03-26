@@ -1098,7 +1098,6 @@ pub async fn wallet_generate(
     }
 
     let identity_id = Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
-    let network = parse_network(&request.network)?;
     let address_count = request.address_count.unwrap_or(5);
 
     if request.password.len() < 8 {
@@ -1184,7 +1183,6 @@ pub async fn wallet_import(
     }
 
     let identity_id = Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
-    let network = parse_network(&request.network)?;
 
     if request.password.len() < 8 {
         return Ok(ApiResponse::error(
@@ -1194,28 +1192,41 @@ pub async fn wallet_import(
 
     let address_count = request.address_count.unwrap_or(5);
     let wallet = match request.import_type.to_lowercase().as_str() {
-        "mnemonic" | "phrase" | "seed" => persona_core::crypto::wallet_import_export::import_from_mnemonic(
+        "mnemonic" | "phrase" | "seed" => {
+            let network = parse_network(&request.network)?;
+            persona_core::crypto::wallet_import_export::import_from_mnemonic(
+                identity_id,
+                request.name.clone(),
+                request.data.trim(),
+                "",
+                network,
+                None,
+                address_count,
+                &request.password,
+            )
+            .map_err(|e| e.to_string())?
+        }
+        "private_key" | "privatekey" | "key" => {
+            let network = parse_network(&request.network)?;
+            persona_core::crypto::wallet_import_export::import_from_private_key(
+                identity_id,
+                request.name.clone(),
+                request.data.trim(),
+                network,
+                &request.password,
+            )
+            .map_err(|e| e.to_string())?
+        }
+        "wif" => persona_core::crypto::wallet_import_export::import_from_wif(
             identity_id,
             request.name.clone(),
             request.data.trim(),
-            "",
-            network,
-            None,
-            address_count,
-            &request.password,
-        )
-        .map_err(|e| e.to_string())?,
-        "private_key" | "privatekey" | "key" => persona_core::crypto::wallet_import_export::import_from_private_key(
-            identity_id,
-            request.name.clone(),
-            request.data.trim(),
-            network,
             &request.password,
         )
         .map_err(|e| e.to_string())?,
         other => {
             return Ok(ApiResponse::error(format!(
-                "Unsupported import_type '{}'. Use 'mnemonic' or 'private_key'.",
+                "Unsupported import_type '{}'. Use 'mnemonic', 'private_key', or 'wif'.",
                 other
             )))
         }
@@ -1460,6 +1471,16 @@ pub async fn wallet_export(
                     .password
                     .as_deref()
                     .ok_or_else(|| "Password required for private key export".to_string())?,
+            )
+            .map_err(|e| e.to_string())?
+        }
+        persona_core::crypto::wallet_import_export::ExportFormat::Wif => {
+            persona_core::crypto::wallet_import_export::export_to_wif(
+                &wallet,
+                request
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| "Password required for WIF export".to_string())?,
             )
             .map_err(|e| e.to_string())?
         }

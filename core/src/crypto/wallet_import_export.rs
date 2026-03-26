@@ -2,19 +2,18 @@
 
 use crate::crypto::address_generator::{
     generate_bitcoin_address, generate_bitcoin_address_from_compressed_pubkey,
-    generate_ethereum_address_checksummed, generate_ethereum_address_checksummed_from_compressed_pubkey,
-    BitcoinAddressType,
+    generate_ethereum_address_checksummed,
+    generate_ethereum_address_checksummed_from_compressed_pubkey, BitcoinAddressType,
 };
-use crate::crypto::wallet_crypto::{
-    Bip44PathBuilder, CoinType, DerivedKey, MasterKey, MnemonicWordCount, SecureMnemonic,
-};
+use crate::crypto::wallet_crypto::{MasterKey, SecureMnemonic};
 use crate::crypto::wallet_encryption::{
-    decrypt_mnemonic, encrypt_master_key, encrypt_mnemonic, EncryptedMnemonic, EncryptedWalletKey,
-    WalletKeyMaterial,
+    decrypt_master_key, decrypt_mnemonic, decrypt_private_key, encrypt_master_key,
+    encrypt_mnemonic, EncryptedMnemonic, EncryptedWalletKey,
 };
 use crate::models::wallet::{BlockchainNetwork, CryptoWallet, WalletType};
 use crate::{PersonaError, PersonaResult};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -38,6 +37,8 @@ pub enum ExportFormat {
     Mnemonic,
     /// Raw private key (hex)
     PrivateKey,
+    /// Bitcoin WIF (Wallet Import Format)
+    Wif,
     /// Extended public key only
     Xpub,
     /// Full JSON export
@@ -77,10 +78,8 @@ pub fn import_from_mnemonic(
     let master_key = MasterKey::from_mnemonic(&mnemonic, passphrase)?;
 
     // Determine derivation path
-    let path = derivation_path.unwrap_or_else(|| {
-        let coin_type = network_to_coin_type(&network);
-        Bip44PathBuilder::new(coin_type).build()
-    });
+    let path =
+        derivation_path.unwrap_or_else(|| CryptoWallet::recommended_derivation_path(&network, 0));
 
     // Encrypt master key
     let encrypted_key = encrypt_master_key(&master_key, password)?;
@@ -198,6 +197,72 @@ pub fn import_from_private_key(
     Ok(wallet)
 }
 
+/// Import wallet from Bitcoin WIF (compressed mainnet only)
+pub fn import_from_wif(
+    identity_id: Uuid,
+    name: String,
+    wif: &str,
+    password: &str,
+) -> PersonaResult<CryptoWallet> {
+    let decoded = bs58::decode(wif)
+        .into_vec()
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid WIF encoding: {}", e)))?;
+
+    if decoded.len() < 5 {
+        return Err(PersonaError::InvalidInput("Invalid WIF length".to_string()));
+    }
+
+    let (payload, checksum) = decoded.split_at(decoded.len() - 4);
+    let expected_checksum = double_sha256(payload);
+    if checksum != &expected_checksum[..4] {
+        return Err(PersonaError::InvalidInput(
+            "Invalid WIF checksum".to_string(),
+        ));
+    }
+
+    let version = payload
+        .first()
+        .copied()
+        .ok_or_else(|| PersonaError::InvalidInput("Missing WIF version byte".to_string()))?;
+
+    if version == 0xEF {
+        return Err(PersonaError::InvalidInput(
+            "Bitcoin testnet WIF is not supported yet".to_string(),
+        ));
+    }
+
+    if version != 0x80 {
+        return Err(PersonaError::InvalidInput(format!(
+            "Unsupported WIF version byte: 0x{version:02x}"
+        )));
+    }
+
+    let compressed = match payload.len() {
+        34 if payload[33] == 0x01 => true,
+        33 => false,
+        _ => {
+            return Err(PersonaError::InvalidInput(
+                "Unsupported WIF payload length".to_string(),
+            ))
+        }
+    };
+
+    if !compressed {
+        return Err(PersonaError::InvalidInput(
+            "Uncompressed WIF is not supported yet".to_string(),
+        ));
+    }
+
+    let private_key_hex = hex::encode(&payload[1..33]);
+    import_from_private_key(
+        identity_id,
+        name,
+        &private_key_hex,
+        BlockchainNetwork::Bitcoin,
+        password,
+    )
+}
+
 /// Export wallet mnemonic (requires password)
 pub fn export_mnemonic(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
     let encrypted_mnemonic_bytes = wallet
@@ -213,15 +278,53 @@ pub fn export_mnemonic(wallet: &CryptoWallet, password: &str) -> PersonaResult<S
 
 /// Export wallet private key (requires password)
 pub fn export_private_key(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
-    let encrypted_key_bytes = &wallet.encrypted_private_key;
+    let private_keys = export_private_keys(wallet, password)?;
 
-    let encrypted_key: EncryptedWalletKey = serde_json::from_slice(encrypted_key_bytes)
-        .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+    if let Some(first_private_key) = wallet
+        .addresses
+        .iter()
+        .find_map(|address| private_keys.get(&address.address))
+    {
+        return Ok(first_private_key.clone());
+    }
 
-    let private_key_bytes =
-        crate::crypto::wallet_encryption::decrypt_private_key(&encrypted_key, password)?;
+    private_keys.into_values().next().ok_or_else(|| {
+        PersonaError::InvalidInput("Wallet does not contain an exportable private key".to_string())
+    })
+}
 
-    Ok(hex::encode(private_key_bytes))
+/// Export wallet private key as Bitcoin WIF (requires password)
+pub fn export_to_wif(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
+    if wallet.watch_only {
+        return Err(PersonaError::InvalidInput(
+            "Watch-only wallets cannot export WIF".to_string(),
+        ));
+    }
+
+    if wallet.network != BlockchainNetwork::Bitcoin {
+        return Err(PersonaError::InvalidInput(
+            "WIF export is only supported for Bitcoin wallets".to_string(),
+        ));
+    }
+
+    if !matches!(wallet.wallet_type, WalletType::SingleAddress) {
+        return Err(PersonaError::InvalidInput(
+            "WIF export is only supported for single-address Bitcoin wallets".to_string(),
+        ));
+    }
+
+    let encrypted_key: EncryptedWalletKey =
+        serde_json::from_slice(&wallet.encrypted_private_key)
+            .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+    let private_key_bytes = decrypt_private_key(&encrypted_key, password)?;
+    let mut payload = Vec::with_capacity(38);
+    payload.push(0x80);
+    payload.extend_from_slice(&private_key_bytes);
+    payload.push(0x01);
+
+    let checksum = double_sha256(&payload);
+    payload.extend_from_slice(&checksum[..4]);
+    Ok(bs58::encode(payload).into_string())
 }
 
 /// Export extended public key (no password required)
@@ -261,8 +364,10 @@ pub fn export_to_json(
             export.mnemonic = Some(mnemonic);
         }
 
-        // Export private keys if available
-        // TODO: Implement address-specific private key export
+        let private_keys = export_private_keys(wallet, password)?;
+        if !private_keys.is_empty() {
+            export.private_keys = Some(private_keys);
+        }
     }
 
     serde_json::to_string_pretty(&export)
@@ -288,29 +393,13 @@ pub fn parse_export_format(format_str: &str) -> PersonaResult<ExportFormat> {
     match format_str.to_lowercase().as_str() {
         "mnemonic" | "phrase" | "seed" => Ok(ExportFormat::Mnemonic),
         "privatekey" | "private_key" | "key" => Ok(ExportFormat::PrivateKey),
+        "wif" => Ok(ExportFormat::Wif),
         "xpub" | "extended_public_key" => Ok(ExportFormat::Xpub),
         "json" => Ok(ExportFormat::Json),
         _ => Err(PersonaError::InvalidInput(format!(
             "Unknown export format: {}",
             format_str
         ))),
-    }
-}
-
-// Helper functions
-
-fn network_to_coin_type(network: &BlockchainNetwork) -> CoinType {
-    match network {
-        BlockchainNetwork::Bitcoin => CoinType::Bitcoin,
-        BlockchainNetwork::Ethereum => CoinType::Ethereum,
-        BlockchainNetwork::Solana => CoinType::Solana,
-        BlockchainNetwork::Litecoin => CoinType::Litecoin,
-        BlockchainNetwork::Dogecoin => CoinType::Dogecoin,
-        BlockchainNetwork::Polygon => CoinType::Polygon,
-        BlockchainNetwork::Arbitrum => CoinType::Arbitrum,
-        BlockchainNetwork::Optimism => CoinType::Optimism,
-        BlockchainNetwork::BinanceSmartChain => CoinType::Binance,
-        _ => CoinType::Bitcoin, // Default
     }
 }
 
@@ -367,6 +456,60 @@ fn derive_addresses(
     Ok(addresses)
 }
 
+fn double_sha256(data: &[u8]) -> [u8; 32] {
+    let first = Sha256::digest(data);
+    let second = Sha256::digest(first);
+    second.into()
+}
+
+fn export_private_keys(
+    wallet: &CryptoWallet,
+    password: &str,
+) -> PersonaResult<HashMap<String, String>> {
+    if wallet.watch_only {
+        return Ok(HashMap::new());
+    }
+
+    let encrypted_key: EncryptedWalletKey =
+        serde_json::from_slice(&wallet.encrypted_private_key)
+            .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+
+    match wallet.wallet_type {
+        WalletType::HierarchicalDeterministic { .. } => {
+            let master_key = decrypt_master_key(&encrypted_key, password)?;
+            let mut private_keys = HashMap::new();
+
+            for address in &wallet.addresses {
+                let derivation_path = address.derivation_path.as_deref().ok_or_else(|| {
+                    PersonaError::InvalidInput(format!(
+                        "Wallet address {} is missing a derivation path",
+                        address.address
+                    ))
+                })?;
+
+                let derived_key = master_key.derive_path(derivation_path)?;
+                private_keys.insert(
+                    address.address.clone(),
+                    hex::encode(derived_key.private_key_bytes()),
+                );
+            }
+
+            Ok(private_keys)
+        }
+        _ => {
+            let private_key_bytes = decrypt_private_key(&encrypted_key, password)?;
+            let key = hex::encode(private_key_bytes);
+            let export_key = wallet
+                .addresses
+                .first()
+                .map(|address| address.address.clone())
+                .unwrap_or_else(|| "primary".to_string());
+
+            Ok(HashMap::from([(export_key, key)]))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,8 +534,23 @@ mod tests {
 
         assert_eq!(wallet.name, "Test Wallet");
         assert_eq!(wallet.addresses.len(), 5);
+        assert_eq!(wallet.derivation_path.as_deref(), Some("m/44'/0'/0'/0"));
         assert!(wallet.extended_public_key.is_some());
         assert!(wallet.encrypted_mnemonic.is_some());
+        assert_eq!(
+            wallet
+                .addresses
+                .first()
+                .and_then(|address| address.derivation_path.as_deref()),
+            Some("m/44'/0'/0'/0/0")
+        );
+        assert_eq!(
+            wallet
+                .addresses
+                .get(1)
+                .and_then(|address| address.derivation_path.as_deref()),
+            Some("m/44'/0'/0'/0/1")
+        );
     }
 
     #[test]
@@ -428,5 +586,109 @@ mod tests {
             ImportFormat::PrivateKey
         );
         assert_eq!(parse_export_format("json").unwrap(), ExportFormat::Json);
+    }
+
+    #[test]
+    fn test_export_private_key_for_single_address_wallet() {
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+        let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b";
+
+        let wallet = import_from_private_key(
+            identity_id,
+            "Single Address".to_string(),
+            private_key,
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+
+        let exported = export_private_key(&wallet, password).unwrap();
+        assert_eq!(exported, private_key);
+    }
+
+    #[test]
+    fn test_import_from_wif() {
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+        let private_key = [0x11u8; 32];
+        let wif = encode_compressed_mainnet_wif(&private_key);
+
+        let wallet =
+            import_from_wif(identity_id, "WIF Wallet".to_string(), &wif, password).unwrap();
+
+        assert_eq!(wallet.name, "WIF Wallet");
+        assert_eq!(wallet.network, BlockchainNetwork::Bitcoin);
+        assert_eq!(wallet.addresses.len(), 1);
+    }
+
+    #[test]
+    fn test_export_to_wif_for_bitcoin_single_address_wallet() {
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+        let private_key = "1111111111111111111111111111111111111111111111111111111111111111";
+
+        let wallet = import_from_private_key(
+            identity_id,
+            "BTC Wallet".to_string(),
+            private_key,
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+
+        let exported = export_to_wif(&wallet, password).unwrap();
+        let roundtrip =
+            import_from_wif(identity_id, "Roundtrip".to_string(), &exported, password).unwrap();
+
+        assert_eq!(roundtrip.network, BlockchainNetwork::Bitcoin);
+        assert_eq!(
+            export_private_key(&roundtrip, password).unwrap(),
+            private_key
+        );
+    }
+
+    #[test]
+    fn test_export_json_includes_private_keys_for_hd_wallet() {
+        let mnemonic =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+
+        let wallet = import_from_mnemonic(
+            identity_id,
+            "HD Wallet".to_string(),
+            mnemonic,
+            "",
+            BlockchainNetwork::Ethereum,
+            None,
+            2,
+            password,
+        )
+        .unwrap();
+
+        let exported = export_to_json(&wallet, true, Some(password)).unwrap();
+        let export: WalletExport = serde_json::from_str(&exported).unwrap();
+
+        assert_eq!(export.mnemonic.as_deref(), Some(mnemonic));
+        let private_keys = export.private_keys.expect("expected private keys");
+        assert_eq!(private_keys.len(), 2);
+        for address in &wallet.addresses {
+            let exported_key = private_keys
+                .get(&address.address)
+                .expect("missing derived private key");
+            assert_eq!(exported_key.len(), 64);
+        }
+    }
+
+    fn encode_compressed_mainnet_wif(private_key: &[u8; 32]) -> String {
+        let mut payload = Vec::with_capacity(34);
+        payload.push(0x80);
+        payload.extend_from_slice(private_key);
+        payload.push(0x01);
+
+        let checksum = double_sha256(&payload);
+        payload.extend_from_slice(&checksum[..4]);
+        bs58::encode(payload).into_string()
     }
 }

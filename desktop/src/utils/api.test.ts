@@ -49,4 +49,47 @@ describe('utils/api PersonaAPI', () => {
     await personaAPI.clearActiveIdentity();
     expect(mockInvoke).toHaveBeenCalledWith('clear_active_identity');
   });
+
+  it('walletImport forwards wif import payloads unchanged', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: { id: 'wallet-1' } });
+
+    await personaAPI.walletImport('id-1', {
+      name: 'BTC WIF',
+      network: 'Bitcoin',
+      import_type: 'wif',
+      data: 'L4xVnV1x...',
+      password: 'password123',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_import', {
+      identity_id: 'id-1',
+      request: {
+        name: 'BTC WIF',
+        network: 'Bitcoin',
+        import_type: 'wif',
+        data: 'L4xVnV1x...',
+        password: 'password123',
+      },
+    });
+  });
+
+  it('walletExport forwards wif export payloads unchanged', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: 'L4xVnV1x...' });
+
+    await personaAPI.walletExport({
+      wallet_id: 'wallet-1',
+      format: 'wif',
+      include_private: false,
+      password: 'password123',
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_export', {
+      request: {
+        wallet_id: 'wallet-1',
+        format: 'wif',
+        include_private: false,
+        password: 'password123',
+      },
+    });
+  });
 });
