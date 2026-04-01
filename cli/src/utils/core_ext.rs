@@ -13,7 +13,9 @@ impl<T> CoreResultExt<T> for Result<T> {
 }
 
 // For Box<dyn std::error::Error>
-impl<T> CoreResultExt<T> for std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>> {
+impl<T> CoreResultExt<T>
+    for std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>
+{
     fn into_anyhow(self) -> Result<T> {
         self.map_err(|e| anyhow!(e.to_string()))
     }

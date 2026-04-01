@@ -208,9 +208,13 @@ mod tests {
         let password = b"correct horse battery staple";
 
         let encrypted = encrypt_data(plaintext, password).unwrap();
-        let decrypted =
-            decrypt_data(&encrypted.ciphertext, password, &encrypted.salt, &encrypted.nonce)
-                .unwrap();
+        let decrypted = decrypt_data(
+            &encrypted.ciphertext,
+            password,
+            &encrypted.salt,
+            &encrypted.nonce,
+        )
+        .unwrap();
 
         assert_eq!(decrypted, plaintext);
     }
@@ -238,12 +242,7 @@ mod tests {
     #[test]
     fn test_decrypt_data_rejects_invalid_nonce_length() {
         let encrypted = encrypt_data(b"hello", b"pw").unwrap();
-        let decrypted = decrypt_data(
-            &encrypted.ciphertext,
-            b"pw",
-            &encrypted.salt,
-            &[0u8; 8],
-        );
+        let decrypted = decrypt_data(&encrypted.ciphertext, b"pw", &encrypted.salt, &[0u8; 8]);
         assert!(decrypted.is_err());
     }
 

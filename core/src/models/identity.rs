@@ -186,7 +186,10 @@ mod tests {
 
         let old_updated = identity.updated_at;
         identity.set_attribute("team".to_string(), "core".to_string());
-        assert_eq!(identity.get_attribute("team").map(|s| s.as_str()), Some("core"));
+        assert_eq!(
+            identity.get_attribute("team").map(|s| s.as_str()),
+            Some("core")
+        );
         assert!(identity.updated_at >= old_updated);
 
         identity.remove_attribute("team");

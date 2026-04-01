@@ -130,7 +130,9 @@ pub fn generate_ethereum_address_checksummed_from_compressed_pubkey(
     Ok(apply_eip55_checksum(&address))
 }
 
-fn generate_ethereum_address_from_uncompressed_pubkey(uncompressed: &[u8]) -> PersonaResult<String> {
+fn generate_ethereum_address_from_uncompressed_pubkey(
+    uncompressed: &[u8],
+) -> PersonaResult<String> {
     if uncompressed.len() != 65 || uncompressed[0] != 0x04 {
         return Err(PersonaError::Cryptography(
             "Invalid uncompressed secp256k1 pubkey".to_string(),

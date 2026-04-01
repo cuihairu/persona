@@ -222,7 +222,8 @@ fn normalize_origin_url(raw: &str) -> Result<String> {
         bail!("URL cannot be empty");
     }
 
-    let url = url::Url::parse(trimmed).or_else(|_| url::Url::parse(&format!("https://{trimmed}")))?;
+    let url =
+        url::Url::parse(trimmed).or_else(|_| url::Url::parse(&format!("https://{trimmed}")))?;
     let scheme = url.scheme();
     let host = url
         .host_str()

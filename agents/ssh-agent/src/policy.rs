@@ -696,7 +696,9 @@ mod tests {
         let mut enforcer = PolicyEnforcer::new(policy);
         let cred_id = Uuid::new_v4();
 
-        let decision = enforcer.check_signature(&cred_id, Some("github.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::RequireConfirm { .. }));
     }
 
@@ -709,7 +711,9 @@ mod tests {
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
-        let decision = enforcer.check_signature(&cred_id, Some("github.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::RequireConfirm { .. }));
     }
 
@@ -725,7 +729,9 @@ mod tests {
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
-        let decision = enforcer.check_signature(&cred_id, Some("github.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
         assert!(matches!(
             decision,
             SignatureDecision::RequireBiometric { .. }
@@ -743,7 +749,9 @@ mod tests {
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
-        let decision = enforcer.check_signature(&cred_id, Some("github.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::Denied { .. }));
     }
 
@@ -802,10 +810,14 @@ mod tests {
         let mut enforcer = PolicyEnforcer::new(policy);
         let cred_id = Uuid::new_v4();
 
-        let decision = enforcer.check_signature(&cred_id, Some("github.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::Allowed));
 
-        let decision = enforcer.check_signature(&cred_id, Some("evil.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("evil.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::Denied { .. }));
 
         let decision = enforcer.check_signature(&cred_id, None).unwrap();
@@ -826,11 +838,15 @@ mod tests {
         let cred_id = Uuid::new_v4();
 
         // Known host: allowed
-        let decision = enforcer.check_signature(&cred_id, Some("github.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::Allowed));
 
         // Unknown host: require confirm
-        let decision = enforcer.check_signature(&cred_id, Some("evil.com")).unwrap();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("evil.com"))
+            .unwrap();
         assert!(matches!(decision, SignatureDecision::RequireConfirm { .. }));
 
         // Unknown host (None): require confirm
@@ -862,16 +878,12 @@ mod tests {
         assert!(matches!(decision, SignatureDecision::Denied { .. }));
 
         // Allowed key first time
-        let decision = enforcer
-            .check_signature(&allowed_key, Some(host))
-            .unwrap();
+        let decision = enforcer.check_signature(&allowed_key, Some(host)).unwrap();
         assert!(matches!(decision, SignatureDecision::Allowed));
         enforcer.record_signature(&allowed_key, Some(host));
 
         // Second time should exceed host hourly limit
-        let decision = enforcer
-            .check_signature(&allowed_key, Some(host))
-            .unwrap();
+        let decision = enforcer.check_signature(&allowed_key, Some(host)).unwrap();
         assert!(matches!(decision, SignatureDecision::Denied { .. }));
     }
 }

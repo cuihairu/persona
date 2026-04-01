@@ -6,8 +6,8 @@ use hmac::{Hmac, Mac};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::Sha512;
 use sha2::Sha256;
+use sha2::Sha512;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -378,7 +378,9 @@ async fn handle_request(
                 .ok_or_else(|| anyhow!("not_found"))?;
             if let Some(active) = active_identity_id {
                 if cred.identity_id != active {
-                    return Err(anyhow!("wrong_identity: switch active identity to access this credential"));
+                    return Err(anyhow!(
+                        "wrong_identity: switch active identity to access this credential"
+                    ));
                 }
             }
             if cred.credential_type != CredentialType::Password {
@@ -444,7 +446,9 @@ async fn handle_request(
                     item_id = %parsed.item_id,
                     "totp request rejected: user_gesture required but not provided"
                 );
-                return Err(anyhow!("user_gesture_required: totp must be triggered by explicit user action"));
+                return Err(anyhow!(
+                    "user_gesture_required: totp must be triggered by explicit user action"
+                ));
             }
 
             let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
@@ -471,7 +475,9 @@ async fn handle_request(
                 .ok_or_else(|| anyhow!("not_found"))?;
             if let Some(active) = active_identity_id {
                 if cred.identity_id != active {
-                    return Err(anyhow!("wrong_identity: switch active identity to access this credential"));
+                    return Err(anyhow!(
+                        "wrong_identity: switch active identity to access this credential"
+                    ));
                 }
             }
             if cred.credential_type != CredentialType::TwoFactor {
@@ -479,7 +485,9 @@ async fn handle_request(
             }
 
             if cred.url.is_none() {
-                return Err(anyhow!("origin_binding_required: totp entries must have a URL set"));
+                return Err(anyhow!(
+                    "origin_binding_required: totp entries must have a URL set"
+                ));
             }
 
             if !validate_origin_binding(&host, cred.url.as_deref()) {
@@ -542,7 +550,9 @@ async fn handle_request(
                     field = %parsed.field,
                     "copy request rejected: user_gesture required but not provided"
                 );
-                return Err(anyhow!("user_gesture_required: copy must be triggered by explicit user action"));
+                return Err(anyhow!(
+                    "user_gesture_required: copy must be triggered by explicit user action"
+                ));
             }
 
             let host = origin_to_host(&parsed.origin)?;
@@ -571,7 +581,9 @@ async fn handle_request(
                 .ok_or_else(|| anyhow!("not_found"))?;
             if let Some(active) = active_identity_id {
                 if cred.identity_id != active {
-                    return Err(anyhow!("wrong_identity: switch active identity to access this credential"));
+                    return Err(anyhow!(
+                        "wrong_identity: switch active identity to access this credential"
+                    ));
                 }
             }
 
@@ -828,9 +840,10 @@ fn ensure_session(
     let mut state = load_state(state_dir)?;
     purge_expired(&mut state);
 
-    let idx = state.pairings.iter().position(|p| {
-        p.extension_id == extension_id && p.client_instance_id == client_instance_id
-    });
+    let idx = state
+        .pairings
+        .iter()
+        .position(|p| p.extension_id == extension_id && p.client_instance_id == client_instance_id);
 
     let Some(idx) = idx else {
         return Ok(None);
@@ -1330,7 +1343,9 @@ fn copy_text_to_clipboard(text: &str) -> Result<()> {
         return Ok(());
     }
 
-    Err(anyhow!("copy_failed: no supported clipboard command found (try installing wl-clipboard or xclip)"))
+    Err(anyhow!(
+        "copy_failed: no supported clipboard command found (try installing wl-clipboard or xclip)"
+    ))
 }
 
 fn pipe_to_command(cmd: &str, args: &[&str], text: &str) -> Result<()> {

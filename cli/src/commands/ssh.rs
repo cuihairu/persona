@@ -1,14 +1,14 @@
-use anyhow::{Context, Result};
 use crate::utils::core_ext::CoreResultExt;
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use clap::{Args, Subcommand};
 use colored::*;
 use dialoguer::{Confirm, Password};
-use std::path::{Path, PathBuf};
 use persona_core::{
     models::{CredentialData, CredentialType, Identity as CoreIdentity, SecurityLevel, SshKeyData},
     Database, PersonaService,
 };
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Args, Debug)]
@@ -442,7 +442,9 @@ fn find_agent_binary_near(current_exe: &Path, binary_name: &str) -> Option<PathB
         current_dir.join(binary_name),
         current_dir.join("deps").join(binary_name),
         current_dir.parent().map(|dir| dir.join(binary_name))?,
-        current_dir.parent().map(|dir| dir.join("deps").join(binary_name))?,
+        current_dir
+            .parent()
+            .map(|dir| dir.join("deps").join(binary_name))?,
     ];
 
     candidates.into_iter().find(|candidate| candidate.is_file())
@@ -775,9 +777,7 @@ fn stop_agent_pid(pid: &str) -> Result<bool> {
 fn stop_agent_pid(pid: &str) -> Result<bool> {
     use std::process::Command;
 
-    let status = Command::new("taskkill")
-        .args(["/PID", pid, "/T"])
-        .status();
+    let status = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
     if matches!(status, Ok(s) if s.success()) {
         return Ok(true);
     }
@@ -826,7 +826,10 @@ mod tests {
     #[test]
     fn format_sock_export_lines_unix() {
         let lines = format_sock_export_lines("/tmp/persona.sock");
-        assert_eq!(lines, vec!["  export SSH_AUTH_SOCK=/tmp/persona.sock".to_string()]);
+        assert_eq!(
+            lines,
+            vec!["  export SSH_AUTH_SOCK=/tmp/persona.sock".to_string()]
+        );
     }
 
     #[cfg(windows)]
@@ -868,7 +871,9 @@ mod tests {
             stream.write_all(&resp).await.unwrap();
         });
 
-        let count = query_agent_identities(sock_path.to_str().unwrap()).await.unwrap();
+        let count = query_agent_identities(sock_path.to_str().unwrap())
+            .await
+            .unwrap();
         assert_eq!(count, 0);
         server_task.await.unwrap();
     }
