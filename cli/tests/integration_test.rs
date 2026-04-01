@@ -321,11 +321,7 @@ fn test_ssh_generate_export_remove_roundtrip() -> Result<()> {
         .lines()
         .find(|line| line.trim_start().starts_with("ID:"))
         .ok_or_else(|| anyhow::anyhow!("Expected an 'ID:' line in ssh generate output"))?;
-    let id_str = id_line
-        .splitn(2, ':')
-        .nth(1)
-        .unwrap_or("")
-        .trim();
+    let id_str = id_line.splitn(2, ':').nth(1).unwrap_or("").trim();
     let id = uuid::Uuid::parse_str(id_str)?;
 
     let mut export_cmd = Command::cargo_bin("persona")?;

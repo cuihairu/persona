@@ -604,7 +604,8 @@ impl CryptoWalletRepository {
 
         Ok(CryptoWallet {
             id: Uuid::parse_str(&id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
-            identity_id: Uuid::parse_str(&identity_id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
+            identity_id: Uuid::parse_str(&identity_id_str)
+                .map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
             name: row.get("name"),
             description: row.get("description"),
             network: serde_json::from_str(&network_str)?,
@@ -749,9 +750,11 @@ impl CryptoWalletRepository {
                     notes: row.get("notes"),
                     platform: row.get("platform"),
                     purpose: row.get("purpose"),
-                    associated_services: serde_json::from_str(&associated_services_str).unwrap_or_default(),
+                    associated_services: serde_json::from_str(&associated_services_str)
+                        .unwrap_or_default(),
                     backup_info: backup_info_str.and_then(|s| serde_json::from_str(&s).ok()),
-                    security_settings: serde_json::from_str(&security_settings_str).unwrap_or_default(),
+                    security_settings: serde_json::from_str(&security_settings_str)
+                        .unwrap_or_default(),
                     custom_data: serde_json::from_str(&custom_data_str).unwrap_or_default(),
                 })
             }
@@ -803,7 +806,8 @@ impl CryptoWalletRepository {
 
         Ok(TransactionRequest {
             id: Uuid::parse_str(&id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
-            wallet_id: Uuid::parse_str(&wallet_id_str).map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
+            wallet_id: Uuid::parse_str(&wallet_id_str)
+                .map_err(|e| PersonaError::InvalidInput(e.to_string()))?,
             network: serde_json::from_str(&network_str)?,
             from_address: row.get("from_address"),
             to_address: row.get("to_address"),

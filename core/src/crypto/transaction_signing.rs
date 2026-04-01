@@ -2,7 +2,9 @@
 // Supports Bitcoin (PSBT), Ethereum (EIP-1559), and Solana transactions
 
 use crate::crypto::wallet_crypto::DerivedKey;
-use crate::models::wallet::{BlockchainNetwork, SignatureScheme, TransactionRequest, TransactionSignature};
+use crate::models::wallet::{
+    BlockchainNetwork, SignatureScheme, TransactionRequest, TransactionSignature,
+};
 use crate::{PersonaError, PersonaResult};
 use chrono::Utc;
 use k256::ecdsa::{
@@ -31,7 +33,11 @@ pub fn sign_transaction(
         | BlockchainNetwork::Optimism
         | BlockchainNetwork::BinanceSmartChain => sign_ethereum_transaction(request, private_key)?,
         BlockchainNetwork::Solana => sign_solana_transaction(request, private_key)?,
-        _ => return Err(PersonaError::InvalidInput("Transaction signing for this network".to_string())),
+        _ => {
+            return Err(PersonaError::InvalidInput(
+                "Transaction signing for this network".to_string(),
+            ))
+        }
     };
 
     Ok(TransactionSignature {
@@ -184,8 +190,9 @@ fn create_solana_message(request: &TransactionRequest) -> PersonaResult<[u8; 32]
 
 /// Sign using secp256k1 (ECDSA)
 fn sign_with_secp256k1(private_key: &DerivedKey, message: &[u8]) -> PersonaResult<Signature> {
-    let signing_key = SigningKey::from_slice(&private_key.private_key_bytes())
-        .map_err(|e| PersonaError::CryptographicError(format!("Failed to create signing key: {}", e)))?;
+    let signing_key = SigningKey::from_slice(&private_key.private_key_bytes()).map_err(|e| {
+        PersonaError::CryptographicError(format!("Failed to create signing key: {}", e))
+    })?;
 
     let digest = Sha256::new().chain_update(message);
     let signature = signing_key.sign_digest(digest);
@@ -193,12 +200,17 @@ fn sign_with_secp256k1(private_key: &DerivedKey, message: &[u8]) -> PersonaResul
 }
 
 /// Sign using Ed25519
-fn sign_with_ed25519(_private_key: &DerivedKey, _message: &[u8]) -> PersonaResult<ed25519_dalek::Signature> {
+fn sign_with_ed25519(
+    _private_key: &DerivedKey,
+    _message: &[u8],
+) -> PersonaResult<ed25519_dalek::Signature> {
     // In a real implementation, you would:
     // 1. Convert the private key to Ed25519 format
     // 2. Sign the message
     // For now, return a placeholder signature
-    Err(PersonaError::InvalidInput("Ed25519 signing not yet implemented".to_string()))
+    Err(PersonaError::InvalidInput(
+        "Ed25519 signing not yet implemented".to_string(),
+    ))
 }
 
 /// Verify a transaction signature
@@ -207,14 +219,24 @@ pub fn verify_transaction_signature(
     message: &[u8],
 ) -> PersonaResult<bool> {
     match signature.signature_scheme {
-        SignatureScheme::ECDSA => verify_ecdsa_signature(&signature.public_key, &signature.signature, message),
-        SignatureScheme::EdDSA => verify_ed25519_signature(&signature.public_key, &signature.signature, message),
-        _ => Err(PersonaError::InvalidInput("Signature verification for this scheme".to_string())),
+        SignatureScheme::ECDSA => {
+            verify_ecdsa_signature(&signature.public_key, &signature.signature, message)
+        }
+        SignatureScheme::EdDSA => {
+            verify_ed25519_signature(&signature.public_key, &signature.signature, message)
+        }
+        _ => Err(PersonaError::InvalidInput(
+            "Signature verification for this scheme".to_string(),
+        )),
     }
 }
 
 /// Verify ECDSA (secp256k1) signature
-fn verify_ecdsa_signature(public_key: &[u8], signature: &[u8], message: &[u8]) -> PersonaResult<bool> {
+fn verify_ecdsa_signature(
+    public_key: &[u8],
+    signature: &[u8],
+    message: &[u8],
+) -> PersonaResult<bool> {
     let verifying_key = VerifyingKey::from_sec1_bytes(public_key)
         .map_err(|e| PersonaError::CryptographicError(format!("Invalid public key: {}", e)))?;
     let signature = Signature::from_der(signature)
@@ -228,14 +250,20 @@ fn verify_ecdsa_signature(public_key: &[u8], signature: &[u8], message: &[u8]) -
         Err(e) => {
             println!("Verification failed: {}", e);
             Ok(false)
-        },
+        }
     }
 }
 
 /// Verify Ed25519 signature
-fn verify_ed25519_signature(_public_key: &[u8], _signature: &[u8], _message: &[u8]) -> PersonaResult<bool> {
+fn verify_ed25519_signature(
+    _public_key: &[u8],
+    _signature: &[u8],
+    _message: &[u8],
+) -> PersonaResult<bool> {
     // In a real implementation, you would verify using ed25519-dalek
-    Err(PersonaError::InvalidInput("Ed25519 verification not yet implemented".to_string()))
+    Err(PersonaError::InvalidInput(
+        "Ed25519 verification not yet implemented".to_string(),
+    ))
 }
 
 #[cfg(test)]

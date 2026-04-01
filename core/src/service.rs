@@ -120,7 +120,9 @@ impl PersonaService {
 
     /// Check if the service is unlocked
     pub fn is_unlocked(&self) -> bool {
-        if let (Some(_), Some(last)) = (&self.master_encryption, *self.last_activity.lock().unwrap()) {
+        if let (Some(_), Some(last)) =
+            (&self.master_encryption, *self.last_activity.lock().unwrap())
+        {
             return last.elapsed() < self.auto_lock_timeout;
         }
         false
@@ -151,7 +153,10 @@ impl PersonaService {
             *self.current_session_id.write().await = Some(session_id.clone());
 
             // Add session to auto-lock manager
-            self.auto_lock_manager.add_session(session).await.map_err(|e| anyhow::anyhow!(e))?;
+            self.auto_lock_manager
+                .add_session(session)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
             self.auto_lock_manager.set_current_user(user_id).await;
         }
 
@@ -244,7 +249,10 @@ impl PersonaService {
         };
 
         if let Some(session_id) = session_id_opt {
-            self.auto_lock_manager.lock_session(&session_id).await.map_err(|e| anyhow::anyhow!(e))?;
+            self.auto_lock_manager
+                .lock_session(&session_id)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -274,7 +282,10 @@ impl PersonaService {
         };
 
         if let Some(session_id) = session_id_opt {
-            self.auto_lock_manager.unlock_session(&session_id).await.map_err(|e| anyhow::anyhow!(e))?;
+            self.auto_lock_manager
+                .unlock_session(&session_id)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -305,7 +316,10 @@ impl PersonaService {
         };
 
         if let Some(session_id) = session_id_opt {
-            self.auto_lock_manager.update_activity(&session_id).await.map_err(|e| anyhow::anyhow!(e))?;
+            self.auto_lock_manager
+                .update_activity(&session_id)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
@@ -320,7 +334,8 @@ impl PersonaService {
         if let Some(session_id) = session_id_opt {
             self.auto_lock_manager
                 .update_sensitive_activity(&session_id)
-                .await.map_err(|e| anyhow::anyhow!(e))?;
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
         }
         Ok(())
     }
