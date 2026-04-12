@@ -15,7 +15,7 @@ pub struct MigrateArgs {
     force: bool,
 }
 
-pub async fn execute(args: MigrateArgs, config: &crate::config::CliConfig) -> Result<()> {
+pub async fn execute(_args: MigrateArgs, config: &crate::config::CliConfig) -> Result<()> {
     println!("{}", "🗃  Running database migrations...".cyan().bold());
 
     // Open DB

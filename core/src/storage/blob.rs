@@ -1,7 +1,7 @@
 use crate::crypto::EncryptionService;
 use crate::models::{Attachment, AttachmentChunk};
 use crate::storage::{AttachmentRepository, FileSystem};
-use crate::{PersonaError, Result};
+use crate::Result;
 use anyhow::anyhow;
 use ring::digest::{Context, SHA256};
 use std::path::{Path, PathBuf};

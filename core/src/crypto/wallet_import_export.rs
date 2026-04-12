@@ -24,6 +24,8 @@ pub enum ImportFormat {
     Mnemonic,
     /// Raw private key (hex)
     PrivateKey,
+    /// Persona wallet JSON export
+    Json,
     /// Ethereum keystore JSON
     Keystore,
     /// WIF (Wallet Import Format) for Bitcoin
@@ -54,6 +56,12 @@ pub struct WalletExport {
     pub network: String,
     pub wallet_type: String,
     pub derivation_path: Option<String>,
+    #[serde(default)]
+    pub extended_public_key: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub watch_only: bool,
     pub mnemonic: Option<String>,
     pub private_keys: Option<HashMap<String, String>>,
     pub addresses: Vec<String>,
@@ -348,6 +356,9 @@ pub fn export_to_json(
         network: format!("{:?}", wallet.network),
         wallet_type: format!("{:?}", wallet.wallet_type),
         derivation_path: wallet.derivation_path.clone(),
+        extended_public_key: wallet.extended_public_key.clone(),
+        description: wallet.description.clone(),
+        watch_only: wallet.watch_only,
         mnemonic: None,
         private_keys: None,
         addresses: wallet.addresses.iter().map(|a| a.address.clone()).collect(),
@@ -374,12 +385,60 @@ pub fn export_to_json(
         .map_err(|e| PersonaError::Cryptography(format!("JSON serialization error: {}", e)))
 }
 
+/// Import wallet from Persona JSON export
+pub fn import_from_json(
+    identity_id: Uuid,
+    fallback_name: Option<String>,
+    json: &str,
+    password: &str,
+) -> PersonaResult<CryptoWallet> {
+    let export: WalletExport = serde_json::from_str(json)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid wallet JSON export: {}", e)))?;
+
+    let wallet_name = fallback_name
+        .or_else(|| (!export.name.trim().is_empty()).then(|| export.name.clone()))
+        .ok_or_else(|| PersonaError::InvalidInput("Wallet export is missing a name".to_string()))?;
+    let network = parse_network_name(&export.network)?;
+    let address_count = export.addresses.len().max(1);
+
+    let mut wallet = if let Some(mnemonic) = export.mnemonic.as_deref() {
+        import_from_mnemonic(
+            identity_id,
+            wallet_name,
+            mnemonic,
+            "",
+            network,
+            export.derivation_path.clone(),
+            address_count,
+            password,
+        )?
+    } else if let Some(private_keys) = export.private_keys.as_ref() {
+        let private_key = private_keys.values().next().ok_or_else(|| {
+            PersonaError::InvalidInput(
+                "Wallet export does not contain any private keys".to_string(),
+            )
+        })?;
+
+        import_from_private_key(identity_id, wallet_name, private_key, network, password)?
+    } else {
+        return Err(PersonaError::InvalidInput(
+            "Wallet JSON import requires mnemonic or private key data".to_string(),
+        ));
+    };
+
+    wallet.description = export.description;
+    wallet.extended_public_key = export.extended_public_key;
+
+    Ok(wallet)
+}
+
 /// Parse import format from string
 pub fn parse_import_format(format_str: &str) -> PersonaResult<ImportFormat> {
     match format_str.to_lowercase().as_str() {
         "mnemonic" | "phrase" | "seed" => Ok(ImportFormat::Mnemonic),
         "privatekey" | "private_key" | "key" => Ok(ImportFormat::PrivateKey),
-        "keystore" | "json" => Ok(ImportFormat::Keystore),
+        "json" => Ok(ImportFormat::Json),
+        "keystore" => Ok(ImportFormat::Keystore),
         "wif" => Ok(ImportFormat::Wif),
         _ => Err(PersonaError::InvalidInput(format!(
             "Unknown import format: {}",
@@ -460,6 +519,22 @@ fn double_sha256(data: &[u8]) -> [u8; 32] {
     let first = Sha256::digest(data);
     let second = Sha256::digest(first);
     second.into()
+}
+
+fn parse_network_name(network: &str) -> PersonaResult<BlockchainNetwork> {
+    match network.trim().to_lowercase().as_str() {
+        "bitcoin" => Ok(BlockchainNetwork::Bitcoin),
+        "ethereum" => Ok(BlockchainNetwork::Ethereum),
+        "solana" => Ok(BlockchainNetwork::Solana),
+        "bitcoincash" | "bitcoin cash" => Ok(BlockchainNetwork::BitcoinCash),
+        "litecoin" => Ok(BlockchainNetwork::Litecoin),
+        "dogecoin" => Ok(BlockchainNetwork::Dogecoin),
+        "polygon" => Ok(BlockchainNetwork::Polygon),
+        "arbitrum" => Ok(BlockchainNetwork::Arbitrum),
+        "optimism" => Ok(BlockchainNetwork::Optimism),
+        "binancesmartchain" | "binance smart chain" => Ok(BlockchainNetwork::BinanceSmartChain),
+        other => Ok(BlockchainNetwork::Custom(other.to_string())),
+    }
 }
 
 fn export_private_keys(
@@ -585,6 +660,8 @@ mod tests {
             parse_import_format("private_key").unwrap(),
             ImportFormat::PrivateKey
         );
+        assert_eq!(parse_import_format("json").unwrap(), ImportFormat::Json);
+        assert_eq!(parse_import_format("keystore").unwrap(), ImportFormat::Keystore);
         assert_eq!(parse_export_format("json").unwrap(), ExportFormat::Json);
     }
 
@@ -679,6 +756,66 @@ mod tests {
                 .expect("missing derived private key");
             assert_eq!(exported_key.len(), 64);
         }
+    }
+
+    #[test]
+    fn test_import_from_json_roundtrip_for_hd_wallet() {
+        let mnemonic =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+
+        let wallet = import_from_mnemonic(
+            identity_id,
+            "HD Wallet".to_string(),
+            mnemonic,
+            "",
+            BlockchainNetwork::Bitcoin,
+            None,
+            3,
+            password,
+        )
+        .unwrap();
+
+        let exported = export_to_json(&wallet, true, Some(password)).unwrap();
+        let imported = import_from_json(
+            Uuid::new_v4(),
+            Some("Imported HD".to_string()),
+            &exported,
+            password,
+        )
+        .unwrap();
+
+        assert_eq!(imported.name, "Imported HD");
+        assert_eq!(imported.network, BlockchainNetwork::Bitcoin);
+        assert_eq!(imported.addresses.len(), 3);
+        assert_eq!(export_mnemonic(&imported, password).unwrap(), mnemonic);
+    }
+
+    #[test]
+    fn test_import_from_json_roundtrip_for_single_address_wallet() {
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+        let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b";
+
+        let wallet = import_from_private_key(
+            identity_id,
+            "Single Address".to_string(),
+            private_key,
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+
+        let exported = export_to_json(&wallet, true, Some(password)).unwrap();
+        let imported = import_from_json(Uuid::new_v4(), None, &exported, password).unwrap();
+
+        assert_eq!(imported.name, "Single Address");
+        assert_eq!(imported.network, BlockchainNetwork::Ethereum);
+        assert_eq!(
+            export_private_key(&imported, password).unwrap(),
+            private_key
+        );
     }
 
     fn encode_compressed_mainnet_wif(private_key: &[u8; 32]) -> String {

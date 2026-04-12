@@ -365,7 +365,7 @@ async fn list_credentials(
 }
 
 async fn show_credential(config: &CliConfig, id: Uuid, reveal: bool) -> Result<()> {
-    let mut service = init_service(config).await?;
+    let service = init_service(config).await?;
     let credential = service
         .get_credential(&id)
         .await
@@ -414,7 +414,7 @@ async fn show_credential(config: &CliConfig, id: Uuid, reveal: bool) -> Result<(
 }
 
 async fn remove_credential(config: &CliConfig, id: Uuid, yes: bool) -> Result<()> {
-    let mut service = init_service(config).await?;
+    let service = init_service(config).await?;
     if !yes {
         let confirm = dialoguer::Confirm::new()
             .with_prompt(format!("Remove credential {}?", id))

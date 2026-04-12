@@ -5,7 +5,6 @@ use clap::{Args, Subcommand};
 use colored::*;
 use data_encoding::{BASE32, BASE32_NOPAD};
 use hmac::{Hmac, Mac};
-use image::GenericImageView;
 use persona_core::{
     models::{CredentialData, CredentialType, SecurityLevel, TwoFactorData},
     Database, PersonaService,
@@ -233,7 +232,7 @@ fn normalize_origin_url(raw: &str) -> Result<String> {
 }
 
 async fn generate_codes(config: &CliConfig, id: Uuid, watch: bool) -> Result<()> {
-    let mut service = init_service(config).await?;
+    let service = init_service(config).await?;
     let credential = service
         .get_credential(&id)
         .await

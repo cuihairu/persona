@@ -5,7 +5,7 @@ use colored::*;
 use persona_core::{
     models::wallet::{
         AddressType, BipVersion, BlockchainNetwork, CryptoWallet, TransactionRequest,
-        WalletAddress, WalletMetadata, WalletSecurityLevel, WalletType,
+        WalletAddress, WalletSecurityLevel, WalletType,
     },
     storage::{CryptoWalletRepository, Database},
 };
@@ -308,7 +308,7 @@ pub enum WalletCommand {
         /// Wallet ID or name
         wallet_identifier: String,
 
-        /// Export format (json, mnemonic, private_key, xpub)
+        /// Export format (json, mnemonic, private_key, wif, xpub)
         #[arg(long, short)]
         format: String,
 
@@ -322,7 +322,7 @@ pub enum WalletCommand {
     },
     /// Import wallet
     Import {
-        /// Import format (json, mnemonic, private_key, xpub)
+        /// Import format (json, mnemonic, private_key, keystore, wif)
         #[arg(long, short)]
         format: String,
 
@@ -594,7 +594,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             description,
             network,
             xpub,
-            address_count,
+            address_count: _,
         } => {
             let network = parse_network(&network)?;
             let mut wallet = CryptoWallet::new_watch_only(
@@ -615,15 +615,15 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
         WalletCommand::Generate {
             name,
-            description,
+            description: _,
             network,
             hd,
-            bip_version,
+            bip_version: _,
             account,
             address_count,
         } => {
             use persona_core::crypto::{
-                import_from_mnemonic, MasterKey, MnemonicWordCount, SecureMnemonic,
+                import_from_mnemonic, MnemonicWordCount, SecureMnemonic,
             };
 
             let network = parse_network(&network)?;
@@ -777,7 +777,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             index,
             derivation_path,
         } => {
-            let wallet = repo
+            let _wallet = repo
                 .find_by_id(&wallet_id)
                 .await
                 .into_anyhow()?
@@ -983,7 +983,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
         WalletCommand::Import { format, data, name } => {
             use persona_core::crypto::{
-                import_from_mnemonic, import_from_private_key, import_from_wif,
+                import_from_json, import_from_mnemonic, import_from_private_key, import_from_wif,
                 parse_import_format, ImportFormat,
             };
 
@@ -1056,6 +1056,10 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                         &password,
                     )
                     .context("Failed to import from WIF")?
+                }
+                ImportFormat::Json => {
+                    import_from_json(uuid::Uuid::new_v4(), name, import_data.trim(), &password)
+                        .context("Failed to import from JSON export")?
                 }
                 _ => {
                     bail!("Import format not yet fully implemented");

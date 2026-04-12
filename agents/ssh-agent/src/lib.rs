@@ -456,10 +456,6 @@ fn write_ssh_string(buf: &mut Vec<u8>, s: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn boxed_persona_error(err: PersonaError) -> Box<dyn std::error::Error + Send + Sync> {
-    Box::new(err)
-}
-
 fn read_ssh_string(buf: &mut &[u8]) -> Result<Vec<u8>> {
     use byteorder::{BigEndian, ReadBytesExt};
     let len = buf.read_u32::<BigEndian>()? as usize;

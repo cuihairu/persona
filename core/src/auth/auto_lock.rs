@@ -129,7 +129,6 @@ struct SessionInfo {
     session: Session,
     last_warning_time: Option<SystemTime>,
     warning_sent: bool,
-    created_at: SystemTime,
 }
 
 impl AutoLockManager {
@@ -187,7 +186,6 @@ impl AutoLockManager {
             session,
             last_warning_time: None,
             warning_sent: false,
-            created_at: SystemTime::now(),
         };
 
         {
@@ -396,7 +394,7 @@ impl AutoLockManager {
 
         let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
-            ticker.tick(); // Skip first tick
+            ticker.tick().await; // Skip first tick
 
             loop {
                 ticker.tick().await;

@@ -1,5 +1,5 @@
 use aes_gcm::{
-    aead::{Aead, OsRng},
+    aead::Aead,
     Aes256Gcm, KeyInit,
 };
 use anyhow::{Context, Result};
