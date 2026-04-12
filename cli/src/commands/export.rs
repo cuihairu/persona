@@ -524,7 +524,7 @@ fn compress_file(file_path: &PathBuf, level: u8) -> Result<()> {
         src_path.extension().unwrap_or_default().to_string_lossy()
     ));
 
-    let mut input = std::fs::read(src_path).context("Failed to read file for compression")?;
+    let input = std::fs::read(src_path).context("Failed to read file for compression")?;
     let mut encoder = GzEncoder::new(
         File::create(&compressed_path).context("Failed to create gzip file")?,
         Compression::new(level.min(9) as u32),

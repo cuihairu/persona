@@ -801,7 +801,7 @@ mod tests {
 
     #[test]
     fn test_multi_signature_validation() {
-        let mut wallet = CryptoWallet::new(
+        let wallet = CryptoWallet::new(
             Uuid::new_v4(),
             "Multi-sig".to_string(),
             BlockchainNetwork::Bitcoin,

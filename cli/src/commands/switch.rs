@@ -330,8 +330,6 @@ struct IdentityInfo {
     email: Option<String>,
     phone: Option<String>,
     tags: Vec<String>,
-    created: String,
-    modified: String,
 }
 
 async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String, IdentityInfo>> {
@@ -381,8 +379,6 @@ async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String
                 email: id.email,
                 phone: id.phone,
                 tags: id.tags,
-                created: id.created_at.format("%Y-%m-%d %H:%M:%S").to_string(),
-                modified: id.updated_at.format("%Y-%m-%d %H:%M:%S").to_string(),
             },
         );
     }

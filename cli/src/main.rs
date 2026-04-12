@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use colored::*;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -184,26 +183,4 @@ fn init_logging(verbose: bool) -> Result<()> {
         .init()?;
 
     Ok(())
-}
-
-fn print_banner() {
-    println!(
-        "{}",
-        "
-    ██████╗ ███████╗██████╗ ███████╗ ██████╗ ███╗   ██╗ █████╗ 
-    ██╔══██╗██╔════╝██╔══██╗██╔════╝██╔═══██╗████╗  ██║██╔══██╗
-    ██████╔╝█████╗  ██████╔╝███████╗██║   ██║██╔██╗ ██║███████║
-    ██╔═══╝ ██╔══╝  ██╔══██╗╚════██║██║   ██║██║╚██╗██║██╔══██║
-    ██║     ███████╗██║  ██║███████║╚██████╔╝██║ ╚████║██║  ██║
-    ╚═╝     ╚══════╝╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝
-    "
-        .cyan()
-        .bold()
-    );
-
-    println!(
-        "{}",
-        "Master your digital identity. Switch freely with one click.".italic()
-    );
-    println!();
 }

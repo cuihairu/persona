@@ -180,7 +180,7 @@ async fn generate_key(
         anyhow::bail!("Only ed25519 is supported currently");
     }
 
-    let mut service = ensure_service(config).await?;
+    let service = ensure_service(config).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
     // Generate ed25519 keypair
@@ -230,7 +230,7 @@ async fn generate_key(
 }
 
 async fn list_keys(identity_name: &str, config: &crate::config::CliConfig) -> Result<()> {
-    let mut service = ensure_service(config).await?;
+    let service = ensure_service(config).await?;
     let identity = resolve_identity(&service, identity_name).await?;
     let creds = service.get_credentials_for_identity(&identity.id).await?;
     let mut count = 0usize;
@@ -258,7 +258,7 @@ async fn list_keys(identity_name: &str, config: &crate::config::CliConfig) -> Re
 }
 
 async fn list_all_keys(config: &crate::config::CliConfig) -> Result<()> {
-    let mut service = ensure_service(config).await?;
+    let service = ensure_service(config).await?;
     let identities = service.get_identities().await?;
     let mut count = 0usize;
 
@@ -292,7 +292,7 @@ async fn list_all_keys(config: &crate::config::CliConfig) -> Result<()> {
 }
 
 async fn remove_key(id: Uuid, yes: bool, config: &crate::config::CliConfig) -> Result<()> {
-    let mut service = ensure_service(config).await?;
+    let service = ensure_service(config).await?;
     if !yes {
         if !Confirm::new()
             .with_prompt(format!("Remove SSH key credential {}?", id))
@@ -337,7 +337,7 @@ async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> R
     cmd.env("PERSONA_DB_PATH", db_path.to_string_lossy().to_string());
     cmd.env("PERSONA_AGENT_SOCKET_PATH", &socket_path);
     // if vault encrypted, prompt for master password and pass via env
-    let mut tmp_service = ensure_service(config).await?; // ensure migrations; may prompt
+    let _ = ensure_service(config).await?; // ensure migrations; may prompt
                                                          // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
                                                          // Here we conservatively ask user again (not stored from ensure_service)
     let pass = if config.ui.interactive {
@@ -678,10 +678,10 @@ async fn import_seed(
     config: &crate::config::CliConfig,
 ) -> Result<()> {
     println!("{}", "🔑 Importing SSH seed...".cyan().bold());
-    let mut service = ensure_service(config).await?;
+    let service = ensure_service(config).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
-    let mut seed = if let Some(b64) = seed_b64 {
+    let seed = if let Some(b64) = seed_b64 {
         BASE64.decode(&b64).context("Invalid base64 seed")?
     } else if let Some(hexs) = seed_hex {
         let cleaned = hexs.trim();
@@ -725,7 +725,7 @@ async fn import_seed(
 }
 
 async fn export_pubkey(id: uuid::Uuid, config: &crate::config::CliConfig) -> Result<()> {
-    let mut service = ensure_service(config).await?;
+    let service = ensure_service(config).await?;
     if let Some(cred) = service.get_credential(&id).await? {
         if !matches!(cred.credential_type, CredentialType::SshKey) {
             anyhow::bail!("Credential is not an SSH key");

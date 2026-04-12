@@ -90,9 +90,9 @@ struct BridgeAuth {
 struct HelloPayload {
     extension_id: String,
     #[serde(default)]
-    extension_version: Option<String>,
+    _extension_version: Option<String>,
     #[serde(default)]
-    protocol_version: Option<u32>,
+    _protocol_version: Option<u32>,
     #[serde(default)]
     client_instance_id: Option<String>,
 }
@@ -810,19 +810,6 @@ fn purge_expired(state: &mut BridgeStateFile) {
             }
         }
     }
-}
-
-fn load_pairing(
-    state_dir: &Path,
-    extension_id: &str,
-    client_instance_id: &str,
-) -> Result<Option<PairingInfo>> {
-    let mut state = load_state(state_dir)?;
-    purge_expired(&mut state);
-    Ok(state
-        .pairings
-        .into_iter()
-        .find(|p| p.extension_id == extension_id && p.client_instance_id == client_instance_id))
 }
 
 fn generate_session() -> SessionInfo {

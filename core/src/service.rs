@@ -8,7 +8,7 @@ use crate::{
     crypto::{EncryptionService, KeyHierarchy, Sha256Hasher},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
-        ChangeHistoryStats, ChangeType, Credential, CredentialData, CredentialType, EntityType,
+        ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType,
         Identity, IdentityType, ResourceType, SecurityLevel,
     },
     password::{PasswordGenerator, PasswordGeneratorOptions},
@@ -1054,32 +1054,6 @@ impl PersonaService {
         self.change_history_repo
             .delete_before_date(before_date)
             .await
-    }
-
-    /// Record a change in history (internal helper)
-    async fn record_change(
-        &self,
-        entity_type: EntityType,
-        entity_id: Uuid,
-        change_type: ChangeType,
-        previous: Option<serde_json::Value>,
-        new: Option<serde_json::Value>,
-    ) -> Result<()> {
-        let version = self
-            .change_history_repo
-            .get_latest_version(entity_type.clone(), &entity_id)
-            .await?
-            + 1;
-
-        let mut history = ChangeHistory::new(entity_type, entity_id, change_type)
-            .with_states(previous, new)
-            .with_version(version);
-
-        if let Some(ref user) = self.current_user {
-            history = history.with_user(user.to_string());
-        }
-
-        self.change_history_repo.record(&history).await
     }
 
     // Private helper methods

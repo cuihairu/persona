@@ -135,7 +135,6 @@ struct ImportIdentity {
     email: Option<String>,
     phone: Option<String>,
     tags: Vec<String>,
-    attributes: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -260,7 +259,6 @@ fn parse_json_import(content: &str) -> Result<ImportData> {
                         .collect()
                 })
                 .unwrap_or_default(),
-            attributes: std::collections::HashMap::new(),
         };
         identities.push(identity);
     }
@@ -304,7 +302,6 @@ fn parse_csv_import(content: &str) -> Result<ImportData> {
                 },
                 phone: None,
                 tags: Vec::new(),
-                attributes: std::collections::HashMap::new(),
             };
             identities.push(identity);
         }

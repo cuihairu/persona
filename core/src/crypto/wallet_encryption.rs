@@ -1,7 +1,7 @@
 // Wallet-specific encryption for private keys and mnemonics
 
 use crate::crypto::encryption::{decrypt_data, encrypt_data};
-use crate::crypto::wallet_crypto::{MasterKey, SecureMnemonic};
+use crate::crypto::wallet_crypto::MasterKey;
 use crate::{PersonaError, PersonaResult};
 use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -217,7 +217,7 @@ pub struct KdfParams {
 }
 
 /// Import from Ethereum keystore JSON
-pub fn import_from_keystore(keystore_json: &str, password: &str) -> PersonaResult<Vec<u8>> {
+pub fn import_from_keystore(keystore_json: &str, _password: &str) -> PersonaResult<Vec<u8>> {
     let keystore: KeystoreV3 = serde_json::from_str(keystore_json)
         .map_err(|e| PersonaError::InvalidInput(format!("Invalid keystore format: {}", e)))?;
 
@@ -237,9 +237,9 @@ pub fn import_from_keystore(keystore_json: &str, password: &str) -> PersonaResul
 
 /// Export to Ethereum-compatible keystore JSON
 pub fn export_to_keystore(
-    private_key: &[u8],
-    password: &str,
-    address: Option<String>,
+    _private_key: &[u8],
+    _password: &str,
+    _address: Option<String>,
 ) -> PersonaResult<String> {
     // Simplified keystore export (production should use proper scrypt)
     // This is a placeholder for the full implementation
