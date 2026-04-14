@@ -15,6 +15,7 @@ jest.mock('@/utils/api', () => ({
     walletGenerate: jest.fn(),
     walletImport: jest.fn(),
     walletAddAddress: jest.fn(),
+    walletDelete: jest.fn(),
   },
 }));
 
@@ -67,5 +68,27 @@ describe('components/WalletPanel', () => {
     expect(optionLabels).toContain('Bitcoin WIF');
     expect(optionLabels).not.toContain('XPUB');
     expect(optionLabels).not.toContain('Mnemonic');
+  });
+
+  it('deletes a wallet after confirmation and refreshes the list', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    (personaAPI.walletDelete as jest.Mock).mockResolvedValue({
+      success: true,
+      data: true,
+    });
+
+    const { findByText, getByLabelText } = render(<WalletPanel />);
+
+    await findByText('BTC Single');
+
+    fireEvent.click(getByLabelText('Delete wallet BTC Single'));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith('Delete wallet "BTC Single"? This cannot be undone.');
+      expect(personaAPI.walletDelete).toHaveBeenCalledWith('wallet-1');
+      expect(personaAPI.walletList).toHaveBeenCalledTimes(2);
+    });
+
+    confirmSpy.mockRestore();
   });
 });

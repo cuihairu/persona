@@ -148,6 +148,10 @@ class PersonaAPI {
     return invoke('wallet_add_address', { wallet_id: walletId, password });
   }
 
+  async walletDelete(walletId: string): Promise<ApiResponse<boolean>> {
+    return invoke('wallet_delete', { wallet_id: walletId });
+  }
+
   async walletExport(request: WalletExportRequest): Promise<ApiResponse<string>> {
     return invoke('wallet_export', { request });
   }

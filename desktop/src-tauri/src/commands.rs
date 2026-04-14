@@ -1396,6 +1396,48 @@ pub async fn wallet_add_address(
 }
 
 #[command]
+pub async fn wallet_delete(
+    wallet_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let repo = CryptoWalletRepository::new(Arc::new(db));
+    let wallet_id =
+        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+
+    let deleted = repo.delete(&wallet_id).await.map_err(|e| e.to_string())?;
+    if !deleted {
+        return Ok(ApiResponse::error("Wallet not found".to_string()));
+    }
+
+    Ok(ApiResponse::success(true))
+}
+
+#[command]
 pub async fn wallet_export(
     request: WalletExportRequest,
     state: State<'_, AppState>,
