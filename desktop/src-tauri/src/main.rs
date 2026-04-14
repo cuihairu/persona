@@ -44,6 +44,7 @@ fn main() {
             commands::wallet_generate,
             commands::wallet_import,
             commands::wallet_add_address,
+            commands::wallet_delete,
             commands::wallet_export,
         ])
         .run(tauri::generate_context!())

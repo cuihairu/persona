@@ -7,6 +7,7 @@ import {
   ArrowUpTrayIcon,
   QrCodeIcon,
   ArrowTrendingUpIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { LoadingSpinner, ErrorDisplay, ErrorBoundary } from '@/components/ErrorHandling';
 import { personaAPI } from '@/utils/api';
@@ -245,6 +246,30 @@ const WalletPanel: React.FC = () => {
     }
   };
 
+  const deleteWallet = async (wallet: WalletSummary) => {
+    const confirmed = window.confirm(`Delete wallet "${wallet.name}"? This cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      setError(null);
+      const response = await personaAPI.walletDelete(wallet.id);
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to delete wallet');
+      }
+
+      if (selectedWallet?.id === wallet.id) {
+        setSelectedWallet(null);
+        setAddresses([]);
+      }
+
+      await loadWallets();
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete wallet');
+    }
+  };
+
   const getNetworkIcon = (network: string) => {
     switch (network.toLowerCase()) {
       case 'bitcoin':
@@ -413,9 +438,20 @@ const WalletPanel: React.FC = () => {
                       loadWallets();
                     }}
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
+                    >
+                      <ArrowTrendingUpIcon className="h-4 w-4" />
+                      Refresh
+                    </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteWallet(wallet);
+                    }}
+                    className="flex items-center justify-center gap-1 px-2 py-1 text-sm bg-red-50 text-red-700 rounded hover:bg-red-100 transition-colors"
+                    aria-label={`Delete wallet ${wallet.name}`}
                   >
-                    <ArrowTrendingUpIcon className="h-4 w-4" />
-                    Refresh
+                    <TrashIcon className="h-4 w-4" />
+                    Delete
                   </button>
                 </div>
               </div>
