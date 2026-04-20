@@ -4,8 +4,8 @@
 mod commands;
 mod types;
 
-use types::AppState;
 use tokio::sync::Mutex;
+use types::AppState;
 
 fn main() {
     tauri::Builder::default()
