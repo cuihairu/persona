@@ -1,7 +1,7 @@
 use persona_core::*;
 use serde::{Deserialize, Serialize};
-use tokio::task::JoinHandle;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 /// Application state that holds the Persona service
 pub struct AppState {
@@ -386,45 +386,63 @@ pub struct WalletExportRequest {
 impl CredentialDataRequest {
     pub fn to_credential_data(&self) -> CredentialData {
         match self {
-            CredentialDataRequest::Password { password, email, security_questions } => {
-                CredentialData::Password(PasswordCredentialData {
-                    password: password.clone(),
-                    email: email.clone(),
-                    security_questions: security_questions.iter().map(|q| SecurityQuestion {
+            CredentialDataRequest::Password {
+                password,
+                email,
+                security_questions,
+            } => CredentialData::Password(PasswordCredentialData {
+                password: password.clone(),
+                email: email.clone(),
+                security_questions: security_questions
+                    .iter()
+                    .map(|q| SecurityQuestion {
                         question: q.question.clone(),
                         answer: q.answer.clone(),
-                    }).collect(),
-                })
-            }
+                    })
+                    .collect(),
+            }),
             CredentialDataRequest::CryptoWallet {
-                wallet_type, mnemonic_phrase, private_key, public_key, address, network
-            } => {
-                CredentialData::CryptoWallet(CryptoWalletData {
-                    wallet_type: wallet_type.clone(),
-                    mnemonic_phrase: mnemonic_phrase.clone(),
-                    private_key: private_key.clone(),
-                    public_key: public_key.clone(),
-                    address: address.clone(),
-                    network: network.clone(),
-                })
-            }
-            CredentialDataRequest::SshKey { private_key, public_key, key_type, passphrase } => {
-                CredentialData::SshKey(SshKeyData {
-                    private_key: private_key.clone(),
-                    public_key: public_key.clone(),
-                    key_type: key_type.clone(),
-                    passphrase: passphrase.clone(),
-                })
-            }
-            CredentialDataRequest::ApiKey { api_key, api_secret, token, permissions, expires_at } => {
-                CredentialData::ApiKey(ApiKeyData {
-                    api_key: api_key.clone(),
-                    api_secret: api_secret.clone(),
-                    token: token.clone(),
-                    permissions: permissions.clone(),
-                    expires_at: expires_at.as_ref().and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok()).map(|dt| dt.with_timezone(&chrono::Utc)),
-                })
-            }
+                wallet_type,
+                mnemonic_phrase,
+                private_key,
+                public_key,
+                address,
+                network,
+            } => CredentialData::CryptoWallet(CryptoWalletData {
+                wallet_type: wallet_type.clone(),
+                mnemonic_phrase: mnemonic_phrase.clone(),
+                private_key: private_key.clone(),
+                public_key: public_key.clone(),
+                address: address.clone(),
+                network: network.clone(),
+            }),
+            CredentialDataRequest::SshKey {
+                private_key,
+                public_key,
+                key_type,
+                passphrase,
+            } => CredentialData::SshKey(SshKeyData {
+                private_key: private_key.clone(),
+                public_key: public_key.clone(),
+                key_type: key_type.clone(),
+                passphrase: passphrase.clone(),
+            }),
+            CredentialDataRequest::ApiKey {
+                api_key,
+                api_secret,
+                token,
+                permissions,
+                expires_at,
+            } => CredentialData::ApiKey(ApiKeyData {
+                api_key: api_key.clone(),
+                api_secret: api_secret.clone(),
+                token: token.clone(),
+                permissions: permissions.clone(),
+                expires_at: expires_at
+                    .as_ref()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc)),
+            }),
             CredentialDataRequest::TwoFactor {
                 secret_key,
                 issuer,
@@ -440,9 +458,7 @@ impl CredentialDataRequest {
                 digits: *digits,
                 period: *period,
             }),
-            CredentialDataRequest::Raw { data } => {
-                CredentialData::Raw(data.clone())
-            }
+            CredentialDataRequest::Raw { data } => CredentialData::Raw(data.clone()),
         }
     }
 }
