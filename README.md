@@ -1,4 +1,4 @@
-# Persona – Digital Identity and Developer Credential Manager
+# Persona - Local-First Identity Material Manager
 
 [![CI](https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI)](https://github.com/cuihairu/persona/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/persona)
@@ -6,19 +6,21 @@
 
 Chinese brand name: "Shuyao" (数钥, pronounced "shu yao"). It captures the idea of "digital keys" in a short, memorable word. We generally refer to the product as "Persona (数钥)" or "Shuyao Persona" in brand materials.
 
-Master your digital identity. Switch freely with one click.
+Manage your digital selves. Switch identity material with confidence.
 
 ## 🎯 Project Overview
 
-Persona is a secure and convenient platform for managing digital identities and credentials. It focuses on developer workflows (SSH agent, API keys, server config) while still covering traditional password vault and digital wallet scenarios. The system follows a zero-knowledge design with end-to-end encryption, so all encryption and decryption happen on the client.
+Persona is a local-first, zero-knowledge manager for one person operating multiple digital selves. Each identity is a distinct key-and-credential context used in a different environment, such as work, personal browsing, infrastructure access, or automation.
+
+The product focuses on identity-scoped credentials and developer workflows: passwords, API keys, TOTP, SSH keys, browser autofill, and active identity switching. Wallet material fits the same conceptual model, but is currently a deferred priority rather than part of the main product track.
 
 ### Key Features
-- 🔐 Passwords & identity vault: account passwords, identity profiles, tags, and custom attributes
-- 🔑 Developer tooling: SSH key storage and signing (built-in SSH agent), API keys, and server configuration
-- 💰 Digital wallet: mnemonic and private-key storage (derivation/signing to follow)
+- 🔐 Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata
+- 🔑 Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access
+- 🌐 Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults
 - 🗄️ Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)
 - 🧾 Audit log: critical operations and signing events (with digest)
-- 🛡️ Supply chain security: automated dependency scanning with cargo-deny and npm audit
+- 🛡️ Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks
 
 ## 🏗️ Architecture
 
@@ -145,8 +147,7 @@ persona ssh generate --identity <name> --name "GitHub Key"
 persona ssh start-agent --print-export
 export SSH_AUTH_SOCK=...   # Copy to the current shell
 
-# Provide the destination host and run a command.
-# `persona ssh run` will inject the agent socket automatically.
+# Provide the destination host and run a command
 persona ssh run --host github.com -- ssh -T git@github.com
 
 # Optional agent policies
@@ -189,9 +190,9 @@ persona ssh stop-agent
 - [x] Export/import (gzip + encryption) and expanded audit logging
 - [x] SSH agent MVP (UNIX socket / ed25519) with CLI management commands
 - [ ] SSH agent policy hardening (full known_hosts parser, allow/deny lists, Windows support)
-- [ ] Digital wallet (models / derivation / signing)
 - [ ] Desktop app data wiring and polished UI
 - [ ] Optional sync/automation service with a local-first design
+- [ ] Wallet support as a deferred, identity-material extension
 
 ## 🤝 Contributing
 
@@ -212,4 +213,4 @@ This project is released under the MIT License. See [LICENSE](LICENSE) for detai
 
 Security note: Persona is evolving quickly, and APIs/storage formats may change. Avoid using it with production secrets until the interfaces stabilize.
 
-Master your digital identity. Switch freely with one click.
+Manage your digital selves. Switch identity material with confidence.

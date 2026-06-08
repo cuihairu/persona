@@ -1,6 +1,6 @@
 # Persona Monorepo TODO
 
-This is the master checklist to reach “1Password-like” parity while adding developer‑first features (SSH Agent, Digital Wallet). Keep this file up to date as work progresses.
+This is the master checklist for Persona's mainline product: local-first identity-material management with strong browser, desktop, CLI, and SSH workflows. Keep this file aligned with `BOUNDARY.md`.
 
 Now (current sprint)
 - [x] CI: GitHub Actions (Rust fmt/clippy/test; Desktop lint/test)
@@ -64,10 +64,9 @@ SSH Agent (developer focus)
 - [x] CLI commands: `persona ssh import|generate|list|list-all|export-pub|add-to-agent|start-agent|stop-agent|agent-status|run|remove`
 - [x] Complete README documentation with usage examples
 - [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
-- [x] Windows CI: build/test Rust workspace (basic validation)
 - [ ] Windows-specific testing and optimization
 
-Digital Wallet (Persona enhancement)
+Wallet Material (deferred / experimental)
 - [ ] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
 - [ ] Derivations: BTC (BIP32/44), ETH (SLIP‑44), Solana (ed25519)
 - [ ] Import (mnemonic/private key/keystore JSON) & export with confirmations

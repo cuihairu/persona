@@ -1,6 +1,6 @@
 # Persona Roadmap & TODO (Detailed)
 
-This plan focuses on parity with 1Password for general users and enhanced developer-centric features like SSH Agent and digital wallet support. Tasks are grouped by track and milestone with concrete deliverables.
+This plan focuses on local-first identity-material management: identity switching, credentials, browser workflows, and developer-centric features like SSH Agent. Wallet support stays conceptually in-model, but remains a deferred track rather than a mainline roadmap driver.
 
 Milestone 0 – Repo Hygiene (1–2 days)
 - Monorepo
@@ -58,7 +58,7 @@ Milestone 3 – SSH Agent (2–3 weeks)
   - [ ] persona ssh add-to-agent / list / rm
   - [ ] Agent status; test harness against `ssh -T git@github.com`
 
-Milestone 4 – Digital Wallet (3–5 weeks incremental)
+Milestone 4 – Wallet Material (Deferred / Experimental)
 - Data Model
   - [x] Credential type placeholders (CryptoWallet)
   - [ ] Wallet models: seed phrase/mnemonic, HD paths, chain meta, watch-only
@@ -105,4 +105,4 @@ Quality & Compliance (ongoing)
 Open Questions
 - Recovery model for master password (none by default; consider Shamir/guardians)
 - Cross-device sync key exchange without server (QR pair? local LAN?)
-- Wallet hardware integration (Ledger/Trezor) roadmap
+- Whether wallet hardware integration (Ledger/Trezor) should remain in Persona or move to a later dedicated track
