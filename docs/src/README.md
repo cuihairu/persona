@@ -117,7 +117,7 @@ flutter build ios  # iOS
 
 ## 📄 许可证
 
-本项目采用 [MIT 许可证](../LICENSE) 开源。
+本项目采用 [MIT 许可证](https://github.com/cuihairu/persona/blob/main/LICENSE) 开源。
 
 ## 🔗 相关链接
 

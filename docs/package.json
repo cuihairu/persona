@@ -1,0 +1,18 @@
+{
+  "name": "persona-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Persona documentation site",
+  "scripts": {
+    "dev": "vitepress dev . --host 0.0.0.0",
+    "build": "vitepress build .",
+    "preview": "vitepress preview . --host 0.0.0.0",
+    "clean": "rimraf .vitepress/dist .vitepress/cache"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "vitepress": "^1.6.4",
+    "vue": "^3.5.38"
+  }
+}
