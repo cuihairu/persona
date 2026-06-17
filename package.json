@@ -16,6 +16,9 @@
     "dev:extension": "pnpm --filter persona-chromium-extension run build --watch",
     "build:extension": "pnpm --filter persona-chromium-extension run build",
     "dev:website": "pnpm --filter persona-website run dev",
-    "build:website": "pnpm --filter persona-website run build"
+    "build:website": "pnpm --filter persona-website run build",
+    "dev:docs": "npm --prefix docs run dev",
+    "build:docs": "npm --prefix docs run build",
+    "preview:docs": "npm --prefix docs run preview"
   }
 }

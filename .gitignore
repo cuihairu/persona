@@ -48,6 +48,8 @@ website/dist/
 website/src/.umi/
 website/src/.umi-production/
 
-# Docs (mdBook output)
+# Docs
 docs/book/
 docs/dist/
+docs/.vitepress/dist/
+docs/.vitepress/cache/

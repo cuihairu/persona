@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Persona 文档构建脚本
-# 用于构建和部署 mdbook 文档
+# 用于构建和部署 VitePress 文档
 
 set -e
 
@@ -33,38 +33,35 @@ log_error() {
 check_dependencies() {
     log_info "检查依赖..."
     
-    if ! command -v mdbook &> /dev/null; then
-        log_error "mdbook 未安装，请先安装 mdbook"
-        log_info "安装命令: cargo install mdbook"
+    if ! command -v npm &> /dev/null; then
+        log_error "npm 未安装，请先安装 Node.js / npm"
         exit 1
     fi
     
     log_success "依赖检查完成"
 }
 
+ensure_dependencies() {
+    if [ ! -d "docs/node_modules/vitepress" ]; then
+        log_info "安装 docs 依赖..."
+        npm --prefix docs ci
+    fi
+}
+
 # 清理旧的构建文件
 clean_build() {
     log_info "清理旧的构建文件..."
     
-    if [ -d "docs/book" ]; then
-        rm -rf docs/book
-        log_success "已清理 docs/book 目录"
-    fi
-    
-    if [ -d "docs/dist" ]; then
-        rm -rf docs/dist
-        log_success "已清理 docs/dist 目录"
-    fi
+    rm -rf docs/book docs/dist docs/.vitepress/dist docs/.vitepress/cache
+    log_success "已清理文档构建目录"
 }
 
 # 构建文档
 build_docs() {
     log_info "开始构建文档..."
-    
-    cd docs
-    
-    # 构建 mdbook
-    mdbook build
+
+    ensure_dependencies
+    npm --prefix docs run build
     
     if [ $? -eq 0 ]; then
         log_success "文档构建成功"
@@ -73,25 +70,24 @@ build_docs() {
         exit 1
     fi
     
-    cd ..
 }
 
 # 验证构建结果
 validate_build() {
     log_info "验证构建结果..."
     
-    if [ ! -d "docs/book" ]; then
+    if [ ! -d "docs/.vitepress/dist" ]; then
         log_error "构建目录不存在"
         exit 1
     fi
     
-    if [ ! -f "docs/book/index.html" ]; then
+    if [ ! -f "docs/.vitepress/dist/index.html" ]; then
         log_error "主页文件不存在"
         exit 1
     fi
     
     # 检查文件大小
-    book_size=$(du -sh docs/book | cut -f1)
+    book_size=$(du -sh docs/.vitepress/dist | cut -f1)
     log_info "构建文档大小: $book_size"
     
     log_success "构建结果验证通过"
@@ -100,9 +96,9 @@ validate_build() {
 # 启动开发服务器
 serve_docs() {
     log_info "启动开发服务器..."
-    
-    cd docs
-    mdbook serve --open --port 3000
+
+    ensure_dependencies
+    npm --prefix docs run dev -- --port 3000 --open
 }
 
 # 部署到 GitHub Pages
@@ -139,7 +135,7 @@ deploy_github_pages() {
     git rm -rf . 2>/dev/null || true
     
     # 复制构建文件
-    cp -r docs/book/* .
+    cp -r docs/.vitepress/dist/* .
     
     # 添加 .nojekyll 文件
     touch .nojekyll
@@ -164,8 +160,8 @@ show_help() {
     echo "用法: $0 [选项]"
     echo ""
     echo "选项:"
-    echo "  build     构建文档"
-    echo "  serve     启动开发服务器"
+    echo "  build     构建 VitePress 文档"
+    echo "  serve     启动 VitePress 开发服务器"
     echo "  clean     清理构建文件"
     echo "  deploy    部署到 GitHub Pages"
     echo "  check     检查依赖"

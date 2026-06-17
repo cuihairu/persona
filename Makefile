@@ -1,6 +1,6 @@
 # Persona 数字身份管理系统 Makefile
 
-.PHONY: help build test clean docs docs-serve docs-build docs-deploy install dev setup js-install extension-build web-dev web-build
+.PHONY: help build test clean docs docs-serve docs-build docs-deploy install dev setup js-install extension-build web-dev web-build docs-dev
 
 # 默认目标
 help: ## 显示帮助信息
@@ -37,7 +37,6 @@ setup: install ## 设置开发环境
 	@command -v cargo >/dev/null 2>&1 || { echo "请先安装 Rust"; exit 1; }
 	@command -v node >/dev/null 2>&1 || { echo "请先安装 Node.js"; exit 1; }
 	@command -v flutter >/dev/null 2>&1 || { echo "请先安装 Flutter"; exit 1; }
-	@command -v mdbook >/dev/null 2>&1 || { echo "安装 mdbook..."; cargo install mdbook; }
 	@echo "开发环境设置完成!"
 
 # 构建项目
@@ -120,11 +119,13 @@ clean: ## 清理构建文件
 	@echo "清理移动应用构建文件..."
 	cd mobile && flutter clean
 	@echo "清理文档构建文件..."
-	rm -rf docs/book docs/dist
+	rm -rf docs/book docs/dist docs/.vitepress/dist docs/.vitepress/cache
 	@echo "清理完成!"
 
 # 文档相关命令
 docs: docs-serve ## 启动文档开发服务器
+
+docs-dev: docs-serve ## 启动文档开发服务器（别名）
 
 docs-serve: ## 启动文档开发服务器
 	./scripts/build-docs.sh serve
