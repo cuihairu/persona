@@ -168,6 +168,58 @@ fn test_config_file_generation() -> Result<()> {
 }
 
 #[test]
+fn test_init_config_toml_roundtrip() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let workspace_path = temp_dir.path();
+    let backup_dir = workspace_path.join("custom_backups");
+
+    let mut cmd = Command::cargo_bin("persona")?;
+    cmd.arg("init")
+        .arg("--path")
+        .arg(workspace_path)
+        .arg("--yes")
+        .arg("--encrypted")
+        .arg("--backup-dir")
+        .arg(&backup_dir)
+        .assert()
+        .success();
+
+    let config_content = fs::read_to_string(workspace_path.join("config.toml"))?;
+    let config: toml::Value = toml::from_str(&config_content)?;
+
+    assert_eq!(
+        config
+            .get("workspace")
+            .and_then(|v| v.get("path"))
+            .and_then(toml::Value::as_str),
+        Some(workspace_path.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        config
+            .get("security")
+            .and_then(|v| v.get("encryption_enabled"))
+            .and_then(toml::Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        config
+            .get("backup")
+            .and_then(|v| v.get("directory"))
+            .and_then(toml::Value::as_str),
+        Some(backup_dir.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        config
+            .get("ui")
+            .and_then(|v| v.get("default_output_format"))
+            .and_then(toml::Value::as_str),
+        Some("table")
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_init_with_master_password() -> Result<()> {
     let temp_dir = tempdir()?;
     let workspace_path = temp_dir.path();

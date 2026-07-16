@@ -1,0 +1,85 @@
+name: Deploy Self Hosted
+
+on:
+  workflow_dispatch:
+    inputs:
+      server_tag:
+        description: "persona-server image tag"
+        required: true
+        default: "main"
+      deploy_dir:
+        description: "Absolute deploy directory on runner host"
+        required: true
+        default: "/data/deploy/persona"
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        timeout-minutes: 3
+        uses: actions/checkout@v5
+
+      - name: Ensure deploy directory
+        timeout-minutes: 1
+        run: mkdir -p "${{ inputs.deploy_dir }}"
+
+      - name: Prepare compose and env
+        timeout-minutes: 2
+        run: |
+          cp docker/docker-compose.deploy.yml "${{ inputs.deploy_dir }}/docker-compose.yml"
+          cat > "${{ inputs.deploy_dir }}/.env" <<EOF
+          GHCR_OWNER=${{ github.repository_owner }}
+          PERSONA_SERVER_TAG=${{ inputs.server_tag }}
+          EOF
+
+      - name: Login GHCR
+        timeout-minutes: 2
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Pull latest image
+        timeout-minutes: 10
+        run: |
+          COMPOSE_ARGS="--env-file ${{ inputs.deploy_dir }}/.env -f ${{ inputs.deploy_dir }}/docker-compose.yml"
+          docker compose $COMPOSE_ARGS pull
+
+      - name: Deploy containers
+        timeout-minutes: 10
+        run: |
+          COMPOSE_ARGS="--env-file ${{ inputs.deploy_dir }}/.env -f ${{ inputs.deploy_dir }}/docker-compose.yml"
+          docker compose $COMPOSE_ARGS up -d --remove-orphans
+
+      - name: Show running services
+        timeout-minutes: 2
+        run: |
+          COMPOSE_ARGS="--env-file ${{ inputs.deploy_dir }}/.env -f ${{ inputs.deploy_dir }}/docker-compose.yml"
+          docker compose $COMPOSE_ARGS ps
+
+      - name: Verify health check
+        timeout-minutes: 2
+        run: |
+          echo "Waiting for container to be healthy..."
+          for i in $(seq 1 12); do
+            sleep 5
+            if docker exec persona-server wget -qO- http://localhost:3000/health 2>/dev/null | grep -q "OK"; then
+              echo "✅ Health check passed!"
+              exit 0
+            fi
+            echo "  Attempt $i/12..."
+          done
+          echo "❌ Health check failed after 60s"
+          docker logs persona-server --tail 20
+          exit 1
+
+      - name: Cleanup dangling images
+        timeout-minutes: 2
+        run: docker image prune -f

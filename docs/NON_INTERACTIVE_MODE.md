@@ -203,7 +203,7 @@ persona ssh generate \
 persona ssh start-agent &
 
 # Option 1: export the socket for generic ssh tooling
-export SSH_AUTH_SOCK=$(cat ~/.persona/ssh-agent.sock)
+export SSH_AUTH_SOCK=$(cat "${PERSONA_AGENT_STATE_DIR:-$HOME/.persona}/ssh-agent.sock")
 ssh git@github.com
 
 # Option 2: use Persona's wrapper, which injects SSH_AUTH_SOCK automatically

@@ -35,8 +35,9 @@ persona ssh generate --identity alice --name "GitHub Key"
 # Start agent with master password
 persona ssh start-agent --print-export
 
-# Copy the export command and run it in your shell
-export SSH_AUTH_SOCK=/tmp/persona-ssh-agent.sock
+# Copy the export command emitted by Persona and run it in your shell
+# Example:
+# export SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
 ```
 
 ### 4. Test the Connection
@@ -101,7 +102,7 @@ max_connections_per_hour = 20
 |----------|-------------|---------|
 | `PERSONA_DB_PATH` | Database file path | `~/.persona/identities.db` |
 | `PERSONA_MASTER_PASSWORD` | Master password for auto-unlock | - |
-| `SSH_AUTH_SOCK` | Agent socket path | `/tmp/persona-ssh-agent.sock` |
+| `SSH_AUTH_SOCK` | Agent socket path | runtime-generated temporary socket |
 | `PERSONA_AGENT_STATE_DIR` | Agent state directory | `~/.persona` |
 | `PERSONA_AGENT_POLICY_FILE` | Policy configuration file | `~/.persona/agent-policy.toml` |
 | `PERSONA_AGENT_TARGET_HOST` | Target hostname (set by CLI) | - |
@@ -133,13 +134,13 @@ The E2E tests require a running agent:
 ```bash
 # 1. Start the agent in one terminal
 persona ssh start-agent --print-export
-export SSH_AUTH_SOCK=/tmp/persona-ssh-agent.sock
+# Run the emitted export command in the current shell
 
 # 2. Generate and add a key
 persona ssh generate --identity alice --name "Test Key"
 
 # 3. Run ignored E2E tests in another terminal
-export SSH_AUTH_SOCK=/tmp/persona-ssh-agent.sock
+# Export the same SSH_AUTH_SOCK value there as well
 cargo test -p persona-ssh-agent -- --ignored
 
 # 4. Full GitHub E2E test (requires GitHub key setup)

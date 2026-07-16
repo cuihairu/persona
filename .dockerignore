@@ -1,0 +1,35 @@
+# Version control
+.git
+.github
+.gitignore
+.gitattributes
+
+# Rust build artifacts
+**/target
+Cargo.lock
+
+# Node.js
+node_modules
+pnpm-lock.yaml
+pnpm-workspace.yaml
+package.json
+
+# Documentation (not needed in container)
+docs
+website
+*.md
+!docker/README.md
+
+# Desktop and browser (not needed in server image)
+desktop
+browser
+mobile
+
+# Dev configs
+.spec-workflow
+.vscode
+.claude
+.deny.toml
+Makefile
+scripts
+LICENSE
