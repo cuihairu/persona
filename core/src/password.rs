@@ -1,5 +1,5 @@
 use crate::{PersonaError, Result};
-use rand::{rngs::OsRng, seq::SliceRandom, Rng};
+use rand::{rngs::ThreadRng, seq::SliceRandom, Rng, RngExt};
 
 const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
 const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -117,7 +117,7 @@ impl PasswordGenerator {
             .into());
         }
 
-        let mut rng = OsRng;
+        let mut rng = rand::rng();
 
         // Build a combined pool for general selection
         let combined: Vec<char> = pools.iter().flat_map(|set| set.chars()).collect();
@@ -129,7 +129,7 @@ impl PasswordGenerator {
         }
 
         while password_chars.len() < options.length {
-            let ch = combined[rng.gen_range(0..combined.len())];
+            let ch = combined[rng.random_range(0..combined.len())];
             password_chars.push(ch);
         }
 
@@ -161,7 +161,7 @@ impl PasswordGenerator {
             .into());
         }
 
-        let mut rng = OsRng;
+        let mut rng = rand::rng();
         let mut password_chars = Vec::with_capacity(options.length);
         let mut use_consonant = true;
 
@@ -189,18 +189,18 @@ impl PasswordGenerator {
         Ok(password_chars.into_iter().collect())
     }
 
-    fn choose_random_char(set: &str, rng: &mut OsRng) -> char {
+    fn choose_random_char(set: &str, rng: &mut ThreadRng) -> char {
         let bytes = set.as_bytes();
-        let idx = rng.gen_range(0..bytes.len());
+        let idx = rng.random_range(0..bytes.len());
         bytes[idx] as char
     }
 
-    fn inject_character_from_set(chars: &mut [char], set: &str, rng: &mut OsRng) {
+    fn inject_character_from_set(chars: &mut [char], set: &str, rng: &mut ThreadRng) {
         if chars.is_empty() {
             return;
         }
 
-        let idx = rng.gen_range(0..chars.len());
+        let idx = rng.random_range(0..chars.len());
         chars[idx] = Self::choose_random_char(set, rng);
     }
 }

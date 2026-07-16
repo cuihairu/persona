@@ -1,5 +1,5 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey as Ed25519VerifyingKey};
-use rand::{rngs::OsRng, RngCore};
+use rand::Rng;
 use zeroize::Zeroize;
 
 /// Ed25519 key pair for digital signatures
@@ -11,7 +11,7 @@ impl SigningKeyPair {
     /// Generate a new random key pair
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
-        OsRng.fill_bytes(&mut bytes);
+        getrandom::fill(&mut bytes).expect("failed to generate random bytes");
         let signing_key = SigningKey::from_bytes(&bytes);
         Self { signing_key }
     }
@@ -116,7 +116,7 @@ impl KeyDerivation {
     /// Generate a random salt
     pub fn generate_salt() -> [u8; 16] {
         let mut salt = [0u8; 16];
-        OsRng.fill_bytes(&mut salt);
+        getrandom::fill(&mut salt).expect("failed to generate random salt");
         salt
     }
 

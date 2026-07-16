@@ -3,8 +3,7 @@ use base64::Engine as _;
 use clap::Args;
 use data_encoding::{BASE32, BASE32_NOPAD};
 use hmac::{Hmac, Mac};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sha2::Sha512;
@@ -957,7 +956,7 @@ fn create_pairing_request(
     }
 
     // Create a 6-digit pairing code (formatted as XXX-XXX).
-    let mut rng = OsRng;
+    let mut rng = rand::rng();
     let code_num: u32 = (rng.next_u32() % 1_000_000) as u32;
     let code_raw = format!("{code_num:06}");
     let code = format!("{}-{}", &code_raw[0..3], &code_raw[3..6]);

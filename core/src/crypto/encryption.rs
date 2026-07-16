@@ -1,5 +1,5 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-use rand::{rngs::OsRng, RngCore};
+use rand::Rng;
 use zeroize::Zeroize;
 
 /// Encrypted data with metadata
@@ -14,7 +14,7 @@ pub struct EncryptedData {
 pub fn encrypt_data(plaintext: &[u8], password: &[u8]) -> Result<EncryptedData, aes_gcm::Error> {
     // Generate random salt
     let mut salt = vec![0u8; 16];
-    OsRng.fill_bytes(&mut salt);
+    getrandom::fill(&mut salt).expect("failed to generate random salt");
 
     // Derive key from password using Argon2
     let mut key = [0u8; 32];
@@ -22,7 +22,7 @@ pub fn encrypt_data(plaintext: &[u8], password: &[u8]) -> Result<EncryptedData, 
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
-    OsRng.fill_bytes(&mut nonce_bytes);
+    getrandom::fill(&mut nonce_bytes).expect("failed to generate random nonce");
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Create cipher and encrypt
@@ -95,14 +95,14 @@ impl EncryptionService {
     /// Generate a random 256-bit encryption key
     pub fn generate_key() -> [u8; 32] {
         let mut key = [0u8; 32];
-        OsRng.fill_bytes(&mut key);
+        getrandom::fill(&mut key).expect("failed to generate random key");
         key
     }
 
     /// Encrypt data with a random nonce
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, aes_gcm::Error> {
         let mut nonce_bytes = [0u8; 12];
-        OsRng.fill_bytes(&mut nonce_bytes);
+        getrandom::fill(&mut nonce_bytes).expect("failed to generate random nonce");
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = self.cipher.encrypt(nonce, plaintext)?;

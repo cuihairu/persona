@@ -4,8 +4,7 @@ use crate::{PersonaError, PersonaResult};
 use bip32::{ChildNumber, DerivationPath, Prefix, XPrv};
 use bip39::Mnemonic;
 use k256::ecdsa::{SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
-use rand::RngCore;
+use rand::Rng;
 use std::str::{self, FromStr};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -20,7 +19,7 @@ impl SecureMnemonic {
     /// Generate a new mnemonic with specified word count
     pub fn generate(word_count: MnemonicWordCount) -> PersonaResult<Self> {
         let mut entropy = vec![0u8; word_count.entropy_bytes()];
-        OsRng.fill_bytes(&mut entropy);
+        getrandom::fill(&mut entropy).expect("failed to generate random entropy");
         let mnemonic = Mnemonic::from_entropy(&entropy).map_err(|e| {
             PersonaError::Cryptography(format!("Failed to generate mnemonic: {}", e))
         })?;
