@@ -18,8 +18,17 @@ async fn main() {
         .route("/health", get(health_check))
         .layer(CorsLayer::permissive());
 
-    // Run it with hyper on localhost:3000
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    // Configurable bind address (0.0.0.0 for containers, 127.0.0.1 for local dev)
+    let host = std::env::var("PERSONA_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".into());
+    let port: u16 = std::env::var("PERSONA_SERVER_PORT")
+        .unwrap_or_else(|_| "3000".into())
+        .parse()
+        .expect("PERSONA_SERVER_PORT must be a valid port number");
+
+    let addr: SocketAddr = format!("{}:{}", host, port)
+        .parse()
+        .expect("invalid bind address");
+
     info!("Persona server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();

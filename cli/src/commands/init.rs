@@ -183,48 +183,13 @@ fn initialize_config(
     backup_dir: Option<PathBuf>,
 ) -> Result<()> {
     let config_path = workspace_path.join("config.toml");
+    let mut config = CliConfig::default();
+    config.workspace.path = workspace_path.clone();
+    config.security.encryption_enabled = encryption_enabled;
+    config.backup.directory = backup_dir.unwrap_or_else(|| workspace_path.join("backups"));
 
-    let config_content = format!(
-        r#"# Persona CLI Configuration
-
-[workspace]
-path = "{}"
-version = "0.1.0"
-
-[security]
-encryption_enabled = {}
-auto_lock_timeout = 300  # seconds
-require_biometric = false
-
-[backup]
-enabled = true
-directory = "{}"
-auto_backup = true
-backup_interval = 86400  # seconds (24 hours)
-max_backups = 30
-
-[sync]
-enabled = false
-server_url = ""
-auto_sync = false
-
-[ui]
-color_enabled = true
-interactive = true
-default_output_format = "table"
-
-[logging]
-level = "info"
-file_enabled = true
-max_file_size = "10MB"
-max_files = 5
-"#,
-        workspace_path.display(),
-        encryption_enabled,
-        backup_dir
-            .unwrap_or_else(|| workspace_path.join("backups"))
-            .display()
-    );
+    let config_content =
+        toml::to_string_pretty(&config).context("Failed to serialize configuration")?;
 
     std::fs::write(&config_path, config_content).context("Failed to write configuration file")?;
 

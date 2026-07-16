@@ -1,0 +1,58 @@
+# ---- Stage 1: Build ----
+FROM rust:1-bookworm AS builder
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy workspace manifests for dependency caching
+COPY Cargo.toml Cargo.lock ./
+COPY core/Cargo.toml core/Cargo.toml
+COPY server/Cargo.toml server/Cargo.toml
+COPY cli/Cargo.toml cli/Cargo.toml
+COPY agents/ssh-agent/Cargo.toml agents/ssh-agent/Cargo.toml
+COPY mobile/rust/Cargo.toml mobile/rust/Cargo.toml
+
+# Copy .sqlx for offline compilation
+COPY .sqlx .sqlx
+
+# Create placeholder src files so cargo can resolve the workspace
+RUN mkdir -p core/src server/src cli/src agents/ssh-agent/src mobile/rust/src \
+    && echo "pub fn placeholder() {}" > core/src/lib.rs \
+    && echo "fn main() {}" > server/src/main.rs \
+    && echo "fn main() {}" > cli/src/main.rs \
+    && echo "pub fn placeholder() {}" > agents/ssh-agent/src/lib.rs \
+    && echo "pub fn placeholder() {}" > mobile/rust/src/lib.rs \
+    && cargo fetch
+
+# Copy actual source
+COPY core/src core/src
+COPY server/src server/src
+COPY cli/src cli/src
+COPY agents/ssh-agent/src agents/ssh-agent/src
+COPY mobile/rust/src mobile/rust/src
+
+# Build only persona-server
+RUN cargo build --release -p persona-server
+
+# ---- Stage 2: Runtime ----
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r persona && useradd -r -g persona -d /app -s /sbin/nologin persona
+
+WORKDIR /app
+
+COPY --from=builder /app/target/release/persona-server /usr/local/bin/persona-server
+
+USER persona
+
+EXPOSE 3000
+
+ENTRYPOINT ["persona-server"]

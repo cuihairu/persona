@@ -23,7 +23,7 @@ Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安
 
 - **UNIX 域套接字** (macOS/Linux):
   - 默认路径: 系统临时目录下的 `persona-ssh-agent-<pid>.sock`
-  - CLI 启动时会固定到 `PERSONA_AGENT_STATE_DIR/agent.socket`
+  - Agent 会把实际监听地址写入 `PERSONA_AGENT_STATE_DIR/ssh-agent.sock`
   - 可通过环境变量 `PERSONA_AGENT_SOCKET_PATH` 自定义 Agent 监听地址
 
 - **Windows 命名管道** (Windows):
