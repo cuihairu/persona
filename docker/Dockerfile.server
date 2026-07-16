@@ -30,6 +30,7 @@ RUN mkdir -p core/src server/src cli/src agents/ssh-agent/src mobile/rust/src \
 
 # Copy actual source
 COPY core/src core/src
+COPY core/migrations core/migrations
 COPY server/src server/src
 COPY cli/src cli/src
 COPY agents/ssh-agent/src agents/ssh-agent/src
