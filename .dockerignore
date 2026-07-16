@@ -4,9 +4,8 @@
 .gitignore
 .gitattributes
 
-# Rust build artifacts
+# Rust build artifacts (but keep Cargo.lock for reproducible builds)
 **/target
-Cargo.lock
 
 # Node.js
 node_modules
@@ -23,7 +22,6 @@ website
 # Desktop and browser (not needed in server image)
 desktop
 browser
-mobile
 
 # Dev configs
 .spec-workflow
@@ -33,3 +31,4 @@ mobile
 Makefile
 scripts
 LICENSE
+PROJECT_STATUS_AUDIT_2026-07-15.md
