@@ -185,9 +185,9 @@ async fn generate_key(
 
     // Generate ed25519 keypair
     use ed25519_dalek::SigningKey;
-    use rand::{rngs::OsRng, RngCore};
+    use rand::Rng;
 
-    let mut rng = OsRng;
+    let mut rng = rand::rng();
     let mut seed = [0u8; 32];
     rng.fill_bytes(&mut seed);
     let signing_key = SigningKey::from_bytes(&seed);

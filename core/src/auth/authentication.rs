@@ -206,8 +206,8 @@ impl MasterKeyService {
         let mut extended_salt = [0u8; 32];
         extended_salt[..16].copy_from_slice(&base_salt);
         // Add some additional entropy for the remaining bytes
-        use rand::{rngs::OsRng, RngCore};
-        OsRng.fill_bytes(&mut extended_salt[16..]);
+        use rand::Rng;
+        getrandom::fill(&mut extended_salt[16..]).expect("failed to generate random bytes");
         extended_salt
     }
 }

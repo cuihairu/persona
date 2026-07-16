@@ -4,7 +4,7 @@ use aes_gcm::{
 };
 use anyhow::{Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
-use rand::RngCore;
+use rand::RngExt;
 use zeroize::Zeroize;
 
 // Simple file encryption format:
@@ -42,9 +42,9 @@ pub fn encrypt_file_inplace(
 
     // Generate salt and nonce
     let mut salt = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut salt);
+    rand::rng().fill(&mut salt);
     let mut nonce = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut nonce);
+    rand::rng().fill(&mut nonce);
 
     // Derive key
     let argon = Argon2::new_with_secret(

@@ -151,14 +151,14 @@ fn get_master_password(provided_password: Option<String>, yes: bool) -> Result<O
 }
 
 fn generate_random_password() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     const CHARSET: &[u8] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     (0..16)
         .map(|_| {
-            let idx = rng.gen_range(0..CHARSET.len());
+            let idx = rng.random_range(0..CHARSET.len());
             CHARSET[idx] as char
         })
         .collect()

@@ -3,7 +3,6 @@ use argon2::{
     password_hash::{PasswordHash, SaltString},
     Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier,
 };
-use rand::rngs::OsRng;
 use ring::digest::{Context, SHA256};
 
 /// Password hashing service using Argon2
@@ -21,7 +20,10 @@ impl PasswordHasher {
 
     /// Hash a password with a random salt
     pub fn hash_password(&self, password: &str) -> PersonaResult<String> {
-        let salt = SaltString::generate(&mut OsRng);
+        let mut salt_bytes = [0u8; 16];
+        getrandom::fill(&mut salt_bytes).expect("failed to generate random salt");
+        let salt = SaltString::encode_b64(&salt_bytes)
+            .map_err(|e| PersonaError::Crypto(format!("Failed to encode salt: {}", e)))?;
         let hash = Argon2PasswordHasher::hash_password(&self.argon2, password.as_bytes(), &salt)
             .map_err(|e| PersonaError::Crypto(format!("Hashing failed: {}", e)))?;
         Ok(hash.to_string())
