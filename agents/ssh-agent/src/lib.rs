@@ -130,6 +130,12 @@ pub struct Agent {
     biometric_provider: Arc<dyn BiometricProvider>,
 }
 
+impl Default for Agent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Agent {
     pub fn new() -> Self {
         let enforcer = PolicyEnforcer::from_env();

@@ -1626,7 +1626,7 @@ mod tests {
         assert_eq!(exported.len(), 32);
         // the exported scalar must match the stored key's public point
         let key = p256::ecdsa::SigningKey::from_slice(&exported).unwrap();
-        let cose = crate::crypto::cose_public_key(&key.verifying_key()).unwrap();
+        let cose = crate::crypto::cose_public_key(key.verifying_key()).unwrap();
         assert_eq!(cose, passkey.public_key_cose);
 
         // ---- assertion: origin must match the passkey's rp_id ----
@@ -1683,7 +1683,7 @@ mod tests {
 
         // a public key from another key pair makes the final RP-check fail
         let foreign =
-            crate::crypto::cose_public_key(&crate::crypto::generate_signing_key().verifying_key())
+            crate::crypto::cose_public_key(crate::crypto::generate_signing_key().verifying_key())
                 .unwrap();
         sqlx::query("UPDATE passkeys SET rp_id = 'example.com', public_key_cose = ? WHERE id = ?")
             .bind(&foreign)

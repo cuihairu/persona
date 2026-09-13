@@ -4,7 +4,7 @@ const writeClipboardText = async (text: string): Promise<boolean> => {
   try {
     await tauriWriteText(text);
     return true;
-  } catch (_err) {
+  } catch {
     // ignore and fall back
   }
 
@@ -13,7 +13,7 @@ const writeClipboardText = async (text: string): Promise<boolean> => {
       await navigator.clipboard.writeText(text);
       return true;
     }
-  } catch (_err) {
+  } catch {
     // ignore and fall back
   }
 
@@ -36,7 +36,7 @@ const writeClipboardText = async (text: string): Promise<boolean> => {
 const readClipboardText = async (): Promise<string | null> => {
   try {
     return await tauriReadText();
-  } catch (_err) {
+  } catch {
     // ignore and fall back
   }
 
@@ -44,7 +44,7 @@ const readClipboardText = async (): Promise<string | null> => {
     if (navigator.clipboard?.readText) {
       return await navigator.clipboard.readText();
     }
-  } catch (_err) {
+  } catch {
     // ignore and fall back
   }
 

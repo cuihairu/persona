@@ -541,7 +541,7 @@ async fn export_csv(
         csv_content.push_str(&format!(
             "{},{},{},{},{},{}\n",
             identity.name,
-            identity.identity_type.to_string(),
+            identity.identity_type,
             identity.description.unwrap_or_default().replace(',', " "),
             identity.email.unwrap_or_default(),
             identity.created_at.format("%Y-%m-%d %H:%M:%S"),
@@ -557,7 +557,7 @@ async fn export_csv(
 }
 
 fn compress_file(file_path: &PathBuf, level: u8) -> Result<()> {
-    println!("{} Compressing file...", "🗜️".to_string());
+    println!("🗜️ Compressing file...");
 
     use flate2::write::GzEncoder;
     use flate2::Compression;

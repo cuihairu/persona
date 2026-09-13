@@ -293,8 +293,8 @@ async fn list_all_keys(config: &crate::config::CliConfig) -> Result<()> {
 
 async fn remove_key(id: Uuid, yes: bool, config: &crate::config::CliConfig) -> Result<()> {
     let service = ensure_service(config).await?;
-    if !yes {
-        if !Confirm::new()
+    if !yes
+        && !Confirm::new()
             .with_prompt(format!("Remove SSH key credential {}?", id))
             .default(false)
             .interact()?
@@ -302,7 +302,6 @@ async fn remove_key(id: Uuid, yes: bool, config: &crate::config::CliConfig) -> R
             println!("{}", "Cancelled.".yellow());
             return Ok(());
         }
-    }
     let _ = service.delete_credential(&id).await?;
     println!("{} Removed credential {}", "✓".green(), id);
     Ok(())
@@ -369,7 +368,10 @@ async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> R
         println!("{}", line);
     }
     if let Some(sock) = sock_line {
-        let sock_value = sock.splitn(2, '=').nth(1).unwrap_or("").trim();
+        let sock_value = sock
+            .split_once('=')
+            .map(|(_, value)| value.trim())
+            .unwrap_or("");
         println!("{} {}", "Agent socket:".yellow(), sock_value.cyan());
         if print_export {
             println!();
@@ -469,7 +471,7 @@ fn print_sock_export(sock_value: &str) {
 fn format_sock_export_lines(sock_value: &str) -> Vec<String> {
     #[cfg(unix)]
     {
-        return vec![format!("  export SSH_AUTH_SOCK={}", sock_value)];
+        vec![format!("  export SSH_AUTH_SOCK={}", sock_value)]
     }
     #[cfg(windows)]
     {

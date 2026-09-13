@@ -208,7 +208,7 @@ struct PolicyTable {
 
 pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<()> {
     let repo = init_repository(config).await?;
-    let formatter = OutputFormatter::default();
+    let formatter = OutputFormatter;
 
     match args.command {
         AutoLockCommand::List {
@@ -370,7 +370,7 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
             let mut config = PolicyConfiguration {
                 name: policy.name.clone(),
                 description: policy.description.clone(),
-                security_level: policy.security_level.clone(),
+                security_level: policy.security_level,
                 inactivity_timeout_secs: policy.inactivity_timeout_secs,
                 absolute_timeout_secs: policy.absolute_timeout_secs,
                 sensitive_operation_timeout_secs: policy.sensitive_operation_timeout_secs,

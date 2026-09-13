@@ -226,11 +226,10 @@ fn handle_key(
                 runtime.block_on(app.load_credentials_for_current(provider))?;
             }
         }
-        KeyCode::Char('g') => {
-            if app.jump_first() {
+        KeyCode::Char('g')
+            if app.jump_first() => {
                 runtime.block_on(app.load_credentials_for_current(provider))?;
             }
-        }
         _ => {}
     }
 
@@ -304,7 +303,7 @@ impl AppState {
 
     async fn reload(&mut self, provider: &mut DataProvider, preferred: Option<&str>) -> Result<()> {
         let mut identities = provider.identities().await?;
-        identities.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        identities.sort_by_key(|a| a.name.to_lowercase());
         self.identities = identities.into_iter().map(IdentityItem::from).collect();
 
         if self.identities.is_empty() {

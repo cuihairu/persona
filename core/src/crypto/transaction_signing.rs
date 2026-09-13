@@ -394,7 +394,7 @@ fn legacy_tx(request: &TransactionRequest) -> PersonaResult<TxLegacy> {
         PersonaError::InvalidInput("Ethereum transactions require a gas_limit".to_string())
     })?;
     Ok(TxLegacy {
-        chain_id: Some(chain_id(request)?.into()),
+        chain_id: Some(chain_id(request)?),
         nonce,
         gas_price,
         gas_limit,
@@ -425,7 +425,7 @@ fn eip1559_tx(request: &TransactionRequest) -> PersonaResult<TxEip1559> {
         ));
     }
     Ok(TxEip1559 {
-        chain_id: chain_id(request)?.into(),
+        chain_id: chain_id(request)?,
         nonce,
         gas_limit,
         max_fee_per_gas: max_fee,
@@ -1347,7 +1347,7 @@ mod tests {
         // Cheap structural check: the raw tx must contain the pubkey and
         // the signature bytes.
         let raw_hex = hex::encode(&signed.raw);
-        assert!(raw_hex.contains(&hex::encode(&pubkey)));
+        assert!(raw_hex.contains(&hex::encode(pubkey)));
         assert!(raw_hex.contains(&hex::encode(&expected_item)));
     }
 

@@ -82,8 +82,8 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
     }
 
     // Confirm import
-    if !args.force && !args.dry_run {
-        if !Confirm::new()
+    if !args.force && !args.dry_run
+        && !Confirm::new()
             .with_prompt("Proceed with import?")
             .default(true)
             .interact()?
@@ -91,7 +91,6 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
             println!("{}", "Import cancelled.".yellow());
             return Ok(());
         }
-    }
 
     // Create backup if requested
     if args.backup && !args.dry_run {
@@ -172,7 +171,7 @@ fn validate_import_file(file_path: &PathBuf) -> Result<()> {
 fn decrypt_import_file(file_path: &PathBuf, _config: &CliConfig) -> Result<PathBuf> {
     use crate::utils::file_crypto::decrypt_file_to_temp;
     use dialoguer::Password;
-    println!("{} Decrypting import file...", "🔓".to_string());
+    println!("🔓 Decrypting import file...");
     let passphrase = Password::new()
         .with_prompt("Enter import passphrase")
         .interact()?;
@@ -469,7 +468,7 @@ fn handle_import_conflicts(conflicts: &[ImportConflict], args: &ImportArgs) -> R
 }
 
 async fn create_backup(config: &CliConfig) -> Result<()> {
-    println!("{} Creating backup...", "💾".to_string());
+    println!("💾 Creating backup...");
 
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     let backup_file = config

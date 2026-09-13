@@ -436,7 +436,7 @@ async fn handle_request(
 
             // For now, require a master password via environment variable for automation.
             // In the 1Password-like model, this step should be delegated to Desktop (UI + biometrics).
-            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+            let (service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             // Fetch decrypted credential data.
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
@@ -525,7 +525,7 @@ async fn handle_request(
                 ));
             }
 
-            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+            let (service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
                 .map_err(|e| anyhow!("invalid item_id uuid: {e}"))?;
@@ -617,7 +617,7 @@ async fn handle_request(
             let host = origin_to_host(&parsed.origin)?;
             let field = parsed.field.trim().to_ascii_lowercase();
 
-            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+            let (service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
                 .map_err(|e| anyhow!("invalid item_id uuid: {e}"))?;
@@ -767,7 +767,7 @@ async fn handle_request(
             let options = parse_creation_options(&parsed.request_json, &parsed.origin)
                 .map_err(flat_persona_error)?;
 
-            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+            let (service, active_identity_id) = open_unlocked_service(db_path).await?;
             let identity_id = active_identity_id.ok_or_else(|| {
                 anyhow!("no_active_identity: switch to an identity before creating a passkey")
             })?;
@@ -826,7 +826,7 @@ async fn handle_request(
                 .decode(parsed.client_data_json_b64.as_bytes())
                 .context("invalid_request: client_data_json_b64 must be base64url")?;
 
-            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+            let (service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             // Preflight the item so error codes stay precise; the assertion
             // re-validates origin↔rp_id inside core regardless.
@@ -1946,7 +1946,7 @@ mod tests {
             .to_string();
 
         let get_client_data =
-            format!(r#"{{"type":"webauthn.get","challenge":"YXNzZXJ0LWNoYWxsZW5nZQ","origin":"https://example.com"}}"#)
+            r#"{"type":"webauthn.get","challenge":"YXNzZXJ0LWNoYWxsZW5nZQ","origin":"https://example.com"}"#.to_string()
                 .into_bytes();
         let resp = handle_request(
             &db_path,

@@ -69,7 +69,7 @@ export const usePersonaService = () => {
         toast.error(response.error || 'Failed to initialize service');
         return false;
       }
-    } catch (err) {
+    } catch {
       const errorMessage = 'Failed to initialize service';
       setError(errorMessage);
       toast.error(errorMessage);
@@ -91,7 +91,7 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || 'Failed to lock service');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to lock service');
     }
   };
@@ -125,7 +125,7 @@ export const usePersonaService = () => {
       } else {
         setError(response.error || 'Failed to load identities');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load identities');
     }
   };
@@ -155,7 +155,7 @@ export const usePersonaService = () => {
         setError(response.error || 'Failed to create identity');
         toast.error(response.error || 'Failed to create identity');
       }
-    } catch (err) {
+    } catch {
       const errorMessage = 'Failed to create identity';
       setError(errorMessage);
       toast.error(errorMessage);
@@ -188,7 +188,7 @@ export const usePersonaService = () => {
       setError(response.error || 'Failed to update identity');
       toast.error(response.error || 'Failed to update identity');
       return null;
-    } catch (err) {
+    } catch {
       const errorMessage = 'Failed to update identity';
       setError(errorMessage);
       toast.error(errorMessage);
@@ -213,7 +213,7 @@ export const usePersonaService = () => {
       }
       toast.error(response.error || 'Failed to delete identity');
       return false;
-    } catch (err) {
+    } catch {
       toast.error('Failed to delete identity');
       return false;
     }
@@ -238,7 +238,7 @@ export const usePersonaService = () => {
       } else {
         setError(response.error || 'Failed to load credentials');
       }
-    } catch (err) {
+    } catch {
       setError('Failed to load credentials');
     }
   };
@@ -259,7 +259,7 @@ export const usePersonaService = () => {
         setError(response.error || 'Failed to create credential');
         toast.error(response.error || 'Failed to create credential');
       }
-    } catch (err) {
+    } catch {
       const errorMessage = 'Failed to create credential';
       setError(errorMessage);
       toast.error(errorMessage);
@@ -277,7 +277,7 @@ export const usePersonaService = () => {
         toast.error(response.error || 'Failed to search credentials');
         return [];
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to search credentials');
       return [];
     }
@@ -292,7 +292,7 @@ export const usePersonaService = () => {
         toast.error(response.error || 'Failed to generate password');
         return '';
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to generate password');
       return '';
     }
@@ -307,7 +307,7 @@ export const usePersonaService = () => {
         toast.error(response.error || 'Failed to get credential data');
         return null;
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to get credential data');
       return null;
     }
@@ -321,7 +321,7 @@ export const usePersonaService = () => {
       }
       toast.error(response.error || 'Failed to generate TOTP code');
       return null;
-    } catch (err) {
+    } catch {
       toast.error('Failed to generate TOTP code');
       return null;
     }
@@ -339,7 +339,7 @@ export const usePersonaService = () => {
       }
       toast.error(response.error || 'Failed to toggle favorite');
       return null;
-    } catch (err) {
+    } catch {
       toast.error('Failed to toggle favorite');
       return null;
     }
@@ -355,7 +355,7 @@ export const usePersonaService = () => {
       }
       toast.error(response.error || 'Failed to delete credential');
       return false;
-    } catch (err) {
+    } catch {
       toast.error('Failed to delete credential');
       return false;
     }
@@ -369,7 +369,7 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || 'Failed to get SSH agent status');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to get SSH agent status');
     }
   };
@@ -383,7 +383,7 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || 'Failed to start SSH agent');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to start SSH agent');
     }
   };
@@ -397,7 +397,7 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || 'Failed to stop SSH agent');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to stop SSH agent');
     }
   };
@@ -410,7 +410,7 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || 'Failed to load SSH keys');
       }
-    } catch (err) {
+    } catch {
       toast.error('Failed to load SSH keys');
     }
   };

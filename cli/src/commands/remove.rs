@@ -30,8 +30,7 @@ pub struct RemoveArgs {
 
 pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
     println!(
-        "{} Removing identity '{}'...",
-        "🗑️".to_string(),
+        "🗑️ Removing identity '{}'...",
         args.name.bright_red().bold()
     );
     println!();
@@ -49,8 +48,8 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
             args.name.yellow()
         );
 
-        if !args.force {
-            if !Confirm::new()
+        if !args.force
+            && !Confirm::new()
                 .with_prompt("Do you want to continue removing the active identity?")
                 .default(false)
                 .interact()?
@@ -58,7 +57,6 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
                 println!("{}", "Removal cancelled.".yellow());
                 return Ok(());
             }
-        }
     }
 
     // Show identity summary before removal
@@ -71,7 +69,7 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
 
         let confirmation_text = format!("remove {}", args.name);
         let user_input: String = Input::new()
-            .with_prompt(&format!("Type '{}' to confirm removal", confirmation_text))
+            .with_prompt(format!("Type '{}' to confirm removal", confirmation_text))
             .interact_text()?;
 
         if user_input != confirmation_text {
@@ -239,7 +237,7 @@ async fn show_removal_summary(name: &str, config: &CliConfig) -> Result<()> {
 }
 
 async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
-    println!("{} Creating backup...", "💾".to_string());
+    println!("💾 Creating backup...");
 
     let backup_path = config.backup.directory.join(format!(
         "{}_backup_{}.json",
@@ -343,7 +341,7 @@ async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
 }
 
 async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<()> {
-    println!("{} Removing identity data...", "🔄".to_string());
+    println!("🔄 Removing identity data...");
 
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -405,7 +403,7 @@ async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<
         .map_err(|e| anyhow!("Failed to delete identity: {}", e))?;
 
     if purge {
-        println!("{} Purging all associated data...", "🧹".to_string());
+        println!("🧹 Purging all associated data...");
         // Remove all associated files, caches, etc.
     }
 

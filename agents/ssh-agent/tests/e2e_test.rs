@@ -84,7 +84,7 @@ fn test_ssh_agent_message_types() {
     const SSH_AGENT_FAILURE: u8 = 5;
 
     // Test request identities message
-    let request = vec![SSH_AGENTC_REQUEST_IDENTITIES];
+    let request = [SSH_AGENTC_REQUEST_IDENTITIES];
     assert_eq!(request[0], 11);
 
     // Test sign request format

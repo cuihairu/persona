@@ -106,14 +106,12 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     };
 
     // Get identity type
-    let identity_types = vec![
-        ("personal", IdentityType::Personal),
+    let identity_types = [("personal", IdentityType::Personal),
         ("work", IdentityType::Work),
         ("social", IdentityType::Social),
         ("gaming", IdentityType::Gaming),
         ("financial", IdentityType::Financial),
-        ("other", IdentityType::Custom("other".to_string())),
-    ];
+        ("other", IdentityType::Custom("other".to_string()))];
 
     let identity_type = if let Some(t) = args.identity_type.as_ref() {
         t.parse::<IdentityType>()
@@ -203,67 +201,6 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     Ok(identity)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn base_args() -> AddArgs {
-        AddArgs {
-            name: None,
-            identity_type: None,
-            description: None,
-            email: None,
-            phone: None,
-            yes: true,
-            from_file: None,
-            set_active: false,
-        }
-    }
-
-    #[test]
-    fn create_identity_non_interactive_requires_name() {
-        let args = base_args();
-        assert!(create_identity_non_interactive(&args).is_err());
-    }
-
-    #[test]
-    fn create_identity_non_interactive_defaults_type_to_personal() {
-        let mut args = base_args();
-        args.name = Some("Alice".to_string());
-        let identity = create_identity_non_interactive(&args).unwrap();
-        assert_eq!(identity.name, "Alice");
-        assert!(matches!(identity.identity_type, IdentityType::Personal));
-    }
-
-    #[test]
-    fn validate_identity_rejects_empty_name() {
-        let identity = Identity::new("".to_string(), IdentityType::Personal);
-        assert!(validate_identity(&identity).is_err());
-    }
-
-    #[test]
-    fn validate_identity_rejects_invalid_email() {
-        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
-        identity.email = Some("invalid".to_string());
-        assert!(validate_identity(&identity).is_err());
-    }
-
-    #[test]
-    fn validate_identity_rejects_short_phone() {
-        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
-        identity.phone = Some("123".to_string());
-        assert!(validate_identity(&identity).is_err());
-    }
-
-    #[test]
-    fn validate_identity_accepts_basic_identity() {
-        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
-        identity.email = Some("alice@example.com".to_string());
-        identity.phone = Some("1234567890".to_string());
-        validate_identity(&identity).unwrap();
-    }
-}
-
 fn create_identity_non_interactive(args: &AddArgs) -> Result<Identity> {
     let name = args
         .name
@@ -321,7 +258,7 @@ fn collect_additional_attributes() -> Result<HashMap<String, Value>> {
         }
 
         let value: String = Input::new()
-            .with_prompt(&format!("Value for '{}'", key))
+            .with_prompt(format!("Value for '{}'", key))
             .interact_text()?;
 
         attributes.insert(key, Value::String(value));
@@ -457,8 +394,7 @@ async fn set_active_identity(name: &str, _config: &CliConfig) -> Result<()> {
 
 async fn import_from_file(file_path: &str, _config: &CliConfig) -> Result<()> {
     println!(
-        "{} Importing identity from file: {}",
-        "📁".to_string(),
+        "📁 Importing identity from file: {}",
         file_path.yellow()
     );
 
@@ -467,4 +403,65 @@ async fn import_from_file(file_path: &str, _config: &CliConfig) -> Result<()> {
 
     println!("{} Import completed successfully!", "✓".green().bold());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_args() -> AddArgs {
+        AddArgs {
+            name: None,
+            identity_type: None,
+            description: None,
+            email: None,
+            phone: None,
+            yes: true,
+            from_file: None,
+            set_active: false,
+        }
+    }
+
+    #[test]
+    fn create_identity_non_interactive_requires_name() {
+        let args = base_args();
+        assert!(create_identity_non_interactive(&args).is_err());
+    }
+
+    #[test]
+    fn create_identity_non_interactive_defaults_type_to_personal() {
+        let mut args = base_args();
+        args.name = Some("Alice".to_string());
+        let identity = create_identity_non_interactive(&args).unwrap();
+        assert_eq!(identity.name, "Alice");
+        assert!(matches!(identity.identity_type, IdentityType::Personal));
+    }
+
+    #[test]
+    fn validate_identity_rejects_empty_name() {
+        let identity = Identity::new("".to_string(), IdentityType::Personal);
+        assert!(validate_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn validate_identity_rejects_invalid_email() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.email = Some("invalid".to_string());
+        assert!(validate_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn validate_identity_rejects_short_phone() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.phone = Some("123".to_string());
+        assert!(validate_identity(&identity).is_err());
+    }
+
+    #[test]
+    fn validate_identity_accepts_basic_identity() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Personal);
+        identity.email = Some("alice@example.com".to_string());
+        identity.phone = Some("1234567890".to_string());
+        validate_identity(&identity).unwrap();
+    }
 }

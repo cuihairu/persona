@@ -229,7 +229,7 @@ impl PolicyEnforcer {
     ) -> Result<SignatureDecision> {
         let hostname = hostname.filter(|h| !h.is_empty());
         let is_known_host = hostname
-            .map(|host| is_host_in_known_hosts(host))
+            .map(is_host_in_known_hosts)
             .unwrap_or(false);
         let mut unknown_host_confirmation: Option<String> = None;
 

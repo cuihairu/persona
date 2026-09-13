@@ -49,8 +49,7 @@ pub struct EditArgs {
 
 pub async fn execute(args: EditArgs, config: &CliConfig) -> Result<()> {
     println!(
-        "{} Editing identity '{}'...",
-        "✏️".to_string(),
+        "✏️ Editing identity '{}'...",
         args.name.bright_cyan().bold()
     );
     println!();
@@ -486,7 +485,7 @@ fn add_custom_attribute(identity: &mut Identity) -> Result<()> {
     let key: String = Input::new().with_prompt("Attribute name").interact_text()?;
 
     let value: String = Input::new()
-        .with_prompt(&format!("Value for '{}'", key))
+        .with_prompt(format!("Value for '{}'", key))
         .interact_text()?;
 
     identity
@@ -517,7 +516,7 @@ fn edit_existing_attribute(identity: &mut Identity) -> Result<()> {
         .unwrap_or("");
 
     let new_value: String = Input::new()
-        .with_prompt(&format!("New value for '{}'", key))
+        .with_prompt(format!("New value for '{}'", key))
         .with_initial_text(current_value)
         .interact_text()?;
 

@@ -26,8 +26,7 @@ pub struct ShowArgs {
 
 pub async fn execute(args: ShowArgs, config: &CliConfig) -> Result<()> {
     println!(
-        "{} Showing identity '{}'...",
-        "👤".to_string(),
+        "👤 Showing identity '{}'...",
         args.name.bright_cyan().bold()
     );
     println!();
