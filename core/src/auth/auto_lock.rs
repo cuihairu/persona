@@ -691,8 +691,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_session_limit() {
-        let mut config = EnhancedAutoLockConfig::default();
-        config.max_concurrent_sessions = 2;
+        let config = EnhancedAutoLockConfig {
+            max_concurrent_sessions: 2,
+            ..Default::default()
+        };
 
         let manager = AutoLockManager::new(config);
 
@@ -736,11 +738,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_requires_sensitive_auth_flag() {
-        let mut base = AutoLockConfig::default();
-        base.require_reauth_sensitive = true;
-        base.sensitive_operation_timeout_secs = 1;
-        let mut config = EnhancedAutoLockConfig::default();
-        config.base = base;
+        let base = AutoLockConfig {
+            require_reauth_sensitive: true,
+            sensitive_operation_timeout_secs: 1,
+            ..Default::default()
+        };
+        let config = EnhancedAutoLockConfig {
+            base,
+            ..Default::default()
+        };
 
         let manager = AutoLockManager::new(config);
         let session = Session::new("user123".to_string(), Duration::from_secs(3600));

@@ -61,12 +61,15 @@ pub struct AutoLockPolicy {
 }
 
 /// Security levels for auto-lock policies
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AutoLockSecurityLevel {
     /// Low security - longer timeouts, more lenient
     Low,
     /// Medium security - balanced approach
+    #[default]
     Medium,
     /// High security - shorter timeouts, stricter
     High,
@@ -96,12 +99,6 @@ impl std::str::FromStr for AutoLockSecurityLevel {
             "maximum" => Ok(Self::Maximum),
             other => Err(format!("Invalid auto-lock security level: {}", other)),
         }
-    }
-}
-
-impl Default for AutoLockSecurityLevel {
-    fn default() -> Self {
-        AutoLockSecurityLevel::Medium
     }
 }
 

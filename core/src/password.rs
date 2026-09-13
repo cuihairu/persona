@@ -1,5 +1,5 @@
 use crate::{PersonaError, Result};
-use rand::{rngs::ThreadRng, seq::SliceRandom, Rng, RngExt};
+use rand::{rngs::ThreadRng, seq::SliceRandom, RngExt};
 
 const LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
 const UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";

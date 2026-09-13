@@ -1,7 +1,4 @@
-use aes_gcm::{
-    aead::Aead,
-    Aes256Gcm, KeyInit,
-};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
 use anyhow::{Context, Result};
 use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngExt;

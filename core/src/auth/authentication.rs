@@ -205,8 +205,6 @@ impl MasterKeyService {
         let base_salt = KeyDerivation::generate_salt();
         let mut extended_salt = [0u8; 32];
         extended_salt[..16].copy_from_slice(&base_salt);
-        // Add some additional entropy for the remaining bytes
-        use rand::Rng;
         getrandom::fill(&mut extended_salt[16..]).expect("failed to generate random bytes");
         extended_salt
     }

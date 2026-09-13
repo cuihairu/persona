@@ -338,8 +338,8 @@ async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> R
     cmd.env("PERSONA_AGENT_SOCKET_PATH", &socket_path);
     // if vault encrypted, prompt for master password and pass via env
     let _ = ensure_service(config).await?; // ensure migrations; may prompt
-                                                         // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
-                                                         // Here we conservatively ask user again (not stored from ensure_service)
+                                           // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
+                                           // Here we conservatively ask user again (not stored from ensure_service)
     let pass = if config.ui.interactive {
         Password::new()
             .with_prompt("Enter master password for agent (leave empty if not set)")

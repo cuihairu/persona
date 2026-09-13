@@ -59,9 +59,8 @@ impl Default for MockBiometricProvider {
 impl BiometricProvider for MockBiometricProvider {
     fn is_available(&self, hint: Option<BiometricPlatform>) -> bool {
         self.available
-            && hint.map_or(true, |h| {
-                h == self.platform || self.platform == BiometricPlatform::Unknown
-            })
+            && hint
+                .is_none_or(|h| h == self.platform || self.platform == BiometricPlatform::Unknown)
     }
 
     fn authenticate(&self, prompt: &BiometricPrompt) -> Result<BiometricAuthResult> {

@@ -198,5 +198,4 @@ impl CliConfig {
     pub fn get_database_path(&self) -> PathBuf {
         self.workspace.path.join("identities.db")
     }
-
 }

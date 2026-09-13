@@ -82,7 +82,7 @@ impl BlobStore {
                 content = encrypted;
                 (true, Some(hex::encode(&key[..16]))) // Use first 16 bytes as key ID
             } else {
-                return Err(anyhow::anyhow!("Encryption key required").into());
+                return Err(anyhow::anyhow!("Encryption key required"));
             }
         } else {
             (false, None)
@@ -177,7 +177,7 @@ impl BlobStore {
                 // Verify chunk hash
                 let calculated_hash = self.calculate_hash(&chunk_data);
                 if calculated_hash != chunk.content_hash {
-                    return Err(anyhow::anyhow!("Chunk {} hash mismatch", chunk.chunk_index).into());
+                    return Err(anyhow::anyhow!("Chunk {} hash mismatch", chunk.chunk_index));
                 }
 
                 full_content.extend_from_slice(&chunk_data);
@@ -193,7 +193,7 @@ impl BlobStore {
         // Verify content hash
         let calculated_hash = self.calculate_hash(&content);
         if calculated_hash != attachment.content_hash {
-            return Err(anyhow::anyhow!("Content hash mismatch").into());
+            return Err(anyhow::anyhow!("Content hash mismatch"));
         }
 
         // Decrypt if needed
@@ -207,7 +207,7 @@ impl BlobStore {
                     .decrypt(&content)
                     .map_err(|e| anyhow::anyhow!("Decryption failed: {:?}", e))?;
             } else {
-                return Err(anyhow::anyhow!("Decryption key required").into());
+                return Err(anyhow::anyhow!("Decryption key required"));
             }
         }
 

@@ -178,25 +178,13 @@ impl AttachmentChunk {
 }
 
 /// Attachment statistics
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AttachmentStats {
     pub total_attachments: usize,
     pub total_size: u64,
     pub encrypted_count: usize,
     pub chunked_count: usize,
     pub by_mime_type: std::collections::HashMap<String, usize>,
-}
-
-impl Default for AttachmentStats {
-    fn default() -> Self {
-        Self {
-            total_attachments: 0,
-            total_size: 0,
-            encrypted_count: 0,
-            chunked_count: 0,
-            by_mime_type: std::collections::HashMap::new(),
-        }
-    }
 }
 
 #[cfg(test)]

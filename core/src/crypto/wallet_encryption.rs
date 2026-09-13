@@ -262,7 +262,7 @@ mod tests {
         let password = "test_password_123";
 
         let encrypted = encrypt_private_key(&private_key, password).unwrap();
-        assert!(encrypted.encrypted_data.len() > 0);
+        assert!(!encrypted.encrypted_data.is_empty());
 
         let decrypted = decrypt_private_key(&encrypted, password).unwrap();
         assert_eq!(decrypted, private_key);

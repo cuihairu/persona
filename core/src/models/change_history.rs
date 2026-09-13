@@ -278,25 +278,13 @@ impl ChangeHistoryQuery {
 }
 
 /// Statistics for change history
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ChangeHistoryStats {
     pub total_changes: usize,
     pub by_entity_type: HashMap<EntityType, usize>,
     pub by_change_type: HashMap<String, usize>,
     pub by_user: HashMap<String, usize>,
     pub recent_changes: Vec<ChangeHistory>,
-}
-
-impl Default for ChangeHistoryStats {
-    fn default() -> Self {
-        Self {
-            total_changes: 0,
-            by_entity_type: HashMap::new(),
-            by_change_type: HashMap::new(),
-            by_user: HashMap::new(),
-            recent_changes: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]

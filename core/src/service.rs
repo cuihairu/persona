@@ -8,8 +8,8 @@ use crate::{
     crypto::{EncryptionService, KeyHierarchy, Sha256Hasher},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
-        ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType,
-        Identity, IdentityType, ResourceType, SecurityLevel,
+        ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType, Identity,
+        IdentityType, ResourceType, SecurityLevel,
     },
     password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
@@ -207,8 +207,6 @@ impl PersonaService {
     pub fn touch_activity(&self) {
         *self.last_activity.lock().unwrap() = Some(std::time::Instant::now());
     }
-
-    /// Enhanced auto-lock management methods
 
     /// Configure auto-lock settings
     pub async fn configure_auto_lock(&mut self, config: crate::auth::AutoLockConfig) -> Result<()> {
@@ -703,9 +701,11 @@ impl PersonaService {
 
     /// Generate a strong password (legacy helper).
     pub fn generate_password(&self, length: usize, include_symbols: bool) -> String {
-        let mut options = PasswordGeneratorOptions::default();
-        options.length = length.max(4);
-        options.include_symbols = include_symbols;
+        let options = PasswordGeneratorOptions {
+            length: length.max(4),
+            include_symbols,
+            ..Default::default()
+        };
 
         PasswordGenerator::generate(&options).unwrap_or_else(|_| {
             // Fall back to a safe default if option validation fails for any reason.

@@ -1,5 +1,4 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey as Ed25519VerifyingKey};
-use rand::Rng;
 use zeroize::Zeroize;
 
 /// Ed25519 key pair for digital signatures

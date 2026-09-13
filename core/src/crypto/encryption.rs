@@ -1,5 +1,4 @@
 use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-use rand::Rng;
 use zeroize::Zeroize;
 
 /// Encrypted data with metadata
