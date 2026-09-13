@@ -11,7 +11,7 @@ Milestones 0–3 – Foundation (done)
 - [x] Browser: Chromium extension + Native Messaging bridge (pairing, HMAC request auth, origin binding, user gesture, autofill MVP, phishing resistance); Safari host shell
 
 Milestone 4 – 1Password Parity (current focus)
-- [ ] Passkeys (WebAuthn): storage model + autofill; design doc before implementation
+- [ ] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (review stage; P1 core/CLI → P2 browser interception)
 - [ ] Watchtower-class health checks: weak/reused/expired detection, breach checks (rules engine, then desktop panels)
 - [ ] Desktop app: wire Tauri commands to core (unlock, lists, CRUD); vault/identity/credential views; search + filters
 - [ ] Desktop: TOTP display; password reveal flow; copy-once clipboard

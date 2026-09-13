@@ -107,7 +107,7 @@ Browser & Autofill (future)
   - [x] Minimal autofill MVP: username/password fill on matched domain
   - [x] Policy integration: domain trust/blocked + confirm-on-unknown
   - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
-- [ ] Passkeys (WebAuthn) storage + autofill
+- [ ] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`（待评审，P1=core/CLI → P2=浏览器拦截）
 - [x] Phishing protections; identity-based context switching
 
 Quality & Security

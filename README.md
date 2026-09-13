@@ -165,6 +165,7 @@ persona ssh stop-agent
 
 - [ONEPASSWORD_FEATURES](./docs/ONEPASSWORD_FEATURES.md) – reference checklist for 1Password parity
 - [FEATURE_GAP_ANALYSIS](./docs/FEATURE_GAP_ANALYSIS.md) – Persona vs. 1Password comparison
+- [PASSKEYS_DESIGN](./docs/PASSKEYS_DESIGN.md) – passkeys (WebAuthn) design draft
 - [MONOREPO](./docs/MONOREPO.md) – monorepo rationale and tooling
 - [ROADMAP](./docs/ROADMAP.md) – roadmap and detailed TODO items
 - [TODO](./TODO.md) – daily-maintained task list
