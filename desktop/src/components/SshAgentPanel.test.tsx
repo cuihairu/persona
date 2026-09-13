@@ -1,4 +1,3 @@
-import React from 'react';
 import { fireEvent, render } from '@testing-library/react';
 import SshAgentPanel from './SshAgentPanel';
 import { usePersonaService } from '@/hooks/usePersonaService';

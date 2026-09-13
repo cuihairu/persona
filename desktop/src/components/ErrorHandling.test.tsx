@@ -1,4 +1,3 @@
-import React from 'react';
 import { act, render, renderHook } from '@testing-library/react';
 import { ErrorDisplay, handleApiError, useErrorHandler } from './ErrorHandling';
 
