@@ -40,8 +40,7 @@ pbkdf2 = "0.12"
 bs58 = "0.5"
 
 # 数据库
-rusqlite = { version = "0.30", features = ["bundled"] }
-sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio-rustls"] }
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
@@ -84,7 +83,6 @@ async-trait = "0.1"
 dirs = "5.0"
 hex = "0.4"
 tempfile = "3.8"
-atty = "0.2"
 
 [profile.release]
 opt-level = 3

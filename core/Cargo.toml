@@ -32,7 +32,6 @@ pbkdf2.workspace = true
 bs58.workspace = true
 
 # 数据库
-rusqlite = { workspace = true, optional = true }
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }
 
 # 序列化
@@ -69,4 +68,4 @@ proptest.workspace = true
 
 [features]
 default = ["sqlite"]
-sqlite = ["rusqlite", "sqlx"]
+sqlite = ["sqlx"]
