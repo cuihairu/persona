@@ -70,9 +70,9 @@ Wallet Material (experimental)
 - [x] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
 - [x] Derivations: BTC (BIP32/44, P2WPKH/P2SH-P2WPKH/Taproot), ETH (SLIP‑44), Solana (SLIP‑0010 ed25519, path `m/44'/501'/0'/i'`, Phantom 兼容)
 - [x] Address encoding: BIP‑173 bech32 / BIP‑350 bech32m (P2WPKH/P2WSH/P2TR)、Base58Check、EIP‑55 checksum
-- [x] Import (mnemonic/private key) & export with confirmations; keystore JSON/WIF 导入仍待做
-- [x] Sign: ETH (EIP‑155 legacy, 字节级规范向量验证)、Solana (ed25519, 签名即 tx id)；本地签名验证后再持久化
-- [ ] Sign: BTC raw transaction (PSBT) — 当前仅审计签名；EIP‑1559 dynamic fee 待做
+- [x] Import (mnemonic/private key) & export with confirmations; WIF 已支持（mainnet compressed，`import --wif` 及私钥导入自动识别）；keystore JSON 仍待做
+- [x] Sign: ETH (EIP‑155 legacy + EIP‑1559 dynamic fee, 字节级规范向量/结构自洽验证)、Solana (ed25519, 签名即 tx id)；本地签名验证后再持久化
+- [x] Sign: BTC raw transaction (BIP‑143 P2WPKH + BIP‑141 segwit 组装, 官方规范向量逐字节验证) — 需 UTXO `inputs` metadata；无 inputs 时仅存审计签名；PSBT 仍待做
 - [x] CLI: wallet create/import/derive/list/sign (`create-transaction --sign`)
 - [ ] Desktop: wallet overview, address lists, QR, signing confirmations
 

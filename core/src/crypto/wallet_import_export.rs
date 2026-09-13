@@ -246,6 +246,52 @@ pub fn signing_key_for_address(
 }
 
 /// Import wallet from private key
+/// A parsed WIF (Wallet Import Format) private key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedWif {
+    pub secret: [u8; 32],
+    /// True when the payload carries the `0x01` compressed-pubkey suffix.
+    pub compressed: bool,
+    /// True for testnet WIFs (`0xef` version byte).
+    pub testnet: bool,
+}
+
+/// Parse a Bitcoin WIF private key (`base58check(0x80|0xef || key [|| 0x01])`).
+pub fn parse_wif(wif: &str) -> PersonaResult<ParsedWif> {
+    use crate::crypto::address_generator::base58_check_decode;
+
+    let data = base58_check_decode(wif.trim())
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid WIF: {e}")))?;
+    if data.len() != 33 && data.len() != 34 {
+        return Err(PersonaError::InvalidInput(format!(
+            "Invalid WIF payload length {} (expected 33 or 34 bytes)",
+            data.len()
+        )));
+    }
+    let (testnet, compressed) = match data[0] {
+        0x80 => (false, data.len() == 34),
+        0xef => (true, data.len() == 34),
+        version => {
+            return Err(PersonaError::InvalidInput(format!(
+                "Invalid WIF version byte 0x{version:02x} (expected 0x80 or 0xef)"
+            )))
+        }
+    };
+    if compressed && data[33] != 0x01 {
+        return Err(PersonaError::InvalidInput(
+            "Invalid WIF: 34-byte payload must end with the 0x01 compressed flag".to_string(),
+        ));
+    }
+
+    let mut secret = [0u8; 32];
+    secret.copy_from_slice(&data[1..33]);
+    Ok(ParsedWif {
+        secret,
+        compressed,
+        testnet,
+    })
+}
+
 pub fn import_from_private_key(
     identity_id: Uuid,
     name: String,
@@ -253,15 +299,25 @@ pub fn import_from_private_key(
     network: BlockchainNetwork,
     password: &str,
 ) -> PersonaResult<CryptoWallet> {
-    // Parse private key
-    let private_key_bytes = hex::decode(private_key_hex.trim_start_matches("0x"))
-        .map_err(|e| PersonaError::InvalidInput(format!("Invalid hex private key: {}", e)))?;
-
-    if private_key_bytes.len() != 32 {
-        return Err(PersonaError::InvalidInput(
-            "Private key must be 32 bytes".to_string(),
-        ));
-    }
+    // Parse private key: hex first, WIF (Bitcoin) as fallback.
+    let private_key_bytes = match hex::decode(private_key_hex.trim_start_matches("0x")) {
+        Ok(bytes) if bytes.len() == 32 => bytes,
+        Ok(_) => {
+            return Err(PersonaError::InvalidInput(
+                "Private key must be 32 bytes".to_string(),
+            ))
+        }
+        Err(_) => {
+            if !matches!(network, BlockchainNetwork::Bitcoin) {
+                return Err(PersonaError::InvalidInput(
+                    "Input is neither valid hex nor a WIF; WIF is only valid \
+                     for Bitcoin wallets"
+                        .to_string(),
+                ));
+            }
+            parse_wif(private_key_hex)?.secret.to_vec()
+        }
+    };
 
     // Encrypt private key
     let encrypted_key =
@@ -346,60 +402,23 @@ pub fn import_from_wif(
     wif: &str,
     password: &str,
 ) -> PersonaResult<CryptoWallet> {
-    let decoded = bs58::decode(wif)
-        .into_vec()
-        .map_err(|e| PersonaError::InvalidInput(format!("Invalid WIF encoding: {}", e)))?;
+    let parsed = parse_wif(wif)?;
 
-    if decoded.len() < 5 {
-        return Err(PersonaError::InvalidInput("Invalid WIF length".to_string()));
-    }
-
-    let (payload, checksum) = decoded.split_at(decoded.len() - 4);
-    let expected_checksum = double_sha256(payload);
-    if checksum != &expected_checksum[..4] {
-        return Err(PersonaError::InvalidInput(
-            "Invalid WIF checksum".to_string(),
-        ));
-    }
-
-    let version = payload
-        .first()
-        .copied()
-        .ok_or_else(|| PersonaError::InvalidInput("Missing WIF version byte".to_string()))?;
-
-    if version == 0xEF {
+    if parsed.testnet {
         return Err(PersonaError::InvalidInput(
             "Bitcoin testnet WIF is not supported yet".to_string(),
         ));
     }
-
-    if version != 0x80 {
-        return Err(PersonaError::InvalidInput(format!(
-            "Unsupported WIF version byte: 0x{version:02x}"
-        )));
-    }
-
-    let compressed = match payload.len() {
-        34 if payload[33] == 0x01 => true,
-        33 => false,
-        _ => {
-            return Err(PersonaError::InvalidInput(
-                "Unsupported WIF payload length".to_string(),
-            ))
-        }
-    };
-
-    if !compressed {
+    if !parsed.compressed {
         return Err(PersonaError::InvalidInput(
             "Uncompressed WIF is not supported yet".to_string(),
         ));
     }
 
-    let private_key_hex = hex::encode(&payload[1..33]);
     import_from_private_key(
         identity_id,
         name,
-        &private_key_hex,
+        &hex::encode(parsed.secret),
         BlockchainNetwork::Bitcoin,
         password,
     )
@@ -844,6 +863,78 @@ mod tests {
         )
         .unwrap();
         assert_eq!(wallet.addresses[0].address, expected);
+    }
+
+    #[test]
+    fn test_parse_wif() {
+        // Canonical mainnet compressed WIF for private key 1 (well-known pair).
+        let wif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn";
+        let parsed = parse_wif(wif).unwrap();
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        assert_eq!(parsed.secret, one);
+        assert!(parsed.compressed);
+        assert!(!parsed.testnet);
+
+        // Uncompressed variant drops the 0x01 suffix byte.
+        let wif_uncompressed = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+        let parsed = parse_wif(wif_uncompressed).unwrap();
+        assert_eq!(
+            parsed.secret,
+            hex::decode("0c28fca386c7a227600b2fe50b7cae11ec86d3bf1fbe471be89827e19d72aa1d")
+                .unwrap()
+                .as_slice()
+        );
+        assert!(!parsed.compressed);
+
+        // Checksum tampering must be rejected.
+        let mut bad = wif.to_string();
+        bad.replace_range(0..1, if wif.starts_with('K') { "L" } else { "K" });
+        assert!(parse_wif(&bad).is_err());
+
+        // Invalid version byte (address instead of key).
+        assert!(parse_wif("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").is_err());
+    }
+
+    #[test]
+    fn test_import_from_private_key_accepts_wif() {
+        let wif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn";
+        let wallet = import_from_private_key(
+            Uuid::new_v4(),
+            "btc-wif".to_string(),
+            wif,
+            BlockchainNetwork::Bitcoin,
+            "pw",
+        )
+        .unwrap();
+
+        // Key 0x01..01 compressed -> known P2WPKH address derived from
+        // pubkey 0279BE667E... (the generator point).
+        assert_eq!(wallet.addresses.len(), 1);
+        assert!(wallet.addresses[0].address.starts_with("bc1q"));
+
+        // Signing must round-trip back to the same secret (key = 1).
+        let key = signing_key_for_address(&wallet, "pw", &wallet.addresses[0].address).unwrap();
+        let WalletSigningKey::Secp256k1(signing) = key else {
+            panic!("expected secp256k1");
+        };
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let expected = k256::ecdsa::SigningKey::from_bytes(&one.into()).unwrap();
+        assert_eq!(
+            signing.to_bytes().as_slice(),
+            expected.to_bytes().as_slice()
+        );
+
+        // WIF is Bitcoin-specific.
+        assert!(import_from_private_key(
+            Uuid::new_v4(),
+            "eth-wif".to_string(),
+            wif,
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .is_err());
     }
 
     #[test]
