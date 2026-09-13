@@ -1159,10 +1159,18 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 _ => {}
             }
 
-            // Bitcoin and friends have no raw assembly yet; the audit
-            // signature is still recorded.
-            let (raw_bytes, tx_hash) =
-                build_raw_transaction(&created, &key).map(|raw| (raw.raw, raw.hash))?;
+            // Bitcoin raw assembly needs the UTXO set; without 'inputs'
+            // metadata only the audit signature is recorded.
+            let (raw_bytes, tx_hash) = match build_raw_transaction(&created, &key) {
+                Ok(raw) => (raw.raw, raw.hash),
+                Err(e) => {
+                    formatter.print_warning(&format!(
+                        "⚠️  Raw transaction not assembled: {e}. \
+                         Only the audit signature will be stored."
+                    ));
+                    (Vec::new(), String::new())
+                }
+            };
 
             let signed = SignedTransaction {
                 id: uuid::Uuid::new_v4(),
@@ -1182,11 +1190,6 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 formatter.print_info(&format!("Transaction hash: {}", tx_hash));
                 formatter.print_warning(
                     "⚠️  Broadcast it with your node/RPC provider; Persona does not broadcast.",
-                );
-            } else {
-                formatter.print_warning(
-                    "⚠️  This network only records an audit signature for now; \
-                     raw transaction assembly (PSBT) is not yet implemented.",
                 );
             }
         }
