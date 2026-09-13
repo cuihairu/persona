@@ -185,10 +185,7 @@ async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -199,7 +196,7 @@ async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
                 .await
                 .map_err(|e| anyhow!("Failed to lookup identity: {}", e))?
                 .is_some(),
-            _ => false,
+            other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         IdentityRepository::new(db)
@@ -240,10 +237,7 @@ async fn perform_switch(
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -348,10 +342,7 @@ async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -383,4 +374,204 @@ async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String
         );
     }
     Ok(identities)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::models::{
+        AuditAction, Identity as CoreIdentityModel, IdentityType, Workspace,
+    };
+    use persona_core::storage::{AuditLogRepository, WorkspaceRepository};
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn args(name: Option<&str>, force: bool) -> SwitchArgs {
+        SwitchArgs {
+            name: name.map(String::from),
+            force,
+            interactive: false,
+            previous: false,
+        }
+    }
+
+    fn switch_args(name: Option<&str>, force: bool) -> SwitchArgs {
+        args(name, force)
+    }
+
+    /// Migrated database with `names` identities inserted.
+    async fn seeded_db(dir: &TempDir, names: &[&str]) -> Database {
+        let db = Database::from_file(dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        for name in names {
+            repo.create(&CoreIdentityModel::new(
+                name.to_string(),
+                IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        }
+        db
+    }
+
+    /// `persona migrate` normally guarantees a workspace row; create it directly.
+    async fn ensure_workspace_row(db: &Database, config: &CliConfig) {
+        let repo = WorkspaceRepository::new(db.clone());
+        repo.create(&Workspace::new(
+            config.workspace.path.clone(),
+            "test-workspace".to_string(),
+        ))
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn switch_updates_workspace_and_audits_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+
+        // Migrate command guarantees a workspace row for this path.
+        ensure_workspace_row(&db, &config).await;
+
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .expect("forced switch must succeed");
+
+        let repo = WorkspaceRepository::new(db.clone());
+        let path_str = config.workspace.path.to_string_lossy().to_string();
+        let ws = repo
+            .find_by_path(&path_str)
+            .await
+            .unwrap()
+            .expect("workspace row exists");
+        let active_id = ws.active_identity_id.expect("active identity recorded");
+
+        let identity = IdentityRepository::new(db.clone())
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .expect("alice exists");
+        assert_eq!(active_id, identity.id);
+
+        // Switching to the same identity short-circuits with "already active".
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .expect("already-active switch is a no-op");
+
+        // One audit entry for the single real switch.
+        let audits = AuditLogRepository::new(db.clone())
+            .find_by_action(&AuditAction::WorkspaceEntered)
+            .await
+            .unwrap();
+        assert_eq!(audits.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn switch_between_identities_audits_twice_and_errors_paths() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+        ensure_workspace_row(&db, &config).await;
+
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .unwrap();
+        execute(switch_args(Some("bob"), true), &config)
+            .await
+            .unwrap();
+
+        let repo = WorkspaceRepository::new(db.clone());
+        let path_str = config.workspace.path.to_string_lossy().to_string();
+        let ws = repo.find_by_path(&path_str).await.unwrap().unwrap();
+        let bob = IdentityRepository::new(db.clone())
+            .find_by_name("bob")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ws.active_identity_id, Some(bob.id));
+
+        let audits = AuditLogRepository::new(db.clone())
+            .find_by_action(&AuditAction::WorkspaceEntered)
+            .await
+            .unwrap();
+        assert_eq!(audits.len(), 2);
+
+        // Unknown target fails in verification.
+        let err = execute(switch_args(Some("ghost"), true), &config)
+            .await
+            .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+
+        // Previous-identity history is not implemented yet.
+        let mut prev = switch_args(None, true);
+        prev.previous = true;
+        let err = execute(prev, &config)
+            .await
+            .expect_err("previous must fail");
+        assert!(err
+            .to_string()
+            .contains("Previous identity history not available"));
+
+        // Interactive selection with an empty database reports the hint.
+        let empty = TempDir::new().unwrap();
+        let err = select_identity_interactive(&config_for(&empty))
+            .await
+            .expect_err("empty selection must fail");
+        assert!(err.to_string().contains("No identities found"));
+    }
+
+    #[tokio::test]
+    async fn switch_authenticated_path_with_master_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["carol"]).await;
+        ensure_workspace_row(&db, &config).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = execute(switch_args(Some("carol"), true), &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        execute(switch_args(Some("carol"), true), &config)
+            .await
+            .expect("correct password must switch");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

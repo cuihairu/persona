@@ -1655,7 +1655,7 @@ async fn write_frame<W: AsyncWriteExt + Unpin, T: Serialize>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use persona_core::models::IdentityType;
     use std::sync::Mutex;
@@ -1663,7 +1663,8 @@ mod tests {
     /// Guards the process-global env vars used by the bridge below — all
     /// passkey bridge cases run inside one #[tokio::test] so they never
     /// overlap, but other tests must not mutate these vars concurrently.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    /// `pub(crate)` so config tests can coordinate on the same vars.
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     const PASSWORD: &str = "bridge-test-password";
 
@@ -2201,5 +2202,245 @@ mod tests {
             resolve_state_dir(None),
             home.join(".persona").join("bridge")
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_pairing_lifecycle() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        // status before any pairing: no auth needed.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "status must succeed: {:?}", resp.error);
+
+        // hello without client_instance_id while pairing is required.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("hello", serde_json::json!({ "extension_id": "ext-a" })),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok);
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["pairing_required"], true);
+        assert!(payload["paired"] == false);
+
+        // pairing_request creates a pending code.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_request",
+                serde_json::json!({ "extension_id": "ext-a", "client_instance_id": "inst-1" }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "pairing_request must succeed: {:?}", resp.error);
+        let code = resp.payload.unwrap()["code"]
+            .as_str()
+            .expect("pairing code present")
+            .to_string();
+
+        // finalize before approval fails.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_finalize",
+                serde_json::json!({ "extension_id": "ext-a", "client_instance_id": "inst-1", "code": code }),
+            ),
+        )
+        .await
+        .expect_err("finalize before approval must fail");
+        assert!(
+            err.to_string().contains("pairing_not_approved"),
+            "got: {err}"
+        );
+
+        // Approve via the CLI-side command, then finalize.
+        approve_pairing(&state_dir, &code).expect("approve pairing");
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_finalize",
+                serde_json::json!({ "extension_id": "ext-a", "client_instance_id": "inst-1", "code": code }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "finalize must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        assert!(payload["pairing_key_b64"].is_string());
+        assert!(payload["session_id"].is_string());
+
+        // hello now reports the session (paired).
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "hello",
+                serde_json::json!({ "extension_id": "ext-a", "client_instance_id": "inst-1" }),
+            ),
+        )
+        .await
+        .unwrap();
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["paired"], true);
+        assert!(payload["session_id"].is_string());
+
+        // Unknown pairing code is rejected.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("pairing_request", serde_json::json!({ "extension_id": "" })),
+        )
+        .await;
+        assert!(err.is_err(), "empty extension_id payload must be rejected");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_fill_totp_copy_and_gesture_paths() {
+        use persona_core::models::credential::{
+            CredentialData, PasswordCredentialData, SecurityLevel,
+        };
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        // Seed a password credential bound to example.com.
+        let cred_id: uuid::Uuid;
+        {
+            let db = open_db(&db_path).await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            assert_eq!(
+                service.authenticate_user(PASSWORD).await.unwrap(),
+                persona_core::auth::authentication::AuthResult::Success
+            );
+            let mut cred = service
+                .create_credential(
+                    identity_id,
+                    "Example login".to_string(),
+                    persona_core::models::credential::CredentialType::Password,
+                    SecurityLevel::High,
+                    &CredentialData::Password(PasswordCredentialData {
+                        password: "hunter2".to_string(),
+                        email: Some("alice@example.com".to_string()),
+                        security_questions: vec![],
+                    }),
+                )
+                .await
+                .unwrap();
+            cred.username = Some("alice@example.com".to_string());
+            cred.url = Some("https://example.com/login".to_string());
+            // Persist the URL/username hints through the repository.
+            use persona_core::storage::CredentialRepository;
+            use persona_core::Repository;
+            let db = open_db(&db_path).await.unwrap();
+            CredentialRepository::new(db).update(&cred).await.unwrap();
+            cred_id = cred.id;
+        }
+
+        // status now reports the active identity.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "status must succeed: {:?}", resp.error);
+
+        // get_suggestions returns an item for example.com.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_suggestions",
+                serde_json::json!({ "origin": "https://example.com" }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "suggestions must succeed: {:?}", resp.error);
+
+        // request_fill without a user gesture is rejected.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({ "origin": "https://example.com", "item_id": uuid::Uuid::new_v4().to_string() }),
+            ),
+        )
+        .await
+        .expect_err("fill without gesture must fail");
+        assert!(
+            err.to_string().contains("user_gesture_required"),
+            "got: {err}"
+        );
+
+        // Unknown host origin is rejected outright.
+        let _err = handle_request(
+            &db_path,
+            &state_dir,
+            request("request_fill", serde_json::json!({ "origin": "not a url" })),
+        )
+        .await
+        .expect_err("invalid origin must fail");
+
+        // copy with an unknown field is rejected (item exists; field check runs
+        // only after the item lookup succeeds).
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": cred_id.to_string(),
+                    "field": "bogus",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy unknown field must fail");
+        assert!(err.to_string().contains("unknown field"), "got: {err}");
+
+        // copy of a ghost item reports not_found.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "field": "username",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy ghost item must fail");
+        assert!(err.to_string().contains("not_found"), "got: {err}");
     }
 }

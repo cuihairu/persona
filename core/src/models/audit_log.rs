@@ -166,6 +166,8 @@ impl std::str::FromStr for AuditAction {
             "logout" => Ok(AuditAction::Logout),
             "login_failed" => Ok(AuditAction::LoginFailed),
             "session_expired" => Ok(AuditAction::SessionExpired),
+            "session_locked" => Ok(AuditAction::SessionLocked),
+            "session_unlocked" => Ok(AuditAction::SessionUnlocked),
             "password_change" => Ok(AuditAction::PasswordChange),
             "mfa_enabled" => Ok(AuditAction::MfaEnabled),
             "mfa_disabled" => Ok(AuditAction::MfaDisabled),
@@ -463,5 +465,260 @@ mod tests {
 
         assert!(failed_log.is_failure());
         assert!(!success_log.is_failure());
+    }
+
+    /// `AuditAction::Display` and `FromStr` must agree on every named variant,
+    /// and unknown strings must fall back to `Custom`.
+    #[test]
+    fn test_audit_action_display_roundtrip_all_variants() {
+        let actions = vec![
+            AuditAction::Login,
+            AuditAction::Logout,
+            AuditAction::LoginFailed,
+            AuditAction::SessionExpired,
+            AuditAction::SessionLocked,
+            AuditAction::SessionUnlocked,
+            AuditAction::PasswordChange,
+            AuditAction::MfaEnabled,
+            AuditAction::MfaDisabled,
+            AuditAction::IdentityCreated,
+            AuditAction::IdentityUpdated,
+            AuditAction::IdentityDeleted,
+            AuditAction::IdentityViewed,
+            AuditAction::IdentitySwitched,
+            AuditAction::CredentialCreated,
+            AuditAction::CredentialUpdated,
+            AuditAction::CredentialDeleted,
+            AuditAction::CredentialViewed,
+            AuditAction::CredentialDecrypted,
+            AuditAction::CredentialExported,
+            AuditAction::PasskeyCreated,
+            AuditAction::PasskeyViewed,
+            AuditAction::PasskeyAsserted,
+            AuditAction::PasskeyDeleted,
+            AuditAction::PasskeyExported,
+            AuditAction::WorkspaceCreated,
+            AuditAction::WorkspaceUpdated,
+            AuditAction::WorkspaceDeleted,
+            AuditAction::WorkspaceEntered,
+            AuditAction::WorkspaceLeft,
+            AuditAction::DatabaseMigration,
+            AuditAction::BackupCreated,
+            AuditAction::BackupRestored,
+            AuditAction::ConfigurationChanged,
+            AuditAction::UnauthorizedAccess,
+            AuditAction::BruteForceDetected,
+            AuditAction::SuspiciousActivity,
+            AuditAction::DataExfiltration,
+        ];
+
+        for action in actions {
+            let text = action.to_string();
+            assert_eq!(text.parse::<AuditAction>().unwrap(), action);
+        }
+
+        // Variants without a dedicated FromStr arm parse back as Custom.
+        assert_eq!(
+            "totally_new".parse::<AuditAction>().unwrap(),
+            AuditAction::Custom("totally_new".to_string())
+        );
+    }
+
+    #[test]
+    fn test_audit_action_serde_snake_case() {
+        // Every variant serializes to its snake_case name and back.
+        let actions = vec![
+            AuditAction::Login,
+            AuditAction::Logout,
+            AuditAction::LoginFailed,
+            AuditAction::SessionExpired,
+            AuditAction::SessionLocked,
+            AuditAction::SessionUnlocked,
+            AuditAction::PasswordChange,
+            AuditAction::MfaEnabled,
+            AuditAction::MfaDisabled,
+            AuditAction::IdentityCreated,
+            AuditAction::IdentityUpdated,
+            AuditAction::IdentityDeleted,
+            AuditAction::IdentityViewed,
+            AuditAction::IdentitySwitched,
+            AuditAction::CredentialCreated,
+            AuditAction::CredentialUpdated,
+            AuditAction::CredentialDeleted,
+            AuditAction::CredentialViewed,
+            AuditAction::CredentialDecrypted,
+            AuditAction::CredentialExported,
+            AuditAction::PasskeyCreated,
+            AuditAction::PasskeyViewed,
+            AuditAction::PasskeyAsserted,
+            AuditAction::PasskeyDeleted,
+            AuditAction::PasskeyExported,
+            AuditAction::WorkspaceCreated,
+            AuditAction::WorkspaceUpdated,
+            AuditAction::WorkspaceDeleted,
+            AuditAction::WorkspaceEntered,
+            AuditAction::WorkspaceLeft,
+            AuditAction::DatabaseMigration,
+            AuditAction::BackupCreated,
+            AuditAction::BackupRestored,
+            AuditAction::ConfigurationChanged,
+            AuditAction::UnauthorizedAccess,
+            AuditAction::BruteForceDetected,
+            AuditAction::SuspiciousActivity,
+            AuditAction::DataExfiltration,
+        ];
+        for action in actions {
+            let json = serde_json::to_string(&action).unwrap();
+            let decoded: AuditAction = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, action);
+        }
+
+        // rename_all also applies to the externally tagged Custom variant.
+        let custom = AuditAction::Custom("my_op".to_string());
+        assert_eq!(
+            serde_json::to_string(&custom).unwrap(),
+            "{\"custom\":\"my_op\"}"
+        );
+        let decoded: AuditAction = serde_json::from_str("{\"custom\":\"my_op\"}").unwrap();
+        assert_eq!(decoded, custom);
+
+        // Unknown variant names are rejected on deserialize.
+        assert!(serde_json::from_str::<AuditAction>("\"does_not_exist\"").is_err());
+    }
+
+    #[test]
+    fn test_resource_type_serde_snake_case() {
+        let types = vec![
+            ResourceType::User,
+            ResourceType::Identity,
+            ResourceType::Credential,
+            ResourceType::Passkey,
+            ResourceType::Workspace,
+            ResourceType::Session,
+            ResourceType::Configuration,
+            ResourceType::Database,
+            ResourceType::Backup,
+            ResourceType::System,
+            ResourceType::Unknown,
+        ];
+        for resource_type in types {
+            let json = serde_json::to_string(&resource_type).unwrap();
+            let decoded: ResourceType = serde_json::from_str(&json).unwrap();
+            assert_eq!(decoded, resource_type);
+        }
+
+        assert!(serde_json::from_str::<ResourceType>("\"galaxy\"").is_err());
+    }
+
+    #[test]
+    fn test_resource_type_display_and_parse() {
+        let types = vec![
+            ResourceType::User,
+            ResourceType::Identity,
+            ResourceType::Credential,
+            ResourceType::Passkey,
+            ResourceType::Workspace,
+            ResourceType::Session,
+            ResourceType::Configuration,
+            ResourceType::Database,
+            ResourceType::Backup,
+            ResourceType::System,
+            ResourceType::Unknown,
+        ];
+
+        for resource_type in types {
+            let text = resource_type.to_string();
+            assert_eq!(text.parse::<ResourceType>().unwrap(), resource_type);
+        }
+
+        let err = "gadget".parse::<ResourceType>().unwrap_err();
+        assert_eq!(err, "Unknown resource type: gadget");
+    }
+
+    #[test]
+    fn test_audit_log_serde_roundtrip() {
+        let log = AuditLog::new(AuditAction::LoginFailed, ResourceType::Session, false)
+            .with_user_id(Some("user-1".to_string()))
+            .with_identity_id(Some(Uuid::new_v4()))
+            .with_credential_id(Some(Uuid::new_v4()))
+            .with_session_id(Some("session-1".to_string()))
+            .with_resource_id(Some("res-1".to_string()))
+            .with_ip_address(Some("127.0.0.1".to_string()))
+            .with_user_agent(Some("persona-cli/0.1".to_string()))
+            .with_error_message(Some("boom".to_string()))
+            .with_details(Some("details".to_string()))
+            .with_metadata("key".to_string(), "value".to_string())
+            .with_metadata_map(HashMap::from([("extra".to_string(), "data".to_string())]));
+
+        // with_details overwrites with_error_message's value.
+        assert_eq!(log.error_message, Some("details".to_string()));
+        assert_eq!(log.metadata.get("key"), Some(&"value".to_string()));
+        assert_eq!(log.metadata.get("extra"), Some(&"data".to_string()));
+
+        let json = serde_json::to_string(&log).unwrap();
+        let decoded: AuditLog = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded, log);
+    }
+
+    #[test]
+    fn test_security_sensitive_covers_all_flagged_actions() {
+        let sensitive = vec![
+            AuditAction::Login,
+            AuditAction::LoginFailed,
+            AuditAction::PasswordChange,
+            AuditAction::CredentialDecrypted,
+            AuditAction::CredentialExported,
+            AuditAction::PasskeyAsserted,
+            AuditAction::PasskeyExported,
+            AuditAction::UnauthorizedAccess,
+            AuditAction::BruteForceDetected,
+            AuditAction::SuspiciousActivity,
+            AuditAction::DataExfiltration,
+        ];
+        for action in sensitive {
+            let log = AuditLog::new(action, ResourceType::System, true);
+            assert!(
+                log.is_security_sensitive(),
+                "{} should be sensitive",
+                log.action
+            );
+        }
+
+        let not_sensitive = vec![
+            AuditAction::Logout,
+            AuditAction::IdentityViewed,
+            AuditAction::CredentialViewed,
+            AuditAction::WorkspaceEntered,
+            AuditAction::BackupCreated,
+        ];
+        for action in not_sensitive {
+            let log = AuditLog::new(action, ResourceType::System, true);
+            assert!(
+                !log.is_security_sensitive(),
+                "{} should not be sensitive",
+                log.action
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_failure_flags_security_actions_even_on_success() {
+        let flagged = vec![
+            AuditAction::LoginFailed,
+            AuditAction::UnauthorizedAccess,
+            AuditAction::BruteForceDetected,
+            AuditAction::SuspiciousActivity,
+            AuditAction::DataExfiltration,
+        ];
+        for action in flagged {
+            let log = AuditLog::new(action, ResourceType::System, true);
+            assert!(log.is_failure(), "{} should count as failure", log.action);
+        }
+
+        // Plain success and plain failure.
+        let success = AuditLog::new(AuditAction::Login, ResourceType::User, true);
+        assert!(!success.is_failure());
+        let failure = AuditLog::new(AuditAction::Logout, ResourceType::User, false);
+        assert!(failure.is_failure());
     }
 }

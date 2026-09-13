@@ -62,7 +62,6 @@ struct IdentityDetails {
 }
 
 async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<IdentityDetails> {
-    use dialoguer::Password;
     // Open DB
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -81,9 +80,7 @@ async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<Identi
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -233,4 +230,150 @@ fn is_sensitive_attribute(key: &str) -> bool {
     sensitive_keys
         .iter()
         .any(|&sensitive| key_lower.contains(sensitive))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::models::{Identity, IdentityType};
+    use persona_core::Repository;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn args(name: &str, format: &str, show_sensitive: bool) -> ShowArgs {
+        ShowArgs {
+            name: name.to_string(),
+            format: format.to_string(),
+            show_sensitive,
+        }
+    }
+
+    /// Creates a migrated database in `dir` and inserts the named identity.
+    async fn seed_identity(dir: &TempDir, name: &str) {
+        let db = Database::from_file(dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = IdentityRepository::new(db);
+        repo.create(&Identity::new(name.to_string(), IdentityType::Personal))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn every_format_and_error_paths_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        // All three formats succeed through the unauthenticated read path.
+        for format in ["table", "json", "yaml"] {
+            execute(args("alice", format, false), &config)
+                .await
+                .unwrap_or_else(|e| panic!("format {} must work: {}", format, e));
+        }
+
+        // Unknown format is rejected after the identity resolves.
+        let err = execute(args("alice", "xml", false), &config)
+            .await
+            .expect_err("unsupported format must fail");
+        assert!(err.to_string().contains("Unsupported output format: xml"));
+
+        // A missing identity is reported before formatting runs.
+        let err = execute(args("ghost", "table", false), &config)
+            .await
+            .expect_err("missing identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_path_with_master_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "bob").await;
+
+        // Seed the workspace user so `has_users` is true and the
+        // authentication branch is taken.
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // Wrong env password fails before any identity lookup.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = execute(args("bob", "json", false), &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        // Correct env password unlocks; sensitive masking runs either way.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        execute(args("bob", "json", false), &config)
+            .await
+            .expect("correct password must show identity");
+        execute(args("bob", "table", true), &config)
+            .await
+            .expect("table with sensitive shown");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[test]
+    fn table_format_masks_sensitive_attributes() {
+        let mut attributes = HashMap::new();
+        attributes.insert("api_token".to_string(), Value::String("hunter2".into()));
+        attributes.insert("city".to_string(), Value::String("Berlin".into()));
+
+        let details = IdentityDetails {
+            name: "bob".into(),
+            identity_type: "personal".into(),
+            description: String::new(),
+            email: Some("bob@example.com".into()),
+            phone: None,
+            tags: vec!["work".into()],
+            attributes,
+            active: true,
+            created: "2024-01-01 00:00:00".into(),
+            modified: "2024-01-02 00:00:00".into(),
+            last_used: None,
+            usage_count: 0,
+        };
+
+        // Rendering must not panic and must not leak the secret — masking is
+        // driven by `is_sensitive_attribute`, asserted directly below.
+        display_table_format(&details, false).unwrap();
+        display_table_format(&details, true).unwrap();
+        display_json_format(&details).unwrap();
+        display_yaml_format(&details).unwrap();
+
+        assert!(is_sensitive_attribute("api_token"));
+        assert!(!is_sensitive_attribute("city"));
+        assert!(is_sensitive_attribute("SOCIAL_SECURITY"));
+    }
 }

@@ -1700,4 +1700,587 @@ mod tests {
                 || err.to_string().contains("Assertion signature invalid")
         );
     }
+
+    // ------------------------------------------------------------------
+    // Helpers shared by the batches below
+    // ------------------------------------------------------------------
+
+    async fn unlocked_service() -> (Database, PersonaService) {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        (db, service)
+    }
+
+    async fn seed_credential(
+        service: &PersonaService,
+        identity_id: Uuid,
+        name: &str,
+        credential_type: CredentialType,
+    ) -> Credential {
+        let data = CredentialData::Password(PasswordCredentialData {
+            password: "pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        });
+        service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                credential_type,
+                SecurityLevel::Medium,
+                &data,
+            )
+            .await
+            .unwrap()
+    }
+
+    // ------------------------------------------------------------------
+    // Locked service error paths
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_locked_service_rejects_operations() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert!(!service.is_unlocked());
+
+        let id = Uuid::new_v4();
+        for err in [
+            service
+                .create_identity("locked".to_string(), IdentityType::Personal)
+                .await
+                .unwrap_err()
+                .to_string(),
+            service.get_identities().await.unwrap_err().to_string(),
+            service.get_identity(&id).await.unwrap_err().to_string(),
+            service
+                .get_credentials_for_identity(&id)
+                .await
+                .unwrap_err()
+                .to_string(),
+            service.get_credential(&id).await.unwrap_err().to_string(),
+            service
+                .delete_credential(&id)
+                .await
+                .unwrap_err()
+                .to_string(),
+            service.export_identity(&id).await.unwrap_err().to_string(),
+            service.get_statistics().await.unwrap_err().to_string(),
+            service
+                .attach_file(id, "/tmp/x", false)
+                .await
+                .unwrap_err()
+                .to_string(),
+            service.get_attachments(&id).await.unwrap_err().to_string(),
+        ] {
+            assert!(
+                err.contains("Service is locked"),
+                "unexpected error: {}",
+                err
+            );
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // User lifecycle / authentication
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_user_lifecycle_and_auth_paths() {
+        // A fresh database has no users; authentication fails closed.
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        assert!(!service.has_users().await.unwrap());
+        assert_eq!(
+            service.authenticate_user("anything").await.unwrap(),
+            AuthResult::InvalidCredentials
+        );
+
+        // Initialize the first user; the service unlocks automatically.
+        let user_id = service.initialize_user("master-pin").await.unwrap();
+        assert!(service.has_users().await.unwrap());
+        assert!(service.is_unlocked());
+
+        // Wrong password keeps the service usable but reports the failure.
+        assert_eq!(
+            service.authenticate_user("wrong").await.unwrap(),
+            AuthResult::InvalidCredentials
+        );
+        // Correct password succeeds (and succeeds again on repeat login).
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+
+        // Locking clears the in-memory key; ops are refused until re-unlock.
+        service.lock();
+        assert!(!service.is_unlocked());
+        assert!(service.current_user.is_none());
+
+        // Direct unlock with the stored salt restores access.
+        let salt = service
+            .user_auth_repo
+            .get_first()
+            .await
+            .unwrap()
+            .unwrap()
+            .get_master_key_salt()
+            .unwrap();
+        service.unlock("master-pin", &salt).unwrap();
+        assert!(service.is_unlocked());
+        assert_ne!(user_id, Uuid::new_v4());
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_user_locks_account_after_failures() {
+        let (_db, mut service) = unlocked_service().await;
+
+        for _ in 0..4 {
+            assert_eq!(
+                service.authenticate_user("wrong").await.unwrap(),
+                AuthResult::InvalidCredentials
+            );
+        }
+        // 5th failure triggers the account lockout.
+        assert_eq!(
+            service.authenticate_user("wrong").await.unwrap(),
+            AuthResult::InvalidCredentials
+        );
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::AccountLocked
+        );
+    }
+
+    #[tokio::test]
+    async fn test_authenticate_memory_user_is_rejected_and_session_surface() {
+        let (_db, mut service) = unlocked_service().await;
+
+        // `authenticate` builds an in-memory UserAuth without a stored hash,
+        // so no password can verify — the failure path must not panic.
+        let salt = service.generate_salt();
+        assert_eq!(
+            service
+                .authenticate(Uuid::new_v4(), "whatever", &salt)
+                .await
+                .unwrap(),
+            AuthResult::InvalidCredentials
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Session / auto-lock surface
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_session_auto_lock_surface() {
+        let (_db, service) = unlocked_service().await;
+
+        // Without a session (initialize_user does not create one) the
+        // legacy checks keep the service usable.
+        assert!(!service.is_session_locked().await);
+        assert!(!service.needs_reauth().await);
+        assert!(service.force_lock_session().await.is_ok());
+        assert!(service.unlock_session().await.is_ok());
+        assert!(service.get_user_sessions().await.unwrap().is_empty());
+        let _stats = service.get_auto_lock_statistics().await.unwrap();
+
+        // With a session id pointing at an unknown session, lock/unlock
+        // surface the manager's errors and the service reports locked.
+        *service.current_session_id.write().await = Some("ghost-session".to_string());
+        assert!(service.is_session_locked().await);
+        assert!(service.force_lock_session().await.is_err());
+        assert!(service.unlock_session().await.is_err());
+        // Default config does not require re-auth for sensitive ops.
+        assert!(!service.needs_reauth().await);
+        assert!(service.get_user_sessions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_auto_lock_configuration_and_monitoring() {
+        let (_db, mut service) = unlocked_service().await;
+
+        service
+            .configure_auto_lock(crate::auth::AutoLockConfig::default())
+            .await
+            .unwrap();
+        service.set_auto_lock_timeout(Duration::from_secs(60));
+        service.touch_activity();
+        service
+            .register_auto_lock_callback(Arc::new(|_event| {}))
+            .await;
+
+        // Monitoring works with and without a current user.
+        service.start_auto_lock_monitoring().await.unwrap();
+        service.stop_auto_lock_monitoring().await;
+        assert!(service.get_auto_lock_statistics().await.is_ok());
+    }
+
+    // ------------------------------------------------------------------
+    // Remote auth / biometric providers
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_remote_and_biometric_provider_surface() {
+        let (_db, mut service) = unlocked_service().await;
+
+        // Swap in providers explicitly (default no-op setters).
+        service.set_remote_auth_provider(Arc::new(MockRemoteAuthProvider));
+        service.set_biometric_provider(Arc::new(MockBiometricProvider::default()));
+
+        let challenge = service.begin_remote_auth("alice").unwrap();
+        let result = service
+            .finalize_remote_auth(&challenge, "client-proof")
+            .unwrap();
+        assert_eq!(result.user_id, challenge.user_id);
+        assert!(!result.session_key_fingerprint.is_empty());
+
+        // Empty client proof is rejected.
+        assert!(service.finalize_remote_auth(&challenge, "").is_err());
+
+        // Biometrics: default mock is available and verifies.
+        assert!(service.biometric_available(None));
+        assert!(service.biometric_available(Some(BiometricPlatform::Unknown)));
+        let prompt = BiometricPrompt {
+            user_id: Uuid::new_v4(),
+            reason: "unlock vault".to_string(),
+            platform: None,
+        };
+        assert!(service.authenticate_biometric(&prompt).unwrap());
+
+        // A failing provider surfaces the error.
+        service.set_biometric_provider(Arc::new(MockBiometricProvider {
+            force_fail: true,
+            ..Default::default()
+        }));
+        assert!(service.authenticate_biometric(&prompt).is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Attachments
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_attachment_lifecycle() {
+        let (db, mut service) = unlocked_service().await;
+
+        // Before initialization every attachment op reports the missing store.
+        let err = service
+            .get_attachment_stats()
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Attachment storage not initialized"));
+
+        let identity = service
+            .create_identity("Attach Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential =
+            seed_credential(&service, identity.id, "with file", CredentialType::Password).await;
+
+        let err = service
+            .attach_file(credential.id, "/tmp/nope", false)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Attachment storage not initialized"));
+
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db)
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("secret.txt");
+        std::fs::write(&file_path, b"attachment-bytes").unwrap();
+
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, false)
+            .await
+            .unwrap();
+
+        let listed = service.get_attachments(&credential.id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, attachment_id);
+
+        let content = service
+            .retrieve_attachment(&attachment_id, false)
+            .await
+            .unwrap();
+        assert_eq!(content, b"attachment-bytes");
+
+        let out_path = dir.path().join("restored.txt");
+        service
+            .save_attachment(&attachment_id, &out_path, false)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out_path).unwrap(), b"attachment-bytes");
+
+        let stats = service.get_attachment_stats().await.unwrap();
+        assert_eq!(stats.total_attachments, 1);
+
+        service.delete_attachment(&attachment_id).await.unwrap();
+        assert!(service
+            .get_attachments(&credential.id)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Retrieving a deleted attachment surfaces the missing-file error.
+        assert!(service
+            .retrieve_attachment(&attachment_id, false)
+            .await
+            .is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // Export / statistics
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_export_identity_and_statistics() {
+        let (_db, service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Export Target".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let first =
+            seed_credential(&service, identity.id, "GitHub", CredentialType::Password).await;
+        seed_credential(&service, identity.id, "API", CredentialType::ApiKey).await;
+
+        let mut favorite = first.clone();
+        favorite.is_favorite = true;
+        service.update_credential(&favorite).await.unwrap();
+
+        let export = service.export_identity(&identity.id).await.unwrap();
+        assert_eq!(export.identity.id, identity.id);
+        assert_eq!(export.credentials.len(), 2);
+
+        // Unknown identity -> IdentityNotFound.
+        let err = service
+            .export_identity(&Uuid::new_v4())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "unexpected error: {}", err);
+
+        let stats = service.get_statistics().await.unwrap();
+        assert_eq!(stats.total_identities, 1);
+        assert_eq!(stats.total_credentials, 2);
+        assert_eq!(stats.active_credentials, 2);
+        assert_eq!(stats.favorite_credentials, 1);
+        assert_eq!(stats.credential_types.values().sum::<u32>(), 2);
+        assert_eq!(stats.security_levels.values().sum::<u32>(), 2);
+    }
+
+    // ------------------------------------------------------------------
+    // Change history
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_change_history_surface() {
+        let (_db, service) = unlocked_service().await;
+
+        let entity_id = Uuid::new_v4();
+        service
+            .change_history_repo
+            .record(&ChangeHistory::new(
+                EntityType::Identity,
+                entity_id,
+                crate::models::ChangeType::Created,
+            ))
+            .await
+            .unwrap();
+
+        let history = service
+            .get_entity_history(EntityType::Identity, &entity_id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+
+        let version = service
+            .get_entity_version(EntityType::Identity, &entity_id, 1)
+            .await
+            .unwrap();
+        assert!(version.is_some());
+        assert!(service
+            .get_entity_version(EntityType::Identity, &entity_id, 99)
+            .await
+            .unwrap()
+            .is_none());
+
+        let queried = service
+            .query_change_history(
+                &ChangeHistoryQuery::new()
+                    .entity_type(EntityType::Identity)
+                    .entity_id(entity_id),
+            )
+            .await
+            .unwrap();
+        assert_eq!(queried.len(), 1);
+
+        let stats = service.get_change_history_stats().await.unwrap();
+        assert!(stats.total_changes >= 1);
+
+        // A cutoff in the future removes everything recorded so far.
+        let removed = service
+            .cleanup_old_history(chrono::Utc::now() + chrono::Duration::days(1))
+            .await
+            .unwrap();
+        assert_eq!(removed, 1);
+        assert!(service
+            .get_entity_history(EntityType::Identity, &entity_id)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Query helpers / password generation
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_query_helpers_and_password_generation() {
+        let (_db, service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Helper Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(
+            &service,
+            identity.id,
+            "GitHub token",
+            CredentialType::Password,
+        )
+        .await;
+        let mut fav = cred.clone();
+        fav.is_favorite = true;
+        service.update_credential(&fav).await.unwrap();
+        seed_credential(&service, identity.id, "API key", CredentialType::ApiKey).await;
+
+        assert_eq!(service.search_credentials("").await.unwrap().len(), 2);
+        assert_eq!(service.search_credentials("GitHub").await.unwrap().len(), 1);
+        assert_eq!(service.get_favorite_credentials().await.unwrap().len(), 1);
+        assert_eq!(
+            service
+                .get_credentials_by_type(&CredentialType::Password)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .get_identities_by_type(&IdentityType::Personal)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(service
+            .get_identity_by_name("no-such-identity")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .list_passkeys_by_rp("example.com")
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(service
+            .get_credential(&Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+
+        // Password helpers.
+        let generated = service.generate_password(16, true);
+        assert_eq!(generated.chars().count(), 16);
+        // Lengths below the minimum are clamped to 4.
+        assert_eq!(service.generate_password(2, false).chars().count(), 4);
+
+        let options = PasswordGeneratorOptions {
+            length: 20,
+            include_symbols: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            service
+                .generate_password_with_options(&options)
+                .unwrap()
+                .chars()
+                .count(),
+            20
+        );
+
+        let hash = service.hash_data(b"persona");
+        assert_eq!(hash.len(), 32);
+        assert_eq!(hash, service.hash_data(b"persona"));
+    }
+
+    // ------------------------------------------------------------------
+    // Identity / credential CRUD
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_identity_and_credential_crud() {
+        let (_db, service) = unlocked_service().await;
+
+        // create_identity_full stores the pre-populated identity.
+        let mut identity = Identity::new("Full Identity".to_string(), IdentityType::Work);
+        identity.email = Some("work@example.com".to_string());
+        let created = service.create_identity_full(identity).await.unwrap();
+        assert_eq!(created.email.as_deref(), Some("work@example.com"));
+
+        // Rename and persist.
+        let mut renamed = created.clone();
+        renamed.name = "Renamed Identity".to_string();
+        let updated = service.update_identity(&renamed).await.unwrap();
+        assert_eq!(updated.name, "Renamed Identity");
+
+        let fetched = service.get_identity(&created.id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "Renamed Identity");
+
+        // Credential lifecycle: not-found delete reports false, then a real delete.
+        assert!(!service.delete_credential(&Uuid::new_v4()).await.unwrap());
+
+        let identity2 = service
+            .create_identity("Cred Owner".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential = seed_credential(
+            &service,
+            identity2.id,
+            "to delete",
+            CredentialType::Password,
+        )
+        .await;
+
+        let mut edited = credential.clone();
+        edited.name = "renamed cred".to_string();
+        service.update_credential(&edited).await.unwrap();
+        assert_eq!(
+            service
+                .get_credential(&credential.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .name,
+            "renamed cred"
+        );
+
+        assert!(service.delete_credential(&credential.id).await.unwrap());
+        assert!(!service.delete_credential(&credential.id).await.unwrap());
+
+        // Deleting an identity with no leftover credentials succeeds.
+        assert!(service.delete_identity(&identity2.id).await.unwrap());
+        assert!(!service.delete_identity(&identity2.id).await.unwrap());
+    }
 }

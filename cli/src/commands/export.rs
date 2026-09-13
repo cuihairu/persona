@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use crate::config::CliConfig;
 use crate::utils::file_crypto::encrypt_file_inplace;
 use crate::utils::progress::create_progress_bar;
-use dialoguer::Password;
 use persona_core::Repository;
 use persona_core::{Database, PersonaService};
 
@@ -145,9 +144,7 @@ async fn get_all_identity_names(config: &CliConfig) -> Result<Vec<String>> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -278,10 +275,7 @@ async fn perform_export(
 
     // Apply encryption if requested
     if args.encrypt {
-        let passphrase = Password::new()
-            .with_prompt("Enter export passphrase")
-            .with_confirmation("Confirm passphrase", "Passphrases do not match")
-            .interact()?;
+        let passphrase = super::service::prompt_payload_passphrase("export")?;
         encrypt_file_inplace(output_path, &passphrase, None)?;
     }
 
@@ -311,18 +305,18 @@ async fn export_json(
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock (for credential export)")
-            .interact()?;
-        matches!(
-            service
-                .authenticate_user(&password)
-                .await
-                .map_err(|e| anyhow!("Auth failed: {}", e))?,
-            persona_core::auth::authentication::AuthResult::Success
-        )
+        let password = super::service::prompt_master_password()?;
+        match service
+            .authenticate_user(&password)
+            .await
+            .map_err(|e| anyhow!("Auth failed: {}", e))?
+        {
+            persona_core::auth::authentication::AuthResult::Success => true,
+            other => anyhow::bail!("Authentication failed: {:?}", other),
+        }
     } else {
-        true
+        // No users: the service is never unlocked; read via repository.
+        false
     };
 
     let mut export_data = serde_json::json!({
@@ -512,14 +506,12 @@ async fn export_csv(
     let mut service = PersonaService::new(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create service: {}", e))?;
-    if service
+    let has_users = service
         .has_users()
         .await
-        .map_err(|e| anyhow!("Failed to check users: {}", e))?
-    {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?;
+    if has_users {
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -533,11 +525,18 @@ async fn export_csv(
     csv_content.push_str("Name,Type,Description,Email,Created,Modified\n");
 
     for (i, name) in identity_names.iter().enumerate() {
-        let identity = service
-            .get_identity_by_name(name)
-            .await
-            .map_err(|e| anyhow!("Failed to load identity '{}': {}", name, e))?
-            .with_context(|| format!("Identity '{}' not found", name))?;
+        let identity = (if has_users {
+            service
+                .get_identity_by_name(name)
+                .await
+                .map_err(|e| anyhow!("Failed to load identity '{}': {}", name, e))?
+        } else {
+            persona_core::storage::IdentityRepository::new(db.clone())
+                .find_by_name(name)
+                .await
+                .map_err(|e| anyhow!("Failed to load identity '{}': {}", name, e))?
+        })
+        .with_context(|| format!("Identity '{}' not found", name))?;
         csv_content.push_str(&format!(
             "{},{},{},{},{},{}\n",
             identity.name,
@@ -604,4 +603,288 @@ fn show_export_info(output_path: &Path) -> Result<()> {
     println!("  • Store backup safely");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
+    use persona_core::storage::IdentityRepository;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn args(names: &[&str], format: &str) -> ExportArgs {
+        ExportArgs {
+            names: names.iter().map(|s| s.to_string()).collect(),
+            output: None,
+            format: format.to_string(),
+            include_sensitive: false,
+            encrypt: false,
+            compression: 0,
+            interactive: false,
+        }
+    }
+
+    /// Migrated database with `names` identities inserted.
+    async fn seeded_db(dir: &TempDir, names: &[&str]) -> Database {
+        let db = Database::from_file(dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        for name in names {
+            repo.create(&CoreIdentityModel::new(
+                name.to_string(),
+                IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        }
+        db
+    }
+
+    #[test]
+    fn determine_output_path_variants() {
+        let out = determine_output_path(
+            &ExportArgs {
+                output: Some(PathBuf::from("/tmp/out.json")),
+                ..args(&["alice"], "json")
+            },
+            &["alice".to_string()],
+        )
+        .unwrap();
+        assert_eq!(out, PathBuf::from("/tmp/out.json"));
+
+        let single =
+            determine_output_path(&args(&["alice"], "json"), &["alice".to_string()]).unwrap();
+        let name = single.to_string_lossy();
+        assert!(name.starts_with("persona_export_alice_"));
+        assert!(name.ends_with(".json"));
+
+        let multi = determine_output_path(
+            &args(&["alice"], "json"),
+            &["alice".to_string(), "bob".to_string(), "carol".to_string()],
+        )
+        .unwrap();
+        let name = multi.to_string_lossy();
+        assert!(name.starts_with("persona_export_3_"));
+        assert!(name.ends_with(".json"));
+    }
+
+    #[tokio::test]
+    async fn get_all_names_and_validation_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice", "bob"]).await;
+
+        let all = get_all_identity_names(&config).await.unwrap();
+        let mut sorted = all.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec!["alice".to_string(), "bob".to_string()]);
+
+        validate_identity_names(&["alice".to_string()], &config)
+            .await
+            .expect("existing name validates");
+        let err = validate_identity_names(&["ghost".to_string()], &config)
+            .await
+            .expect_err("unknown name must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+    }
+
+    #[test]
+    fn compress_creates_gzip_and_removes_source() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("data.json");
+        std::fs::write(&path, b"payload").unwrap();
+
+        compress_file(&path, 6).unwrap();
+
+        let gz = dir.path().join("data.json.gz");
+        assert!(gz.exists(), "gzip file created");
+        assert!(!path.exists(), "source removed");
+
+        // Decompressing restores the payload.
+        let f = std::fs::File::open(&gz).unwrap();
+        let mut decoder = flate2::read::GzDecoder::new(f);
+        use std::io::Read;
+        let mut restored = Vec::new();
+        decoder.read_to_end(&mut restored).unwrap();
+        assert_eq!(restored, b"payload");
+    }
+
+    #[tokio::test]
+    async fn perform_export_rejects_unknown_format() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        let out = dir.path().join("out.xml");
+
+        let err = perform_export(
+            &["alice".to_string()],
+            &out,
+            &args(&["alice"], "xml"),
+            &config,
+        )
+        .await
+        .expect_err("unknown format must fail");
+        assert!(err.to_string().contains("Unsupported export format: xml"));
+    }
+
+    #[tokio::test]
+    async fn export_json_unencrypted_workspace_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice", "bob"]).await;
+        let out = dir.path().join("nested").join("out.json");
+
+        perform_export(
+            &["alice".to_string(), "bob".to_string()],
+            &out,
+            &args(&["alice", "bob"], "json"),
+            &config,
+        )
+        .await
+        .expect("json export must succeed");
+
+        let content = std::fs::read_to_string(&out).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(value["export_info"]["identities_count"], 2);
+        let names: Vec<&str> = value["identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"alice"));
+        assert!(names.contains(&"bob"));
+    }
+
+    #[tokio::test]
+    async fn export_authenticated_path_with_master_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["carol"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // Wrong password fails before any file is written.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let out = dir.path().join("carol.json");
+        let err = perform_export(
+            &["carol".to_string()],
+            &out,
+            &args(&["carol"], "json"),
+            &config,
+        )
+        .await
+        .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        // Correct password exports the identity.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        perform_export(
+            &["carol".to_string()],
+            &out,
+            &args(&["carol"], "json"),
+            &config,
+        )
+        .await
+        .expect("correct password must export");
+        let content = std::fs::read_to_string(&out).unwrap();
+        assert!(content.contains("carol"));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn export_yaml_and_csv_formats_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+
+        let yaml_out = dir.path().join("out.yaml");
+        perform_export(
+            &["alice".to_string()],
+            &yaml_out,
+            &args(&["alice"], "yaml"),
+            &config,
+        )
+        .await
+        .expect("yaml export must succeed");
+        let yaml = std::fs::read_to_string(&yaml_out).unwrap();
+        assert!(yaml.contains("alice"), "yaml contains identity");
+
+        let csv_out = dir.path().join("out.csv");
+        perform_export(
+            &["alice".to_string()],
+            &csv_out,
+            &args(&["alice"], "csv"),
+            &config,
+        )
+        .await
+        .expect("csv export must succeed");
+        let csv = std::fs::read_to_string(&csv_out).unwrap();
+        assert!(csv.starts_with("Name,Type,Description,Email,Created,Modified"));
+        assert!(csv.contains("alice"));
+    }
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use tempfile::TempDir;
+
+    #[test]
+    fn summary_and_info_render_without_state() {
+        let dir = TempDir::new().unwrap();
+        let config = CliConfig::default();
+        let _ = config;
+
+        let mut args = ExportArgs {
+            names: vec!["alice".to_string(), "bob".to_string()],
+            output: None,
+            format: "json".to_string(),
+            include_sensitive: true,
+            encrypt: true,
+            compression: 9,
+            interactive: false,
+        };
+        args.compression = 9;
+        let path = dir.path().join("out.json");
+        std::fs::write(&path, "{}").unwrap();
+
+        show_export_summary(&["alice".to_string(), "bob".to_string()], &path, &args).unwrap();
+        show_export_info(&path).unwrap();
+        // Missing files take the "no metadata" branch.
+        show_export_info(&dir.path().join("missing.json")).unwrap();
+    }
 }

@@ -429,4 +429,207 @@ mod tests {
             assert!(!validate_bitcoin_address(&tampered));
         }
     }
+
+    #[test]
+    fn test_testnet_address_generation() {
+        let key = {
+            let mnemonic = SecureMnemonic::from_phrase(TEST_MNEMONIC).unwrap();
+            let master = MasterKey::from_mnemonic(&mnemonic, "").unwrap();
+            master.derive_path("m/84'/1'/0'/0/0").unwrap()
+        };
+
+        let p2pkh = generate_bitcoin_address(&key, BitcoinAddressType::P2PKH, true).unwrap();
+        assert!(p2pkh.starts_with('m') || p2pkh.starts_with('n'));
+        assert!(validate_bitcoin_address(&p2pkh));
+
+        let p2sh = generate_bitcoin_address(&key, BitcoinAddressType::P2SHP2WPKH, true).unwrap();
+        assert!(p2sh.starts_with('2'));
+        assert!(validate_bitcoin_address(&p2sh));
+
+        let p2wpkh = generate_bitcoin_address(&key, BitcoinAddressType::P2WPKH, true).unwrap();
+        assert!(p2wpkh.starts_with("tb1q"));
+        assert!(validate_bitcoin_address(&p2wpkh));
+
+        let p2tr = generate_bitcoin_address(&key, BitcoinAddressType::P2TR, true).unwrap();
+        assert!(p2tr.starts_with("tb1p"));
+        assert!(validate_bitcoin_address(&p2tr));
+    }
+
+    #[test]
+    fn test_from_compressed_pubkey_matches_derived_key_path() {
+        let master = master_from_test_mnemonic();
+        let key = master.derive_path("m/84'/0'/0'/0/0").unwrap();
+        let pubkey = key.public_key_bytes();
+
+        for address_type in [
+            BitcoinAddressType::P2PKH,
+            BitcoinAddressType::P2SHP2WPKH,
+            BitcoinAddressType::P2WPKH,
+            BitcoinAddressType::P2TR,
+        ] {
+            let via_key = generate_bitcoin_address(&key, address_type, false).unwrap();
+            let via_pubkey =
+                generate_bitcoin_address_from_compressed_pubkey(&pubkey, address_type, false)
+                    .unwrap();
+            assert_eq!(via_key, via_pubkey);
+            assert!(validate_bitcoin_address(&via_pubkey));
+        }
+    }
+
+    #[test]
+    fn test_taproot_tweak_rejects_uncompressed_and_invalid_keys() {
+        // 0x04 prefix is not a compressed key.
+        let err =
+            tweak_pubkey_taproot(&[0x04u8; 33]).expect_err("uncompressed prefix must be rejected");
+        assert!(err.to_string().contains("compressed secp256k1 pubkey"));
+
+        // 0x02 prefix but not a valid curve point.
+        let mut invalid = [0x02u8; 33];
+        invalid[1..].fill(0xFF); // x = n-1 region is not a valid x-only key
+        assert!(tweak_pubkey_taproot(&invalid).is_err());
+
+        // Odd-y (0x03) vs even-y (0x02) forms of the same x-only key: BIP-340
+        // semantics interpret the internal key as the even-y point either way,
+        // so both compressed forms must tweak to the same output key.
+        let master = master_from_test_mnemonic();
+        let key = master.derive_path("m/86'/0'/0'/0/0").unwrap();
+        let mut even = key.public_key_bytes();
+        even[0] = 0x02;
+        let mut odd = even;
+        odd[0] = 0x03;
+        assert_ne!(even[0], odd[0]);
+        assert_eq!(
+            tweak_pubkey_taproot(&even).unwrap(),
+            tweak_pubkey_taproot(&odd).unwrap(),
+            "x-only tweak must be parity-independent"
+        );
+    }
+
+    #[test]
+    fn test_ethereum_address_variants_agree() {
+        let master = master_from_test_mnemonic();
+        let key = master.derive_path("m/44'/60'/0'/0/0").unwrap();
+
+        // Plain (no EIP-55 checksum) vs checksummed.
+        let plain = generate_ethereum_address(&key).unwrap();
+        let checksummed = generate_ethereum_address_checksummed(&key).unwrap();
+        assert!(plain.starts_with("0x"));
+        assert_eq!(plain.len(), 42);
+        assert_eq!(plain.to_lowercase(), checksummed.to_lowercase());
+        // The checksum casing must differ from all-lowercase for this address,
+        // or EIP-55 would be a no-op.
+        assert_eq!(plain, plain.to_lowercase());
+        assert_ne!(plain, checksummed);
+
+        // The compressed-pubkey entry point produces the same address.
+        let via_pubkey =
+            generate_ethereum_address_checksummed_from_compressed_pubkey(&key.public_key_bytes())
+                .unwrap();
+        assert_eq!(via_pubkey, checksummed);
+    }
+
+    #[test]
+    fn test_solana_address_rejects_wrong_length() {
+        let err = generate_solana_address(&[7u8; 31]).expect_err("31-byte pubkey must be rejected");
+        assert!(err.to_string().contains("32-byte Ed25519 public key"));
+        assert!(generate_solana_address(&[7u8; 33]).is_err());
+        assert!(generate_solana_address(&[]).is_err());
+    }
+
+    #[test]
+    fn test_base58_check_decode_rejects_bad_input() {
+        assert!(base58_check_decode("").is_err());
+        assert!(base58_check_decode("not base58!").is_err());
+        // Valid base58 characters but broken checksum.
+        assert!(base58_check_decode("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb").is_err());
+
+        // Round-trip through the encoder used by the address functions.
+        let payload = {
+            let mut p = vec![0x00u8];
+            p.extend_from_slice(&hash160(&[1u8; 33]));
+            p
+        };
+        let encoded = bs58::encode(&payload).with_check().into_string();
+        assert_eq!(base58_check_decode(&encoded).unwrap(), payload);
+    }
+
+    #[test]
+    fn test_validate_bitcoin_address_accepts_uppercase_mainnet_prefix() {
+        // Upper-case Bech32 is valid per BIP-173 (decoders must accept it).
+        // Note: the prefix dispatch only special-cases "BC1"; an upper-case
+        // "TB1..." falls through to the base58 branch and is rejected.
+        assert!(validate_bitcoin_address(
+            "BC1QW508D6QEJXTDG4Y5R3ZARVARY0C5XW7KV8F3T4"
+        ));
+    }
+
+    #[test]
+    fn test_validate_bitcoin_address_rejects_known_version_bytes() {
+        // Checksum-valid base58 with a non-Bitcoin version byte (Litecoin
+        // P2PKH 0x30) must be rejected.
+        let mut payload = vec![0x30u8];
+        payload.extend_from_slice(&hash160(&[2u8; 33]));
+        let ltc_style = bs58::encode(&payload).with_check().into_string();
+        assert!(!validate_bitcoin_address(&ltc_style));
+
+        // Checksum-valid base58 with a too-short payload (version + 19 bytes).
+        let mut short_payload = vec![0x00u8];
+        short_payload.extend_from_slice(&[1u8; 19]);
+        let short = bs58::encode(&short_payload).with_check().into_string();
+        assert!(!validate_bitcoin_address(&short));
+    }
+
+    #[test]
+    fn test_validate_ethereum_address_length_and_hex_checks() {
+        assert!(validate_ethereum_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0"
+        ));
+        // 39 and 41 hex chars are invalid.
+        assert!(!validate_ethereum_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+        ));
+        assert!(!validate_ethereum_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb00"
+        ));
+        // Non-hex payload.
+        assert!(!validate_ethereum_address(
+            "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEbG"
+        ));
+        // Empty string.
+        assert!(!validate_ethereum_address(""));
+    }
+
+    #[test]
+    fn test_validate_solana_address_boundaries() {
+        // 32 random bytes encode to 43-44 base58 chars.
+        let max_len = bs58::encode([0xFFu8; 32]).into_string();
+        assert_eq!(max_len.len(), 44);
+        assert!(validate_solana_address(&max_len));
+
+        // 32 zero bytes encode to a short (32-char) but valid address.
+        let all_zero = bs58::encode([0u8; 32]).into_string();
+        assert_eq!(all_zero.len(), 32);
+        assert!(validate_solana_address(&all_zero));
+
+        // 44 chars decoding to the wrong byte count is rejected.
+        let long_44 = "11111111111111111111111111111111111111111111";
+        assert_eq!(long_44.len(), 44);
+        assert!(!validate_solana_address(long_44));
+
+        // Base58-invalid characters (0, O, I, l) are rejected.
+        assert!(!validate_solana_address(
+            "0OIl0000000000000000000000000000000000000000"
+        ));
+
+        // Length bounds: 31 and 45 chars.
+        assert!(!validate_solana_address(&"a".repeat(31)));
+        assert!(!validate_solana_address(&"a".repeat(45)));
+    }
+
+    #[test]
+    fn test_hash160_matches_double_digest_composition() {
+        let data = b"hash160 composition check";
+        let expected = ripemd::Ripemd160::digest(Sha256::digest(data));
+        assert_eq!(hash160(data), expected.as_slice());
+    }
 }

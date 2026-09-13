@@ -891,4 +891,370 @@ mod tests {
             "authData must be bytes",
         );
     }
+
+    // ============ additional coverage: helpers, UV flag, error paths ========
+
+    #[test]
+    fn local_client_data_helpers_produce_parseable_json() {
+        let cd = local_client_data(CLIENT_DATA_TYPE_CREATE, "https://example.com").unwrap();
+        let parsed = parse_client_data(&cd, CLIENT_DATA_TYPE_CREATE, "https://example.com")
+            .expect("locally built client data must parse");
+        // The challenge is random 32 bytes of base64url (43 chars).
+        assert_eq!(URL_SAFE_NO_PAD.decode(&parsed.challenge).unwrap().len(), 32);
+
+        let self_test = self_test_client_data("https://example.com").unwrap();
+        parse_client_data(&self_test, CLIENT_DATA_TYPE_GET, "https://example.com")
+            .expect("self-test client data must use the GET ceremony type");
+    }
+
+    #[test]
+    fn aaguid_and_random_bytes_are_distinct() {
+        // The AAGUID is a fixed 16-byte identifier for the software
+        // authenticator.
+        assert_eq!(aaguid().len(), 16);
+        assert_eq!(aaguid(), PasskeyItem::aaguid());
+
+        let a = random_bytes32();
+        let b = random_bytes32();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn user_verification_flag_is_carried_into_authenticator_data() {
+        let rp = "example.com";
+        let origin = "https://example.com";
+        let cd_create = client_data(true, "dXZmbGFn", origin);
+        let reg = register_passkey(rp, origin, &cd_create, true).unwrap();
+
+        // Registration authData flags must include UP | AT | UV.
+        let value: coset::cbor::value::Value =
+            coset::cbor::de::from_reader(reg.attestation_object.as_slice()).unwrap();
+        let coset::cbor::value::Value::Map(entries) = value else {
+            panic!("attestation must be a map")
+        };
+        let auth_data = entries
+            .iter()
+            .find_map(|(k, v)| match (k, v) {
+                (coset::cbor::value::Value::Text(t), coset::cbor::value::Value::Bytes(b))
+                    if t == "authData" =>
+                {
+                    Some(b.clone())
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(auth_data[32], FLAG_UP | FLAG_AT | FLAG_UV);
+
+        // Assertion with UV also sets the flag and still verifies.
+        let cd_get = client_data(false, "dXZmbGFn", origin);
+        let out = assert_passkey(rp, origin, &cd_get, &reg.signing_key, true).unwrap();
+        assert_eq!(out.authenticator_data[32], FLAG_UP | FLAG_UV);
+        verify_assertion(
+            &reg.public_key_cose,
+            rp,
+            &cd_get,
+            &out.authenticator_data,
+            &out.signature_der,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn parse_creation_options_rejects_missing_or_wrong_alg_params() {
+        let origin = "https://example.com";
+
+        // pubKeyCredParams missing entirely.
+        let options = serde_json::json!({ "user": { "id": "dXNlcg" } });
+        let err = parse_creation_options(&options, origin)
+            .expect_err("missing pubKeyCredParams must be rejected");
+        assert!(err.to_string().contains("passkey_alg_unsupported"));
+
+        // Only non-ES256 algorithms offered.
+        let options = serde_json::json!({
+            "user": { "id": "dXNlcg" },
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -257 }],
+        });
+        let err = parse_creation_options(&options, origin)
+            .expect_err("non-ES256 params must be rejected");
+        assert!(err.to_string().contains("passkey_alg_unsupported"));
+
+        // ES256 present but with a wrong type string.
+        let options = serde_json::json!({
+            "user": { "id": "dXNlcg" },
+            "pubKeyCredParams": [{ "type": "other", "alg": -7 }],
+        });
+        assert!(parse_creation_options(&options, origin).is_err());
+
+        // user object missing entirely.
+        let options =
+            serde_json::json!({ "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }] });
+        let err =
+            parse_creation_options(&options, origin).expect_err("missing user must be rejected");
+        assert!(err.to_string().contains("missing user"));
+    }
+
+    #[test]
+    fn parse_creation_options_accepts_padded_base64url_and_rp_name() {
+        // Padded base64url ("dXNlcg==") must decode via the fallback engine.
+        let parsed = parse_creation_options(
+            &es256_options(Some("example.com"), Some("dXNlcg==")),
+            "https://example.com",
+        )
+        .unwrap();
+        assert_eq!(parsed.user_handle, b"user");
+        assert_eq!(parsed.rp_name.as_deref(), Some("Example"));
+        assert_eq!(parsed.rp_id, "example.com");
+
+        // Invalid base64url (bad alphabet) is rejected.
+        let err = parse_creation_options(
+            &es256_options(Some("example.com"), Some("!!!not-base64url!!!")),
+            "https://example.com",
+        )
+        .expect_err("invalid base64url must be rejected");
+        assert!(err.to_string().contains("invalid base64url encoding"));
+    }
+
+    #[test]
+    fn origin_host_extraction_rules() {
+        // Host is lower-cased; port, path, query and fragment are stripped.
+        let parsed = parse_creation_options(
+            &es256_options(None, Some("dQ")),
+            "https://EXAMPLE.COM:8443/path?q=1#frag",
+        )
+        .unwrap();
+        assert_eq!(parsed.rp_id, "example.com");
+
+        // A scheme-less origin is rejected.
+        let err = parse_creation_options(&es256_options(None, Some("dQ")), "example.com")
+            .expect_err("scheme-less origin must be rejected");
+        assert!(err.to_string().contains("Invalid origin"));
+    }
+
+    #[test]
+    fn validate_origin_matches_rp_id_rules() {
+        // Exact match and subdomain match are fine.
+        assert!(validate_origin_matches_rp_id("https://example.com", "example.com").is_ok());
+        assert!(validate_origin_matches_rp_id("https://a.b.example.com", "example.com").is_ok());
+
+        // A sibling domain is not a subdomain.
+        let err = validate_origin_matches_rp_id("https://example.org", "example.com")
+            .expect_err("different domain must be rejected");
+        assert!(err.to_string().contains("does not match rp_id"));
+
+        // rp_id shape rules apply to the direct call too.
+        assert!(
+            validate_origin_matches_rp_id("https://example.com", "https://example.com").is_err()
+        );
+        assert!(validate_origin_matches_rp_id("https://example.com", "").is_err());
+        assert!(validate_origin_matches_rp_id("https://example.com", ".").is_err());
+    }
+
+    /// `ParsedClientData` is not `Debug`, so `expect_err` cannot be used.
+    fn expect_invalid(result: PersonaResult<ParsedClientData>, msg: &str) -> PersonaError {
+        match result {
+            Err(e) => e,
+            Ok(_) => panic!("{msg}"),
+        }
+    }
+
+    #[test]
+    fn parse_client_data_error_paths() {
+        // Malformed JSON.
+        let err = expect_invalid(
+            parse_client_data(b"{not json", CLIENT_DATA_TYPE_GET, "https://example.com"),
+            "malformed JSON must be rejected",
+        );
+        assert!(err.to_string().contains("Invalid clientDataJSON"));
+
+        // Missing type field.
+        let err = expect_invalid(
+            parse_client_data(
+                br#"{"challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#,
+                CLIENT_DATA_TYPE_GET,
+                "https://example.com",
+            ),
+            "missing type must be rejected",
+        );
+        assert!(err.to_string().contains("missing type"));
+
+        // Challenge that is not base64url.
+        let err = expect_invalid(
+            parse_client_data(
+                br#"{"type":"webauthn.get","challenge":"!!!","origin":"https://example.com"}"#,
+                CLIENT_DATA_TYPE_GET,
+                "https://example.com",
+            ),
+            "non-base64url challenge must be rejected",
+        );
+        assert!(err.to_string().contains("challenge is not base64url"));
+
+        // Missing origin field.
+        let err = expect_invalid(
+            parse_client_data(
+                br#"{"type":"webauthn.get","challenge":"Y2hhbGxlbmdl"}"#,
+                CLIENT_DATA_TYPE_GET,
+                "https://example.com",
+            ),
+            "missing origin must be rejected",
+        );
+        assert!(err.to_string().contains("missing origin"));
+
+        // Origin comparison is ASCII-case-insensitive.
+        parse_client_data(
+            br#"{"type":"webauthn.get","challenge":"Y2hhbGxlbmdl","origin":"HTTPS://EXAMPLE.COM"}"#,
+            CLIENT_DATA_TYPE_GET,
+            "https://example.com",
+        )
+        .expect("case difference in origin must be tolerated");
+    }
+
+    #[test]
+    fn verify_assertion_error_paths() {
+        let rp = "example.com";
+        let reg = register_passkey(
+            rp,
+            "https://example.com",
+            &client_data(true, "cmVnaXN0ZXI", "https://example.com"),
+            false,
+        )
+        .unwrap();
+        let cd = client_data(false, "Y2hhbGxlbmdl", "https://example.com");
+        let out = assert_passkey(rp, "https://example.com", &cd, &reg.signing_key, false).unwrap();
+
+        // Garbage instead of a COSE key.
+        let err = verify_assertion(
+            b"not a cose key",
+            rp,
+            &cd,
+            &out.authenticator_data,
+            &out.signature_der,
+        )
+        .expect_err("invalid COSE key must be rejected");
+        assert!(err.to_string().contains("Invalid COSE key"));
+
+        // Authenticator data shorter than the 37-byte header.
+        let err = verify_assertion(
+            &reg.public_key_cose,
+            rp,
+            &cd,
+            &out.authenticator_data[..20],
+            &out.signature_der,
+        )
+        .expect_err("truncated authenticator data must be rejected");
+        assert!(err.to_string().contains("rpIdHash mismatch"));
+
+        // Not a DER signature.
+        let err = verify_assertion(
+            &reg.public_key_cose,
+            rp,
+            &cd,
+            &out.authenticator_data,
+            b"not der",
+        )
+        .expect_err("non-DER signature must be rejected");
+        assert!(err.to_string().contains("Invalid DER signature"));
+
+        // A valid DER signature made over different bytes.
+        let err = verify_assertion(
+            &reg.public_key_cose,
+            rp,
+            &client_data(false, "dGFtcGVyZWQ", "https://example.com"),
+            &out.authenticator_data,
+            &out.signature_der,
+        )
+        .expect_err("signature over different client data must fail");
+        assert!(err.to_string().contains("Assertion signature invalid"));
+    }
+
+    fn cose_key_with_params(params: Vec<(coset::Label, coset::cbor::value::Value)>) -> Vec<u8> {
+        let key = CoseKey {
+            kty: coset::KeyType::Assigned(iana::KeyType::EC2),
+            key_id: Vec::new(),
+            alg: Some(coset::Algorithm::Assigned(iana::Algorithm::ES256)),
+            key_ops: Default::default(),
+            base_iv: Vec::new(),
+            params,
+        };
+        key.to_vec().unwrap()
+    }
+
+    #[test]
+    fn verify_assertion_rejects_cose_key_missing_coordinates() {
+        let reg = register_passkey(
+            "example.com",
+            "https://example.com",
+            &client_data(true, "cmVnaXN0ZXI", "https://example.com"),
+            false,
+        )
+        .unwrap();
+        let cd = client_data(false, "Y2hhbGxlbmdl", "https://example.com");
+        let out = assert_passkey(
+            "example.com",
+            "https://example.com",
+            &cd,
+            &reg.signing_key,
+            false,
+        )
+        .unwrap();
+
+        // Rebuild the real key to harvest a valid x coordinate.
+        let real = CoseKey::from_slice(&reg.public_key_cose).unwrap();
+        let x = real
+            .params
+            .iter()
+            .find_map(|(l, v)| match (l, v) {
+                (coset::Label::Int(-2), Value::Bytes(b)) => Some(b.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let y = real
+            .params
+            .iter()
+            .find_map(|(l, v)| match (l, v) {
+                (coset::Label::Int(-3), Value::Bytes(b)) => Some(b.clone()),
+                _ => None,
+            })
+            .unwrap();
+
+        // Missing y.
+        let missing_y =
+            cose_key_with_params(vec![(coset::Label::Int(-2), Value::Bytes(x.clone()))]);
+        let err = verify_assertion(
+            &missing_y,
+            "example.com",
+            &cd,
+            &out.authenticator_data,
+            &out.signature_der,
+        )
+        .expect_err("COSE key without y must be rejected");
+        assert!(err.to_string().contains("missing y"));
+
+        // Missing x.
+        let missing_x =
+            cose_key_with_params(vec![(coset::Label::Int(-3), Value::Bytes(y.clone()))]);
+        let err = verify_assertion(
+            &missing_x,
+            "example.com",
+            &cd,
+            &out.authenticator_data,
+            &out.signature_der,
+        )
+        .expect_err("COSE key without x must be rejected");
+        assert!(err.to_string().contains("missing x"));
+
+        // Coordinates that are not a valid P-256 point.
+        let bad_point = cose_key_with_params(vec![
+            (coset::Label::Int(-2), Value::Bytes(vec![0xFF; 32])),
+            (coset::Label::Int(-3), Value::Bytes(vec![0xFF; 32])),
+        ]);
+        let err = verify_assertion(
+            &bad_point,
+            "example.com",
+            &cd,
+            &out.authenticator_data,
+            &out.signature_der,
+        )
+        .expect_err("invalid P-256 point must be rejected");
+        assert!(err.to_string().contains("Invalid P-256 point"));
+    }
 }

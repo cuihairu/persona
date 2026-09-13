@@ -89,4 +89,53 @@ mod tests {
             .unwrap();
         assert_eq!(plaintext, decrypted.as_slice());
     }
+
+    #[test]
+    fn wrong_master_key_cannot_unwrap() {
+        let master_key = EncryptionService::generate_key();
+        let master = EncryptionService::new(&master_key);
+        let hierarchy = KeyHierarchy::new(&master);
+
+        let envelope = hierarchy.encrypt_with_new_item_key(b"data").unwrap();
+
+        // A different master key fails the AEAD check while unwrapping.
+        let other_key = EncryptionService::generate_key();
+        let other = EncryptionService::new(&other_key);
+        let other_hierarchy = KeyHierarchy::new(&other);
+        let err = other_hierarchy
+            .decrypt_with_wrapped_key(&envelope.wrapped_key, &envelope.ciphertext)
+            .expect_err("foreign master key must not unwrap");
+        assert!(err.to_string().contains("Failed to unwrap item key"));
+    }
+
+    #[test]
+    fn wrapped_key_of_wrong_length_is_rejected() {
+        let master_key = EncryptionService::generate_key();
+        let master = EncryptionService::new(&master_key);
+        let hierarchy = KeyHierarchy::new(&master);
+
+        // Valid AEAD payload, but the plaintext inside is not a 32-byte key.
+        let bogus_wrapped = master.encrypt(b"not-a-32-byte-key").unwrap();
+        let err = hierarchy
+            .decrypt_with_wrapped_key(&bogus_wrapped, &[0u8; 16])
+            .expect_err("non-32-byte unwrapped key must be rejected");
+        assert!(err.to_string().contains("invalid length"));
+    }
+
+    #[test]
+    fn tampered_ciphertext_fails_payload_decrypt() {
+        let master_key = EncryptionService::generate_key();
+        let master = EncryptionService::new(&master_key);
+        let hierarchy = KeyHierarchy::new(&master);
+
+        let envelope = hierarchy.encrypt_with_new_item_key(b"payload").unwrap();
+        let mut tampered = envelope.ciphertext.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+
+        let err = hierarchy
+            .decrypt_with_wrapped_key(&envelope.wrapped_key, &tampered)
+            .expect_err("tampered payload must not decrypt");
+        assert!(err.to_string().contains("Failed to decrypt payload"));
+    }
 }

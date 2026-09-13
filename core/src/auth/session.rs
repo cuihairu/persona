@@ -457,4 +457,161 @@ mod tests {
         manager.unlock_session(&session.id).await.ok();
         assert!(manager.is_valid(&session.id).await);
     }
+
+    #[test]
+    fn test_session_extend_and_expiry() {
+        let mut session = Session::new("user123".to_string(), Duration::from_secs(1));
+        session.extend(Duration::from_secs(3600));
+        assert!(!session.is_expired());
+
+        // Simulate an already-expired session.
+        session.expires_at = SystemTime::now() - Duration::from_secs(1);
+        assert!(session.is_expired());
+        assert!(!session.is_valid());
+    }
+
+    #[test]
+    fn test_session_permissions() {
+        let mut session = Session::new("user123".to_string(), Duration::from_secs(60));
+        assert!(!session.has_permission("read"));
+
+        session.add_permission("read".to_string());
+        session.add_permission("read".to_string()); // duplicate is a no-op
+        assert!(session.has_permission("read"));
+        assert_eq!(session.metadata.permissions.len(), 1);
+
+        session.remove_permission("read");
+        assert!(!session.has_permission("read"));
+    }
+
+    #[test]
+    fn test_session_idle_with_future_activity() {
+        let mut session = Session::new("user123".to_string(), Duration::from_secs(60));
+        // Clock rollback: last_activity in the future makes elapsed computation fail.
+        session.last_activity = SystemTime::now() + Duration::from_secs(10);
+        assert!(!session.is_idle(Duration::from_secs(1)));
+        assert_eq!(session.get_idle_seconds(), 0);
+    }
+
+    #[test]
+    fn test_session_lifetime_seconds() {
+        let session = Session::new("user123".to_string(), Duration::from_secs(60));
+        assert!(session.get_lifetime_seconds() < 5);
+    }
+
+    #[test]
+    fn test_requires_sensitive_reauth_with_future_timestamp() {
+        let mut session = Session::new("user123".to_string(), Duration::from_secs(60));
+        session.last_sensitive_op = Some(SystemTime::now() + Duration::from_secs(10));
+        // Elapsed computation fails -> fall through to "require auth".
+        assert!(session.requires_sensitive_reauth(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn test_auto_lock_config_serde_defaults() {
+        let config: AutoLockConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.inactivity_timeout_secs, 900);
+        assert_eq!(config.absolute_timeout_secs, 3600);
+        assert_eq!(config.sensitive_operation_timeout_secs, 300);
+        assert!(!config.require_reauth_sensitive);
+    }
+
+    #[test]
+    fn test_session_serde_round_trip() {
+        let mut session = Session::new("user123".to_string(), Duration::from_secs(60));
+        session.add_permission("read".to_string());
+        let json = serde_json::to_string(&session).unwrap();
+        let restored: Session = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.user_id, session.user_id);
+        assert!(restored.has_permission("read"));
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_unknown_session_errors() {
+        let manager = SessionManager::new();
+        assert!(manager.touch("missing").await.is_err());
+        assert!(manager.touch_sensitive("missing").await.is_err());
+        assert!(manager.lock_session("missing").await.is_err());
+        assert!(manager.unlock_session("missing").await.is_err());
+        assert!(manager.get_session("missing").await.is_none());
+        assert!(!manager.is_valid("missing").await);
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_requires_sensitive_auth_modes() {
+        // Disabled -> always false.
+        let manager = SessionManager::with_config(AutoLockConfig::default());
+        assert!(!manager.requires_sensitive_auth("missing").await);
+
+        // Enabled -> unknown session requires auth.
+        let strict = AutoLockConfig {
+            require_reauth_sensitive: true,
+            sensitive_operation_timeout_secs: 300,
+            ..Default::default()
+        };
+        let manager = SessionManager::with_config(strict);
+        assert!(manager.requires_sensitive_auth("missing").await);
+
+        let session = manager.create_session("user123".to_string()).await;
+        assert!(manager.requires_sensitive_auth(&session.id).await);
+        manager.touch_sensitive(&session.id).await.unwrap();
+        assert!(!manager.requires_sensitive_auth(&session.id).await);
+    }
+
+    #[tokio::test]
+    async fn test_create_session_default_timeout_when_disabled() {
+        let manager = SessionManager::with_config(AutoLockConfig {
+            absolute_timeout_secs: 0,
+            ..Default::default()
+        });
+        let session = manager.create_session("user123".to_string()).await;
+        // Falls back to the built-in 1 hour default.
+        assert!(session.expires_at > SystemTime::now() + Duration::from_secs(3500));
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_cleanup_removes_expired() {
+        let manager = SessionManager::with_config(AutoLockConfig {
+            absolute_timeout_secs: 1,
+            inactivity_timeout_secs: 0,
+            ..Default::default()
+        });
+        let session = manager.create_session("user123".to_string()).await;
+        assert_eq!(manager.active_count().await, 1);
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        manager.cleanup().await;
+        assert_eq!(manager.active_count().await, 0);
+        assert!(manager.get_session(&session.id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_auto_locks_on_touch_after_inactivity() {
+        let manager = SessionManager::with_config(AutoLockConfig {
+            inactivity_timeout_secs: 1,
+            absolute_timeout_secs: 0,
+            ..Default::default()
+        });
+        let session = manager.create_session("user123".to_string()).await;
+
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        let err = manager.touch(&session.id).await.unwrap_err();
+        assert!(err.contains("automatically locked"));
+
+        // The session is now locked and invalid.
+        assert!(!manager.is_valid(&session.id).await);
+        assert!(manager.get_session(&session.id).await.unwrap().locked);
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_absolute_timeout_invalidates() {
+        let manager = SessionManager::with_config(AutoLockConfig {
+            inactivity_timeout_secs: 0,
+            absolute_timeout_secs: 1,
+            ..Default::default()
+        });
+        let session = manager.create_session("user123".to_string()).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(!manager.is_valid(&session.id).await);
+    }
 }

@@ -2,8 +2,16 @@
 -- This migration adds policy tables, augments the sessions table, and seeds sensible defaults.
 
 -- Create table for configurable auto-lock policies
+--
+-- The default id generator emits a canonical hyphenated UUID string so ids
+-- survive round-trips through `uuid::Uuid` (which renders with hyphens).
 CREATE TABLE IF NOT EXISTS auto_lock_policies (
-    id TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
+    id TEXT PRIMARY KEY NOT NULL DEFAULT (
+        lower(hex(randomblob(4))) || '-' ||
+        lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))), 2) || '-' ||
+        substr('89ab', abs(random()) % 4 + 1, 1) || substr(lower(hex(randomblob(2))), 2) || '-' ||
+        lower(hex(randomblob(6)))
+    ),
     name TEXT NOT NULL UNIQUE CHECK(length(trim(name)) > 0),
     description TEXT,
     security_level TEXT NOT NULL CHECK (security_level IN ('low', 'medium', 'high', 'maximum')),
@@ -62,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions(last_activity)
 
 -- Seed built-in policies that mirror typical Persona presets
 INSERT INTO auto_lock_policies (
+    id,
     name,
     description,
     security_level,
@@ -77,6 +86,7 @@ INSERT INTO auto_lock_policies (
     is_default
 ) VALUES
 (
+    '11111111-1111-4111-8111-111111111111',
     'Low Security Policy',
     'Recommended for personal devices with relaxed security requirements',
     'low',
@@ -92,6 +102,7 @@ INSERT INTO auto_lock_policies (
     0
 ),
 (
+    '22222222-2222-4222-8222-222222222222',
     'Medium Security Policy',
     'Balanced security for general corporate use',
     'medium',
@@ -107,6 +118,7 @@ INSERT INTO auto_lock_policies (
     1
 ),
 (
+    '33333333-3333-4333-8333-333333333333',
     'High Security Policy',
     'Enhanced security for sensitive corporate environments',
     'high',
@@ -122,6 +134,7 @@ INSERT INTO auto_lock_policies (
     0
 ),
 (
+    '44444444-4444-4444-8444-444444444444',
     'Maximum Security Policy',
     'Highest security for critical environments and public access',
     'maximum',

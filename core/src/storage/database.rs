@@ -173,4 +173,103 @@ mod tests {
         let retrieved_name: String = row.get("name");
         assert_eq!(retrieved_name, "test_name");
     }
+
+    #[tokio::test]
+    async fn test_from_file_creates_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("persist.db");
+
+        // mode=rwc must create the file when missing.
+        let db = Database::from_file(&db_path).await.unwrap();
+        db.execute("CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT)")
+            .await
+            .unwrap();
+        db.execute("INSERT INTO kv (k, v) VALUES ('a', '1')")
+            .await
+            .unwrap();
+        db.close().await;
+        assert!(db_path.exists());
+
+        // Reopening keeps the data.
+        let reopened = Database::from_file(&db_path).await.unwrap();
+        let rows = reopened.fetch_all("SELECT k, v FROM kv").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        reopened.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_helpers_and_error_paths() {
+        let db = Database::in_memory().await.unwrap();
+        db.execute("CREATE TABLE nums (n INTEGER)").await.unwrap();
+        db.execute("INSERT INTO nums (n) VALUES (7)").await.unwrap();
+
+        // fetch_one errors when no row matches.
+        assert!(db
+            .fetch_one("SELECT n FROM nums WHERE n = 1")
+            .await
+            .is_err());
+        // fetch_optional returns None instead.
+        assert!(db
+            .fetch_optional("SELECT n FROM nums WHERE n = 1")
+            .await
+            .unwrap()
+            .is_none());
+        let some = db
+            .fetch_optional("SELECT n FROM nums WHERE n = 7")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(some.get::<i64, _>("n"), 7);
+
+        // Invalid SQL surfaces a Database error through every helper.
+        assert!(db.execute("NOT SQL").await.is_err());
+        assert!(db.fetch_one("ALSO NOT SQL").await.is_err());
+        assert!(db.fetch_all("STILL NOT SQL").await.is_err());
+        assert!(db.fetch_optional("NOT SQL EITHER").await.is_err());
+
+        // Connecting to an impossible location fails cleanly.
+        assert!(Database::new("sqlite:/nonexistent-root-dir/x.db?mode=rw")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_transaction_commit_and_rollback() {
+        let db = Database::in_memory().await.unwrap();
+        db.execute("CREATE TABLE ledger (amount INTEGER)")
+            .await
+            .unwrap();
+
+        // Commit persists the writes made through the wrapper.
+        let tx = db.begin_transaction().await.unwrap();
+        let mut tx = Transaction::new(tx);
+        tx.execute("INSERT INTO ledger (amount) VALUES (10)")
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            db.fetch_all("SELECT amount FROM ledger")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Rollback discards them.
+        let tx = db.begin_transaction().await.unwrap();
+        let mut tx = Transaction::new(tx);
+        tx.execute("INSERT INTO ledger (amount) VALUES (99)")
+            .await
+            .unwrap();
+        tx.rollback().await.unwrap();
+        let rows = db.fetch_all("SELECT amount FROM ledger").await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].get::<i64, _>("amount"), 10);
+
+        // Invalid SQL inside a transaction reports an error.
+        let tx = db.begin_transaction().await.unwrap();
+        let mut tx = Transaction::new(tx);
+        assert!(tx.execute("BAD SQL").await.is_err());
+        tx.rollback().await.unwrap();
+    }
 }

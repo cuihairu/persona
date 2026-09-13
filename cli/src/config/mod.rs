@@ -199,3 +199,404 @@ impl CliConfig {
         self.workspace.path.join("identities.db")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Serializes every test that mutates process-global env vars.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// The bridge tests also flip `PERSONA_MASTER_PASSWORD` from their own
+    /// threads, so env-sensitive tests must take their lock in addition to
+    /// ours to keep the process environment stable while they run.
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn sample_toml() -> String {
+        r#"
+[workspace]
+path = "/tmp/sample-workspace"
+version = "9.9.9"
+
+[security]
+encryption_enabled = false
+auto_lock_timeout = 42
+require_biometric = true
+
+[backup]
+enabled = false
+directory = "/tmp/sample-backups"
+auto_backup = false
+backup_interval = 60
+max_backups = 3
+
+[sync]
+enabled = true
+server_url = "https://sync.example.com"
+auto_sync = true
+
+[ui]
+color_enabled = false
+interactive = false
+default_output_format = "json"
+
+[logging]
+level = "debug"
+file_enabled = false
+max_file_size = "1MB"
+max_files = 2
+"#
+        .to_string()
+    }
+
+    /// Sets an env var, returning its previous value if it was set.
+    fn set_var(key: &str, value: &str) -> Option<String> {
+        let previous = std::env::var(key).ok();
+        std::env::set_var(key, value);
+        previous
+    }
+
+    fn restore_var(key: &str, previous: Option<String>) {
+        match previous {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    #[test]
+    fn default_config_has_expected_values() {
+        let config = CliConfig::default();
+
+        assert_eq!(config.workspace.version, "0.1.0");
+        assert!(config.workspace.path.ends_with(".persona"));
+        assert!(config.security.encryption_enabled);
+        assert_eq!(config.security.auto_lock_timeout, 300);
+        assert!(!config.security.require_biometric);
+        assert!(config.backup.enabled);
+        assert!(config.backup.auto_backup);
+        assert_eq!(config.backup.backup_interval, 86400);
+        assert_eq!(config.backup.max_backups, 30);
+        assert!(!config.sync.enabled);
+        assert!(config.sync.server_url.is_empty());
+        assert!(config.ui.color_enabled);
+        assert!(config.ui.interactive);
+        assert_eq!(config.ui.default_output_format, "table");
+        assert_eq!(config.logging.level, "info");
+        assert!(config.logging.file_enabled);
+        assert_eq!(config.logging.max_file_size, "10MB");
+        assert_eq!(config.logging.max_files, 5);
+
+        // Backup directory lives inside the workspace directory.
+        assert_eq!(
+            Some(config.workspace.path.clone()),
+            config.backup.directory.parent().map(|p| p.to_path_buf())
+        );
+    }
+
+    #[test]
+    fn get_database_path_lives_in_workspace() {
+        let mut config = CliConfig::default();
+        config.workspace.path = PathBuf::from("/data/ws");
+
+        assert_eq!(
+            config.get_database_path(),
+            PathBuf::from("/data/ws/identities.db")
+        );
+    }
+
+    #[test]
+    fn load_file_reads_strict_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, sample_toml()).unwrap();
+
+        let config = CliConfig::load_file(&path).unwrap();
+        assert_eq!(config.workspace.version, "9.9.9");
+        assert_eq!(
+            config.workspace.path,
+            PathBuf::from("/tmp/sample-workspace")
+        );
+        assert!(!config.security.encryption_enabled);
+        assert_eq!(config.security.auto_lock_timeout, 42);
+        assert_eq!(config.sync.server_url, "https://sync.example.com");
+        assert_eq!(config.ui.default_output_format, "json");
+        assert_eq!(config.logging.level, "debug");
+    }
+
+    #[test]
+    fn load_file_errors_on_missing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+
+        let err = CliConfig::load_file(&path).unwrap_err();
+        assert!(err.to_string().contains("Failed to read config file"));
+    }
+
+    #[test]
+    fn load_file_errors_on_invalid_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("broken.toml");
+        std::fs::write(&path, "not [valid toml").unwrap();
+
+        let err = CliConfig::load_file(&path).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse config file"));
+    }
+
+    #[test]
+    fn load_file_errors_on_schema_mismatch() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[workspace]\npath = 12\n").unwrap();
+
+        let err = CliConfig::load_file(&path).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse config file"));
+    }
+
+    #[test]
+    fn load_with_override_requires_the_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("missing.toml");
+
+        assert!(CliConfig::load(Some(&missing)).is_err());
+
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, sample_toml()).unwrap();
+        let config = CliConfig::load(Some(&path)).unwrap();
+        assert_eq!(config.workspace.version, "9.9.9");
+    }
+
+    #[test]
+    fn load_without_override_uses_default_or_resolved_file() {
+        let (_bridge_guard, _guard) = lock_process_env();
+
+        // Point the platform config directory at a temp dir so the global
+        // user config does not leak into the test.
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(config_root.join("persona")).unwrap();
+
+        let mut saved = Vec::new();
+        saved.push((
+            "XDG_CONFIG_HOME",
+            set_var("XDG_CONFIG_HOME", config_root.to_str().unwrap()),
+        ));
+        if let Ok(home) = std::env::var("HOME") {
+            saved.push(("HOME", Some(home)));
+        }
+        std::env::set_var("HOME", dir.path());
+
+        // No config file at the resolved path -> built-in default.
+        let config = CliConfig::load(None).unwrap();
+        assert_eq!(config.workspace.version, "0.1.0");
+        assert_eq!(config.ui.default_output_format, "table");
+
+        // Once a config.toml exists there, load it instead.
+        let config_path = config_root.join("persona").join("config.toml");
+        std::fs::write(&config_path, sample_toml()).unwrap();
+        let config = CliConfig::load(None).unwrap();
+        assert_eq!(config.workspace.version, "9.9.9");
+
+        for (key, previous) in saved {
+            restore_var(key, previous);
+        }
+    }
+
+    #[test]
+    fn get_config_path_returns_ok() {
+        let path = CliConfig::get_config_path().unwrap();
+        assert!(path.to_string_lossy().contains("persona"));
+        assert!(path.to_string_lossy().contains("persona"));
+    }
+
+    #[test]
+    fn env_overrides_apply_valid_values() {
+        let (_bridge_guard, _guard) = lock_process_env();
+
+        let mut config = CliConfig::default();
+        assert!(config.ui.interactive);
+        assert!(config.ui.color_enabled);
+        assert!(config.security.encryption_enabled);
+        assert_eq!(config.ui.default_output_format, "table");
+        assert_eq!(config.logging.level, "info");
+        assert_ne!(config.workspace.path, PathBuf::from("/env/ws"));
+
+        let saved = vec![
+            (
+                "PERSONA_NON_INTERACTIVE",
+                set_var("PERSONA_NON_INTERACTIVE", "1"),
+            ),
+            (
+                "PERSONA_WORKSPACE_PATH",
+                set_var("PERSONA_WORKSPACE_PATH", "/env/ws"),
+            ),
+            (
+                "PERSONA_MASTER_PASSWORD",
+                set_var("PERSONA_MASTER_PASSWORD", "secret"),
+            ),
+            (
+                "PERSONA_ENCRYPTION_ENABLED",
+                set_var("PERSONA_ENCRYPTION_ENABLED", "false"),
+            ),
+            (
+                "PERSONA_OUTPUT_FORMAT",
+                set_var("PERSONA_OUTPUT_FORMAT", "yaml"),
+            ),
+            ("PERSONA_NO_COLOR", set_var("PERSONA_NO_COLOR", "true")),
+            ("PERSONA_LOG_LEVEL", set_var("PERSONA_LOG_LEVEL", "trace")),
+        ];
+
+        config.apply_env_overrides();
+
+        for (key, previous) in saved {
+            restore_var(key, previous);
+        }
+
+        assert!(!config.ui.interactive);
+        assert_eq!(config.workspace.path, PathBuf::from("/env/ws"));
+        assert!(!config.security.encryption_enabled);
+        assert_eq!(config.ui.default_output_format, "yaml");
+        assert!(!config.ui.color_enabled);
+        assert_eq!(config.logging.level, "trace");
+    }
+
+    #[test]
+    fn env_overrides_ignore_invalid_values() {
+        let (_bridge_guard, _guard) = lock_process_env();
+
+        let mut config = CliConfig::default();
+
+        let saved = vec![
+            // Not "1"/"true": no effect.
+            (
+                "PERSONA_NON_INTERACTIVE",
+                set_var("PERSONA_NON_INTERACTIVE", "nope"),
+            ),
+            // Not parseable as bool: no effect.
+            (
+                "PERSONA_ENCRYPTION_ENABLED",
+                set_var("PERSONA_ENCRYPTION_ENABLED", "maybe"),
+            ),
+            // Invalid output format: no effect.
+            (
+                "PERSONA_OUTPUT_FORMAT",
+                set_var("PERSONA_OUTPUT_FORMAT", "xml"),
+            ),
+            // "0" does not disable color.
+            ("PERSONA_NO_COLOR", set_var("PERSONA_NO_COLOR", "0")),
+            // Invalid log level: no effect.
+            ("PERSONA_LOG_LEVEL", set_var("PERSONA_LOG_LEVEL", "verbose")),
+        ];
+
+        config.apply_env_overrides();
+
+        for (key, previous) in saved {
+            restore_var(key, previous);
+        }
+
+        assert!(config.ui.interactive);
+        assert!(config.security.encryption_enabled);
+        assert_eq!(config.ui.default_output_format, "table");
+        assert!(config.ui.color_enabled);
+        assert_eq!(config.logging.level, "info");
+    }
+
+    #[test]
+    fn env_overrides_accept_word_forms() {
+        let (_bridge_guard, _guard) = lock_process_env();
+
+        let mut config = CliConfig::default();
+
+        let saved = vec![
+            (
+                "PERSONA_NON_INTERACTIVE",
+                set_var("PERSONA_NON_INTERACTIVE", "TRUE"),
+            ),
+            ("PERSONA_NO_COLOR", set_var("PERSONA_NO_COLOR", "True")),
+            (
+                "PERSONA_ENCRYPTION_ENABLED",
+                set_var("PERSONA_ENCRYPTION_ENABLED", "true"),
+            ),
+            (
+                "PERSONA_OUTPUT_FORMAT",
+                set_var("PERSONA_OUTPUT_FORMAT", "csv"),
+            ),
+            ("PERSONA_LOG_LEVEL", set_var("PERSONA_LOG_LEVEL", "warn")),
+        ];
+
+        config.apply_env_overrides();
+
+        for (key, previous) in saved {
+            restore_var(key, previous);
+        }
+
+        assert!(!config.ui.interactive);
+        assert!(!config.ui.color_enabled);
+        assert!(config.security.encryption_enabled);
+        assert_eq!(config.ui.default_output_format, "csv");
+        assert_eq!(config.logging.level, "warn");
+    }
+
+    #[test]
+    fn env_overrides_are_applied_by_load() {
+        let (_bridge_guard, _guard) = lock_process_env();
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, sample_toml()).unwrap();
+
+        let previous = set_var("PERSONA_WORKSPACE_PATH", "/env/from-load/ws");
+        let config = CliConfig::load(Some(&path)).unwrap();
+        restore_var("PERSONA_WORKSPACE_PATH", previous);
+
+        assert_eq!(config.workspace.path, PathBuf::from("/env/from-load/ws"));
+    }
+
+    #[test]
+    fn config_serde_roundtrips_through_json() {
+        let config = CliConfig::default();
+
+        let json = serde_json::to_string(&config).unwrap();
+        let decoded: CliConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.workspace.path, config.workspace.path);
+        assert_eq!(decoded.workspace.version, config.workspace.version);
+        assert_eq!(
+            decoded.security.auto_lock_timeout,
+            config.security.auto_lock_timeout
+        );
+        assert_eq!(decoded.backup.directory, config.backup.directory);
+        assert_eq!(decoded.backup.max_backups, config.backup.max_backups);
+        assert_eq!(
+            decoded.ui.default_output_format,
+            config.ui.default_output_format
+        );
+        assert_eq!(decoded.logging.max_file_size, config.logging.max_file_size);
+        assert_eq!(decoded.logging.max_files, config.logging.max_files);
+    }
+
+    #[test]
+    fn config_serializes_and_reparses_as_toml() {
+        let config = CliConfig::default();
+
+        // toml serialization exercises the Serialize side of every section,
+        // matching what load_file does on the Deserialize side.
+        let toml_text = toml::to_string(&config).unwrap();
+        let decoded: CliConfig = toml::from_str(&toml_text).unwrap();
+
+        assert_eq!(decoded.workspace.path, config.workspace.path);
+        assert_eq!(decoded.backup.directory, config.backup.directory);
+        assert_eq!(
+            decoded.ui.default_output_format,
+            config.ui.default_output_format
+        );
+    }
+}

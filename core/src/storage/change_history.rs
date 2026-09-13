@@ -172,6 +172,11 @@ impl ChangeHistoryRepository {
         }
 
         if let Some(offset) = query_opts.offset {
+            // SQLite only accepts OFFSET together with LIMIT; LIMIT -1 means
+            // "no limit" and keeps a standalone offset valid.
+            if query_opts.limit.is_none() {
+                sql.push_str(" LIMIT -1");
+            }
             sql.push_str(&format!(" OFFSET {}", offset));
         }
 
@@ -406,5 +411,385 @@ mod tests {
 
         let results = repo.query(&query).await.unwrap();
         assert!(!results.is_empty());
+    }
+
+    async fn seed_three_versions(
+        repo: &ChangeHistoryRepository,
+    ) -> (Uuid, Uuid, chrono::DateTime<chrono::Utc>) {
+        let entity_a = Uuid::new_v4();
+        let entity_b = Uuid::new_v4();
+        let base = chrono::Utc::now() - chrono::Duration::hours(3);
+
+        let mut created = ChangeHistory::new(EntityType::Identity, entity_a, ChangeType::Created)
+            .with_user("alice".to_string())
+            .with_states(None, Some(serde_json::json!({"name": "new"})))
+            .with_reason("initial creation".to_string())
+            .with_version(1);
+        created.timestamp = base;
+        created.ip_address = Some("127.0.0.1".to_string());
+        created.user_agent = Some("persona-cli".to_string());
+        created.add_metadata("source".to_string(), "test".to_string());
+        created.add_field_change("name".to_string(), "".to_string(), "new".to_string());
+        repo.record(&created).await.unwrap();
+
+        let mut updated = ChangeHistory::new(EntityType::Identity, entity_a, ChangeType::Updated)
+            .with_user("alice".to_string())
+            .with_states(
+                Some(serde_json::json!({"name": "new"})),
+                Some(serde_json::json!({"name": "newer"})),
+            )
+            .with_version(2);
+        updated.timestamp = base + chrono::Duration::hours(1);
+        repo.record(&updated).await.unwrap();
+
+        let mut other = ChangeHistory::new(EntityType::Credential, entity_b, ChangeType::Deleted)
+            .with_user("bob".to_string())
+            .with_version(1);
+        other.timestamp = base + chrono::Duration::hours(2);
+        repo.record(&other).await.unwrap();
+
+        (entity_a, entity_b, base)
+    }
+
+    #[tokio::test]
+    async fn test_record_round_trips_every_field() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let (entity_a, _, _) = seed_three_versions(&repo).await;
+
+        let entries = repo
+            .get_entity_history(EntityType::Identity, &entity_a)
+            .await
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let created = &entries[1]; // ordered by version ASC within same timestamp? DESC by version → created is last
+        assert_eq!(created.change_type, ChangeType::Created);
+        assert_eq!(created.user_id.as_deref(), Some("alice"));
+        assert_eq!(created.previous_state, None);
+        assert_eq!(created.new_state, Some(serde_json::json!({"name": "new"})));
+        assert_eq!(
+            created
+                .changes_summary
+                .get("name")
+                .map(|f| f.new_value.as_str()),
+            Some("new")
+        );
+        assert_eq!(created.reason.as_deref(), Some("initial creation"));
+        assert_eq!(created.ip_address.as_deref(), Some("127.0.0.1"));
+        assert_eq!(created.user_agent.as_deref(), Some("persona-cli"));
+        assert_eq!(
+            created.metadata.get("source").map(String::as_str),
+            Some("test")
+        );
+        assert!(created.is_reversible);
+    }
+
+    #[tokio::test]
+    async fn test_get_entity_history_empty_for_unknown_entity() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let entries = repo
+            .get_entity_history(EntityType::Config, &Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_version_found_and_missing() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let (entity_a, _, _) = seed_three_versions(&repo).await;
+
+        let v2 = repo
+            .get_version(EntityType::Identity, &entity_a, 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(v2.version, 2);
+        assert_eq!(v2.change_type, ChangeType::Updated);
+
+        assert!(repo
+            .get_version(EntityType::Identity, &entity_a, 99)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_version_zero_when_unknown() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let latest = repo
+            .get_latest_version(EntityType::Workspace, &Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(latest, 0);
+    }
+
+    #[tokio::test]
+    async fn test_query_supports_every_filter_and_paging() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let (entity_a, entity_b, base) = seed_three_versions(&repo).await;
+
+        // entity_id filter.
+        let results = repo
+            .query(&ChangeHistoryQuery::new().entity_id(entity_a))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        // user_id filter.
+        let results = repo
+            .query(&ChangeHistoryQuery::new().user("bob".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].entity_id, entity_b);
+
+        // change_type filter.
+        let results = repo
+            .query(&ChangeHistoryQuery::new().change_type(ChangeType::Deleted))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+
+        // from_date excludes older rows.
+        let results = repo
+            .query(
+                &ChangeHistoryQuery::new()
+                    .date_range(base + chrono::Duration::hours(1), chrono::Utc::now()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 2);
+
+        // to_date alone caps the upper bound.
+        let results = repo
+            .query(&ChangeHistoryQuery::new().date_range(base - chrono::Duration::hours(1), base))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+
+        // limit truncates; offset skips the newest rows.
+        let results = repo
+            .query(&ChangeHistoryQuery::new().limit(1))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+
+        let results = repo
+            .query(&ChangeHistoryQuery::new().offset(2))
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+
+        // Newest first ordering.
+        let results = repo.query(&ChangeHistoryQuery::new()).await.unwrap();
+        assert_eq!(results.len(), 3);
+        assert!(results[0].timestamp >= results[1].timestamp);
+        assert!(results[1].timestamp >= results[2].timestamp);
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_aggregates_types_and_recent() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let (entity_a, entity_b, _) = seed_three_versions(&repo).await;
+
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.total_changes, 3);
+        assert_eq!(stats.by_entity_type.get(&EntityType::Identity), Some(&2));
+        assert_eq!(stats.by_entity_type.get(&EntityType::Credential), Some(&1));
+        assert_eq!(stats.by_change_type.get("created"), Some(&1));
+        assert_eq!(stats.by_change_type.get("updated"), Some(&1));
+        assert_eq!(stats.by_change_type.get("deleted"), Some(&1));
+        assert_eq!(stats.recent_changes.len(), 3);
+        assert!(stats
+            .recent_changes
+            .iter()
+            .any(|e| e.entity_id == entity_a && e.entity_id != entity_b));
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_skips_unparseable_entity_types() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db.clone());
+
+        let (entity_a, _, base) = seed_three_versions(&repo).await;
+
+        // Pad to 10 valid rows so the corrupt row (timestamped oldest) stays
+        // out of the top-10 recent list while still exercising the
+        // entity-type aggregation skip.
+        for i in 0..7 {
+            let mut filler =
+                ChangeHistory::new(EntityType::Workspace, Uuid::new_v4(), ChangeType::Archived);
+            filler.timestamp = base + chrono::Duration::hours(i);
+            repo.record(&filler).await.unwrap();
+        }
+
+        // A row with an unknown entity_type is skipped in the aggregation.
+        let mut conn = db.pool().acquire().await.unwrap();
+        sqlx::query(
+            "INSERT INTO change_history (id, entity_type, entity_id, change_type, timestamp)
+             VALUES ('99999999-9999-4999-8999-999999999999', 'bogus', ?, 'created', '2020-01-01T00:00:00+00:00')",
+        )
+        .bind(entity_a.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        drop(conn);
+
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.total_changes, 11);
+        // The corrupt row is excluded from the per-type aggregation...
+        assert!(!stats
+            .by_entity_type
+            .keys()
+            .any(|k| k.to_string() == "bogus"));
+        assert_eq!(stats.by_entity_type.get(&EntityType::Workspace), Some(&7));
+        // ...and from the recent list, which only holds the 10 valid rows
+        // (the corrupt row carries the oldest timestamp and is cut by LIMIT).
+        assert_eq!(stats.recent_changes.len(), 10);
+        assert_eq!(
+            stats
+                .recent_changes
+                .iter()
+                .filter(|e| e.entity_type == EntityType::Workspace)
+                .count(),
+            7
+        );
+    }
+
+    #[tokio::test]
+    async fn test_delete_before_date_removes_only_old_entries() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db);
+
+        let (_, _, base) = seed_three_versions(&repo).await;
+
+        let deleted = repo
+            .delete_before_date(base + chrono::Duration::hours(1))
+            .await
+            .unwrap();
+        assert_eq!(deleted, 1);
+
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.total_changes, 2);
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_rows_surface_database_errors() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db.clone());
+
+        let entity_id = Uuid::new_v4();
+        let mut conn = db.pool().acquire().await.unwrap();
+
+        // Bad UUID.
+        sqlx::query(
+            "INSERT INTO change_history (id, entity_type, entity_id, change_type, timestamp)
+             VALUES ('not-a-uuid', 'identity', ?, 'created', '2024-01-01T00:00:00+00:00')",
+        )
+        .bind(entity_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        assert!(repo
+            .get_entity_history(EntityType::Identity, &entity_id)
+            .await
+            .is_err());
+
+        // Bad entity_type: a filterless query scans it.
+        sqlx::query(
+            "INSERT INTO change_history (id, entity_type, entity_id, change_type, timestamp)
+             VALUES ('11111111-2222-4333-8444-555555555555', 'bogus', ?, 'created', '2024-01-01T00:00:00+00:00')",
+        )
+        .bind(entity_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        assert!(repo.query(&ChangeHistoryQuery::new()).await.is_err());
+
+        // Bad change_type.
+        sqlx::query(
+            "INSERT INTO change_history (id, entity_type, entity_id, change_type, timestamp)
+             VALUES ('22222222-2222-4333-8444-555555555555', 'identity', ?, 'exploded', '2024-01-01T00:00:00+00:00')",
+        )
+        .bind(entity_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        assert!(repo
+            .get_entity_history(EntityType::Identity, &entity_id)
+            .await
+            .is_err());
+
+        // Bad timestamp.
+        sqlx::query(
+            "INSERT INTO change_history (id, entity_type, entity_id, change_type, timestamp)
+             VALUES ('33333333-3333-4333-8444-555555555555', 'identity', ?, 'created', 'whenever')",
+        )
+        .bind(entity_id.to_string())
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+        assert!(repo
+            .get_entity_history(EntityType::Identity, &entity_id)
+            .await
+            .is_err());
+
+        drop(conn);
+    }
+
+    #[tokio::test]
+    async fn dropped_table_surfaces_database_errors() {
+        let db = create_test_db().await;
+        let repo = ChangeHistoryRepository::new(db.clone());
+
+        sqlx::query("DROP TABLE change_history")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // Every statement now fails at the SQL level; each query must map the
+        // driver error into PersonaError::Database.
+        let entity_id = Uuid::new_v4();
+        let history = ChangeHistory::new(EntityType::Identity, entity_id, ChangeType::Created);
+        let query = ChangeHistoryQuery::new();
+        let errors = vec![
+            repo.record(&history).await.unwrap_err(),
+            repo.get_entity_history(EntityType::Identity, &entity_id)
+                .await
+                .unwrap_err(),
+            repo.get_version(EntityType::Identity, &entity_id, 1)
+                .await
+                .unwrap_err(),
+            repo.query(&query).await.unwrap_err(),
+            repo.get_latest_version(EntityType::Identity, &entity_id)
+                .await
+                .unwrap_err(),
+            repo.get_stats().await.unwrap_err(),
+            repo.delete_before_date(chrono::Utc::now())
+                .await
+                .unwrap_err(),
+        ];
+        for err in errors {
+            assert!(
+                matches!(
+                    err.downcast_ref::<PersonaError>(),
+                    Some(PersonaError::Database(_))
+                ),
+                "expected a database error, got: {err}"
+            );
+        }
     }
 }

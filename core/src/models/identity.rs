@@ -194,5 +194,69 @@ mod tests {
 
         identity.remove_attribute("team");
         assert!(identity.get_attribute("team").is_none());
+
+        // Removing an attribute that is already gone must be a no-op.
+        let before = identity.updated_at;
+        identity.remove_attribute("team");
+        assert!(identity.get_attribute("team").is_none());
+        assert_eq!(identity.updated_at, before);
+    }
+
+    #[test]
+    fn identity_type_parse_and_display_remaining_variants() {
+        for name in ["Work", "Social", "Financial", "Gaming"] {
+            let parsed: IdentityType = name.parse().unwrap();
+            assert_eq!(parsed.to_string(), name);
+        }
+
+        // Custom roundtrips an empty name too.
+        let parsed: IdentityType = "".parse().unwrap();
+        assert_eq!(parsed, IdentityType::Custom(String::new()));
+    }
+
+    #[test]
+    fn identity_new_sets_defaults() {
+        let identity = Identity::new("Bob".to_string(), IdentityType::Work);
+
+        assert_eq!(identity.name, "Bob");
+        assert_eq!(identity.identity_type, IdentityType::Work);
+        assert!(identity.description.is_none());
+        assert!(identity.email.is_none());
+        assert!(identity.phone.is_none());
+        assert!(identity.ssh_key.is_none());
+        assert!(identity.gpg_key.is_none());
+        assert!(identity.tags.is_empty());
+        assert!(identity.attributes.is_empty());
+        assert_eq!(identity.created_at, identity.updated_at);
+        assert!(identity.is_active);
+    }
+
+    #[test]
+    fn identity_touch_refreshes_updated_at() {
+        let mut identity = Identity::new("Bob".to_string(), IdentityType::Work);
+
+        let before = identity.updated_at;
+        identity.touch();
+        assert!(identity.updated_at >= before);
+    }
+
+    #[test]
+    fn identity_serde_roundtrip() {
+        let mut identity = Identity::new("Alice".to_string(), IdentityType::Financial);
+        identity.description = Some("primary".to_string());
+        identity.email = Some("alice@example.com".to_string());
+        identity.phone = Some("+86 138 0000 0000".to_string());
+        identity.ssh_key = Some("ssh-ed25519 AAAA".to_string());
+        identity.gpg_key = Some("gpg-key".to_string());
+        identity.tags = vec!["core".to_string()];
+        identity.set_attribute("team".to_string(), "core".to_string());
+
+        let json = serde_json::to_string(&identity).unwrap();
+        let decoded: Identity = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, identity.id);
+        assert_eq!(decoded.identity_type, IdentityType::Financial);
+        assert_eq!(decoded.email, identity.email);
+        assert_eq!(decoded.tags, identity.tags);
+        assert_eq!(decoded.attributes, identity.attributes);
     }
 }

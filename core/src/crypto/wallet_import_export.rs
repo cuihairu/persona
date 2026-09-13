@@ -1151,4 +1151,449 @@ mod tests {
         payload.extend_from_slice(&checksum[..4]);
         bs58::encode(payload).into_string()
     }
+
+    /// `WalletSigningKey` is not `Debug`, so `expect_err` cannot be used.
+    fn expect_sign_err(result: PersonaResult<WalletSigningKey>, msg: &str) -> PersonaError {
+        match result {
+            Err(e) => e,
+            Ok(_) => panic!("{msg}"),
+        }
+    }
+
+    fn hd_wallet(network: BlockchainNetwork, count: usize) -> CryptoWallet {
+        import_from_mnemonic(
+            Uuid::new_v4(),
+            "HD".to_string(),
+            TEST_PHRASE,
+            "",
+            network,
+            None,
+            count,
+            "pw",
+        )
+        .unwrap()
+    }
+
+    const TEST_PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const ETH_KEY: &str = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b";
+
+    #[test]
+    fn import_from_mnemonic_rejects_invalid_phrase() {
+        let err = import_from_mnemonic(
+            Uuid::new_v4(),
+            "bad".to_string(),
+            "not a valid mnemonic at all",
+            "",
+            BlockchainNetwork::Bitcoin,
+            None,
+            1,
+            "pw",
+        )
+        .expect_err("invalid mnemonic must be rejected");
+        assert!(err.to_string().contains("Invalid mnemonic"));
+    }
+
+    #[test]
+    fn import_from_mnemonic_honors_explicit_derivation_path() {
+        let wallet = import_from_mnemonic(
+            Uuid::new_v4(),
+            "custom path".to_string(),
+            TEST_PHRASE,
+            "passphrase",
+            BlockchainNetwork::Bitcoin,
+            Some("m/84'/0'/7'/0".to_string()),
+            2,
+            "pw",
+        )
+        .unwrap();
+        assert_eq!(wallet.derivation_path.as_deref(), Some("m/84'/0'/7'/0"));
+        assert_eq!(
+            wallet.addresses[0].derivation_path.as_deref(),
+            Some("m/84'/0'/7'/0/0")
+        );
+        // A BIP-84 path yields bech32 (P2WPKH) addresses.
+        assert!(wallet.addresses[0].address.starts_with("bc1q"));
+    }
+
+    #[test]
+    fn signing_key_for_address_rejects_watch_only() {
+        let mut wallet = import_from_private_key(
+            Uuid::new_v4(),
+            "watch".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .unwrap();
+        wallet.watch_only = true;
+        let err = expect_sign_err(
+            signing_key_for_address(&wallet, "pw", &wallet.addresses[0].address),
+            "watch-only wallets must not sign",
+        );
+        assert!(err.to_string().contains("Watch-only wallets cannot sign"));
+    }
+
+    #[test]
+    fn signing_key_for_address_requires_a_derivation_path() {
+        // HD secp256k1 wallet without any path information.
+        let mut wallet = hd_wallet(BlockchainNetwork::Bitcoin, 1);
+        let address = wallet.addresses[0].address.clone();
+        wallet.addresses.clear();
+        wallet.derivation_path = None;
+        let err = expect_sign_err(
+            signing_key_for_address(&wallet, "pw", &address),
+            "HD wallet without a path must be rejected",
+        );
+        assert!(err.to_string().contains("Wallet has no derivation path"));
+
+        // Same for the Solana (Ed25519) branch.
+        let mut sol = hd_wallet(BlockchainNetwork::Solana, 1);
+        let sol_address = sol.addresses[0].address.clone();
+        sol.addresses.clear();
+        sol.derivation_path = None;
+        let err = expect_sign_err(
+            signing_key_for_address(&sol, "pw", &sol_address),
+            "Solana wallet without a path must be rejected",
+        );
+        assert!(err.to_string().contains("Wallet has no derivation path"));
+    }
+
+    #[test]
+    fn signing_key_for_address_rejects_corrupt_key_payload() {
+        let mut wallet = hd_wallet(BlockchainNetwork::Bitcoin, 1);
+        wallet.encrypted_private_key = b"corrupt".to_vec();
+        let err = expect_sign_err(
+            signing_key_for_address(&wallet, "pw", "anything"),
+            "corrupt payload must be rejected",
+        );
+        assert!(err.to_string().contains("Deserialization error"));
+    }
+
+    #[test]
+    fn import_from_private_key_rejects_bad_lengths_and_formats() {
+        // 31-byte hex payload.
+        let err = import_from_private_key(
+            Uuid::new_v4(),
+            "short".to_string(),
+            &"ab".repeat(31),
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .expect_err("31-byte key must be rejected");
+        assert!(err.to_string().contains("Private key must be 32 bytes"));
+
+        // 33-byte hex payload.
+        assert!(import_from_private_key(
+            Uuid::new_v4(),
+            "long".to_string(),
+            &"ab".repeat(33),
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .is_err());
+
+        // Neither hex nor WIF, on a non-Bitcoin network.
+        let err = import_from_private_key(
+            Uuid::new_v4(),
+            "junk".to_string(),
+            "zzz-not-hex",
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .expect_err("non-hex must be rejected outside Bitcoin");
+        assert!(err.to_string().contains("neither valid hex nor a WIF"));
+
+        // On Bitcoin it falls through to WIF parsing, which also fails.
+        let err = import_from_private_key(
+            Uuid::new_v4(),
+            "junk-btc".to_string(),
+            "zzz-not-hex",
+            BlockchainNetwork::Bitcoin,
+            "pw",
+        )
+        .expect_err("garbage input must fail WIF parsing too");
+        assert!(err.to_string().contains("Invalid WIF"));
+    }
+
+    #[test]
+    fn import_from_private_key_rejects_unsupported_networks() {
+        let err = import_from_private_key(
+            Uuid::new_v4(),
+            "custom".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Custom("fantasy".to_string()),
+            "pw",
+        )
+        .expect_err("custom networks have no address scheme");
+        assert!(err.to_string().contains("not implemented for"));
+    }
+
+    #[test]
+    fn import_from_wif_rejects_testnet_and_uncompressed() {
+        // Testnet WIF: version byte 0xef, compressed suffix.
+        let mut payload = vec![0xefu8];
+        payload.extend_from_slice(&[0x22u8; 32]);
+        payload.push(0x01);
+        let checksum = double_sha256(&payload);
+        payload.extend_from_slice(&checksum[..4]);
+        let testnet_wif = bs58::encode(payload).into_string();
+
+        let err = import_from_wif(Uuid::new_v4(), "t".to_string(), &testnet_wif, "pw")
+            .expect_err("testnet WIF must be rejected");
+        assert!(err.to_string().contains("testnet WIF is not supported"));
+
+        // Uncompressed mainnet WIF (no 0x01 suffix).
+        let uncompressed = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+        let err = import_from_wif(Uuid::new_v4(), "u".to_string(), uncompressed, "pw")
+            .expect_err("uncompressed WIF must be rejected");
+        assert!(err
+            .to_string()
+            .contains("Uncompressed WIF is not supported"));
+    }
+
+    #[test]
+    fn export_mnemonic_requires_stored_mnemonic() {
+        let wallet = import_from_private_key(
+            Uuid::new_v4(),
+            "single".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .unwrap();
+        let err = export_mnemonic(&wallet, "pw").expect_err("single-key wallets have no mnemonic");
+        assert!(err.to_string().contains("Wallet has no mnemonic"));
+    }
+
+    #[test]
+    fn export_private_key_falls_back_to_any_stored_key() {
+        let mut wallet = import_from_private_key(
+            Uuid::new_v4(),
+            "single".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .unwrap();
+        // With the address list cleared, the per-address lookup misses and the
+        // export falls back to the only stored key ("primary" bucket).
+        wallet.addresses.clear();
+        let exported = export_private_key(&wallet, "pw").unwrap();
+        assert_eq!(exported, ETH_KEY);
+    }
+
+    #[test]
+    fn export_private_keys_requires_paths_for_hd_addresses() {
+        let mut wallet = hd_wallet(BlockchainNetwork::Ethereum, 2);
+        wallet.addresses[1].derivation_path = None;
+        let err = export_private_key(&wallet, "pw")
+            .expect_err("HD address without a derivation path must fail");
+        assert!(err.to_string().contains("missing a derivation path"));
+    }
+
+    #[test]
+    fn export_to_wif_guardrails() {
+        let password = "pw";
+
+        // Watch-only.
+        let mut watch = import_from_private_key(
+            Uuid::new_v4(),
+            "w".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        watch.watch_only = true;
+        let err = export_to_wif(&watch, password).expect_err("watch-only must not export WIF");
+        assert!(err
+            .to_string()
+            .contains("Watch-only wallets cannot export WIF"));
+
+        // Non-Bitcoin network.
+        let eth = import_from_private_key(
+            Uuid::new_v4(),
+            "e".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+        let err = export_to_wif(&eth, password).expect_err("WIF is Bitcoin-only");
+        assert!(err.to_string().contains("only supported for Bitcoin"));
+
+        // HD Bitcoin wallet.
+        let hd = hd_wallet(BlockchainNetwork::Bitcoin, 1);
+        let err = export_to_wif(&hd, password).expect_err("HD wallets must not export WIF");
+        assert!(err.to_string().contains("single-address Bitcoin wallets"));
+
+        // Wrong password.
+        let btc = import_from_private_key(
+            Uuid::new_v4(),
+            "b".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        assert!(export_to_wif(&btc, "wrong").is_err());
+    }
+
+    #[test]
+    fn export_xpub_presence() {
+        let hd = hd_wallet(BlockchainNetwork::Bitcoin, 1);
+        let xpub = export_xpub(&hd).unwrap();
+        assert!(xpub.starts_with("xpub"));
+
+        let single = import_from_private_key(
+            Uuid::new_v4(),
+            "s".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Ethereum,
+            "pw",
+        )
+        .unwrap();
+        let err = export_xpub(&single).expect_err("single-key wallets have no xpub");
+        assert!(err.to_string().contains("no extended public key"));
+    }
+
+    #[test]
+    fn export_to_json_requires_password_for_private_data() {
+        let wallet = hd_wallet(BlockchainNetwork::Bitcoin, 1);
+        let err = export_to_json(&wallet, true, None)
+            .expect_err("private export without a password must fail");
+        assert!(err.to_string().contains("Password required"));
+
+        // Public-only export needs no password and omits secrets.
+        let public = export_to_json(&wallet, false, None).unwrap();
+        let parsed: WalletExport = serde_json::from_str(&public).unwrap();
+        assert!(parsed.mnemonic.is_none());
+        assert!(parsed.private_keys.is_none());
+        assert_eq!(parsed.addresses.len(), 1);
+    }
+
+    #[test]
+    fn import_from_json_error_paths() {
+        // Malformed JSON.
+        let err = import_from_json(Uuid::new_v4(), None, "{nope", "pw")
+            .expect_err("malformed export must be rejected");
+        assert!(err.to_string().contains("Invalid wallet JSON export"));
+
+        // Neither mnemonic nor private keys.
+        let bare = r#"{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"bare","network":"bitcoin","wallet_type":"HD","addresses":[],"created_at":"2024-01-01T00:00:00Z"}"#;
+        let err = import_from_json(Uuid::new_v4(), None, bare, "pw")
+            .expect_err("export without key material must be rejected");
+        assert!(err
+            .to_string()
+            .contains("requires mnemonic or private key data"));
+
+        // Empty private-keys map.
+        let empty_keys = r#"{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"empty","network":"bitcoin","wallet_type":"single","addresses":[],"private_keys":{},"created_at":"2024-01-01T00:00:00Z"}"#;
+        let err = import_from_json(Uuid::new_v4(), None, empty_keys, "pw")
+            .expect_err("empty private key map must be rejected");
+        assert!(err
+            .to_string()
+            .contains("does not contain any private keys"));
+
+        // Missing name and no fallback.
+        let nameless = r#"{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"  ","network":"bitcoin","wallet_type":"hd","addresses":[],"mnemonic":"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about","created_at":"2024-01-01T00:00:00Z"}"#;
+        let err = import_from_json(Uuid::new_v4(), None, nameless, "pw")
+            .expect_err("missing name must be rejected");
+        assert!(err.to_string().contains("missing a name"));
+    }
+
+    #[test]
+    fn import_from_json_defaults_optional_fields() {
+        // extended_public_key / description / watch_only are serde-defaulted.
+        let minimal = format!(
+            r#"{{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"minimal","network":"polygon","wallet_type":"hd","mnemonic":"{TEST_PHRASE}","addresses":["a"],"created_at":"2024-01-01T00:00:00Z"}}"#
+        );
+        let wallet = import_from_json(Uuid::new_v4(), None, &minimal, "pw").unwrap();
+        assert_eq!(wallet.network, BlockchainNetwork::Polygon);
+        assert!(!wallet.watch_only);
+        assert_eq!(wallet.addresses.len(), 1);
+        assert!(wallet.addresses[0].address.starts_with("0x"));
+    }
+
+    #[test]
+    fn parse_network_name_covers_all_known_networks() {
+        let password = "pw";
+        // Non-EVM, non-Bitcoin networks parse but cannot derive addresses.
+        for network in ["bitcoincash", "bitcoin cash", "litecoin", "dogecoin"] {
+            let json = format!(
+                r#"{{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"n","network":"{network}","wallet_type":"hd","mnemonic":"{TEST_PHRASE}","addresses":["a"],"created_at":"2024-01-01T00:00:00Z"}}"#
+            );
+            let err = import_from_json(Uuid::new_v4(), None, &json, password)
+                .expect_err("unsupported address scheme must fail");
+            assert!(err.to_string().contains("not implemented for"), "{network}");
+        }
+
+        // Unknown network strings become Custom and fail the same way.
+        let custom = format!(
+            r#"{{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"n","network":"Some Chain","wallet_type":"hd","mnemonic":"{TEST_PHRASE}","addresses":["a"],"created_at":"2024-01-01T00:00:00Z"}}"#
+        );
+        let err = import_from_json(Uuid::new_v4(), None, &custom, password).unwrap_err();
+        assert!(err.to_string().contains("Custom"));
+
+        // EVM networks succeed end-to-end.
+        for network in [
+            "polygon",
+            "arbitrum",
+            "optimism",
+            "binancesmartchain",
+            "binance smart chain",
+        ] {
+            let json = format!(
+                r#"{{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"n","network":"{network}","wallet_type":"hd","mnemonic":"{TEST_PHRASE}","addresses":["a"],"created_at":"2024-01-01T00:00:00Z"}}"#
+            );
+            let wallet = import_from_json(Uuid::new_v4(), None, &json, password)
+                .unwrap_or_else(|e| panic!("{network} must import: {e}"));
+            assert_eq!(wallet.addresses.len(), 1);
+        }
+    }
+
+    #[test]
+    fn format_parsing_covers_every_variant_and_is_case_insensitive() {
+        use ExportFormat as E;
+        use ImportFormat as F;
+
+        for (s, expected) in [
+            ("MNEMONIC", F::Mnemonic),
+            ("phrase", F::Mnemonic),
+            ("Seed", F::Mnemonic),
+            ("privatekey", F::PrivateKey),
+            ("PRIVATE_KEY", F::PrivateKey),
+            ("key", F::PrivateKey),
+            ("JSON", F::Json),
+            ("keystore", F::Keystore),
+            ("WIF", F::Wif),
+        ] {
+            assert_eq!(parse_import_format(s).unwrap(), expected, "{s}");
+        }
+        assert!(parse_import_format("yaml")
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Unknown import format"));
+
+        for (s, expected) in [
+            ("mnemonic", E::Mnemonic),
+            ("PHRASE", E::Mnemonic),
+            ("seed", E::Mnemonic),
+            ("privatekey", E::PrivateKey),
+            ("private_key", E::PrivateKey),
+            ("KEY", E::PrivateKey),
+            ("wif", E::Wif),
+            ("xpub", E::Xpub),
+            ("extended_public_key", E::Xpub),
+            ("json", E::Json),
+        ] {
+            assert_eq!(parse_export_format(s).unwrap(), expected, "{s}");
+        }
+        assert!(parse_export_format("csv")
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("Unknown export format"));
+    }
 }

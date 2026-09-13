@@ -118,10 +118,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -132,7 +129,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
                 .await
                 .map_err(|e| anyhow!("Lookup failed: {}", e))?
                 .is_some()),
-            _ => Ok(false),
+            other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         Ok(IdentityRepository::new(db)
@@ -187,10 +184,7 @@ async fn show_removal_summary(name: &str, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -267,10 +261,7 @@ async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -353,15 +344,12 @@ async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<
     let mut service = PersonaService::new(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
-    if service
+    let has_users = service
         .has_users()
         .await
-        .map_err(|e| anyhow!("Failed to check users: {}", e))?
-    {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        .map_err(|e| anyhow!("Failed to check users: {}", e))?;
+    if has_users {
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -372,12 +360,19 @@ async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<
         }
     }
 
-    // Locate identity
-    let identity = service
-        .get_identity_by_name(name)
-        .await
-        .map_err(|e| anyhow!("Lookup failed: {}", e))?
-        .with_context(|| format!("Identity '{}' not found", name))?;
+    // Locate identity (direct read for unencrypted, user-less workspaces)
+    let identity = if has_users {
+        service
+            .get_identity_by_name(name)
+            .await
+            .map_err(|e| anyhow!("Lookup failed: {}", e))?
+    } else {
+        IdentityRepository::new(db.clone())
+            .find_by_name(name)
+            .await
+            .map_err(|e| anyhow!("Lookup failed: {}", e))?
+    }
+    .with_context(|| format!("Identity '{}' not found", name))?;
 
     // Update workspace active if needed (v2 schema)
     let repo = WorkspaceRepository::new(db.clone());
@@ -397,10 +392,17 @@ async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<
     }
 
     // Delete identity
-    let _ = service
-        .delete_identity(&identity.id)
-        .await
-        .map_err(|e| anyhow!("Failed to delete identity: {}", e))?;
+    let _ = if has_users {
+        service
+            .delete_identity(&identity.id)
+            .await
+            .map_err(|e| anyhow!("Failed to delete identity: {}", e))?
+    } else {
+        IdentityRepository::new(db.clone())
+            .delete(&identity.id)
+            .await
+            .map_err(|e| anyhow!("Failed to delete identity: {}", e))?
+    };
 
     if purge {
         println!("🧹 Purging all associated data...");
@@ -437,7 +439,7 @@ async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db)
+    let mut service = PersonaService::new(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     if service
@@ -445,10 +447,7 @@ async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -459,9 +458,154 @@ async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
                 .await
                 .map_err(|e| anyhow!("Failed to fetch identities: {}", e))?
                 .len()),
-            _ => Ok(0),
+            other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
-        Ok(0)
+        Ok(IdentityRepository::new(db.clone())
+            .find_all()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch identities: {}", e))?
+            .len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn args(name: &str, force: bool, purge: bool) -> RemoveArgs {
+        RemoveArgs {
+            name: name.to_string(),
+            force,
+            backup: false,
+            purge,
+        }
+    }
+
+    /// Migrated database with `names` identities inserted.
+    async fn seeded_db(dir: &TempDir, names: &[&str]) -> Database {
+        let db = Database::from_file(dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        for name in names {
+            repo.create(&CoreIdentityModel::new(
+                name.to_string(),
+                IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        }
+        db
+    }
+
+    #[tokio::test]
+    async fn remove_deletes_identity_and_reports_missing() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice", "bob"]).await;
+
+        // Missing identity fails fast.
+        let err = execute(args("ghost", true, false), &config)
+            .await
+            .expect_err("missing identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+
+        // Forced removal succeeds without any prompt.
+        execute(args("alice", true, false), &config)
+            .await
+            .expect("forced removal must succeed");
+
+        // The identity is gone; the other one remains.
+        assert!(!identity_exists("alice", &config).await.unwrap());
+        assert!(identity_exists("bob", &config).await.unwrap());
+        assert_eq!(get_remaining_identities_count(&config).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn remove_clears_active_identity_pointer() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+
+        // Point the workspace at alice first.
+        {
+            let repo = WorkspaceRepository::new(db.clone());
+            let identity = IdentityRepository::new(db.clone())
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            let mut ws = persona_core::models::Workspace::new(
+                config.workspace.path.clone(),
+                "test-workspace".to_string(),
+            );
+            ws.switch_identity(identity.id);
+            repo.create(&ws).await.unwrap();
+        }
+        assert!(is_active_identity("alice", &config).await.unwrap());
+
+        execute(args("alice", true, true), &config)
+            .await
+            .expect("removal with purge must succeed");
+        assert!(
+            !is_active_identity("alice", &config).await.unwrap(),
+            "active pointer cleared"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_authenticated_path_with_master_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["carol"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = execute(args("carol", true, false), &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        execute(args("carol", true, false), &config)
+            .await
+            .expect("correct password must remove");
+        assert!(!identity_exists("carol", &config).await.unwrap());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }

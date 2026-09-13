@@ -260,4 +260,163 @@ mod tests {
             .to_string()
             .contains("At least one character set must be enabled"));
     }
+
+    #[test]
+    fn rejects_short_length() {
+        let options = PasswordGeneratorOptions {
+            length: 3,
+            include_lowercase: true,
+            ..PasswordGeneratorOptions::default()
+        };
+        let err = PasswordGenerator::generate(&options).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Password length must be at least 4 characters"));
+    }
+
+    #[test]
+    fn pronounceable_requires_letters() {
+        let options = PasswordGeneratorOptions {
+            length: 16,
+            include_lowercase: false,
+            include_uppercase: false,
+            include_numbers: true,
+            include_symbols: true,
+            pronounceable: true,
+        };
+        let err = PasswordGenerator::generate(&options).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Pronounceable passwords require lowercase and/or uppercase"));
+    }
+
+    #[test]
+    fn single_charset_password_uses_only_that_set() {
+        let options = PasswordGeneratorOptions {
+            length: 32,
+            include_lowercase: false,
+            include_uppercase: false,
+            include_numbers: true,
+            include_symbols: false,
+            pronounceable: false,
+        };
+        let password = PasswordGenerator::generate(&options).unwrap();
+        assert_eq!(password.len(), 32);
+        assert!(password.chars().all(|c| DIGITS.contains(c)));
+    }
+
+    #[test]
+    fn pronounceable_password_supports_uppercase() {
+        let options = PasswordGeneratorOptions {
+            length: 20,
+            include_lowercase: false,
+            include_uppercase: true,
+            include_numbers: false,
+            include_symbols: false,
+            pronounceable: true,
+        };
+        let password = PasswordGenerator::generate(&options).unwrap();
+        assert_eq!(password.len(), 20);
+        assert!(password.chars().all(|c| UPPERCASE.contains(c)));
+    }
+
+    #[test]
+    fn pronounceable_password_mixed_case() {
+        let options = PasswordGeneratorOptions {
+            length: 24,
+            include_lowercase: true,
+            include_uppercase: true,
+            include_numbers: false,
+            include_symbols: false,
+            pronounceable: true,
+        };
+        let password = PasswordGenerator::generate(&options).unwrap();
+        assert_eq!(password.len(), 24);
+        assert!(password
+            .chars()
+            .all(|c| LOWERCASE.contains(c) || UPPERCASE.contains(c)));
+    }
+
+    #[test]
+    fn pronounceable_password_injects_digits_and_symbols() {
+        // Injection replaces one random position per enabled set. The symbol
+        // pass runs last, so every password carries a symbol; the digit pass
+        // can be overwritten when both land on the same position, so digits
+        // are only required to appear across several runs.
+        let mut saw_digit = false;
+        for _ in 0..25 {
+            let options = PasswordGeneratorOptions {
+                length: 16,
+                include_lowercase: true,
+                include_uppercase: false,
+                include_numbers: true,
+                include_symbols: true,
+                pronounceable: true,
+            };
+            let password = PasswordGenerator::generate(&options).unwrap();
+            assert_eq!(password.len(), 16);
+            assert!(
+                password.chars().all(|c| {
+                    LOWERCASE.contains(c) || DIGITS.contains(c) || SYMBOLS.contains(c)
+                }),
+                "unexpected character in {password}"
+            );
+            assert!(
+                password.chars().any(|c| SYMBOLS.contains(c)),
+                "symbol injection failed for {password}"
+            );
+            saw_digit |= password.chars().any(|c| DIGITS.contains(c));
+        }
+        assert!(saw_digit, "digit never appeared across runs");
+    }
+
+    #[test]
+    fn pronounceable_password_injection_is_per_set_reliable() {
+        // With only one injected set there is nothing to overwrite it, so
+        // every generated password must contain that set.
+        for include_numbers in [true, false] {
+            let options = PasswordGeneratorOptions {
+                length: 20,
+                include_lowercase: true,
+                include_uppercase: false,
+                include_numbers,
+                include_symbols: !include_numbers,
+                pronounceable: true,
+            };
+            let password = PasswordGenerator::generate(&options).unwrap();
+            assert_eq!(password.len(), 20);
+            if include_numbers {
+                assert!(password.chars().any(|c| DIGITS.contains(c)));
+                assert!(password
+                    .chars()
+                    .all(|c| LOWERCASE.contains(c) || DIGITS.contains(c)));
+            } else {
+                assert!(password.chars().any(|c| SYMBOLS.contains(c)));
+                assert!(password
+                    .chars()
+                    .all(|c| LOWERCASE.contains(c) || SYMBOLS.contains(c)));
+            }
+        }
+    }
+
+    #[test]
+    fn default_options_are_documented_values() {
+        let options = PasswordGeneratorOptions::default();
+        assert_eq!(options.length, 16);
+        assert!(options.include_lowercase);
+        assert!(options.include_uppercase);
+        assert!(options.include_numbers);
+        assert!(options.include_symbols);
+        assert!(!options.pronounceable);
+
+        // Default options generate a 16-char password using all four sets.
+        let password = PasswordGenerator::generate(&options).unwrap();
+        assert_eq!(password.len(), 16);
+        assert!(password.chars().all(|c| {
+            LOWERCASE.contains(c)
+                || UPPERCASE.contains(c)
+                || DIGITS.contains(c)
+                || SYMBOLS.contains(c)
+        }));
+    }
 }

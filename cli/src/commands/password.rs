@@ -44,7 +44,7 @@ pub struct GenerateArgs {
     pub pronounceable: bool,
 
     /// Number of passwords to generate
-    #[arg(short, long, default_value = "1")]
+    #[arg(long, default_value = "1")]
     pub count: usize,
 }
 
@@ -104,4 +104,99 @@ fn generate_password(args: GenerateArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+
+    fn generate_args(
+        length: usize,
+        sets: Vec<CharacterSet>,
+        pronounceable: bool,
+        count: usize,
+    ) -> GenerateArgs {
+        GenerateArgs {
+            length,
+            sets,
+            pronounceable,
+            count,
+        }
+    }
+
+    #[tokio::test]
+    async fn generate_single_default_password() {
+        let config = CliConfig::default();
+        let args = PasswordArgs {
+            command: PasswordCommand::Generate(generate_args(
+                20,
+                vec![
+                    CharacterSet::Lowercase,
+                    CharacterSet::Uppercase,
+                    CharacterSet::Digits,
+                    CharacterSet::Symbols,
+                ],
+                false,
+                1,
+            )),
+        };
+        execute(args, &config)
+            .await
+            .expect("default generation works");
+    }
+
+    #[tokio::test]
+    async fn generate_multiple_and_pronounceable_and_single_set() {
+        let config = CliConfig::default();
+
+        // Multiple passwords.
+        execute(
+            PasswordArgs {
+                command: PasswordCommand::Generate(generate_args(
+                    16,
+                    vec![CharacterSet::Lowercase, CharacterSet::Digits],
+                    false,
+                    3,
+                )),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // Pronounceable mode takes the alternate branch.
+        execute(
+            PasswordArgs {
+                command: PasswordCommand::Generate(generate_args(
+                    12,
+                    vec![CharacterSet::Lowercase],
+                    true,
+                    1,
+                )),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn duplicate_sets_collapse_via_hash_set() {
+        let config = CliConfig::default();
+        // Repeated flags deduplicate through the HashSet.
+        execute(
+            PasswordArgs {
+                command: PasswordCommand::Generate(generate_args(
+                    8,
+                    vec![CharacterSet::Digits, CharacterSet::Digits],
+                    false,
+                    1,
+                )),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
 }

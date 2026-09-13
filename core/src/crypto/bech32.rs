@@ -121,4 +121,41 @@ mod tests {
         let (hrp, _, _) = decode_witness_address(&addr).unwrap();
         assert_eq!(hrp, "tb");
     }
+
+    #[test]
+    fn test_rejects_invalid_hrp() {
+        let p = program("751e76e8199196d454941c45d1b3a323f1433bd6");
+        // HRP must be US-ASCII; a non-ASCII byte is rejected by Hrp::parse.
+        let err = encode_witness_address("bç", 0, &p).expect_err("non-ASCII HRP must be rejected");
+        assert!(err.to_string().contains("Invalid HRP"));
+    }
+
+    #[test]
+    fn test_decode_trims_surrounding_whitespace() {
+        let addr = " bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4\n";
+        let (hrp, version, _) = decode_witness_address(addr).unwrap();
+        assert_eq!(hrp, "bc");
+        assert_eq!(version, 0);
+    }
+
+    #[test]
+    fn test_max_version_16_roundtrip_uses_bech32m() {
+        let p = vec![0xABu8; 40]; // maximum-length witness program
+        let addr = encode_witness_address("bc", 16, &p).unwrap();
+        // Witness version 16 encodes as charset index 16 = 's'; the bech32m
+        // checksum constant applies to all versions >= 1.
+        assert!(addr.starts_with("bc1s"), "got {addr}");
+        let (hrp, version, decoded) = decode_witness_address(&addr).unwrap();
+        assert_eq!(hrp, "bc");
+        assert_eq!(version, 16);
+        assert_eq!(decoded, p);
+    }
+
+    #[test]
+    fn test_decode_rejects_garbage() {
+        assert!(decode_witness_address("").is_err());
+        assert!(decode_witness_address("notanaddress").is_err());
+        // Valid bech32 (non-segwit) encoding without a witness version.
+        assert!(decode_witness_address("bc1sw50qa3jx3s").is_err());
+    }
 }

@@ -466,4 +466,260 @@ mod tests {
         let found = repo.find_by_id(&attachment.id).await.unwrap().unwrap();
         assert!(!found.is_active);
     }
+
+    fn make_attachment(credential_id: Uuid, name: &str) -> Attachment {
+        Attachment::new(
+            credential_id,
+            name.to_string(),
+            "application/pdf".to_string(),
+            1024,
+            format!("path/to/{name}"),
+            "hash".to_string(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_find_by_id_missing_returns_none() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+
+        assert!(repo.find_by_id(&Uuid::new_v4()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_by_credential_lists_active_only() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+
+        let credential_id = seed_identity_and_credential(&repo.db).await;
+        let keep = make_attachment(credential_id, "keep.pdf");
+        let drop = make_attachment(credential_id, "drop.pdf");
+        repo.create(&keep).await.unwrap();
+        repo.create(&drop).await.unwrap();
+
+        repo.delete(&drop.id).await.unwrap();
+
+        let listed = repo.find_by_credential(&credential_id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, keep.id);
+        assert!(!listed.iter().any(|a| a.id == drop.id));
+    }
+
+    #[tokio::test]
+    async fn test_permanent_delete_removes_row() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+
+        let credential_id = seed_identity_and_credential(&repo.db).await;
+        let attachment = make_attachment(credential_id, "gone.pdf");
+        repo.create(&attachment).await.unwrap();
+
+        repo.permanent_delete(&attachment.id).await.unwrap();
+        assert!(repo.find_by_id(&attachment.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_stats_aggregates_active_attachments() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+
+        // Empty table: SUM(size) is NULL and must not panic.
+        let empty = repo.get_stats().await.unwrap();
+        assert_eq!(empty.total_attachments, 0);
+        assert_eq!(empty.total_size, 0);
+        assert_eq!(empty.encrypted_count, 0);
+        assert_eq!(empty.chunked_count, 0);
+
+        let credential_id = seed_identity_and_credential(&repo.db).await;
+
+        let mut plain = make_attachment(credential_id, "plain.pdf");
+        plain.size = 100;
+        let mut encrypted = make_attachment(credential_id, "enc.pdf");
+        encrypted.size = 300;
+        encrypted.enable_encryption("key-1".to_string());
+        let mut chunked = make_attachment(credential_id, "chunked.pdf");
+        chunked.size = 500;
+        chunked.set_chunks(4, 128);
+        let mut soft_deleted = make_attachment(credential_id, "deleted.pdf");
+        soft_deleted.size = 10_000;
+
+        for attachment in [&plain, &encrypted, &chunked, &soft_deleted] {
+            repo.create(attachment).await.unwrap();
+        }
+        repo.delete(&soft_deleted.id).await.unwrap();
+
+        let stats = repo.get_stats().await.unwrap();
+        assert_eq!(stats.total_attachments, 3);
+        assert_eq!(stats.total_size, 900);
+        assert_eq!(stats.encrypted_count, 1);
+        assert_eq!(stats.chunked_count, 1);
+        assert_eq!(stats.by_mime_type.get("application/pdf"), Some(&3));
+    }
+
+    #[tokio::test]
+    async fn test_chunk_lifecycle_and_ordering() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+
+        let credential_id = seed_identity_and_credential(&repo.db).await;
+        let attachment = make_attachment(credential_id, "chunked.pdf");
+        repo.create(&attachment).await.unwrap();
+
+        assert!(repo.get_chunks(&attachment.id).await.unwrap().is_empty());
+
+        // Insert out of order; retrieval must order by chunk_index.
+        for index in [2u32, 0, 1] {
+            let chunk = AttachmentChunk::new(
+                attachment.id,
+                index,
+                128,
+                format!("hash-{index}"),
+                format!("chunks/chunk_{index:04}"),
+            );
+            repo.create_chunk(&chunk).await.unwrap();
+        }
+
+        let chunks = repo.get_chunks(&attachment.id).await.unwrap();
+        assert_eq!(chunks.len(), 3);
+        let indexes: Vec<u32> = chunks.iter().map(|c| c.chunk_index).collect();
+        assert_eq!(indexes, vec![0, 1, 2]);
+        assert_eq!(chunks[2].content_hash, "hash-2");
+        assert!(!chunks[0].is_encrypted);
+
+        repo.delete_chunks(&attachment.id).await.unwrap();
+        assert!(repo.get_chunks(&attachment.id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_last_accessed_and_encryption_roundtrip() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+
+        let credential_id = seed_identity_and_credential(&repo.db).await;
+        let mut attachment = make_attachment(credential_id, "accessed.pdf");
+        attachment.touch();
+        attachment.enable_encryption("key-42".to_string());
+        attachment.tags = vec!["archive".to_string()];
+        attachment.metadata = serde_json::json!({"origin": "import"});
+
+        repo.create(&attachment).await.unwrap();
+        let found = repo.find_by_id(&attachment.id).await.unwrap().unwrap();
+        assert!(found.last_accessed.is_some());
+        assert!(found.is_encrypted);
+        assert_eq!(found.encryption_key_id.as_deref(), Some("key-42"));
+        assert_eq!(found.tags, vec!["archive".to_string()]);
+        assert_eq!(found.metadata["origin"], "import");
+
+        // update() persists touched timestamps too.
+        let mut updated = found.clone();
+        updated.touch();
+        repo.update(&updated).await.unwrap();
+        let reloaded = repo.find_by_id(&attachment.id).await.unwrap().unwrap();
+        assert!(reloaded.last_accessed.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_corrupt_rows_surface_database_errors() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+        let credential_id = seed_identity_and_credential(&repo.db).await;
+
+        // Corrupt UUID in the id column: any full listing must fail.
+        sqlx::query(
+            "INSERT INTO attachments (id, credential_id, filename, mime_type, size, storage_path,
+             content_hash, created_at, updated_at)
+             VALUES ('not-a-uuid', ?, 'bad', 'application/pdf', 1, 'p', 'h',
+                     '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00')",
+        )
+        .bind(credential_id.to_string())
+        .execute(repo.db.pool())
+        .await
+        .unwrap();
+        assert!(repo.find_by_credential(&credential_id).await.is_err());
+
+        // Remove it, then corrupt created_at on a valid UUID instead.
+        sqlx::query("DELETE FROM attachments WHERE id = 'not-a-uuid'")
+            .execute(repo.db.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO attachments (id, credential_id, filename, mime_type, size, storage_path,
+             content_hash, created_at, updated_at)
+             VALUES ('11111111-2222-3333-4444-555555555555', ?, 'bad', 'application/pdf', 1, 'p',
+                     'h', 'not-a-date', '2024-01-01T00:00:00+00:00')",
+        )
+        .bind(credential_id.to_string())
+        .execute(repo.db.pool())
+        .await
+        .unwrap();
+        assert!(repo.find_by_credential(&credential_id).await.is_err());
+
+        // A corrupt chunk row breaks get_chunks for its attachment.
+        sqlx::query("DELETE FROM attachments WHERE id = '11111111-2222-3333-4444-555555555555'")
+            .execute(repo.db.pool())
+            .await
+            .unwrap();
+        let base = make_attachment(credential_id, "base.pdf");
+        repo.create(&base).await.unwrap();
+        sqlx::query(
+            "INSERT INTO attachment_chunks (id, attachment_id, chunk_index, size, content_hash,
+             storage_path, is_encrypted, created_at)
+             VALUES ('not-a-uuid', ?, 0, 1, 'h', 'p', 0, '2024-01-01T00:00:00+00:00')",
+        )
+        .bind(base.id.to_string())
+        .execute(repo.db.pool())
+        .await
+        .unwrap();
+
+        assert!(repo.get_chunks(&base.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn dropped_tables_surface_database_errors() {
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db.clone());
+
+        sqlx::query("DROP TABLE attachments")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("DROP TABLE attachment_chunks")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // Every statement now fails at the SQL level; each query must map the
+        // driver error into PersonaError::Database.
+        let attachment = make_attachment(Uuid::new_v4(), "ghost.pdf");
+        let chunk = AttachmentChunk::new(
+            attachment.id,
+            0,
+            8,
+            "hash".to_string(),
+            "chunks/chunk_0000".to_string(),
+        );
+        let errors = vec![
+            repo.create(&attachment).await.unwrap_err(),
+            repo.find_by_id(&attachment.id).await.unwrap_err(),
+            repo.find_by_credential(&attachment.credential_id)
+                .await
+                .unwrap_err(),
+            repo.update(&attachment).await.unwrap_err(),
+            repo.delete(&attachment.id).await.unwrap_err(),
+            repo.permanent_delete(&attachment.id).await.unwrap_err(),
+            repo.get_stats().await.unwrap_err(),
+            repo.create_chunk(&chunk).await.unwrap_err(),
+            repo.get_chunks(&attachment.id).await.unwrap_err(),
+            repo.delete_chunks(&attachment.id).await.unwrap_err(),
+        ];
+        for err in errors {
+            assert!(
+                matches!(
+                    err.downcast_ref::<PersonaError>(),
+                    Some(PersonaError::Database(_))
+                ),
+                "expected a database error, got: {err}"
+            );
+        }
+    }
 }

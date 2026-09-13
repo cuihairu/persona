@@ -521,6 +521,186 @@ mod tests {
         assert!(key.derive_path("m/44'/501'/0'/0").is_err());
         assert!(key.derive_path("m/44'/501'/0'/0'").is_ok());
     }
+
+    #[test]
+    fn test_mnemonic_word_count_values() {
+        assert_eq!(MnemonicWordCount::Words12.as_usize(), 12);
+        assert_eq!(MnemonicWordCount::Words15.as_usize(), 15);
+        assert_eq!(MnemonicWordCount::Words18.as_usize(), 18);
+        assert_eq!(MnemonicWordCount::Words21.as_usize(), 21);
+        assert_eq!(MnemonicWordCount::Words24.as_usize(), 24);
+    }
+
+    #[test]
+    fn test_mnemonic_to_seed_is_64_bytes_and_passphrase_bound() {
+        let mnemonic =
+            SecureMnemonic::from_phrase("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap();
+        let seed_no_pass = mnemonic.to_seed("");
+        let seed_with_pass = mnemonic.to_seed("TREZOR");
+        assert_eq!(seed_no_pass.len(), 64);
+        assert_eq!(seed_with_pass.len(), 64);
+        assert_ne!(seed_no_pass, seed_with_pass);
+    }
+
+    #[test]
+    fn test_invalid_mnemonic_rejected() {
+        assert!(!SecureMnemonic::validate("not a real mnemonic phrase"));
+        let err = match SecureMnemonic::from_phrase("not a real mnemonic phrase") {
+            Err(e) => e,
+            Ok(_) => panic!("invalid phrase must be rejected"),
+        };
+        assert!(err.to_string().contains("Invalid mnemonic"));
+    }
+
+    #[test]
+    fn test_master_key_from_seed_rejects_short_seed() {
+        // BIP32 requires at least 16 bytes of seed entropy.
+        let err = match MasterKey::from_seed(&[1u8; 8]) {
+            Err(e) => e,
+            Ok(_) => panic!("short seed must be rejected"),
+        };
+        assert!(err.to_string().contains("Failed to derive master key"));
+    }
+
+    #[test]
+    fn test_master_key_derive_path_rejects_garbage() {
+        let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words12).unwrap();
+        let master = MasterKey::from_mnemonic(&mnemonic, "").unwrap();
+        let err = match master.derive_path("this is not a path") {
+            Err(e) => e,
+            Ok(_) => panic!("garbage path must be rejected"),
+        };
+        assert!(err.to_string().contains("Invalid derivation path"));
+    }
+
+    #[test]
+    fn test_master_key_bytes_roundtrip_and_rejections() {
+        let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words12).unwrap();
+        let master = MasterKey::from_mnemonic(&mnemonic, "").unwrap();
+
+        let bytes = master.to_bytes();
+        let as_text = std::str::from_utf8(&bytes).unwrap();
+        assert!(as_text.starts_with("xprv"));
+
+        let restored = MasterKey::from_bytes(&bytes).unwrap();
+        assert_eq!(restored.to_xpub(), master.to_xpub());
+
+        // Non-UTF-8 bytes cannot be a serialized key.
+        let err = match MasterKey::from_bytes(&[0xFF, 0xFE, 0x00]) {
+            Err(e) => e,
+            Ok(_) => panic!("non-UTF-8 key encoding must be rejected"),
+        };
+        assert!(err.to_string().contains("Invalid key encoding"));
+
+        // Valid UTF-8 that is not an xprv must also be rejected.
+        let err = match MasterKey::from_bytes(b"plainly not a key") {
+            Err(e) => e,
+            Ok(_) => panic!("non-xprv text must be rejected"),
+        };
+        assert!(err.to_string().contains("Invalid master key"));
+    }
+
+    #[test]
+    fn test_derived_key_verifying_key_and_hardened_child() {
+        let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words12).unwrap();
+        let master = MasterKey::from_mnemonic(&mnemonic, "").unwrap();
+        let parent = master.derive_path("m/44'/0'/0'").unwrap();
+
+        let verifying = parent.to_verifying_key().unwrap();
+        let signing = parent.to_signing_key().unwrap();
+        assert_eq!(
+            verifying,
+            *signing.verifying_key(),
+            "verifying key must match the signing key"
+        );
+
+        let non_hardened = parent.derive_child(0, false).unwrap();
+        let hardened = parent.derive_child(0, true).unwrap();
+        assert_ne!(
+            non_hardened.private_key_bytes(),
+            hardened.private_key_bytes(),
+            "hardened and non-hardened derivation must differ"
+        );
+
+        // Indexes at or above 0x80000000 are invalid child numbers.
+        assert!(parent.derive_child(0x8000_0000, true).is_err());
+        assert!(parent.derive_child(0x8000_0000, false).is_err());
+    }
+
+    #[test]
+    fn test_bip44_path_builder_all_purposes_and_change() {
+        let path = Bip44PathBuilder::bip49(CoinType::Bitcoin)
+            .account(1)
+            .change(1)
+            .address_index(2)
+            .build();
+        assert_eq!(path, "m/49'/0'/1'/1/2");
+
+        let path = Bip44PathBuilder::bip86(CoinType::Bitcoin)
+            .account(0)
+            .change(0)
+            .address_index(3)
+            .build();
+        assert_eq!(path, "m/86'/0'/0'/0/3");
+    }
+
+    #[test]
+    fn test_coin_type_values() {
+        assert_eq!(CoinType::Bitcoin.value(), 0);
+        assert_eq!(CoinType::Testnet.value(), 1);
+        assert_eq!(CoinType::Litecoin.value(), 2);
+        assert_eq!(CoinType::Dogecoin.value(), 3);
+        assert_eq!(CoinType::Ethereum.value(), 60);
+        assert_eq!(CoinType::EthereumClassic.value(), 61);
+        assert_eq!(CoinType::Optimism.value(), 10);
+        assert_eq!(CoinType::Cosmos.value(), 118);
+        assert_eq!(CoinType::Binance.value(), 714);
+        assert_eq!(CoinType::Solana.value(), 501);
+        assert_eq!(CoinType::Polygon.value(), 966);
+        assert_eq!(CoinType::Arbitrum.value(), 9001);
+    }
+
+    #[test]
+    fn test_ed25519_derive_path_rejects_bad_components() {
+        let key = Ed25519Key::from_seed(&[2u8; 64]).unwrap();
+
+        // Non-numeric index.
+        let err = match key.derive_path("m/44'/abc'") {
+            Err(e) => e,
+            Ok(_) => panic!("non-numeric index must be rejected"),
+        };
+        assert!(err.to_string().contains("Invalid path index"));
+
+        // Index already carrying the hardened bit.
+        let err = match key.derive_path("m/44'/2147483648'") {
+            Err(e) => e,
+            Ok(_) => panic!("index >= 2^31 must be rejected"),
+        };
+        assert!(err.to_string().contains("Invalid hardened index"));
+    }
+
+    #[test]
+    fn test_ed25519_parts_roundtrip() {
+        let key = Ed25519Key::from_seed(&[3u8; 64]).unwrap();
+        let (secret, chain_code) = key.to_parts();
+        let restored = Ed25519Key::from_parts(secret, chain_code).unwrap();
+        assert_eq!(restored.public_bytes(), key.public_bytes());
+        assert_eq!(restored.secret_bytes(), key.secret_bytes());
+    }
+
+    #[test]
+    fn test_ed25519_path_without_m_prefix() {
+        // A path without the leading `m` is accepted too.
+        let with_m = Ed25519Key::from_seed(&[4u8; 64])
+            .unwrap()
+            .derive_path("m/0'")
+            .unwrap();
+        let without_m = Ed25519Key::from_seed(&[4u8; 64])
+            .unwrap()
+            .derive_path("0'")
+            .unwrap();
+        assert_eq!(with_m.public_bytes(), without_m.public_bytes());
+    }
 }
 
 #[cfg(test)]

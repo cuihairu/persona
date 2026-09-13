@@ -119,16 +119,42 @@ impl KeyDerivation {
         salt
     }
 
-    /// Derive keys using HKDF with SHA-256
+    /// Derive keys using HKDF with SHA-256 (RFC 5869) and an empty salt.
+    ///
+    /// Implemented directly over `ring::hmac` because `ring::hkdf`'s
+    /// `Prk::expand` binds the OKM length to a `KeyType` (an `Algorithm`
+    /// yields exactly one digest-width block), so it cannot serve arbitrary
+    /// output lengths.
     pub fn derive_keys_hkdf(master_key: &[u8], info: &[u8], length: usize) -> Vec<u8> {
-        use ring::hkdf;
-        let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &[]);
-        let prk = salt.extract(master_key);
-        let info_slice = [info];
-        let okm = prk.expand(&info_slice, hkdf::HKDF_SHA256).unwrap();
-        let mut output = vec![0u8; length];
-        okm.fill(&mut output).unwrap();
-        output
+        use ring::hmac;
+
+        let max_len = 255 * ring::digest::SHA256_OUTPUT_LEN;
+        assert!(
+            length <= max_len,
+            "HKDF-Expand length {length} exceeds the RFC 5869 maximum of {max_len}"
+        );
+
+        // Extract: PRK = HMAC-SHA256(salt = empty, IKM).
+        let salt_key = hmac::Key::new(hmac::HMAC_SHA256, &[]);
+        let prk = hmac::sign(&salt_key, master_key);
+
+        // Expand: T(0) = empty; T(i) = HMAC-SHA256(PRK, T(i-1) || info || i);
+        // OKM = first `length` bytes of T(1) || T(2) || ...
+        let prk_key = hmac::Key::new(hmac::HMAC_SHA256, prk.as_ref());
+        let mut okm = Vec::with_capacity(length);
+        let mut prev_block: Vec<u8> = Vec::new();
+        let mut counter = 1u8;
+        while okm.len() < length {
+            let mut ctx = hmac::Context::with_key(&prk_key);
+            ctx.update(&prev_block);
+            ctx.update(info);
+            ctx.update(&[counter]);
+            prev_block = ctx.sign().as_ref().to_vec();
+            let take = (length - okm.len()).min(prev_block.len());
+            okm.extend_from_slice(&prev_block[..take]);
+            counter += 1;
+        }
+        okm
     }
 }
 
@@ -171,5 +197,106 @@ mod tests {
 
         assert_eq!(key1, key2);
         assert_eq!(key1.len(), 32);
+    }
+
+    #[test]
+    fn test_from_secret_bytes_roundtrip() {
+        let original = SigningKeyPair::generate();
+        let secret = original.secret_key_bytes();
+
+        let restored = SigningKeyPair::from_secret_bytes(&secret).unwrap();
+        assert_eq!(restored.public_key_bytes(), original.public_key_bytes());
+        // A signature made by the restored key verifies under the original.
+        let signature = restored.sign(b"roundtrip");
+        assert!(original.verify(b"roundtrip", &signature).is_ok());
+    }
+
+    #[test]
+    fn test_from_secret_bytes_rejects_wrong_length() {
+        assert!(SigningKeyPair::from_secret_bytes(&[0u8; 31]).is_err());
+        assert!(SigningKeyPair::from_secret_bytes(&[0u8; 33]).is_err());
+        assert!(SigningKeyPair::from_secret_bytes(&[]).is_err());
+    }
+
+    #[test]
+    fn test_public_key_accessor_matches_bytes() {
+        let keypair = SigningKeyPair::generate();
+        assert_eq!(keypair.public_key().to_bytes(), keypair.public_key_bytes());
+    }
+
+    #[test]
+    fn test_verifying_key_from_bytes_rejects_wrong_length() {
+        assert!(VerifyingKey::from_bytes(&[0u8; 0]).is_err());
+        assert!(VerifyingKey::from_bytes(&[0u8; 31]).is_err());
+        assert!(VerifyingKey::from_bytes(&[0u8; 33]).is_err());
+    }
+
+    #[test]
+    fn test_verifying_key_to_bytes_roundtrip() {
+        let keypair = SigningKeyPair::generate();
+        let verifying_key = VerifyingKey::from_bytes(&keypair.public_key_bytes()).unwrap();
+        assert_eq!(verifying_key.to_bytes(), keypair.public_key_bytes());
+
+        // The wrapper rejects signatures over a different message.
+        let signature = keypair.sign(b"real");
+        assert!(verifying_key.verify(b"real", &signature).is_ok());
+        assert!(verifying_key.verify(b"forged", &signature).is_err());
+    }
+
+    #[test]
+    fn test_pbkdf2_salt_and_iterations_change_output() {
+        let salt_a = KeyDerivation::generate_salt();
+        let mut salt_b = salt_a;
+        salt_b[0] ^= 0xFF;
+
+        let base = KeyDerivation::derive_key_pbkdf2("pw", &salt_a, 1000);
+        assert_ne!(base, KeyDerivation::derive_key_pbkdf2("pw", &salt_b, 1000));
+        assert_ne!(base, KeyDerivation::derive_key_pbkdf2("pw", &salt_a, 2000));
+        assert_ne!(
+            base,
+            KeyDerivation::derive_key_pbkdf2("other", &salt_a, 1000)
+        );
+    }
+
+    // RFC 5869 Test Case 3 (SHA-256, zero-length salt, zero-length info,
+    // L = 42) — matches this function's fixed empty-salt semantics.
+    #[test]
+    fn test_hkdf_rfc5869_vector_3() {
+        let ikm = [0x0bu8; 22];
+        let okm = KeyDerivation::derive_keys_hkdf(&ikm, b"", 42);
+        assert_eq!(
+            hex::encode(okm),
+            "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d\
+             9d201395faa4b61a96c8"
+                .replace(' ', "")
+        );
+    }
+
+    #[test]
+    fn test_hkdf_derive_keys_properties() {
+        let ikm = [7u8; 32];
+
+        let a = KeyDerivation::derive_keys_hkdf(&ikm, b"persona", 42);
+        let b = KeyDerivation::derive_keys_hkdf(&ikm, b"persona", 42);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 42);
+
+        // Different info must derive independent keys.
+        assert_ne!(a, KeyDerivation::derive_keys_hkdf(&ikm, b"other", 42));
+        // Different input key material must derive independent keys.
+        assert_ne!(
+            a,
+            KeyDerivation::derive_keys_hkdf(&[8u8; 32], b"persona", 42)
+        );
+        // HKDF-Expand outputs are prefix-consistent across lengths.
+        let short = KeyDerivation::derive_keys_hkdf(&ikm, b"persona", 32);
+        assert_eq!(&a[..32], &short[..]);
+    }
+
+    #[test]
+    fn test_generate_salt_is_random() {
+        let a = KeyDerivation::generate_salt();
+        let b = KeyDerivation::generate_salt();
+        assert_ne!(a, b);
     }
 }

@@ -27,11 +27,11 @@ pub enum AutoLockCommand {
         active: bool,
 
         /// Filter by security level
-        #[arg(long, short)]
+        #[arg(long)]
         security_level: Option<AutoLockSecurityLevel>,
 
         /// Search policies by name
-        #[arg(long, short)]
+        #[arg(long)]
         search: Option<String>,
     },
     /// Show details of a specific policy
@@ -62,7 +62,7 @@ pub enum AutoLockCommand {
         absolute_timeout: Option<u64>,
 
         /// Sensitive operation timeout in seconds
-        #[arg(long, short)]
+        #[arg(long)]
         sensitive_timeout: Option<u64>,
 
         /// Maximum concurrent sessions
@@ -111,7 +111,7 @@ pub enum AutoLockCommand {
         absolute_timeout: Option<u64>,
 
         /// New sensitive operation timeout in seconds
-        #[arg(long, short)]
+        #[arg(long)]
         sensitive_timeout: Option<u64>,
 
         /// New maximum concurrent sessions
@@ -732,5 +732,377 @@ impl OutputFormatter {
 
     fn print_error(&self, message: &str) {
         println!("{} {}", "✗".red().bold(), message.red());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    async fn handler(command: AutoLockCommand, dir: &TempDir) -> Result<()> {
+        handle_auto_lock(AutoLockArgs { command }, &config_for(dir)).await
+    }
+
+    #[test]
+    fn parse_use_case_labels_cover_all_aliases() {
+        assert!(matches!(
+            parse_use_case_label("personal").unwrap(),
+            AutoLockUseCase::PersonalDevice
+        ));
+        assert!(matches!(
+            parse_use_case_label("corporate_desktop").unwrap(),
+            AutoLockUseCase::CorporateDesktop
+        ));
+        assert!(matches!(
+            parse_use_case_label("kiosk").unwrap(),
+            AutoLockUseCase::PublicKiosk
+        ));
+        assert!(matches!(
+            parse_use_case_label("dev").unwrap(),
+            AutoLockUseCase::DeveloperEnvironment
+        ));
+        assert!(matches!(
+            parse_use_case_label("High-Security").unwrap(),
+            AutoLockUseCase::HighSecurityFacility
+        ));
+        let err = parse_use_case_label("bogus").unwrap_err();
+        assert!(err.to_string().contains("Unsupported use case 'bogus'"));
+    }
+
+    #[tokio::test]
+    async fn policy_crud_lifecycle_via_cli_handler() {
+        let dir = TempDir::new().unwrap();
+
+        // Empty list reports no policies.
+        handler(
+            AutoLockCommand::List {
+                active: false,
+                security_level: None,
+                search: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("empty list works");
+
+        // Create from a use-case preset.
+        handler(
+            AutoLockCommand::Create {
+                name: "preset".to_string(),
+                description: Some("from preset".to_string()),
+                security_level: AutoLockSecurityLevel::Medium,
+                inactivity_timeout: None,
+                absolute_timeout: None,
+                sensitive_timeout: None,
+                max_sessions: None,
+                warnings: false,
+                warning_time: None,
+                force_sensitive: false,
+                use_case: Some("personal".to_string()),
+            },
+            &dir,
+        )
+        .await
+        .expect("preset create works");
+
+        // Create with explicit configuration.
+        handler(
+            AutoLockCommand::Create {
+                name: "custom".to_string(),
+                description: None,
+                security_level: AutoLockSecurityLevel::High,
+                inactivity_timeout: Some(600),
+                absolute_timeout: Some(2400),
+                sensitive_timeout: Some(120),
+                max_sessions: Some(3),
+                warnings: true,
+                warning_time: Some(30),
+                force_sensitive: true,
+                use_case: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("custom create works");
+
+        // List with each filter.
+        handler(
+            AutoLockCommand::List {
+                active: false,
+                security_level: None,
+                search: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("full list works");
+        handler(
+            AutoLockCommand::List {
+                active: true,
+                security_level: None,
+                search: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("active list works");
+        handler(
+            AutoLockCommand::List {
+                active: false,
+                security_level: None,
+                search: Some("cust".to_string()),
+            },
+            &dir,
+        )
+        .await
+        .expect("search list works");
+        handler(
+            AutoLockCommand::List {
+                active: false,
+                security_level: Some(AutoLockSecurityLevel::High),
+                search: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("level filter works");
+
+        // Resolve the custom policy id through the repository.
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        let all = repo.find_all().await.unwrap();
+        // The repository seeds built-in system policies; ours are on top.
+        assert!(all.len() >= 2, "seeded policies present");
+        let custom = all.iter().find(|p| p.name == "custom").unwrap().clone();
+        drop(repo);
+
+        // Show by UUID and by name, and a missing one.
+        handler(
+            AutoLockCommand::Show {
+                policy_identifier: custom.id.to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("show by uuid works");
+        handler(
+            AutoLockCommand::Show {
+                policy_identifier: "custom".to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("show by name works");
+        let err = handler(
+            AutoLockCommand::Show {
+                policy_identifier: "ghost".to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect_err("missing policy must fail");
+        assert!(err.to_string().contains("Policy 'ghost' not found"));
+
+        // Update fields.
+        handler(
+            AutoLockCommand::Update {
+                policy_id: custom.id,
+                name: Some("renamed".to_string()),
+                description: Some("new desc".to_string()),
+                security_level: Some(AutoLockSecurityLevel::Maximum),
+                inactivity_timeout: Some(300),
+                absolute_timeout: Some(1200),
+                sensitive_timeout: Some(60),
+                max_sessions: Some(2),
+                warnings: Some(false),
+                warning_time: Some(15),
+                force_sensitive: Some(false),
+            },
+            &dir,
+        )
+        .await
+        .expect("update works");
+
+        // Deleting a system policy needs --force.
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        let renamed = repo.find_by_id(&custom.id).await.unwrap().unwrap();
+        drop(repo);
+        if renamed.metadata.is_system_policy {
+            let err = handler(
+                AutoLockCommand::Delete {
+                    policy_id: renamed.id,
+                    force: false,
+                },
+                &dir,
+            )
+            .await
+            .expect_err("system policy delete without force must fail");
+            assert!(err.to_string().contains("Cannot delete system policy"));
+        }
+        handler(
+            AutoLockCommand::Delete {
+                policy_id: renamed.id,
+                force: true,
+            },
+            &dir,
+        )
+        .await
+        .expect("forced delete works");
+
+        // Unknown update id fails.
+        let err = handler(
+            AutoLockCommand::Update {
+                policy_id: uuid::Uuid::new_v4(),
+                name: None,
+                description: None,
+                security_level: None,
+                inactivity_timeout: None,
+                absolute_timeout: None,
+                sensitive_timeout: None,
+                max_sessions: None,
+                warnings: None,
+                warning_time: None,
+                force_sensitive: None,
+            },
+            &dir,
+        )
+        .await
+        .expect_err("unknown update must fail");
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn assign_default_stats_and_session_commands() {
+        let dir = TempDir::new().unwrap();
+
+        handler(
+            AutoLockCommand::Create {
+                name: "team".to_string(),
+                description: None,
+                security_level: AutoLockSecurityLevel::Low,
+                inactivity_timeout: None,
+                absolute_timeout: None,
+                sensitive_timeout: None,
+                max_sessions: None,
+                warnings: false,
+                warning_time: None,
+                force_sensitive: false,
+                use_case: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("create works");
+
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        let policy = repo.find_all().await.unwrap().remove(0);
+        let pid = policy.id;
+        drop(repo);
+
+        let user = uuid::Uuid::new_v4();
+
+        // Non-UUID user ids are rejected.
+        let err = handler(
+            AutoLockCommand::Assign {
+                user_id: "not-a-uuid".to_string(),
+                policy_identifier: "team".to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect_err("bad user id must fail");
+        assert!(err.to_string().contains("valid UUID"));
+
+        handler(
+            AutoLockCommand::Assign {
+                user_id: user.to_string(),
+                policy_identifier: "team".to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("assign works");
+
+        handler(
+            AutoLockCommand::UserPolicy {
+                user_id: user.to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("user policy works");
+        handler(
+            AutoLockCommand::UserPolicy {
+                user_id: uuid::Uuid::new_v4().to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("unassigned user works");
+
+        handler(AutoLockCommand::SetDefault { policy_id: pid }, &dir)
+            .await
+            .expect("set default works");
+        handler(
+            AutoLockCommand::Stats {
+                policy_id: Some(pid),
+            },
+            &dir,
+        )
+        .await
+        .expect("stats for policy works");
+        handler(AutoLockCommand::Stats { policy_id: None }, &dir)
+            .await
+            .expect("system stats works");
+        handler(
+            AutoLockCommand::Status {
+                user_id: Some(user.to_string()),
+            },
+            &dir,
+        )
+        .await
+        .expect("status with user works");
+        handler(AutoLockCommand::Status { user_id: None }, &dir)
+            .await
+            .expect("global status works");
+
+        handler(
+            AutoLockCommand::Unassign {
+                user_id: user.to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("unassign works");
+
+        // Session lock/unlock round-trip; unknown ids report but do not panic.
+        handler(AutoLockCommand::Lock { session_id: None }, &dir)
+            .await
+            .expect("lock without id works");
+        handler(
+            AutoLockCommand::Unlock {
+                session_id: "ghost".to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("unlock unknown session reports gracefully");
+
+        let err = handler(
+            AutoLockCommand::Assign {
+                user_id: user.to_string(),
+                policy_identifier: "ghost".to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect_err("unknown policy must fail");
+        assert!(err.to_string().contains("Policy 'ghost' not found"));
     }
 }

@@ -6,7 +6,6 @@ use std::path::{Path, PathBuf};
 
 use crate::utils::progress::create_progress_bar;
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
-use dialoguer::Password;
 use persona_core::{
     models::IdentityType,
     storage::{IdentityRepository, Repository},
@@ -171,11 +170,8 @@ fn validate_import_file(file_path: &Path) -> Result<()> {
 
 fn decrypt_import_file(file_path: &Path, _config: &CliConfig) -> Result<PathBuf> {
     use crate::utils::file_crypto::decrypt_file_to_temp;
-    use dialoguer::Password;
     println!("🔓 Decrypting import file...");
-    let passphrase = Password::new()
-        .with_prompt("Enter import passphrase")
-        .interact()?;
+    let passphrase = super::service::prompt_payload_passphrase("import")?;
     let out = decrypt_file_to_temp(file_path, &passphrase)?;
     println!("{} File decrypted", "✓".green());
     Ok(out)
@@ -392,9 +388,7 @@ async fn check_import_conflicts(
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
     let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
     let names = if service.has_users().await.into_anyhow()? {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service.authenticate_user(&password).await.into_anyhow()? {
             persona_core::auth::authentication::AuthResult::Success => service
                 .get_identities()
@@ -403,7 +397,7 @@ async fn check_import_conflicts(
                 .into_iter()
                 .map(|i| i.name)
                 .collect::<Vec<_>>(),
-            _ => Vec::new(),
+            other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         IdentityRepository::new(db)
@@ -544,10 +538,9 @@ async fn perform_import(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
     let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
-    if service.has_users().await.into_anyhow()? {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+    let has_users = service.has_users().await.into_anyhow()?;
+    if has_users {
+        let password = super::service::prompt_master_password()?;
         match service.authenticate_user(&password).await.into_anyhow()? {
             persona_core::auth::authentication::AuthResult::Success => {}
             other => anyhow::bail!("Authentication failed: {:?}", other),
@@ -555,13 +548,18 @@ async fn perform_import(
     } else {
         // If no users configured, initialize one? For import we allow creating identities without encryption.
     }
+    let repo = IdentityRepository::new(db.clone());
 
     for (i, identity) in identities.iter().enumerate() {
-        // Check existing
-        let existing = service
-            .get_identity_by_name(&identity.name)
-            .await
-            .into_anyhow()?;
+        // Check existing (direct read for unencrypted, user-less workspaces)
+        let existing = if has_users {
+            service
+                .get_identity_by_name(&identity.name)
+                .await
+                .into_anyhow()?
+        } else {
+            repo.find_by_name(&identity.name).await.into_anyhow()?
+        };
 
         match args.mode.as_str() {
             "skip" if existing.is_some() => {
@@ -586,7 +584,11 @@ async fn perform_import(
                 current.tags = identity.tags.clone();
                 // attributes: currently not imported from file -> keep current
                 current.touch();
-                let _ = service.update_identity(&current).await.into_anyhow()?;
+                let _ = if has_users {
+                    service.update_identity(&current).await.into_anyhow()?
+                } else {
+                    repo.update(&current).await.into_anyhow()?
+                };
             }
             "merge" if existing.is_some() => {
                 let mut current = existing.unwrap();
@@ -610,7 +612,11 @@ async fn perform_import(
                     current.tags = identity.tags.clone();
                 }
                 current.touch();
-                let _ = service.update_identity(&current).await.into_anyhow()?;
+                let _ = if has_users {
+                    service.update_identity(&current).await.into_anyhow()?
+                } else {
+                    repo.update(&current).await.into_anyhow()?
+                };
             }
             _ => {
                 // Create new
@@ -629,7 +635,11 @@ async fn perform_import(
                 new.email = identity.email.clone();
                 new.phone = identity.phone.clone();
                 new.tags = identity.tags.clone();
-                let _ = service.create_identity_full(new).await.into_anyhow()?;
+                let _ = if has_users {
+                    service.create_identity_full(new).await.into_anyhow()?
+                } else {
+                    repo.create(&new).await.into_anyhow()?
+                };
             }
         }
 
@@ -646,4 +656,296 @@ async fn perform_import(
 
     pb.finish_with_message("Import completed");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn args(file: &Path, force: bool) -> ImportArgs {
+        ImportArgs {
+            file: file.to_path_buf(),
+            mode: "merge".to_string(),
+            dry_run: false,
+            force,
+            backup: false,
+            decrypt: false,
+            interactive: false,
+        }
+    }
+
+    fn sample_json() -> String {
+        serde_json::json!({
+            "export_info": {"version": "1.0", "created": "2024-01-01T00:00:00Z"},
+            "identities": [
+                {"name": "alice", "type": "personal", "description": "first", "email": "a@b.c", "tags": ["work"]},
+                {"name": "bob", "type": "work", "description": "second"}
+            ]
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn validate_reports_missing_and_directory_paths() {
+        let dir = TempDir::new().unwrap();
+        let err = validate_import_file(&dir.path().join("ghost.json"))
+            .expect_err("missing file must fail");
+        assert!(err.to_string().contains("does not exist"));
+
+        let err = validate_import_file(dir.path()).expect_err("directory must fail");
+        assert!(err.to_string().contains("not a file"));
+
+        let f = dir.path().join("ok.json");
+        std::fs::write(&f, "{}").unwrap();
+        validate_import_file(&f).expect("regular file validates");
+    }
+
+    #[test]
+    fn parse_all_three_formats_and_reject_unknown() {
+        let dir = TempDir::new().unwrap();
+
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+        let data = parse_import_file(&json_path).unwrap();
+        assert_eq!(data.version, "1.0");
+        assert_eq!(data.identities.len(), 2);
+        assert_eq!(data.identities[0].name, "alice");
+        assert_eq!(data.identities[0].email.as_deref(), Some("a@b.c"));
+        assert_eq!(data.identities[0].tags, vec!["work".to_string()]);
+
+        let yaml_path = dir.path().join("data.yaml");
+        std::fs::write(&yaml_path, sample_yaml()).unwrap();
+        let data = parse_import_file(&yaml_path).unwrap();
+        assert_eq!(data.identities.len(), 2);
+        assert_eq!(data.identities[1].name, "bob");
+
+        let csv_path = dir.path().join("data.csv");
+        std::fs::write(&csv_path, sample_csv()).unwrap();
+        let data = parse_import_file(&csv_path).unwrap();
+        assert_eq!(data.version, "csv");
+        assert_eq!(data.identities.len(), 1);
+        assert_eq!(data.identities[0].name, "carol");
+        assert_eq!(data.identities[0].email.as_deref(), Some("c@d.e"));
+
+        // CSV rows with fewer than 4 fields are skipped.
+        let short_csv = dir.path().join("short.csv");
+        std::fs::write(&short_csv, "Name,Type\nbroken,row\n").unwrap();
+        let data = parse_import_file(&short_csv).unwrap();
+        assert!(data.identities.is_empty());
+
+        let txt_path = dir.path().join("data.txt");
+        std::fs::write(&txt_path, "junk").unwrap();
+        let err = parse_import_file(&txt_path).expect_err("unknown format must fail");
+        assert!(err.to_string().contains("Unsupported import format: txt"));
+    }
+
+    fn sample_yaml() -> String {
+        "export_info:\n  version: \"1.0\"\n  created: \"2024-01-01\"\nidentities:\n  - name: alice\n    type: personal\n  - name: bob\n    type: work\n".to_string()
+    }
+
+    fn sample_csv() -> String {
+        "Name,Type,Description,Email,Created,Modified\ncarol,personal,desc,c@d.e,2024,2024\n"
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn import_round_trip_merge_conflicts_and_dry_run() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+
+        // Dry run touches nothing.
+        let mut dry_args = args(&json_path, true);
+        dry_args.dry_run = true;
+        execute(dry_args, &config).await.expect("dry run succeeds");
+        assert!(check_import_conflicts(&[], &config)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Real import creates both identities.
+        execute(args(&json_path, true), &config)
+            .await
+            .expect("import succeeds");
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        assert!(repo.find_by_name("alice").await.unwrap().is_some());
+        assert!(repo.find_by_name("bob").await.unwrap().is_some());
+        drop(db);
+
+        // Re-importing detects conflicts and merge mode updates them.
+        let conflicts = check_import_conflicts(
+            &[ImportIdentity {
+                name: "alice".to_string(),
+                identity_type: "personal".to_string(),
+                description: "x".to_string(),
+                email: None,
+                phone: None,
+                tags: vec![],
+            }],
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].conflict_type, "name_exists");
+
+        // Invalid mode is rejected when conflicts exist.
+        let mut bad_args = args(&json_path, true);
+        bad_args.mode = "bogus".to_string();
+        let err = execute(bad_args, &config)
+            .await
+            .expect_err("invalid mode must fail");
+        assert!(err.to_string().contains("Invalid import mode: bogus"));
+
+        // Missing file fails fast.
+        let err = execute(args(&dir.path().join("ghost.json"), true), &config)
+            .await
+            .expect_err("missing file must fail");
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[tokio::test]
+    async fn import_modes_merge_replace_skip() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+
+        // First import creates identities.
+        execute(args(&json_path, true), &config).await.unwrap();
+
+        // Updated payload with new description for alice.
+        let updated = serde_json::json!({
+            "export_info": {"version": "1.0", "created": "2024-01-02T00:00:00Z"},
+            "identities": [
+                {"name": "alice", "type": "personal", "description": "updated-desc", "email": "new@b.c"}
+            ]
+        })
+        .to_string();
+        let updated_path = dir.path().join("updated.json");
+        std::fs::write(&updated_path, updated).unwrap();
+
+        // Merge keeps existing fields and applies new ones.
+        let mut merge_args = args(&updated_path, true);
+        merge_args.mode = "merge".to_string();
+        execute(merge_args, &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = IdentityRepository::new(db);
+            let alice = repo.find_by_name("alice").await.unwrap().unwrap();
+            assert_eq!(alice.description.as_deref(), Some("updated-desc"));
+            assert_eq!(alice.email.as_deref(), Some("new@b.c"));
+        }
+
+        // Replace overwrites; skip leaves the row untouched.
+        let blank = serde_json::json!({
+            "export_info": {"version": "1.0", "created": "2024-01-03T00:00:00Z"},
+            "identities": [
+                {"name": "alice", "type": "work", "description": "replaced", "email": "r@b.c"}
+            ]
+        })
+        .to_string();
+        let blank_path = dir.path().join("blank.json");
+        std::fs::write(&blank_path, blank).unwrap();
+
+        let mut skip_args = args(&blank_path, true);
+        skip_args.mode = "skip".to_string();
+        execute(skip_args, &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = IdentityRepository::new(db);
+            let alice = repo.find_by_name("alice").await.unwrap().unwrap();
+            assert_eq!(alice.description.as_deref(), Some("updated-desc"));
+        }
+
+        let mut replace_args = args(&blank_path, true);
+        replace_args.mode = "replace".to_string();
+        execute(replace_args, &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = IdentityRepository::new(db);
+            let alice = repo.find_by_name("alice").await.unwrap().unwrap();
+            assert_eq!(alice.description.as_deref(), Some("replaced"));
+            assert_eq!(alice.email.as_deref(), Some("r@b.c"));
+        }
+    }
+
+    #[tokio::test]
+    async fn import_authenticated_path_with_master_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = execute(args(&json_path, true), &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        execute(args(&json_path, true), &config)
+            .await
+            .expect("correct password must import");
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let service = PersonaService::new(db).await.unwrap();
+            // Both identities landed in the encrypted workspace.
+            let mut service = service;
+            let password = crate::commands::service::prompt_master_password().unwrap();
+            let _ = service.authenticate_user(&password).await.unwrap();
+            assert!(service
+                .get_identity_by_name("alice")
+                .await
+                .unwrap()
+                .is_some());
+        }
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

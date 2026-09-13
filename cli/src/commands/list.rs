@@ -136,7 +136,6 @@ struct Identity {
 }
 
 async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
-    use dialoguer::Password;
     // Open DB
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -156,9 +155,7 @@ async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -382,5 +379,282 @@ fn truncate_string(s: &str, max_len: usize) -> String {
         s.to_string()
     } else {
         format!("{}...", &s[..max_len.saturating_sub(3)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn args(
+        identity_type: Option<&str>,
+        tag: Option<&str>,
+        search: Option<&str>,
+        format: &str,
+        detailed: bool,
+        active_only: bool,
+        sort_by: &str,
+        reverse: bool,
+    ) -> ListArgs {
+        ListArgs {
+            identity_type: identity_type.map(String::from),
+            tag: tag.map(String::from),
+            search: search.map(String::from),
+            format: format.to_string(),
+            detailed,
+            active_only,
+            sort_by: sort_by.to_string(),
+            reverse,
+        }
+    }
+
+    fn sample(name: &str, identity_type: &str, active: bool) -> Identity {
+        Identity {
+            name: name.to_string(),
+            identity_type: identity_type.to_string(),
+            description: String::new(),
+            email: None,
+            phone: None,
+            tags: vec![],
+            active,
+            created: "2024-01-01 00:00:00".to_string(),
+            modified: "2024-01-01 00:00:00".to_string(),
+            attributes: HashMap::new(),
+        }
+    }
+
+    /// Creates a migrated database in `dir` and inserts `n` identities.
+    async fn seed_identities(dir: &TempDir, names: &[&str]) {
+        let db = Database::from_file(dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = persona_core::storage::IdentityRepository::new(db);
+        for name in names {
+            repo.create(&CoreIdentityModel::new(
+                name.to_string(),
+                IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn list_formats_filters_and_empty_state_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identities(&dir, &["alice", "bob", "carol"]).await;
+
+        // Every output format renders.
+        for format in ["table", "json", "yaml", "csv"] {
+            execute(
+                args(None, None, None, format, false, false, "name", false),
+                &config,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("format {} must work: {}", format, e));
+        }
+
+        // Detailed table and active-only both take their branches.
+        execute(
+            args(None, None, None, "table", true, true, "created", true),
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // Unsupported format fails.
+        let err = execute(
+            args(None, None, None, "xml", false, false, "name", false),
+            &config,
+        )
+        .await
+        .expect_err("unsupported format must fail");
+        assert!(err.to_string().contains("Unsupported output format: xml"));
+
+        // Invalid sort field fails.
+        let err = execute(
+            args(None, None, None, "json", false, false, "bogus", false),
+            &config,
+        )
+        .await
+        .expect_err("invalid sort must fail");
+        assert!(err.to_string().contains("Invalid sort field: bogus"));
+
+        // Empty database prints the hint instead of failing.
+        let empty = TempDir::new().unwrap();
+        execute(
+            args(None, None, None, "table", false, false, "name", false),
+            &config_for(&empty),
+        )
+        .await
+        .expect("empty list must succeed");
+    }
+
+    #[tokio::test]
+    async fn list_authenticated_path_rejects_wrong_and_accepts_right_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identities(&dir, &["dave"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = execute(
+            args(None, None, None, "json", false, false, "name", false),
+            &config,
+        )
+        .await
+        .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        execute(
+            args(None, None, None, "csv", false, false, "modified", false),
+            &config,
+        )
+        .await
+        .expect("correct password must list identities");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[test]
+    fn apply_filters_narrows_by_type_tag_search_and_active() {
+        let mut work = sample("alice", "personal", true);
+        work.tags = vec!["work".to_string()];
+        let home = sample("bob", "work", false);
+        let mut described = sample("carol", "server", true);
+        described.description = "production box".to_string();
+
+        let base = vec![work, home, described];
+
+        let by_type = apply_filters(
+            base.clone(),
+            &args(
+                Some("work"),
+                None,
+                None,
+                "table",
+                false,
+                false,
+                "name",
+                false,
+            ),
+        )
+        .unwrap();
+        assert_eq!(by_type.len(), 1);
+        assert_eq!(by_type[0].name, "bob");
+
+        let by_tag = apply_filters(
+            base.clone(),
+            &args(
+                None,
+                Some("work"),
+                None,
+                "table",
+                false,
+                false,
+                "name",
+                false,
+            ),
+        )
+        .unwrap();
+        assert_eq!(by_tag.len(), 1);
+        assert_eq!(by_tag[0].name, "alice");
+
+        let by_search = apply_filters(
+            base.clone(),
+            &args(
+                None,
+                None,
+                Some("production"),
+                "table",
+                false,
+                false,
+                "name",
+                false,
+            ),
+        )
+        .unwrap();
+        assert_eq!(by_search.len(), 1);
+        assert_eq!(by_search[0].name, "carol");
+
+        let active = apply_filters(
+            base.clone(),
+            &args(None, None, None, "table", false, true, "name", false),
+        )
+        .unwrap();
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().all(|id| id.active));
+    }
+
+    #[test]
+    fn sort_identities_orders_by_every_field_and_reverses() {
+        let mut list = vec![
+            sample("carol", "server", true),
+            sample("alice", "personal", true),
+        ];
+        list[1].created = "2023-01-01 00:00:00".to_string();
+        list[0].modified = "2025-01-01 00:00:00".to_string();
+
+        sort_identities(&mut list, "name", false).unwrap();
+        assert_eq!(list[0].name, "alice");
+
+        sort_identities(&mut list, "type", false).unwrap();
+        assert_eq!(list[0].identity_type, "personal");
+
+        sort_identities(&mut list, "created", false).unwrap();
+        assert_eq!(list[0].name, "alice"); // 2023 < 2024
+
+        sort_identities(&mut list, "modified", false).unwrap();
+        assert_eq!(list[0].name, "alice"); // 2024 < 2025
+
+        sort_identities(&mut list, "name", true).unwrap();
+        assert_eq!(list[0].name, "carol"); // reversed
+
+        let err = sort_identities(&mut list, "bogus", false).unwrap_err();
+        assert!(err.to_string().contains("Invalid sort field"));
+    }
+
+    #[test]
+    fn truncate_string_respects_limit() {
+        assert_eq!(truncate_string("short", 10), "short");
+        let truncated = truncate_string("a-very-long-identity-name", 10);
+        assert_eq!(truncated.len(), 10);
+        assert!(truncated.ends_with("..."));
     }
 }

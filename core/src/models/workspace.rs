@@ -109,3 +109,60 @@ impl Workspace {
         self.path.join("backups")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_workspace_new_defaults() {
+        let ws = Workspace::new("/tmp/persona", "main".to_string());
+        assert_eq!(ws.name, "main");
+        assert_eq!(ws.path, PathBuf::from("/tmp/persona"));
+        assert!(ws.active_identity_id.is_none());
+        assert!(ws.settings.encryption_enabled);
+        assert_eq!(ws.settings.auto_backup_hours, 24);
+        assert_eq!(ws.settings.backup_retention_count, 7);
+        assert_eq!(ws.settings.session_timeout_seconds, 3600);
+        assert!(ws.settings.require_confirmation);
+        assert_eq!(ws.settings.default_identity_type, "personal");
+    }
+
+    #[test]
+    fn test_workspace_identity_switching() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        let id = Uuid::new_v4();
+
+        ws.switch_identity(id);
+        assert_eq!(ws.active_identity_id, Some(id));
+
+        ws.clear_active_identity();
+        assert!(ws.active_identity_id.is_none());
+    }
+
+    #[test]
+    fn test_workspace_paths() {
+        let ws = Workspace::new("/tmp/persona", "main".to_string());
+        assert_eq!(
+            ws.database_path(),
+            PathBuf::from("/tmp/persona/identities.db")
+        );
+        assert_eq!(ws.config_path(), PathBuf::from("/tmp/persona/config.toml"));
+        assert_eq!(ws.backup_path(), PathBuf::from("/tmp/persona/backups"));
+    }
+
+    #[test]
+    fn test_workspace_touch_and_serde_round_trip() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        let id = Uuid::new_v4();
+        ws.switch_identity(id);
+        ws.settings.auto_backup_hours = 12;
+        ws.touch();
+
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.id, ws.id);
+        assert_eq!(restored.active_identity_id, Some(id));
+        assert_eq!(restored.settings.auto_backup_hours, 12);
+    }
+}

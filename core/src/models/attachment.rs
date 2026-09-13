@@ -259,4 +259,118 @@ mod tests {
         assert!(path.contains(&attachment.id.to_string()));
         assert!(path.contains("document.pdf"));
     }
+
+    #[test]
+    fn test_touch_sets_last_accessed() {
+        let mut attachment = Attachment::new(
+            Uuid::new_v4(),
+            "note.txt".to_string(),
+            "text/plain".to_string(),
+            12,
+            "path".to_string(),
+            "hash".to_string(),
+        );
+
+        assert!(attachment.last_accessed.is_none());
+        attachment.touch();
+        assert!(attachment.last_accessed.is_some());
+    }
+
+    #[test]
+    fn test_update_refreshes_updated_at() {
+        let mut attachment = Attachment::new(
+            Uuid::new_v4(),
+            "note.txt".to_string(),
+            "text/plain".to_string(),
+            12,
+            "path".to_string(),
+            "hash".to_string(),
+        );
+
+        let before = attachment.updated_at;
+        attachment.update();
+        assert!(attachment.updated_at >= before);
+    }
+
+    #[test]
+    fn test_deactivate_marks_inactive() {
+        let mut attachment = Attachment::new(
+            Uuid::new_v4(),
+            "old.bin".to_string(),
+            "application/octet-stream".to_string(),
+            4096,
+            "path".to_string(),
+            "hash".to_string(),
+        );
+
+        assert!(attachment.is_active);
+        attachment.deactivate();
+        assert!(!attachment.is_active);
+    }
+
+    #[test]
+    fn test_attachment_serde_roundtrip() {
+        let mut attachment = Attachment::new(
+            Uuid::new_v4(),
+            "photo.png".to_string(),
+            "image/png".to_string(),
+            20480,
+            "path/to/photo.png".to_string(),
+            "sha256-hash".to_string(),
+        );
+        attachment.enable_encryption("key-1".to_string());
+        attachment.set_chunks(4, 5120);
+        attachment.touch();
+        attachment.tags = vec!["receipts".to_string(), "2026".to_string()];
+        attachment.metadata = serde_json::json!({"source": "scan"});
+
+        let json = serde_json::to_string(&attachment).unwrap();
+        let decoded: Attachment = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, attachment.id);
+        assert_eq!(decoded.filename, "photo.png");
+        assert!(decoded.is_encrypted);
+        assert_eq!(decoded.encryption_key_id, Some("key-1".to_string()));
+        assert_eq!(decoded.chunk_count, 4);
+        assert_eq!(decoded.chunk_size, 5120);
+        assert_eq!(
+            decoded.tags,
+            vec!["receipts".to_string(), "2026".to_string()]
+        );
+        assert_eq!(decoded.metadata, serde_json::json!({"source": "scan"}));
+        assert!(decoded.last_accessed.is_some());
+    }
+
+    #[test]
+    fn test_attachment_chunk_new_and_serde_roundtrip() {
+        let attachment_id = Uuid::new_v4();
+        let chunk = AttachmentChunk::new(
+            attachment_id,
+            3,
+            65536,
+            "chunk-hash".to_string(),
+            "chunks/3.bin".to_string(),
+        );
+
+        assert_eq!(chunk.attachment_id, attachment_id);
+        assert_eq!(chunk.chunk_index, 3);
+        assert_eq!(chunk.size, 65536);
+        assert_eq!(chunk.content_hash, "chunk-hash");
+        assert_eq!(chunk.storage_path, "chunks/3.bin");
+        assert!(!chunk.is_encrypted);
+
+        let json = serde_json::to_string(&chunk).unwrap();
+        let decoded: AttachmentChunk = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, chunk.id);
+        assert_eq!(decoded.chunk_index, chunk.chunk_index);
+    }
+
+    #[test]
+    fn test_attachment_stats_default() {
+        let stats = AttachmentStats::default();
+        assert_eq!(stats.total_attachments, 0);
+        assert_eq!(stats.total_size, 0);
+        assert_eq!(stats.encrypted_count, 0);
+        assert_eq!(stats.chunked_count, 0);
+        assert!(stats.by_mime_type.is_empty());
+    }
 }

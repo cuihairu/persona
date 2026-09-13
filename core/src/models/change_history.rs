@@ -336,4 +336,156 @@ mod tests {
         assert_eq!(ChangeType::Created.to_string(), "created");
         assert_eq!(ChangeType::Updated.to_string(), "updated");
     }
+
+    #[test]
+    fn test_builder_methods_and_metadata() {
+        let previous = serde_json::json!({"name": "old"});
+        let new = serde_json::json!({"name": "new"});
+
+        let mut history =
+            ChangeHistory::new(EntityType::Credential, Uuid::new_v4(), ChangeType::Updated)
+                .with_states(Some(previous.clone()), Some(new.clone()))
+                .with_version(7)
+                .set_reversible(false);
+
+        history.add_metadata("origin".to_string(), "cli".to_string());
+
+        assert_eq!(history.previous_state, Some(previous));
+        assert_eq!(history.new_state, Some(new));
+        assert_eq!(history.version, 7);
+        assert!(!history.is_reversible);
+        assert_eq!(history.metadata.get("origin"), Some(&"cli".to_string()));
+    }
+
+    #[test]
+    fn test_with_states_accepts_none() {
+        let history =
+            ChangeHistory::new(EntityType::Workspace, Uuid::new_v4(), ChangeType::Deleted)
+                .with_states(None, None);
+
+        assert!(history.previous_state.is_none());
+        assert!(history.new_state.is_none());
+        // Defaults from `new`.
+        assert_eq!(history.version, 1);
+        assert!(history.is_reversible);
+    }
+
+    #[test]
+    fn test_entity_type_display_and_parse_all_variants() {
+        let types = vec![
+            EntityType::Identity,
+            EntityType::Credential,
+            EntityType::Attachment,
+            EntityType::Workspace,
+            EntityType::UserAuth,
+            EntityType::Config,
+        ];
+
+        for entity_type in types {
+            let text = entity_type.to_string();
+            assert_eq!(text.parse::<EntityType>().unwrap(), entity_type);
+        }
+
+        let err = "galaxy".parse::<EntityType>().unwrap_err();
+        assert_eq!(err, "Unknown entity type: galaxy");
+    }
+
+    #[test]
+    fn test_entity_type_hash_keyed_map() {
+        let mut counts = std::collections::HashMap::new();
+        counts.insert(EntityType::Identity, 3usize);
+        counts.insert(EntityType::Config, 1usize);
+
+        assert_eq!(counts.get(&EntityType::Identity), Some(&3));
+        assert_eq!(counts.get(&EntityType::Config), Some(&1));
+    }
+
+    #[test]
+    fn test_change_type_display_and_parse_all_variants() {
+        let types = vec![
+            ChangeType::Created,
+            ChangeType::Updated,
+            ChangeType::Deleted,
+            ChangeType::Restored,
+            ChangeType::Archived,
+            ChangeType::Activated,
+            ChangeType::Deactivated,
+        ];
+
+        for change_type in types {
+            let text = change_type.to_string();
+            assert_eq!(text.parse::<ChangeType>().unwrap(), change_type);
+        }
+
+        let err = "exploded".parse::<ChangeType>().unwrap_err();
+        assert_eq!(err, "Unknown change type: exploded");
+    }
+
+    #[test]
+    fn test_change_history_query_builders() {
+        let from = Utc::now();
+        let to = from + chrono::Duration::hours(1);
+
+        let query = ChangeHistoryQuery::new()
+            .entity_type(EntityType::Credential)
+            .entity_id(Uuid::new_v4())
+            .change_type(ChangeType::Updated)
+            .user("user-9".to_string())
+            .date_range(from, to)
+            .limit(50)
+            .offset(10);
+
+        assert_eq!(query.entity_type, Some(EntityType::Credential));
+        assert!(query.entity_id.is_some());
+        assert_eq!(query.change_type, Some(ChangeType::Updated));
+        assert_eq!(query.user_id, Some("user-9".to_string()));
+        assert_eq!(query.from_date, Some(from));
+        assert_eq!(query.to_date, Some(to));
+        assert_eq!(query.limit, Some(50));
+        assert_eq!(query.offset, Some(10));
+    }
+
+    #[test]
+    fn test_change_history_stats_default() {
+        let stats = ChangeHistoryStats::default();
+        assert_eq!(stats.total_changes, 0);
+        assert!(stats.by_entity_type.is_empty());
+        assert!(stats.by_change_type.is_empty());
+        assert!(stats.by_user.is_empty());
+        assert!(stats.recent_changes.is_empty());
+    }
+
+    #[test]
+    fn test_change_history_serde_roundtrip() {
+        let mut history =
+            ChangeHistory::new(EntityType::UserAuth, Uuid::new_v4(), ChangeType::Restored)
+                .with_user("admin".to_string())
+                .with_states(
+                    Some(serde_json::json!({"active": false})),
+                    Some(serde_json::json!({"active": true})),
+                )
+                .with_reason("account recovery".to_string());
+
+        history.add_field_change(
+            "active".to_string(),
+            "false".to_string(),
+            "true".to_string(),
+        );
+        history.add_metadata("ip".to_string(), "10.0.0.1".to_string());
+
+        let json = serde_json::to_string(&history).unwrap();
+        let decoded: ChangeHistory = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, history.id);
+        assert_eq!(decoded.entity_type, EntityType::UserAuth);
+        assert_eq!(decoded.change_type, ChangeType::Restored);
+        assert_eq!(decoded.user_id, Some("admin".to_string()));
+        assert_eq!(decoded.reason, Some("account recovery".to_string()));
+        assert_eq!(decoded.changes_summary.len(), 1);
+        let field = decoded.changes_summary.get("active").unwrap();
+        assert_eq!(field.field_name, "active");
+        assert_eq!(field.old_value, "false");
+        assert_eq!(field.new_value, "true");
+        assert_eq!(decoded.version, 1);
+        assert!(decoded.is_reversible);
+    }
 }

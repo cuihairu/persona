@@ -1483,4 +1483,800 @@ mod tests {
         let v = sig[sig.len() - 1];
         assert!(v >= 35, "legacy v must encode chain id + parity");
     }
+
+    // ============ additional coverage: dispatch, guards, verify paths ======
+
+    fn btc_request(from: String, to: String) -> TransactionRequest {
+        TransactionRequest {
+            network: BlockchainNetwork::Bitcoin,
+            from_address: from,
+            to_address: to,
+            amount: "100000".to_string(),
+            fee: "1000".to_string(),
+            ..eth_request(0)
+        }
+    }
+
+    #[test]
+    fn k256_error_converts_into_persona_error() {
+        // k256's ecdsa::Error is signature::Error; the From impl wraps its
+        // message into a cryptographic PersonaError.
+        let converted: PersonaError = k256::ecdsa::Error::new().into();
+        assert!(!converted.to_string().is_empty());
+    }
+
+    #[test]
+    fn sign_transaction_rejects_mismatched_key_curve() {
+        // Bitcoin with an Ed25519 key.
+        let ed = WalletSigningKey::Ed25519(Ed25519Key::from_seed(&[7u8; 64]).unwrap());
+        let err = sign_transaction(
+            &btc_request(
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+                "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+            ),
+            &ed,
+        )
+        .expect_err("Bitcoin requires secp256k1");
+        assert!(err.to_string().contains("No matching signing key curve"));
+
+        // Solana with a secp256k1 key.
+        let secp = WalletSigningKey::Secp256k1(create_test_signing_key());
+        let mut sol_request = eth_request(0);
+        sol_request.network = BlockchainNetwork::Solana;
+        sol_request.raw_transaction_data = Some(b"msg".to_vec());
+        assert!(sign_transaction(&sol_request, &secp).is_err());
+    }
+
+    #[test]
+    fn sign_transaction_covers_solana_dispatch() {
+        let ed_key = Ed25519Key::from_seed(&[7u8; 64]).unwrap();
+        let message = b"solana wire message".to_vec();
+        let mut request = eth_request(0);
+        request.network = BlockchainNetwork::Solana;
+        request.from_address = bs58::encode(ed_key.public_bytes()).into_string();
+        request.raw_transaction_data = Some(message.clone());
+
+        let sig = sign_transaction(&request, &WalletSigningKey::Ed25519(ed_key.clone())).unwrap();
+        assert_eq!(sig.signature_scheme, SignatureScheme::EdDSA);
+        assert_eq!(sig.public_key, ed_key.public_bytes().to_vec());
+        assert_eq!(sig.signature.len(), 64);
+        assert!(verify_solana_transaction(&sig, &message).unwrap());
+    }
+
+    #[test]
+    fn build_raw_transaction_rejects_wrong_curves_and_networks() {
+        let secp = WalletSigningKey::Secp256k1(create_test_signing_key());
+        let ed = WalletSigningKey::Ed25519(Ed25519Key::from_seed(&[7u8; 64]).unwrap());
+
+        // Bitcoin requires secp256k1.
+        let err = build_raw_transaction(
+            &btc_request(
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+                "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+            ),
+            &ed,
+        )
+        .expect_err("Bitcoin requires secp256k1");
+        assert!(err.to_string().contains("Bitcoin requires a secp256k1"));
+
+        // Ethereum requires secp256k1.
+        let err =
+            build_raw_transaction(&eth_request(0), &ed).expect_err("Ethereum requires secp256k1");
+        assert!(err.to_string().contains("Ethereum requires a secp256k1"));
+
+        // Solana requires Ed25519.
+        let mut sol = eth_request(0);
+        sol.network = BlockchainNetwork::Solana;
+        sol.raw_transaction_data = Some(b"msg".to_vec());
+        let err = build_raw_transaction(&sol, &secp).expect_err("Solana requires Ed25519");
+        assert!(err.to_string().contains("Solana requires an Ed25519"));
+
+        // Other networks have no raw assembly.
+        let mut other = eth_request(0);
+        other.network = BlockchainNetwork::BitcoinCash;
+        let err =
+            build_raw_transaction(&other, &secp).expect_err("raw assembly is network-limited");
+        assert!(err.to_string().contains("not supported"));
+    }
+
+    #[test]
+    fn build_raw_transaction_covers_solana() {
+        let ed_key = Ed25519Key::from_seed(&[7u8; 64]).unwrap();
+        let message = b"serialized solana message".to_vec();
+        let mut request = eth_request(0);
+        request.network = BlockchainNetwork::Solana;
+        request.from_address = bs58::encode(ed_key.public_bytes()).into_string();
+        request.raw_transaction_data = Some(message.clone());
+
+        let signed =
+            build_raw_transaction(&request, &WalletSigningKey::Ed25519(ed_key.clone())).unwrap();
+        // Wire format: 1 signature || 64-byte sig || message.
+        assert_eq!(signed.raw[0], 1);
+        assert_eq!(&signed.raw[1..65], &ed_key.sign(&message)[..]);
+        assert_eq!(&signed.raw[65..], &message[..]);
+        // Hash is the base58 signature.
+        assert_eq!(signed.hash, bs58::encode(&signed.raw[1..65]).into_string());
+    }
+
+    #[test]
+    fn minimal_be_bytes_encodes_minimally() {
+        assert_eq!(minimal_be_bytes(0), Vec::<u8>::new());
+        assert_eq!(minimal_be_bytes(1), vec![1]);
+        assert_eq!(minimal_be_bytes(35), vec![35]);
+        assert_eq!(minimal_be_bytes(255), vec![255]);
+        assert_eq!(minimal_be_bytes(256), vec![1, 0]);
+        assert_eq!(minimal_be_bytes(0x0100_0000_0000), vec![1, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn decode_varuint_boundaries() {
+        assert_eq!(decode_varuint(&[]), None);
+        assert_eq!(decode_varuint(&[1, 2]), Some(0x0102));
+        assert_eq!(decode_varuint(&[0xFFu8; 8]), Some(u64::MAX));
+        assert_eq!(decode_varuint(&[0xFFu8; 9]), None);
+    }
+
+    #[test]
+    fn bitcoin_sighash_binds_request_fields() {
+        let mut request = btc_request(
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+            "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+        );
+        request.amount = "100".to_string();
+        request.fee = "10".to_string();
+
+        let baseline = create_bitcoin_sighash(&request).unwrap();
+        // Deterministic.
+        assert_eq!(create_bitcoin_sighash(&request).unwrap(), baseline);
+
+        // Changing any bound field changes the hash.
+        let mut other = request.clone();
+        other.to_address = "1FC9gffSsyaMNCmZ3CuktoAjs.IdFjdNv".to_string();
+        assert_ne!(create_bitcoin_sighash(&other).unwrap(), baseline);
+        let mut other = request.clone();
+        other.amount = "101".to_string();
+        assert_ne!(create_bitcoin_sighash(&other).unwrap(), baseline);
+        let mut other = request.clone();
+        other.fee = "11".to_string();
+        assert_ne!(create_bitcoin_sighash(&other).unwrap(), baseline);
+
+        // Non-numeric amounts are skipped from the hash rather than erroring.
+        let mut other = request.clone();
+        other.amount = "not-a-number".to_string();
+        let skipped = create_bitcoin_sighash(&other).unwrap();
+        assert_ne!(skipped, baseline);
+        let mut without_amount = request.clone();
+        without_amount.amount = "garbage too".to_string();
+        assert_eq!(create_bitcoin_sighash(&without_amount).unwrap(), skipped);
+    }
+
+    #[test]
+    fn metadata_u128_rejects_non_numeric() {
+        let mut request = eip1559_request(0);
+        request
+            .metadata
+            .insert("max_fee_per_gas".to_string(), "abc".to_string());
+        let err = build_eip1559_raw_transaction(&request, &create_test_signing_key())
+            .expect_err("non-numeric fee metadata must be rejected");
+        assert!(err.to_string().contains("must be a decimal integer"));
+    }
+
+    #[test]
+    fn evm_field_errors() {
+        // Invalid to_address.
+        let mut request = eth_request(0);
+        request.to_address = "not an address".to_string();
+        let err = build_eip155_raw_transaction(&request, &create_test_signing_key())
+            .expect_err("invalid to_address must be rejected");
+        assert!(err.to_string().contains("Invalid Ethereum to_address"));
+
+        // Invalid wei amount.
+        let mut request = eth_request(0);
+        request.amount = "1.5".to_string();
+        let err = build_eip155_raw_transaction(&request, &create_test_signing_key())
+            .expect_err("fractional wei must be rejected");
+        assert!(err.to_string().contains("Invalid wei amount"));
+
+        // Hex input data is accepted (with or without 0x prefix).
+        let mut request = eth_request(0);
+        request
+            .metadata
+            .insert("data".to_string(), "0xdeadbeef".to_string());
+        assert!(build_eip155_raw_transaction(&request, &create_test_signing_key()).is_ok());
+
+        // Non-hex data is rejected.
+        let mut request = eth_request(0);
+        request
+            .metadata
+            .insert("data".to_string(), "zz-not-hex".to_string());
+        let err = build_eip155_raw_transaction(&request, &create_test_signing_key())
+            .expect_err("invalid hex data must be rejected");
+        assert!(err.to_string().contains("must be hex"));
+    }
+
+    #[test]
+    fn legacy_tx_requires_nonce_gas_price_and_limit() {
+        let key = create_test_signing_key();
+
+        // Missing nonce.
+        let mut request = eth_request(0);
+        request.nonce = None;
+        let err = build_eip155_raw_transaction(&request, &key)
+            .expect_err("missing nonce must be rejected");
+        assert!(err.to_string().contains("require a nonce"));
+
+        // Missing gas_price.
+        let mut request = eth_request(0);
+        request.gas_price = None;
+        let err = build_eip155_raw_transaction(&request, &key)
+            .expect_err("missing gas_price must be rejected");
+        assert!(err.to_string().contains("require a numeric gas_price"));
+
+        // Non-numeric gas_price.
+        let mut request = eth_request(0);
+        request.gas_price = Some("20 gwei".to_string());
+        assert!(build_eip155_raw_transaction(&request, &key).is_err());
+
+        // Missing gas_limit.
+        let mut request = eth_request(0);
+        request.gas_limit = None;
+        let err = build_eip155_raw_transaction(&request, &key)
+            .expect_err("missing gas_limit must be rejected");
+        assert!(err.to_string().contains("require a gas_limit"));
+
+        // EIP-1559: missing gas_limit is also rejected there.
+        let mut request = eip1559_request(0);
+        request.gas_limit = None;
+        let err = build_eip1559_raw_transaction(&request, &key)
+            .expect_err("1559 missing gas_limit must be rejected");
+        assert!(err.to_string().contains("require a gas_limit"));
+
+        // EIP-1559: missing nonce.
+        let mut request = eip1559_request(0);
+        request.nonce = None;
+        assert!(build_eip1559_raw_transaction(&request, &key).is_err());
+
+        // EIP-1559: zero max fee.
+        let mut request = eip1559_request(0);
+        request
+            .metadata
+            .insert("max_fee_per_gas".to_string(), "0".to_string());
+        let err = build_eip1559_raw_transaction(&request, &key)
+            .expect_err("zero max fee must be rejected");
+        assert!(err
+            .to_string()
+            .contains("require metadata 'max_fee_per_gas'"));
+    }
+
+    #[test]
+    fn parse_satoshis_validates_range_and_format() {
+        assert_eq!(parse_satoshis(" 100 ", "amount").unwrap(), 100);
+        assert_eq!(
+            parse_satoshis("2100000000000000", "amount").unwrap(),
+            MAX_MONEY_SATS
+        );
+
+        let err =
+            parse_satoshis("1.5", "amount").expect_err("fractional satoshis must be rejected");
+        assert!(err.to_string().contains("must be decimal satoshis"));
+
+        let err = parse_satoshis("2100000000000001", "amount")
+            .expect_err("above the money supply must be rejected");
+        assert!(err.to_string().contains("exceeds the max money supply"));
+    }
+
+    #[test]
+    fn parse_btc_inputs_error_paths() {
+        let base = btc_request(
+            "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string(),
+            "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+        );
+        let with_inputs = |json: &str| {
+            let mut request = base.clone();
+            request
+                .metadata
+                .insert("inputs".to_string(), json.to_string());
+            parse_btc_inputs(&request)
+        };
+
+        // Missing inputs field entirely.
+        let err = parse_btc_inputs(&base).expect_err("missing inputs must be rejected");
+        assert!(err
+            .to_string()
+            .contains("requires an 'inputs' metadata field"));
+
+        // Invalid JSON.
+        let err = with_inputs("[").expect_err("invalid JSON must be rejected");
+        assert!(err.to_string().contains("not valid JSON"));
+
+        // Empty array.
+        let err = with_inputs("[]").expect_err("empty inputs must be rejected");
+        assert!(err.to_string().contains("at least one input"));
+
+        // Missing txid.
+        let err =
+            with_inputs(r#"[{"vout":0,"amount":1}]"#).expect_err("missing txid must be rejected");
+        assert!(err.to_string().contains("missing 'txid'"));
+
+        // Malformed txid.
+        let err = with_inputs(r#"[{"txid":"nothex","vout":0,"amount":1}]"#)
+            .expect_err("bad txid must be rejected");
+        assert!(err.to_string().contains("64-hex txid"));
+
+        // Missing vout.
+        let err = with_inputs(format!(r#"[{{"txid":"{}","amount":1}}]"#, "11".repeat(32)).as_str())
+            .expect_err("missing vout must be rejected");
+        assert!(err.to_string().contains("missing numeric 'vout'"));
+
+        // vout overflowing u32.
+        let err = with_inputs(
+            format!(
+                r#"[{{"txid":"{}","vout":4294967296,"amount":1}}]"#,
+                "11".repeat(32)
+            )
+            .as_str(),
+        )
+        .expect_err("vout above u32 must be rejected");
+        assert!(err.to_string().contains("missing numeric 'vout'"));
+
+        // Missing amount.
+        let err = with_inputs(format!(r#"[{{"txid":"{}","vout":0}}]"#, "11".repeat(32)).as_str())
+            .expect_err("missing amount must be rejected");
+        assert!(err.to_string().contains("missing numeric 'amount'"));
+
+        // Numeric amount above the money supply (but inside u64).
+        let err = with_inputs(
+            format!(
+                r#"[{{"txid":"{}","vout":0,"amount":9000000000000000}}]"#,
+                "11".repeat(32)
+            )
+            .as_str(),
+        )
+        .expect_err("amount above the money supply must be rejected");
+        assert!(err.to_string().contains("exceeds the max money supply"));
+
+        // Happy path: string amounts and numeric amounts both parse.
+        let inputs = with_inputs(
+            r#"[{"txid":"11ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","vout":0,"amount":"100"},
+                {"txid":"22ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","vout":1,"amount":200}]"#,
+        )
+        .unwrap();
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].amount, 100);
+        assert_eq!(inputs[1].amount, 200);
+        assert_eq!(inputs[1].sequence, Sequence::MAX);
+    }
+
+    #[test]
+    fn script_pubkey_for_address_shapes() {
+        // P2PKH: version + push20 + hash + check = 25 bytes.
+        let p2pkh = script_pubkey_for_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa").unwrap();
+        assert_eq!(p2pkh.len(), 25);
+        assert_eq!(p2pkh.as_bytes()[0], 0x76); // OP_DUP
+
+        // P2SH: hash160 script = 23 bytes.
+        let p2sh = script_pubkey_for_address("3P14159f73E4gFr7JterCCQh9QjiTjiZrG").unwrap();
+        assert_eq!(p2sh.len(), 23);
+        assert_eq!(p2sh.as_bytes()[0], 0xa9); // OP_HASH160
+
+        // Bech32 P2WPKH.
+        let bech32 =
+            script_pubkey_for_address("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4").unwrap();
+        assert_eq!(bech32.as_bytes()[..2], [0x00, 0x14]);
+
+        // Testnet addresses are rejected (Persona signs mainnet only).
+        let err = script_pubkey_for_address("mipcBbFg9gMiCh81Kj8tqqdgoZub1ZJRfn")
+            .expect_err("testnet address must be rejected");
+        assert!(err.to_string().contains("Unsupported or invalid mainnet"));
+
+        // Garbage.
+        assert!(script_pubkey_for_address("hello").is_err());
+    }
+
+    #[test]
+    fn bitcoin_raw_rejects_non_p2wpkh_from_address() {
+        let key = create_test_signing_key();
+        // Taproot from_address: witness version 1.
+        let p2tr_from =
+            crate::crypto::address_generator::generate_bitcoin_address_from_compressed_pubkey(
+                &secp_compressed_pubkey(&key),
+                crate::crypto::address_generator::BitcoinAddressType::P2TR,
+                false,
+            )
+            .unwrap();
+        let mut request = btc_request(p2tr_from, "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string());
+        request.metadata.insert(
+            "inputs".to_string(),
+            format!(
+                r#"[{{"txid":"{}","vout":0,"amount":200000}}]"#,
+                "11".repeat(32)
+            ),
+        );
+        let err = build_bitcoin_raw_transaction(&request, &key)
+            .expect_err("taproot inputs are not supported yet");
+        assert!(
+            err.to_string().contains("only P2WPKH inputs"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn bitcoin_raw_change_address_paths() {
+        let key = create_test_signing_key();
+        let from_address =
+            crate::crypto::address_generator::generate_bitcoin_address_from_compressed_pubkey(
+                &secp_compressed_pubkey(&key),
+                crate::crypto::address_generator::BitcoinAddressType::P2WPKH,
+                false,
+            )
+            .unwrap();
+        let to_address = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string();
+
+        let make_request = |amount: &str, fee: &str, extra: Vec<(&str, String)>| {
+            let mut request = btc_request(from_address.clone(), to_address.clone());
+            request.amount = amount.to_string();
+            request.fee = fee.to_string();
+            request.metadata.insert(
+                "inputs".to_string(),
+                format!(
+                    r#"[{{"txid":"{}","vout":0,"amount":300000}}]"#,
+                    "11".repeat(32)
+                ),
+            );
+            for (k, v) in extra {
+                request.metadata.insert(k.to_string(), v);
+            }
+            request
+        };
+
+        // Without a change address the inputs must equal amount + fee exactly.
+        let err = build_bitcoin_raw_transaction(&make_request("100000", "1000", vec![]), &key)
+            .expect_err("surplus without change address must be rejected");
+        assert!(
+            err.to_string().contains("Inputs do not equal amount + fee"),
+            "unexpected error: {err}"
+        );
+
+        // With a change address, zero change collapses to a single output.
+        let signed = build_bitcoin_raw_transaction(
+            &make_request(
+                "299000",
+                "1000",
+                vec![(
+                    "change_address",
+                    "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+                )],
+            ),
+            &key,
+        )
+        .unwrap();
+        // Header: version 2, segwit marker+flag; and byte 48 (after the
+        // single input) is the output count.
+        assert_eq!(&signed.raw[..6], &[0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        assert_eq!(signed.raw[48], 1);
+        // Default sequence is 0xffffffff.
+        assert_eq!(&signed.raw[44..48], &[0xff, 0xff, 0xff, 0xff]);
+        // Default locktime 0 closes the transaction.
+        assert_eq!(
+            &signed.raw[signed.raw.len() - 4..],
+            &[0x00, 0x00, 0x00, 0x00]
+        );
+
+        // Positive change produces a second output.
+        let signed = build_bitcoin_raw_transaction(
+            &make_request(
+                "100000",
+                "1000",
+                vec![(
+                    "change_address",
+                    "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+                )],
+            ),
+            &key,
+        )
+        .unwrap();
+        assert_eq!(signed.raw[48], 2);
+
+        // Fee exceeding inputs-minus-amount is rejected.
+        let err = build_bitcoin_raw_transaction(
+            &make_request(
+                "299999",
+                "2000",
+                vec![(
+                    "change_address",
+                    "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
+                )],
+            ),
+            &key,
+        )
+        .expect_err("fee above inputs-minus-amount must be rejected");
+        assert!(err.to_string().contains("Fee exceeds"));
+
+        // RBF signalling and a custom locktime land in the transaction.
+        let signed = build_bitcoin_raw_transaction(
+            &make_request(
+                "299000",
+                "1000",
+                vec![
+                    ("rbf", "true".to_string()),
+                    ("locktime", "800000".to_string()),
+                ],
+            ),
+            &key,
+        )
+        .unwrap();
+        // RBF sequence 0xfffffffd (little-endian on the wire) and locktime
+        // 800000 = 0x0c3500 as the trailing 4 consensus bytes.
+        assert_eq!(&signed.raw[44..48], &[0xfd, 0xff, 0xff, 0xff]);
+        assert_eq!(
+            &signed.raw[signed.raw.len() - 4..],
+            &[0x00, 0x35, 0x0c, 0x00]
+        );
+    }
+
+    #[test]
+    fn chain_id_resolution() {
+        let mut request = eth_request(0);
+
+        request.network = BlockchainNetwork::Ethereum;
+        assert_eq!(chain_id(&request).unwrap(), 1);
+        request.network = BlockchainNetwork::Optimism;
+        assert_eq!(chain_id(&request).unwrap(), 10);
+        request.network = BlockchainNetwork::Polygon;
+        assert_eq!(chain_id(&request).unwrap(), 137);
+        request.network = BlockchainNetwork::Arbitrum;
+        assert_eq!(chain_id(&request).unwrap(), 42161);
+        request.network = BlockchainNetwork::BinanceSmartChain;
+        assert_eq!(chain_id(&request).unwrap(), 56);
+
+        // Custom networks need an explicit chain_id.
+        request.network = BlockchainNetwork::Custom("test".to_string());
+        let err = chain_id(&request).expect_err("custom without chain_id must fail");
+        assert!(err.to_string().contains("require a chain_id"));
+        request
+            .metadata
+            .insert("chain_id".to_string(), "1337".to_string());
+        assert_eq!(chain_id(&request).unwrap(), 1337);
+
+        // Non-EVM networks are rejected.
+        request.network = BlockchainNetwork::Bitcoin;
+        request.metadata.remove("chain_id");
+        let err = chain_id(&request).expect_err("Bitcoin is not EVM");
+        assert!(err.to_string().contains("is not an EVM network"));
+    }
+
+    #[test]
+    fn recovery_id_for_fails_on_foreign_verifying_key() {
+        let key_a = test_key_from_raw([1u8; 32]);
+        let key_b = test_key_from_raw([2u8; 32]);
+
+        let prehash = [7u8; 32];
+        let signature: k256::ecdsa::Signature = key_a.sign_prehash(&prehash).unwrap();
+
+        // Recovery against key_a succeeds...
+        assert!(recovery_id_for(&key_a, &prehash, &signature).is_ok());
+        // ...but the same signature cannot reproduce key_b.
+        let err = recovery_id_for(&key_b, &prehash, &signature)
+            .expect_err("a signature cannot recover a foreign key");
+        assert!(err.to_string().contains("Failed to recover signer"));
+    }
+
+    #[test]
+    fn verify_transaction_signature_dispatch() {
+        let key = create_test_signing_key();
+        let message = b"some message";
+
+        // ECDSA round trip.
+        let signature = sign_with_secp256k1(&key, message).unwrap();
+        let tx_sig = signature_for(
+            "addr",
+            signature.to_der().to_vec(),
+            secp_compressed_pubkey(&key).to_vec(),
+            SignatureScheme::ECDSA,
+            Utc::now(),
+        );
+        assert!(verify_transaction_signature(&tx_sig, message).unwrap());
+        assert!(!verify_transaction_signature(&tx_sig, b"other").unwrap());
+
+        // Unsupported scheme.
+        let mut unsupported = tx_sig.clone();
+        unsupported.signature_scheme = SignatureScheme::Schnorr;
+        let err = verify_transaction_signature(&unsupported, message)
+            .expect_err("Schnorr has no verifier");
+        assert!(err.to_string().contains("Signature verification"));
+        unsupported.signature_scheme = SignatureScheme::BLS;
+        assert!(verify_transaction_signature(&unsupported, message).is_err());
+
+        // Malformed public key / signature.
+        let mut bad = tx_sig.clone();
+        bad.public_key = vec![1, 2, 3];
+        let err = verify_transaction_signature(&bad, message)
+            .expect_err("short public key must be rejected");
+        assert!(err.to_string().contains("Invalid public key"));
+
+        let mut bad = tx_sig.clone();
+        bad.signature = vec![0xFF; 10];
+        let err = verify_transaction_signature(&bad, message)
+            .expect_err("non-DER signature must be rejected");
+        assert!(err.to_string().contains("Invalid signature"));
+    }
+
+    #[test]
+    fn verify_ed25519_signature_error_paths() {
+        let ed_key = Ed25519Key::from_seed(&[9u8; 64]).unwrap();
+        let message = b"solana message";
+        let tx_sig = signature_for(
+            "addr",
+            ed_key.sign(message).to_vec(),
+            ed_key.public_bytes().to_vec(),
+            SignatureScheme::EdDSA,
+            Utc::now(),
+        );
+
+        assert!(verify_transaction_signature(&tx_sig, message).unwrap());
+        // Wrong message verifies to false (not an error).
+        assert!(!verify_transaction_signature(&tx_sig, b"tampered").unwrap());
+
+        // Public key of the wrong length.
+        let mut bad = tx_sig.clone();
+        bad.public_key = vec![0u8; 31];
+        let err = verify_transaction_signature(&bad, message)
+            .expect_err("31-byte Ed25519 key must be rejected");
+        assert!(err.to_string().contains("must be 32 bytes"));
+
+        // Signature of the wrong length.
+        let mut bad = tx_sig.clone();
+        bad.signature = vec![0u8; 63];
+        let err = verify_transaction_signature(&bad, message)
+            .expect_err("63-byte Ed25519 signature must be rejected");
+        assert!(err.to_string().contains("must be 64 bytes"));
+    }
+
+    #[test]
+    fn verify_ethereum_legacy_rejects_malformed_signatures() {
+        let request = eth_request(0);
+        let key = create_test_signing_key();
+        let real_address = address_from_verifying_key(key.verifying_key()).unwrap();
+
+        let (sig, _) = sign_ethereum_transaction(&request, &key).unwrap();
+        let make_sig = |signature: Vec<u8>, signer: String| {
+            signature_for(
+                &signer,
+                signature,
+                secp_compressed_pubkey(&key).to_vec(),
+                SignatureScheme::ECDSA,
+                Utc::now(),
+            )
+        };
+
+        // Happy path.
+        assert!(verify_ethereum_transaction(
+            &request,
+            &make_sig(sig.clone(), real_address.clone())
+        )
+        .unwrap());
+
+        // Too short.
+        assert!(!verify_ethereum_transaction(
+            &request,
+            &make_sig(sig[..64].to_vec(), real_address.clone())
+        )
+        .unwrap());
+
+        // 73-byte signature: v section longer than 8 bytes is undecodable.
+        let mut long = sig.clone();
+        long.extend_from_slice(&[0u8; 8]);
+        let err = verify_ethereum_transaction(&request, &make_sig(long, real_address.clone()))
+            .expect_err("undecodable v must error");
+        assert!(err.to_string().contains("Invalid Ethereum signature v"));
+
+        // v = 0 is below the EIP-155 floor.
+        let mut v0 = sig[..64].to_vec();
+        v0.push(0);
+        assert!(
+            !verify_ethereum_transaction(&request, &make_sig(v0, real_address.clone())).unwrap()
+        );
+
+        // v = 36 encodes a chain id below Ethereum's.
+        let mut low_v = sig[..64].to_vec();
+        low_v.push(36);
+        assert!(
+            !verify_ethereum_transaction(&request, &make_sig(low_v, real_address.clone())).unwrap()
+        );
+
+        // r = 0 is an invalid scalar.
+        let mut zero_r = sig.clone();
+        zero_r[..32].fill(0);
+        let err = verify_ethereum_transaction(&request, &make_sig(zero_r, real_address.clone()))
+            .expect_err("r=0 must error");
+        assert!(err.to_string().contains("Invalid r/s"));
+
+        // Valid signature attributed to a different address.
+        assert!(!verify_ethereum_transaction(
+            &request,
+            &make_sig(
+                sig,
+                "0x1111111111111111111111111111111111111111".to_string()
+            )
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn verify_ethereum_typed_rejects_malformed_signatures() {
+        let request = eip1559_request(0);
+        let key = create_test_signing_key();
+        let real_address = address_from_verifying_key(key.verifying_key()).unwrap();
+
+        let (sig, _) = sign_ethereum_transaction(&request, &key).unwrap();
+        assert_eq!(sig.len(), 65);
+        let make_sig = |signature: Vec<u8>, signer: String| {
+            signature_for(
+                &signer,
+                signature,
+                secp_compressed_pubkey(&key).to_vec(),
+                SignatureScheme::ECDSA,
+                Utc::now(),
+            )
+        };
+
+        assert!(verify_ethereum_transaction(
+            &request,
+            &make_sig(sig.clone(), real_address.clone())
+        )
+        .unwrap());
+
+        // Wrong lengths.
+        assert!(!verify_ethereum_transaction(
+            &request,
+            &make_sig(sig[..64].to_vec(), real_address.clone())
+        )
+        .unwrap());
+        let mut long = sig.clone();
+        long.push(0);
+        assert!(
+            !verify_ethereum_transaction(&request, &make_sig(long, real_address.clone())).unwrap()
+        );
+
+        // Invalid r scalar.
+        let mut zero_r = sig.clone();
+        zero_r[..32].fill(0);
+        let err = verify_ethereum_transaction(&request, &make_sig(zero_r, real_address.clone()))
+            .expect_err("r=0 must error");
+        assert!(err.to_string().contains("Invalid r/s"));
+
+        // Different signer.
+        assert!(!verify_ethereum_transaction(
+            &request,
+            &make_sig(
+                sig,
+                "0x1111111111111111111111111111111111111111".to_string()
+            )
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn p2wpkh_output_script_shape() {
+        let script = p2wpkh_output_script(&[0xABu8; 20]);
+        let mut expected = vec![0x00, 0x14];
+        expected.extend_from_slice(&[0xABu8; 20]);
+        assert_eq!(script.as_bytes(), expected.as_slice());
+    }
+
+    #[test]
+    fn secp_compressed_pubkey_prefixes_by_parity() {
+        // Key 1 has even-y pubkey 0279BE667E...
+        let one = test_key_from_raw({
+            let mut k = [0u8; 32];
+            k[31] = 1;
+            k
+        });
+        let compressed = secp_compressed_pubkey(&one);
+        assert_eq!(compressed[0], 0x02);
+        assert_eq!(
+            hex::encode(&compressed[1..]),
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        );
+    }
 }

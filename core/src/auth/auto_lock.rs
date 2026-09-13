@@ -431,10 +431,12 @@ impl AutoLockManager {
                         }
 
                         if should_lock {
-                            let lock_reason = if session_info
-                                .session
-                                .is_idle(Duration::from_secs(config.base.inactivity_timeout_secs))
-                            {
+                            // Only report Inactivity when the idle check is
+                            // actually enabled (0 disables it).
+                            let lock_reason = if config.base.inactivity_timeout_secs > 0
+                                && session_info.session.is_idle(Duration::from_secs(
+                                    config.base.inactivity_timeout_secs,
+                                )) {
                                 LockReason::Inactivity
                             } else {
                                 LockReason::AbsoluteTimeout
@@ -623,6 +625,7 @@ pub struct AutoLockStatistics {
 mod tests {
     use super::*;
     use crate::auth::session::AutoLockConfig;
+    use crate::storage::Database;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]
@@ -767,5 +770,309 @@ mod tests {
         // Wait past the sensitive timeout to trigger re-auth again.
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert!(manager.requires_sensitive_auth(&session_id).await);
+    }
+
+    #[test]
+    fn test_enhanced_config_serde_defaults() {
+        let config: EnhancedAutoLockConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.warning_time_secs, 60);
+        assert_eq!(config.max_concurrent_sessions, 5);
+        assert!(!config.enable_warnings);
+        assert!(!config.force_lock_sensitive);
+        assert_eq!(config.activity_grace_period_secs, 5);
+        assert_eq!(config.background_check_interval_secs, 30);
+
+        // From<AutoLockConfig> keeps the base and applies the defaults.
+        let from_base: EnhancedAutoLockConfig = AutoLockConfig::default().into();
+        assert_eq!(from_base.base.inactivity_timeout_secs, 900);
+        assert_eq!(from_base.warning_time_secs, 60);
+    }
+
+    #[tokio::test]
+    async fn test_update_activity_unknown_session() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+        assert_eq!(
+            manager.update_activity("missing").await.unwrap_err(),
+            "Session not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_activity_grace_period_skips_emit() {
+        let config = EnhancedAutoLockConfig::default(); // grace period 5s
+        let manager = AutoLockManager::new(config);
+
+        let activity_count = Arc::new(AtomicU32::new(0));
+        let counter = activity_count.clone();
+        manager
+            .register_callback(Arc::new(move |event| {
+                if matches!(event, AutoLockEvent::Activity { .. }) {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                }
+            }))
+            .await;
+
+        let session = Session::new("user123".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(activity_count.load(Ordering::Relaxed), 1);
+
+        // Second call inside the grace period updates nothing and emits no event.
+        manager.update_activity(&session_id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(activity_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn test_lock_unlock_unknown_session_errors() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+        assert_eq!(
+            manager.lock_session("missing").await.unwrap_err(),
+            "Session not found"
+        );
+        assert_eq!(
+            manager.unlock_session("missing").await.unwrap_err(),
+            "Session not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_requires_sensitive_auth_disabled_and_unknown() {
+        // Flag off -> short-circuit false.
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+        assert!(!manager.requires_sensitive_auth("missing").await);
+
+        // Flag on + unknown session -> require auth.
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                require_reauth_sensitive: true,
+                sensitive_operation_timeout_secs: 300,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+        assert!(manager.requires_sensitive_auth("missing").await);
+    }
+
+    #[tokio::test]
+    async fn test_get_session_and_user_sessions() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+
+        let alice = Session::new("alice".to_string(), Duration::from_secs(3600));
+        let bob = Session::new("bob".to_string(), Duration::from_secs(3600));
+        let alice_id = alice.id.clone();
+        manager.add_session(alice).await.unwrap();
+        manager.add_session(bob).await.unwrap();
+
+        assert_eq!(manager.get_session(&alice_id).await.unwrap().id, alice_id);
+        assert!(manager.get_session("missing").await.is_none());
+
+        assert_eq!(manager.get_user_sessions("alice").await.len(), 1);
+        assert_eq!(manager.get_user_sessions("bob").await.len(), 1);
+        assert!(manager.get_user_sessions("carol").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_statistics_counts() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig {
+            inactivity_timeout_secs: 1,
+            absolute_timeout_secs: 0,
+            ..Default::default()
+        });
+
+        let s1 = Session::new("u".to_string(), Duration::from_secs(3600));
+        let s2 = Session::new("u".to_string(), Duration::from_secs(3600));
+        let s1_id = s1.id.clone();
+        manager.add_session(s1).await.unwrap();
+        manager.add_session(s2).await.unwrap();
+        manager.lock_session(&s1_id).await.unwrap();
+
+        // Let both sessions become idle (locked one no longer counts as valid).
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+
+        let stats = manager.get_statistics().await;
+        assert_eq!(stats.total_sessions, 2);
+        assert_eq!(stats.locked_sessions, 1);
+        assert_eq!(stats.active_sessions, 1);
+        assert_eq!(stats.idle_sessions, 1);
+        assert_eq!(stats.max_concurrent_sessions, 5);
+    }
+
+    #[tokio::test]
+    async fn test_audit_logging_on_lock_unlock() {
+        let db = Database::in_memory().await.expect("in-memory db");
+        db.migrate().await.expect("migrate");
+        let audit_repo = AuditLogRepository::new(db.clone());
+
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default())
+            .with_audit_repo(AuditLogRepository::new(db.clone()));
+
+        // audit_logs.user_id has a FK to user_auth, so the user must exist.
+        let user = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO user_auth (user_id, enabled_factors, failed_attempts, created_at, updated_at)
+             VALUES (?, '[]', 0, ?, ?)",
+        )
+        .bind(user.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        manager.set_current_user(user).await;
+
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        manager.lock_session(&session_id).await.unwrap();
+        manager.unlock_session(&session_id).await.unwrap();
+        manager.clear_current_user().await;
+
+        // Both events were written with the session id attached.
+        let locked = audit_repo
+            .find_by_action(&AuditAction::SessionLocked)
+            .await
+            .unwrap();
+        assert!(locked
+            .iter()
+            .any(|l| l.session_id.as_deref() == Some(session_id.as_str())
+                && l.user_id.as_deref() == Some(user.to_string().as_str())));
+        let unlocked = audit_repo
+            .find_by_action(&AuditAction::SessionUnlocked)
+            .await
+            .unwrap();
+        assert!(unlocked
+            .iter()
+            .any(|l| l.session_id.as_deref() == Some(session_id.as_str())));
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_expired_sessions() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+
+        let short = Session::new("u".to_string(), Duration::from_secs(1));
+        let long = Session::new("u".to_string(), Duration::from_secs(3600));
+        manager.add_session(short).await.unwrap();
+        manager.add_session(long).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        let removed = manager.cleanup_expired_sessions().await;
+        assert_eq!(removed, 1);
+        assert_eq!(manager.get_statistics().await.total_sessions, 1);
+    }
+
+    #[tokio::test]
+    async fn test_background_monitoring_warns_then_locks() {
+        let db = Database::in_memory().await.expect("in-memory db");
+        db.migrate().await.expect("migrate");
+
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 2,
+                absolute_timeout_secs: 0,
+                ..Default::default()
+            },
+            warning_time_secs: 1,
+            enable_warnings: true,
+            background_check_interval_secs: 1,
+            ..Default::default()
+        };
+        let manager =
+            AutoLockManager::new(config).with_audit_repo(AuditLogRepository::new(db.clone()));
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::<AutoLockEvent>::new()));
+        let sink = events.clone();
+        manager
+            .register_callback(Arc::new(move |event| {
+                sink.lock().unwrap().push(event);
+            }))
+            .await;
+
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+        manager.start_background_monitoring().await;
+
+        // Tick 1 (~1s): idle 1s >= warning threshold -> LockPending.
+        // Tick 2 (~2s): idle 2s >= inactivity timeout -> Locked(Inactivity).
+        tokio::time::sleep(Duration::from_millis(2600)).await;
+        manager.stop_background_monitoring().await;
+
+        let got = events.lock().unwrap().clone();
+        assert!(got.iter().any(|e| matches!(
+            e,
+            AutoLockEvent::LockPending {
+                seconds_remaining: 1,
+                ..
+            }
+        )));
+        assert!(got.iter().any(|e| matches!(
+            e,
+            AutoLockEvent::Locked {
+                reason: LockReason::Inactivity,
+                ..
+            }
+        )));
+
+        // The manager locked the session and the audit trail recorded it.
+        let locked = manager.get_session(&session_id).await.unwrap();
+        assert!(locked.locked);
+        let logs = AuditLogRepository::new(db)
+            .find_by_action(&AuditAction::SessionLocked)
+            .await
+            .unwrap();
+        assert!(!logs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_background_monitoring_absolute_timeout_locks() {
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 0,
+                absolute_timeout_secs: 1,
+                ..Default::default()
+            },
+            background_check_interval_secs: 1,
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+
+        let events = Arc::new(std::sync::Mutex::new(Vec::<AutoLockEvent>::new()));
+        let sink = events.clone();
+        manager
+            .register_callback(Arc::new(move |event| {
+                sink.lock().unwrap().push(event);
+            }))
+            .await;
+
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        manager.add_session(session).await.unwrap();
+        manager.start_background_monitoring().await;
+
+        // Two ticks: on the second one lifetime (~2s) exceeds the 1s absolute timeout.
+        tokio::time::sleep(Duration::from_millis(2400)).await;
+        manager.stop_background_monitoring().await;
+        // Give the spawned callback tasks a chance to run (current-thread runtime).
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let got = events.lock().unwrap().clone();
+        // Idle check is disabled, so the lock reason is the absolute timeout.
+        assert!(got.iter().any(|e| matches!(
+            e,
+            AutoLockEvent::Locked {
+                reason: LockReason::AbsoluteTimeout,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn test_stop_background_monitoring_without_start_is_noop() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+        manager.stop_background_monitoring().await;
     }
 }

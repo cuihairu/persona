@@ -1,0 +1,180 @@
+//! Shared service bootstrap for the interactive command modules.
+//!
+//! Every top-level command group (`credential`, `passkey`, `totp`, ...)
+//! opens the workspace database and unlocks it the same way; the logic
+//! lives here so the behaviour stays consistent and testable.
+
+use anyhow::{bail, Context, Result};
+
+use crate::config::CliConfig;
+use crate::utils::core_ext::CoreResultExt;
+use persona_core::{Database, PersonaService};
+
+/// Open the workspace database, run migrations and unlock the service.
+///
+/// The master password is resolved in this order:
+/// 1. `PERSONA_MASTER_PASSWORD` (CI / automation; a blank value falls
+///    through to the interactive prompt)
+/// 2. an interactive `dialoguer` prompt
+pub(crate) fn prompt_master_password() -> Result<String> {
+    match std::env::var("PERSONA_MASTER_PASSWORD") {
+        Ok(p) if !p.trim().is_empty() => Ok(p),
+        _ => Ok(dialoguer::Password::new()
+            .with_prompt("Enter master password to unlock")
+            .interact()?),
+    }
+}
+
+/// Prompt for an arbitrary passphrase (import/export payloads).
+///
+/// Resolved in this order:
+/// 1. `PERSONA_PAYLOAD_PASSPHRASE` (CI / automation; blank falls through)
+/// 2. an interactive `dialoguer` prompt with confirmation
+pub(crate) fn prompt_payload_passphrase(kind: &str) -> Result<String> {
+    match std::env::var("PERSONA_PAYLOAD_PASSPHRASE") {
+        Ok(p) if !p.trim().is_empty() => Ok(p),
+        _ => Ok(dialoguer::Password::new()
+            .with_prompt(format!("Enter {} passphrase", kind))
+            .with_confirmation("Confirm passphrase", "Passphrases do not match")
+            .interact()?),
+    }
+}
+
+/// Prompt for a credential's secret value.
+///
+/// Resolved in this order:
+/// 1. `PERSONA_CREDENTIAL_SECRET` (CI / automation; blank falls through)
+/// 2. an interactive `dialoguer` prompt with confirmation
+pub(crate) fn prompt_credential_secret() -> Result<String> {
+    match std::env::var("PERSONA_CREDENTIAL_SECRET") {
+        Ok(p) if !p.trim().is_empty() => Ok(p),
+        _ => Ok(dialoguer::Password::new()
+            .with_prompt("Secret / password")
+            .with_confirmation("Confirm secret", "Mismatch")
+            .interact()?),
+    }
+}
+
+/// Prompt for a brand-new master password (workspace initialization).
+pub(crate) fn prompt_new_master_password() -> Result<String> {
+    match std::env::var("PERSONA_MASTER_PASSWORD") {
+        Ok(p) if !p.trim().is_empty() => Ok(p),
+        _ => Ok(dialoguer::Password::new()
+            .with_prompt("Set a new master password")
+            .with_confirmation("Confirm master password", "Passwords don't match")
+            .interact()?),
+    }
+}
+
+pub(crate) async fn init_service(config: &CliConfig) -> Result<PersonaService> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path)
+        .await
+        .into_anyhow()
+        .with_context(|| format!("Failed to connect to database: {}", db_path.display()))?;
+    db.migrate()
+        .await
+        .into_anyhow()
+        .context("Failed to run database migrations")?;
+    let mut service = PersonaService::new(db)
+        .await
+        .into_anyhow()
+        .context("Failed to create PersonaService")?;
+
+    if !service
+        .has_users()
+        .await
+        .into_anyhow()
+        .context("Failed to check users")?
+    {
+        bail!("Workspace not initialized. Run `persona init` first");
+    }
+
+    let password = prompt_master_password()?;
+
+    match service
+        .authenticate_user(&password)
+        .await
+        .into_anyhow()
+        .context("Failed to authenticate user")?
+    {
+        persona_core::auth::authentication::AuthResult::Success => Ok(service),
+        other => bail!("Authentication failed: {:?}", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and config tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    #[tokio::test]
+    async fn missing_workspace_is_reported_before_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let err = init_service(&config_for(&dir))
+            .await
+            .err()
+            .expect("workspace was never initialized");
+        assert!(err.to_string().contains("Workspace not initialized"));
+    }
+
+    #[tokio::test]
+    async fn env_password_unlocks_seeded_workspace() {
+        let _guard = lock_process_env();
+        let master = "env-secret-123";
+
+        // Seed a workspace with a user whose master password is `master`.
+        let dir = TempDir::new().unwrap();
+        let db = Database::from_file(&dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        service
+            .initialize_user(master)
+            .await
+            .expect("seed master user");
+        drop(service);
+
+        // A wrong env password must fail authentication (proves the env
+        // path is taken instead of an interactive prompt).
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "not-the-password");
+        let err = init_service(&config_for(&dir))
+            .await
+            .err()
+            .expect("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        // The correct env password unlocks the service.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", master);
+        let service = init_service(&config_for(&dir))
+            .await
+            .expect("correct password must unlock");
+        assert!(service.has_users().await.unwrap());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+}

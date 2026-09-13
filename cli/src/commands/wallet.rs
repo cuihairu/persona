@@ -27,11 +27,11 @@ pub enum WalletCommand {
     /// List all crypto wallets
     List {
         /// Filter by network (bitcoin, ethereum, solana, etc.)
-        #[arg(long, short)]
+        #[arg(long)]
         network: Option<String>,
 
         /// Filter by security level (low, medium, high, maximum)
-        #[arg(long, short)]
+        #[arg(long)]
         security_level: Option<String>,
 
         /// Show only watch-only wallets
@@ -39,7 +39,7 @@ pub enum WalletCommand {
         watch_only: bool,
 
         /// Search wallets by name
-        #[arg(long, short)]
+        #[arg(long)]
         search: Option<String>,
     },
     /// Show details of a specific wallet
@@ -50,19 +50,19 @@ pub enum WalletCommand {
     /// Create a new crypto wallet
     Create {
         /// Wallet name
-        #[arg(long, short)]
+        #[arg(long)]
         name: String,
 
         /// Wallet description
-        #[arg(long, short)]
+        #[arg(long)]
         description: Option<String>,
 
         /// Blockchain network
-        #[arg(long, short)]
+        #[arg(long)]
         network: String,
 
         /// Wallet type (single, hd, multisig, hardware)
-        #[arg(long, short)]
+        #[arg(long)]
         wallet_type: String,
 
         /// BIP version for HD wallets (32, 44, 49, 84, 86)
@@ -70,7 +70,7 @@ pub enum WalletCommand {
         bip_version: Option<u32>,
 
         /// Address count for HD wallets
-        #[arg(long, short)]
+        #[arg(long)]
         address_count: Option<usize>,
 
         /// Create watch-only wallet (no private key)
@@ -82,7 +82,7 @@ pub enum WalletCommand {
         xpub: Option<String>,
 
         /// Security level (low, medium, high, maximum)
-        #[arg(long, short)]
+        #[arg(long)]
         security_level: Option<String>,
 
         /// Import from mnemonic phrase
@@ -100,37 +100,37 @@ pub enum WalletCommand {
     /// Create a watch-only wallet
     CreateWatchOnly {
         /// Wallet name
-        #[arg(long, short)]
+        #[arg(long)]
         name: String,
 
         /// Wallet description
-        #[arg(long, short)]
+        #[arg(long)]
         description: Option<String>,
 
         /// Blockchain network
-        #[arg(long, short)]
+        #[arg(long)]
         network: String,
 
         /// Extended public key (xpub/ypub/zpub)
-        #[arg(long, short)]
+        #[arg(long)]
         xpub: String,
 
         /// Address count to derive
-        #[arg(long, short)]
+        #[arg(long)]
         address_count: Option<usize>,
     },
     /// Generate a new wallet with fresh keys
     Generate {
         /// Wallet name
-        #[arg(long, short)]
+        #[arg(long)]
         name: String,
 
         /// Wallet description
-        #[arg(long, short)]
+        #[arg(long)]
         description: Option<String>,
 
         /// Blockchain network
-        #[arg(long, short)]
+        #[arg(long)]
         network: String,
 
         /// Generate HD wallet
@@ -155,15 +155,15 @@ pub enum WalletCommand {
         wallet_id: uuid::Uuid,
 
         /// New wallet name
-        #[arg(long, short)]
+        #[arg(long)]
         name: Option<String>,
 
         /// New wallet description
-        #[arg(long, short)]
+        #[arg(long)]
         description: Option<String>,
 
         /// New security level
-        #[arg(long, short)]
+        #[arg(long)]
         security_level: Option<String>,
 
         /// Add tag
@@ -183,7 +183,7 @@ pub enum WalletCommand {
         purpose: Option<String>,
 
         /// Add note
-        #[arg(long, short)]
+        #[arg(long)]
         note: Option<String>,
     },
     /// Delete a wallet
@@ -192,7 +192,7 @@ pub enum WalletCommand {
         wallet_id: uuid::Uuid,
 
         /// Skip confirmation prompt
-        #[arg(long, short)]
+        #[arg(long)]
         force: bool,
     },
     /// Add address to wallet
@@ -204,7 +204,7 @@ pub enum WalletCommand {
         address: String,
 
         /// Address type (p2pkh, p2sh, p2wpkh, p2tr, ethereum, solana)
-        #[arg(long, short)]
+        #[arg(long)]
         address_type: String,
 
         /// Address index
@@ -229,7 +229,7 @@ pub enum WalletCommand {
         unused: bool,
 
         /// Limit number of addresses to show
-        #[arg(long, short)]
+        #[arg(long)]
         limit: Option<usize>,
     },
     /// Mark address as used
@@ -313,7 +313,7 @@ pub enum WalletCommand {
         wallet_identifier: String,
 
         /// Export format (json, mnemonic, private_key, wif, xpub)
-        #[arg(long, short)]
+        #[arg(long)]
         format: String,
 
         /// Include private keys (use with caution)
@@ -327,7 +327,7 @@ pub enum WalletCommand {
     /// Import wallet
     Import {
         /// Import format (json, mnemonic, private_key, keystore, wif)
-        #[arg(long, short)]
+        #[arg(long)]
         format: String,
 
         /// Import data (file path or direct input)
@@ -545,12 +545,9 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     bail!("Watch-only wallets require an extended public key (--xpub)");
                 }
 
-                let wallet = CryptoWallet::new_watch_only(
-                    uuid::Uuid::new_v4(), // Would get from current identity
-                    name,
-                    network,
-                    xpub.unwrap(),
-                );
+                let identity_id = resolve_default_identity_id(config).await?;
+                let wallet =
+                    CryptoWallet::new_watch_only(identity_id, name, network, xpub.unwrap());
 
                 let created = repo.create(&wallet).await.into_anyhow()?;
                 formatter.print_success(&format!(
@@ -558,10 +555,11 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     created.name, created.id
                 ));
             } else {
+                let identity_id = resolve_default_identity_id(config).await?;
                 // For now, create with placeholder encrypted key
                 // In real implementation, this would involve key generation and encryption
                 let mut wallet = CryptoWallet::new(
-                    uuid::Uuid::new_v4(), // Would get from current identity
+                    identity_id,
                     name,
                     network,
                     wallet_type,
@@ -594,12 +592,8 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             address_count: _,
         } => {
             let network = parse_network(&network)?;
-            let mut wallet = CryptoWallet::new_watch_only(
-                uuid::Uuid::new_v4(), // Would get from current identity
-                name,
-                network,
-                xpub,
-            );
+            let identity_id = resolve_default_identity_id(config).await?;
+            let mut wallet = CryptoWallet::new_watch_only(identity_id, name, network, xpub);
 
             wallet.description = description;
 
@@ -654,8 +648,9 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 None
             };
 
+            let identity_id = resolve_default_identity_id(config).await?;
             let wallet = import_from_mnemonic(
-                uuid::Uuid::new_v4(), // Would get from current identity
+                identity_id,
                 name.clone(),
                 &mnemonic_phrase,
                 "", // No additional passphrase
@@ -1247,6 +1242,43 @@ async fn init_wallet_repository(config: &CliConfig) -> Result<CryptoWalletReposi
     Ok(CryptoWalletRepository::new(Arc::new(db)))
 }
 
+/// Resolve the identity a new wallet belongs to: the workspace's active
+/// identity if set, otherwise the first identity in the database. Wallets
+/// cannot be created without one (`identity_id` is a foreign key).
+async fn resolve_default_identity_id(config: &CliConfig) -> Result<uuid::Uuid> {
+    use persona_core::storage::{IdentityRepository, WorkspaceRepository};
+    use persona_core::Repository;
+
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path)
+        .await
+        .into_anyhow()
+        .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
+    db.migrate()
+        .await
+        .into_anyhow()
+        .context("Failed to run database migrations")?;
+
+    let path_str = config.workspace.path.to_string_lossy().to_string();
+    if let Some(active_id) = WorkspaceRepository::new(db.clone())
+        .find_by_path(&path_str)
+        .await
+        .into_anyhow()?
+        .and_then(|ws| ws.active_identity_id)
+    {
+        return Ok(active_id);
+    }
+
+    IdentityRepository::new(db)
+        .find_all()
+        .await
+        .into_anyhow()?
+        .into_iter()
+        .next()
+        .map(|identity| identity.id)
+        .ok_or_else(|| anyhow!("No identity found. Create one with 'persona add' first"))
+}
+
 async fn find_wallet_by_identifier(
     repo: &CryptoWalletRepository,
     identifier: &str,
@@ -1517,5 +1549,518 @@ mod tests {
     #[test]
     fn xpub_export_does_not_require_password() {
         assert!(!export_requires_password(ExportFormat::Xpub, false));
+    }
+}
+
+#[cfg(test)]
+mod integration {
+    use super::*;
+    use crate::config::CliConfig;
+    use tempfile::TempDir;
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    /// Wallet rows reference `identities(id)` via foreign key, so seed one.
+    async fn seed_identity(dir: &TempDir, name: &str) {
+        use persona_core::models::{Identity, IdentityType};
+        use persona_core::storage::IdentityRepository;
+        use persona_core::Repository;
+        let db = Database::from_file(dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        IdentityRepository::new(db)
+            .create(&Identity::new(name.to_string(), IdentityType::Personal))
+            .await
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_args(
+        name: &str,
+        network: &str,
+        wallet_type: &str,
+        watch_only: bool,
+        xpub: Option<&str>,
+        security_level: Option<&str>,
+        description: Option<&str>,
+    ) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::Create {
+                name: name.to_string(),
+                description: description.map(String::from),
+                network: network.to_string(),
+                wallet_type: wallet_type.to_string(),
+                bip_version: None,
+                address_count: None,
+                watch_only,
+                xpub: xpub.map(String::from),
+                security_level: security_level.map(String::from),
+                mnemonic: None,
+                private_key: None,
+                derivation_path: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn wallet_create_list_show_update_stats_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        // Empty list reports the hint.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::List {
+                    network: None,
+                    security_level: None,
+                    watch_only: false,
+                    search: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("empty list must succeed");
+
+        // Watch-only Create without xpub is rejected.
+        let err = handle_wallet(
+            create_args("solo", "bitcoin", "single", true, None, None, None),
+            &config,
+        )
+        .await
+        .expect_err("watch-only without xpub must fail");
+        assert!(err.to_string().contains("require an extended public key"));
+
+        // Create a normal wallet and a watch-only wallet.
+        handle_wallet(
+            create_args(
+                "vault",
+                "bitcoin",
+                "single",
+                false,
+                None,
+                Some("high"),
+                Some("main savings"),
+            ),
+            &config,
+        )
+        .await
+        .expect("create normal wallet");
+        handle_wallet(
+            create_args("watcher", "ethereum", "single", true, Some("zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs"), None, None),
+            &config,
+        )
+        .await
+        .expect("create watch-only wallet");
+
+        // List: default, filtered by network / level / search / watch_only.
+        for list_args in [
+            WalletCommand::List {
+                network: None,
+                security_level: None,
+                watch_only: false,
+                search: None,
+            },
+            WalletCommand::List {
+                network: Some("bitcoin".into()),
+                security_level: None,
+                watch_only: false,
+                search: None,
+            },
+            WalletCommand::List {
+                network: None,
+                security_level: Some("high".into()),
+                watch_only: false,
+                search: None,
+            },
+            WalletCommand::List {
+                network: None,
+                security_level: None,
+                watch_only: false,
+                search: Some("vau".into()),
+            },
+            WalletCommand::List {
+                network: None,
+                security_level: None,
+                watch_only: true,
+                search: None,
+            },
+            WalletCommand::List {
+                network: Some("solana".into()),
+                security_level: None,
+                watch_only: false,
+                search: None,
+            },
+            WalletCommand::List {
+                network: None,
+                security_level: Some("bogus".into()),
+                watch_only: false,
+                search: None,
+            },
+        ] {
+            // The bogus security level must fail; the rest must succeed.
+            let result = handle_wallet(WalletArgs { command: list_args }, &config).await;
+            match result {
+                Ok(()) => {}
+                Err(e) => assert!(
+                    e.to_string().contains("Invalid security level"),
+                    "unexpected error: {e}"
+                ),
+            }
+        }
+
+        // Show by name (normal) and by name (watch-only covers xpub rendering).
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Show {
+                    wallet_identifier: "vault".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("show by name");
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Show {
+                    wallet_identifier: "watcher".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("show watch-only");
+
+        let err = handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Show {
+                    wallet_identifier: "ghost".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown wallet must fail");
+        assert!(err.to_string().to_lowercase().contains("not found"));
+
+        // Empty identifier is rejected outright.
+        let err = handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Show {
+                    wallet_identifier: "   ".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("empty identifier must fail");
+        assert!(err.to_string().contains("cannot be empty"));
+
+        // Locate the wallet id through the repository for id-based commands.
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        let vault = all.iter().find(|w| w.name == "vault").unwrap().clone();
+        drop(repo);
+
+        // Update every mutable field.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Update {
+                    wallet_id: vault.id,
+                    name: Some("vault2".into()),
+                    description: Some("updated".into()),
+                    security_level: Some("maximum".into()),
+                    add_tag: Some("cold".into()),
+                    remove_tag: Some("hot".into()),
+                    platform: Some("ledger".into()),
+                    purpose: Some("savings".into()),
+                    note: Some("n".into()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("update all fields");
+
+        let ghost = uuid::Uuid::new_v4();
+        let err = handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Update {
+                    wallet_id: ghost,
+                    name: None,
+                    description: None,
+                    security_level: None,
+                    add_tag: None,
+                    remove_tag: None,
+                    platform: None,
+                    purpose: None,
+                    note: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("update missing wallet must fail");
+        assert!(err.to_string().contains("not found"));
+
+        // Stats for the wallet and system-wide.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Stats {
+                    wallet_identifier: Some("vault2".into()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("stats for wallet");
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Stats {
+                    wallet_identifier: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("system stats");
+
+        // Delete without force only warns.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Delete {
+                    wallet_id: vault.id,
+                    force: false,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("delete without force warns only");
+        // Force delete works and a missing delete reports.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Delete {
+                    wallet_id: vault.id,
+                    force: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("force delete works");
+        let err = handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Delete {
+                    wallet_id: ghost,
+                    force: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("delete missing wallet must fail");
+        assert!(err.to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn wallet_addresses_mark_used_and_export_paths() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        handle_wallet(
+            create_args("hot", "ethereum", "hd", false, None, None, None),
+            &config,
+        )
+        .await
+        .expect("create hd wallet");
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        let hot = all.iter().find(|w| w.name == "hot").unwrap().clone();
+        drop(repo);
+
+        // Add an address; unknown wallet fails.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::AddAddress {
+                    wallet_id: hot.id,
+                    address: "0xabc123def4567890abcdef1234567890abcdef12".into(),
+                    address_type: "ethereum".into(),
+                    index: 0,
+                    derivation_path: Some("m/44'/60'/0'/0/0".into()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("add address");
+        let err = handle_wallet(
+            WalletArgs {
+                command: WalletCommand::AddAddress {
+                    wallet_id: uuid::Uuid::new_v4(),
+                    address: "0xdeadbeef".into(),
+                    address_type: "ethereum".into(),
+                    index: 1,
+                    derivation_path: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("add address to unknown wallet must fail");
+        assert!(err.to_string().contains("not found"));
+
+        // ListAddresses: all, unused-only, limit.
+        for (used, unused, limit) in [
+            (false, false, None),
+            (false, true, None),
+            (false, false, Some(1)),
+        ] {
+            handle_wallet(
+                WalletArgs {
+                    command: WalletCommand::ListAddresses {
+                        wallet_identifier: "hot".into(),
+                        used,
+                        unused,
+                        limit,
+                    },
+                },
+                &config,
+            )
+            .await
+            .expect("list addresses");
+        }
+        // Filter that matches nothing prints the hint.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::ListAddresses {
+                    wallet_identifier: "hot".into(),
+                    used: true,
+                    unused: false,
+                    limit: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("unused filter prints hint");
+
+        // Mark used: success then unknown address error branch.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::MarkUsed {
+                    wallet_identifier: "hot".into(),
+                    address: "0xabc123def4567890abcdef1234567890abcdef12".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("mark used");
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::MarkUsed {
+                    wallet_identifier: "hot".into(),
+                    address: "0xunknown00000000000000000000000000000000".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("mark unknown address reports via formatter");
+
+        // Now the used-only filter matches.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::ListAddresses {
+                    wallet_identifier: "hot".into(),
+                    used: true,
+                    unused: false,
+                    limit: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("used filter matches after mark");
+
+        // CreateWatchOnly standalone command works.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::CreateWatchOnly {
+                    name: "cold-watch".into(),
+                    description: Some("watch".into()),
+                    network: "bitcoin".into(),
+                    xpub: "xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDHsk3QtFKLNDbjKZ2vBKtK9BfOHmSib8aLerSzhVbfJogu6vndeXTZvoQDLasZJHnJQrAGNKG".into(),
+                    address_count: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("create watch-only");
+
+        // Export xpub to stdout and json (no private data) to a file.
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Export {
+                    wallet_identifier: "cold-watch".into(),
+                    format: "xpub".into(),
+                    include_private: false,
+                    output: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("xpub export");
+        let out_path = dir.path().join("wallet-export.json");
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Export {
+                    wallet_identifier: "cold-watch".into(),
+                    format: "json".into(),
+                    include_private: false,
+                    output: Some(out_path.display().to_string()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("json export to file");
+        assert!(out_path.exists(), "export file written");
+
+        // Unknown export format fails.
+        let err = handle_wallet(
+            WalletArgs {
+                command: WalletCommand::Export {
+                    wallet_identifier: "hot".into(),
+                    format: "yaml".into(),
+                    include_private: false,
+                    output: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown export format must fail");
+        assert!(err.to_string().contains("Unknown export format"));
+
+        // Invalid network is rejected during create.
+        let err = handle_wallet(
+            create_args("bad", "moon", "single", false, None, None, None),
+            &config,
+        )
+        .await
+        .expect_err("invalid network must fail");
+        assert!(err.to_string().contains("Unsupported network"));
     }
 }

@@ -130,4 +130,50 @@ mod tests {
         let admin_checker = PermissionChecker::new(vec![Permission::Admin]);
         assert!(admin_checker.has_permission(&Permission::Delete));
     }
+
+    #[test]
+    fn test_permission_display_all_variants() {
+        assert_eq!(Permission::Create.to_string(), "create");
+        assert_eq!(Permission::Update.to_string(), "update");
+        assert_eq!(Permission::Delete.to_string(), "delete");
+    }
+
+    #[test]
+    fn test_permission_from_str_all_variants() {
+        assert_eq!("Create".parse::<Permission>().unwrap(), Permission::Create);
+        assert_eq!("UPDATE".parse::<Permission>().unwrap(), Permission::Update);
+        assert_eq!("delete".parse::<Permission>().unwrap(), Permission::Delete);
+    }
+
+    #[test]
+    fn test_has_any_permission() {
+        let checker = PermissionChecker::new(vec![Permission::Read]);
+
+        assert!(checker.has_any_permission(&[Permission::Read, Permission::Delete]));
+        assert!(!checker.has_any_permission(&[Permission::Delete, Permission::Update]));
+
+        // Admin grants anything, even unlisted permissions.
+        let admin = PermissionChecker::new(vec![Permission::Admin]);
+        assert!(admin.has_any_permission(&[Permission::Delete]));
+    }
+
+    #[test]
+    fn test_has_all_permissions() {
+        let checker = PermissionChecker::new(vec![Permission::Read, Permission::Create]);
+
+        assert!(checker.has_all_permissions(&[Permission::Read, Permission::Create]));
+        assert!(!checker.has_all_permissions(&[Permission::Read, Permission::Delete]));
+
+        let admin = PermissionChecker::new(vec![Permission::Admin]);
+        assert!(admin.has_all_permissions(&[Permission::Read, Permission::Delete]));
+    }
+
+    #[test]
+    fn test_get_permissions_and_default() {
+        let checker = PermissionChecker::default();
+        assert_eq!(
+            checker.get_permissions(),
+            &[Permission::Read, Permission::Create, Permission::Update]
+        );
+    }
 }

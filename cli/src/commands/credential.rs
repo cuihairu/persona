@@ -7,8 +7,10 @@ use uuid::Uuid;
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
     models::{Credential, CredentialData, CredentialType, PasswordCredentialData, SecurityLevel},
-    Database, Identity, PersonaService,
+    Identity, PersonaService,
 };
+
+use super::service::init_service;
 
 #[derive(Args, Debug)]
 pub struct CredentialArgs {
@@ -27,7 +29,7 @@ pub enum CredentialCommand {
         #[arg(short, long)]
         name: String,
         /// Credential type
-        #[arg(short, long, default_value = "password")]
+        #[arg(long, default_value = "password")]
         credential_type: CredentialTypeOption,
         /// Security level (critical/high/medium/low)
         #[arg(long, default_value = "high")]
@@ -54,7 +56,7 @@ pub enum CredentialCommand {
         #[arg(short, long)]
         identity: Option<String>,
         /// Credential type filter
-        #[arg(short, long)]
+        #[arg(long)]
         credential_type: Option<String>,
         /// Show only favorites
         #[arg(long)]
@@ -188,44 +190,6 @@ pub async fn execute(args: CredentialArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn init_service(config: &CliConfig) -> Result<PersonaService> {
-    let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path)
-        .await
-        .into_anyhow()
-        .with_context(|| format!("Failed to connect to database: {}", db_path.display()))?;
-    db.migrate()
-        .await
-        .into_anyhow()
-        .context("Failed to run database migrations")?;
-    let mut service = PersonaService::new(db)
-        .await
-        .into_anyhow()
-        .context("Failed to create PersonaService")?;
-
-    if service
-        .has_users()
-        .await
-        .into_anyhow()
-        .context("Failed to check users")?
-    {
-        let password = dialoguer::Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
-        match service
-            .authenticate_user(&password)
-            .await
-            .into_anyhow()
-            .context("Failed to authenticate user")?
-        {
-            persona_core::auth::authentication::AuthResult::Success => Ok(service),
-            other => anyhow::bail!("Authentication failed: {:?}", other),
-        }
-    } else {
-        anyhow::bail!("Workspace not initialized. Run `persona init` first");
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn add_credential(
     config: &CliConfig,
@@ -244,10 +208,7 @@ async fn add_credential(
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
     let secret_value = if prompt_secret {
-        dialoguer::Password::new()
-            .with_prompt("Secret / password")
-            .with_confirmation("Confirm secret", "Mismatch")
-            .interact()?
+        super::service::prompt_credential_secret()?
     } else if let Some(raw) = secret {
         raw
     } else {
@@ -441,4 +402,264 @@ async fn resolve_identity(service: &mut PersonaService, name: &str) -> Result<Id
         .await
         .into_anyhow()?
         .ok_or_else(|| anyhow!("Identity '{}' not found", name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::{Database, PersonaService};
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    /// Unlocks the workspace and creates the named identity.
+    async fn seed(config: &CliConfig, identity: &str) -> persona_core::Identity {
+        let service = crate::commands::service::init_service(config)
+            .await
+            .unwrap();
+        let created = service
+            .create_identity_full(persona_core::Identity::new(
+                identity.to_string(),
+                persona_core::models::IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        created
+    }
+
+    fn add_args(
+        identity: &str,
+        name: &str,
+        secret: Option<&str>,
+        favorite: bool,
+    ) -> CredentialArgs {
+        CredentialArgs {
+            command: CredentialCommand::Add {
+                identity: identity.to_string(),
+                name: name.to_string(),
+                credential_type: CredentialTypeOption::Password,
+                security_level: SecurityLevelOption::High,
+                username: Some("u1".to_string()),
+                url: Some("https://example.com".to_string()),
+                prompt_secret: false,
+                secret: secret.map(String::from),
+                favorite,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn credential_add_list_show_remove_round_trip() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "alice").await;
+
+        // Add with an explicit secret (no prompt path).
+        execute(
+            add_args("alice", "site-login", Some("s3cret"), true),
+            &config,
+        )
+        .await
+        .expect("add with explicit secret works");
+
+        // List all + per identity + favorite filter, in each format.
+        for fmt in ["table", "json", "yaml"] {
+            execute(
+                CredentialArgs {
+                    command: CredentialCommand::List {
+                        identity: None,
+                        credential_type: None,
+                        favorite: false,
+                        format: fmt.to_string(),
+                    },
+                },
+                &config,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("list {} must work: {}", fmt, e));
+        }
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::List {
+                    identity: Some("alice".to_string()),
+                    credential_type: Some("password".to_string()),
+                    favorite: true,
+                    format: "json".to_string(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("filtered list works");
+
+        // Unknown format fails.
+        let err = execute(
+            CredentialArgs {
+                command: CredentialCommand::List {
+                    identity: None,
+                    credential_type: None,
+                    favorite: false,
+                    format: "xml".to_string(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("bad format must fail");
+        assert!(err.to_string().contains("Unsupported format: xml"));
+
+        // Unknown identity fails during add.
+        let err = execute(add_args("ghost", "x", Some("pw"), false), &config)
+            .await
+            .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+
+        // Grab the credential id, then show + remove it.
+        let service = crate::commands::service::init_service(&config)
+            .await
+            .unwrap();
+        let alice = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 1);
+        let cred_id = creds[0].id;
+        assert!(creds[0].is_favorite);
+        drop(service);
+
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: cred_id,
+                    reveal: false,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("show works");
+
+        // Missing credential fails fast.
+        let err = execute(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: uuid::Uuid::new_v4(),
+                    reveal: false,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("missing credential must fail");
+        assert!(err.to_string().contains("not found"));
+
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Remove {
+                    id: cred_id,
+                    yes: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("remove works");
+
+        // Remove is reported for missing credentials too.
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Remove {
+                    id: cred_id,
+                    yes: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("second remove reports not found");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn credential_secret_env_var_serves_prompt() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "bob").await;
+
+        // prompt_secret=true reads PERSONA_CREDENTIAL_SECRET instead of the TTY.
+        std::env::set_var("PERSONA_CREDENTIAL_SECRET", "env-secret");
+        let mut args = add_args("bob", "from-env", None, false);
+        if let CredentialCommand::Add {
+            ref mut prompt_secret,
+            ..
+        } = args.command
+        {
+            *prompt_secret = true;
+        }
+        execute(args, &config)
+            .await
+            .expect("add via env secret works");
+
+        let service = crate::commands::service::init_service(&config)
+            .await
+            .unwrap();
+        let bob = service.get_identity_by_name("bob").await.unwrap().unwrap();
+        let creds = service.get_credentials_for_identity(&bob.id).await.unwrap();
+        assert_eq!(creds.len(), 1);
+        let data = service.get_credential_data(&creds[0].id).await.unwrap();
+        match data {
+            Some(CredentialData::Password(pw)) => assert_eq!(pw.password, "env-secret"),
+            other => panic!("unexpected data: {:?}", other),
+        }
+
+        std::env::remove_var("PERSONA_CREDENTIAL_SECRET");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

@@ -277,3 +277,194 @@ impl Default for AuthService {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_master_password_generates_salt_once() {
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        assert!(auth.master_key_salt.is_none());
+
+        auth.set_master_password("correct horse battery staple")
+            .unwrap();
+        assert!(auth.master_password_hash.is_some());
+        assert!(auth.master_key_salt.is_some());
+        assert!(auth.has_factor(&AuthFactor::MasterPassword));
+        assert!(!auth.password_change_required);
+
+        // Re-setting the password keeps the original salt (key stability).
+        let salt = auth.master_key_salt.clone().unwrap();
+        auth.set_master_password("new password").unwrap();
+        assert_eq!(auth.master_key_salt.as_deref(), Some(salt.as_str()));
+    }
+
+    #[test]
+    fn test_get_master_key_salt_variants() {
+        let mut auth = UserAuth::new(Uuid::new_v4());
+
+        // No salt at all.
+        assert!(auth.get_master_key_salt().is_err());
+
+        // Valid salt round-trips to 32 bytes.
+        auth.master_key_salt = Some(hex::encode([7u8; 32]));
+        assert_eq!(auth.get_master_key_salt().unwrap(), [7u8; 32]);
+
+        // Not valid hex.
+        auth.master_key_salt = Some("zz-not-hex".to_string());
+        assert!(auth.get_master_key_salt().is_err());
+
+        // Wrong length.
+        auth.master_key_salt = Some(hex::encode([7u8; 16]));
+        assert!(auth.get_master_key_salt().is_err());
+    }
+
+    #[test]
+    fn test_verify_master_password() {
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        // No hash stored -> never verifies.
+        assert!(!auth.verify_master_password("anything").unwrap());
+
+        auth.set_master_password("hunter2").unwrap();
+        assert!(auth.verify_master_password("hunter2").unwrap());
+        assert!(!auth.verify_master_password("hunter3").unwrap());
+    }
+
+    #[test]
+    fn test_lock_after_failed_attempts() {
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        assert!(!auth.is_locked());
+
+        for _ in 0..4 {
+            auth.add_failed_attempt();
+        }
+        assert!(!auth.is_locked());
+
+        // 5th attempt triggers the 5-minute lockout.
+        auth.add_failed_attempt();
+        assert_eq!(auth.failed_attempts, 5);
+        assert!(auth.is_locked());
+
+        // A lockout already in the past does not count.
+        auth.locked_until = Some(SystemTime::now() - Duration::from_secs(1));
+        assert!(!auth.is_locked());
+    }
+
+    #[test]
+    fn test_reset_failed_attempts() {
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        for _ in 0..5 {
+            auth.add_failed_attempt();
+        }
+        assert!(auth.is_locked());
+
+        auth.reset_failed_attempts();
+        assert_eq!(auth.failed_attempts, 0);
+        assert!(auth.locked_until.is_none());
+        assert!(auth.last_auth.is_some());
+        assert!(!auth.is_locked());
+    }
+
+    #[test]
+    fn test_factor_management() {
+        let mut auth = UserAuth::new(Uuid::new_v4());
+
+        let biometric = AuthFactor::Biometric(BiometricType::Fingerprint);
+        auth.enable_factor(biometric.clone());
+        auth.enable_factor(biometric.clone()); // duplicate is a no-op
+        assert_eq!(auth.enabled_factors.len(), 1);
+        assert!(auth.has_factor(&biometric));
+
+        auth.enable_factor(AuthFactor::Pin);
+        assert_eq!(auth.enabled_factors.len(), 2);
+
+        auth.disable_factor(&biometric);
+        assert!(!auth.has_factor(&biometric));
+        assert!(auth.has_factor(&AuthFactor::Pin));
+    }
+
+    #[test]
+    fn test_auth_factor_serde_round_trip() {
+        let factors = vec![
+            AuthFactor::MasterPassword,
+            AuthFactor::Biometric(BiometricType::FaceId),
+            AuthFactor::HardwareKey,
+            AuthFactor::Pin,
+            AuthFactor::Pattern,
+        ];
+        for f in factors {
+            let json = serde_json::to_string(&f).unwrap();
+            let restored: AuthFactor = serde_json::from_str(&json).unwrap();
+            assert_eq!(restored, f);
+        }
+    }
+
+    #[test]
+    fn test_master_key_service_deterministic() {
+        let service = MasterKeyService::new();
+        let salt = service.generate_salt();
+        assert_eq!(salt.len(), 32);
+
+        // Random salt every time.
+        assert_ne!(service.generate_salt(), salt);
+
+        // Same password+salt -> same key.
+        let key1 = service.derive_master_key("pass", &salt);
+        let key2 = service.derive_master_key("pass", &salt);
+        assert_eq!(key1, key2);
+        assert_ne!(service.derive_master_key("other", &salt), key1);
+
+        let _default: MasterKeyService = Default::default();
+    }
+
+    #[test]
+    fn test_create_encryption_service_round_trip() {
+        let service = MasterKeyService::new();
+        let salt = service.generate_salt();
+        let enc = service.create_encryption_service("master-pass", &salt);
+
+        let ciphertext = enc.encrypt(b"secret data").unwrap();
+        assert_ne!(ciphertext, b"secret data");
+        assert_eq!(enc.decrypt(&ciphertext).unwrap(), b"secret data");
+    }
+
+    #[test]
+    fn test_authenticate_password_paths() {
+        let mut service = AuthService::new();
+        let _ = service.master_key_service();
+
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        auth.set_master_password("hunter2").unwrap();
+
+        // Wrong password counts as a failed attempt.
+        assert_eq!(
+            service.authenticate_password(&mut auth, "wrong").unwrap(),
+            AuthResult::InvalidCredentials
+        );
+
+        // Correct password succeeds and resets the counter.
+        assert_eq!(
+            service.authenticate_password(&mut auth, "hunter2").unwrap(),
+            AuthResult::Success
+        );
+        assert_eq!(auth.failed_attempts, 0);
+
+        // Locked account short-circuits before password verification.
+        auth.locked_until = Some(SystemTime::now() + Duration::from_secs(300));
+        assert_eq!(
+            service.authenticate_password(&mut auth, "hunter2").unwrap(),
+            AuthResult::AccountLocked
+        );
+        auth.locked_until = None;
+
+        // Forced password change short-circuits too.
+        auth.password_change_required = true;
+        assert_eq!(
+            service.authenticate_password(&mut auth, "hunter2").unwrap(),
+            AuthResult::PasswordChangeRequired
+        );
+
+        let _default: AuthService = Default::default();
+    }
+}

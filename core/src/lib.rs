@@ -99,3 +99,82 @@ impl From<std::io::Error> for PersonaError {
         PersonaError::Io(err.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn persona_error_display_matches_variants() {
+        let cases = [
+            (
+                PersonaError::AuthenticationFailed("locked".into()),
+                "Authentication failed: locked",
+            ),
+            (
+                PersonaError::CryptographicError("aes".into()),
+                "Cryptographic operation failed: aes",
+            ),
+            (
+                PersonaError::Crypto("gcm".into()),
+                "Cryptographic operation failed: gcm",
+            ),
+            (
+                PersonaError::Cryptography("kdf".into()),
+                "Cryptographic operation failed: kdf",
+            ),
+            (
+                PersonaError::StorageError("blob".into()),
+                "Storage operation failed: blob",
+            ),
+            (
+                PersonaError::Database("sql".into()),
+                "Database operation failed: sql",
+            ),
+            (PersonaError::Io("disk".into()), "IO operation failed: disk"),
+            (
+                PersonaError::IdentityNotFound("id-1".into()),
+                "Identity not found: id-1",
+            ),
+            (
+                PersonaError::InvalidInput("bad".into()),
+                "Invalid input: bad",
+            ),
+            (
+                PersonaError::ConfigurationError("cfg".into()),
+                "Configuration error: cfg",
+            ),
+            (
+                PersonaError::NotFound("gone".into()),
+                "Resource not found: gone",
+            ),
+            (PersonaError::Validation("v".into()), "Validation error: v"),
+        ];
+        for (err, expected) in cases {
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn persona_error_from_conversions() {
+        let db: PersonaError = sqlx::Error::RowNotFound.into();
+        assert!(matches!(db, PersonaError::Database(_)));
+
+        let json: PersonaError = serde_json::from_str::<Vec<u8>>("{").unwrap_err().into();
+        assert!(matches!(json, PersonaError::InvalidInput(_)));
+
+        let io: PersonaError = std::io::Error::other("boom").into();
+        assert!(matches!(io, PersonaError::Io(_)));
+    }
+
+    #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)] // unwrapping a literal is the point of this test
+    fn result_type_aliases_are_compatible() {
+        // Result<T> is anyhow-based; PersonaResult<T> carries PersonaError.
+        let ok: Result<u8> = Ok(1);
+        assert_eq!(ok.unwrap(), 1);
+
+        let err: PersonaResult<u8> = Err(PersonaError::NotFound("x".into()));
+        assert!(err.is_err());
+    }
+}

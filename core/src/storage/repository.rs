@@ -824,7 +824,7 @@ impl AuditLogRepository {
     pub async fn find_by_user(&self, user_id: &str) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE user_id = ? ORDER BY timestamp DESC
@@ -846,7 +846,7 @@ impl AuditLogRepository {
     pub async fn find_by_identity(&self, identity_id: &Uuid) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE identity_id = ? ORDER BY timestamp DESC
@@ -868,7 +868,7 @@ impl AuditLogRepository {
     pub async fn find_by_action(&self, action: &AuditAction) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE action = ? ORDER BY timestamp DESC
@@ -890,7 +890,7 @@ impl AuditLogRepository {
     pub async fn find_failures(&self) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE success = 0 ORDER BY timestamp DESC
@@ -928,7 +928,7 @@ impl AuditLogRepository {
             .join(",");
         let query = format!(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE action IN ({}) ORDER BY timestamp DESC
@@ -961,7 +961,7 @@ impl AuditLogRepository {
     ) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE timestamp BETWEEN ? AND ? ORDER BY timestamp DESC
@@ -984,7 +984,7 @@ impl AuditLogRepository {
     pub async fn find_by_ip(&self, ip_address: &str) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE ip_address = ? ORDER BY timestamp DESC
@@ -1125,16 +1125,17 @@ impl Repository<AuditLog> for AuditLogRepository {
         sqlx::query(
             r#"
             INSERT INTO audit_logs (
-                id, user_id, identity_id, credential_id, action, resource_type,
-                resource_id, ip_address, user_agent, success, error_message,
-                metadata, timestamp
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                id, user_id, identity_id, credential_id, session_id, action,
+                resource_type, resource_id, ip_address, user_agent, success,
+                error_message, metadata, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(log.id.to_string())
         .bind(&log.user_id)
         .bind(log.identity_id.map(|id| id.to_string()))
         .bind(log.credential_id.map(|id| id.to_string()))
+        .bind(&log.session_id)
         .bind(log.action.to_string())
         .bind(log.resource_type.to_string())
         .bind(&log.resource_id)
@@ -1154,7 +1155,7 @@ impl Repository<AuditLog> for AuditLogRepository {
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<AuditLog>> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs WHERE id = ?
@@ -1174,7 +1175,7 @@ impl Repository<AuditLog> for AuditLogRepository {
     async fn find_all(&self) -> Result<Vec<AuditLog>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, identity_id, credential_id, action, resource_type,
+            SELECT id, user_id, identity_id, credential_id, session_id, action, resource_type,
                    resource_id, ip_address, user_agent, success, error_message,
                    metadata, timestamp
             FROM audit_logs ORDER BY timestamp DESC LIMIT 1000
@@ -1246,4 +1247,365 @@ pub struct AuditLogStatistics {
     pub failed_operations: u64,
     pub recent_login_attempts: u64,
     pub active_users_last_week: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{CredentialData, PasswordCredentialData};
+    use chrono::Duration;
+
+    async fn test_db() -> Database {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        db
+    }
+
+    fn sample_identity(name: &str) -> Identity {
+        Identity::new(name.to_string(), IdentityType::Personal)
+    }
+
+    fn sample_credential(identity_id: Uuid, name: &str) -> Credential {
+        let data = CredentialData::Password(PasswordCredentialData {
+            password: "pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        });
+        let plaintext = data.to_bytes().unwrap();
+        let mut cred = Credential::new(
+            identity_id,
+            name.to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            plaintext.clone(),
+            None,
+        );
+        cred.encrypted_data = plaintext;
+        cred
+    }
+
+    fn audit_log(action: AuditAction) -> AuditLog {
+        AuditLog::new(action, ResourceType::User, true)
+            .with_user_id(Some("tester".to_string()))
+            .with_ip_address(Some("127.0.0.1".to_string()))
+            .with_user_agent(Some("repo-test".to_string()))
+    }
+
+    async fn insert_audit_user(db: &Database) {
+        // audit_logs.user_id has an FK to user_auth(user_id); seed a matching row.
+        sqlx::query("INSERT INTO user_auth (user_id, failed_attempts, password_change_required, created_at, updated_at) VALUES (?, 0, 0, ?, ?)")
+            .bind("tester")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(chrono::Utc::now().to_rfc3339())
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // CredentialRepository
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn credential_repository_crud_and_queries() {
+        let db = test_db().await;
+        // credentials.identity_id has an FK to identities; seed the parent first.
+        let identities = IdentityRepository::new(db.clone());
+        identities
+            .create(&sample_identity("cred owner"))
+            .await
+            .unwrap();
+        let repo = CredentialRepository::new(db);
+
+        let identity_id = identities.find_all().await.unwrap()[0].id;
+        let mut cred = sample_credential(identity_id, "Repo credential");
+        cred.username = Some("user".to_string());
+        cred.url = Some("https://example.com".to_string());
+        cred.notes = Some("note".to_string());
+        cred.tags = vec!["work".to_string()];
+        cred.metadata.insert("env".to_string(), "test".to_string());
+
+        repo.create(&cred).await.unwrap();
+        assert!(repo.create(&cred).await.is_err()); // PK conflict
+
+        let fetched = repo.find_by_id(&cred.id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "Repo credential");
+        assert_eq!(fetched.username.as_deref(), Some("user"));
+        assert_eq!(fetched.tags, vec!["work".to_string()]);
+        assert_eq!(
+            fetched.metadata.get("env").map(String::as_str),
+            Some("test")
+        );
+
+        // Every enum variant round-trips through the stored string form.
+        for (name, variant) in [
+            ("BankCard", CredentialType::BankCard),
+            ("GameAccount", CredentialType::GameAccount),
+            ("ServerConfig", CredentialType::ServerConfig),
+            ("Certificate", CredentialType::Certificate),
+            ("TwoFactor", CredentialType::TwoFactor),
+            (
+                "SomethingCustom",
+                CredentialType::Custom("SomethingCustom".to_string()),
+            ),
+        ] {
+            let mut special = sample_credential(identity_id, &format!("{} cred", name));
+            special.credential_type = variant;
+            repo.create(&special).await.unwrap();
+            let round_trip = repo.find_by_id(&special.id).await.unwrap().unwrap();
+            assert_eq!(round_trip.credential_type.to_string(), name);
+        }
+
+        let mut renamed = fetched.clone();
+        renamed.name = "Renamed credential".to_string();
+        renamed.is_favorite = true;
+        repo.update(&renamed).await.unwrap();
+
+        assert_eq!(repo.find_all().await.unwrap().len(), 7);
+        assert_eq!(repo.find_by_identity(&identity_id).await.unwrap().len(), 7);
+        assert_eq!(
+            repo.find_by_type(&CredentialType::Password)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(repo.find_favorites().await.unwrap().len(), 1);
+
+        let hits = repo.search_by_name("Renamed").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert!(repo
+            .search_by_name("no-match-xyz")
+            .await
+            .unwrap()
+            .is_empty());
+
+        assert!(repo.delete(&renamed.id).await.unwrap());
+        assert!(!repo.delete(&renamed.id).await.unwrap());
+    }
+
+    // ------------------------------------------------------------------
+    // WorkspaceRepository (legacy schema used by the current migrations)
+    // ------------------------------------------------------------------
+
+    async fn rebuild_workspaces_table(db: &Database, ddl: &str) {
+        sqlx::query("DROP TABLE IF EXISTS workspaces")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(ddl).execute(db.pool()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn workspace_repository_legacy_schema_round_trip() {
+        let db = test_db().await;
+        // The shipped migrations ship the v2 layout; rebuild the pre-v2 table
+        // (no path/settings columns) to exercise the legacy code paths.
+        rebuild_workspaces_table(
+            &db,
+            r#"
+            CREATE TABLE workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1
+            )
+            "#,
+        )
+        .await;
+        let repo = WorkspaceRepository::new(db.clone());
+
+        assert!(!repo.has_workspace_v2().await.unwrap());
+
+        let mut ws = Workspace::new("/tmp/legacy-ws", "legacy".to_string());
+        repo.create(&ws).await.unwrap();
+
+        let by_id = repo.find_by_id(&ws.id).await.unwrap().unwrap();
+        assert_eq!(by_id.name, "legacy");
+        assert_eq!(by_id.path, std::path::PathBuf::from("."));
+
+        let by_path = repo.find_by_path("legacy").await.unwrap().unwrap();
+        assert_eq!(by_path.id, ws.id);
+        assert!(repo.find_by_path("missing").await.unwrap().is_none());
+
+        ws.name = "legacy renamed".to_string();
+        ws.touch();
+        repo.update(&ws).await.unwrap();
+        assert_eq!(repo.find_all().await.unwrap()[0].name, "legacy renamed");
+
+        assert!(repo.delete(&ws.id).await.unwrap());
+        assert!(!repo.delete(&ws.id).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn workspace_repository_v2_schema_round_trip() {
+        let db = test_db().await;
+        // The shipped migrations already carry the v2 layout (path/settings).
+        let repo = WorkspaceRepository::new(db);
+        assert!(repo.has_workspace_v2().await.unwrap());
+
+        let mut ws = Workspace::new("/tmp/v2-ws", "v2".to_string());
+        ws.settings.session_timeout_seconds = 1234;
+        repo.create(&ws).await.unwrap();
+
+        let identity_id = Uuid::new_v4();
+        ws.active_identity_id = Some(identity_id);
+        ws.name = "v2 renamed".to_string();
+        ws.touch();
+        repo.update(&ws).await.unwrap();
+
+        let by_id = repo.find_by_id(&ws.id).await.unwrap().unwrap();
+        assert_eq!(by_id.name, "v2 renamed");
+        assert_eq!(by_id.path, std::path::PathBuf::from("/tmp/v2-ws"));
+        assert_eq!(by_id.active_identity_id, Some(identity_id));
+        assert_eq!(by_id.settings.session_timeout_seconds, 1234);
+
+        let by_path = repo.find_by_path("/tmp/v2-ws").await.unwrap().unwrap();
+        assert_eq!(by_path.id, ws.id);
+        assert_eq!(repo.find_all().await.unwrap().len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // AuditLogRepository queries
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn audit_log_repository_crud_and_filters() {
+        let db = test_db().await;
+        insert_audit_user(&db).await;
+
+        // audit_logs carries FKs to identities/credentials; seed both parents.
+        let identities = IdentityRepository::new(db.clone());
+        identities
+            .create(&sample_identity("audit owner"))
+            .await
+            .unwrap();
+        let identity_id = identities.find_all().await.unwrap()[0].id;
+        let credentials = CredentialRepository::new(db.clone());
+        credentials
+            .create(&sample_credential(identity_id, "audit cred"))
+            .await
+            .unwrap();
+        let credential_id = credentials.find_all().await.unwrap()[0].id;
+
+        let repo = AuditLogRepository::new(db.clone());
+
+        let mut ok_login = audit_log(AuditAction::Login)
+            .with_identity_id(Some(identity_id))
+            .with_session_id(Some("sess-1".to_string()));
+        ok_login.metadata.insert("k".to_string(), "v".to_string());
+        repo.create(&ok_login).await.unwrap();
+
+        let mut failed = AuditLog::new(AuditAction::LoginFailed, ResourceType::User, false)
+            .with_user_id(Some("tester".to_string()))
+            .with_credential_id(Some(credential_id))
+            .with_error_message(Some("bad password".to_string()));
+        failed.ip_address = Some("10.0.0.7".to_string());
+        repo.create(&failed).await.unwrap();
+
+        repo.create(&audit_log(AuditAction::PasswordChange))
+            .await
+            .unwrap();
+
+        // find_by_id / find_all / update
+        let stored = repo.find_by_id(&ok_login.id).await.unwrap().unwrap();
+        assert_eq!(stored.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(stored.metadata.get("k").map(String::as_str), Some("v"));
+        assert_eq!(repo.find_all().await.unwrap().len(), 3);
+
+        let mut edited = stored.clone();
+        edited.success = false;
+        repo.update(&edited).await.unwrap();
+        assert!(
+            !repo
+                .find_by_id(&ok_login.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .success
+        );
+
+        // Filters
+        assert_eq!(repo.find_by_user("tester").await.unwrap().len(), 3);
+        assert_eq!(repo.find_by_identity(&identity_id).await.unwrap().len(), 1);
+        assert_eq!(
+            repo.find_by_action(&AuditAction::LoginFailed)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(repo.find_failures().await.unwrap().len(), 2);
+        let sensitive = repo.find_security_sensitive().await.unwrap();
+        assert_eq!(sensitive.len(), 3);
+        assert_eq!(repo.find_by_ip("10.0.0.7").await.unwrap().len(), 1);
+
+        let now = chrono::Utc::now();
+        assert_eq!(
+            repo.find_by_time_range(now - Duration::hours(1), now + Duration::hours(1))
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        assert!(repo
+            .find_by_time_range(now + Duration::hours(2), now + Duration::hours(3))
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Statistics
+        let stats = repo.get_statistics().await.unwrap();
+        assert_eq!(stats.total_logs, 3);
+        assert_eq!(stats.failed_operations, 2);
+        assert_eq!(stats.recent_login_attempts, 2);
+        assert_eq!(stats.active_users_last_week, 1);
+
+        // Cleanup only removes rows older than the cutoff.
+        assert_eq!(repo.cleanup_old_logs(7).await.unwrap(), 0);
+        assert_eq!(repo.cleanup_old_logs(0).await.unwrap(), 3);
+        assert_eq!(repo.find_all().await.unwrap().len(), 0);
+
+        // Delete trait method.
+        let keep = audit_log(AuditAction::Logout);
+        repo.create(&keep).await.unwrap();
+        assert!(repo.delete(&keep.id).await.unwrap());
+        assert!(!repo.delete(&keep.id).await.unwrap());
+    }
+
+    // ------------------------------------------------------------------
+    // IdentityRepository extras
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn identity_repository_find_by_type_and_name() {
+        let db = test_db().await;
+        let repo = IdentityRepository::new(db);
+
+        let mut personal = sample_identity("personal one");
+        personal.tags = vec!["tag-a".to_string()];
+        personal
+            .attributes
+            .insert("dept".to_string(), "eng".to_string());
+        repo.create(&personal).await.unwrap();
+
+        let mut work = Identity::new("work one".to_string(), IdentityType::Work);
+        work.email = Some("work@example.com".to_string());
+        repo.create(&work).await.unwrap();
+
+        assert_eq!(repo.find_all().await.unwrap().len(), 2);
+        assert_eq!(
+            repo.find_by_type(&IdentityType::Work).await.unwrap().len(),
+            1
+        );
+        let by_name = repo.find_by_name("personal one").await.unwrap().unwrap();
+        assert_eq!(by_name.tags, vec!["tag-a".to_string()]);
+        assert_eq!(
+            by_name.attributes.get("dept").map(String::as_str),
+            Some("eng")
+        );
+        assert!(repo.find_by_name("ghost").await.unwrap().is_none());
+    }
 }

@@ -258,4 +258,68 @@ mod tests {
         secure.zeroize();
         assert!(secure.as_bytes().iter().all(|b| *b == 0));
     }
+
+    #[test]
+    fn test_secure_string_empty_and_lossy() {
+        let empty = SecureString::from_bytes(Vec::new());
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+        assert_eq!(empty.to_string_lossy(), "");
+
+        // Invalid UTF-8 must not panic; replacement chars are produced.
+        let binary = SecureString::from_bytes(vec![0xFF, 0xFE, b'a']);
+        assert!(!binary.is_empty());
+        assert_eq!(binary.len(), 3);
+        assert_eq!(binary.to_string_lossy(), "\u{FFFD}\u{FFFD}a");
+    }
+
+    #[test]
+    fn test_encryption_service_empty_and_large_payloads() {
+        let key = EncryptionService::generate_key();
+        let service = EncryptionService::new(&key);
+
+        // Empty plaintext round-trips (ciphertext = nonce + tag only).
+        let encrypted = service.encrypt(b"").unwrap();
+        assert_eq!(encrypted.len(), 12 + 16);
+        assert_eq!(service.decrypt(&encrypted).unwrap(), Vec::<u8>::new());
+
+        // Payload larger than one AES block round-trips too.
+        let big = vec![0xA5u8; 10_000];
+        let encrypted = service.encrypt(&big).unwrap();
+        assert_eq!(service.decrypt(&encrypted).unwrap(), big);
+    }
+
+    #[test]
+    fn test_encryption_service_rejects_nonce_only_ciphertext() {
+        let key = EncryptionService::generate_key();
+        let service = EncryptionService::new(&key);
+        // Exactly 12 bytes: nonce present but no ciphertext/tag.
+        assert!(service.decrypt(&[0u8; 12]).is_err());
+    }
+
+    #[test]
+    fn test_wrong_key_fails_to_decrypt() {
+        let encrypted = EncryptionService::new(&EncryptionService::generate_key())
+            .encrypt(b"secret")
+            .unwrap();
+        let other = EncryptionService::new(&EncryptionService::generate_key());
+        assert!(other.decrypt(&encrypted).is_err());
+    }
+
+    #[test]
+    fn test_decrypt_data_tampered_ciphertext_fails() {
+        let encrypted = encrypt_data(b"payload", b"pw").unwrap();
+        let mut tampered = encrypted.ciphertext.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(decrypt_data(&tampered, b"pw", &encrypted.salt, &encrypted.nonce).is_err());
+    }
+
+    #[test]
+    fn test_decrypt_data_wrong_salt_fails() {
+        let encrypted = encrypt_data(b"payload", b"pw").unwrap();
+        let mut wrong_salt = encrypted.salt.clone();
+        wrong_salt[0] ^= 0x01;
+        assert!(decrypt_data(&encrypted.ciphertext, b"pw", &wrong_salt, &encrypted.nonce).is_err());
+    }
 }

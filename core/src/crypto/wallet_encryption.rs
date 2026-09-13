@@ -367,4 +367,161 @@ mod tests {
             prop_assert_eq!(parsed, keystore);
         }
     }
+
+    #[test]
+    fn wallet_key_material_constructors() {
+        let from_key = WalletKeyMaterial::from_private_key(vec![1u8; 32]);
+        assert!(!from_key.has_mnemonic());
+        assert_eq!(from_key.private_key, vec![1u8; 32]);
+        assert!(from_key.derivation_path.is_none());
+
+        let from_mnemonic = WalletKeyMaterial::from_mnemonic(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            Some("m/44'/60'/0'/0/0".to_string()),
+        );
+        assert!(from_mnemonic.has_mnemonic());
+        assert!(from_mnemonic.private_key.is_empty());
+        assert_eq!(
+            from_mnemonic.derivation_path.as_deref(),
+            Some("m/44'/60'/0'/0/0")
+        );
+    }
+
+    #[test]
+    fn decrypt_private_key_rejects_unknown_version() {
+        let encrypted = encrypt_private_key(&[7u8; 32], "pw").unwrap();
+        let mut future = encrypted.clone();
+        future.version = 2;
+        let err = decrypt_private_key(&future, "pw").expect_err("unknown version must be rejected");
+        assert!(err
+            .to_string()
+            .contains("Unsupported encryption version: 2"));
+    }
+
+    #[test]
+    fn decrypt_mnemonic_rejects_unknown_version() {
+        let encrypted = encrypt_mnemonic("test phrase", "pw").unwrap();
+        let mut future = encrypted.clone();
+        future.version = 99;
+        let err = decrypt_mnemonic(&future, "pw").expect_err("unknown version must be rejected");
+        assert!(err
+            .to_string()
+            .contains("Unsupported encryption version: 99"));
+    }
+
+    #[test]
+    fn decrypt_mnemonic_rejects_non_utf8_payload() {
+        let password = "pw";
+        // Hand-build an EncryptedMnemonic whose plaintext is not valid UTF-8.
+        let encrypted = encrypt_data(&[0xFF, 0xFE, 0xC0], password.as_bytes()).unwrap();
+        let forged = EncryptedMnemonic {
+            version: 1,
+            encrypted_phrase: encrypted.ciphertext,
+            salt: encrypted.salt,
+            nonce: encrypted.nonce,
+        };
+        let err =
+            decrypt_mnemonic(&forged, password).expect_err("non-UTF-8 mnemonic must be rejected");
+        assert!(err.to_string().contains("Invalid UTF-8"));
+    }
+
+    #[test]
+    fn decrypt_private_key_rejects_wrong_password() {
+        let encrypted = encrypt_private_key(&[3u8; 32], "correct").unwrap();
+        let err = decrypt_private_key(&encrypted, "wrong").expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Failed to decrypt private key"));
+    }
+
+    #[test]
+    fn decrypt_mnemonic_rejects_wrong_password() {
+        let encrypted = encrypt_mnemonic("phrase", "correct").unwrap();
+        let err = decrypt_mnemonic(&encrypted, "wrong").expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Failed to decrypt mnemonic"));
+    }
+
+    #[test]
+    fn mnemonic_encryption_roundtrip_with_special_chars() {
+        let phrase = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        // Non-ASCII exercises the UTF-8 path end to end.
+        let unicode_phrase = "成功 ハэлло wörld";
+        let password = "pw-😀";
+        for phrase in [phrase, unicode_phrase] {
+            let encrypted = encrypt_mnemonic(phrase, password).unwrap();
+            assert_eq!(encrypted.version, 1);
+            assert_eq!(decrypt_mnemonic(&encrypted, password).unwrap(), phrase);
+        }
+    }
+
+    #[test]
+    fn import_from_keystore_rejects_malformed_json() {
+        let err = import_from_keystore("not json at all", "pw")
+            .expect_err("malformed keystore JSON must be rejected");
+        assert!(err.to_string().contains("Invalid keystore format"));
+    }
+
+    #[test]
+    fn import_from_keystore_rejects_wrong_version() {
+        let keystore = KeystoreV3 {
+            version: 1,
+            id: Uuid::new_v4().to_string(),
+            address: None,
+            crypto: KeystoreCrypto {
+                cipher: "aes-128-ctr".to_string(),
+                ciphertext: "aa".to_string(),
+                cipherparams: CipherParams {
+                    iv: "bb".to_string(),
+                },
+                kdf: "scrypt".to_string(),
+                kdfparams: KdfParams {
+                    dklen: 32,
+                    n: 16384,
+                    p: 1,
+                    r: 8,
+                    salt: "cc".to_string(),
+                },
+                mac: "dd".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&keystore).unwrap();
+        let err = import_from_keystore(&json, "pw").expect_err("non-v3 keystore must be rejected");
+        assert!(err.to_string().contains("Unsupported keystore version: 1"));
+    }
+
+    #[test]
+    fn import_from_keystore_v3_reports_unimplemented() {
+        let keystore_json = r#"{
+            "version": 3,
+            "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+            "address": "008aeeda4d805471d9ce51f053c6c1265d6a6ad9",
+            "crypto": {
+                "cipher": "aes-128-ctr",
+                "ciphertext": "d172bf743a674da9cdad04534d56926ef8358534d458fffccc4b3b6b0f6de5f1",
+                "cipherparams": {"iv": "83dbcc02d8ccb40e466191a123791e0e"},
+                "kdf": "scrypt",
+                "kdfparams": {"dklen": 32, "n": 262144, "p": 8, "r": 1, "salt": "ab0c7876052600dd703518d6fc3fe8984592145b591fc8fb5c6d43190334ba19"},
+                "mac": "2103ac29920d71da29f15d75b4a16dbe95cfd7ff8ec01d476db6d3c960fcbfff"
+            }
+        }"#;
+        let err = import_from_keystore(keystore_json, "testpassword")
+            .expect_err("v3 import is a placeholder");
+        assert!(err.to_string().contains("not yet fully implemented"));
+    }
+
+    #[test]
+    fn export_to_keystore_is_not_yet_implemented() {
+        let err = export_to_keystore(&[1u8; 32], "pw", None)
+            .expect_err("keystore export is a placeholder");
+        assert!(err
+            .to_string()
+            .contains("Keystore export not yet fully implemented"));
+    }
+
+    #[test]
+    fn master_key_encryption_rejects_wrong_password() {
+        let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words12).unwrap();
+        let master_key = MasterKey::from_mnemonic(&mnemonic, "").unwrap();
+        let encrypted = encrypt_master_key(&master_key, "right").unwrap();
+        assert!(decrypt_master_key(&encrypted, "wrong").is_err());
+        assert!(decrypt_master_key(&encrypted, "right").is_ok());
+    }
 }

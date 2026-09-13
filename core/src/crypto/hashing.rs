@@ -136,4 +136,77 @@ mod tests {
         assert!(HmacSha256::verify(key, data, &mac));
         assert!(!HmacSha256::verify(b"wrong_key", data, &mac));
     }
+
+    #[test]
+    fn test_default_hasher_matches_new() {
+        let hasher = PasswordHasher::default();
+        let hash = hasher.hash_password("default-check").unwrap();
+        assert!(hasher.verify_password("default-check", &hash).unwrap());
+    }
+
+    #[test]
+    fn test_verify_password_rejects_malformed_hash() {
+        let hasher = PasswordHasher::new();
+        let err = hasher
+            .verify_password("pw", "not-an-argon2-hash")
+            .expect_err("malformed hash must fail parsing");
+        assert!(err.to_string().contains("Invalid hash format"));
+    }
+
+    #[test]
+    fn test_verify_password_rejects_valid_phc_but_wrong_params() {
+        // A syntactically valid PHC string that is not Argon2id must surface
+        // a verification error rather than `false`.
+        let result = hasher_verify_bad_phc();
+        assert!(result.is_err());
+    }
+
+    fn hasher_verify_bad_phc() -> PersonaResult<bool> {
+        let hasher = PasswordHasher::new();
+        // argon2id header but truncated/invalid parameter section
+        hasher.verify_password("pw", "$argon2id$v=19$m=64,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$")
+    }
+
+    // SHA-256("abc") per FIPS 180-4.
+    #[test]
+    fn test_sha256_known_vector() {
+        let digest = Sha256Hasher::hash(b"abc");
+        assert_eq!(
+            hex::encode(digest),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            hex::encode(Sha256Hasher::hash_string("abc")),
+            hex::encode(digest)
+        );
+        assert_eq!(
+            Sha256Hasher::hash_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            Sha256Hasher::hash_string_hex("abc"),
+            Sha256Hasher::hash_hex(b"abc")
+        );
+        // The empty input has its own well-known digest.
+        assert_eq!(
+            Sha256Hasher::hash_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    // RFC 4231 test case 2: HMAC-SHA256 over the quick brown fox.
+    #[test]
+    fn test_hmac_known_vector() {
+        let key = b"key";
+        let data = b"The quick brown fox jumps over the lazy dog";
+        let mac = HmacSha256::compute(key, data);
+        assert_eq!(
+            hex::encode(mac),
+            "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+        );
+        // Tampered MAC fails verification.
+        let mut tampered = mac;
+        tampered[0] ^= 0x01;
+        assert!(!HmacSha256::verify(key, data, &tampered));
+    }
 }

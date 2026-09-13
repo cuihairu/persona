@@ -104,6 +104,7 @@ impl std::str::FromStr for AutoLockSecurityLevel {
 
 /// Policy metadata
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
 pub struct PolicyMetadata {
     /// Tags for policy categorization
     pub tags: Vec<String>,
@@ -122,7 +123,7 @@ pub struct PolicyMetadata {
 }
 
 /// Auto-lock policy statistics
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct PolicyStatistics {
     /// Number of active sessions using this policy
     pub active_sessions: usize,
@@ -452,5 +453,224 @@ mod tests {
         policy.inactivity_timeout_secs = 600;
         policy.warning_time_secs = 700; // Greater than inactivity timeout
         assert!(policy.validate().is_err());
+
+        policy.warning_time_secs = 60;
+        policy.sensitive_operation_timeout_secs = 0;
+        assert!(policy.validate().is_err());
+
+        policy.sensitive_operation_timeout_secs = 300;
+        policy.max_concurrent_sessions = 0;
+        assert!(policy.validate().is_err());
+
+        policy.max_concurrent_sessions = 5;
+        policy.background_check_interval_secs = 0;
+        assert!(policy.validate().is_err());
+
+        policy.background_check_interval_secs = 30;
+        assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn test_security_level_display_and_parse() {
+        for (level, text) in [
+            (AutoLockSecurityLevel::Low, "low"),
+            (AutoLockSecurityLevel::Medium, "medium"),
+            (AutoLockSecurityLevel::High, "high"),
+            (AutoLockSecurityLevel::Maximum, "maximum"),
+        ] {
+            assert_eq!(level.to_string(), capitalize(text));
+            assert_eq!(text.parse::<AutoLockSecurityLevel>().unwrap(), level);
+            assert_eq!(
+                "MiXeD".parse::<AutoLockSecurityLevel>(),
+                Err("Invalid auto-lock security level: mixed".to_string())
+            );
+        }
+        assert_eq!(
+            AutoLockSecurityLevel::default(),
+            AutoLockSecurityLevel::Medium
+        );
+        // Ord follows declaration order: Low < Medium < High < Maximum.
+        assert!(AutoLockSecurityLevel::Low < AutoLockSecurityLevel::Maximum);
+    }
+
+    fn capitalize(s: &str) -> String {
+        let mut chars = s.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    }
+
+    #[test]
+    fn test_security_level_serde_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&AutoLockSecurityLevel::Maximum).unwrap(),
+            "\"maximum\""
+        );
+        let restored: AutoLockSecurityLevel = serde_json::from_str("\"high\"").unwrap();
+        assert_eq!(restored, AutoLockSecurityLevel::High);
+    }
+
+    #[test]
+    fn test_new_defaults_per_security_level() {
+        let low = AutoLockPolicy::new("L".to_string(), AutoLockSecurityLevel::Low, 3600);
+        assert_eq!(low.absolute_timeout_secs, 7200);
+        assert_eq!(low.max_concurrent_sessions, 10);
+        assert!(!low.force_lock_sensitive);
+
+        let medium = AutoLockPolicy::new("M".to_string(), AutoLockSecurityLevel::Medium, 900);
+        assert_eq!(medium.absolute_timeout_secs, 3600);
+        assert_eq!(medium.warning_time_secs, 60);
+        assert!(medium.force_lock_sensitive);
+
+        let maximum = AutoLockPolicy::new("X".to_string(), AutoLockSecurityLevel::Maximum, 120);
+        assert_eq!(maximum.absolute_timeout_secs, 900);
+        assert_eq!(maximum.sensitive_operation_timeout_secs, 60);
+        assert_eq!(maximum.max_concurrent_sessions, 1);
+        assert!(!maximum.enable_warnings);
+    }
+
+    #[test]
+    fn test_new_full_and_update() {
+        let config = PolicyConfiguration {
+            name: "Custom".to_string(),
+            description: Some("desc".to_string()),
+            security_level: AutoLockSecurityLevel::High,
+            inactivity_timeout_secs: 300,
+            absolute_timeout_secs: 1800,
+            sensitive_operation_timeout_secs: 120,
+            max_concurrent_sessions: 2,
+            enable_warnings: true,
+            warning_time_secs: 30,
+            force_lock_sensitive: true,
+            activity_grace_period_secs: 3,
+            background_check_interval_secs: 15,
+            is_active: false,
+        };
+
+        let mut policy = AutoLockPolicy::new_full(config.clone());
+        assert_eq!(policy.name, "Custom");
+        assert_eq!(policy.description.as_deref(), Some("desc"));
+        assert!(!policy.is_active);
+        assert!(!policy.is_default);
+
+        let mut updated_config = config.clone();
+        updated_config.name = "Renamed".to_string();
+        updated_config.description = None;
+        policy.update(updated_config);
+        assert_eq!(policy.name, "Renamed");
+        assert!(policy.description.is_none());
+        assert_eq!(policy.inactivity_timeout_secs, 300);
+    }
+
+    #[test]
+    fn test_policy_metadata_and_statistics_serde() {
+        let mut metadata = PolicyMetadata::default();
+        assert!(metadata.tags.is_empty());
+        assert_eq!(metadata.version, 0);
+        metadata.tags.push("team".to_string());
+        metadata
+            .custom_settings
+            .insert("dept".to_string(), "eng".to_string());
+        let json = serde_json::to_string(&metadata).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PolicyMetadata>(&json).unwrap(),
+            metadata
+        );
+
+        let stats = PolicyStatistics {
+            active_sessions: 3,
+            assigned_users: 10,
+            avg_session_duration_secs: 600,
+            recent_lock_events: 2,
+            compliance_score: 95,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PolicyStatistics>(&json).unwrap(),
+            stats
+        );
+    }
+
+    #[test]
+    fn test_strictness_all_branches() {
+        let low = AutoLockPolicy::new("L".to_string(), AutoLockSecurityLevel::Low, 3600);
+        let medium = AutoLockPolicy::new("M".to_string(), AutoLockSecurityLevel::Medium, 900);
+        let high = AutoLockPolicy::new("H".to_string(), AutoLockSecurityLevel::High, 300);
+        let maximum = AutoLockPolicy::new("X".to_string(), AutoLockSecurityLevel::Maximum, 120);
+
+        // Maximum is always stricter.
+        assert!(maximum.is_more_strict_than(&low));
+        assert!(!low.is_more_strict_than(&maximum));
+        // High > Low/Medium.
+        assert!(high.is_more_strict_than(&medium));
+        // Medium > Low.
+        assert!(medium.is_more_strict_than(&low));
+        // Low is never stricter.
+        assert!(!low.is_more_strict_than(&medium));
+        // Same level falls back to inactivity timeout.
+        let high_slower = AutoLockPolicy::new("H2".to_string(), AutoLockSecurityLevel::High, 600);
+        assert!(high.is_more_strict_than(&high_slower));
+        assert!(!high_slower.is_more_strict_than(&high));
+
+        // Strictness can also come from tighter limits even when the level
+        // comparison short-circuits to false ((Low, _) branch).
+        let mut tighter = AutoLockPolicy::new("T".to_string(), AutoLockSecurityLevel::Low, 300);
+        tighter.max_concurrent_sessions = 2;
+        let mut looser = AutoLockPolicy::new("O".to_string(), AutoLockSecurityLevel::Low, 600);
+        looser.max_concurrent_sessions = 5;
+        assert!(tighter.is_more_strict_than(&looser));
+    }
+
+    #[test]
+    fn test_security_score_tiers() {
+        // Lenient baseline: nothing bonus.
+        let mut policy = AutoLockPolicy::new("Base".to_string(), AutoLockSecurityLevel::Low, 3600);
+        policy.sensitive_operation_timeout_secs = 900;
+        policy.force_lock_sensitive = false;
+        policy.enable_warnings = false;
+        policy.max_concurrent_sessions = 20;
+        assert_eq!(policy.security_score(), 50);
+
+        // Each timeout tier adds its own bonus.
+        policy.inactivity_timeout_secs = 1800; // +10
+        assert_eq!(policy.security_score(), 60);
+        policy.inactivity_timeout_secs = 900; // +15
+        assert_eq!(policy.security_score(), 65);
+        policy.inactivity_timeout_secs = 300; // +20
+        assert_eq!(policy.security_score(), 70);
+
+        // Sensitive timeout tiers.
+        policy.sensitive_operation_timeout_secs = 300; // +10
+        assert_eq!(policy.security_score(), 80);
+        policy.sensitive_operation_timeout_secs = 60; // +15
+        assert_eq!(policy.security_score(), 85);
+
+        // Session limit tiers.
+        policy.max_concurrent_sessions = 5; // +4
+        assert_eq!(policy.security_score(), 89);
+        policy.max_concurrent_sessions = 2; // +8
+        assert_eq!(policy.security_score(), 93);
+    }
+
+    #[test]
+    fn test_recommended_for_all_use_cases() {
+        let personal = AutoLockPolicy::recommended_for_use_case(AutoLockUseCase::PersonalDevice);
+        assert_eq!(personal.security_level, AutoLockSecurityLevel::Medium);
+
+        let corporate = AutoLockPolicy::recommended_for_use_case(AutoLockUseCase::CorporateDesktop);
+        assert_eq!(corporate.security_level, AutoLockSecurityLevel::High);
+        assert_eq!(corporate.inactivity_timeout_secs, 600);
+
+        let facility =
+            AutoLockPolicy::recommended_for_use_case(AutoLockUseCase::HighSecurityFacility);
+        assert_eq!(facility.security_level, AutoLockSecurityLevel::Maximum);
+        assert_eq!(facility.inactivity_timeout_secs, 120);
+
+        // Use case enum serializes in snake_case.
+        assert_eq!(
+            serde_json::to_string(&AutoLockUseCase::DeveloperEnvironment).unwrap(),
+            "\"developer_environment\""
+        );
     }
 }

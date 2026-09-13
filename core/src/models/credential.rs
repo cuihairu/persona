@@ -419,4 +419,142 @@ mod tests {
         let decoded = CredentialData::from_bytes(&bytes).unwrap();
         assert!(matches!(decoded, CredentialData::Password(_)));
     }
+
+    #[test]
+    fn credential_type_display_remaining_values() {
+        assert_eq!(CredentialType::ApiKey.to_string(), "ApiKey");
+        assert_eq!(CredentialType::BankCard.to_string(), "BankCard");
+        assert_eq!(CredentialType::GameAccount.to_string(), "GameAccount");
+        assert_eq!(CredentialType::ServerConfig.to_string(), "ServerConfig");
+        assert_eq!(CredentialType::Certificate.to_string(), "Certificate");
+    }
+
+    #[test]
+    fn credential_data_bincode_roundtrip_all_variants() {
+        let variants = vec![
+            CredentialData::CryptoWallet(CryptoWalletData {
+                wallet_type: "hd".to_string(),
+                mnemonic_phrase: Some("word word word".to_string()),
+                private_key: Some("hex".to_string()),
+                public_key: "pub".to_string(),
+                address: "0xabc".to_string(),
+                network: "ethereum".to_string(),
+            }),
+            CredentialData::SshKey(SshKeyData {
+                private_key: "priv".to_string(),
+                public_key: "pub".to_string(),
+                key_type: "ed25519".to_string(),
+                passphrase: Some("phrase".to_string()),
+            }),
+            CredentialData::ApiKey(ApiKeyData {
+                api_key: "key".to_string(),
+                api_secret: Some("secret".to_string()),
+                token: Some("token".to_string()),
+                permissions: vec!["read".to_string(), "write".to_string()],
+                expires_at: Some(chrono::Utc::now()),
+            }),
+            CredentialData::BankCard(BankCardData {
+                card_number: "4242".to_string(),
+                cardholder_name: "Alice".to_string(),
+                expiry_date: "12/30".to_string(),
+                cvv: "123".to_string(),
+                bank_name: "Example Bank".to_string(),
+                card_type: "visa".to_string(),
+            }),
+            CredentialData::ServerConfig(ServerConfigData {
+                hostname: "server.example.com".to_string(),
+                ip_address: Some("10.0.0.2".to_string()),
+                port: 22,
+                protocol: "ssh".to_string(),
+                username: "deploy".to_string(),
+                password: None,
+                ssh_key_id: Some(Uuid::new_v4()),
+                additional_config: HashMap::new(),
+            }),
+            CredentialData::TwoFactor(TwoFactorData {
+                secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+                issuer: "Example".to_string(),
+                account_name: "alice@example.com".to_string(),
+                algorithm: "SHA1".to_string(),
+                digits: 6,
+                period: 30,
+            }),
+            CredentialData::Raw(vec![1, 2, 3]),
+        ];
+
+        for data in variants {
+            let bytes = data.to_bytes().unwrap();
+            let decoded = CredentialData::from_bytes(&bytes).unwrap();
+            assert_eq!(
+                std::mem::discriminant(&decoded),
+                std::mem::discriminant(&data)
+            );
+        }
+    }
+
+    #[test]
+    fn credential_data_from_bytes_rejects_garbage() {
+        assert!(CredentialData::from_bytes(b"not bincode").is_err());
+    }
+
+    #[test]
+    fn credential_serde_roundtrip() {
+        let mut cred = Credential::new(
+            Uuid::new_v4(),
+            "Example".to_string(),
+            CredentialType::ApiKey,
+            SecurityLevel::Critical,
+            vec![1, 2, 3],
+            Some(vec![9, 9]),
+        );
+        cred.url = Some("https://example.com".to_string());
+        cred.username = Some("alice".to_string());
+        cred.notes = Some("rotates quarterly".to_string());
+        cred.tags = vec!["work".to_string()];
+        cred.mark_accessed();
+
+        let json = serde_json::to_string(&cred).unwrap();
+        let decoded: Credential = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, cred.id);
+        assert_eq!(decoded.wrapped_item_key, Some(vec![9, 9]));
+        assert_eq!(decoded.last_accessed, cred.last_accessed);
+        assert_eq!(decoded.credential_type, CredentialType::ApiKey);
+    }
+
+    #[test]
+    fn credential_remove_missing_tag_and_metadata_are_noop() {
+        let mut cred = Credential::new(
+            Uuid::new_v4(),
+            "Example".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            vec![1],
+            None,
+        );
+        cred.tags.clear();
+        cred.metadata.clear();
+
+        let before = cred.updated_at;
+        cred.remove_tag("missing");
+        cred.remove_metadata("missing");
+        assert!(cred.tags.is_empty());
+        assert!(cred.get_metadata("missing").is_none());
+        assert_eq!(cred.updated_at, before);
+    }
+
+    #[test]
+    fn credential_touch_refreshes_updated_at() {
+        let mut cred = Credential::new(
+            Uuid::new_v4(),
+            "Example".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            vec![1],
+            None,
+        );
+
+        let before = cred.updated_at;
+        cred.touch();
+        assert!(cred.updated_at >= before);
+    }
 }

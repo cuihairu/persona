@@ -230,4 +230,101 @@ mod tests {
             AuthFactor::MasterPassword
         );
     }
+
+    #[tokio::test]
+    async fn get_by_id_returns_none_for_unknown_user() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let repo = UserAuthRepository::new(db);
+        assert!(repo.get_by_id(&Uuid::new_v4()).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn create_with_unset_time_fields_round_trips_as_none() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let repo = UserAuthRepository::new(db.clone());
+        let user_id = Uuid::new_v4();
+        let auth = UserAuth::new(user_id);
+
+        assert!(auth.locked_until.is_none());
+        assert!(auth.last_auth.is_none());
+        repo.create(&auth).await.unwrap();
+
+        let fetched = repo.get_by_id(&user_id).await.unwrap().unwrap();
+        assert_eq!(fetched.user_id, user_id);
+        assert!(fetched.locked_until.is_none());
+        assert!(fetched.last_auth.is_none());
+        assert_eq!(fetched.failed_attempts, 0);
+        assert!(!fetched.password_change_required);
+
+        // A row whose locked_until cannot be parsed degrades to None instead
+        // of failing the whole lookup.
+        sqlx::query("UPDATE user_auth SET locked_until = 'not-a-date' WHERE user_id = ?")
+            .bind(user_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let degraded = repo.get_by_id(&user_id).await.unwrap().unwrap();
+        assert!(degraded.locked_until.is_none());
+    }
+
+    #[tokio::test]
+    async fn corrupt_user_id_surfaces_database_error() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let repo = UserAuthRepository::new(db.clone());
+        sqlx::query(
+            "INSERT INTO user_auth (user_id, enabled_factors, failed_attempts, created_at, updated_at)
+             VALUES ('not-a-uuid', '[]', 0, '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // get_first scans the table and must surface the corrupt row.
+        let err = repo
+            .get_first()
+            .await
+            .expect_err("corrupt uuid must fail the lookup");
+        assert!(matches!(
+            err.downcast_ref::<PersonaError>(),
+            Some(PersonaError::Database(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn dropped_table_surfaces_database_errors() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let repo = UserAuthRepository::new(db.clone());
+        sqlx::query("DROP TABLE user_auth")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // Every statement now fails at the SQL level; each query must map the
+        // driver error into PersonaError::Database.
+        let auth = UserAuth::new(Uuid::new_v4());
+        let errors = vec![
+            repo.has_any().await.unwrap_err(),
+            repo.get_first().await.unwrap_err(),
+            repo.get_by_id(&auth.user_id).await.unwrap_err(),
+            repo.create(&auth).await.unwrap_err(),
+            repo.update(&auth).await.unwrap_err(),
+        ];
+        for err in errors {
+            assert!(
+                matches!(
+                    err.downcast_ref::<PersonaError>(),
+                    Some(PersonaError::Database(_))
+                ),
+                "expected a database error, got: {err}"
+            );
+        }
+    }
 }

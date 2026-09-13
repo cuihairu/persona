@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input, Password, Select};
+use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
 use std::collections::HashMap;
 use tracing::info;
@@ -339,17 +339,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = if config.ui.interactive {
-            Password::new()
-                .with_prompt("Enter master password to unlock")
-                .interact()?
-        } else {
-            std::env::var("PERSONA_MASTER_PASSWORD").map_err(|_| {
-                anyhow!(
-                    "IO error: not a terminal\n\nCaused by:\n    Master password required but PERSONA_MASTER_PASSWORD not set"
-                )
-            })?
-        };
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -361,18 +351,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
-        let password = if config.ui.interactive {
-            Password::new()
-                .with_prompt("Set a new master password")
-                .with_confirmation("Confirm master password", "Passwords don't match")
-                .interact()?
-        } else {
-            std::env::var("PERSONA_MASTER_PASSWORD").map_err(|_| {
-                anyhow!(
-                    "IO error: not a terminal\n\nCaused by:\n    Master password required but PERSONA_MASTER_PASSWORD not set"
-                )
-            })?
-        };
+        let password = super::service::prompt_new_master_password()?;
         let _ = service
             .initialize_user(&password)
             .await
@@ -462,5 +441,136 @@ mod tests {
         identity.email = Some("alice@example.com".to_string());
         identity.phone = Some("1234567890".to_string());
         validate_identity(&identity).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod integration {
+    use super::*;
+    use crate::config::CliConfig;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn args(
+        name: Option<&str>,
+        identity_type: Option<&str>,
+        description: Option<&str>,
+        email: Option<&str>,
+        yes: bool,
+    ) -> AddArgs {
+        AddArgs {
+            name: name.map(String::from),
+            identity_type: identity_type.map(String::from),
+            description: description.map(String::from),
+            email: email.map(String::from),
+            phone: None,
+            yes,
+            from_file: None,
+            set_active: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn add_non_interactive_initializes_and_creates_identity() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        // First add initializes the workspace master password from the env.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "new-master-pin");
+        execute(
+            args(
+                Some("alice"),
+                Some("personal"),
+                Some("first"),
+                Some("a@b.c"),
+                true,
+            ),
+            &config,
+        )
+        .await
+        .expect("first add must initialize and create");
+
+        // The identity landed and the second add authenticates instead.
+        execute(args(Some("bob"), None, None, None, true), &config)
+            .await
+            .expect("second add must authenticate with env password");
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = persona_core::storage::IdentityRepository::new(db);
+        let alice = repo.find_by_name("alice").await.unwrap().unwrap();
+        assert_eq!(alice.email.as_deref(), Some("a@b.c"));
+        assert_eq!(alice.description.as_deref(), Some("first"));
+        assert!(repo.find_by_name("bob").await.unwrap().is_some());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn add_requires_name_in_non_interactive_mode() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let err = execute(args(None, None, None, None, true), &config)
+            .await
+            .expect_err("missing name must fail");
+        assert!(err.to_string().contains("Identity name is required"));
+    }
+
+    #[tokio::test]
+    async fn add_rejects_invalid_identity_data() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        // Bad email fails validation before any DB access.
+        let err = execute(
+            args(Some("x"), None, None, Some("not-an-email"), true),
+            &config,
+        )
+        .await
+        .expect_err("bad email must fail");
+        assert!(err.to_string().contains("Invalid email format"));
+    }
+
+    #[test]
+    fn validate_identity_bounds() {
+        let mut identity = Identity::new("ok".to_string(), IdentityType::Personal);
+        validate_identity(&identity).expect("valid identity");
+
+        // Over-long name.
+        let long = "x".repeat(51);
+        identity.name = long;
+        let err = validate_identity(&identity).unwrap_err();
+        assert!(err.to_string().contains("cannot exceed 50"));
+
+        // Unknown type string becomes Custom via non-interactive parsing.
+        let parsed = "weird"
+            .parse::<IdentityType>()
+            .unwrap_or(IdentityType::Custom("weird".into()));
+        let mut identity = Identity::new("t".to_string(), parsed);
+        identity.email = Some("a@b.c".to_string());
+        validate_identity(&identity).expect("custom type is fine");
     }
 }

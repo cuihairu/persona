@@ -17,15 +17,13 @@ const MAX_SINGLE_FILE_SIZE: u64 = 100 * 1024 * 1024;
 pub struct BlobStore {
     storage_root: PathBuf,
     chunk_size: usize,
+    max_single_file_size: u64,
 }
 
 impl BlobStore {
     /// Create a new blob store
     pub fn new<P: AsRef<Path>>(storage_root: P) -> Self {
-        Self {
-            storage_root: storage_root.as_ref().to_path_buf(),
-            chunk_size: DEFAULT_CHUNK_SIZE,
-        }
+        Self::with_chunk_size(storage_root, DEFAULT_CHUNK_SIZE)
     }
 
     /// Create a new blob store with custom chunk size
@@ -33,6 +31,26 @@ impl BlobStore {
         Self {
             storage_root: storage_root.as_ref().to_path_buf(),
             chunk_size,
+            max_single_file_size: MAX_SINGLE_FILE_SIZE,
+        }
+    }
+
+    /// Create a blob store with fully configurable limits (test helper).
+    ///
+    /// Production behavior is identical; the only difference is that the
+    /// single-file chunking threshold is configurable so tests can exercise
+    /// the chunked code paths without writing >100MB files.
+    #[cfg(test)]
+    #[allow(dead_code)]
+    fn with_test_limits<P: AsRef<Path>>(
+        storage_root: P,
+        chunk_size: usize,
+        max_single_file_size: u64,
+    ) -> Self {
+        Self {
+            storage_root: storage_root.as_ref().to_path_buf(),
+            chunk_size,
+            max_single_file_size,
         }
     }
 
@@ -92,7 +110,7 @@ impl BlobStore {
         let content_hash = self.calculate_hash(&content);
 
         // Determine if chunking is needed
-        let should_chunk = file_size > MAX_SINGLE_FILE_SIZE;
+        let should_chunk = file_size > self.max_single_file_size;
 
         let mut attachment = Attachment::new(
             credential_id,
@@ -112,10 +130,11 @@ impl BlobStore {
                 let _chunk_hash = self.calculate_hash(chunk_data);
                 let chunk_path = self.get_chunk_path(&credential_id, &attachment.id, i);
 
-                // Ensure parent directory exists
-                if let Some(parent) = chunk_path.parent() {
-                    FileSystem::create_dir_all(parent).await?;
-                }
+                // Ensure the parent directory exists. `chunk_path` is always
+                // nested below `storage_root`, so `parent()` is `Some`; the
+                // fallback never fires.
+                let chunk_dir = chunk_path.parent().unwrap_or(self.storage_root.as_path());
+                FileSystem::create_dir_all(chunk_dir).await?;
 
                 // Write chunk
                 FileSystem::write(&chunk_path, chunk_data).await?;
@@ -133,10 +152,11 @@ impl BlobStore {
             // Store as single file
             let file_path = self.get_file_path(&credential_id, &attachment.id, &filename);
 
-            // Ensure parent directory exists
-            if let Some(parent) = file_path.parent() {
-                FileSystem::create_dir_all(parent).await?;
-            }
+            // Ensure the parent directory exists. `file_path` is always
+            // nested below `storage_root`, so `parent()` is `Some`; the
+            // fallback never fires.
+            let parent = file_path.parent().unwrap_or(self.storage_root.as_path());
+            FileSystem::create_dir_all(parent).await?;
 
             // Write file
             FileSystem::write(&file_path, &content).await?;
@@ -621,5 +641,384 @@ mod tests {
         // Try to retrieve (should fail)
         let result = manager.retrieve(&attachment_id, false, None).await;
         assert!(result.is_err());
+    }
+
+    fn small_test_file(dir: &Path, name: &str, contents: &[u8]) -> PathBuf {
+        use std::io::Write;
+        let path = dir.join(name);
+        let mut file = std::fs::File::create(&path).unwrap();
+        file.write_all(contents).unwrap();
+        file.sync_all().unwrap();
+        path
+    }
+
+    #[test]
+    fn test_detect_mime_type_covers_known_extensions() {
+        let store = BlobStore::new("/tmp/unused");
+        let cases = [
+            ("a.pdf", "application/pdf"),
+            ("a.doc", "application/msword"),
+            (
+                "a.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            ("a.xls", "application/vnd.ms-excel"),
+            (
+                "a.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ),
+            ("a.txt", "text/plain"),
+            ("a.jpg", "image/jpeg"),
+            ("a.jpeg", "image/jpeg"),
+            ("a.png", "image/png"),
+            ("a.gif", "image/gif"),
+            ("a.zip", "application/zip"),
+            ("a.json", "application/json"),
+            ("a.xml", "application/xml"),
+            ("a.unknownext", "application/octet-stream"),
+            ("noextension", "application/octet-stream"),
+            ("UPPER.PNG", "image/png"),
+        ];
+        for (filename, expected) in cases {
+            assert_eq!(store.detect_mime_type(filename), expected, "for {filename}");
+        }
+    }
+
+    #[test]
+    fn test_chunk_and_path_helpers() {
+        let root = Path::new("/tmp/blob-root");
+        let store = BlobStore::with_chunk_size(root, 4);
+        let credential_id = Uuid::new_v4();
+        let attachment_id = Uuid::new_v4();
+
+        // Chunking splits on the configured chunk size, last chunk keeps the rest.
+        assert_eq!(
+            store.chunk_data(&[1, 2, 3, 4, 5, 6]),
+            vec![vec![1, 2, 3, 4], vec![5, 6]]
+        );
+        assert!(store.chunk_data(&[]).is_empty());
+
+        let file_path = store.get_file_path(&credential_id, &attachment_id, "f.txt");
+        assert_eq!(
+            file_path,
+            root.join(credential_id.to_string())
+                .join(attachment_id.to_string())
+                .join("f.txt")
+        );
+
+        let chunk_dir = store.get_chunk_dir(&credential_id, &attachment_id);
+        assert_eq!(
+            chunk_dir,
+            root.join(credential_id.to_string())
+                .join(attachment_id.to_string())
+                .join("chunks")
+        );
+
+        let chunk_path = store.get_chunk_path(&credential_id, &attachment_id, 3);
+        assert_eq!(chunk_path, chunk_dir.join("chunk_0003"));
+
+        // Known SHA-256 vector.
+        assert_eq!(
+            store.calculate_hash(b"hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_store_file_missing_errors() {
+        let temp_dir = tempdir().unwrap();
+        let store = BlobStore::new(temp_dir.path().join("storage"));
+
+        let err = store
+            .store_file(
+                temp_dir.path().join("nope.txt"),
+                Uuid::new_v4(),
+                false,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("File does not exist"));
+    }
+
+    #[tokio::test]
+    async fn test_store_file_rejects_unnameable_path() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        let store = BlobStore::new(&storage_dir);
+        store.init().await.unwrap();
+
+        // `storage/..` resolves to an existing directory but has no file name.
+        let weird = storage_dir.join("..");
+        let err = store
+            .store_file(&weird, Uuid::new_v4(), false, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid filename"));
+    }
+
+    #[tokio::test]
+    async fn test_store_file_encryption_requires_key_and_valid_length() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        let store = BlobStore::new(&storage_dir);
+        store.init().await.unwrap();
+        let file = small_test_file(temp_dir.path(), "secret.txt", b"payload");
+
+        // encrypt=true but no key.
+        let err = store
+            .store_file(&file, Uuid::new_v4(), true, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Encryption key required"));
+
+        // Key that is not 32 bytes.
+        let err = store
+            .store_file(&file, Uuid::new_v4(), true, Some(&b"short"[..]))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid encryption key length"));
+    }
+
+    #[tokio::test]
+    async fn test_chunked_store_retrieve_and_hash_mismatch() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        // Chunk threshold of 8 bytes forces chunking for a 16-byte file.
+        let store = BlobStore::with_test_limits(&storage_dir, 8, 8);
+        store.init().await.unwrap();
+        let credential_id = Uuid::new_v4();
+
+        let contents = b"0123456789abcdef"; // 16 bytes → 2 chunks of 8
+        let file = small_test_file(temp_dir.path(), "big.bin", contents);
+
+        let mut attachment = store
+            .store_file(&file, credential_id, false, None)
+            .await
+            .unwrap();
+        assert!(attachment.chunk_count > 1);
+        assert_eq!(attachment.size as usize, contents.len());
+
+        // Collect the chunk metadata the store just wrote.
+        let chunk_dir = store.get_chunk_dir(&credential_id, &attachment.id);
+        let mut paths = FileSystem::read_dir(&chunk_dir).await.unwrap();
+        paths.sort();
+        let mut chunks = Vec::new();
+        for (i, p) in paths.iter().enumerate() {
+            let data = FileSystem::read(p).await.unwrap();
+            let relative = p
+                .strip_prefix(&storage_dir)
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            chunks.push(AttachmentChunk::new(
+                attachment.id,
+                i as u32,
+                data.len() as u32,
+                store.calculate_hash(&data),
+                relative,
+            ));
+        }
+
+        // Clean reconstruction works.
+        let rebuilt = store
+            .retrieve_file(&attachment, &chunks, false, None)
+            .await
+            .unwrap();
+        assert_eq!(rebuilt, contents);
+
+        // Corrupting one chunk hash must abort reconstruction.
+        let mut tampered = chunks.clone();
+        tampered[1].content_hash = "0".repeat(64);
+        let err = store
+            .retrieve_file(&attachment, &tampered, false, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("hash mismatch"));
+
+        // Tampering with the whole-content hash must also fail.
+        attachment.content_hash = "f".repeat(64);
+        let err = store
+            .retrieve_file(&attachment, &chunks, false, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Content hash mismatch"));
+
+        // Deleting the chunked attachment removes every chunk and the directory.
+        store.delete_file(&attachment, &chunks).await.unwrap();
+        assert!(!FileSystem::exists(&chunk_dir).await);
+        // Deleting again is a no-op (paths already gone).
+        store.delete_file(&attachment, &chunks).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_single_file_content_hash_mismatch_and_missing() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        let store = BlobStore::new(&storage_dir);
+        store.init().await.unwrap();
+        let credential_id = Uuid::new_v4();
+
+        let mut attachment = Attachment::new(
+            credential_id,
+            "f.txt".to_string(),
+            "text/plain".to_string(),
+            5,
+            "f.txt".to_string(),
+            store.calculate_hash(b"hello"),
+        );
+        FileSystem::write(&storage_dir.join("f.txt"), b"hello")
+            .await
+            .unwrap();
+
+        // Corrupt the recorded hash.
+        attachment.content_hash = "0".repeat(64);
+        let err = store
+            .retrieve_file(&attachment, &[], false, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Content hash mismatch"));
+
+        // Missing file surfaces an IO error.
+        attachment.content_hash = store.calculate_hash(b"hello");
+        attachment.storage_path = "gone.txt".to_string();
+        assert!(store
+            .retrieve_file(&attachment, &[], false, None)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_retrieve_encrypted_requires_key_and_valid_length() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        let store = BlobStore::new(&storage_dir);
+        store.init().await.unwrap();
+
+        let file = small_test_file(temp_dir.path(), "enc.txt", b"top secret");
+        let key = [7u8; 32];
+        let attachment = store
+            .store_file(&file, Uuid::new_v4(), true, Some(&key))
+            .await
+            .unwrap();
+        assert!(attachment.is_encrypted);
+        assert!(attachment.encryption_key_id.is_some());
+
+        // Encrypted content cannot be decrypted without a key.
+        let err = store
+            .retrieve_file(&attachment, &[], true, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Decryption key required"));
+
+        // A wrongly-sized key is rejected before decryption.
+        let err = store
+            .retrieve_file(&attachment, &[], true, Some(&[1u8; 16]))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid decryption key length"));
+
+        // Correct key restores the plaintext.
+        let plaintext = store
+            .retrieve_file(&attachment, &[], true, Some(&key))
+            .await
+            .unwrap();
+        assert_eq!(plaintext, b"top secret");
+    }
+
+    #[tokio::test]
+    async fn test_delete_single_file_and_missing_file_noop() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        let store = BlobStore::new(&storage_dir);
+        store.init().await.unwrap();
+        let credential_id = Uuid::new_v4();
+
+        let attachment = Attachment::new(
+            credential_id,
+            "doomed.txt".to_string(),
+            "text/plain".to_string(),
+            4,
+            "doomed.txt".to_string(),
+            store.calculate_hash(b"bye!"),
+        );
+        FileSystem::write(&storage_dir.join("doomed.txt"), b"bye!")
+            .await
+            .unwrap();
+
+        store.delete_file(&attachment, &[]).await.unwrap();
+        assert!(!FileSystem::exists(&storage_dir.join("doomed.txt")).await);
+
+        // Deleting an already-missing single file is fine.
+        store.delete_file(&attachment, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manager_chunked_round_trip_stats_and_list() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+        let contents = b"chunked-content-0123456789"; // 26 bytes
+        let test_file = small_test_file(temp_dir.path(), "chunked.bin", contents);
+
+        let db = create_test_db().await;
+        let credential_id = seed_identity_and_credential(&db).await;
+        let repo = AttachmentRepository::new(db);
+        // Chunk threshold of 8 bytes forces chunking for a 26-byte file.
+        let blob_store = BlobStore::with_test_limits(&storage_dir, 8, 8);
+        let manager = AttachmentManager::new(repo, blob_store);
+        manager.init().await.unwrap();
+
+        let attachment_id = manager
+            .store(&test_file, credential_id, false, None)
+            .await
+            .unwrap();
+
+        // Chunked retrieval reconstructs the original bytes.
+        let content = manager.retrieve(&attachment_id, false, None).await.unwrap();
+        assert_eq!(content, contents);
+
+        // Stats see one chunked attachment.
+        let stats = manager.get_stats().await.unwrap();
+        assert_eq!(stats.total_attachments, 1);
+        assert_eq!(stats.chunked_count, 1);
+        assert_eq!(stats.total_size, contents.len() as u64);
+
+        // Listing by credential finds it.
+        assert_eq!(
+            manager
+                .list_for_credential(&credential_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // Deleting removes metadata and the on-disk chunks.
+        manager.delete(&attachment_id).await.unwrap();
+        assert!(manager
+            .list_for_credential(&credential_id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(manager.retrieve(&attachment_id, false, None).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_manager_retrieve_and_delete_missing_attachment() {
+        let temp_dir = tempdir().unwrap();
+        let storage_dir = temp_dir.path().join("storage");
+
+        let db = create_test_db().await;
+        let repo = AttachmentRepository::new(db);
+        let blob_store = BlobStore::new(&storage_dir);
+        let manager = AttachmentManager::new(repo, blob_store);
+        manager.init().await.unwrap();
+
+        let missing = Uuid::new_v4();
+        let err = manager.retrieve(&missing, false, None).await.unwrap_err();
+        assert!(err.to_string().contains("Attachment not found"));
+
+        let err = manager.delete(&missing).await.unwrap_err();
+        assert!(err.to_string().contains("Attachment not found"));
     }
 }

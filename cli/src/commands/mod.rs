@@ -11,6 +11,7 @@ pub mod migrate;
 pub mod passkey;
 pub mod password;
 pub mod remove;
+pub mod service;
 pub mod show;
 pub mod ssh;
 pub mod switch;

@@ -90,3 +90,64 @@ pub async fn execute(_args: MigrateArgs, config: &crate::config::CliConfig) -> R
     println!("{}", "Done.".green().bold());
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use tempfile::TempDir;
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    #[tokio::test]
+    async fn migrate_creates_workspace_row_then_is_idempotent() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        execute(MigrateArgs { force: false }, &config)
+            .await
+            .expect("first migrate must succeed");
+
+        // The workspace row now exists and audit trail records the migration.
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = WorkspaceRepository::new(db.clone());
+        let path_str = dir.path().to_string_lossy().to_string();
+        let ws = repo
+            .find_by_path(&path_str)
+            .await
+            .into_anyhow()
+            .unwrap()
+            .expect("workspace row created on first migrate");
+        assert_eq!(
+            ws.name,
+            dir.path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        );
+
+        let audit_repo = AuditLogRepository::new(db.clone());
+        let logs = audit_repo
+            .find_by_action(&AuditAction::DatabaseMigration)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+
+        // Second run is a no-op update path (same name) and still succeeds.
+        execute(MigrateArgs { force: true }, &config)
+            .await
+            .expect("second migrate must succeed");
+        let logs = audit_repo
+            .find_by_action(&AuditAction::DatabaseMigration)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 2);
+    }
+}

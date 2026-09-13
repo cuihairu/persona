@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use tabled::{settings::Style, Table, Tabled};
 use uuid::Uuid;
 
-use persona_core::{
-    crypto::{local_client_data, CLIENT_DATA_TYPE_CREATE},
-    PersonaService,
-};
+use persona_core::crypto::{local_client_data, CLIENT_DATA_TYPE_CREATE};
+
+use super::service::init_service;
 
 #[derive(Args)]
 pub struct PasskeyArgs {
@@ -267,42 +266,188 @@ struct PasskeyTable {
     created: String,
 }
 
-/// Open the workspace database, run migrations and unlock with the master
-/// password — the same flow `credential` commands use.
-async fn init_service(config: &CliConfig) -> Result<PersonaService> {
-    let db_path = config.get_database_path();
-    let db = persona_core::Database::from_file(&db_path)
-        .await
-        .into_anyhow()
-        .with_context(|| format!("Failed to connect to database: {}", db_path.display()))?;
-    db.migrate()
-        .await
-        .into_anyhow()
-        .context("Failed to run database migrations")?;
-    let mut service = PersonaService::new(db)
-        .await
-        .into_anyhow()
-        .context("Failed to create PersonaService")?;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use persona_core::{Database, PersonaService};
+    use std::sync::Mutex;
+    use tempfile::TempDir;
 
-    if service
-        .has_users()
-        .await
-        .into_anyhow()
-        .context("Failed to check users")?
-    {
-        let password = dialoguer::Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
-        match service
-            .authenticate_user(&password)
-            .await
-            .into_anyhow()
-            .context("Failed to authenticate user")?
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    /// Caller must already hold `lock_process_env()`.
+    async fn seeded_config(dir: &TempDir) -> CliConfig {
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let config = config_for(dir);
         {
-            persona_core::auth::authentication::AuthResult::Success => Ok(service),
-            other => bail!("Authentication failed: {:?}", other),
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
         }
-    } else {
-        bail!("Workspace not initialized. Run `persona init` first");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        let service = init_service(&config).await.unwrap();
+        service
+            .create_identity_full(persona_core::Identity::new(
+                "alice".to_string(),
+                persona_core::models::IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        config
+    }
+
+    fn create_args(identity: &str, rp: &str) -> PasskeyArgs {
+        PasskeyArgs {
+            command: PasskeyCommand::Create {
+                identity: identity.to_string(),
+                rp: rp.to_string(),
+                rp_name: Some("Example".to_string()),
+                origin: None,
+                user: Some("alice@example.com".to_string()),
+                display: None,
+                uv: true,
+                client_data: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn passkey_create_list_show_selftest_remove_round_trip() {
+        let _guard = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let config = seeded_config(&dir).await;
+
+        // Unknown identity fails during create.
+        let err = handle_passkey(create_args("ghost", "example.com"), &config)
+            .await
+            .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+
+        handle_passkey(create_args("alice", "example.com"), &config)
+            .await
+            .expect("create works");
+
+        // List for identity and globally.
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::List {
+                    identity: Some("alice".to_string()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("list for identity works");
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::List { identity: None },
+            },
+            &config,
+        )
+        .await
+        .expect("global list works");
+
+        // Fetch the created passkey through the service for id-based commands.
+        let service = init_service(&config).await.unwrap();
+        let alice = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let keys = service.list_passkeys(&alice.id).await.unwrap();
+        assert_eq!(keys.len(), 1);
+        let id = keys[0].id;
+        drop(service);
+
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::Show { id },
+            },
+            &config,
+        )
+        .await
+        .expect("show works");
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::SelfTest { id },
+            },
+            &config,
+        )
+        .await
+        .expect("self-test verifies the stored key");
+
+        // Unknown ids fail for Show/Remove/SelfTest.
+        let ghost = uuid::Uuid::new_v4();
+        let err = handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::Show { id: ghost },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown show must fail");
+        assert!(err.to_string().contains("not found"));
+        let err = handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::Remove { id: ghost },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown remove must fail");
+        assert!(err.to_string().contains("not found"));
+        let err = handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::SelfTest { id: ghost },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown self-test must fail");
+        assert!(err.to_string().contains("Self-test FAILED"));
+
+        // Empty list for an identity without passkeys.
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::List {
+                    identity: Some("bob".to_string()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown identity list fails");
+
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::Remove { id },
+            },
+            &config,
+        )
+        .await
+        .expect("remove works");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }

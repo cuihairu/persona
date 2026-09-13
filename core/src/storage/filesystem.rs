@@ -244,4 +244,93 @@ mod tests {
         assert_eq!(contents.len(), 1);
         assert_eq!(contents[0], sub_dir);
     }
+
+    #[tokio::test]
+    async fn test_byte_io_copy_rename_and_dir_removal() {
+        let temp_dir = tempdir().unwrap();
+
+        // Binary write/read round trip.
+        let src = temp_dir.path().join("blob.bin");
+        FileSystem::write(&src, &[0u8, 1, 2, 250, 255])
+            .await
+            .unwrap();
+        assert_eq!(
+            FileSystem::read(&src).await.unwrap(),
+            vec![0u8, 1, 2, 250, 255]
+        );
+
+        // Copy keeps both copies and reports the byte count.
+        let copied = temp_dir.path().join("copy.bin");
+        let n = FileSystem::copy(&src, &copied).await.unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(FileSystem::file_size(&copied).await.unwrap(), 5);
+
+        // Rename moves the file.
+        let moved = temp_dir.path().join("moved.bin");
+        FileSystem::rename(&copied, &moved).await.unwrap();
+        assert!(!FileSystem::exists(&copied).await);
+        assert!(FileSystem::exists(&moved).await);
+        assert!(FileSystem::is_file(&moved).await.unwrap());
+        assert!(!FileSystem::is_dir(&src).await.unwrap());
+
+        // remove_dir_all clears the nested tree.
+        let tree = temp_dir.path().join("tree/nested");
+        FileSystem::create_dir_all(&tree).await.unwrap();
+        FileSystem::write_string(&tree.join("leaf.txt"), "leaf")
+            .await
+            .unwrap();
+        FileSystem::remove_dir_all(temp_dir.path().join("tree"))
+            .await
+            .unwrap();
+        assert!(!FileSystem::exists(&tree).await);
+    }
+
+    #[tokio::test]
+    async fn test_error_paths() {
+        let temp_dir = tempdir().unwrap();
+        let missing = temp_dir.path().join("missing.txt");
+
+        assert!(FileSystem::read(&missing).await.is_err());
+        assert!(FileSystem::read_to_string(&missing).await.is_err());
+        assert!(FileSystem::file_size(&missing).await.is_err());
+        assert!(FileSystem::remove_file(&missing).await.is_err());
+        assert!(FileSystem::remove_dir_all(&missing).await.is_err());
+        assert!(FileSystem::copy(&missing, temp_dir.path().join("x"))
+            .await
+            .is_err());
+        assert!(FileSystem::rename(&missing, temp_dir.path().join("y"))
+            .await
+            .is_err());
+        assert!(FileSystem::read_dir(&missing).await.is_err());
+        // The async metadata-based helpers surface missing paths as errors.
+        assert!(FileSystem::is_file(&missing).await.is_err());
+        assert!(FileSystem::is_dir(&missing).await.is_err());
+    }
+
+    #[test]
+    fn test_sync_file_system_and_path_utils() {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("sync.txt");
+
+        SyncFileSystem::write_string(&file_path, "sync").unwrap();
+        assert!(SyncFileSystem::exists(&file_path));
+        assert!(SyncFileSystem::is_file(&file_path));
+        assert!(SyncFileSystem::is_dir(temp_dir.path()));
+        assert_eq!(SyncFileSystem::read_to_string(&file_path).unwrap(), "sync");
+
+        // Directory helpers return something valid in a normal environment.
+        assert!(PathUtils::home_dir().is_some());
+        let _ = PathUtils::config_dir();
+        let _ = PathUtils::data_dir();
+        let _ = PathUtils::cache_dir();
+
+        let joined = PathUtils::join(temp_dir.path(), "child");
+        assert_eq!(joined, temp_dir.path().join("child"));
+
+        let absolute = PathUtils::ensure_absolute("/tmp/persona-abs").unwrap();
+        assert!(absolute.is_absolute());
+        // Relative paths resolve against the current directory.
+        let resolved = PathUtils::ensure_absolute("relative/path").unwrap();
+        assert!(resolved.is_absolute());
+    }
 }

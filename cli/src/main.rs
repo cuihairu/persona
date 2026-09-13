@@ -23,7 +23,11 @@ struct Cli {
     verbose: bool,
 
     /// Configuration file path
-    #[arg(short, long, global = true)]
+    // `-C` instead of the usual `-c`: subcommands like `credential`/`password`
+    // own `-c` themselves, and a global `-c` would collide with them
+    // (clap's debug asserts reject the definition and the short flag would be
+    // silently shadowed at runtime).
+    #[arg(short = 'C', long, global = true)]
     config: Option<std::path::PathBuf>,
 }
 
@@ -87,7 +91,7 @@ enum Commands {
     Passkey(commands::passkey::PasskeyArgs),
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args = maybe_inject_bridge_subcommand(std::env::args_os().collect());
     let cli = Cli::parse_from(args);
@@ -185,4 +189,95 @@ fn init_logging(verbose: bool) -> Result<()> {
         .init()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory as _;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn bridge_injection_happens_only_for_bridge_named_single_arg() {
+        // argv[0] == "persona-bridge" -> inject the bridge subcommand.
+        let injected = maybe_inject_bridge_subcommand(args(&["persona-bridge"]));
+        assert_eq!(injected, args(&["persona-bridge", "bridge"]));
+
+        // An installed copy under a bin directory resolves via file_stem.
+        let injected = maybe_inject_bridge_subcommand(args(&["/usr/local/bin/persona-bridge"]));
+        assert_eq!(injected, args(&["/usr/local/bin/persona-bridge", "bridge"]));
+
+        // Matching on the executable name ignores ASCII case.
+        let injected = maybe_inject_bridge_subcommand(args(&["PERSONA-BRIDGE.EXE"]));
+        assert_eq!(injected, args(&["PERSONA-BRIDGE.EXE", "bridge"]));
+
+        // The regular binary and any multi-arg invocation stay untouched.
+        let untouched = maybe_inject_bridge_subcommand(args(&["persona"]));
+        assert_eq!(untouched, args(&["persona"]));
+
+        let untouched = maybe_inject_bridge_subcommand(args(&["persona", "list"]));
+        assert_eq!(untouched, args(&["persona", "list"]));
+    }
+
+    #[test]
+    fn bridge_injection_ignores_non_utf8_and_pathless_names() {
+        // An argv[0] that is not valid UTF-8 cannot be matched; args pass through.
+        let untouched = maybe_inject_bridge_subcommand(args(&["persona-bridgé"]));
+        assert_eq!(untouched, args(&["persona-bridgé"]));
+
+        // A name without a recognizable file stem (e.g. trailing slash on the
+        // root) also passes through untouched.
+        let untouched = maybe_inject_bridge_subcommand(args(&["/"]));
+        assert_eq!(untouched, args(&["/"]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_injection_ignores_non_utf8_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let raw = OsString::from_vec(vec![0xff, 0xfe, 0x2e]);
+        let untouched = maybe_inject_bridge_subcommand(vec![raw]);
+        assert_eq!(untouched.len(), 1);
+    }
+
+    #[test]
+    fn workspace_commands_exclude_init_bridge_and_password() {
+        // Build one instance per variant through the real clap parser so the
+        // test keeps compiling when new subcommands are added.
+        let cli = Cli::parse_from(args(&["persona", "init"]));
+        assert!(!command_requires_workspace(&cli.command));
+
+        let cli = Cli::parse_from(args(&["persona", "bridge"]));
+        assert!(!command_requires_workspace(&cli.command));
+
+        let cli = Cli::parse_from(args(&["persona", "password", "generate"]));
+        assert!(!command_requires_workspace(&cli.command));
+
+        // Everything else operates on an initialized workspace.
+        let cli = Cli::parse_from(args(&["persona", "list"]));
+        assert!(command_requires_workspace(&cli.command));
+
+        let cli = Cli::parse_from(args(&["persona", "add", "work"]));
+        assert!(command_requires_workspace(&cli.command));
+    }
+
+    #[test]
+    fn cli_definition_is_well_formed() {
+        // Exercises the derived clap metadata without spawning the binary.
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn init_logging_installs_subscriber_exactly_once() {
+        // The global subscriber can only be installed once per process.
+        // Either this test is the first (first call succeeds, second fails)
+        // or another test installed one earlier (both calls fail) — in every
+        // interleaving the second install must report an error.
+        let _ = init_logging(true);
+        assert!(init_logging(false).is_err());
+    }
 }

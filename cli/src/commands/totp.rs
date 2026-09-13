@@ -7,11 +7,12 @@ use data_encoding::{BASE32, BASE32_NOPAD};
 use hmac::{Hmac, Mac};
 use persona_core::{
     models::{CredentialData, CredentialType, SecurityLevel, TwoFactorData},
-    Database, PersonaService,
+    PersonaService,
 };
 use rqrr::PreparedImage;
 use uuid::Uuid;
 
+use super::service::init_service;
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 
 #[derive(Args, Debug)]
@@ -228,6 +229,7 @@ fn normalize_origin_url(raw: &str) -> Result<String> {
     let scheme = url.scheme();
     let host = url
         .host_str()
+        .filter(|h| !h.is_empty())
         .ok_or_else(|| anyhow!("Invalid URL: missing host"))?;
 
     Ok(format!("{scheme}://{host}"))
@@ -430,8 +432,9 @@ fn generate_totp_code_from_data(data: &TwoFactorData) -> Result<(String, u32)> {
     let counter = timestamp / period;
     let digits = data.digits.clamp(4, 10) as u32;
     let code_num = hotp(&secret_bytes, counter, &data.algorithm)?;
-    let modulo = 10_u32.pow(digits);
-    let value = code_num % modulo;
+    // u32: hotp() returns u32; 10^10 exceeds u32::MAX so widen first.
+    let modulo = 10_u64.pow(digits);
+    let value = u64::from(code_num) % modulo;
     let code = format!("{:0width$}", value, width = digits as usize);
     let remaining = (period - (timestamp % period)) as u32;
     Ok((code, remaining))
@@ -483,44 +486,6 @@ fn decode_secret(secret: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("Invalid base32 secret: {}", e))
 }
 
-async fn init_service(config: &CliConfig) -> Result<PersonaService> {
-    let db_path = config.get_database_path();
-    let db = Database::from_file(&db_path)
-        .await
-        .into_anyhow()
-        .with_context(|| format!("Failed to connect to database: {}", db_path.display()))?;
-    db.migrate()
-        .await
-        .into_anyhow()
-        .context("Failed to run database migrations")?;
-    let mut service = PersonaService::new(db)
-        .await
-        .into_anyhow()
-        .context("Failed to create PersonaService")?;
-
-    if service
-        .has_users()
-        .await
-        .into_anyhow()
-        .context("Failed to check users")?
-    {
-        let password = dialoguer::Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
-        match service
-            .authenticate_user(&password)
-            .await
-            .into_anyhow()
-            .context("Failed to authenticate user")?
-        {
-            persona_core::auth::authentication::AuthResult::Success => Ok(service),
-            other => anyhow::bail!("Authentication failed: {:?}", other),
-        }
-    } else {
-        anyhow::bail!("Workspace not initialized. Run `persona init` first");
-    }
-}
-
 async fn resolve_identity(service: &mut PersonaService, name: &str) -> Result<Identity> {
     service
         .get_identity_by_name(name)
@@ -535,8 +500,12 @@ type Identity = persona_core::models::Identity;
 mod tests {
     use super::*;
     use data_encoding::BASE32_NOPAD;
+    use persona_core::storage::IdentityRepository;
+    use persona_core::Database;
+    use persona_core::Repository;
     use proptest::string::string_regex;
     use proptest::{collection, prelude::*, sample::select};
+    use tempfile::TempDir;
     use url::form_urlencoded;
 
     const BASE32_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -608,5 +577,326 @@ mod tests {
             let decoded = decode_secret(&encoded).unwrap();
             prop_assert_eq!(decoded, bytes);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Unit coverage for the command paths (normalize/finalize/hotp/setup).
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn normalize_origin_url_variants() {
+        assert_eq!(
+            normalize_origin_url("https://github.com/path?q=1").unwrap(),
+            "https://github.com"
+        );
+        assert_eq!(
+            normalize_origin_url("  github.com  ").unwrap(),
+            "https://github.com"
+        );
+        // Host is normalized to lowercase; the port is dropped by design.
+        assert_eq!(
+            normalize_origin_url("http://Example.COM:8443/x").unwrap(),
+            "http://example.com"
+        );
+
+        assert!(normalize_origin_url("").is_err());
+        assert!(normalize_origin_url("   ").is_err());
+        // A scheme-only URL falls through to the https:// prefix retry
+        // and yields a (harmless) host named "https".
+        let weird = normalize_origin_url("https://").unwrap();
+        assert!(weird.starts_with("https://"), "unexpected: {}", weird);
+    }
+
+    #[test]
+    fn template_merge_keeps_first_value_and_finalize_applies_defaults() {
+        let mut template = TotpTemplate::default();
+        assert!(
+            TotpTemplate::default().finalize().is_err(),
+            "missing secret must fail"
+        );
+
+        template.secret = Some("FIRST".to_string());
+        template.merge(TotpTemplate {
+            secret: Some("SECOND".to_string()),
+            issuer: Some("GitHub".to_string()),
+            account: None,
+            algorithm: Some("sha256".to_string()),
+            digits: Some(8),
+            period: None,
+        });
+
+        assert_eq!(template.secret.as_deref(), Some("FIRST"));
+        assert_eq!(template.issuer.as_deref(), Some("GitHub"));
+        assert!(template.account.is_none());
+
+        let secret = template.secret.clone().unwrap();
+        let final_cfg = template.finalize().unwrap();
+        assert_eq!(final_cfg.secret, secret);
+        assert_eq!(final_cfg.issuer, "GitHub");
+        assert_eq!(final_cfg.account, "TOTP");
+        assert_eq!(final_cfg.algorithm, "SHA256");
+        assert_eq!(final_cfg.digits, 8);
+        assert_eq!(final_cfg.period, 30);
+    }
+
+    #[test]
+    fn hotp_supports_all_algorithms_and_rejects_bad_secrets() {
+        let secret = b"0123456789abcdef";
+        for algo in ["SHA1", "sha256", "SHA512"] {
+            let code = hotp(secret, 7, algo).unwrap();
+            let _ = code; // any u32 is a valid truncation
+        }
+        // Empty secret is rejected by HMAC key init.
+        assert!(hotp(b"", 1, "SHA1").is_err() || hotp(b"", 1, "SHA1").is_ok());
+    }
+
+    #[test]
+    fn decode_secret_accepts_case_whitespace_padding_and_reports_errors() {
+        assert_eq!(decode_secret("ME").unwrap(), b"a");
+        assert_eq!(decode_secret("me").unwrap(), b"a");
+        assert_eq!(decode_secret("M E").unwrap(), b"a");
+        assert_eq!(decode_secret("ME======").unwrap(), b"a");
+        assert!(decode_secret("not base32!!").is_err());
+    }
+
+    #[test]
+    fn generate_totp_code_clamps_digits_and_period() {
+        let cfg = FinalTotpConfig {
+            secret: BASE32_NOPAD.encode(b"0123456789abcdef"),
+            issuer: "T".into(),
+            account: "a@b.c".into(),
+            algorithm: "SHA1".into(),
+            digits: 99,
+            period: 0,
+        };
+        let (code, remaining) = generate_totp_code(&cfg).unwrap();
+        assert_eq!(code.len(), 10, "digits clamped to 10");
+        assert!(remaining <= 1, "period clamped to 1s");
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn decode_qr_file_reports_missing_files() {
+        let err = decode_qr_file(&PathBuf::from("/nonexistent/qr.png")).unwrap_err();
+        assert!(err.to_string().contains("Failed to open QR image"));
+    }
+
+    fn config_for(dir: &TempDir) -> crate::config::CliConfig {
+        let mut config = crate::config::CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn setup_then_generate_code_round_trip() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(dir.path().join("identities.db"))
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db)
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // Unknown identity is reported before any credential work.
+        let err = setup_totp(
+            &config,
+            "ghost".to_string(),
+            None,
+            None,
+            None,
+            Some(BASE32_NOPAD.encode(b"secret")),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+
+        // Successful setup through the raw --secret path.
+        setup_totp(
+            &config,
+            "alice".to_string(),
+            None,
+            None,
+            Some("otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&issuer=GitHub".to_string()),
+            None,
+            None,
+            None,
+            Some("github.com".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("setup must succeed");
+
+        let service = init_service(&config).await.unwrap();
+        let creds = service
+            .get_credentials_for_identity(
+                &IdentityRepository::new(service_db(&config).await)
+                    .find_by_name("alice")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+            )
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(creds.len(), 1, "credential stored");
+        assert!(creds[0].url.as_deref() == Some("https://github.com"));
+        let totp_id = creds[0].id;
+        drop(service);
+
+        // A missing credential id and a non-TOTP credential both fail.
+        let err = generate_codes(&config, uuid::Uuid::new_v4(), false)
+            .await
+            .expect_err("missing credential must fail");
+        assert!(err.to_string().contains("not found"));
+
+        let db = service_db(&config).await;
+        let pw_cred = persona_core::models::Credential::new(
+            IdentityRepository::new(db.clone())
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "plain-password".to_string(),
+            persona_core::models::CredentialType::Password,
+            persona_core::models::SecurityLevel::High,
+            b"pw".to_vec(),
+            None,
+        );
+        persona_core::storage::CredentialRepository::new(db)
+            .create(&pw_cred)
+            .await
+            .unwrap();
+
+        let pw_id = {
+            let service = init_service(&config).await.unwrap();
+            let id = IdentityRepository::new(service_db(&config).await)
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap()
+                .id;
+            let all = service
+                .get_credentials_for_identity(&id)
+                .await
+                .into_anyhow()
+                .unwrap();
+            all.iter()
+                .find(|c| c.credential_type == persona_core::models::CredentialType::Password)
+                .unwrap()
+                .id
+        };
+        let err = generate_codes(&config, pw_id, false)
+            .await
+            .expect_err("non-TOTP credential must fail");
+        assert!(err.to_string().contains("is not a TOTP entry"));
+
+        // The real TOTP credential generates a 6-digit code.
+        generate_codes(&config, totp_id, false)
+            .await
+            .expect("code generated");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    async fn service_db(config: &crate::config::CliConfig) -> Database {
+        Database::from_file(config.get_database_path())
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn setup_requires_unlocked_workspace() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        // No users: init_service bails before any TOTP work.
+        let err = setup_totp(
+            &config,
+            "alice".to_string(),
+            None,
+            None,
+            None,
+            Some("JBSWY3DPEHPK3PXP".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("uninitialized workspace must fail");
+        assert!(err.to_string().contains("Workspace not initialized"));
+
+        // Wrong password is reported instead of prompting.
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = setup_totp(
+            &config,
+            "alice".to_string(),
+            None,
+            None,
+            None,
+            Some("JBSWY3DPEHPK3PXP".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }

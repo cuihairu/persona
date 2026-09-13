@@ -132,10 +132,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -146,7 +143,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
                 .await
                 .map_err(|e| anyhow::anyhow!("Lookup failed: {}", e))?
                 .is_some()),
-            _ => Ok(false),
+            other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
         Ok(IdentityRepository::new(db)
@@ -173,10 +170,7 @@ async fn load_identity(name: &str, config: &CliConfig) -> Result<Identity> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to check users: {}", e))?
     {
-        use dialoguer::Password;
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -579,7 +573,6 @@ fn show_changes_summary(identity: &Identity) -> Result<()> {
 }
 
 async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
-    use dialoguer::Password;
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -595,9 +588,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to check users: {}", e))?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .interact()?;
+        let password = super::service::prompt_master_password()?;
         match service
             .authenticate_user(&password)
             .await
@@ -657,4 +648,171 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to update identity: {}", e))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CliConfig;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    fn config_for(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        config
+    }
+
+    fn sample_identity() -> Identity {
+        Identity {
+            id: Some(uuid::Uuid::new_v4()),
+            name: "alice".to_string(),
+            identity_type: "personal".to_string(),
+            description: "old description".to_string(),
+            email: Some("alice@example.com".to_string()),
+            phone: None,
+            tags: vec!["work".to_string()],
+            attributes: HashMap::new(),
+            modified: "2024-01-01 00:00:00".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn edit_rejects_missing_identity_before_prompts() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let args = EditArgs {
+            name: "ghost".to_string(),
+            identity_type: None,
+            description: None,
+            email: None,
+            phone: None,
+            interactive: false,
+            field: None,
+            value: None,
+        };
+        let err = execute(args, &config)
+            .await
+            .expect_err("missing identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+    }
+
+    #[test]
+    fn single_field_edits_apply_and_clear_on_empty() {
+        let mut identity = sample_identity();
+
+        edit_single_field(&mut identity, "email", Some("new@example.com".to_string())).unwrap();
+        assert_eq!(identity.email.as_deref(), Some("new@example.com"));
+
+        // An empty string clears the field.
+        edit_single_field(&mut identity, "email", Some(String::new())).unwrap();
+        assert!(identity.email.is_none());
+
+        edit_single_field(&mut identity, "phone", Some("+49123456789".to_string())).unwrap();
+        assert_eq!(identity.phone.as_deref(), Some("+49123456789"));
+        edit_single_field(&mut identity, "phone", Some(String::new())).unwrap();
+        assert!(identity.phone.is_none());
+
+        edit_single_field(&mut identity, "description", Some("fresh".to_string())).unwrap();
+        assert_eq!(identity.description, "fresh");
+
+        edit_single_field(&mut identity, "type", Some("work".to_string())).unwrap();
+        assert_eq!(identity.identity_type, "work");
+
+        // Field matching is case-insensitive.
+        edit_single_field(&mut identity, "DESCRIPTION", Some("upper".to_string())).unwrap();
+        assert_eq!(identity.description, "upper");
+
+        let err = edit_single_field(&mut identity, "bogus", Some("x".to_string())).unwrap_err();
+        assert!(err.to_string().contains("Unknown field: bogus"));
+    }
+
+    #[test]
+    fn edit_from_args_applies_only_present_fields() {
+        let mut identity = sample_identity();
+        let args = EditArgs {
+            name: identity.name.clone(),
+            identity_type: Some("work".to_string()),
+            description: Some("updated".to_string()),
+            email: Some(String::new()),
+            phone: Some("+491234567890".to_string()),
+            interactive: false,
+            field: None,
+            value: None,
+        };
+        edit_from_args(&mut identity, &args).unwrap();
+        assert_eq!(identity.identity_type, "work");
+        assert_eq!(identity.description, "updated");
+        assert!(identity.email.is_none());
+        assert_eq!(identity.phone.as_deref(), Some("+491234567890"));
+    }
+
+    #[test]
+    fn validate_identity_checks_name_email_and_phone() {
+        let mut identity = sample_identity();
+        validate_identity(&identity).expect("valid identity");
+
+        identity.name = String::new();
+        let err = validate_identity(&identity).unwrap_err();
+        assert!(err.to_string().contains("name cannot be empty"));
+        identity.name = "alice".to_string();
+
+        identity.email = Some("not-an-email".to_string());
+        let err = validate_identity(&identity).unwrap_err();
+        assert!(err.to_string().contains("Invalid email format"));
+        identity.email = Some("a@b.c".to_string());
+
+        identity.phone = Some("123".to_string());
+        let err = validate_identity(&identity).unwrap_err();
+        assert!(err.to_string().contains("Phone number too short"));
+    }
+
+    #[tokio::test]
+    async fn edit_authentication_is_propagated() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // Wrong password is reported instead of being treated as "not found".
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let args = EditArgs {
+            name: "alice".to_string(),
+            identity_type: None,
+            description: None,
+            email: None,
+            phone: None,
+            interactive: false,
+            field: None,
+            value: None,
+        };
+        let err = execute(args, &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }
