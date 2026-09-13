@@ -45,6 +45,7 @@ node_modules/
 
 # Website (UmiJS)
 website/dist/
+desktop/dist/
 website/src/.umi/
 website/src/.umi-production/
 
