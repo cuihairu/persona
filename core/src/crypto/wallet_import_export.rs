@@ -256,39 +256,15 @@ pub struct ParsedWif {
     pub testnet: bool,
 }
 
-/// Parse a Bitcoin WIF private key (`base58check(0x80|0xef || key [|| 0x01])`).
+/// Parse a Bitcoin WIF private key (`base58check(0x80|0xef || key [|| 0x01])`),
+/// delegating decoding and validation to the `bitcoin` crate.
 pub fn parse_wif(wif: &str) -> PersonaResult<ParsedWif> {
-    use crate::crypto::address_generator::base58_check_decode;
-
-    let data = base58_check_decode(wif.trim())
+    let key = bitcoin::key::PrivateKey::from_wif(wif.trim())
         .map_err(|e| PersonaError::InvalidInput(format!("Invalid WIF: {e}")))?;
-    if data.len() != 33 && data.len() != 34 {
-        return Err(PersonaError::InvalidInput(format!(
-            "Invalid WIF payload length {} (expected 33 or 34 bytes)",
-            data.len()
-        )));
-    }
-    let (testnet, compressed) = match data[0] {
-        0x80 => (false, data.len() == 34),
-        0xef => (true, data.len() == 34),
-        version => {
-            return Err(PersonaError::InvalidInput(format!(
-                "Invalid WIF version byte 0x{version:02x} (expected 0x80 or 0xef)"
-            )))
-        }
-    };
-    if compressed && data[33] != 0x01 {
-        return Err(PersonaError::InvalidInput(
-            "Invalid WIF: 34-byte payload must end with the 0x01 compressed flag".to_string(),
-        ));
-    }
-
-    let mut secret = [0u8; 32];
-    secret.copy_from_slice(&data[1..33]);
     Ok(ParsedWif {
-        secret,
-        compressed,
-        testnet,
+        secret: key.inner.secret_bytes(),
+        compressed: key.compressed,
+        testnet: !matches!(key.network, bitcoin::NetworkKind::Main),
     })
 }
 

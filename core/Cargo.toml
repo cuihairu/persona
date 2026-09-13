@@ -30,6 +30,11 @@ ripemd.workspace = true
 hmac.workspace = true
 pbkdf2.workspace = true
 bs58.workspace = true
+bitcoin.workspace = true
+alloy-consensus.workspace = true
+alloy-eips.workspace = true
+alloy-primitives.workspace = true
+bech32.workspace = true
 
 # 数据库
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }

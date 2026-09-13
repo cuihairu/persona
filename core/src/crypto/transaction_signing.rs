@@ -1,11 +1,16 @@
 // Multi-chain transaction signing module.
 //
+// Protocol-level serialization, signing hashes and address parsing are
+// delegated to the audited `alloy` (Ethereum) and `rust-bitcoin` (Bitcoin)
+// crates; k256/ed25519-dalek remain the signing primitives.
+//
 // Implemented chains:
 // - Ethereum & EVM L2s: legacy EIP-155 and typed EIP-1559 transactions
-//   (RLP + keccak256), producing broadcastable raw signed transactions.
+//   (`alloy_consensus`), producing broadcastable raw signed transactions.
 // - Bitcoin: BIP-143 P2WPKH signing and segwit (BIP-141) transaction
-//   assembly from caller-provided UTXO `inputs` metadata; without them
-//   only an audit signature over the request fields is recorded.
+//   assembly (`SighashCache` + consensus serialization) from
+//   caller-provided UTXO `inputs` metadata; without them only an audit
+//   signature over the request fields is recorded.
 // - Solana: Ed25519 signing over a serialized message (e.g. the output of
 //   `Transaction::serialize_message()`), producing a wire-format signed
 //   transaction with a single signature.
@@ -15,6 +20,18 @@ use crate::models::wallet::{
     BlockchainNetwork, SignatureScheme, TransactionRequest, TransactionSignature,
 };
 use crate::{PersonaError, PersonaResult};
+use alloy_consensus::{SignableTransaction, Signed, TxEip1559, TxLegacy};
+use alloy_eips::eip2718::Encodable2718;
+use alloy_primitives::{
+    Address as EvmAddress, Signature as EvmSignature, TxKind, B256, U256 as EvmU256,
+};
+use bitcoin::absolute::LockTime;
+use bitcoin::amount::Amount;
+use bitcoin::consensus::serialize as consensus_serialize;
+use bitcoin::hashes::Hash;
+use bitcoin::sighash::{EcdsaSighashType, SighashCache};
+use bitcoin::transaction::{Transaction, TxIn, TxOut, Version};
+use bitcoin::{Network, OutPoint, ScriptBuf, Sequence, Txid};
 use chrono::Utc;
 use k256::ecdsa::{
     signature::{hazmat::PrehashSigner, DigestSigner, DigestVerifier, SignatureEncoding},
@@ -218,15 +235,26 @@ fn sign_ethereum_transaction(
             eth_signature.extend_from_slice(&minimal_be_bytes(v));
         }
         EvmTxType::Eip1559 => {
-            let signing_hash = eip1559_signing_hash(request)?;
-            let signature: Signature = signing_key.sign_prehash(&signing_hash)?;
-            let y_parity = recovery_id_for(signing_key, &signing_hash, &signature)?;
+            let signing_hash: B256 = eip1559_tx(request)?.signature_hash();
+            let signature: Signature = signing_key.sign_prehash(&signing_hash.0)?;
+            let y_parity = recovery_id_for(signing_key, &signing_hash.0, &signature)?;
             eth_signature.extend_from_slice(&signature.r().to_bytes());
             eth_signature.extend_from_slice(&signature.s().to_bytes());
             eth_signature.push(y_parity);
         }
     }
     Ok((eth_signature, SignatureScheme::ECDSA))
+}
+
+/// Minimal big-endian encoding of an unsigned integer (0 -> empty),
+/// used for the EIP-155 `v` byte in stored audit signatures.
+fn minimal_be_bytes(value: u64) -> Vec<u8> {
+    if value == 0 {
+        return Vec::new();
+    }
+    let be = value.to_be_bytes();
+    let first = be.iter().position(|&b| b != 0).unwrap_or(be.len() - 1);
+    be[first..].to_vec()
 }
 
 /// Sign Solana transaction
@@ -314,16 +342,6 @@ fn metadata_u128(request: &TransactionRequest, key: &str) -> PersonaResult<Optio
     }
 }
 
-/// Base fields shared by both EVM transaction types (already RLP-wrapped).
-struct EvmBaseFields {
-    chain_id: u64,
-    nonce: Vec<u8>,
-    gas_limit: Vec<u8>,
-    to: Vec<u8>,
-    value: Vec<u8>,
-    data: Vec<u8>,
-}
-
 /// Access list is accepted as empty; a non-empty `access_list` in metadata is
 /// rejected so callers never get a signature over semantics Persona ignored.
 fn access_list_guard(request: &TransactionRequest) -> PersonaResult<()> {
@@ -336,37 +354,64 @@ fn access_list_guard(request: &TransactionRequest) -> PersonaResult<()> {
     }
 }
 
-fn evm_base_fields(request: &TransactionRequest) -> PersonaResult<EvmBaseFields> {
+fn evm_to_address(request: &TransactionRequest) -> PersonaResult<EvmAddress> {
+    request
+        .to_address
+        .parse::<EvmAddress>()
+        .map_err(|_| PersonaError::InvalidInput("Invalid Ethereum to_address".to_string()))
+}
+
+/// Full-range wei value (no longer capped at u128).
+fn evm_value(request: &TransactionRequest) -> PersonaResult<EvmU256> {
+    EvmU256::from_str_radix(request.amount.trim(), 10)
+        .map_err(|_| PersonaError::InvalidInput(format!("Invalid wei amount '{}'", request.amount)))
+}
+
+fn evm_input(request: &TransactionRequest) -> PersonaResult<alloy_primitives::Bytes> {
+    match request.metadata.get("data") {
+        Some(hex_data) => hex::decode(hex_data.trim_start_matches("0x"))
+            .map(Into::into)
+            .map_err(|_| PersonaError::InvalidInput("metadata 'data' must be hex".to_string())),
+        None => Ok(Default::default()),
+    }
+}
+
+/// EIP-155 legacy transaction fields, built by `alloy_consensus`.
+fn legacy_tx(request: &TransactionRequest) -> PersonaResult<TxLegacy> {
+    let nonce = request.nonce.ok_or_else(|| {
+        PersonaError::InvalidInput("Ethereum transactions require a nonce".to_string())
+    })?;
+    let gas_price = request
+        .gas_price
+        .as_deref()
+        .and_then(|g| g.parse::<u128>().ok())
+        .ok_or_else(|| {
+            PersonaError::InvalidInput(
+                "Ethereum transactions require a numeric gas_price".to_string(),
+            )
+        })?;
+    let gas_limit = request.gas_limit.ok_or_else(|| {
+        PersonaError::InvalidInput("Ethereum transactions require a gas_limit".to_string())
+    })?;
+    Ok(TxLegacy {
+        chain_id: Some(chain_id(request)?.into()),
+        nonce,
+        gas_price,
+        gas_limit,
+        to: TxKind::Call(evm_to_address(request)?),
+        value: evm_value(request)?,
+        input: evm_input(request)?,
+    })
+}
+
+/// EIP-1559 typed transaction fields, built by `alloy_consensus`.
+fn eip1559_tx(request: &TransactionRequest) -> PersonaResult<TxEip1559> {
     let nonce = request.nonce.ok_or_else(|| {
         PersonaError::InvalidInput("Ethereum transactions require a nonce".to_string())
     })?;
     let gas_limit = request.gas_limit.ok_or_else(|| {
         PersonaError::InvalidInput("Ethereum transactions require a gas_limit".to_string())
     })?;
-    let value = parse_u256_string(&request.amount)?;
-    let to = hex::decode(request.to_address.trim_start_matches("0x"))
-        .ok()
-        .filter(|bytes| bytes.len() == 20)
-        .ok_or_else(|| {
-            PersonaError::InvalidInput("Ethereum to_address must be 20 hex bytes".to_string())
-        })?;
-    let data = match request.metadata.get("data") {
-        Some(hex_data) => hex::decode(hex_data.trim_start_matches("0x"))
-            .map_err(|_| PersonaError::InvalidInput("metadata 'data' must be hex".to_string()))?,
-        None => Vec::new(),
-    };
-    Ok(EvmBaseFields {
-        chain_id: chain_id(request)?,
-        nonce: rlp_uint(nonce),
-        gas_limit: rlp_uint(gas_limit),
-        to: rlp_encode_bytes(&to),
-        value: rlp_u128(value),
-        data: rlp_encode_bytes(&data),
-    })
-}
-
-/// 1559 fee fields: priority fee must be <= max fee per gas.
-fn eip1559_fee_fields(request: &TransactionRequest) -> PersonaResult<(Vec<u8>, Vec<u8>)> {
     let max_priority = metadata_u128(request, "max_priority_fee_per_gas")?.unwrap_or(0);
     let max_fee = metadata_u128(request, "max_fee_per_gas")?.unwrap_or(0);
     if max_fee == 0 {
@@ -379,29 +424,17 @@ fn eip1559_fee_fields(request: &TransactionRequest) -> PersonaResult<(Vec<u8>, V
             "max_priority_fee_per_gas must not exceed max_fee_per_gas".to_string(),
         ));
     }
-    Ok((rlp_u128(max_priority), rlp_u128(max_fee)))
-}
-
-/// `keccak256(0x02 || rlp([chainId, nonce, maxPriorityFee, maxFee, gas, to,
-/// value, data, accessList]))`
-fn eip1559_signing_hash(request: &TransactionRequest) -> PersonaResult<[u8; 32]> {
-    access_list_guard(request)?;
-    let base = evm_base_fields(request)?;
-    let (max_priority, max_fee) = eip1559_fee_fields(request)?;
-    let payload = rlp_list(&[
-        rlp_uint(base.chain_id),
-        base.nonce,
-        max_priority,
-        max_fee,
-        base.gas_limit,
-        base.to,
-        base.value,
-        base.data,
-        rlp_list(&[]), // empty access list
-    ]);
-    let mut input = vec![0x02];
-    input.extend_from_slice(&payload);
-    Ok(Keccak256::digest(&input).into())
+    Ok(TxEip1559 {
+        chain_id: chain_id(request)?.into(),
+        nonce,
+        gas_limit,
+        max_fee_per_gas: max_fee,
+        max_priority_fee_per_gas: max_priority,
+        to: TxKind::Call(evm_to_address(request)?),
+        value: evm_value(request)?,
+        access_list: Default::default(),
+        input: evm_input(request)?,
+    })
 }
 
 /// Build the full broadcastable EIP-1559 transaction:
@@ -412,65 +445,72 @@ pub fn build_eip1559_raw_transaction(
     signing_key: &SigningKey,
 ) -> PersonaResult<Vec<u8>> {
     access_list_guard(request)?;
-    let base = evm_base_fields(request)?;
-    let (max_priority, max_fee) = eip1559_fee_fields(request)?;
+    let tx = eip1559_tx(request)?;
+    let signed = sign_alloy_transaction(tx, signing_key)?;
+    Ok(signed.encoded_2718())
+}
 
-    let signing_hash = eip1559_signing_hash(request)?;
-    let signature: Signature = signing_key.sign_prehash(&signing_hash)?;
-    let y_parity = recovery_id_for(signing_key, &signing_hash, &signature)?;
+/// Sign a transaction's signing hash with k256 and wrap the resulting
+/// (r, s, y-parity) into alloy's signature for encoding.
+fn sign_alloy_transaction<T>(
+    tx: T,
+    signing_key: &SigningKey,
+) -> PersonaResult<Signed<T, EvmSignature>>
+where
+    T: SignableTransaction<EvmSignature>,
+{
+    let signing_hash: B256 = tx.signature_hash();
+    let signature: Signature = signing_key.sign_prehash(&signing_hash.0)?;
+    let y_parity = recovery_id_for(signing_key, &signing_hash.0, &signature)?;
 
     let mut r = [0u8; 32];
     r.copy_from_slice(&signature.r().to_bytes());
     let mut s = [0u8; 32];
     s.copy_from_slice(&signature.s().to_bytes());
+    let evm_signature = EvmSignature::new(
+        EvmU256::from_be_bytes(r),
+        EvmU256::from_be_bytes(s),
+        y_parity == 1,
+    );
 
-    let mut raw = vec![0x02];
-    raw.extend_from_slice(&rlp_list(&[
-        rlp_uint(base.chain_id),
-        base.nonce,
-        max_priority,
-        max_fee,
-        base.gas_limit,
-        base.to,
-        base.value,
-        base.data,
-        rlp_list(&[]), // empty access list
-        rlp_uint(u64::from(y_parity)),
-        rlp_bytes32(r),
-        rlp_bytes32(s),
-    ]));
-    Ok(raw)
+    Ok(tx.into_signed(evm_signature))
 }
 
 // ---------------------------------------------------------------------------
 // Bitcoin: BIP-143 P2WPKH signing and segwit transaction assembly
+// (delegated to the `bitcoin` crate for sighash, serialization and parsing)
 // ---------------------------------------------------------------------------
 
 const SIGHASH_ALL: u8 = 0x01;
-const SEQUENCE_FINAL: u32 = 0xFFFF_FFFF;
-/// Final + opt-in Replace-By-Fee (BIP-125).
-const SEQUENCE_FINAL_RBF: u32 = 0xFFFF_FFFE;
+
+/// Hard upper bound for satoshi amounts (21M BTC), so `Amount::from_sat`
+/// can never panic on user input.
+const MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
 /// A segwit transaction input as provided by the caller.
 #[derive(Debug, Clone)]
 struct BtcInput {
-    /// Internal-order txid (wire order; hex input is display order and must
-    /// be reversed when parsing).
-    txid: [u8; 32],
-    vout: u32,
+    outpoint: OutPoint,
     /// Prevout value in satoshis (required by BIP-143).
     amount: u64,
-    sequence: u32,
+    sequence: Sequence,
 }
 
-#[derive(Debug, Clone)]
-struct BtcOutput {
-    amount: u64,
-    script_pubkey: Vec<u8>,
+fn parse_satoshis(value: &str, field: &str) -> PersonaResult<u64> {
+    let sat: u64 = value.trim().parse().map_err(|_| {
+        PersonaError::InvalidInput(format!("Bitcoin {field} must be decimal satoshis"))
+    })?;
+    if sat > MAX_MONEY_SATS {
+        return Err(PersonaError::InvalidInput(format!(
+            "Bitcoin {field} exceeds the max money supply"
+        )));
+    }
+    Ok(sat)
 }
 
 /// Parse the `inputs` metadata field: a JSON array of
 /// `{"txid": "<64 hex>", "vout": <n>, "amount": "<satoshis>"}`.
+/// `Txid::from_str` takes care of display-order vs internal-order txids.
 fn parse_btc_inputs(request: &TransactionRequest) -> PersonaResult<Vec<BtcInput>> {
     let raw = request.metadata.get("inputs").ok_or_else(|| {
         PersonaError::InvalidInput(
@@ -494,16 +534,9 @@ fn parse_btc_inputs(request: &TransactionRequest) -> PersonaResult<Vec<BtcInput>
             .get("txid")
             .and_then(|v| v.as_str())
             .ok_or_else(|| PersonaError::InvalidInput(format!("inputs[{i}] missing 'txid'")))?;
-        let mut txid = [0u8; 32];
-        let bytes = hex::decode(txid_hex)
-            .ok()
-            .filter(|b| b.len() == 32)
-            .ok_or_else(|| {
-                PersonaError::InvalidInput(format!("inputs[{i}].txid must be 32 hex bytes"))
-            })?;
-        txid.copy_from_slice(&bytes);
-        txid.reverse(); // display -> internal order
-
+        let txid: Txid = txid_hex.parse().map_err(|_| {
+            PersonaError::InvalidInput(format!("inputs[{i}].txid must be a 64-hex txid"))
+        })?;
         let vout = entry
             .get("vout")
             .and_then(|v| v.as_u64())
@@ -515,7 +548,7 @@ fn parse_btc_inputs(request: &TransactionRequest) -> PersonaResult<Vec<BtcInput>
             .get("amount")
             .and_then(|v| {
                 v.as_str()
-                    .and_then(|s| s.parse::<u64>().ok())
+                    .and_then(|s| parse_satoshis(s, "input amount").ok())
                     .or(v.as_u64())
             })
             .ok_or_else(|| {
@@ -523,133 +556,46 @@ fn parse_btc_inputs(request: &TransactionRequest) -> PersonaResult<Vec<BtcInput>
                     "inputs[{i}] missing numeric 'amount' (satoshis)"
                 ))
             })?;
+        if amount > MAX_MONEY_SATS {
+            return Err(PersonaError::InvalidInput(format!(
+                "inputs[{i}].amount exceeds the max money supply"
+            )));
+        }
 
         inputs.push(BtcInput {
-            txid,
-            vout: vout as u32,
+            outpoint: OutPoint::new(txid, vout as u32),
             amount,
-            sequence: SEQUENCE_FINAL,
+            sequence: Sequence::MAX,
         });
     }
     Ok(inputs)
 }
 
-/// scriptPubKey for a destination address (segwit witness programs and
-/// base58 P2PKH/P2SH).
-fn script_pubkey_for_address(address: &str) -> PersonaResult<Vec<u8>> {
-    use crate::crypto::address_generator::base58_check_decode;
-    use crate::crypto::bech32::decode_witness_address;
+/// scriptPubKey for a destination address; parsing, network and checksum
+/// validation are delegated to the `bitcoin` crate. Persona signs for
+/// mainnet only.
+fn script_pubkey_for_address(address: &str) -> PersonaResult<ScriptBuf> {
+    use bitcoin::address::NetworkUnchecked;
 
-    if let Ok((_, version, program)) = decode_witness_address(address) {
-        return match (version, program.len()) {
-            (0, 20) => Ok([vec![0x00, 0x14], program].concat()),
-            (0, 32) => Ok([vec![0x00, 0x20], program].concat()),
-            (1, 32) => Ok([vec![0x51, 0x20], program].concat()), // P2TR
-            _ => Err(PersonaError::InvalidInput(format!(
-                "Unsupported witness program for output '{address}'"
-            ))),
-        };
-    }
-    if let Ok(data) = base58_check_decode(address) {
-        let (version, payload) = (data[0], &data[1..]);
-        if payload.len() == 20 {
-            // 0x00/0x05 mainnet P2PKH/P2SH, 0x6f/0xc4 testnet
-            match version {
-                0x00 | 0x6f => {
-                    return Ok([vec![0x76, 0xa9, 0x14], payload.to_vec(), vec![0x88, 0xac]].concat())
-                }
-                0x05 | 0xc4 => return Ok([vec![0xa9, 0x14], payload.to_vec(), vec![0x87]].concat()),
-                _ => {}
-            }
-        }
-    }
-    Err(PersonaError::InvalidInput(format!(
-        "Unsupported or invalid Bitcoin address '{address}'"
-    )))
+    address
+        .parse::<bitcoin::Address<NetworkUnchecked>>()
+        .ok()
+        .and_then(|a| a.require_network(Network::Bitcoin).ok())
+        .map(|a| a.script_pubkey())
+        .ok_or_else(|| {
+            PersonaError::InvalidInput(format!(
+                "Unsupported or invalid mainnet Bitcoin address '{address}'"
+            ))
+        })
 }
 
-fn btc_varint(n: usize) -> Vec<u8> {
-    if n < 0xfd {
-        vec![n as u8]
-    } else if n <= 0xffff {
-        [vec![0xfd], (n as u16).to_le_bytes().to_vec()].concat()
-    } else if n <= 0xffff_ffff {
-        [vec![0xfe], (n as u32).to_le_bytes().to_vec()].concat()
-    } else {
-        [vec![0xff], (n as u64).to_le_bytes().to_vec()].concat()
-    }
-}
-
-fn dsha256(data: &[u8]) -> [u8; 32] {
-    Sha256::digest(Sha256::digest(data)).into()
-}
-
-/// Serialize outputs the way they appear in a transaction body
-/// (amount + script), without the count prefix.
-fn serialize_outputs(outputs: &[BtcOutput]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for o in outputs {
-        out.extend_from_slice(&o.amount.to_le_bytes());
-        out.extend_from_slice(&btc_varint(o.script_pubkey.len()));
-        out.extend_from_slice(&o.script_pubkey);
-    }
-    out
-}
-
-/// BIP-143 sighash for a P2WPKH input under SIGHASH_ALL without
-/// ANYONECANPAY (the only mode Persona produces).
-fn p2wpkh_sighash_all(
-    version: i32,
-    inputs: &[BtcInput],
-    outputs: &[BtcOutput],
-    index: usize,
-    pubkey_hash: &[u8; 20],
-    locktime: u32,
-) -> PersonaResult<[u8; 32]> {
-    let input = inputs.get(index).ok_or_else(|| {
-        PersonaError::InvalidInput("Signing index out of range for Bitcoin inputs".to_string())
-    })?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(version.to_le_bytes());
-
-    // hashPrevouts = dsha256(all outpoints)
-    let mut prevouts = Sha256::new();
-    for i in inputs {
-        prevouts.update(i.txid);
-        prevouts.update(i.vout.to_le_bytes());
-    }
-    hasher.update(Sha256::digest(prevouts.finalize()));
-
-    // hashSequence = dsha256(all nSequence)
-    let mut sequences = Sha256::new();
-    for i in inputs {
-        sequences.update(i.sequence.to_le_bytes());
-    }
-    hasher.update(Sha256::digest(sequences.finalize()));
-
-    // outpoint being signed
-    hasher.update(input.txid);
-    hasher.update(input.vout.to_le_bytes());
-
-    // scriptCode for P2WPKH: varint(0x19) || OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG
-    hasher.update([0x19, 0x76, 0xa9, 0x14]);
-    hasher.update(pubkey_hash);
-    hasher.update([0x88, 0xac]);
-
-    hasher.update(input.amount.to_le_bytes());
-    hasher.update(input.sequence.to_le_bytes());
-
-    // hashOutputs = dsha256(all outputs) for SIGHASH_ALL
-    hasher.update(dsha256(&serialize_outputs(outputs)));
-
-    hasher.update(locktime.to_le_bytes());
-    hasher.update((SIGHASH_ALL as u32).to_le_bytes());
-
-    let mut sighash = [0u8; 32];
-    let intermediate = hasher.finalize();
-    sighash.copy_from_slice(&Sha256::digest(intermediate));
-    Ok(sighash)
+/// The P2WPKH output script (`OP_0 <20-byte key hash>`) whose script code
+/// BIP-143 derives when signing.
+fn p2wpkh_output_script(pubkey_hash: &[u8; 20]) -> ScriptBuf {
+    let mut bytes = Vec::with_capacity(22);
+    bytes.extend_from_slice(&[0x00, 0x14]);
+    bytes.extend_from_slice(pubkey_hash);
+    ScriptBuf::from_bytes(bytes)
 }
 
 /// Build the broadcastable segwit (BIP-141) transaction spending the given
@@ -661,7 +607,7 @@ fn p2wpkh_sighash_all(
 ///   Without it, inputs must exactly equal `amount + fee` so no value is
 ///   silently burned.
 /// - `locktime`: optional u32 (default 0); `rbf`: "true" enables BIP-125
-///   signalling (nSequence 0xfffffffe).
+///   replace-by-fee signalling.
 ///
 /// Only P2WPKH inputs (native segwit, BIP-84 addresses) can be signed.
 /// `from_address` must be the address of the signing key.
@@ -669,10 +615,12 @@ pub fn build_bitcoin_raw_transaction(
     request: &TransactionRequest,
     signing_key: &SigningKey,
 ) -> PersonaResult<RawSignedTransaction> {
+    use crate::crypto::address_generator::hash160;
+    use crate::crypto::bech32::decode_witness_address;
+
     let inputs = parse_btc_inputs(request)?;
 
     // The input being spent must be a native P2WPKH output.
-    use crate::crypto::bech32::decode_witness_address;
     let (_, witness_version, program) = decode_witness_address(&request.from_address)?;
     if witness_version != 0 || program.len() != 20 {
         return Err(PersonaError::InvalidInput(
@@ -684,24 +632,20 @@ pub fn build_bitcoin_raw_transaction(
 
     // Guard against signing away funds from an address we don't control.
     let pubkey = secp_compressed_pubkey(signing_key);
-    let pubkey_hash = crate::crypto::address_generator::hash160(&pubkey);
+    let pubkey_hash = hash160(&pubkey);
     if pubkey_hash != program.as_slice() {
         return Err(PersonaError::InvalidInput(
             "from_address does not match the signing key".to_string(),
         ));
     }
 
-    let send_amount: u64 = request.amount.parse().map_err(|_| {
-        PersonaError::InvalidInput("Bitcoin amount must be decimal satoshis".to_string())
-    })?;
-    let fee: u64 = request.fee.parse().map_err(|_| {
-        PersonaError::InvalidInput("Bitcoin fee must be decimal satoshis".to_string())
-    })?;
+    let send_amount = parse_satoshis(&request.amount, "amount")?;
+    let fee = parse_satoshis(&request.fee, "fee")?;
     let output_script = script_pubkey_for_address(&request.to_address)?;
 
     let total_in: u64 = inputs.iter().map(|i| i.amount).sum();
-    let mut outputs = vec![BtcOutput {
-        amount: send_amount,
+    let mut outputs = vec![TxOut {
+        value: Amount::from_sat(send_amount),
         script_pubkey: output_script,
     }];
 
@@ -711,8 +655,8 @@ pub fn build_bitcoin_raw_transaction(
                 PersonaError::InvalidInput("Fee exceeds inputs minus send amount".to_string())
             })?;
             if change > 0 {
-                outputs.push(BtcOutput {
-                    amount: change,
+                outputs.push(TxOut {
+                    value: Amount::from_sat(change),
                     script_pubkey: script_pubkey_for_address(change_addr)?,
                 });
             }
@@ -741,66 +685,57 @@ pub fn build_bitcoin_raw_transaction(
     let mut inputs = inputs;
     if rbf {
         for input in &mut inputs {
-            input.sequence = SEQUENCE_FINAL_RBF;
+            input.sequence = Sequence::ENABLE_RBF_NO_LOCKTIME;
         }
     }
 
-    let version = 2i32;
+    let mut tx = Transaction {
+        version: Version::TWO,
+        lock_time: LockTime::from_consensus(locktime),
+        input: inputs
+            .iter()
+            .map(|i| TxIn {
+                previous_output: i.outpoint,
+                script_sig: ScriptBuf::new(),
+                sequence: i.sequence,
+                witness: Default::default(),
+            })
+            .collect(),
+        output: outputs,
+    };
 
-    // Sign each input (BIP-143, SIGHASH_ALL).
+    // Sign each input (BIP-143 P2WPKH, SIGHASH_ALL) via rust-bitcoin's
+    // sighash implementation.
+    let witness_script = p2wpkh_output_script(&pubkey_hash);
     let mut witnesses = Vec::with_capacity(inputs.len());
-    for index in 0..inputs.len() {
-        let sighash =
-            p2wpkh_sighash_all(version, &inputs, &outputs, index, &pubkey_hash, locktime)?;
-        let signature: k256::ecdsa::Signature = signing_key.sign_prehash(&sighash)?;
-        let mut witness_item = signature.to_der().to_vec();
-        witness_item.push(SIGHASH_ALL);
-        witnesses.push((witness_item, pubkey.to_vec()));
+    {
+        let mut cache = SighashCache::new(&mut tx);
+        for (index, input) in inputs.iter().enumerate() {
+            let sighash = cache
+                .p2wpkh_signature_hash(
+                    index,
+                    witness_script.as_script(),
+                    Amount::from_sat(input.amount),
+                    EcdsaSighashType::All,
+                )
+                .map_err(|e| {
+                    PersonaError::InvalidInput(format!("Cannot sign input {index}: {e}"))
+                })?;
+            let signature: Signature = signing_key.sign_prehash(&sighash.to_byte_array())?;
+            let mut witness_item = signature.to_der().to_vec();
+            witness_item.push(SIGHASH_ALL);
+            witnesses.push((witness_item, pubkey.to_vec()));
+        }
+    }
+    for (index, (item_sig, item_pub)) in witnesses.iter().enumerate() {
+        tx.input[index].witness = bitcoin::Witness::from_slice(&[item_sig, item_pub]);
     }
 
-    // Assemble: version | marker/flag | inputs | outputs | witness | locktime
-    let mut body = Vec::new();
-    body.extend_from_slice(&version.to_le_bytes());
-    body.extend_from_slice(&[0x00, 0x01]); // segwit marker + flag
-    body.extend_from_slice(&btc_varint(inputs.len()));
-    for input in &inputs {
-        body.extend_from_slice(&input.txid); // internal order
-        body.extend_from_slice(&input.vout.to_le_bytes());
-        body.extend_from_slice(&btc_varint(0)); // empty scriptSig
-        body.extend_from_slice(&input.sequence.to_le_bytes());
-    }
-    body.extend_from_slice(&btc_varint(outputs.len()));
-    body.extend_from_slice(&serialize_outputs(&outputs));
-    for (item_sig, item_pub) in &witnesses {
-        body.extend_from_slice(&btc_varint(2));
-        body.extend_from_slice(&btc_varint(item_sig.len()));
-        body.extend_from_slice(item_sig);
-        body.extend_from_slice(&btc_varint(item_pub.len()));
-        body.extend_from_slice(item_pub);
-    }
-    body.extend_from_slice(&locktime.to_le_bytes());
-
-    // txid = dsha256 of the tx WITHOUT witness data (stripped serialization).
-    let mut stripped = Vec::new();
-    stripped.extend_from_slice(&version.to_le_bytes());
-    stripped.extend_from_slice(&btc_varint(inputs.len()));
-    for input in &inputs {
-        stripped.extend_from_slice(&input.txid);
-        stripped.extend_from_slice(&input.vout.to_le_bytes());
-        stripped.extend_from_slice(&btc_varint(0));
-        stripped.extend_from_slice(&input.sequence.to_le_bytes());
-    }
-    stripped.extend_from_slice(&btc_varint(outputs.len()));
-    stripped.extend_from_slice(&serialize_outputs(&outputs));
-    stripped.extend_from_slice(&locktime.to_le_bytes());
-
-    let txid = dsha256(&stripped);
-    let mut display = txid;
-    display.reverse(); // explorers show internal order reversed
-
+    // compute_txid hashes the stripped (witness-free) serialization, matching
+    // what explorers display.
     Ok(RawSignedTransaction {
-        raw: body,
-        hash: hex::encode(display),
+        raw: consensus_serialize(&tx),
+        hash: tx.compute_txid().to_string(),
     })
 }
 
@@ -834,15 +769,15 @@ fn sign_eip155(
     signing_key: &SigningKey,
 ) -> PersonaResult<([u8; 32], [u8; 32], u64)> {
     let chain = chain_id(request)?;
-    let signing_hash = eip155_signing_hash(request, chain)?;
+    let signing_hash: B256 = legacy_tx(request)?.signature_hash();
 
     // Per EIP-155 the message to sign is the keccak hash of the RLP payload;
     // sign it directly rather than hashing again.
-    let signature: Signature = signing_key.sign_prehash(&signing_hash)?;
+    let signature: Signature = signing_key.sign_prehash(&signing_hash.0)?;
 
     // k256 normalizes to low-s; recover the parity bit that reproduces our
     // public key so the signature validates against from_address.
-    let recovery_id = recovery_id_for(signing_key, &signing_hash, &signature)?;
+    let recovery_id = recovery_id_for(signing_key, &signing_hash.0, &signature)?;
 
     let mut r = [0u8; 32];
     r.copy_from_slice(&signature.r().to_bytes());
@@ -866,86 +801,17 @@ fn build_eip155_raw_transaction_with(
     request: &TransactionRequest,
     signing_key: &SigningKey,
 ) -> PersonaResult<Vec<u8>> {
-    let fields = eip155_fields(request)?;
+    let tx = legacy_tx(request)?;
     let (r, s, v) = sign_eip155(request, signing_key)?;
+    let chain = chain_id(request)?;
+    let y_odd = ((v - 35 - 2 * chain) & 1) == 1;
 
-    Ok(rlp_list(&[
-        fields.nonce,
-        fields.gas_price,
-        fields.gas_limit,
-        fields.to,
-        fields.value,
-        fields.data,
-        rlp_uint(v),
-        rlp_bytes32(r),
-        rlp_bytes32(s),
-    ]))
-}
-
-struct Eip155Fields {
-    nonce: Vec<u8>,
-    gas_price: Vec<u8>,
-    gas_limit: Vec<u8>,
-    to: Vec<u8>,
-    value: Vec<u8>,
-    data: Vec<u8>,
-}
-
-/// Encode the base transaction fields (already RLP-wrapped byte strings).
-fn eip155_fields(request: &TransactionRequest) -> PersonaResult<Eip155Fields> {
-    let nonce = request.nonce.ok_or_else(|| {
-        PersonaError::InvalidInput("Ethereum transactions require a nonce".to_string())
-    })?;
-    let gas_price = request
-        .gas_price
-        .as_deref()
-        .and_then(|g| g.parse::<u128>().ok())
-        .ok_or_else(|| {
-            PersonaError::InvalidInput(
-                "Ethereum transactions require a numeric gas_price".to_string(),
-            )
-        })?;
-    let gas_limit = request.gas_limit.ok_or_else(|| {
-        PersonaError::InvalidInput("Ethereum transactions require a gas_limit".to_string())
-    })?;
-    let value = parse_u256_string(&request.amount)?;
-    let to = hex::decode(request.to_address.trim_start_matches("0x"))
-        .ok()
-        .filter(|bytes| bytes.len() == 20)
-        .ok_or_else(|| {
-            PersonaError::InvalidInput("Ethereum to_address must be 20 hex bytes".to_string())
-        })?;
-    let data = match request.metadata.get("data") {
-        Some(hex_data) => hex::decode(hex_data.trim_start_matches("0x"))
-            .map_err(|_| PersonaError::InvalidInput("metadata 'data' must be hex".to_string()))?,
-        None => Vec::new(),
-    };
-
-    Ok(Eip155Fields {
-        nonce: rlp_uint(nonce),
-        gas_price: rlp_u128(gas_price),
-        gas_limit: rlp_uint(gas_limit),
-        to: rlp_encode_bytes(&to),
-        value: rlp_u128(value),
-        data: rlp_encode_bytes(&data),
-    })
-}
-
-/// `keccak256(rlp([nonce, gasPrice, gas, to, value, data, chainId, 0, 0]))`
-fn eip155_signing_hash(request: &TransactionRequest, chain: u64) -> PersonaResult<[u8; 32]> {
-    let fields = eip155_fields(request)?;
-    let encoded = rlp_list(&[
-        fields.nonce,
-        fields.gas_price,
-        fields.gas_limit,
-        fields.to,
-        fields.value,
-        fields.data,
-        rlp_uint(chain),
-        rlp_encode_bytes(&[]),
-        rlp_encode_bytes(&[]),
-    ]);
-    Ok(Keccak256::digest(&encoded).into())
+    let signed = tx.into_signed(EvmSignature::new(
+        EvmU256::from_be_bytes(r),
+        EvmU256::from_be_bytes(s),
+        y_odd,
+    ));
+    Ok(signed.encoded_2718())
 }
 
 /// Recover the y-parity bit of the signature that reproduces the signer.
@@ -967,85 +833,6 @@ fn recovery_id_for(
     Err(PersonaError::Cryptography(
         "Failed to recover signer from Ethereum signature".to_string(),
     ))
-}
-
-// ---------------------------------------------------------------------------
-// RLP encoding
-// ---------------------------------------------------------------------------
-
-/// RLP-encode a single byte string.
-fn rlp_encode_bytes(data: &[u8]) -> Vec<u8> {
-    if data.len() == 1 && data[0] < 0x80 {
-        return data.to_vec();
-    }
-    let mut out = Vec::with_capacity(data.len() + 4);
-    push_length(&mut out, data.len() as u64, 0x80);
-    out.extend_from_slice(data);
-    out
-}
-
-/// RLP-encode an unsigned integer as its minimal big-endian representation
-/// (zero encodes as the empty string).
-fn rlp_uint(value: u64) -> Vec<u8> {
-    rlp_encode_bytes(&minimal_be_bytes(value))
-}
-
-fn rlp_u128(value: u128) -> Vec<u8> {
-    rlp_encode_bytes(&minimal_be_bytes_u128(value))
-}
-
-/// RLP-encode a list of already-encoded items.
-fn rlp_list(items: &[Vec<u8>]) -> Vec<u8> {
-    let payload_len: usize = items.iter().map(|item| item.len()).sum();
-    let mut out = Vec::with_capacity(payload_len + 4);
-    push_length(&mut out, payload_len as u64, 0xc0);
-    for item in items {
-        out.extend_from_slice(item);
-    }
-    out
-}
-
-fn push_length(out: &mut Vec<u8>, length: u64, offset: u8) {
-    if length < 56 {
-        out.push(offset + length as u8);
-    } else {
-        let be = minimal_be_bytes(length);
-        out.push(offset + 55 + be.len() as u8);
-        out.extend_from_slice(&be);
-    }
-}
-
-fn minimal_be_bytes(value: u64) -> Vec<u8> {
-    if value == 0 {
-        return Vec::new();
-    }
-    let be = value.to_be_bytes();
-    let first = be.iter().position(|&b| b != 0).unwrap_or(be.len() - 1);
-    be[first..].to_vec()
-}
-
-fn minimal_be_bytes_u128(value: u128) -> Vec<u8> {
-    if value == 0 {
-        return Vec::new();
-    }
-    let be = value.to_be_bytes();
-    let first = be.iter().position(|&b| b != 0).unwrap_or(be.len() - 1);
-    be[first..].to_vec()
-}
-
-fn rlp_bytes32(bytes: [u8; 32]) -> Vec<u8> {
-    rlp_encode_bytes(&bytes)
-}
-
-/// Parse a decimal string into u128 (values beyond u128 wei are rejected;
-/// that is ~3.4e38 and above any realistic token supply in wei).
-fn parse_u256_string(value: &str) -> PersonaResult<u128> {
-    value.trim().parse::<u128>().map_err(|_| {
-        PersonaError::InvalidInput(format!(
-            "Amount '{}' must be a decimal integer that fits in u128",
-            value
-        ))
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,7 +875,7 @@ fn verify_ethereum_legacy(
     signature: &TransactionSignature,
 ) -> PersonaResult<bool> {
     let chain = chain_id(request)?;
-    let prehash = eip155_signing_hash(request, chain)?;
+    let prehash: B256 = legacy_tx(request)?.signature_hash();
     if signature.signature.len() < 65 {
         return Ok(false);
     }
@@ -1107,7 +894,7 @@ fn verify_ethereum_legacy(
     let sig = Signature::from_scalars(r, s)
         .map_err(|_| PersonaError::InvalidInput("Invalid r/s in Ethereum signature".to_string()))?;
     let recovered =
-        VerifyingKey::recover_from_prehash(&prehash, &sig, RecoveryId::new(y_odd, false))
+        VerifyingKey::recover_from_prehash(&prehash.0, &sig, RecoveryId::new(y_odd, false))
             .map_err(|e| PersonaError::CryptographicError(e.to_string()))?;
 
     let recovered_address = address_from_verifying_key(&recovered)?;
@@ -1119,7 +906,7 @@ fn verify_ethereum_typed(
     request: &TransactionRequest,
     signature: &TransactionSignature,
 ) -> PersonaResult<bool> {
-    let prehash = eip1559_signing_hash(request)?;
+    let prehash: B256 = eip1559_tx(request)?.signature_hash();
     if signature.signature.len() != 65 {
         return Ok(false);
     }
@@ -1132,7 +919,7 @@ fn verify_ethereum_typed(
     let sig = Signature::from_scalars(r, s)
         .map_err(|_| PersonaError::InvalidInput("Invalid r/s in Ethereum signature".to_string()))?;
     let recovered =
-        VerifyingKey::recover_from_prehash(&prehash, &sig, RecoveryId::new(y_odd, false))
+        VerifyingKey::recover_from_prehash(&prehash.0, &sig, RecoveryId::new(y_odd, false))
             .map_err(|e| PersonaError::CryptographicError(e.to_string()))?;
 
     let recovered_address = address_from_verifying_key(&recovered)?;
@@ -1240,6 +1027,12 @@ mod tests {
         SigningKey::from_slice(&raw).unwrap()
     }
 
+    /// Build a `Txid` from wire-order bytes (the order txids appear inside
+    /// a raw transaction), which is how BIP-143 vectors list them.
+    fn wire_order_txid(hex_str: &str) -> Txid {
+        Txid::from_byte_array(hex::decode(hex_str).unwrap().try_into().unwrap())
+    }
+
     fn eth_request(nonce: u64) -> TransactionRequest {
         TransactionRequest {
             id: uuid::Uuid::new_v4(),
@@ -1266,8 +1059,7 @@ mod tests {
     fn test_eip155_spec_signing_hash() {
         // nonce=9, gasprice=20e9, startgas=21000, to=0x3535..35, value=1e18
         let request = eth_request(9);
-        let chain = chain_id(&request).unwrap();
-        let hash = eip155_signing_hash(&request, chain).unwrap();
+        let hash: B256 = legacy_tx(&request).unwrap().signature_hash();
         assert_eq!(
             hex::encode(hash),
             "daf5a779ae972f972197303d7b574746c7ef83eadac0f2791ad23db92e4c8e53"
@@ -1366,7 +1158,10 @@ mod tests {
         assert!(build_raw_transaction(&request, &key).is_err());
     }
 
-    // BIP-143 native P2WPKH example: input index 1.
+    // BIP-143 native P2WPKH example: input index 1, via rust-bitcoin's
+    // SighashCache. The spec's txid strings appear in the unsigned tx hex,
+    // i.e. internal (wire) byte order, so they are loaded with
+    // `Txid::from_byte_array` rather than parsed as display-order ids.
     #[test]
     fn test_bip143_spec_sighash() {
         let privkey = test_key_from_raw(
@@ -1382,49 +1177,57 @@ mod tests {
         );
         let pubkey_hash = crate::crypto::address_generator::hash160(&pubkey);
 
-        let txid0: [u8; 32] =
-            hex::decode("fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f")
-                .unwrap()
-                .try_into()
-                .unwrap();
-        let txid1: [u8; 32] =
-            hex::decode("ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a")
-                .unwrap()
-                .try_into()
-                .unwrap();
+        let txid0 =
+            wire_order_txid("fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f");
+        let txid1 =
+            wire_order_txid("ef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a");
         // Both inputs participate in hashPrevouts/hashSequence with their
         // own sequence; the script type of input 0 does not affect the
         // P2WPKH sighash for input 1.
-        let inputs = vec![
-            BtcInput {
-                txid: txid0,
-                vout: 0,
-                amount: 625_000_000,
-                sequence: 0xffff_ffee,
-            },
-            BtcInput {
-                txid: txid1,
-                vout: 1,
-                amount: 600_000_000,
-                sequence: 0xffff_ffff,
-            },
-        ];
-        let outputs = vec![
-            BtcOutput {
-                amount: 112_340_000,
-                script_pubkey: hex::decode("76a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac")
-                    .unwrap(),
-            },
-            BtcOutput {
-                amount: 223_450_000,
-                script_pubkey: hex::decode("76a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac")
-                    .unwrap(),
-            },
-        ];
+        let tx = Transaction {
+            version: Version::ONE,
+            lock_time: LockTime::from_consensus(17),
+            input: vec![
+                TxIn {
+                    previous_output: OutPoint::new(txid0, 0),
+                    script_sig: ScriptBuf::new(),
+                    sequence: Sequence::from_consensus(0xffff_ffee),
+                    witness: Default::default(),
+                },
+                TxIn {
+                    previous_output: OutPoint::new(txid1, 1),
+                    script_sig: ScriptBuf::new(),
+                    sequence: Sequence::MAX,
+                    witness: Default::default(),
+                },
+            ],
+            output: vec![
+                TxOut {
+                    value: Amount::from_sat(112_340_000),
+                    script_pubkey: ScriptBuf::from_bytes(
+                        hex::decode("76a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac").unwrap(),
+                    ),
+                },
+                TxOut {
+                    value: Amount::from_sat(223_450_000),
+                    script_pubkey: ScriptBuf::from_bytes(
+                        hex::decode("76a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac").unwrap(),
+                    ),
+                },
+            ],
+        };
 
-        let sighash = p2wpkh_sighash_all(1, &inputs, &outputs, 1, &pubkey_hash, 17).unwrap();
+        let mut cache = SighashCache::new(&tx);
+        let sighash = cache
+            .p2wpkh_signature_hash(
+                1,
+                p2wpkh_output_script(&pubkey_hash).as_script(),
+                Amount::from_sat(600_000_000),
+                EcdsaSighashType::All,
+            )
+            .unwrap();
         assert_eq!(
-            hex::encode(sighash),
+            hex::encode(sighash.to_byte_array()),
             "c37af31116d1b27caf68aae9e3ac82f1477929014d5b917657d0eb49478cb670"
         );
     }
@@ -1510,12 +1313,33 @@ mod tests {
         // sighash; item 2 is the compressed pubkey.
         let pubkey_hash = crate::crypto::address_generator::hash160(&pubkey);
         let inputs = parse_btc_inputs(&request).unwrap();
-        let outputs = vec![BtcOutput {
-            amount: 280_000,
-            script_pubkey: script_pubkey_for_address(&request.to_address).unwrap(),
-        }];
-        let sighash = p2wpkh_sighash_all(2, &inputs, &outputs, 0, &pubkey_hash, 0).unwrap();
-        let sig: k256::ecdsa::Signature = key.sign_prehash(&sighash).unwrap();
+        let template = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::from_consensus(0),
+            input: inputs
+                .iter()
+                .map(|i| TxIn {
+                    previous_output: i.outpoint,
+                    script_sig: ScriptBuf::new(),
+                    sequence: i.sequence,
+                    witness: Default::default(),
+                })
+                .collect(),
+            output: vec![TxOut {
+                value: Amount::from_sat(280_000),
+                script_pubkey: script_pubkey_for_address(&request.to_address).unwrap(),
+            }],
+        };
+        let mut cache = SighashCache::new(&template);
+        let sighash = cache
+            .p2wpkh_signature_hash(
+                0,
+                p2wpkh_output_script(&pubkey_hash).as_script(),
+                Amount::from_sat(inputs[0].amount),
+                EcdsaSighashType::All,
+            )
+            .unwrap();
+        let sig: k256::ecdsa::Signature = key.sign_prehash(&sighash.to_byte_array()).unwrap();
         let mut expected_item = sig.to_der().to_vec();
         expected_item.push(SIGHASH_ALL);
 
@@ -1611,10 +1435,10 @@ mod tests {
         // The raw envelope's [chainId, nonce, prio, fee, gas, to, value, data]
         // must be exactly the fields the signing hash committed to.
         let request = eip1559_request(7);
-        let hash = eip1559_signing_hash(&request).unwrap();
+        let hash: B256 = eip1559_tx(&request).unwrap().signature_hash();
         // Deterministic: same request, same hash (RFC-6979 signing not
         // involved in the hash itself).
-        assert_eq!(hash, eip1559_signing_hash(&request).unwrap());
+        assert_eq!(hash, eip1559_tx(&request).unwrap().signature_hash());
     }
 
     #[test]

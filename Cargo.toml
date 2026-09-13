@@ -37,7 +37,13 @@ sha3 = "0.10"
 ripemd = "0.1"
 hmac = "0.12"
 pbkdf2 = "0.12"
-bs58 = "0.5"
+bs58 = { version = "0.5", features = ["check"] }
+# 链协议标准库：交易序列化/签名哈希/地址解析交给审计过的实现
+bitcoin = "0.32"
+alloy-consensus = "2.4"
+alloy-eips = "2.4"
+alloy-primitives = "1.7"
+bech32 = "0.12"
 
 # 数据库
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }

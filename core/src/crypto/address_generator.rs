@@ -201,29 +201,14 @@ fn generate_ethereum_address_from_uncompressed_pubkey(
     Ok(format!("0x{}", hex::encode(address_bytes)))
 }
 
+/// Apply the EIP-55 mixed-case checksum via `alloy-primitives`.
 fn apply_eip55_checksum(address: &str) -> String {
-    let address_lower = address.trim_start_matches("0x").to_lowercase();
-
-    // Keccak256 hash of lowercase address
-    let hash = Keccak256::digest(address_lower.as_bytes());
-    let hash_hex = hex::encode(hash);
-
-    // Apply EIP-55 checksum
-    let mut checksummed = String::from("0x");
-    for (i, c) in address_lower.chars().enumerate() {
-        if c.is_ascii_digit() {
-            checksummed.push(c);
-        } else {
-            let hash_char = hash_hex.chars().nth(i).unwrap();
-            if hash_char >= '8' {
-                checksummed.push(c.to_ascii_uppercase());
-            } else {
-                checksummed.push(c);
-            }
-        }
+    match address.parse::<alloy_primitives::Address>() {
+        Ok(addr) => addr.to_checksum(None),
+        // Callers pass internally-generated 0x-prefixed addresses; fall back
+        // to the input rather than panicking on malformed strings.
+        Err(_) => address.to_string(),
     }
-
-    checksummed
 }
 
 /// Generate Solana address (base58-encoded Ed25519 public key)
@@ -239,39 +224,24 @@ pub fn generate_solana_address(pubkey_bytes: &[u8]) -> PersonaResult<String> {
 
 // Helper functions
 
-/// Base58Check encoding (Bitcoin-style)
+/// Base58Check encoding (Bitcoin-style), delegated to bs58's `check` support.
 fn base58_check_encode(payload: &[u8]) -> String {
-    // Calculate checksum (first 4 bytes of double SHA256)
-    let hash1 = Sha256::digest(payload);
-    let hash2 = Sha256::digest(hash1);
-    let checksum = &hash2[..4];
-
-    // Concatenate payload and checksum
-    let mut data = payload.to_vec();
-    data.extend_from_slice(checksum);
-
-    bs58::encode(data).into_string()
+    bs58::encode(payload).with_check().into_string()
 }
 
-/// Base58Check decode, returning the payload without version/checksum.
+/// Base58Check decode, returning the payload including the version byte
+/// (checksum verified by bs58).
 pub fn base58_check_decode(encoded: &str) -> PersonaResult<Vec<u8>> {
     let data = bs58::decode(encoded)
+        .with_check(None)
         .into_vec()
         .map_err(|e| PersonaError::InvalidInput(format!("Invalid base58 address: {}", e)))?;
-    if data.len() < 5 {
+    if data.is_empty() {
         return Err(PersonaError::InvalidInput(
             "Base58 address too short".to_string(),
         ));
     }
-    let (payload, checksum) = data.split_at(data.len() - 4);
-    let hash1 = Sha256::digest(payload);
-    let hash2 = Sha256::digest(hash1);
-    if &hash2[..4] != checksum {
-        return Err(PersonaError::InvalidInput(
-            "Base58 address checksum mismatch".to_string(),
-        ));
-    }
-    Ok(payload.to_vec())
+    Ok(data)
 }
 
 /// Uncompress secp256k1 public key
