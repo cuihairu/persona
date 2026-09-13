@@ -197,10 +197,7 @@ fn initialize_config(
     Ok(())
 }
 
-async fn initialize_database(
-    workspace_path: &Path,
-    master_password: Option<&str>,
-) -> Result<()> {
+async fn initialize_database(workspace_path: &Path, master_password: Option<&str>) -> Result<()> {
     let db_path = workspace_path.join("identities.db");
 
     // Initialize SQLite database with proper schema using persona-core

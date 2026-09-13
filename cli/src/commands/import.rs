@@ -82,15 +82,16 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
     }
 
     // Confirm import
-    if !args.force && !args.dry_run
+    if !args.force
+        && !args.dry_run
         && !Confirm::new()
             .with_prompt("Proceed with import?")
             .default(true)
             .interact()?
-        {
-            println!("{}", "Import cancelled.".yellow());
-            return Ok(());
-        }
+    {
+        println!("{}", "Import cancelled.".yellow());
+        return Ok(());
+    }
 
     // Create backup if requested
     if args.backup && !args.dry_run {

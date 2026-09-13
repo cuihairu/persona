@@ -298,10 +298,10 @@ async fn remove_key(id: Uuid, yes: bool, config: &crate::config::CliConfig) -> R
             .with_prompt(format!("Remove SSH key credential {}?", id))
             .default(false)
             .interact()?
-        {
-            println!("{}", "Cancelled.".yellow());
-            return Ok(());
-        }
+    {
+        println!("{}", "Cancelled.".yellow());
+        return Ok(());
+    }
     let _ = service.delete_credential(&id).await?;
     println!("{} Removed credential {}", "✓".green(), id);
     Ok(())

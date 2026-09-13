@@ -106,12 +106,14 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     };
 
     // Get identity type
-    let identity_types = [("personal", IdentityType::Personal),
+    let identity_types = [
+        ("personal", IdentityType::Personal),
         ("work", IdentityType::Work),
         ("social", IdentityType::Social),
         ("gaming", IdentityType::Gaming),
         ("financial", IdentityType::Financial),
-        ("other", IdentityType::Custom("other".to_string()))];
+        ("other", IdentityType::Custom("other".to_string())),
+    ];
 
     let identity_type = if let Some(t) = args.identity_type.as_ref() {
         t.parse::<IdentityType>()
@@ -393,10 +395,7 @@ async fn set_active_identity(name: &str, _config: &CliConfig) -> Result<()> {
 }
 
 async fn import_from_file(file_path: &str, _config: &CliConfig) -> Result<()> {
-    println!(
-        "📁 Importing identity from file: {}",
-        file_path.yellow()
-    );
+    println!("📁 Importing identity from file: {}", file_path.yellow());
 
     // TODO: Implement file import functionality
     // This would parse JSON/YAML/CSV files and create identities

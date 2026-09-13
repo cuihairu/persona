@@ -227,10 +227,9 @@ fn handle_key(
                 runtime.block_on(app.load_credentials_for_current(provider))?;
             }
         }
-        KeyCode::Char('g')
-            if app.jump_first() => {
-                runtime.block_on(app.load_credentials_for_current(provider))?;
-            }
+        KeyCode::Char('g') if app.jump_first() => {
+            runtime.block_on(app.load_credentials_for_current(provider))?;
+        }
         _ => {}
     }
 

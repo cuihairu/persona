@@ -53,10 +53,10 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
                 .with_prompt("Do you want to continue removing the active identity?")
                 .default(false)
                 .interact()?
-            {
-                println!("{}", "Removal cancelled.".yellow());
-                return Ok(());
-            }
+        {
+            println!("{}", "Removal cancelled.".yellow());
+            return Ok(());
+        }
     }
 
     // Show identity summary before removal
