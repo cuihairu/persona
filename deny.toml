@@ -13,8 +13,9 @@ db-path = "~/.cargo/advisory-db"
 db-urls = ["https://github.com/rustsec/advisory-db"]
 # The lint level for security vulnerabilities
 vulnerability = "deny"
-# The lint level for unmaintained crates
-unmaintained = "warn"
+# Which dependencies to check for unmaintained status
+# (all/workspace/transitive/none; findings are reported as warnings)
+unmaintained = "all"
 # The lint level for crates that have been yanked from their source registry
 yanked = "deny"
 # The lint level for crates with security notices
