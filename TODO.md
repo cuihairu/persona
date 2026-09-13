@@ -2,6 +2,8 @@
 
 This is the master checklist for Persona's mainline product: local-first identity-material management with strong browser, desktop, CLI, and SSH workflows. Keep this file aligned with `BOUNDARY.md`.
 
+Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track is paused until that feature set is complete — wallet mistakes are irreversible (funds, not accounts), so wallet-grade security must be built on a proven vault foundation.
+
 Now (current sprint)
 - [x] CI: GitHub Actions (Rust fmt/clippy/test; Desktop lint/test)
 - [x] Architecture diagram in docs (core/service/storage/agents/desktop/server)
@@ -66,7 +68,7 @@ SSH Agent (developer focus)
 - [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
 - [ ] Windows-specific testing and optimization
 
-Wallet Material (experimental)
+Wallet Material (experimental — deferred until 1Password parity; see priority policy above)
 - [x] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
 - [x] Derivations: BTC (BIP32/44, P2WPKH/P2SH-P2WPKH/Taproot), ETH (SLIP‑44), Solana (SLIP‑0010 ed25519, path `m/44'/501'/0'/i'`, Phantom 兼容)
 - [x] Address encoding: BIP‑173 bech32 / BIP‑350 bech32m (P2WPKH/P2WSH/P2TR)、Base58Check、EIP‑55 checksum

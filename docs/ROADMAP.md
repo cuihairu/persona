@@ -1,108 +1,41 @@
 # Persona Roadmap & TODO (Detailed)
 
-This plan focuses on local-first identity-material management: identity switching, credentials, browser workflows, and developer-centric features like SSH Agent. Wallet support stays conceptually in-model, but remains a deferred track rather than a mainline roadmap driver.
+Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track stays experimental and deferred until that foundation is proven — wallet security requirements (irreversible outcomes, signing confirmations, a transaction-level threat model) deserve a dedicated design pass of their own. Daily task tracking lives in the root [TODO](../TODO.md); this file is the milestone view.
 
-Milestone 0 – Repo Hygiene (1–2 days)
-- Monorepo
-  - [x] Ensure Cargo workspace across crates
-  - [x] Add JS workspace for desktop (root `package.json`)
-  - [x] Add `agents/ssh-agent` crate skeleton
-  - [x] Add CI (GitHub Actions): Rust fmt/clippy/test, Desktop lint/test
-  - [x] Add CODEOWNERS; PR templates; Conventional Commits
-- Docs
-  - [x] 1Password feature inventory
-  - [x] Monorepo guide
-  - [x] Roadmap
-  - [x] Architecture diagram (core/service/storage/agents)
+Milestones 0–3 – Foundation (done)
+- [x] Monorepo + CI + Conventional Commits + supply-chain checks (cargo-deny, npm/pnpm audit)
+- [x] Workspace v2 schema + migrations; audit logging from service/CLI
+- [x] Per-item key hierarchy (wrapped item keys); SRP-like remote-auth abstraction; biometric hooks; auto-lock + re-auth for sensitive ops
+- [x] CLI parity: identity/credential CRUD, TOTP (QR setup + watch), password generator, TUI, export/import (gzip + encryption), non-interactive CI mode
+- [x] SSH agent: policy engine (per-key/per-host rules, rate limits, known_hosts, glob allow/deny, biometric gating), full CLI control, E2E protocol tests
+- [x] Browser: Chromium extension + Native Messaging bridge (pairing, HMAC request auth, origin binding, user gesture, autofill MVP, phishing resistance); Safari host shell
 
-Milestone 1 – Core Security & Storage (1–2 weeks)
-- Crypto & Auth
-  - [x] Replace simple unlock with SRP-like remote auth abstraction (prep for server)
-  - [ ] Key hierarchy: per-item keys wrapped by user master key
-  - [ ] Biometric unlock hook (macOS Touch ID; Windows Hello; Linux Secret Service)
-  - [ ] Auto-lock timers; “require re-auth for sensitive ops”
-- Storage
-  - [ ] Workspace schema v2: persist `path`, `active_identity_id`, `settings` in DB
-  - [ ] Migrations for workspace v1→v2; CLI to migrate existing workspaces
-  - [ ] Item history/versioning (identity/credential changes)
-  - [ ] Attachments blob store (file chunks + refs)
-- Audit & Events
-  - [x] Audit repo queries
-  - [ ] Emit audit events from CLI/service operations
-  - [ ] Export events to server (optional)
+Milestone 4 – 1Password Parity (current focus)
+- [ ] Passkeys (WebAuthn): storage model + autofill; design doc before implementation
+- [ ] Watchtower-class health checks: weak/reused/expired detection, breach checks (rules engine, then desktop panels)
+- [ ] Desktop app: wire Tauri commands to core (unlock, lists, CRUD); vault/identity/credential views; search + filters
+- [ ] Desktop: TOTP display; password reveal flow; copy-once clipboard
+- [ ] Desktop: SSH agent controls; signing approvals via notifications
+- [ ] Browser: polished TOTP autofill UX
+- [ ] SSH agent: real-host E2E test (`ssh -T git@github.com`); Windows-specific testing and optimization
+- [ ] Reproducible builds
 
-Milestone 2 – CLI Parity (1–2 weeks)
-- Identity lifecycle
-  - [x] add/list/show wired to DB with unlock flow
-  - [ ] edit/remove wired to DB
-  - [ ] switch: persist `active_identity_id` and last N history
-  - [ ] export/import: implement compression + encryption; integrity checks
-- Credentials
-  - [ ] CRUD for credentials; filters (type/tags/active/favorite)
-  - [ ] TOTP: generate/setup via QR; time skew handling
-  - [ ] Password generator (policy controls: length, symbols, pronounceable)
-- Dev usability
-  - [x] TUI mode (crossterm/ratatui) for quick flows
-  - [ ] Non-interactive CI mode with env var injection
+Milestone 5 – Wallet Graduation (deferred until Milestone 4; experimental today)
+Existing experimental base: BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana derivation and signing on audited crates (rust-bitcoin, alloy, bech32), CLI wallet flows, official test vectors as regression harness.
+- [ ] `docs/WALLET_DESIGN.md`: wallet key hierarchy (seed ↔ master key wrapping, re-wrap on password change), identity-binding model, signing-confirmation UX, wallet threat-model extension
+- [ ] keystore JSON import/export (replace the simplified keystore path with standard scrypt/pbkdf2)
+- [ ] PSBT workflow
+- [ ] Signing confirmations verifying recipient address, amount, fees and chain id (anti address-poisoning)
+- [ ] Desktop wallet UI (addresses, QR, confirmations)
+- [ ] Open question: hardware wallets (Ledger/Trezor) in-scope here or a separate later track
 
-Milestone 3 – SSH Agent (2–3 weeks)
-- Agent Core
-  - [ ] UNIX socket server implementing SSH agent protocol (add/list/remove/sign)
-  - [ ] Windows named pipe support
-  - [ ] Key management: create/import keys; store in core with metadata
-  - [ ] Per-host/per-command policies; confirmation prompts
-  - [ ] Touch ID/biometric gating for signing; rate limiting; logging
-  - [ ] Known_hosts policy check; refusal on mismatch
-- CLI Integration
-  - [ ] persona ssh import <key> / generate
-  - [ ] persona ssh add-to-agent / list / rm
-  - [ ] Agent status; test harness against `ssh -T git@github.com`
+Milestone 6 – Server & Sync (optional)
+- [ ] Events API, audit ingestion, metrics
+- [ ] Connect-like local-first secrets automation endpoint
+- [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
+- [ ] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted
 
-Milestone 4 – Wallet Material (Deferred / Experimental)
-- Data Model
-  - [x] Credential type placeholders (CryptoWallet)
-  - [ ] Wallet models: seed phrase/mnemonic, HD paths, chain meta, watch-only
-  - [ ] Per-chain derivation: BTC (BIP32/44), ETH (SLIP-44), Solana (ed25519)
-  - [ ] Key import (mnemonic/private key/keystore JSON), export w/ confirmations
-- Crypto Ops
-  - [ ] Derive addresses; checksum validation; QR display
-  - [ ] Sign primitives: BTC (PSBT), ETH (EIP-1559), Solana (ed25519)
-  - [ ] Testnets; multiple networks per wallet
-- UI/CLI
-  - [ ] CLI: wallet create/import/derive/list/sign/verify
-  - [ ] Desktop: wallet overview; address lists; copy/share with warnings
-  - [ ] Security prompts before revealing secrets; 2-person approval (optional)
-
-Milestone 5 – Desktop App (2–4 weeks)
-- Foundation
-  - [ ] Wire to core via FFI/tauri command; unlock flow
-  - [ ] Vault/identity/credential views; search; filters
-  - [ ] TOTP display; password reveal flow; copy-once
-  - [ ] Keyboard-friendly UX; theming; accessibility basics
-- Advanced
-  - [ ] SSH agent controls; signing prompts as desktop notifications
-  - [ ] Wallet UI (addresses, QR, signing confirmations)
-  - [ ] Import/export; Watchtower-like panels (weak/reused/2FA)
-
-Milestone 6 – Server & Sync (optional, 3–6 weeks)
-- Server
-  - [ ] Events API; audit ingestion; metrics
-  - [ ] “Connect-like” secrets automation endpoint (local-first, optional)
-  - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
-  - [ ] SCIM/SSO bridging (future)
-
-Milestone 7 – Browser & Autofill (future)
-- [ ] WebExtension skeleton (autofill; domain rules)
-- [ ] Passkeys (WebAuthn) – store and autofill platform credentials
-- [ ] Phishing protections; identity-based context switching
-
-Quality & Compliance (ongoing)
-- [x] Threat model & security review
-- [ ] Fuzzing paths for parsers (mnemonic, keystore)
-- [ ] Secrets redaction policy in logs; zero sensitive data in telemetry
-- [ ] Reproducible builds; supply chain checks (cargo-deny, pnpm audit)
-
-Open Questions
-- Recovery model for master password (none by default; consider Shamir/guardians)
-- Cross-device sync key exchange without server (QR pair? local LAN?)
-- Whether wallet hardware integration (Ledger/Trezor) should remain in Persona or move to a later dedicated track
+Ongoing quality
+- [x] Threat model + periodic review process (`THREAT_MODEL.md`)
+- [x] Fuzz tests for parsers (mnemonic/keystore/QR); secrets redaction policy for logs
+- [ ] KDF parameter review: both paths documented (`KEY_HIERARCHY.md`); PBKDF2 iteration count and Argon2 parameters revisited quarterly, changes applied via re-wrap/re-encrypt migrations

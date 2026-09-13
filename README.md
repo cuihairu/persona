@@ -186,14 +186,18 @@ persona ssh stop-agent
 
 ## 🛣️ Roadmap
 
-- [x] Monorepo and core library scaffold, end-to-end CLI + database wiring
-- [x] Workspace v2 (path/active_identity/settings) with migration command
-- [x] Export/import (gzip + encryption) and expanded audit logging
-- [x] SSH agent MVP (UNIX socket / ed25519) with CLI management commands
-- [ ] SSH agent policy hardening (full known_hosts parser, allow/deny lists, Windows support)
+Priority policy: the password-manager track targets 1Password parity first; wallet work stays experimental and deferred until that foundation is proven (wallet security requirements are higher and get a dedicated design pass).
+
+- [x] Monorepo, core library, workspace v2, audit logging, export/import (gzip + encryption)
+- [x] SSH agent with a full policy engine (known_hosts, rate limits, per-host/key rules, biometric gating)
+- [x] Browser extension + native messaging bridge (autofill MVP, domain policies, phishing resistance)
+- [x] CLI parity: CRUD, TOTP, password generator, TUI, non-interactive CI mode
+- [x] Wallet material (experimental): BTC/ETH/Solana derivation + signing on audited crates (rust-bitcoin/alloy)
+- [ ] Passkeys (WebAuthn) storage + autofill
+- [ ] Watchtower-class health checks (weak/reused/expired, breach checks)
 - [ ] Desktop app data wiring and polished UI
 - [ ] Optional sync/automation service with a local-first design
-- [ ] Wallet support as a deferred, identity-material extension
+- [ ] Wallet graduation: design doc, signing confirmations, PSBT, keystore JSON (after parity)
 
 ## 🤝 Contributing
 

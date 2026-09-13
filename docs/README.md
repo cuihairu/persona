@@ -2,101 +2,39 @@
 
 **Master your digital identity. Switch freely with one click.**
 
-## 文档概览
+本目录是 Persona 的设计与安全文档入口。里程碑视图见 [ROADMAP](./ROADMAP.md)，每日任务见根目录 [TODO](../TODO.md)。
 
-本目录包含了 Persona 数字身份管理项目的完整分析文档，帮助理解项目的需求、场景和技术实现方案。
+## 产品与边界
 
-## 文档结构
+- [BOUNDARY](../BOUNDARY.md) – 产品边界：Principal / Identity / 身份材料的定义，钱包的定位（deferred：先补齐 1Password 级密码功能，再做钱包）
+- [ROADMAP](./ROADMAP.md) – 里程碑视图与优先级政策
+- [MONOREPO](./MONOREPO.md) – monorepo 结构与工具链
 
-### 📋 [场景分析](./scenarios-analysis.md)
-详细分析了数字身份管理的各种使用场景，包括：
-- 6个核心管理场景（用户提出的需求）
-- 9个扩展场景（系统分析补充）
-- 场景特征分类和优先级分析
+## 对标与差距
 
-**主要内容**:
-- 密码密钥管理
-- 钱包助记词管理  
-- 服务器资源配置
-- 银行卡信息管理
-- SSH密钥管理
-- 游戏动态密码
-- 企业身份管理
-- 社交媒体身份
-- 数字证书管理
-- 订阅服务管理
-- 开发者工具身份
-- 教育学习平台
-- 健康医疗信息
-- 旅行出行身份
-- 物联网设备管理
+- [ONEPASSWORD_FEATURES](./ONEPASSWORD_FEATURES.md) – 1Password 功能全集（对标清单）
+- [FEATURE_GAP_ANALYSIS](./FEATURE_GAP_ANALYSIS.md) – Persona vs 1Password 现状对比
 
-### 🔒 [安全需求分析](./security-requirements.md)
-深入分析了不同场景下的安全需求和技术实现方案，包括：
-- 威胁模型分析
-- 分级安全需求
-- 核心安全特征
-- 合规性要求
-- 技术实现建议
+## 架构
 
-**主要内容**:
-- 三级安全分类（极高/高/中等）
-- 加密架构设计
-- 身份认证机制
-- 数据保护机制
-- 访问控制模型
-- 审计和监控
-- 应急响应计划
+- [CLIENT_COMMUNICATION_ARCHITECTURE](./CLIENT_COMMUNICATION_ARCHITECTURE.md) – 统一客户端通信架构（CLI/桌面/浏览器/Agent 共用同一本地服务/IPC 协议）
+- [LOCAL_SERVICE](./LOCAL_SERVICE.md) – 本地服务、IPC 传输（Unix Socket 优先）与三种存储/同步模式（纯本地 / 自托管云 / Persona 服务器辅助）
+- [BRIDGE_PROTOCOL](./BRIDGE_PROTOCOL.md) – 浏览器扩展 Native Messaging 协议
+- [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md) – CI/CD 非交互模式指南
+- [REMOTE_AUTH](./REMOTE_AUTH.md) – 远程认证抽象
+- [KEY_HIERARCHY](./KEY_HIERARCHY.md) – 密钥层级与 KDF 路径
 
-### 🔌 [客户端通信与存储模式](./LOCAL_SERVICE.md)
-描述 CLI、桌面端、浏览器插件、SSH Agent 等客户端如何通过统一的本地服务通信，详解 IPC 传输（优先 Unix Socket）、本地工作区、以及「纯本地 / 自托管云 / Persona 服务器」三种同步模式。
+## 安全
 
-## 场景特征总结
+- [THREAT_MODEL](./THREAT_MODEL.md) – 威胁模型与周期性安全审查
+- [SSH_AGENT_FEATURES](./SSH_AGENT_FEATURES.md) – SSH Agent 完整文档
+- [BIOMETRIC_HOOKS](./BIOMETRIC_HOOKS.md) – 生物识别解锁抽象
+- [SUPPLY_CHAIN_SECURITY](./SUPPLY_CHAIN_SECURITY.md) – 供应链安全检查
 
-### 按使用频率分类
-- **极高频率**: 密码密钥管理
-- **高频率**: SSH密钥、企业身份、社交媒体、开发者工具
-- **中等频率**: 服务器配置、银行卡、游戏密码、订阅服务等
-- **低频率**: 钱包助记词、数字证书、健康医疗、旅行出行
+## 品牌
 
-### 按安全级别分类
-- **极高安全**: 钱包助记词、银行卡信息、健康医疗信息
-- **高安全**: 密码密钥、服务器配置、SSH密钥、企业身份等
-- **中等安全**: 游戏密码、社交媒体、订阅服务等
-
-### 按数据类型分类
-- **认证信息**: 用户名密码、API密钥、证书
-- **金融数据**: 银行卡、钱包助记词、支付信息
-- **配置数据**: 服务器配置、网络设置、应用配置
-- **个人信息**: 身份证件、健康信息、联系方式
-- **数字资产**: 加密货币、数字证书、知识产权
-
-## 核心设计原则
-
-1. **安全第一**: 采用零信任安全模型，端到端加密
-2. **用户体验**: 一键切换，透明安全机制
-3. **分级管理**: 根据数据敏感性采用不同安全策略
-4. **合规性**: 满足国际和行业安全标准
-5. **可扩展性**: 支持新场景和新技术的接入
-
-## 技术架构要点
-
-- **分层加密**: 四层加密架构保护数据安全
-- **多因素认证**: 知识、持有、生物、行为四因子认证
-- **自适应安全**: 基于风险评估的动态安全策略
-- **全面审计**: 完整的操作日志和实时监控
-- **应急响应**: 完善的安全事件响应机制
-
-## 下一步工作
-
-基于这些分析文档，项目的下一步工作包括：
-
-1. **技术架构设计**: 基于安全需求设计系统架构
-2. **用户界面设计**: 设计直观易用的用户界面
-3. **核心功能开发**: 实现加密存储和身份管理功能
-4. **安全测试**: 进行全面的安全测试和评估
-5. **用户体验优化**: 基于用户反馈优化产品体验
+- [branding](./branding/README.md) – logo、字标、配色与使用规范
 
 ---
 
-*本文档持续更新，反映项目的最新分析和设计思路。*
+*早期场景分析文档（scenarios-analysis / security-requirements）已不再单独维护，其内容并入 [BOUNDARY](../BOUNDARY.md) 与 [THREAT_MODEL](./THREAT_MODEL.md)。*

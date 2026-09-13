@@ -1,33 +1,31 @@
 # Feature Gap Analysis (Persona vs 1Password)
 
-Legend: [=] parity or similar, [+] Persona advantage, [−] missing/incomplete
+Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona advantage, [−] missing/incomplete
 
 - Security
-  - E2E encryption, zero-knowledge: [=] design parity target; implementation WIP
-  - SRP auth model: [−] not implemented
-  - Biometric unlock: [−] planned hooks
-  - Auto-lock policies: [−] pending
+  - E2E encryption, zero-knowledge: [=] per-item keys wrapped by the master key (AES-256-GCM); Argon2id for export/backup encryption; legacy direct-encryption rows still readable
+  - SRP auth model: [≈] SRP-like remote-auth abstraction landed (PBKDF2-HMAC-SHA256, 100k iterations); full server-side flow waits for the sync track
+  - Biometric unlock: [≈] provider abstraction + hooks landed; native Touch ID/Windows Hello wiring lands with the desktop app
+  - Auto-lock policies: [=] auto-lock timers + re-authentication for sensitive ops
 - Vaults/Items
-  - Multiple vaults/collections: [−] single workspace MVP
-  - Item types (login/note/card/bank): [−] partial; identity/credential present
-  - Passkeys (FIDO): [−] future
-  - Attachments/versioning: [−] planned
+  - Multiple vaults/collections: [−] single workspace by design (identity-scoped); multi-user vault features intentionally out of scope (see `BOUNDARY.md`)
+  - Item types: [≈] password, API key, TOTP, SSH key, bank card, server config, digital certificate, game account, crypto-wallet placeholder; secure notes via metadata
+  - Passkeys (FIDO): [−] not started — the next major parity gap
+  - Attachments/versioning: [=] blob store + item change history
 - Autofill & Browser
-  - Browser extension: [−] future
-  - TOTP autofill: [−] future (CLI/desktop display only first)
+  - Browser extension: [≈] Chromium extension + Native Messaging bridge MVP (username/password fill, TOTP verb, pairing + HMAC + origin binding + user gesture, domain policies, phishing resistance); Safari host shell present
+  - TOTP autofill: [≈] bridge protocol supports it; polished in-page UX pending
 - Watchtower
-  - Breach/weak/reused: [−] rules engine to implement
+  - Breach/weak/reused/expired detection: [−] rules engine to implement — current focus alongside passkeys
 - Sharing/Admin
-  - Multi-user vaults & RBAC: [−] future
-  - SCIM/SSO/Recovery: [−] future
+  - Multi-user vaults, RBAC, SCIM/SSO, account recovery: [−] out of scope for a single-principal product (`BOUNDARY.md`)
 - Apps & Interfaces
-  - Desktop app: [≈] skeleton present (Tauri), needs data wiring
+  - Desktop app: [−] prototype shell; wiring Tauri commands to core is the deliberate current focus
   - Mobile: [−] placeholder
-  - CLI: [=] MVP; needs full CRUD and export/import
+  - CLI: [=] full CRUD, TOTP (QR setup + watch), password generator, TUI, export/import (gzip + encryption), non-interactive CI mode, migrations
 - Developer
-  - SSH Agent: [+] first-class priority (crate skeleton added)
+  - SSH Agent: [+] first-class: policy engine (per-key/per-host rules, rate limits, known_hosts, glob allow/deny, biometric gating), E2E tests — exceeds 1Password's agent controls
   - Secrets automation: [−] planned (server optional)
-  - SDKs & CI plugins: [−] planned
+  - SDKs & CI plugins: [≈] env-var non-interactive mode covers CI basics
 - Digital Wallet
-  - Wallet item type, derivation, signing: [+] Persona advantage (planned)
-
+  - Wallet item type, derivation, signing: [+] experimental advantage: BTC (BIP-143 P2WPKH), ETH (EIP-155/1559), Solana derivation + signing on audited crates (rust-bitcoin/alloy/bech32); deferred until password parity per the priority policy — keystore JSON, PSBT, signing-confirmation UX and a wallet threat model all pending

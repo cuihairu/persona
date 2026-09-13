@@ -70,12 +70,13 @@ The current product boundary does not include:
 
 Wallet material is conceptually inside the same model as SSH keys and other credentials because it is still identity material bound to one digital self.
 
-However, wallet support is not a current product priority.
+However, wallet support is deliberately sequenced after the password-manager feature set reaches 1Password parity. Wallet mistakes are irreversible — the loss is funds, not a locked account — so wallet-grade security (signing-confirmation UX, a transaction-level threat model, a hardened key hierarchy) should be built on a proven vault foundation, not in parallel with it.
 
 Current status:
 - conceptually in-boundary
-- roadmap priority deferred
-- implementation treated as experimental or later-stage work
+- deferred until the password/credential feature set is complete (passkeys, watchtower-class health checks, desktop wiring)
+- implementation treated as experimental; existing wallet code stays inside that scope
+- requires a dedicated wallet design doc and threat-model extension before leaving experimental status
 
 This means wallet support should not define the current roadmap, UI priority, or platform abstractions unless it directly helps the primary identity-material workflows already in use.
 
