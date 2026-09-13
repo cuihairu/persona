@@ -3,9 +3,13 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
+    crypto::{
+        build_raw_transaction, sign_transaction, signing_key_for_address,
+        verify_ethereum_transaction, verify_solana_transaction,
+    },
     models::wallet::{
-        AddressType, BipVersion, BlockchainNetwork, CryptoWallet, TransactionRequest,
-        WalletAddress, WalletSecurityLevel, WalletType,
+        AddressType, BipVersion, BlockchainNetwork, CryptoWallet, SignedTransaction,
+        TransactionRequest, WalletAddress, WalletSecurityLevel, WalletType,
     },
     storage::{CryptoWalletRepository, Database},
 };
@@ -373,7 +377,7 @@ struct AddressTable {
 
 pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
     let repo = init_wallet_repository(config).await?;
-    let formatter = OutputFormatter::default();
+    let formatter = OutputFormatter;
 
     match args.command {
         WalletCommand::List {
@@ -394,10 +398,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             if let Some(pattern) = search {
                 let needle = pattern.to_lowercase();
-                wallets = wallets
-                    .into_iter()
-                    .filter(|wallet| wallet.name.to_lowercase().contains(&needle))
-                    .collect();
+                wallets.retain(|wallet| wallet.name.to_lowercase().contains(&needle));
             }
 
             if wallets.is_empty() {
@@ -407,11 +408,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             let filtered_wallets: Vec<_> = wallets
                 .into_iter()
-                .filter(|w| {
-                    let include = true;
-                    let include = include && (!watch_only || w.watch_only);
-                    include
-                })
+                .filter(|w| !watch_only || w.watch_only)
                 .collect();
 
             if filtered_wallets.is_empty() {
@@ -622,9 +619,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             account,
             address_count,
         } => {
-            use persona_core::crypto::{
-                import_from_mnemonic, MnemonicWordCount, SecureMnemonic,
-            };
+            use persona_core::crypto::{import_from_mnemonic, MnemonicWordCount, SecureMnemonic};
 
             let network = parse_network(&network)?;
             let network_str = network.to_string();
@@ -813,12 +808,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             let mut addresses: Vec<_> = wallet
                 .addresses
                 .iter()
-                .filter(|addr| {
-                    let include = true;
-                    let include = include && (!used || addr.used);
-                    let include = include && (!unused || !addr.used);
-                    include
-                })
+                .filter(|addr| (!used || addr.used) && (!unused || !addr.used))
                 .collect();
 
             if let Some(lim) = limit {
@@ -1083,7 +1073,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             gas_limit,
             nonce,
             memo,
-            sign: _,
+            sign,
             broadcast: _,
             expires_in,
         } => {
@@ -1092,7 +1082,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             let transaction = TransactionRequest {
                 id: uuid::Uuid::new_v4(),
                 wallet_id: wallet.id,
-                network: wallet.network,
+                network: wallet.network.clone(),
                 from_address: wallet
                     .addresses
                     .first()
@@ -1125,6 +1115,80 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             formatter.print_info(&format!("To: {}", created.to_address));
             formatter.print_info(&format!("Amount: {} units", created.amount));
             formatter.print_info(&format!("Fee: {} units", created.fee));
+
+            if !sign {
+                return Ok(());
+            }
+
+            // Sign the created request with the wallet's first address key
+            let password = if config.ui.interactive {
+                formatter.print_info("Enter wallet password to sign:");
+                rpassword::read_password().context("Failed to read password")?
+            } else {
+                std::env::var("PERSONA_WALLET_PASSWORD")
+                    .context("PERSONA_WALLET_PASSWORD must be set in non-interactive mode")?
+            };
+
+            let key = signing_key_for_address(&wallet, &password, &created.from_address)
+                .context("Failed to derive signing key (wrong password?)")?;
+            let signature =
+                sign_transaction(&created, &key).context("Failed to sign transaction")?;
+
+            // Verify locally before persisting anything
+            match created.network {
+                BlockchainNetwork::Ethereum
+                | BlockchainNetwork::Polygon
+                | BlockchainNetwork::Arbitrum
+                | BlockchainNetwork::Optimism
+                | BlockchainNetwork::BinanceSmartChain => {
+                    anyhow::ensure!(
+                        verify_ethereum_transaction(&created, &signature)?,
+                        "Signature verification failed; refusing to store signed transaction"
+                    );
+                }
+                BlockchainNetwork::Solana => {
+                    let message = created
+                        .raw_transaction_data
+                        .clone()
+                        .ok_or_else(|| anyhow!("Solana signing requires raw_transaction_data"))?;
+                    anyhow::ensure!(
+                        verify_solana_transaction(&signature, &message)?,
+                        "Signature verification failed; refusing to store signed transaction"
+                    );
+                }
+                _ => {}
+            }
+
+            // Bitcoin and friends have no raw assembly yet; the audit
+            // signature is still recorded.
+            let (raw_bytes, tx_hash) =
+                build_raw_transaction(&created, &key).map(|raw| (raw.raw, raw.hash))?;
+
+            let signed = SignedTransaction {
+                id: uuid::Uuid::new_v4(),
+                request: created.clone(),
+                signatures: vec![signature],
+                raw_signed_transaction: raw_bytes,
+                transaction_hash: tx_hash.clone(),
+                signed_at: chrono::Utc::now(),
+                broadcast_status: persona_core::models::wallet::BroadcastStatus::NotBroadcast,
+            };
+            repo.create_signed_transaction(&signed)
+                .await
+                .into_anyhow()?;
+
+            formatter.print_success("Transaction signed and stored");
+            if !tx_hash.is_empty() {
+                formatter.print_info(&format!("Transaction hash: {}", tx_hash));
+                formatter.print_warning(
+                    "⚠️  Broadcast it with your node/RPC provider; Persona does not broadcast.",
+                );
+            } else {
+                formatter.print_warning(
+                    "⚠️  This network only records an audit signature for now; \
+                     raw transaction assembly (PSBT) is not yet implemented.",
+                );
+            }
         }
 
         WalletCommand::ListTransactions {

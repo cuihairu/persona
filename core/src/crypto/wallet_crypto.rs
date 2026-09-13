@@ -3,8 +3,9 @@
 use crate::{PersonaError, PersonaResult};
 use bip32::{ChildNumber, DerivationPath, Prefix, XPrv};
 use bip39::Mnemonic;
+use hmac::{Hmac, Mac};
 use k256::ecdsa::{SigningKey, VerifyingKey};
-use rand::Rng;
+use sha2::Sha512;
 use std::str::{self, FromStr};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -148,6 +149,7 @@ impl MasterKey {
 }
 
 /// Derived key from HD wallet
+#[derive(Clone)]
 pub struct DerivedKey {
     xprv: XPrv,
 }
@@ -299,6 +301,121 @@ impl Bip44PathBuilder {
     }
 }
 
+/// Ed25519 extended key derived per SLIP-0010 (ed25519, hardened only).
+///
+/// Curves like Solana use Ed25519 keys that cannot come from a secp256k1
+/// `XPrv`; this type derives them straight from the BIP39 seed.
+#[derive(Clone)]
+pub struct Ed25519Key {
+    key: ed25519_dalek::SigningKey,
+    chain_code: [u8; 32],
+}
+
+impl Drop for Ed25519Key {
+    fn drop(&mut self) {
+        // ed25519-dalek's `zeroize` feature clears the inner signing key on
+        // drop; the chain code has no such guarantee, so clear it here.
+        self.chain_code.zeroize();
+    }
+}
+
+impl Ed25519Key {
+    const ED25519_SEED_KEY: &'static [u8] = b"ed25519 seed";
+
+    /// Derive the SLIP-0010 master node from a BIP39 seed.
+    pub fn from_seed(seed: &[u8]) -> PersonaResult<Self> {
+        let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(Self::ED25519_SEED_KEY)
+            .map_err(|e| PersonaError::Cryptography(format!("HMAC init failed: {}", e)))?;
+        mac.update(seed);
+        let output = mac.finalize().into_bytes();
+
+        let key = ed25519_dalek::SigningKey::from_bytes(
+            output[..32].try_into().expect("32-byte HMAC output"),
+        );
+        let chain_code: [u8; 32] = output[32..].try_into().expect("32-byte HMAC chain code");
+        Ok(Self { key, chain_code })
+    }
+
+    /// Derive a hardened child at `index` (the hardened bit is applied here).
+    pub fn derive_child_hardened(&self, index: u32) -> PersonaResult<Self> {
+        let hardened = index | 0x8000_0000;
+        let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(&self.chain_code)
+            .map_err(|e| PersonaError::Cryptography(format!("HMAC init failed: {}", e)))?;
+        mac.update(&[0u8]); // ed25519 private-key derivation prefix
+        mac.update(&self.key.to_bytes());
+        mac.update(&hardened.to_be_bytes());
+        let output = mac.finalize().into_bytes();
+
+        let key = ed25519_dalek::SigningKey::from_bytes(
+            output[..32].try_into().expect("32-byte HMAC output"),
+        );
+        let chain_code: [u8; 32] = output[32..].try_into().expect("32-byte HMAC chain code");
+        Ok(Self { key, chain_code })
+    }
+
+    /// Derive the node at `path` (e.g. `m/44'/501'/0'/0'`).
+    ///
+    /// Ed25519 only supports hardened derivation; non-hardened components
+    /// are rejected.
+    pub fn derive_path(&self, path: &str) -> PersonaResult<Self> {
+        let trimmed = path.strip_prefix('m').unwrap_or(path);
+        let mut current = self.clone();
+        for component in trimmed.split('/').filter(|c| !c.is_empty()) {
+            let Some(stripped) = component.strip_suffix('\'') else {
+                return Err(PersonaError::Cryptography(format!(
+                    "Ed25519 derivation requires hardened path components: {}",
+                    component
+                )));
+            };
+            let index: u32 = stripped.parse().map_err(|_| {
+                PersonaError::Cryptography(format!("Invalid path index: {}", component))
+            })?;
+            if index >= 0x8000_0000 {
+                return Err(PersonaError::Cryptography(format!(
+                    "Invalid hardened index: {}",
+                    component
+                )));
+            }
+            current = current.derive_child_hardened(index)?;
+        }
+        Ok(current)
+    }
+
+    /// 32-byte public key (the Solana address payload).
+    pub fn public_bytes(&self) -> [u8; 32] {
+        self.key.verifying_key().to_bytes()
+    }
+
+    /// 32-byte secret key (handle with care).
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.key.to_bytes()
+    }
+
+    /// Split into `(secret, chain_code)` for encrypted persistence.
+    pub fn to_parts(&self) -> ([u8; 32], [u8; 32]) {
+        (self.key.to_bytes(), self.chain_code)
+    }
+
+    /// Rebuild a node from its `(secret, chain_code)` parts.
+    pub fn from_parts(secret: [u8; 32], chain_code: [u8; 32]) -> PersonaResult<Self> {
+        let key = ed25519_dalek::SigningKey::from_bytes(&secret);
+        Ok(Self { key, chain_code })
+    }
+
+    /// Sign a message, returning the 64-byte Ed25519 signature.
+    pub fn sign(&self, message: &[u8]) -> [u8; 64] {
+        use ed25519_dalek::Signer;
+        self.key.sign(message).to_bytes()
+    }
+
+    /// Verify a 64-byte Ed25519 signature over a message.
+    pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> bool {
+        self.key
+            .verify(message, &ed25519_dalek::Signature::from_bytes(signature))
+            .is_ok()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,5 +512,84 @@ mod tests {
             let is_valid = SecureMnemonic::validate(&input);
             prop_assert_eq!(parsed.is_ok(), is_valid);
         }
+    }
+
+    #[test]
+    fn test_ed25519_non_hardened_path_rejected() {
+        let seed = [1u8; 64];
+        let key = Ed25519Key::from_seed(&seed).unwrap();
+        assert!(key.derive_path("m/44'/501'/0'/0").is_err());
+        assert!(key.derive_path("m/44'/501'/0'/0'").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod slip10_tests {
+    use super::*;
+
+    // SLIP-0010 ed25519 Test Vector 1
+    // seed = 000102030405060708090a0b0c0d0e0f
+    #[test]
+    fn test_slip10_vector1_master() {
+        let seed = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+        let key = Ed25519Key::from_seed(&seed).unwrap();
+        assert_eq!(
+            hex::encode(key.secret_bytes()),
+            "2b4be7f19ee27bbf30c667b642d5f4aa69fd169872f8fc3059c08ebae2eb19e7"
+        );
+        assert_eq!(
+            hex::encode(key.chain_code),
+            "90046a93de5380a72b5e45010748567d5ea02bbf6522f979e05c0d8d8ca9fffb"
+        );
+        assert_eq!(
+            hex::encode(key.public_bytes()),
+            "a4b2856bfec510abab89753fac1ac0e1112364e7d250545963f135f2a33188ed"
+        );
+    }
+
+    // SLIP-0010 ed25519 Test Vector 1: m/0'
+    #[test]
+    fn test_slip10_vector1_child0() {
+        let seed = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+        let key = Ed25519Key::from_seed(&seed)
+            .unwrap()
+            .derive_path("m/0'")
+            .unwrap();
+        assert_eq!(
+            hex::encode(key.secret_bytes()),
+            "68e0fe46dfb67e368c75379acec591dad19df3cde26e63b93a8e704f1dade7a3"
+        );
+        assert_eq!(
+            hex::encode(key.chain_code),
+            "8b59aa11380b624e81507a27fedda59fea6d0b779a778918a2fd3590e16e9c69"
+        );
+    }
+
+    // SLIP-0010 ed25519 Test Vector 1: m/0'/1'
+    #[test]
+    fn test_slip10_vector1_child1() {
+        let seed = hex::decode("000102030405060708090a0b0c0d0e0f").unwrap();
+        let key = Ed25519Key::from_seed(&seed)
+            .unwrap()
+            .derive_path("m/0'/1'")
+            .unwrap();
+        assert_eq!(
+            hex::encode(key.secret_bytes()),
+            "b1d0bad404bf35da785a64ca1ac54b2617211d2777696fbffaf208f746ae84f2"
+        );
+        assert_eq!(
+            hex::encode(key.chain_code),
+            "a320425f77d1b5c2505a6b1b27382b37368ee640e3557c315416801243552f14"
+        );
+    }
+
+    #[test]
+    fn test_ed25519_sign_verify_roundtrip() {
+        let seed = [42u8; 64];
+        let key = Ed25519Key::from_seed(&seed).unwrap();
+        let message = b"persona solana transfer message";
+        let signature = key.sign(message);
+        assert!(key.verify(message, &signature));
+        assert!(!key.verify(b"tampered", &signature));
     }
 }

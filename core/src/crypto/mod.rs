@@ -1,4 +1,5 @@
 pub mod address_generator;
+pub mod bech32;
 pub mod encryption;
 pub mod hashing;
 pub mod key_hierarchy;

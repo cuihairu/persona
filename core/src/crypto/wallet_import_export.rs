@@ -3,15 +3,18 @@
 use crate::crypto::address_generator::{
     generate_bitcoin_address, generate_bitcoin_address_from_compressed_pubkey,
     generate_ethereum_address_checksummed,
-    generate_ethereum_address_checksummed_from_compressed_pubkey, BitcoinAddressType,
+    generate_ethereum_address_checksummed_from_compressed_pubkey, generate_solana_address,
+    BitcoinAddressType,
 };
-use crate::crypto::wallet_crypto::{MasterKey, SecureMnemonic};
+use crate::crypto::transaction_signing::WalletSigningKey;
+use crate::crypto::wallet_crypto::{Ed25519Key, MasterKey, SecureMnemonic};
 use crate::crypto::wallet_encryption::{
     decrypt_master_key, decrypt_mnemonic, decrypt_private_key, encrypt_master_key,
-    encrypt_mnemonic, EncryptedMnemonic, EncryptedWalletKey,
+    encrypt_mnemonic, encrypt_private_key, EncryptedMnemonic, EncryptedWalletKey,
 };
-use crate::models::wallet::{BlockchainNetwork, CryptoWallet, WalletType};
+use crate::models::wallet::{AddressType, BlockchainNetwork, CryptoWallet, WalletType};
 use crate::{PersonaError, PersonaResult};
+use k256::ecdsa::SigningKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -69,6 +72,7 @@ pub struct WalletExport {
 }
 
 /// Import wallet from mnemonic phrase
+#[allow(clippy::too_many_arguments)]
 pub fn import_from_mnemonic(
     identity_id: Uuid,
     name: String,
@@ -82,18 +86,33 @@ pub fn import_from_mnemonic(
     // Validate mnemonic
     let mnemonic = SecureMnemonic::from_phrase(mnemonic_phrase)?;
 
-    // Create master key
-    let master_key = MasterKey::from_mnemonic(&mnemonic, passphrase)?;
-
     // Determine derivation path
     let path =
         derivation_path.unwrap_or_else(|| CryptoWallet::recommended_derivation_path(&network, 0));
 
-    // Encrypt master key
-    let encrypted_key = encrypt_master_key(&master_key, password)?;
-
     // Encrypt mnemonic
     let encrypted_mnemonic_data = encrypt_mnemonic(mnemonic_phrase, password)?;
+
+    let seed = mnemonic.to_seed(passphrase);
+    let (encrypted_key, addresses, extended_public_key) = if network == BlockchainNetwork::Solana {
+        // Solana keys are Ed25519 and cannot come from a secp256k1 XPrv;
+        // derive them per SLIP-0010 straight from the seed. The 64-byte
+        // root node (secret + chain code) is stored for later signing.
+        let root = Ed25519Key::from_seed(&seed)?;
+        let addresses = derive_solana_addresses(&root, &path, address_count)?;
+        let (secret, chain_code) = root.to_parts();
+        let mut root_material = Vec::with_capacity(64);
+        root_material.extend_from_slice(&secret);
+        root_material.extend_from_slice(&chain_code);
+        let encrypted = encrypt_private_key(&root_material, password)?;
+        (encrypted, addresses, None)
+    } else {
+        // Create master key (secp256k1 chains)
+        let master_key = MasterKey::from_seed(&seed)?;
+        let addresses = derive_addresses(&master_key, &path, &network, address_count)?;
+        let encrypted = encrypt_master_key(&master_key, password)?;
+        (encrypted, addresses, Some(master_key.to_xpub()))
+    };
 
     // Create wallet
     let mut wallet = CryptoWallet::new(
@@ -110,17 +129,120 @@ pub fn import_from_mnemonic(
     );
 
     wallet.derivation_path = Some(path.clone());
-    wallet.extended_public_key = Some(master_key.to_xpub());
+    wallet.extended_public_key = extended_public_key;
     wallet.encrypted_mnemonic = Some(
         serde_json::to_vec(&encrypted_mnemonic_data)
             .map_err(|e| PersonaError::Cryptography(format!("Serialization error: {}", e)))?,
     );
-
-    // Derive addresses
-    let addresses = derive_addresses(&master_key, &path, &network, address_count)?;
     wallet.addresses = addresses;
 
     Ok(wallet)
+}
+
+/// Drop the last (address-index) component of a derivation path so children
+/// can be appended for each address. `m/44'/501'/0'/0'` -> `m/44'/501'/0'`.
+fn parent_derivation_path(path: &str) -> String {
+    path.rsplit_once('/')
+        .map(|(parent, _)| parent.to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Derive Solana addresses from a SLIP-0010 root node, one hardened child
+/// per address index (e.g. `m/44'/501'/0'/0'`, `m/44'/501'/0'/1'`, ...).
+fn derive_solana_addresses(
+    root: &Ed25519Key,
+    base_path: &str,
+    count: usize,
+) -> PersonaResult<Vec<crate::models::wallet::WalletAddress>> {
+    let parent_path = parent_derivation_path(base_path);
+    let parent = root.derive_path(&parent_path)?;
+    let mut addresses = Vec::with_capacity(count);
+
+    for i in 0..count {
+        let child = parent.derive_child_hardened(i as u32)?;
+        addresses.push(crate::models::wallet::WalletAddress {
+            address: generate_solana_address(&child.public_bytes())?,
+            address_type: AddressType::Solana,
+            derivation_path: Some(format!("{}/{}'", parent_path, i)),
+            index: i as u32,
+            used: false,
+            balance: None,
+            last_activity: None,
+            metadata: HashMap::new(),
+            created_at: chrono::Utc::now(),
+        });
+    }
+
+    Ok(addresses)
+}
+
+/// Derive the signing key for a specific wallet address, decrypting the
+/// stored key material with `password`.
+///
+/// - Solana wallets store their SLIP-0010 root node; the address path is
+///   re-derived from it.
+/// - HD wallets store the secp256k1 master key.
+/// - Single-address wallets store the raw private key.
+pub fn signing_key_for_address(
+    wallet: &CryptoWallet,
+    password: &str,
+    address: &str,
+) -> PersonaResult<WalletSigningKey> {
+    if wallet.watch_only {
+        return Err(PersonaError::InvalidInput(
+            "Watch-only wallets cannot sign transactions".to_string(),
+        ));
+    }
+
+    let encrypted_key: EncryptedWalletKey =
+        serde_json::from_slice(&wallet.encrypted_private_key)
+            .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+
+    let stored_path = wallet
+        .addresses
+        .iter()
+        .find(|entry| entry.address == address)
+        .and_then(|entry| entry.derivation_path.clone())
+        .or_else(|| wallet.derivation_path.clone());
+
+    if wallet.network == BlockchainNetwork::Solana {
+        let root_material = decrypt_private_key(&encrypted_key, password)?;
+        let secret: [u8; 32] = root_material
+            .get(..32)
+            .and_then(|s| s.try_into().ok())
+            .ok_or_else(|| {
+                PersonaError::Cryptography("Invalid Solana key material length".to_string())
+            })?;
+        let chain_code: [u8; 32] = root_material
+            .get(32..64)
+            .and_then(|c| c.try_into().ok())
+            .ok_or_else(|| {
+                PersonaError::Cryptography("Invalid Solana key material length".to_string())
+            })?;
+        let root = Ed25519Key::from_parts(secret, chain_code)?;
+        let path = stored_path.ok_or_else(|| {
+            PersonaError::InvalidInput("Wallet has no derivation path".to_string())
+        })?;
+        return Ok(WalletSigningKey::Ed25519(root.derive_path(&path)?));
+    }
+
+    match wallet.wallet_type {
+        WalletType::HierarchicalDeterministic { .. } => {
+            let master_key = decrypt_master_key(&encrypted_key, password)?;
+            let path = stored_path.ok_or_else(|| {
+                PersonaError::InvalidInput("Wallet has no derivation path".to_string())
+            })?;
+            Ok(WalletSigningKey::Secp256k1(
+                master_key.derive_path(&path)?.to_signing_key()?,
+            ))
+        }
+        _ => {
+            let private_key_bytes = decrypt_private_key(&encrypted_key, password)?;
+            let signing_key = SigningKey::from_slice(&private_key_bytes)
+                .map_err(|e| PersonaError::Cryptography(format!("Invalid private key: {}", e)))?;
+            Ok(WalletSigningKey::Secp256k1(signing_key))
+        }
+    }
 }
 
 /// Import wallet from private key
@@ -182,6 +304,18 @@ pub fn import_from_private_key(
             generate_ethereum_address_checksummed_from_compressed_pubkey(&compressed)?,
             crate::models::wallet::AddressType::Ethereum,
         ),
+        BlockchainNetwork::Solana => {
+            // A Solana private key is a 32-byte Ed25519 seed
+            let secret: [u8; 32] = private_key_bytes
+                .as_slice()
+                .try_into()
+                .map_err(|_| PersonaError::InvalidInput("Invalid Ed25519 seed".to_string()))?;
+            let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+            (
+                generate_solana_address(&signing_key.verifying_key().to_bytes())?,
+                crate::models::wallet::AddressType::Solana,
+            )
+        }
         other => {
             return Err(PersonaError::Cryptography(format!(
                 "Address generation not implemented for {:?}",
@@ -629,6 +763,125 @@ mod tests {
     }
 
     #[test]
+    fn test_import_from_mnemonic_solana() {
+        let test_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let password = "test_password";
+
+        let mut wallet = import_from_mnemonic(
+            Uuid::new_v4(),
+            "sol".to_string(),
+            test_mnemonic,
+            "",
+            BlockchainNetwork::Solana,
+            None,
+            3,
+            password,
+        )
+        .unwrap();
+
+        // Solana address paths follow the hardened leaf convention
+        assert_eq!(
+            wallet
+                .addresses
+                .first()
+                .and_then(|a| a.derivation_path.as_deref()),
+            Some("m/44'/501'/0'/0'")
+        );
+        assert_eq!(
+            wallet
+                .addresses
+                .get(2)
+                .and_then(|a| a.derivation_path.as_deref()),
+            Some("m/44'/501'/0'/2'")
+        );
+        for address in &wallet.addresses {
+            assert!(crate::crypto::address_generator::validate_solana_address(
+                &address.address
+            ));
+        }
+
+        // The signing key derived for the first address must reproduce it
+        let first_address = wallet.addresses[0].address.clone();
+        let key = signing_key_for_address(&wallet, password, &first_address).unwrap();
+        let WalletSigningKey::Ed25519(ed_key) = key else {
+            panic!("expected Ed25519 signing key");
+        };
+        let derived_address =
+            crate::crypto::address_generator::generate_solana_address(&ed_key.public_bytes())
+                .unwrap();
+        assert_eq!(derived_address, first_address);
+
+        // A different address must derive a different key
+        let second_address = wallet.addresses[1].address.clone();
+        let key2 = signing_key_for_address(&wallet, password, &second_address).unwrap();
+        let WalletSigningKey::Ed25519(ed_key2) = key2 else {
+            panic!("expected Ed25519 signing key");
+        };
+        assert_ne!(ed_key.public_bytes(), ed_key2.public_bytes());
+
+        // Wrong password must not decrypt
+        assert!(signing_key_for_address(&wallet, "wrong", &first_address).is_err());
+
+        // Cleanup sensitive clone we made for assertions
+        wallet.addresses.clear();
+    }
+
+    #[test]
+    fn test_import_from_private_key_solana() {
+        let secret = [9u8; 32];
+        let wallet = import_from_private_key(
+            Uuid::new_v4(),
+            "sol-single".to_string(),
+            &hex::encode(secret),
+            BlockchainNetwork::Solana,
+            "pw",
+        )
+        .unwrap();
+
+        let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
+        let expected = crate::crypto::address_generator::generate_solana_address(
+            &signing_key.verifying_key().to_bytes(),
+        )
+        .unwrap();
+        assert_eq!(wallet.addresses[0].address, expected);
+    }
+
+    #[test]
+    fn test_signing_key_for_eth_hd_matches_address() {
+        let test_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let password = "test_password";
+
+        let mut wallet = import_from_mnemonic(
+            Uuid::new_v4(),
+            "eth".to_string(),
+            test_mnemonic,
+            "",
+            BlockchainNetwork::Ethereum,
+            None,
+            2,
+            password,
+        )
+        .unwrap();
+
+        let first_address = wallet.addresses[0].address.clone();
+        let key = signing_key_for_address(&wallet, password, &first_address).unwrap();
+        let WalletSigningKey::Secp256k1(signing_key) = key else {
+            panic!("expected secp256k1 signing key");
+        };
+        let derived =
+            crate::crypto::address_generator::generate_ethereum_address_checksummed_from_compressed_pubkey(
+                &{
+                    let encoded = signing_key.verifying_key().to_encoded_point(true);
+                    encoded.as_bytes().try_into().unwrap()
+                },
+            )
+            .unwrap();
+        assert_eq!(derived.to_lowercase(), first_address.to_lowercase());
+
+        wallet.addresses.clear();
+    }
+
+    #[test]
     fn test_export_mnemonic() {
         let test_mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
         let identity_id = Uuid::new_v4();
@@ -661,7 +914,10 @@ mod tests {
             ImportFormat::PrivateKey
         );
         assert_eq!(parse_import_format("json").unwrap(), ImportFormat::Json);
-        assert_eq!(parse_import_format("keystore").unwrap(), ImportFormat::Keystore);
+        assert_eq!(
+            parse_import_format("keystore").unwrap(),
+            ImportFormat::Keystore
+        );
         assert_eq!(parse_export_format("json").unwrap(), ExportFormat::Json);
     }
 

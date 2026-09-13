@@ -66,12 +66,14 @@ SSH Agent (developer focus)
 - [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
 - [ ] Windows-specific testing and optimization
 
-Wallet Material (deferred / experimental)
-- [ ] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
-- [ ] Derivations: BTC (BIP32/44), ETH (SLIP‑44), Solana (ed25519)
-- [ ] Import (mnemonic/private key/keystore JSON) & export with confirmations
-- [ ] Sign: BTC (PSBT), ETH (EIP‑1559), Solana; testnets/multiple networks
-- [ ] CLI: wallet create/import/derive/list/sign/verify
+Wallet Material (experimental)
+- [x] Wallet models: mnemonic/seed, HD paths, chain metadata, watch-only
+- [x] Derivations: BTC (BIP32/44, P2WPKH/P2SH-P2WPKH/Taproot), ETH (SLIP‑44), Solana (SLIP‑0010 ed25519, path `m/44'/501'/0'/i'`, Phantom 兼容)
+- [x] Address encoding: BIP‑173 bech32 / BIP‑350 bech32m (P2WPKH/P2WSH/P2TR)、Base58Check、EIP‑55 checksum
+- [x] Import (mnemonic/private key) & export with confirmations; keystore JSON/WIF 导入仍待做
+- [x] Sign: ETH (EIP‑155 legacy, 字节级规范向量验证)、Solana (ed25519, 签名即 tx id)；本地签名验证后再持久化
+- [ ] Sign: BTC raw transaction (PSBT) — 当前仅审计签名；EIP‑1559 dynamic fee 待做
+- [x] CLI: wallet create/import/derive/list/sign (`create-transaction --sign`)
 - [ ] Desktop: wallet overview, address lists, QR, signing confirmations
 
 Desktop (Tauri + React)
