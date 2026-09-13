@@ -1,35 +1,39 @@
 # cargo-deny configuration
 # https://embarkstudios.github.io/cargo-deny/
-
-# Note that all fields that take a lint level have these possible values:
-# * deny - An error will be produced and the check will fail
-# * warn - A warning will be produced, but the check will not fail
-# * allow - No warning or error will be produced, though in some cases a note will be
+#
+# `version = 2` opts both [advisories] and [licenses] into the v2 behavior
+# (cargo-deny PR #611): per-check lint levels were removed. Vulnerable,
+# unmaintained, unsound and notice-rated crates are always denied unless
+# exempted via `ignore`; a license is denied unless listed in `allow` or
+# `exceptions`.
 
 [advisories]
+version = 2
 # The path where the advisory database is cloned/fetched into
 db-path = "~/.cargo/advisory-db"
 # The url(s) of the advisory databases to use
 db-urls = ["https://github.com/rustsec/advisory-db"]
-# The lint level for security vulnerabilities
-vulnerability = "deny"
-# Which dependencies to check for unmaintained status
-# (all/workspace/transitive/none; findings are reported as warnings)
+# Which dependencies to check for unmaintained/unsound advisories
+# (all/workspace/transitive/none)
 unmaintained = "all"
-# The lint level for crates that have been yanked from their source registry
 yanked = "deny"
-# The lint level for crates with security notices
-notice = "warn"
 # A list of advisory IDs to ignore
+# In v2, unmaintained advisories are always denied, so unmaintained crates we
+# accept for now are exempted here (equivalent to the old `unmaintained = "warn"`).
 ignore = [
-    # Add specific advisory IDs here if needed
-    # Example: "RUSTSEC-2020-0001",
+    # Bincode author marked it unmaintained; wait for ecosystem migration
+    "RUSTSEC-2025-0141",
+    # number_prefix (via indicatif -> persona-cli); unmaintained, no replacement release yet
+    "RUSTSEC-2025-0119",
+    # paste (via alloy-consensus/alloy-eips -> persona-core); upstream alloy still depends on it
+    "RUSTSEC-2024-0436",
+    # proc-macro-error (via tabled 0.15 -> persona-cli); tabled >= 0.16 drops it
+    "RUSTSEC-2024-0370",
 ]
 
 [licenses]
-# The lint level for crates which do not have a detectable license
-unlicensed = "deny"
-# List of explicitly allowed licenses
+version = 2
+# List of explicitly allowed licenses (everything else is denied)
 allow = [
     "MIT",
     "Apache-2.0",
@@ -37,26 +41,14 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
+    "Unicode-3.0",
     "Zlib",
     "0BSD",
     "CC0-1.0",
     "MPL-2.0",
+    "MITNFA",
+    "CDLA-Permissive-2.0",
 ]
-# List of explicitly disallowed licenses
-deny = [
-    # Commercial licenses
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0",
-    # We want to be liberal, but not allow copyleft licenses
-]
-# Lint level for licenses considered copyleft
-copyleft = "warn"
-# Blanket approval or denial for OSI-approved or FSF Free/Libre licenses
-allow-osi-fsf-free = "both"
-# Lint level used when no other predicates are matched
-default = "deny"
 # The confidence threshold for detecting a license from license text
 confidence-threshold = 0.8
 
