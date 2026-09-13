@@ -1,0 +1,111 @@
+# Persona 威胁模型与周期性安全审查
+
+本文档定义 Persona 当前主线产品的安全边界、主要威胁、已落地控制和复审机制。范围以根目录 `BOUNDARY.md` 为准：Persona 是本地优先、零知识的身份材料管理器，主要保护同一用户在不同身份上下文中的密码、API Key、TOTP、SSH Key、浏览器填充数据和相关元数据。
+
+## 目标与非目标
+
+目标：
+
+- 保护本地工作区中的身份材料，避免未授权读取、填充、导出和签名。
+- 将凭据、SSH Key、TOTP 等敏感材料限制在明确的身份上下文和来源上下文内使用。
+- 在 CLI、桌面端、浏览器扩展和 SSH Agent 之间保持一致的加密、审计和策略边界。
+- 在发生误用、异常填充、异常签名或配置变更时留下足够的本地审计证据。
+
+非目标：
+
+- 不防御已经完全控制当前用户会话的恶意内核、调试器或系统级恶意软件。
+- 不承诺在未解锁且主密码丢失时恢复明文数据。
+- 不把 Server/Sync 作为强依赖；可选服务端不得接触明文身份材料。
+- 不把钱包能力作为当前安全主线，钱包相关能力仍按实验性范围处理。
+
+## 资产
+
+| 资产 | 示例 | 主要风险 |
+| --- | --- | --- |
+| 主密码与派生主密钥 | `PERSONA_MASTER_PASSWORD`、内存中的解锁密钥 | 泄露后可解密本地工作区 |
+| 单项凭据密钥 | `wrapped_item_key` 解封后的 item key | 单项明文泄露或横向扩大 |
+| 凭据明文 | 密码、API Key、TOTP secret、SSH 私钥 seed | 数据外泄、未授权填充、未授权签名 |
+| 工作区数据库 | SQLite、迁移、用户认证记录、元数据 | 离线暴力破解、篡改、回滚 |
+| 浏览器桥接会话 | 配对密钥、短期 session、Native Messaging 消息 | 恶意扩展请求填充或复制 |
+| SSH Agent socket/pipe | `SSH_AUTH_SOCK`、Windows Named Pipe | 未授权签名、agent 转发滥用 |
+| 审计日志 | 登录、解锁、凭据解密、SSH 签名摘要 | 篡改、删除、敏感字段误写入 |
+| 备份/导入导出文件 | JSON/YAML/CSV、加密备份 | 备份泄露、格式注入、弱 passphrase |
+
+## 信任边界
+
+1. **本地用户边界**：当前 OS 用户账户是主要安全边界。Persona 不应把明文写入 world-readable 路径，也不应依赖云端保密。
+2. **进程内解锁边界**：解锁后的主密钥和部分明文只应存在于短期内存路径，锁定后必须清理服务状态。
+3. **工作区边界**：SQLite、附件和配置文件属于同一个本地工作区；迁移必须保持向后兼容和最小权限。
+4. **浏览器桥接边界**：浏览器扩展通过 Native Messaging 调用 `persona bridge`，敏感操作必须经过配对、HMAC、短期 session、origin binding 和 user gesture。
+5. **SSH Agent 边界**：OpenSSH 客户端通过 socket/pipe 请求签名；agent 只暴露公钥列表和签名能力，不导出私钥。
+6. **可选服务端边界**：server/sync 只能处理事件摘要、密文或同步元数据，不得成为明文解密方。
+7. **自动化边界**：非交互模式允许用环境变量注入主密码，适合 CI，但环境变量由调用方负责隔离和清理。
+
+## 主要威胁与控制
+
+| STRIDE | 威胁 | 已有控制 | 仍需关注 |
+| --- | --- | --- | --- |
+| Spoofing | 恶意浏览器扩展伪装成已配对客户端 | 配对码、`client_instance_id`、短期 session、HMAC-SHA256 请求认证 | 配对状态文件权限和撤销 UX 需要持续检查 |
+| Spoofing | SSH 连接目标主机被冒充 | known_hosts 强制模式、未知主机确认、每主机策略 | known_hosts 解析仍需随 OpenSSH 格式演进复测 |
+| Tampering | 本地 SQLite 或配置被离线篡改 | AES-GCM 认证加密保护凭据密文，迁移测试覆盖 schema | 明文元数据和审计日志仍可能被本地攻击者修改 |
+| Tampering | 导入文件或 Native Messaging 消息被构造为恶意输入 | JSON 解析、长度前缀协议、格式解析测试与 fuzz 路径 | 需把新增解析器纳入 fuzz 清单 |
+| Repudiation | 用户否认敏感操作 | 审计记录身份 CRUD、凭据解密、导出、SSH 签名摘要 | 审计日志当前不是防篡改账本 |
+| Information Disclosure | 工作区文件被复制并离线攻击 | Argon2id/PBKDF2 派生、AES-256-GCM、单项 item key 包裹 | 主密码强度仍是核心风险；KDF 参数需周期性复审 |
+| Information Disclosure | 浏览器后台页面悄悄读取密码/TOTP | user gesture、origin binding、活动身份过滤、只返回匹配凭据 | 没有 URL 的凭据无法绑定来源，应在 UI/CLI 中提示风险 |
+| Information Disclosure | 日志泄露 secret、token、验证码 | 日志脱敏策略和单元测试覆盖常见 secret/key/value 形式 | 新增日志字段必须先确认不含明文 |
+| Denial of Service | Agent 被频繁请求签名或耗尽资源 | 全局最小间隔、每小时/每日限制、每密钥/每主机策略 | 长期运行 agent 需要实机压力测试 |
+| Elevation of Privilege | 被低信任自动化脚本借用解锁态执行敏感操作 | 自动锁、敏感操作再认证、非交互模式显式环境开关 | 解锁态是高风险窗口，桌面端接线时要避免隐式授权 |
+
+## 已落地安全控制
+
+- **本地加密**：凭据明文使用 AES-256-GCM 加密；新写入凭据使用随机 item key，并由主密钥包裹。
+- **密钥派生**：密码导出与部分数据加密使用 Argon2id；核心主密钥服务当前仍包含 PBKDF2 路径，需在安全复审中跟踪参数和迁移策略。
+- **会话与锁定**：服务层支持自动锁、敏感操作再认证、生物识别 Provider 抽象和远程认证抽象。
+- **浏览器桥接**：Native Messaging 协议包含配对、HMAC 请求认证、短期 session、重放窗口、origin binding 和 user gesture 要求。
+- **SSH Agent 策略**：支持 deny-all、速率限制、known_hosts、每密钥/每主机 allow/deny、确认和生物识别优先级。
+- **审计**：身份、凭据、解锁、导出、SSH 签名等敏感事件写入本地审计日志，SSH 签名只记录待签名数据 digest。
+- **供应链检查**：`deny.toml`、cargo-deny、cargo-audit、npm audit/pnpm audit 和许可证策略已有文档化流程。
+- **解析器测试**：TOTP、钱包导入导出、SSH 协议编码、浏览器桥协议具备单元/集成测试路径，部分 parser 已列入 fuzz 方向。
+
+## 当前接受的限制
+
+- 本地管理员、内核级恶意软件、调试器和内存转储仍可攻击解锁后的明文。
+- 当前审计日志强调可追踪性，不提供加密签名链或远端不可抵赖性。
+- `PERSONA_MASTER_PASSWORD` 适合自动化，但会暴露给同一执行环境中的进程/日志风险；CI 必须使用 secret store 并禁用命令回显。
+- 没有 URL 的浏览器凭据无法做严格 origin binding；高价值凭据必须绑定 URL。
+- 可选 Server/Sync 仍是后续方向；在 E2EE 同步完成前，不应把服务端当作恢复或信任根。
+- 钱包能力仍是实验性，不能用当前主线安全承诺覆盖生产级资金安全。
+
+## 安全复审节奏
+
+每个版本发布前必须完成：
+
+- 运行 `cargo test --workspace`，并运行对应前端/扩展测试。
+- 运行 `cargo deny check` 和 JS 依赖审计。
+- 检查新增日志、错误消息和审计 metadata，确认不包含明文 secret。
+- 检查新增 CLI/bridge/agent 参数是否绕过 user gesture、origin binding、确认或自动锁。
+- 检查新增迁移是否保护历史密文和 `wrapped_item_key`。
+
+每月必须完成：
+
+- 复查 RustSec、npm/pnpm audit 和过期依赖。
+- 抽查 `PERSONA_*` 环境变量文档，确认没有新增高风险默认值。
+- 抽查浏览器桥配对状态、session 过期和 nonce/HMAC 逻辑。
+- 抽查 SSH Agent 策略默认值，确认默认不扩大签名权限。
+
+每季度必须完成：
+
+- 重新评估 KDF 参数、主密钥迁移和备份加密参数。
+- 复审本威胁模型和 `BOUNDARY.md`，确认新功能仍在产品边界内。
+- 对浏览器填充、SSH 签名、导入导出、备份恢复执行一次手工安全场景演练。
+- 清理或解释 `deny.toml`、审计忽略项和未修复安全 TODO。
+
+## 变更门槛
+
+以下改动必须在 PR 中显式更新本威胁模型或说明不更新的理由：
+
+- 新增明文 secret 类型、导出格式、同步路径或长期后台进程。
+- 改变主密钥、item key、KDF、nonce、备份加密或签名算法。
+- 改变浏览器桥接、Native Messaging、SSH Agent、自动化环境变量的认证/授权规则。
+- 改变审计日志结构、脱敏策略、敏感 metadata 或日志保留策略。
+- 引入新的生产网络 API、生产遥测或云端存储路径。

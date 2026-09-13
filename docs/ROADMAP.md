@@ -97,7 +97,7 @@ Milestone 7 – Browser & Autofill (future)
 - [ ] Phishing protections; identity-based context switching
 
 Quality & Compliance (ongoing)
-- [ ] Threat model & security review
+- [x] Threat model & security review
 - [ ] Fuzzing paths for parsers (mnemonic, keystore)
 - [ ] Secrets redaction policy in logs; zero sensitive data in telemetry
 - [ ] Reproducible builds; supply chain checks (cargo-deny, pnpm audit)

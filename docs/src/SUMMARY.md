@@ -26,6 +26,10 @@
 - [安全设计](./design/security.md)
 - [UI/UX 设计](./design/ui-ux.md)
 
+# 安全运营
+
+- [威胁模型与安全审查](../THREAT_MODEL.md)
+
 # 开发指南
 
 - [环境搭建](./development/setup.md)

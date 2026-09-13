@@ -106,7 +106,7 @@ Browser & Autofill (future)
 - [x] Phishing protections; identity-based context switching
 
 Quality & Security
-- [ ] Threat model & periodic security review
+- [x] Threat model & periodic security review
 - [x] Fuzz tests for parsers (mnemonic/keystore/QR)
 - [x] Supply chain checks (cargo-deny, npm audit)
 - [ ] Reproducible builds
