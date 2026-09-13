@@ -44,6 +44,11 @@ alloy-consensus = "2.4"
 alloy-eips = "2.4"
 alloy-primitives = "1.7"
 bech32 = "0.12"
+# WebAuthn/passkey：P-256 与 COSE/CBOR 用审计过的实现
+p256 = { version = "0.13", features = ["ecdsa"] }
+coset = "0.3"
+base64 = "0.22"
+webauthn-rs = "0.5"
 
 # 数据库
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
@@ -89,6 +94,7 @@ async-trait = "0.1"
 dirs = "5.0"
 hex = "0.4"
 tempfile = "3.8"
+url = "2"
 
 [profile.release]
 opt-level = 3

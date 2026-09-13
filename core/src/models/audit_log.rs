@@ -80,6 +80,13 @@ pub enum AuditAction {
     CredentialDecrypted,
     CredentialExported,
 
+    // Passkey（WebAuthn）
+    PasskeyCreated,
+    PasskeyViewed,
+    PasskeyAsserted,
+    PasskeyDeleted,
+    PasskeyExported,
+
     // 工作区管理
     WorkspaceCreated,
     WorkspaceUpdated,
@@ -126,6 +133,11 @@ impl std::fmt::Display for AuditAction {
             AuditAction::CredentialViewed => "credential_viewed",
             AuditAction::CredentialDecrypted => "credential_decrypted",
             AuditAction::CredentialExported => "credential_exported",
+            AuditAction::PasskeyCreated => "passkey_created",
+            AuditAction::PasskeyViewed => "passkey_viewed",
+            AuditAction::PasskeyAsserted => "passkey_asserted",
+            AuditAction::PasskeyDeleted => "passkey_deleted",
+            AuditAction::PasskeyExported => "passkey_exported",
             AuditAction::WorkspaceCreated => "workspace_created",
             AuditAction::WorkspaceUpdated => "workspace_updated",
             AuditAction::WorkspaceDeleted => "workspace_deleted",
@@ -168,6 +180,11 @@ impl std::str::FromStr for AuditAction {
             "credential_viewed" => Ok(AuditAction::CredentialViewed),
             "credential_decrypted" => Ok(AuditAction::CredentialDecrypted),
             "credential_exported" => Ok(AuditAction::CredentialExported),
+            "passkey_created" => Ok(AuditAction::PasskeyCreated),
+            "passkey_viewed" => Ok(AuditAction::PasskeyViewed),
+            "passkey_asserted" => Ok(AuditAction::PasskeyAsserted),
+            "passkey_deleted" => Ok(AuditAction::PasskeyDeleted),
+            "passkey_exported" => Ok(AuditAction::PasskeyExported),
             "workspace_created" => Ok(AuditAction::WorkspaceCreated),
             "workspace_updated" => Ok(AuditAction::WorkspaceUpdated),
             "workspace_deleted" => Ok(AuditAction::WorkspaceDeleted),
@@ -193,6 +210,7 @@ pub enum ResourceType {
     User,
     Identity,
     Credential,
+    Passkey,
     Workspace,
     Session,
     Configuration,
@@ -208,6 +226,7 @@ impl std::fmt::Display for ResourceType {
             ResourceType::User => "user",
             ResourceType::Identity => "identity",
             ResourceType::Credential => "credential",
+            ResourceType::Passkey => "passkey",
             ResourceType::Workspace => "workspace",
             ResourceType::Session => "session",
             ResourceType::Configuration => "configuration",
@@ -228,6 +247,7 @@ impl std::str::FromStr for ResourceType {
             "user" => Ok(ResourceType::User),
             "identity" => Ok(ResourceType::Identity),
             "credential" => Ok(ResourceType::Credential),
+            "passkey" => Ok(ResourceType::Passkey),
             "workspace" => Ok(ResourceType::Workspace),
             "session" => Ok(ResourceType::Session),
             "configuration" => Ok(ResourceType::Configuration),
@@ -336,6 +356,8 @@ impl AuditLog {
                 | AuditAction::PasswordChange
                 | AuditAction::CredentialDecrypted
                 | AuditAction::CredentialExported
+                | AuditAction::PasskeyAsserted
+                | AuditAction::PasskeyExported
                 | AuditAction::UnauthorizedAccess
                 | AuditAction::BruteForceDetected
                 | AuditAction::SuspiciousActivity

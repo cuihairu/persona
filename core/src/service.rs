@@ -5,17 +5,20 @@ use crate::{
         MockRemoteAuthProvider, RemoteAuthChallenge, RemoteAuthProvider, RemoteAuthResult, Session,
         UserAuth,
     },
-    crypto::{EncryptionService, KeyHierarchy, Sha256Hasher},
+    crypto::{
+        assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
+        EncryptionService, KeyHierarchy, Sha256Hasher,
+    },
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
         ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType, Identity,
-        IdentityType, ResourceType, SecurityLevel,
+        IdentityType, PasskeyItem, ResourceType, SecurityLevel,
     },
     password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
         AttachmentManager, AttachmentRepository, AuditLogRepository, BlobStore,
-        ChangeHistoryRepository, CredentialRepository, Database, IdentityRepository, Repository,
-        UserAuthRepository,
+        ChangeHistoryRepository, CredentialRepository, Database, IdentityRepository,
+        PasskeyRepository, Repository, UserAuthRepository,
     },
     PersonaError, Result,
 };
@@ -34,6 +37,7 @@ pub struct PersonaService {
     master_key_service: MasterKeyService,
     identity_repo: IdentityRepository,
     credential_repo: CredentialRepository,
+    passkey_repo: PasskeyRepository,
     user_auth_repo: UserAuthRepository,
     audit_repo: AuditLogRepository,
     change_history_repo: ChangeHistoryRepository,
@@ -64,6 +68,7 @@ impl PersonaService {
             master_key_service: MasterKeyService::new(),
             identity_repo: IdentityRepository::new(db.clone()),
             credential_repo: CredentialRepository::new(db.clone()),
+            passkey_repo: PasskeyRepository::new(Arc::new(db.clone())),
             user_auth_repo: UserAuthRepository::new(db.clone()),
             audit_repo,
             change_history_repo: ChangeHistoryRepository::new(db.clone()),
@@ -665,6 +670,242 @@ impl PersonaService {
         Ok(ok)
     }
 
+    // ------------------------------------------------------------------
+    // Passkeys (WebAuthn software authenticator)
+    // ------------------------------------------------------------------
+
+    /// Run a registration ceremony and store the new passkey.
+    ///
+    /// `client_data_json` must carry the RP's challenge; the private key is
+    /// generated inside core, wrapped with a fresh item key, and never
+    /// stored or returned in the clear.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_passkey(
+        &self,
+        identity_id: Uuid,
+        rp_id: String,
+        origin: &str,
+        client_data_json: &[u8],
+        user_name: Option<String>,
+        user_display_name: Option<String>,
+        user_verification: bool,
+    ) -> Result<PasskeyItem> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+
+        let registration = register_passkey(&rp_id, origin, client_data_json, user_verification)?;
+
+        let master_encryption = self.get_master_encryption_service()?;
+        let hierarchy = KeyHierarchy::new(master_encryption);
+        let scalar = registration.signing_key.to_bytes();
+        let envelope = hierarchy.encrypt_with_new_item_key(scalar.as_slice())?;
+
+        let mut item = PasskeyItem::new(
+            identity_id,
+            rp_id,
+            random_bytes32().to_vec(),
+            registration.credential_id,
+            envelope.ciphertext,
+            envelope.wrapped_key,
+            registration.public_key_cose,
+        );
+        item.user_name = user_name;
+        item.user_display_name = user_display_name;
+        item.uv_initialized = user_verification;
+
+        let created = self.passkey_repo.create(&item).await?;
+        self.log_audit(
+            AuditAction::PasskeyCreated,
+            ResourceType::Passkey,
+            true,
+            Some(created.id),
+            Some(identity_id),
+            None,
+        )
+        .await;
+        Ok(created)
+    }
+
+    /// List the passkeys of an identity (metadata only; no key material).
+    pub async fn list_passkeys(&self, identity_id: &Uuid) -> Result<Vec<PasskeyItem>> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+        Ok(self.passkey_repo.find_by_identity(identity_id).await?)
+    }
+
+    /// Fetch one passkey (metadata only) and audit the view.
+    pub async fn get_passkey(&self, id: &Uuid) -> Result<Option<PasskeyItem>> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+        let item = self.passkey_repo.find_by_id(id).await?;
+        if let Some(passkey) = &item {
+            self.log_audit(
+                AuditAction::PasskeyViewed,
+                ResourceType::Passkey,
+                true,
+                Some(passkey.id),
+                Some(passkey.identity_id),
+                None,
+            )
+            .await;
+        }
+        Ok(item)
+    }
+
+    /// Delete a passkey by ID.
+    pub async fn delete_passkey(&self, id: &Uuid) -> Result<bool> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+        // Fetch first so the audit entry keeps the identity context.
+        let existing = self.passkey_repo.find_by_id(id).await?;
+        let Some(existing) = existing else {
+            return Ok(false);
+        };
+        let ok = self.passkey_repo.delete(id).await?;
+        self.log_audit(
+            AuditAction::PasskeyDeleted,
+            ResourceType::Passkey,
+            ok,
+            Some(*id),
+            Some(existing.identity_id),
+            None,
+        )
+        .await;
+        Ok(ok)
+    }
+
+    /// Produce a WebAuthn assertion for a stored passkey.
+    ///
+    /// Unseals the private key in memory, signs the ceremony, stamps usage
+    /// time and audits the event. The key never leaves core.
+    pub async fn passkey_assertion(
+        &self,
+        id: &Uuid,
+        origin: &str,
+        client_data_json: &[u8],
+        user_verification: bool,
+    ) -> Result<PasskeyAssertion> {
+        self.ensure_sensitive_operation_allowed().await?;
+        self.touch_activity();
+
+        let passkey = self
+            .passkey_repo
+            .find_by_id(id)
+            .await?
+            .ok_or_else(|| PersonaError::NotFound("Passkey".to_string()))?;
+
+        let signing_key = self.unseal_passkey_key(&passkey)?;
+        let assertion = assert_passkey(
+            &passkey.rp_id,
+            origin,
+            client_data_json,
+            &signing_key,
+            user_verification,
+        )?;
+
+        let mut updated = passkey.clone();
+        updated.last_used_at = Some(chrono::Utc::now());
+        self.passkey_repo.update(&updated).await?;
+
+        self.log_audit(
+            AuditAction::PasskeyAsserted,
+            ResourceType::Passkey,
+            true,
+            Some(passkey.id),
+            Some(passkey.identity_id),
+            None,
+        )
+        .await;
+        self.update_sensitive_auto_lock_activity().await?;
+
+        Ok(PasskeyAssertion {
+            credential_id: passkey.credential_id,
+            user_handle: passkey.user_handle,
+            authenticator_data: assertion.authenticator_data,
+            signature_der: assertion.signature_der,
+        })
+    }
+
+    /// Verify a stored passkey end to end: sign a locally generated ceremony
+    /// and check the assertion against the stored public key — the same
+    /// verification an RP would run. No state is modified.
+    pub async fn passkey_self_test(&self, id: &Uuid) -> Result<()> {
+        self.ensure_sensitive_operation_allowed().await?;
+        self.touch_activity();
+
+        let passkey = self
+            .passkey_repo
+            .find_by_id(id)
+            .await?
+            .ok_or_else(|| PersonaError::NotFound("Passkey".to_string()))?;
+
+        let origin = format!("https://{}", passkey.rp_id);
+        let client_data = self_test_client_data(&origin)?;
+        let signing_key = self.unseal_passkey_key(&passkey)?;
+        let assertion = assert_passkey(
+            &passkey.rp_id,
+            &origin,
+            &client_data,
+            &signing_key,
+            passkey.uv_initialized,
+        )?;
+        verify_assertion(
+            &passkey.public_key_cose,
+            &passkey.rp_id,
+            &client_data,
+            &assertion.authenticator_data,
+            &assertion.signature_der,
+        )?;
+        Ok(())
+    }
+
+    /// Export a passkey's private key scalar (P2 import/backup needs).
+    ///
+    /// Refused when the passkey is marked non-exportable; audited as a
+    /// security-sensitive event.
+    pub async fn export_passkey_private_key(&self, id: &Uuid) -> Result<Vec<u8>> {
+        self.ensure_sensitive_operation_allowed().await?;
+        self.touch_activity();
+
+        let passkey = self
+            .passkey_repo
+            .find_by_id(id)
+            .await?
+            .ok_or_else(|| PersonaError::NotFound("Passkey".to_string()))?;
+        if !passkey.export_allowed {
+            return Err(PersonaError::InvalidInput(
+                "Passkey export is disabled for this credential".to_string(),
+            )
+            .into());
+        }
+
+        let signing_key = self.unseal_passkey_key(&passkey)?;
+        self.log_audit(
+            AuditAction::PasskeyExported,
+            ResourceType::Passkey,
+            true,
+            Some(passkey.id),
+            Some(passkey.identity_id),
+            None,
+        )
+        .await;
+        self.update_sensitive_auto_lock_activity().await?;
+        Ok(signing_key.to_bytes().to_vec())
+    }
+
+    /// Decrypt the wrapped private key scalar and rebuild the signing key.
+    fn unseal_passkey_key(&self, passkey: &PasskeyItem) -> Result<p256::ecdsa::SigningKey> {
+        let master_encryption = self.get_master_encryption_service()?;
+        let hierarchy = KeyHierarchy::new(master_encryption);
+        let mut scalar = hierarchy
+            .decrypt_with_wrapped_key(&passkey.wrapped_item_key, &passkey.encrypted_private_key)?;
+        let key = p256::ecdsa::SigningKey::from_slice(&scalar).map_err(|e| {
+            PersonaError::CryptographicError(format!("Invalid stored passkey key: {e}"))
+        })?;
+        scalar.fill(0);
+        Ok(key)
+    }
+
     /// Search credentials by name
     pub async fn search_credentials(&self, query: &str) -> Result<Vec<Credential>> {
         self.ensure_unlocked()?;
@@ -1093,6 +1334,17 @@ impl PersonaService {
                 AuditAction::IdentityDeleted => {
                     // Identity no longer exists; don't set FK-backed fields.
                 }
+                AuditAction::PasskeyCreated
+                | AuditAction::PasskeyViewed
+                | AuditAction::PasskeyAsserted
+                | AuditAction::PasskeyExported
+                | AuditAction::PasskeyDeleted => {
+                    // A passkey id is not a credential FK; resource_id carries
+                    // the primary key, so just attach the identity context.
+                    if let Some(identity_id_val) = identity_id {
+                        log = log.with_identity_id(Some(identity_id_val));
+                    }
+                }
                 AuditAction::CredentialDeleted => {
                     // Credential no longer exists; keep identity context if available.
                     if let Some(identity_id_val) = identity_id {
@@ -1120,6 +1372,15 @@ impl PersonaService {
 pub struct IdentityExport {
     pub identity: Identity,
     pub credentials: Vec<Credential>,
+}
+
+/// Assertion produced by a stored passkey, ready to hand to an RP.
+#[derive(Debug, Clone)]
+pub struct PasskeyAssertion {
+    pub credential_id: Vec<u8>,
+    pub user_handle: Vec<u8>,
+    pub authenticator_data: Vec<u8>,
+    pub signature_der: Vec<u8>,
 }
 
 /// Service usage statistics
@@ -1186,5 +1447,61 @@ mod tests {
         } else {
             panic!("Expected password credential data");
         }
+    }
+
+    #[tokio::test]
+    async fn test_passkey_lifecycle() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let mut service = PersonaService::new(db).await.unwrap();
+        let salt = service.generate_salt();
+        service.unlock("test_password", &salt).unwrap();
+
+        let identity = service
+            .create_identity("Passkey Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // registration through the service; client data mimics an RP challenge
+        let create_client_data = br#"{"type":"webauthn.create","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#;
+        let passkey = service
+            .create_passkey(
+                identity.id,
+                "example.com".to_string(),
+                "https://example.com",
+                create_client_data,
+                Some("alice@example.com".to_string()),
+                Some("Alice".to_string()),
+                true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(passkey.rp_id, "example.com");
+        assert_eq!(passkey.user_handle.len(), 32);
+        assert_eq!(passkey.alg, -7);
+
+        let listed = service.list_passkeys(&identity.id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+
+        // self-test: sign locally, verify against the stored public key
+        service.passkey_self_test(&passkey.id).await.unwrap();
+
+        // assertion updates last_used_at and returns RP-ready artifacts
+        let get_client_data =
+            br#"{"type":"webauthn.get","challenge":"YXNzZXJ0aW9u","origin":"https://example.com"}"#;
+        let assertion = service
+            .passkey_assertion(&passkey.id, "https://example.com", get_client_data, true)
+            .await
+            .unwrap();
+        assert_eq!(assertion.credential_id, passkey.credential_id);
+        assert_eq!(assertion.user_handle, passkey.user_handle);
+
+        let reloaded = service.get_passkey(&passkey.id).await.unwrap().unwrap();
+        assert!(reloaded.last_used_at.is_some());
+
+        assert!(service.delete_passkey(&passkey.id).await.unwrap());
+        assert!(!service.delete_passkey(&passkey.id).await.unwrap());
+        assert!(service.get_passkey(&passkey.id).await.unwrap().is_none());
     }
 }

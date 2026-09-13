@@ -22,6 +22,7 @@ pub use models::auto_lock_policy::*;
 pub use models::change_history::*;
 pub use models::credential::*;
 pub use models::identity::*;
+pub use models::passkey::*;
 pub use models::workspace::*;
 
 // Selective re-exports from storage to avoid conflicts

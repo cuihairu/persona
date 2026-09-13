@@ -352,6 +352,8 @@ async fn export_json(
 
         // Collect credentials metadata and optionally data
         let mut credentials_json = Vec::new();
+        // Collect passkeys (metadata; private key only when allowed)
+        let mut passkeys_json = Vec::new();
         if unlocked {
             let creds = service
                 .get_credentials_for_identity(&identity.id)
@@ -396,6 +398,49 @@ async fn export_json(
                 }
                 credentials_json.push(entry);
             }
+
+            // Collect passkeys (metadata; private key only when allowed)
+            let passkeys = service
+                .list_passkeys(&identity.id)
+                .await
+                .unwrap_or_default();
+            for pk in passkeys {
+                let mut entry = serde_json::json!({
+                    "id": pk.id.to_string(),
+                    "rp_id": pk.rp_id,
+                    "rp_name": pk.rp_name,
+                    "user_handle": hex::encode(&pk.user_handle),
+                    "user_name": pk.user_name,
+                    "user_display_name": pk.user_display_name,
+                    "credential_id": hex::encode(&pk.credential_id),
+                    "public_key_cose": hex::encode(&pk.public_key_cose),
+                    "alg": pk.alg,
+                    "uv_initialized": pk.uv_initialized,
+                    "export_allowed": pk.export_allowed,
+                    "created": pk.created_at.to_rfc3339(),
+                    "last_used": pk.last_used_at.map(|d| d.to_rfc3339()),
+                    "tags": pk.tags,
+                });
+                if args.include_sensitive {
+                    if !pk.export_allowed {
+                        eprintln!(
+                            "⚠️  Passkey {} for {} is marked non-exportable; skipping private key",
+                            pk.id, pk.rp_id
+                        );
+                    } else if let Ok(scalar) = service.export_passkey_private_key(&pk.id).await {
+                        entry.as_object_mut().unwrap().insert(
+                            "private_key".to_string(),
+                            serde_json::json!(hex::encode(&scalar)),
+                        );
+                    } else {
+                        eprintln!(
+                            "⚠️  Could not export private key of passkey {} ({})",
+                            pk.id, pk.rp_id
+                        );
+                    }
+                }
+                passkeys_json.push(entry);
+            }
         }
 
         let identity_data = serde_json::json!({
@@ -411,6 +456,7 @@ async fn export_json(
             "created": identity.created_at.to_rfc3339(),
             "modified": identity.updated_at.to_rfc3339(),
             "credentials": credentials_json,
+            "passkeys": passkeys_json,
         });
 
         export_data["identities"]

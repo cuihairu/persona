@@ -82,6 +82,9 @@ enum Commands {
 
     /// Crypto wallet management
     Wallet(commands::wallet::WalletArgs),
+
+    /// Passkey (WebAuthn software authenticator) management
+    Passkey(commands::passkey::PasskeyArgs),
 }
 
 #[tokio::main]
@@ -136,6 +139,7 @@ async fn main() -> Result<()> {
         Commands::Totp(args) => commands::totp::execute(args, &config).await,
         Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
         Commands::Wallet(args) => commands::wallet::handle_wallet(args, &config).await,
+        Commands::Passkey(args) => commands::passkey::handle_passkey(args, &config).await,
     }
 }
 

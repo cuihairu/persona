@@ -107,7 +107,11 @@ Browser & Autofill (future)
   - [x] Minimal autofill MVP: username/password fill on matched domain
   - [x] Policy integration: domain trust/blocked + confirm-on-unknown
   - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
-- [ ] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`（待评审，P1=core/CLI → P2=浏览器拦截）
+- [ ] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`
+  - [x] P1: 软件验证器 core/CLI（ES256 生成/签名、p256+coset、passkeys 表与 KeyHierarchy 包裹、
+    PersonaService create/list/show/delete/assertion/self-test/export、审计事件、
+    `persona passkey …` CLI、JSON 导出含私钥（export_allowed 门禁）、
+    webauthn-rs RP 全流程回归 + 单测）
 - [x] Phishing protections; identity-based context switching
 
 Quality & Security
