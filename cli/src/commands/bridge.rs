@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use clap::Args;
 use data_encoding::{BASE32, BASE32_NOPAD};
@@ -15,9 +16,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, warn};
 use url::Url;
 
+use persona_core::crypto::{parse_creation_options, validate_origin_matches_rp_id};
 use persona_core::models::{CredentialData, CredentialType, TwoFactorData};
 use persona_core::storage::{CredentialRepository, WorkspaceRepository};
-use persona_core::{Database, PersonaService, Repository};
+use persona_core::{Database, PersonaError, PersonaService, Repository};
 
 /// Native Messaging host for the Persona browser extension.
 ///
@@ -189,6 +191,95 @@ struct CopyResponse {
     clear_after_seconds: Option<u32>,
 }
 
+// ---------------------------------------------------------------------------
+// Bridge protocol v2: passkey (WebAuthn software authenticator) messages
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct PasskeyListPayload {
+    origin: String,
+    /// Indicates this request was triggered by an explicit user action
+    /// (the WebAuthn call Persona intercepts). Required.
+    #[serde(default)]
+    user_gesture: bool,
+    /// Relying party ID. Defaults to the origin's effective host.
+    #[serde(default)]
+    rp_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct PasskeyCreatePayload {
+    origin: String,
+    /// Indicates this request was triggered by an explicit user action.
+    #[serde(default)]
+    user_gesture: bool,
+    /// `PublicKeyCredentialCreationOptions` in JSON form; BufferSource fields
+    /// (challenge, user.id, ...) are base64url strings serialized by the
+    /// extension before forwarding.
+    request_json: serde_json::Value,
+    /// Raw clientDataJSON bytes produced by the browser (base64url, no pad).
+    /// The core only hashes these — never reassembled or inspected further.
+    client_data_json_b64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct PasskeyAssertPayload {
+    origin: String,
+    /// Indicates this request was triggered by an explicit user action
+    /// (the selection-UI click). Required — silent signing is refused.
+    #[serde(default)]
+    user_gesture: bool,
+    /// The passkey the user picked in the selection UI. Missing ⇒ refuse.
+    item_id: String,
+    /// Raw clientDataJSON bytes produced by the browser (base64url, no pad).
+    client_data_json_b64: String,
+    /// Mirror of `PublicKeyCredentialRequestOptions.userVerification`:
+    /// the extension maps "discouraged" to false. Default true.
+    #[serde(default = "default_true")]
+    user_verification: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PasskeyListItem {
+    id: String,
+    rp_id: String,
+    user_name: Option<String>,
+    user_display_name: Option<String>,
+    identity_name: Option<String>,
+    created_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PasskeyCreateResponse {
+    item_id: String,
+    credential_id_b64: String,
+    /// `none`-format attestation object (CBOR bytes, base64url).
+    attestation_object_b64: String,
+    /// Echoed back so the page's PublicKeyCredential can carry the exact
+    /// bytes the authenticator attested over.
+    client_data_json_b64: String,
+    transports: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct PasskeyAssertResponse {
+    item_id: String,
+    credential_id_b64: String,
+    authenticator_data_b64: String,
+    signature_der_b64: String,
+    user_handle_b64: String,
+}
+
 pub async fn execute(args: BridgeArgs) -> Result<()> {
     let db_path = resolve_db_path(args.db_path);
     let state_dir = resolve_state_dir(args.state_dir);
@@ -268,7 +359,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy"],
+                "protocol_version": 2,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -331,9 +423,7 @@ async fn handle_request(
 
             // Security: Require user gesture for fill operations.
             // This prevents malicious scripts from silently exfiltrating credentials.
-            let require_gesture = std::env::var("PERSONA_BRIDGE_REQUIRE_GESTURE")
-                .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true); // Default: require gesture
+            let require_gesture = gesture_required();
 
             if require_gesture && !parsed.user_gesture {
                 warn!(
@@ -346,21 +436,7 @@ async fn handle_request(
 
             // For now, require a master password via environment variable for automation.
             // In the 1Password-like model, this step should be delegated to Desktop (UI + biometrics).
-            let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| anyhow!("locked: PERSONA_MASTER_PASSWORD not set"))?;
-
-            // Open DB + unlock.
-            let db = open_db(db_path).await?;
-            let active_identity_id = get_active_identity_id(&db).await;
-            let mut service = PersonaService::new(db)
-                .await
-                .map_err(|e| anyhow!("failed to create service: {e}"))?;
-            let auth = service.authenticate_user(&master_password).await?;
-            if auth != persona_core::auth::authentication::AuthResult::Success {
-                return Err(anyhow!("authentication_failed"));
-            }
+            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             // Fetch decrypted credential data.
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
@@ -436,9 +512,8 @@ async fn handle_request(
                 serde_json::from_value(req.payload).context("invalid payload for get_totp")?;
             let host = origin_to_host(&parsed.origin)?;
 
-            let require_gesture = std::env::var("PERSONA_BRIDGE_REQUIRE_GESTURE")
-                .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true);
+            let require_gesture = gesture_required();
+
             if require_gesture && !parsed.user_gesture {
                 warn!(
                     origin = %parsed.origin,
@@ -450,20 +525,7 @@ async fn handle_request(
                 ));
             }
 
-            let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| anyhow!("locked: PERSONA_MASTER_PASSWORD not set"))?;
-
-            let db = open_db(db_path).await?;
-            let active_identity_id = get_active_identity_id(&db).await;
-            let mut service = PersonaService::new(db)
-                .await
-                .map_err(|e| anyhow!("failed to create service: {e}"))?;
-            let auth = service.authenticate_user(&master_password).await?;
-            if auth != persona_core::auth::authentication::AuthResult::Success {
-                return Err(anyhow!("authentication_failed"));
-            }
+            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
                 .map_err(|e| anyhow!("invalid item_id uuid: {e}"))?;
@@ -538,9 +600,7 @@ async fn handle_request(
             let parsed: CopyPayload =
                 serde_json::from_value(req.payload).context("invalid payload for copy")?;
 
-            let require_gesture = std::env::var("PERSONA_BRIDGE_REQUIRE_GESTURE")
-                .map(|v| v != "0" && v.to_lowercase() != "false")
-                .unwrap_or(true);
+            let require_gesture = gesture_required();
 
             if require_gesture && !parsed.user_gesture {
                 warn!(
@@ -557,20 +617,7 @@ async fn handle_request(
             let host = origin_to_host(&parsed.origin)?;
             let field = parsed.field.trim().to_ascii_lowercase();
 
-            let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| anyhow!("locked: PERSONA_MASTER_PASSWORD not set"))?;
-
-            let db = open_db(db_path).await?;
-            let active_identity_id = get_active_identity_id(&db).await;
-            let mut service = PersonaService::new(db)
-                .await
-                .map_err(|e| anyhow!("failed to create service: {e}"))?;
-            let auth = service.authenticate_user(&master_password).await?;
-            if auth != persona_core::auth::authentication::AuthResult::Success {
-                return Err(anyhow!("authentication_failed"));
-            }
+            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
 
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
                 .map_err(|e| anyhow!("invalid item_id uuid: {e}"))?;
@@ -658,6 +705,186 @@ async fn handle_request(
                 })?,
             ))
         }
+        "passkey_list" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: PasskeyListPayload =
+                serde_json::from_value(req.payload).context("invalid payload for passkey_list")?;
+
+            if gesture_required() && !parsed.user_gesture {
+                warn!(origin = %parsed.origin, "passkey_list rejected: user_gesture required");
+                return Err(anyhow!(
+                    "user_gesture_required: passkey enumeration requires user action"
+                ));
+            }
+
+            let rp_id = match &parsed.rp_id {
+                Some(rp_id) => {
+                    validate_origin_matches_rp_id(&parsed.origin, rp_id).map_err(|_| {
+                        anyhow!("passkey_rp_mismatch: rp_id does not match request origin")
+                    })?;
+                    rp_id.clone()
+                }
+                None => origin_to_host(&parsed.origin)?,
+            };
+
+            let (service, _) = open_unlocked_service(db_path).await?;
+            let passkeys = service.list_passkeys_by_rp(&rp_id).await?;
+            let mut items = Vec::with_capacity(passkeys.len());
+            for pk in passkeys {
+                let identity_name = service.get_identity(&pk.identity_id).await?.map(|i| i.name);
+                items.push(PasskeyListItem {
+                    id: pk.id.to_string(),
+                    rp_id: pk.rp_id,
+                    user_name: pk.user_name,
+                    user_display_name: pk.user_display_name,
+                    identity_name,
+                    created_at: pk.created_at.timestamp(),
+                });
+            }
+            debug!(event = "bridge_passkey_list", rp_id = %rp_id, count = items.len());
+
+            Ok(ok(
+                req.request_id,
+                "passkey_list_response",
+                serde_json::json!({ "items": items, "rp_id": rp_id }),
+            ))
+        }
+        "passkey_create" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: PasskeyCreatePayload = serde_json::from_value(req.payload)
+                .context("invalid payload for passkey_create")?;
+
+            if gesture_required() && !parsed.user_gesture {
+                warn!(origin = %parsed.origin, "passkey_create rejected: user_gesture required");
+                return Err(anyhow!(
+                    "user_gesture_required: passkey creation must be triggered by explicit user action"
+                ));
+            }
+
+            let client_data_json = URL_SAFE_NO_PAD
+                .decode(parsed.client_data_json_b64.as_bytes())
+                .context("invalid_request: client_data_json_b64 must be base64url")?;
+            let options = parse_creation_options(&parsed.request_json, &parsed.origin)
+                .map_err(flat_persona_error)?;
+
+            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+            let identity_id = active_identity_id.ok_or_else(|| {
+                anyhow!("no_active_identity: switch to an identity before creating a passkey")
+            })?;
+
+            // The bridge session just authenticated with the master password,
+            // so the user-verification flag truthfully reflects local auth.
+            let creation = service
+                .create_passkey_full(
+                    identity_id,
+                    options.rp_id.clone(),
+                    &parsed.origin,
+                    &client_data_json,
+                    Some(options.user_handle),
+                    options.user_name,
+                    options.user_display_name.or(options.rp_name),
+                    true,
+                )
+                .await?;
+            let item = &creation.item;
+
+            info!(
+                event = "bridge_passkey_create",
+                rp_id = %item.rp_id,
+                origin = %parsed.origin,
+                item_id = %item.id,
+                "passkey created via bridge"
+            );
+
+            Ok(ok(
+                req.request_id,
+                "passkey_create_response",
+                serde_json::to_value(PasskeyCreateResponse {
+                    item_id: item.id.to_string(),
+                    credential_id_b64: URL_SAFE_NO_PAD.encode(&item.credential_id),
+                    attestation_object_b64: URL_SAFE_NO_PAD.encode(&creation.attestation_object),
+                    client_data_json_b64: parsed.client_data_json_b64,
+                    transports: vec!["internal".to_string()],
+                })?,
+            ))
+        }
+        "passkey_assert" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: PasskeyAssertPayload = serde_json::from_value(req.payload)
+                .context("invalid payload for passkey_assert")?;
+
+            if gesture_required() && !parsed.user_gesture {
+                warn!(origin = %parsed.origin, "passkey_assert rejected: user_gesture required");
+                return Err(anyhow!(
+                    "user_gesture_required: passkey assertions require an explicit selection click"
+                ));
+            }
+
+            let item_id = uuid::Uuid::parse_str(&parsed.item_id)
+                .map_err(|e| anyhow!("invalid_request: item_id uuid: {e}"))?;
+            let client_data_json = URL_SAFE_NO_PAD
+                .decode(parsed.client_data_json_b64.as_bytes())
+                .context("invalid_request: client_data_json_b64 must be base64url")?;
+
+            let (mut service, active_identity_id) = open_unlocked_service(db_path).await?;
+
+            // Preflight the item so error codes stay precise; the assertion
+            // re-validates origin↔rp_id inside core regardless.
+            let item = service
+                .get_passkey(&item_id)
+                .await?
+                .ok_or_else(|| anyhow!("passkey_item_not_found"))?;
+            if let Some(active) = active_identity_id {
+                if item.identity_id != active {
+                    return Err(anyhow!(
+                        "wrong_identity: switch active identity to use this passkey"
+                    ));
+                }
+            }
+            validate_origin_matches_rp_id(&parsed.origin, &item.rp_id).map_err(|_| {
+                anyhow!("passkey_rp_mismatch: origin does not match the passkey's rp_id")
+            })?;
+
+            let assertion = service
+                .passkey_assertion(
+                    &item_id,
+                    &parsed.origin,
+                    &client_data_json,
+                    parsed.user_verification,
+                )
+                .await
+                .map_err(|e| {
+                    let not_found = e
+                        .downcast_ref::<PersonaError>()
+                        .is_some_and(|pe| matches!(pe, PersonaError::NotFound(_)));
+                    if not_found {
+                        anyhow!("passkey_item_not_found")
+                    } else {
+                        anyhow!("passkey_assert_failed: {e}")
+                    }
+                })?;
+
+            info!(
+                event = "bridge_passkey_assert",
+                rp_id = %item.rp_id,
+                origin = %parsed.origin,
+                item_id = %item.id,
+                user_gesture = parsed.user_gesture,
+                "passkey assertion signed via bridge"
+            );
+
+            Ok(ok(
+                req.request_id,
+                "passkey_assert_response",
+                serde_json::to_value(PasskeyAssertResponse {
+                    item_id: item.id.to_string(),
+                    credential_id_b64: URL_SAFE_NO_PAD.encode(&assertion.credential_id),
+                    authenticator_data_b64: URL_SAFE_NO_PAD.encode(&assertion.authenticator_data),
+                    signature_der_b64: URL_SAFE_NO_PAD.encode(&assertion.signature_der),
+                    user_handle_b64: URL_SAFE_NO_PAD.encode(&assertion.user_handle),
+                })?,
+            ))
+        }
         other => Ok(err(
             req.request_id,
             "error",
@@ -716,6 +943,46 @@ async fn open_db(db_path: &PathBuf) -> Result<Database> {
     let db = Database::from_file(db_path).await?;
     db.migrate().await?;
     Ok(db)
+}
+
+/// Whether fill/copy/totp/passkey requests must carry `user_gesture: true`
+/// (default yes; `PERSONA_BRIDGE_REQUIRE_GESTURE=0` disables).
+fn gesture_required() -> bool {
+    std::env::var("PERSONA_BRIDGE_REQUIRE_GESTURE")
+        .map(|v| v != "0" && v.to_lowercase() != "false")
+        .unwrap_or(true)
+}
+
+/// Flatten a `PersonaError` into a wire message that starts with the protocol
+/// error code — its `Display` wraps the code in a human prefix ("Invalid
+/// input: …"), which would leak into the bridge error response.
+fn flat_persona_error(e: PersonaError) -> anyhow::Error {
+    let msg = e.to_string();
+    match msg.split_once(": ") {
+        Some((_prefix, rest)) => anyhow!(rest.to_string()),
+        None => anyhow!(msg),
+    }
+}
+
+/// Open the database and unlock the service with the master password from
+/// `PERSONA_MASTER_PASSWORD` (the bridge's lock state). Returns the service
+/// plus the active identity (if one is set).
+async fn open_unlocked_service(db_path: &PathBuf) -> Result<(PersonaService, Option<uuid::Uuid>)> {
+    let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| anyhow!("locked: PERSONA_MASTER_PASSWORD not set"))?;
+
+    let db = open_db(db_path).await?;
+    let active_identity_id = get_active_identity_id(&db).await;
+    let mut service = PersonaService::new(db)
+        .await
+        .map_err(|e| anyhow!("failed to create service: {e}"))?;
+    let auth = service.authenticate_user(&master_password).await?;
+    if auth != persona_core::auth::authentication::AuthResult::Success {
+        return Err(anyhow!("authentication_failed"));
+    }
+    Ok((service, active_identity_id))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1385,4 +1652,553 @@ async fn write_frame<W: AsyncWriteExt + Unpin, T: Serialize>(
     writer.write_all(&payload).await?;
     writer.flush().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use persona_core::models::IdentityType;
+    use std::sync::Mutex;
+
+    /// Guards the process-global env vars used by the bridge below — all
+    /// passkey bridge cases run inside one #[tokio::test] so they never
+    /// overlap, but other tests must not mutate these vars concurrently.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    const PASSWORD: &str = "bridge-test-password";
+
+    async fn seeded_bridge() -> (tempfile::TempDir, PathBuf, PathBuf, uuid::Uuid) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let state_dir = dir.path().join("bridge");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let db = open_db(&db_path).await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        service.initialize_user(PASSWORD).await.unwrap();
+        let identity = service
+            .create_identity("Bridge Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // Mark the identity active in workspace v2 (what the bridge reads).
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"INSERT INTO workspaces (id, name, created_at, updated_at, is_active, active_identity_id, settings)
+               VALUES (?, ?, ?, ?, 1, ?, '{}')"#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind("test")
+        .bind(&now)
+        .bind(&now)
+        .bind(identity.id.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let client_data = local_client_data_for("https://example.com", "Y2hhbGxlbmdl");
+        let _ = service
+            .create_passkey(
+                identity.id,
+                "example.com".to_string(),
+                "https://example.com",
+                &client_data,
+                Some(b"user-handle-bytes".to_vec()),
+                Some("alice@example.com".to_string()),
+                Some("Alice".to_string()),
+                true,
+            )
+            .await
+            .unwrap();
+        drop(service);
+        drop(db);
+        (dir, db_path, state_dir, identity.id)
+    }
+
+    fn local_client_data_for(origin: &str, challenge: &str) -> Vec<u8> {
+        format!(r#"{{"type":"webauthn.create","challenge":"{challenge}","origin":"{origin}"}}"#)
+            .into_bytes()
+    }
+
+    fn request(kind: &str, payload: serde_json::Value) -> BridgeRequest {
+        BridgeRequest {
+            request_id: Some("req-1".to_string()),
+            kind: kind.to_string(),
+            payload,
+            auth: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn passkey_bridge_protocol_cases() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        // ---- hello: protocol v2 advertises the passkey capabilities ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "hello",
+                serde_json::json!({
+                    "extension_id": "test-extension",
+                    "extension_version": "0.1.0",
+                    "protocol_version": 2,
+                    "client_instance_id": "instance-1"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "hello must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["protocol_version"], 2);
+        for capability in ["passkey_list", "passkey_create", "passkey_assert"] {
+            assert!(
+                payload["capabilities"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|c| c == capability),
+                "capability {capability} must be advertised"
+            );
+        }
+        let options_json = serde_json::json!({
+            "rp": { "id": "example.com", "name": "Example" },
+            "user": {
+                "id": URL_SAFE_NO_PAD.encode(b"bridge-user-handle"),
+                "name": "bob@example.com",
+                "displayName": "Bob"
+            },
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
+        });
+        let non_es256_options = serde_json::json!({
+            "rp": { "id": "example.com" },
+            "user": { "id": URL_SAFE_NO_PAD.encode(b"u"), "name": "b@example.com" },
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -257 }],
+        });
+
+        // ---- passkey_list: happy path returns the seeded credential ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_list",
+                serde_json::json!({ "origin": "https://example.com", "user_gesture": true }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "list must succeed: {:?}", resp.error);
+        let items = resp.payload.unwrap()["items"].as_array().unwrap().clone();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["rp_id"], "example.com");
+        assert_eq!(items[0]["user_name"], "alice@example.com");
+        assert!(items[0].get("credential_id").is_none(), "no key material");
+
+        // ---- passkey_list: rp_id that doesn't match the origin ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_list",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "rp_id": "evil.example"
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_rp_mismatch"));
+
+        // ---- passkey_list: missing gesture ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_list",
+                serde_json::json!({ "origin": "https://example.com" }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("user_gesture_required"));
+
+        // ---- passkey_create: happy path ----
+        let client_data = local_client_data_for("https://example.com", "Y3JlYXRlLWNoYWxsZW5nZQ");
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": options_json,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "create must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        let attestation = URL_SAFE_NO_PAD
+            .decode(payload["attestation_object_b64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            payload["transports"][0], "internal",
+            "transports must be present"
+        );
+        assert!(attestation.len() > 100);
+
+        // ---- passkey_create: non-ES256 algorithm refused ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": non_es256_options,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_alg_unsupported"));
+
+        // ---- passkey_create: no active identity ----
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = NULL")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": options_json,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("no_active_identity"));
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // ---- passkey_create: missing gesture ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "request_json": options_json,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("user_gesture_required"));
+
+        // ---- passkey_assert: happy path, verified by core's RP-check ----
+        // The list's single item plus the one created above.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_list",
+                serde_json::json!({ "origin": "https://example.com", "user_gesture": true }),
+            ),
+        )
+        .await
+        .unwrap();
+        let items = resp.payload.unwrap()["items"].as_array().unwrap().clone();
+        // The create case above added a second credential for the same RP;
+        // assert against the seeded one explicitly (list order is not fixed).
+        let item_id = items
+            .iter()
+            .find(|i| i["user_name"] == "alice@example.com")
+            .expect("seeded passkey must be listed")["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let get_client_data =
+            format!(r#"{{"type":"webauthn.get","challenge":"YXNzZXJ0LWNoYWxsZW5nZQ","origin":"https://example.com"}}"#)
+                .into_bytes();
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "assert must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        let auth_data = URL_SAFE_NO_PAD
+            .decode(payload["authenticator_data_b64"].as_str().unwrap())
+            .unwrap();
+        let signature = URL_SAFE_NO_PAD
+            .decode(payload["signature_der_b64"].as_str().unwrap())
+            .unwrap();
+        let credential_id = URL_SAFE_NO_PAD
+            .decode(payload["credential_id_b64"].as_str().unwrap())
+            .unwrap();
+        let user_handle = URL_SAFE_NO_PAD
+            .decode(payload["user_handle_b64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(user_handle, b"user-handle-bytes");
+
+        // Rebuild the public key from the stored COSE and verify like an RP.
+        let db = open_db(&db_path).await.unwrap();
+        let repo = persona_core::storage::PasskeyRepository::new(std::sync::Arc::new(db));
+        let all = repo.find_by_rp_id("example.com").await.unwrap();
+        let stored = all
+            .iter()
+            .find(|p| p.credential_id == credential_id)
+            .expect("asserted credential must exist");
+        persona_core::crypto::verify_assertion(
+            &stored.public_key_cose,
+            "example.com",
+            &get_client_data,
+            &auth_data,
+            &signature,
+        )
+        .expect("bridge assertion must verify against the stored public key");
+
+        // ---- passkey_list: explicit rp_id that matches the origin ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_list",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "rp_id": "example.com"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "list with rp_id must succeed: {:?}", resp.error);
+
+        // ---- passkey_assert: passkey belongs to another identity ----
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("wrong_identity"));
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // ---- unknown message type yields an error response ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("definitely_not_a_type", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert!(!resp.ok, "unknown type must not succeed");
+        assert!(
+            resp.error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("unknown_type")),
+            "unexpected error: {:?}",
+            resp.error
+        );
+
+        // ---- passkey_assert: origin does not match the passkey's rp_id ----
+        let evil_client_data = local_client_data_for("https://evil.example", "ZXZpbA");
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://evil.example",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&evil_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_rp_mismatch"));
+
+        // ---- passkey_assert: unknown item ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_item_not_found"));
+
+        // ---- passkey_assert: silent signing refused ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("user_gesture_required"));
+
+        // ---- passkey_assert: corrupted sealed key surfaces as assert_failed ----
+        // (last data-touching case: it invalidates the stored key material)
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE passkeys SET encrypted_private_key = x'00', wrapped_item_key = x'00' WHERE id = ?")
+            .bind(item_id.clone())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_assert_failed"));
+
+        // ---- locked vault (no PERSONA_MASTER_PASSWORD) ----
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_list",
+                serde_json::json!({ "origin": "https://example.com", "user_gesture": true }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("locked:"));
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[test]
+    fn path_resolvers_honor_override_and_environment() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("PERSONA_DB_PATH");
+        std::env::remove_var("PERSONA_BRIDGE_STATE_DIR");
+
+        // explicit override wins
+        let override_path = std::path::PathBuf::from("/tmp/custom.db");
+        assert_eq!(resolve_db_path(Some(override_path.clone())), override_path);
+        let override_state = std::path::PathBuf::from("/tmp/bridge-state");
+        assert_eq!(
+            resolve_state_dir(Some(override_state.clone())),
+            override_state
+        );
+
+        // environment fallback
+        std::env::set_var("PERSONA_DB_PATH", "/tmp/env.db");
+        assert_eq!(
+            resolve_db_path(None),
+            std::path::PathBuf::from("/tmp/env.db")
+        );
+        std::env::remove_var("PERSONA_DB_PATH");
+
+        std::env::set_var("PERSONA_BRIDGE_STATE_DIR", "/tmp/env-state");
+        assert_eq!(
+            resolve_state_dir(None),
+            std::path::PathBuf::from("/tmp/env-state")
+        );
+        std::env::remove_var("PERSONA_BRIDGE_STATE_DIR");
+
+        // default: ~/.persona
+        let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+        assert_eq!(
+            resolve_db_path(None),
+            home.join(".persona").join("identities.db")
+        );
+        assert_eq!(
+            resolve_state_dir(None),
+            home.join(".persona").join("bridge")
+        );
+    }
 }

@@ -112,6 +112,11 @@ Browser & Autofill (future)
     PersonaService create/list/show/delete/assertion/self-test/export、审计事件、
     `persona passkey …` CLI、JSON 导出含私钥（export_allowed 门禁）、
     webauthn-rs RP 全流程回归 + 单测）
+  - [x] P2: 浏览器桥接 v2（passkey_list/create/assert 三消息 + protocol_version 2、扩展 MAIN-world
+    WebAuthn 拦截 + 选择/确认 UI + 回退原生、conditional mediation/cross-origin iframe 不拦截、
+    桥接层 origin↔rp_id 校验与 user gesture 强制、协议文档/README 增补）
+  - [ ] P3: Desktop GUI（系统托盘、指纹/主密码闸门、通知式确认）
+  - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入
 - [x] Phishing protections; identity-based context switching
 
 Quality & Security

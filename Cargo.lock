@@ -3561,6 +3561,7 @@ dependencies = [
  "serde_yaml",
  "sha1",
  "sha2",
+ "sqlx",
  "tabled",
  "tempfile",
  "thiserror 1.0.69",

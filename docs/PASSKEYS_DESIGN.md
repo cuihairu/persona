@@ -35,7 +35,7 @@ v1 覆盖：
 | authenticator data | `rpIdHash(32) ‖ flags(1) ‖ signCount(4) [+ attestedCredentialData + extensions]`；flags 含 UP/UV/AT |
 | client data | `{"type":"webauthn.create"/"webauthn.get","challenge":…,"origin":…}` 的 JSON 字节 |
 | 注册产物 | attestation object（fmt `none`：`{fmt, attStmt:{}, authData}`）+ clientDataJSON |
-| 断言产物 | `credentialId + authenticatorData + signature(SHA256(clientDataJSON) ‖ authenticatorData)` |
+| 断言产物 | `credentialId + authenticatorData + signature(authenticatorData ‖ SHA256(clientDataJSON))` |
 
 RP 侧校验与我们相关的规则：
 - `rpIdHash` 必须等于 SHA-256(rp_id)
@@ -145,7 +145,7 @@ core 侧流程：
   } }
 ```
 
-core 侧流程：同 7.3 的 origin↔rp_id 校验 → 组装 `authenticator_data`（UP|UV，signCount=0，无 AT）→ `signature = ES256_sign(priv, SHA256(client_data_json) ‖ auth_data)`（DER）→ 返回 `{credential_id_b64, authenticator_data_b64, signature_der_b64}` → 审计 `passkey_asserted{rp_id, origin, item_id, result}`。
+core 侧流程：同 7.3 的 origin↔rp_id 校验 → 组装 `authenticator_data`（UP|UV，signCount=0，无 AT）→ `signature = ES256_sign(priv, auth_data ‖ SHA256(client_data_json))`（DER；签名对象顺序遵循 WebAuthn 标准 §6.5.6：authenticatorData 在前，clientDataHash 在后）→ 返回 `{credential_id_b64, authenticator_data_b64, signature_der_b64}` → 审计 `passkey_asserted{rp_id, origin, item_id, result}`。
 
 ### 7.4 版本兼容
 

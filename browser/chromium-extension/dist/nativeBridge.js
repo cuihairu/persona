@@ -108,7 +108,7 @@ export async function hello(host = DEFAULT_NATIVE_HOST) {
         payload: {
             extension_id: chrome.runtime.id,
             extension_version: chrome.runtime.getManifest().version,
-            protocol_version: 1,
+            protocol_version: 2,
             client_instance_id: state.clientInstanceId
         }
     }, host);
@@ -242,5 +242,30 @@ export async function copyToClipboard(origin, itemId, field, userGesture = true,
         field,
         user_gesture: userGesture
     }, host);
+}
+// ============ Passkeys (bridge protocol v2) ============
+/**
+ * List passkeys for a relying party (non-sensitive summaries only).
+ * @param rpId - Optional RP id; defaults to the origin's effective domain
+ */
+export async function passkeyList(origin, rpId, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('passkey_list', {
+        origin,
+        user_gesture: true,
+        rp_id: rpId
+    }, host);
+}
+/**
+ * Create a passkey for the active identity.
+ * @param request - Options serialized by the MAIN-world hook
+ */
+export async function passkeyCreate(request, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('passkey_create', request, host);
+}
+/**
+ * Sign a WebAuthn assertion with a specific passkey.
+ */
+export async function passkeyAssert(request, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('passkey_assert', request, host);
 }
 //# sourceMappingURL=nativeBridge.js.map

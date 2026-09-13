@@ -295,4 +295,18 @@ mod tests {
         second.id = Uuid::new_v4();
         assert!(repo.create(&second).await.is_err());
     }
+
+    #[tokio::test]
+    async fn update_unknown_id_is_not_found() {
+        let db = setup_db().await;
+        let repo = PasskeyRepository::new(db.clone());
+        let identity_id = seed_identity(&db).await;
+        // Never created — update must surface NotFound, not silently succeed.
+        let ghost = make_item(&db, identity_id);
+        let err = repo
+            .update(&ghost)
+            .await
+            .expect_err("updating a missing passkey must fail");
+        assert!(matches!(err, PersonaError::NotFound(_)));
+    }
 }

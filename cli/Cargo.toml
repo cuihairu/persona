@@ -87,6 +87,7 @@ tempfile = "3.8"
 assert_cmd = "2.0"
 predicates = "3.0"
 proptest = { workspace = true }
+sqlx = { workspace = true }
 
 [features]
 default = ["interactive"]

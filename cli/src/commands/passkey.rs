@@ -111,6 +111,7 @@ pub async fn handle_passkey(args: PasskeyArgs, config: &CliConfig) -> Result<()>
                     rp.clone(),
                     &origin,
                     &client_data_json,
+                    None,
                     user,
                     display.or(rp_name),
                     uv,

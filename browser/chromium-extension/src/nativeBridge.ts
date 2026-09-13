@@ -39,6 +39,55 @@ export interface StatusPayload {
     active_identity_name?: string;
 }
 
+// ============ Passkeys (bridge protocol v2) ============
+
+export interface PasskeyListItem {
+    id: string;
+    rp_id: string;
+    user_name?: string;
+    user_display_name?: string;
+    identity_name?: string;
+    created_at: number;
+}
+
+export interface PasskeyListResponsePayload {
+    items: PasskeyListItem[];
+}
+
+export interface PasskeyCreateResponsePayload {
+    item_id: string;
+    credential_id_b64: string;
+    attestation_object_b64: string;
+    client_data_json_b64: string;
+    transports: string[];
+}
+
+export interface PasskeyAssertResponsePayload {
+    item_id: string;
+    credential_id_b64: string;
+    authenticator_data_b64: string;
+    signature_der_b64: string;
+    user_handle_b64: string;
+}
+
+/** Payload built by the MAIN-world WebAuthn hook (webauthnHook.ts). */
+export interface PasskeyCreateRequest {
+    origin: string;
+    user_gesture: boolean;
+    /** PublicKeyCredentialCreationOptions with BufferSource fields b64url-encoded */
+    request_json: Record<string, any>;
+    /** Raw clientDataJSON bytes the authenticator will sign over */
+    client_data_json_b64: string;
+}
+
+export interface PasskeyAssertRequest {
+    origin: string;
+    user_gesture: boolean;
+    item_id: string;
+    client_data_json_b64: string;
+    user_verification: boolean;
+}
+
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 
@@ -180,7 +229,7 @@ export async function hello(host = DEFAULT_NATIVE_HOST): Promise<NativeBridgeRes
         payload: {
             extension_id: chrome.runtime.id,
             extension_version: chrome.runtime.getManifest().version,
-            protocol_version: 1,
+            protocol_version: 2,
             client_instance_id: state.clientInstanceId
         }
     }, host);
@@ -387,4 +436,47 @@ export async function copyToClipboard(
         },
         host
     );
+}
+
+// ============ Passkeys (bridge protocol v2) ============
+
+/**
+ * List passkeys for a relying party (non-sensitive summaries only).
+ * @param rpId - Optional RP id; defaults to the origin's effective domain
+ */
+export async function passkeyList(
+    origin: string,
+    rpId?: string,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<PasskeyListResponsePayload>> {
+    return sendAuthedNativeMessage<PasskeyListResponsePayload>(
+        'passkey_list',
+        {
+            origin,
+            user_gesture: true,
+            rp_id: rpId
+        },
+        host
+    );
+}
+
+/**
+ * Create a passkey for the active identity.
+ * @param request - Options serialized by the MAIN-world hook
+ */
+export async function passkeyCreate(
+    request: PasskeyCreateRequest,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<PasskeyCreateResponsePayload>> {
+    return sendAuthedNativeMessage<PasskeyCreateResponsePayload>('passkey_create', request, host);
+}
+
+/**
+ * Sign a WebAuthn assertion with a specific passkey.
+ */
+export async function passkeyAssert(
+    request: PasskeyAssertRequest,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<PasskeyAssertResponsePayload>> {
+    return sendAuthedNativeMessage<PasskeyAssertResponsePayload>('passkey_assert', request, host);
 }

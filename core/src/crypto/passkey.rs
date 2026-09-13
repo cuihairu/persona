@@ -56,7 +56,93 @@ pub fn self_test_client_data(origin: &str) -> PersonaResult<Vec<u8>> {
     local_client_data(CLIENT_DATA_TYPE_GET, origin)
 }
 
+/// The subset of `PublicKeyCredentialCreationOptions` the authenticator acts on.
+#[derive(Debug, Clone)]
+pub struct ParsedCreationOptions {
+    pub rp_id: String,
+    pub rp_name: Option<String>,
+    pub user_handle: Vec<u8>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+}
+
+/// Parse the JSON form of `PublicKeyCredentialCreationOptions` as forwarded by
+/// the browser extension (bridge protocol v2 `passkey_create`).
+///
+/// Only ES256 is accepted — a request whose `pubKeyCredParams` lacks
+/// `alg: -7` is rejected. When the RP omits `rp.id`, the origin's effective
+/// host is used (WebAuthn §5.4). `user.id` must be a base64url string (the
+/// extension serializes BufferSource bytes before forwarding).
+pub fn parse_creation_options(
+    options: &serde_json::Value,
+    origin: &str,
+) -> PersonaResult<ParsedCreationOptions> {
+    let params = options.get("pubKeyCredParams").and_then(|v| v.as_array());
+    let es256 = params.is_some_and(|params| {
+        params.iter().any(|p| {
+            p.get("type").and_then(|v| v.as_str()) == Some("public-key")
+                && p.get("alg").and_then(|v| v.as_i64()) == Some(crate::models::passkey::ES256_ALG)
+        })
+    });
+    if !es256 {
+        return Err(PersonaError::InvalidInput(
+            "passkey_alg_unsupported: pubKeyCredParams must include ES256 (alg -7)".to_string(),
+        ));
+    }
+
+    let user = options
+        .get("user")
+        .ok_or_else(|| PersonaError::InvalidInput("invalid_request: missing user".to_string()))?;
+    let user_id_b64 = user.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+        PersonaError::InvalidInput(
+            "invalid_request: user.id must be a base64url string".to_string(),
+        )
+    })?;
+    let user_handle = decode_b64url(user_id_b64)?;
+    if user_handle.is_empty() || user_handle.len() > 64 {
+        return Err(PersonaError::InvalidInput(
+            "invalid_request: user.id must be 1..=64 bytes (WebAuthn §5.4.2)".to_string(),
+        ));
+    }
+
+    let rp_id = match options
+        .get("rp")
+        .and_then(|rp| rp.get("id"))
+        .and_then(|v| v.as_str())
+    {
+        Some(id) => id.to_string(),
+        None => origin_host(origin)?,
+    };
+
+    Ok(ParsedCreationOptions {
+        rp_id,
+        rp_name: options
+            .get("rp")
+            .and_then(|rp| rp.get("name"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        user_handle,
+        user_name: user
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        user_display_name: user
+            .get("displayName")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+    })
+}
+
+/// Decode base64url with or without padding.
+fn decode_b64url(s: &str) -> PersonaResult<Vec<u8>> {
+    URL_SAFE_NO_PAD
+        .decode(s)
+        .or_else(|_| base64::engine::general_purpose::URL_SAFE.decode(s))
+        .map_err(|e| PersonaError::InvalidInput(format!("invalid base64url encoding: {e}")))
+}
+
 /// Successful registration: everything an RP needs plus the key to persist.
+#[derive(Debug)]
 pub struct RegistrationOutput {
     /// Newly generated private key (caller encrypts and stores it)
     pub signing_key: SigningKey,
@@ -69,6 +155,7 @@ pub struct RegistrationOutput {
 }
 
 /// Successful assertion: the two byte strings an RP verifies.
+#[derive(Debug)]
 pub struct AssertionOutput {
     /// authenticator data (rpIdHash ‖ flags ‖ signCount)
     pub authenticator_data: Vec<u8>,
@@ -456,9 +543,8 @@ mod tests {
         let value: coset::cbor::value::Value =
             coset::cbor::de::from_reader(reg.attestation_object.as_slice())
                 .map_err(|e| PersonaError::InvalidInput(format!("bad cbor: {e}")))?;
-        let entries = match value {
-            coset::cbor::value::Value::Map(m) => m,
-            _ => panic!("attestation must be a map"),
+        let coset::cbor::value::Value::Map(entries) = value else {
+            panic!("attestation must be a map")
         };
         let get = |k: &str| {
             entries
@@ -469,17 +555,16 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("missing key {k}"))
         };
-        match get("fmt") {
-            coset::cbor::value::Value::Text(t) => assert_eq!(t, "none"),
-            _ => panic!("fmt must be text"),
-        }
-        match get("attStmt") {
-            coset::cbor::value::Value::Map(m) => assert!(m.is_empty()),
-            _ => panic!("attStmt must be a map"),
-        }
-        let auth_data = match get("authData") {
-            coset::cbor::value::Value::Bytes(b) => b,
-            _ => panic!("authData must be bytes"),
+        let coset::cbor::value::Value::Text(fmt) = get("fmt") else {
+            panic!("fmt must be text")
+        };
+        assert_eq!(fmt, "none");
+        let coset::cbor::value::Value::Map(att_stmt) = get("attStmt") else {
+            panic!("attStmt must be a map")
+        };
+        assert!(att_stmt.is_empty());
+        let coset::cbor::value::Value::Bytes(auth_data) = get("authData") else {
+            panic!("authData must be bytes")
         };
 
         // rpIdHash, flags UP|AT, signCount 0, AAGUID, credIdLen 32
@@ -504,8 +589,7 @@ mod tests {
     fn rejects_origin_rp_mismatch() {
         let cd = client_data(true, "Y2hhbGxlbmdl", "https://evil.example");
         let err = register_passkey("example.com", "https://evil.example", &cd, false)
-            .err()
-            .expect("must reject");
+            .expect_err("must reject");
         assert!(matches!(err, PersonaError::InvalidInput(_)));
     }
 
@@ -514,8 +598,7 @@ mod tests {
         // Request origin ok, but the clientDataJSON claims a different origin.
         let cd = client_data(true, "Y2hhbGxlbmdl", "https://evil.example");
         let err = register_passkey("example.com", "https://example.com", &cd, false)
-            .err()
-            .expect("must reject");
+            .expect_err("must reject");
         assert!(err.to_string().contains("does not match request origin"));
     }
 
@@ -523,8 +606,7 @@ mod tests {
     fn rejects_wrong_ceremony_type() {
         let cd = client_data(false, "Y2hhbGxlbmdl", "https://example.com");
         let err = register_passkey("example.com", "https://example.com", &cd, false)
-            .err()
-            .expect("must reject");
+            .expect_err("must reject");
         assert!(err.to_string().contains("type mismatch"));
     }
 
@@ -541,6 +623,123 @@ mod tests {
         assert!(validate_rp_id("com").is_err());
         assert!(validate_rp_id("github.com").is_ok());
         assert!(validate_rp_id("localhost").is_ok());
+    }
+
+    // ============ passkey_create options parsing (bridge protocol v2) ============
+
+    fn es256_options(rp_id: Option<&str>, user_id: Option<&str>) -> serde_json::Value {
+        let mut options = serde_json::json!({
+            "user": { "id": user_id, "name": "alice@example.com", "displayName": "Alice" },
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
+        });
+        if let Some(id) = rp_id {
+            options["rp"] = serde_json::json!({ "id": id, "name": "Example" });
+        }
+        options
+    }
+
+    #[test]
+    fn parse_options_defaults_rp_id_to_origin_host() {
+        // rp.id omitted → the origin's effective host is used (WebAuthn §5.4).
+        let parsed =
+            parse_creation_options(&es256_options(None, Some("dXNlcg")), "https://example.com")
+                .unwrap();
+        assert_eq!(parsed.rp_id, "example.com");
+        assert_eq!(parsed.user_handle, b"user");
+        assert_eq!(parsed.user_name.as_deref(), Some("alice@example.com"));
+        assert_eq!(parsed.user_display_name.as_deref(), Some("Alice"));
+        assert_eq!(parsed.rp_name.as_deref(), None);
+    }
+
+    #[test]
+    fn parse_options_rejects_missing_or_invalid_user_id() {
+        // user present but id missing / not a string
+        let err = parse_creation_options(
+            &es256_options(Some("example.com"), None),
+            "https://example.com",
+        )
+        .expect_err("missing user.id must be rejected");
+        assert!(err
+            .to_string()
+            .contains("user.id must be a base64url string"));
+
+        // id decodes to zero bytes
+        let err = parse_creation_options(
+            &es256_options(Some("example.com"), Some("")),
+            "https://example.com",
+        )
+        .expect_err("empty user.id must be rejected");
+        assert!(err.to_string().contains("1..=64 bytes"));
+
+        // id larger than 64 bytes
+        let big = URL_SAFE_NO_PAD.encode(vec![0u8; 65]);
+        let err = parse_creation_options(
+            &es256_options(Some("example.com"), Some(&big)),
+            "https://example.com",
+        )
+        .expect_err("oversized user.id must be rejected");
+        assert!(err.to_string().contains("1..=64 bytes"));
+    }
+
+    #[test]
+    fn parse_options_rejects_invalid_rp_id_and_origin() {
+        // rp.id is passed through unvalidated here; registration re-checks it
+        // via validate_rp_id (tested below). What IS rejected at parse time:
+        // an origin whose authority is empty when no rp.id can be derived.
+        let err = parse_creation_options(&es256_options(None, Some("dQ")), "https://")
+            .expect_err("hostless origin must be rejected");
+        assert!(err.to_string().contains("Origin has no host"));
+
+        // IPv6 origin: the host extraction strips brackets and port.
+        let parsed = parse_creation_options(&es256_options(None, Some("dQ")), "https://[::1]:8443")
+            .expect("IPv6 host must extract");
+        assert_eq!(parsed.rp_id, "::1");
+    }
+
+    #[test]
+    fn validate_rp_id_shape_rules() {
+        // dotted-only and scheme-carrying rp_ids are not hostnames
+        let err = validate_rp_id(".").expect_err("dotted rp_id must be rejected");
+        assert!(err.to_string().contains("Invalid rp_id"));
+        let err = validate_rp_id("https://example.com")
+            .expect_err("rp_id with a scheme must be rejected");
+        assert!(err.to_string().contains("rp_id must be a bare hostname"));
+    }
+
+    #[test]
+    fn rejects_client_data_without_challenge() {
+        let cd = br#"{"type":"webauthn.create","origin":"https://example.com"}"#;
+        let err = register_passkey("example.com", "https://example.com", cd, false)
+            .expect_err("clientDataJSON without challenge must be rejected");
+        assert!(err.to_string().contains("missing challenge"));
+    }
+
+    #[test]
+    fn verify_rejects_tampered_authenticator_data() {
+        let rp = "example.com";
+        let reg = register_passkey(
+            rp,
+            "https://example.com",
+            &client_data(true, "cmVnaXN0ZXI", "https://example.com"),
+            false,
+        )
+        .unwrap();
+        let cd = client_data(false, "Y2hhbGxlbmdl", "https://example.com");
+        let out = assert_passkey(rp, "https://example.com", &cd, &reg.signing_key, false).unwrap();
+
+        // rpIdHash no longer matches the rp_id
+        let mut bad_hash = out.authenticator_data.clone();
+        bad_hash[0] ^= 0xFF;
+        let err = verify_assertion(&reg.public_key_cose, rp, &cd, &bad_hash, &out.signature_der)
+            .expect_err("rpIdHash mismatch must be rejected");
+        assert!(err.to_string().contains("rpIdHash mismatch"));
+
+        // user presence flag cleared
+        let mut no_up = out.authenticator_data.clone();
+        no_up[32] &= !FLAG_UP;
+        let err = verify_assertion(&reg.public_key_cose, rp, &cd, &no_up, &out.signature_der)
+            .expect_err("cleared UP flag must be rejected");
+        assert!(err.to_string().contains("user presence flag not set"));
     }
 
     #[test]
@@ -577,5 +776,119 @@ mod tests {
             &out.signature_der,
         )
         .is_err());
+    }
+
+    // ============ malformed attestation objects ============
+    //
+    // Feed hand-built CBOR through the structure checker so its defensive
+    // failure paths are actually exercised, not just compiled in.
+
+    fn cbor_bytes(value: &coset::cbor::value::Value) -> Vec<u8> {
+        let mut buf = Vec::new();
+        coset::cbor::ser::into_writer(value, &mut buf).unwrap();
+        buf
+    }
+
+    fn attestation_with(
+        fields: Vec<(coset::cbor::value::Value, coset::cbor::value::Value)>,
+    ) -> Vec<u8> {
+        cbor_bytes(&coset::cbor::value::Value::Map(fields))
+    }
+
+    fn assert_panics_on_attestation(attestation: &[u8], expected: &str) {
+        let rp = "example.com";
+        let reg = register_passkey(
+            rp,
+            "https://example.com",
+            &client_data(true, "cmVnaXN0ZXI", "https://example.com"),
+            false,
+        )
+        .unwrap();
+        let broken = RegistrationOutput {
+            attestation_object: attestation.to_vec(),
+            ..reg
+        };
+        let result = std::panic::catch_unwind(move || {
+            let cd = client_data(true, "cmVnaXN0ZXI", "https://example.com");
+            let _ = verify_attestation_structure(rp, &broken, &cd);
+        })
+        .expect_err("malformed attestation must panic the checker");
+        let message = result
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| result.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(message.contains(expected), "panic was: {message}");
+    }
+
+    #[test]
+    fn attestation_checker_rejects_non_map_root() {
+        assert_panics_on_attestation(
+            &cbor_bytes(&coset::cbor::value::Value::Text("not a map".to_string())),
+            "attestation must be a map",
+        );
+    }
+
+    #[test]
+    fn attestation_checker_rejects_non_text_fmt() {
+        assert_panics_on_attestation(
+            &attestation_with(vec![
+                (
+                    coset::cbor::value::Value::Text("fmt".to_string()),
+                    coset::cbor::value::Value::Bytes(vec![1]),
+                ),
+                (
+                    coset::cbor::value::Value::Text("attStmt".to_string()),
+                    coset::cbor::value::Value::Map(Vec::new()),
+                ),
+                (
+                    coset::cbor::value::Value::Text("authData".to_string()),
+                    coset::cbor::value::Value::Bytes(vec![1]),
+                ),
+            ]),
+            "fmt must be text",
+        );
+    }
+
+    #[test]
+    fn attestation_checker_rejects_non_map_att_stmt() {
+        assert_panics_on_attestation(
+            &attestation_with(vec![
+                (
+                    coset::cbor::value::Value::Text("fmt".to_string()),
+                    coset::cbor::value::Value::Text("none".to_string()),
+                ),
+                (
+                    coset::cbor::value::Value::Text("attStmt".to_string()),
+                    coset::cbor::value::Value::Text("nope".to_string()),
+                ),
+                (
+                    coset::cbor::value::Value::Text("authData".to_string()),
+                    coset::cbor::value::Value::Bytes(vec![1]),
+                ),
+            ]),
+            "attStmt must be a map",
+        );
+    }
+
+    #[test]
+    fn attestation_checker_rejects_non_bytes_auth_data() {
+        assert_panics_on_attestation(
+            &attestation_with(vec![
+                (
+                    coset::cbor::value::Value::Text("fmt".to_string()),
+                    coset::cbor::value::Value::Text("none".to_string()),
+                ),
+                (
+                    coset::cbor::value::Value::Text("attStmt".to_string()),
+                    coset::cbor::value::Value::Map(Vec::new()),
+                ),
+                (
+                    coset::cbor::value::Value::Text("authData".to_string()),
+                    coset::cbor::value::Value::Text("nope".to_string()),
+                ),
+            ]),
+            "authData must be bytes",
+        );
     }
 }

@@ -680,16 +680,48 @@ impl PersonaService {
     /// generated inside core, wrapped with a fresh item key, and never
     /// stored or returned in the clear.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_passkey(
         &self,
         identity_id: Uuid,
         rp_id: String,
         origin: &str,
         client_data_json: &[u8],
+        user_handle: Option<Vec<u8>>,
         user_name: Option<String>,
         user_display_name: Option<String>,
         user_verification: bool,
     ) -> Result<PasskeyItem> {
+        Ok(self
+            .create_passkey_full(
+                identity_id,
+                rp_id,
+                origin,
+                client_data_json,
+                user_handle,
+                user_name,
+                user_display_name,
+                user_verification,
+            )
+            .await?
+            .item)
+    }
+
+    /// Like [`Self::create_passkey`] but also returns the attestation object
+    /// produced by this registration — the bridge forwards it to the page so
+    /// the browser `PublicKeyCredential` carries the exact attested bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn create_passkey_full(
+        &self,
+        identity_id: Uuid,
+        rp_id: String,
+        origin: &str,
+        client_data_json: &[u8],
+        user_handle: Option<Vec<u8>>,
+        user_name: Option<String>,
+        user_display_name: Option<String>,
+        user_verification: bool,
+    ) -> Result<PasskeyCreation> {
         self.ensure_unlocked()?;
         self.touch_activity();
 
@@ -700,10 +732,14 @@ impl PersonaService {
         let scalar = registration.signing_key.to_bytes();
         let envelope = hierarchy.encrypt_with_new_item_key(scalar.as_slice())?;
 
+        let user_handle = match user_handle {
+            Some(handle) => handle,
+            None => random_bytes32().to_vec(),
+        };
         let mut item = PasskeyItem::new(
             identity_id,
             rp_id,
-            random_bytes32().to_vec(),
+            user_handle,
             registration.credential_id,
             envelope.ciphertext,
             envelope.wrapped_key,
@@ -723,7 +759,10 @@ impl PersonaService {
             None,
         )
         .await;
-        Ok(created)
+        Ok(PasskeyCreation {
+            item: created,
+            attestation_object: registration.attestation_object,
+        })
     }
 
     /// List the passkeys of an identity (metadata only; no key material).
@@ -731,6 +770,14 @@ impl PersonaService {
         self.ensure_unlocked()?;
         self.touch_activity();
         Ok(self.passkey_repo.find_by_identity(identity_id).await?)
+    }
+
+    /// List all passkeys registered for a relying party, across identities
+    /// (metadata only; the bridge's selection UI data source).
+    pub async fn list_passkeys_by_rp(&self, rp_id: &str) -> Result<Vec<PasskeyItem>> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+        Ok(self.passkey_repo.find_by_rp_id(rp_id).await?)
     }
 
     /// Fetch one passkey (metadata only) and audit the view.
@@ -1383,6 +1430,14 @@ pub struct PasskeyAssertion {
     pub signature_der: Vec<u8>,
 }
 
+/// A newly stored passkey plus the registration artifacts.
+#[derive(Debug, Clone)]
+pub struct PasskeyCreation {
+    pub item: PasskeyItem,
+    /// `none`-format attestation object from this registration ceremony.
+    pub attestation_object: Vec<u8>,
+}
+
 /// Service usage statistics
 #[derive(Debug)]
 pub struct PersonaStatistics {
@@ -1471,6 +1526,7 @@ mod tests {
                 "example.com".to_string(),
                 "https://example.com",
                 create_client_data,
+                None,
                 Some("alice@example.com".to_string()),
                 Some("Alice".to_string()),
                 true,
@@ -1503,5 +1559,145 @@ mod tests {
         assert!(service.delete_passkey(&passkey.id).await.unwrap());
         assert!(!service.delete_passkey(&passkey.id).await.unwrap());
         assert!(service.get_passkey(&passkey.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_passkey_error_paths_and_export() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        let salt = service.generate_salt();
+        service.unlock("test_password", &salt).unwrap();
+
+        let identity = service
+            .create_identity("Passkey Errors".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let create_client_data = br#"{"type":"webauthn.create","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#;
+        let passkey = service
+            .create_passkey(
+                identity.id,
+                "example.com".to_string(),
+                "https://example.com",
+                create_client_data,
+                None,
+                Some("alice@example.com".to_string()),
+                Some("Alice".to_string()),
+                true,
+            )
+            .await
+            .unwrap();
+
+        // ---- export: disabled flag, unknown id, then the happy path ----
+        service
+            .passkey_repo
+            .update(&PasskeyItem {
+                export_allowed: false,
+                ..passkey.clone()
+            })
+            .await
+            .unwrap();
+        let err = service
+            .export_passkey_private_key(&passkey.id)
+            .await
+            .expect_err("non-exportable passkey must be refused");
+        assert!(err.to_string().contains("export is disabled"));
+
+        let unknown = uuid::Uuid::new_v4();
+        let err = service
+            .export_passkey_private_key(&unknown)
+            .await
+            .expect_err("unknown passkey export must fail");
+        assert!(err.to_string().contains("not found"));
+
+        service
+            .passkey_repo
+            .update(&PasskeyItem {
+                export_allowed: true,
+                ..passkey.clone()
+            })
+            .await
+            .unwrap();
+        let exported = service
+            .export_passkey_private_key(&passkey.id)
+            .await
+            .unwrap();
+        assert_eq!(exported.len(), 32);
+        // the exported scalar must match the stored key's public point
+        let key = p256::ecdsa::SigningKey::from_slice(&exported).unwrap();
+        let cose = crate::crypto::cose_public_key(&key.verifying_key()).unwrap();
+        assert_eq!(cose, passkey.public_key_cose);
+
+        // ---- assertion: origin must match the passkey's rp_id ----
+        let get_client_data = br#"{"type":"webauthn.get","challenge":"YXNzZXJ0aW9u","origin":"https://evil.example"}"#;
+        let err = service
+            .passkey_assertion(&passkey.id, "https://evil.example", get_client_data, true)
+            .await
+            .expect_err("mismatched origin must be rejected");
+        assert!(err.to_string().contains("does not match rp_id"));
+
+        // ---- corrupted sealed key: unsealing must surface a crypto error ----
+        // A validly-sealed envelope whose plaintext is not a valid P-256
+        // scalar (zero) — AEAD decrypts fine, key reconstruction must fail.
+        let hierarchy =
+            crate::crypto::KeyHierarchy::new(service.get_master_encryption_service().unwrap());
+        let envelope = hierarchy.encrypt_with_new_item_key(&[0u8; 32]).unwrap();
+        sqlx::query(
+            "UPDATE passkeys SET encrypted_private_key = ?, wrapped_item_key = ? WHERE id = ?",
+        )
+        .bind(&envelope.ciphertext)
+        .bind(&envelope.wrapped_key)
+        .bind(passkey.id.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        let err = service
+            .passkey_self_test(&passkey.id)
+            .await
+            .expect_err("corrupted sealed key must fail");
+        assert!(err.to_string().contains("Invalid stored passkey key"));
+
+        // ---- restore the sealed key, then break rp_id / public key ----
+        sqlx::query(
+            "UPDATE passkeys SET encrypted_private_key = ?, wrapped_item_key = ? WHERE id = ?",
+        )
+        .bind(&passkey.encrypted_private_key)
+        .bind(&passkey.wrapped_item_key)
+        .bind(passkey.id.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // a rp_id that is not a hostname makes the self-test's own assertion fail
+        sqlx::query("UPDATE passkeys SET rp_id = 'bad rp' WHERE id = ?")
+            .bind(passkey.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = service
+            .passkey_self_test(&passkey.id)
+            .await
+            .expect_err("invalid rp_id must fail the self-test");
+        assert!(err.to_string().contains("rp_id"));
+
+        // a public key from another key pair makes the final RP-check fail
+        let foreign =
+            crate::crypto::cose_public_key(&crate::crypto::generate_signing_key().verifying_key())
+                .unwrap();
+        sqlx::query("UPDATE passkeys SET rp_id = 'example.com', public_key_cose = ? WHERE id = ?")
+            .bind(&foreign)
+            .bind(passkey.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = service
+            .passkey_self_test(&passkey.id)
+            .await
+            .expect_err("mismatched public key must fail the self-test");
+        assert!(
+            err.to_string().contains("signature invalid")
+                || err.to_string().contains("Assertion signature invalid")
+        );
     }
 }

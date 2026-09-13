@@ -1,4 +1,4 @@
-# Persona Bridge Protocol v1
+# Persona Bridge Protocol v2
 
 Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desktop 之间的安全通信。
 
@@ -10,6 +10,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 - 自动填充建议获取
 - 凭证填充请求
 - TOTP 代码获取
+- Passkey（WebAuthn）创建/断言/列表（v2 新增）
 - 会话管理
 
 ## 传输层
@@ -97,7 +98,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "payload": {
     "extension_id": "abcdefghijklmnopabcdefghijklmnop",
     "extension_version": "1.0.0",
-    "protocol_version": 1,
+    "protocol_version": 2,
     "client_instance_id": "uuid-v4"
   }
 }
@@ -110,7 +111,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "ok": true,
   "payload": {
     "server_version": "0.1.0",
-    "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy"],
+    "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert"],
     "pairing_required": true,
     "paired": false,
     "session_id": null,
@@ -343,6 +344,135 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
+### 9. passkey_list - 列出 Passkey
+
+列出某个 RP（relying party）下的 passkey 摘要（**不含任何密钥材料**，仅非敏感字段）。
+
+**请求：**
+```json
+{
+  "type": "passkey_list",
+  "payload": {
+    "origin": "https://example.com",
+    "user_gesture": true,
+    "rp_id": "example.com"
+  }
+}
+```
+
+> `rp_id` 缺省时按 origin 的 effective domain 推导；显式给出且与 origin 不符时返回 `passkey_rp_mismatch`。
+
+**响应：**
+```json
+{
+  "type": "passkey_list_response",
+  "ok": true,
+  "payload": {
+    "items": [
+      {
+        "id": "uuid-v4",
+        "rp_id": "example.com",
+        "user_name": "alice@example.com",
+        "user_display_name": "Alice",
+        "identity_name": "Personal",
+        "created_at": 1730000000
+      }
+    ]
+  }
+}
+```
+
+### 10. passkey_create - 创建 Passkey
+
+为当前 active identity 在指定 RP 下创建软件 passkey，返回注册产物（attestationObject）。
+
+**请求：**
+```json
+{
+  "type": "passkey_create",
+  "payload": {
+    "origin": "https://example.com",
+    "user_gesture": true,
+    "request_json": {
+      "rp": { "id": "example.com", "name": "Example" },
+      "user": {
+        "id": "b64url-user-handle",
+        "name": "alice@example.com",
+        "displayName": "Alice"
+      },
+      "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }]
+    },
+    "client_data_json_b64": "b64url-clientDataJSON"
+  }
+}
+```
+
+约定：
+
+- `request_json` 是 `PublicKeyCredentialCreationOptions` 的 JSON 形态，所有 `BufferSource` 字段（`user.id`、`challenge`、`excludeCredentials[].id`）已由扩展序列化为 base64url 字符串
+- `pubKeyCredParams` 必须包含 `{type: "public-key", alg: -7}`（ES256），否则返回 `passkey_alg_unsupported`
+- `rp.id` 缺省时取 origin 的 effective domain；与 origin 不符时返回 `passkey_rp_mismatch`
+- `client_data_json_b64` 是扩展侧构造的原始 clientDataJSON 字节；core 只做 SHA-256 哈希入签，不重组
+- 桥接会话刚通过主密码认证，因此落库的 `uv_initialized=true` 属实
+- 未设置 active identity 时返回 `no_active_identity`
+
+**响应：**
+```json
+{
+  "type": "passkey_create_response",
+  "ok": true,
+  "payload": {
+    "item_id": "uuid-v4",
+    "credential_id_b64": "b64url",
+    "attestation_object_b64": "b64url",
+    "client_data_json_b64": "b64url（原样回传）",
+    "transports": ["internal"]
+  }
+}
+```
+
+### 11. passkey_assert - Passkey 断言
+
+用指定的 passkey 对 ceremony 签名（不允许静默选钥：`item_id` 必填）。
+
+**请求：**
+```json
+{
+  "type": "passkey_assert",
+  "payload": {
+    "origin": "https://example.com",
+    "user_gesture": true,
+    "item_id": "uuid-v4",
+    "client_data_json_b64": "b64url-clientDataJSON",
+    "user_verification": true
+  }
+}
+```
+
+约定：
+
+- `item_id` 缺省直接拒绝——扩展侧的选择 UI 必须让用户显式点选，即使只有单个候选
+- `user_verification` 缺省 `true`；扩展将 WebAuthn 的 `discouraged` 映射为 `false`
+- passkey 不存在返回 `passkey_item_not_found`；属于其他 identity 返回 `wrong_identity`
+- origin 与 rp_id 不符返回 `passkey_rp_mismatch`
+
+**响应：**
+```json
+{
+  "type": "passkey_assert_response",
+  "ok": true,
+  "payload": {
+    "item_id": "uuid-v4",
+    "credential_id_b64": "b64url",
+    "authenticator_data_b64": "b64url",
+    "signature_der_b64": "b64url",
+    "user_handle_b64": "b64url"
+  }
+}
+```
+
+> 签名对象为 `authenticatorData ‖ SHA-256(clientDataJSON)`，签名算法 ES256，输出 DER 编码。
+
 ## 安全机制
 
 ### Origin 绑定
@@ -350,15 +480,15 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 所有涉及敏感数据的请求必须包含 `origin` 字段：
 
 1. 扩展从 `window.location.origin` 获取当前页面 origin
-2. CLI 验证 origin 与凭证 URL 是否匹配
-3. 不匹配时返回 `origin_mismatch` 错误
+2. CLI 验证 origin 与凭证 URL（或 passkey 的 rp_id）是否匹配
+3. 不匹配时返回 `origin_mismatch`（凭证类）或 `passkey_rp_mismatch`（passkey 类）错误
 
 ### User Gesture 要求
 
-`request_fill` / `get_totp` / `copy` 操作要求：
+`request_fill` / `get_totp` / `copy` / `passkey_*` 操作要求：
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
-2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作
+2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
 3. CLI 可配置对未确认的请求要求桌面通知确认
 
 ### 会话管理（可选）
@@ -432,6 +562,12 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 | `user_confirmation_required` | 需要用户确认 |
 | `session_expired` | 会话已过期 |
 | `rate_limited` | 请求过于频繁 |
+| `user_gesture_required` | 缺少用户手势（v2） |
+| `no_active_identity` | 未设置 active identity（v2） |
+| `passkey_rp_mismatch` | origin 与 passkey 的 rp_id 不符（v2） |
+| `passkey_alg_unsupported` | pubKeyCredParams 不含 ES256（v2） |
+| `passkey_item_not_found` | 指定的 passkey 不存在（v2） |
+| `passkey_origin_mismatch` | passkey origin 校验失败（预留）（v2） |
 
 ## 配置
 
@@ -520,7 +656,10 @@ manifest 文件内容示例：
 | Protocol Version | CLI Version | 功能 |
 |------------------|-------------|------|
 | 1 | 0.1.0+ | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
-| 2 (计划) | - | biometric confirmation + richer policy prompts |
+| 2 | 0.1.0+ | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道） |
+| 3 (计划) | - | biometric confirmation + richer policy prompts |
+
+> v2 未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；v1 扩展对 v2 桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 
 ## 安装脚本
 

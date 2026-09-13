@@ -5,9 +5,17 @@ import {
     requestFill,
     getTotp,
     copyToClipboard,
+    passkeyList,
+    passkeyCreate,
+    passkeyAssert,
     type SuggestionItem,
     type SuggestionsPayload,
-    type FillPayload
+    type FillPayload,
+    type PasskeyCreateRequest,
+    type PasskeyAssertRequest,
+    type PasskeyListResponsePayload,
+    type PasskeyCreateResponsePayload,
+    type PasskeyAssertResponsePayload
 } from './nativeBridge';
 import {
     evaluateDomain,
@@ -106,6 +114,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     // Copy to clipboard
     if (message?.type === 'persona_copy') {
         handleCopy(message.origin, message.itemId, message.field, message.userGesture).then(sendResponse);
+        return true;
+    }
+
+    // ============ Passkeys (bridge protocol v2) ============
+
+    if (message?.type === 'persona_passkey_list') {
+        handlePasskeyList(message.origin, message.rpId).then(sendResponse);
+        return true;
+    }
+
+    if (message?.type === 'persona_passkey_create') {
+        handlePasskeyCreate(message.request).then(sendResponse);
+        return true;
+    }
+
+    if (message?.type === 'persona_passkey_assert') {
+        handlePasskeyAssert(message.request).then(sendResponse);
         return true;
     }
 
@@ -410,19 +435,8 @@ async function handleCopy(
             return { success: false, error: 'Origin is required for copy requests' };
         }
 
-        const policies = await getPolicies();
-        const host = new URL(origin).hostname;
-        const assessment = evaluateDomain(host, policies);
-
-        if (assessment.risk === 'blocked') {
-            return { success: false, error: 'Domain is blocked by policy' };
-        }
-        if (assessment.risk === 'suspicious') {
-            return {
-                success: false,
-                error: `user_confirmation_required: domain flagged as suspicious (${assessment.reasons.join('; ') || host})`
-            };
-        }
+        const policyError = await policyRejection(origin);
+        if (policyError) return { success: false, error: policyError };
 
         const response = await copyToClipboard(origin, itemId, field, userGesture);
 
@@ -442,5 +456,86 @@ async function handleCopy(
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
         };
+    }
+}
+
+/**
+ * Domain-policy gate shared by the passkey handlers: returns an error string
+ * when the origin is blocked or flagged suspicious, or null to proceed.
+ */
+async function policyRejection(origin: string): Promise<string | null> {
+    const policies = await getPolicies();
+    const host = new URL(origin).hostname;
+    const assessment = evaluateDomain(host, policies);
+    if (assessment.risk === 'blocked') {
+        return 'Domain is blocked by policy';
+    }
+    if (assessment.risk === 'suspicious') {
+        return `user_confirmation_required: domain flagged as suspicious (${assessment.reasons.join('; ') || host})`;
+    }
+    return null;
+}
+
+// ============ Passkey Handlers (bridge protocol v2) ============
+
+/**
+ * List passkeys for a relying party (non-sensitive summaries).
+ */
+async function handlePasskeyList(
+    origin: string,
+    rpId?: string
+): Promise<AutofillResult<PasskeyListResponsePayload>> {
+    try {
+        const policyError = await policyRejection(origin);
+        if (policyError) return { success: false, error: policyError };
+
+        const response = await passkeyList(origin, rpId);
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Failed to list passkeys' };
+        }
+        return { success: true, data: response.payload };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+}
+
+/**
+ * Create a passkey for the active identity (the hook's confirm dialog has
+ * already run — the content script only forwards after an explicit click).
+ */
+async function handlePasskeyCreate(
+    request: PasskeyCreateRequest
+): Promise<AutofillResult<PasskeyCreateResponsePayload>> {
+    try {
+        const policyError = await policyRejection(request.origin);
+        if (policyError) return { success: false, error: policyError };
+
+        const response = await passkeyCreate(request);
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Passkey creation failed' };
+        }
+        return { success: true, data: response.payload };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+}
+
+/**
+ * Sign a WebAuthn assertion with a user-selected passkey.
+ */
+async function handlePasskeyAssert(
+    request: PasskeyAssertRequest
+): Promise<AutofillResult<PasskeyAssertResponsePayload>> {
+    try {
+        const policyError = await policyRejection(request.origin);
+        if (policyError) return { success: false, error: policyError };
+
+        const response = await passkeyAssert(request);
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Passkey assertion failed' };
+        }
+        return { success: true, data: response.payload };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
 }
