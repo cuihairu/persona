@@ -1,0 +1,9 @@
+# Windows reserves only 1 MiB of stack for the main thread (Linux gives 8 MiB),
+# which is not enough for the deep call chains of a debug build — even
+# `persona --help` overflowed at startup (exit code 0xC00000FD) in CI. Reserve
+# 16 MiB for every binary we link on Windows, matching the Linux default.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "link-args=/STACK:16777216"]
+
+[target.'cfg(all(windows, target_env = "gnu"))']
+rustflags = ["-C", "link-args=-Wl,--stack,16777216"]
