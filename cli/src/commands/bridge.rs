@@ -336,8 +336,8 @@ pub async fn execute(args: BridgeArgs) -> Result<()> {
 }
 
 async fn handle_request(
-    db_path: &PathBuf,
-    state_dir: &PathBuf,
+    db_path: &Path,
+    state_dir: &Path,
     req: BridgeRequest,
 ) -> Result<BridgeResponse<serde_json::Value>> {
     match req.kind.as_str() {
@@ -939,7 +939,7 @@ fn resolve_state_dir(override_path: Option<PathBuf>) -> PathBuf {
         })
 }
 
-async fn open_db(db_path: &PathBuf) -> Result<Database> {
+async fn open_db(db_path: &Path) -> Result<Database> {
     let db = Database::from_file(db_path).await?;
     db.migrate().await?;
     Ok(db)
@@ -967,7 +967,7 @@ fn flat_persona_error(e: PersonaError) -> anyhow::Error {
 /// Open the database and unlock the service with the master password from
 /// `PERSONA_MASTER_PASSWORD` (the bridge's lock state). Returns the service
 /// plus the active identity (if one is set).
-async fn open_unlocked_service(db_path: &PathBuf) -> Result<(PersonaService, Option<uuid::Uuid>)> {
+async fn open_unlocked_service(db_path: &Path) -> Result<(PersonaService, Option<uuid::Uuid>)> {
     let master_password = std::env::var("PERSONA_MASTER_PASSWORD")
         .ok()
         .filter(|s| !s.trim().is_empty())
@@ -1314,7 +1314,7 @@ fn finalize_pairing(state_dir: &Path, payload: PairingFinalizePayload) -> Result
     Ok(out)
 }
 
-async fn compute_status(db_path: &PathBuf) -> Result<(bool, Option<String>)> {
+async fn compute_status(db_path: &Path) -> Result<(bool, Option<String>)> {
     let db = open_db(db_path).await?;
     let mut service = PersonaService::new(db.clone())
         .await
@@ -1352,7 +1352,7 @@ async fn compute_status(db_path: &PathBuf) -> Result<(bool, Option<String>)> {
     Ok((locked, active_identity))
 }
 
-async fn get_credential_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec<SuggestionItem>> {
+async fn get_credential_suggestions(db_path: &Path, host: &str) -> Result<Vec<SuggestionItem>> {
     let db = open_db(db_path).await?;
     let active_identity_id = get_active_identity_id(&db).await;
     let repo = CredentialRepository::new(db);
@@ -1393,7 +1393,7 @@ async fn get_credential_suggestions(db_path: &PathBuf, host: &str) -> Result<Vec
     }
 
     // Sort by match strength descending.
-    out.sort_by(|a, b| b.match_strength.cmp(&a.match_strength));
+    out.sort_by_key(|b| std::cmp::Reverse(b.match_strength));
 
     debug!(
         host = %host,
@@ -1730,6 +1730,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
     async fn passkey_bridge_protocol_cases() {
         let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");

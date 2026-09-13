@@ -21,6 +21,7 @@ pub struct TotpArgs {
 }
 
 #[derive(Subcommand, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum TotpCommand {
     /// Set up a new TOTP credential from QR/otpauth URI/secret
     Setup {
@@ -97,6 +98,7 @@ pub async fn execute(args: TotpArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn setup_totp(
     config: &CliConfig,
     identity_name: String,

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
 use dialoguer::{Confirm, MultiSelect};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::CliConfig;
 use crate::utils::file_crypto::encrypt_file_inplace;
@@ -207,7 +207,7 @@ fn determine_output_path(args: &ExportArgs, identity_names: &[String]) -> Result
 
 fn show_export_summary(
     identity_names: &[String],
-    output_path: &PathBuf,
+    output_path: &Path,
     args: &ExportArgs,
 ) -> Result<()> {
     println!("{}", "Export Summary:".yellow().bold());
@@ -250,7 +250,7 @@ fn show_export_summary(
 
 async fn perform_export(
     identity_names: &[String],
-    output_path: &PathBuf,
+    output_path: &Path,
     args: &ExportArgs,
     config: &CliConfig,
 ) -> Result<()> {
@@ -290,7 +290,7 @@ async fn perform_export(
 
 async fn export_json(
     identity_names: &[String],
-    output_path: &PathBuf,
+    output_path: &Path,
     args: &ExportArgs,
     config: &CliConfig,
     pb: &indicatif::ProgressBar,
@@ -474,7 +474,7 @@ async fn export_json(
 
 async fn export_yaml(
     identity_names: &[String],
-    output_path: &PathBuf,
+    output_path: &Path,
     args: &ExportArgs,
     config: &CliConfig,
     pb: &indicatif::ProgressBar,
@@ -497,7 +497,7 @@ async fn export_yaml(
 
 async fn export_csv(
     identity_names: &[String],
-    output_path: &PathBuf,
+    output_path: &Path,
     _args: &ExportArgs,
     config: &CliConfig,
     pb: &indicatif::ProgressBar,
@@ -556,7 +556,7 @@ async fn export_csv(
     Ok(())
 }
 
-fn compress_file(file_path: &PathBuf, level: u8) -> Result<()> {
+fn compress_file(file_path: &Path, level: u8) -> Result<()> {
     println!("🗜️ Compressing file...");
 
     use flate2::write::GzEncoder;
@@ -588,7 +588,7 @@ fn compress_file(file_path: &PathBuf, level: u8) -> Result<()> {
 
 // legacy helper removed; kept for back-compat if referenced
 
-fn show_export_info(output_path: &PathBuf) -> Result<()> {
+fn show_export_info(output_path: &Path) -> Result<()> {
     if let Ok(metadata) = std::fs::metadata(output_path) {
         let file_size = crate::utils::format_file_size(metadata.len());
         println!("  File size: {}", file_size.cyan());

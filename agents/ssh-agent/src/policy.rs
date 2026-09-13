@@ -646,8 +646,10 @@ mod tests {
         let mut policy = SigningPolicy::default();
         let cred_id = Uuid::new_v4();
 
-        let mut key_policy = KeyPolicy::default();
-        key_policy.allowed_hosts = vec!["github.com".to_string(), "gitlab.com".to_string()];
+        let key_policy = KeyPolicy {
+            allowed_hosts: vec!["github.com".to_string(), "gitlab.com".to_string()],
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -670,8 +672,10 @@ mod tests {
         let mut policy = SigningPolicy::default();
         let cred_id = Uuid::new_v4();
 
-        let mut key_policy = KeyPolicy::default();
-        key_policy.allowed_hosts = vec!["*.github.com".to_string()];
+        let key_policy = KeyPolicy {
+            allowed_hosts: vec!["*.github.com".to_string()],
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -706,8 +710,10 @@ mod tests {
     fn test_key_specific_require_confirm() {
         let mut policy = SigningPolicy::default();
         let cred_id = Uuid::new_v4();
-        let mut key_policy = KeyPolicy::default();
-        key_policy.require_confirm = true;
+        let key_policy = KeyPolicy {
+            require_confirm: true,
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -723,9 +729,11 @@ mod tests {
         policy.global.require_confirm = true;
 
         let cred_id = Uuid::new_v4();
-        let mut key_policy = KeyPolicy::default();
-        key_policy.require_confirm = true;
-        key_policy.require_biometric = true;
+        let key_policy = KeyPolicy {
+            require_confirm: true,
+            require_biometric: true,
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -743,9 +751,11 @@ mod tests {
         let mut policy = SigningPolicy::default();
         let cred_id = Uuid::new_v4();
 
-        let mut key_policy = KeyPolicy::default();
-        key_policy.allowed_hosts = vec!["github.com".to_string()];
-        key_policy.denied_hosts = vec!["github.com".to_string()];
+        let key_policy = KeyPolicy {
+            allowed_hosts: vec!["github.com".to_string()],
+            denied_hosts: vec!["github.com".to_string()],
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -760,8 +770,10 @@ mod tests {
         let mut policy = SigningPolicy::default();
         let cred_id = Uuid::new_v4();
 
-        let mut key_policy = KeyPolicy::default();
-        key_policy.max_uses_per_day = 1;
+        let key_policy = KeyPolicy {
+            max_uses_per_day: 1,
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -790,8 +802,10 @@ mod tests {
             .format("%H:%M")
             .to_string();
 
-        let mut key_policy = KeyPolicy::default();
-        key_policy.allowed_time_range = Some(format!("{start}-{end}"));
+        let key_policy = KeyPolicy {
+            allowed_time_range: Some(format!("{start}-{end}")),
+            ..Default::default()
+        };
         policy.key_policies.insert(cred_id.to_string(), key_policy);
 
         let mut enforcer = PolicyEnforcer::new(policy);
@@ -864,9 +878,11 @@ mod tests {
         let allowed_key = Uuid::new_v4();
         let denied_key = Uuid::new_v4();
 
-        let mut host_policy = HostPolicy::default();
-        host_policy.allowed_keys = vec![allowed_key.to_string()];
-        host_policy.max_connections_per_hour = 1;
+        let host_policy = HostPolicy {
+            allowed_keys: vec![allowed_key.to_string()],
+            max_connections_per_hour: 1,
+            ..Default::default()
+        };
         policy
             .host_policies
             .insert("prod-*.company.com".to_string(), host_policy);

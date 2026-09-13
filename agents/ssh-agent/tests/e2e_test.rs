@@ -88,8 +88,7 @@ fn test_ssh_agent_message_types() {
     assert_eq!(request[0], 11);
 
     // Test sign request format
-    let mut sign_request = Vec::new();
-    sign_request.push(SSH_AGENTC_SIGN_REQUEST);
+    let sign_request = [SSH_AGENTC_SIGN_REQUEST];
     assert_eq!(sign_request[0], 13);
 
     // Test response types

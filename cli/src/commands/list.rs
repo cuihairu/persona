@@ -236,7 +236,7 @@ fn apply_filters(mut identities: Vec<Identity>, args: &ListArgs) -> Result<Vec<I
     Ok(identities)
 }
 
-fn sort_identities(identities: &mut Vec<Identity>, sort_by: &str, reverse: bool) -> Result<()> {
+fn sort_identities(identities: &mut [Identity], sort_by: &str, reverse: bool) -> Result<()> {
     match sort_by {
         "name" => identities.sort_by(|a, b| a.name.cmp(&b.name)),
         "type" => identities.sort_by(|a, b| a.identity_type.cmp(&b.identity_type)),

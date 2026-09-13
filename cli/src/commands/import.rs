@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
 use dialoguer::{Confirm, MultiSelect};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::utils::progress::create_progress_bar;
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
@@ -144,7 +144,7 @@ struct ImportConflict {
     new_data: String,
 }
 
-fn validate_import_file(file_path: &PathBuf) -> Result<()> {
+fn validate_import_file(file_path: &Path) -> Result<()> {
     if !file_path.exists() {
         anyhow::bail!("Import file does not exist: {}", file_path.display());
     }
@@ -168,7 +168,7 @@ fn validate_import_file(file_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn decrypt_import_file(file_path: &PathBuf, _config: &CliConfig) -> Result<PathBuf> {
+fn decrypt_import_file(file_path: &Path, _config: &CliConfig) -> Result<PathBuf> {
     use crate::utils::file_crypto::decrypt_file_to_temp;
     use dialoguer::Password;
     println!("🔓 Decrypting import file...");
@@ -180,7 +180,7 @@ fn decrypt_import_file(file_path: &PathBuf, _config: &CliConfig) -> Result<PathB
     Ok(out)
 }
 
-fn parse_import_file(file_path: &PathBuf) -> Result<ImportData> {
+fn parse_import_file(file_path: &Path) -> Result<ImportData> {
     let content = std::fs::read_to_string(file_path).context("Failed to read import file")?;
 
     // Determine format by extension

@@ -94,6 +94,7 @@ async fn init_data_provider(config: &CliConfig) -> Result<DataProvider> {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 enum DataProvider {
     Service(PersonaService),
     Direct {

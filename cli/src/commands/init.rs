@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::config::CliConfig;
@@ -164,7 +164,7 @@ fn generate_random_password() -> String {
         .collect()
 }
 
-fn create_workspace_structure(workspace_path: &PathBuf) -> Result<()> {
+fn create_workspace_structure(workspace_path: &Path) -> Result<()> {
     let directories = ["identities", "backups", "exports", "temp", "logs"];
 
     for dir in &directories {
@@ -178,13 +178,13 @@ fn create_workspace_structure(workspace_path: &PathBuf) -> Result<()> {
 }
 
 fn initialize_config(
-    workspace_path: &PathBuf,
+    workspace_path: &Path,
     encryption_enabled: bool,
     backup_dir: Option<PathBuf>,
 ) -> Result<()> {
     let config_path = workspace_path.join("config.toml");
     let mut config = CliConfig::default();
-    config.workspace.path = workspace_path.clone();
+    config.workspace.path = workspace_path.to_path_buf();
     config.security.encryption_enabled = encryption_enabled;
     config.backup.directory = backup_dir.unwrap_or_else(|| workspace_path.join("backups"));
 
@@ -198,7 +198,7 @@ fn initialize_config(
 }
 
 async fn initialize_database(
-    workspace_path: &PathBuf,
+    workspace_path: &Path,
     master_password: Option<&str>,
 ) -> Result<()> {
     let db_path = workspace_path.join("identities.db");
@@ -231,7 +231,7 @@ async fn initialize_database(
             .map_err(|e| anyhow::anyhow!("Workspace lookup failed: {}", e))?
             .is_none()
         {
-            let ws = Workspace::new(workspace_path.clone(), name);
+            let ws = Workspace::new(workspace_path, name);
             // Persist; repo will choose proper schema (legacy/v2)
             let _ = repo
                 .create(&ws)

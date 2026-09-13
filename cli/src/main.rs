@@ -166,12 +166,7 @@ fn maybe_inject_bridge_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn command_requires_workspace(cmd: &Commands) -> bool {
-    match cmd {
-        Commands::Init(_) => false,
-        Commands::Bridge(_) => false,
-        Commands::Password(_) => false,
-        _ => true,
-    }
+    !matches!(cmd, Commands::Init(_) | Commands::Bridge(_) | Commands::Password(_))
 }
 
 /// Initialize logging based on verbosity level

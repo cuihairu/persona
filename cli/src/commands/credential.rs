@@ -226,6 +226,7 @@ async fn init_service(config: &CliConfig) -> Result<PersonaService> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn add_credential(
     config: &CliConfig,
     identity_name: String,
