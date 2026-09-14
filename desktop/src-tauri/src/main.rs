@@ -68,6 +68,7 @@ fn main() {
             commands::audit_query,
             commands::audit_statistics,
             commands::audit_cleanup,
+            commands::health_scan,
             commands::passkey_list,
             commands::passkey_list_by_rp,
             commands::passkey_get,

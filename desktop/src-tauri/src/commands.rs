@@ -2205,6 +2205,53 @@ fn build_audit_query(
 }
 
 // ---------------------------------------------------------------------------
+// Watchtower 健康扫描（只读聚合；报告只含元数据、不含密文）
+// ---------------------------------------------------------------------------
+
+/// 可选请求字段 → core 扫描配置；缺省字段回落 core 默认值。
+/// 独立成纯函数以便无需运行中的服务即可测试。
+fn build_health_scan_config(request: &HealthScanRequest) -> persona_core::HealthScanConfig {
+    persona_core::HealthScanConfig {
+        min_password_score: request
+            .min_password_score
+            .unwrap_or(persona_core::DEFAULT_MIN_PASSWORD_SCORE),
+        expiry_warning_days: request
+            .expiry_warning_days
+            .unwrap_or(persona_core::DEFAULT_EXPIRY_WARNING_DAYS),
+        stale_after_days: request
+            .stale_after_days
+            .unwrap_or(persona_core::DEFAULT_STALE_AFTER_DAYS),
+    }
+}
+
+/// Run the Watchtower health scan (weak / reused / expired / stale).
+///
+/// The report is metadata only — credential names and issue kinds, never
+/// the decrypted secrets — and the scan writes one aggregate audit entry.
+#[command]
+pub async fn health_scan(
+    request: Option<HealthScanRequest>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<HealthReport>, String> {
+    let config = build_health_scan_config(&request.unwrap_or_default());
+
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match service.scan_health(config).await {
+            Ok(report) => Ok(ApiResponse::success(report)),
+            Err(e) => {
+                let (code, msg) = map_persona_error(&e);
+                match code {
+                    Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                    None => Ok(ApiResponse::error(format!("Health scan failed: {}", msg))),
+                }
+            }
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Passkey 管理（P3 命令层接缝）
 // ---------------------------------------------------------------------------
 
@@ -2899,6 +2946,51 @@ mod tests {
         assert!(
             extract_secret_field(&CredentialData::Raw(vec![0xff]), "raw_data").is_err(),
             "非 UTF-8 原始数据必须报错"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // build_health_scan_config：扫描参数解析
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn health_scan_empty_request_uses_core_defaults() {
+        let c = build_health_scan_config(&HealthScanRequest::default());
+        assert_eq!(
+            c,
+            persona_core::HealthScanConfig {
+                min_password_score: persona_core::DEFAULT_MIN_PASSWORD_SCORE,
+                expiry_warning_days: persona_core::DEFAULT_EXPIRY_WARNING_DAYS,
+                stale_after_days: persona_core::DEFAULT_STALE_AFTER_DAYS,
+            }
+        );
+    }
+
+    #[test]
+    fn health_scan_request_overrides_each_field() {
+        let raw = serde_json::json!({
+            "min_password_score": 2,
+            "expiry_warning_days": 7,
+            "stale_after_days": 90
+        });
+        let request: HealthScanRequest = serde_json::from_value(raw).unwrap();
+        let c = build_health_scan_config(&request);
+        assert_eq!(c.min_password_score, 2);
+        assert_eq!(c.expiry_warning_days, 7);
+        assert_eq!(c.stale_after_days, 90);
+
+        // 前端可以只传部分字段，其余回落默认值
+        let partial: HealthScanRequest =
+            serde_json::from_value(serde_json::json!({ "min_password_score": 1 })).unwrap();
+        let c = build_health_scan_config(&partial);
+        assert_eq!(c.min_password_score, 1);
+        assert_eq!(
+            c,
+            persona_core::HealthScanConfig {
+                min_password_score: 1,
+                expiry_warning_days: persona_core::DEFAULT_EXPIRY_WARNING_DAYS,
+                stale_after_days: persona_core::DEFAULT_STALE_AFTER_DAYS,
+            }
         );
     }
 

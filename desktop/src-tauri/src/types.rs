@@ -556,6 +556,17 @@ pub struct AuditQueryRequest {
     pub limit: Option<usize>,
 }
 
+/// Watchtower 健康扫描请求（None 字段 = 使用 core 默认值）
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct HealthScanRequest {
+    /// zxcvbn 分数阈值（0-4）：低于该值的密码判弱
+    pub min_password_score: Option<u8>,
+    /// 过期警告窗口（天）
+    pub expiry_warning_days: Option<i64>,
+    /// 超过该天数未更新的凭据判陈旧
+    pub stale_after_days: Option<i64>,
+}
+
 /// 审计统计
 #[derive(Debug, Serialize)]
 pub struct SerializableAuditStatistics {

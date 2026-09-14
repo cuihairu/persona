@@ -25,6 +25,8 @@ import type {
   AuditLogEntry,
   AuditQueryRequest,
   AuditStatistics,
+  HealthReport,
+  HealthScanRequest,
   Passkey,
   CreatePasskeyRequest,
   PasskeyCreationResponse,
@@ -209,6 +211,14 @@ class PersonaAPI {
 
   async auditCleanup(retainDays: number): Promise<ApiResponse<number>> {
     return invoke('audit_cleanup', { retain_days: retainDays });
+  }
+
+  // -------------------------------------------------------------------------
+  // Watchtower 健康扫描
+  // -------------------------------------------------------------------------
+
+  async healthScan(request?: HealthScanRequest): Promise<ApiResponse<HealthReport>> {
+    return invoke('health_scan', { request: request ?? {} });
   }
 
   // -------------------------------------------------------------------------
