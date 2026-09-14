@@ -1042,12 +1042,13 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    #[allow(unused_mut)]
     async fn query_agent_identities_windows_mock_server() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::windows::named_pipe::ServerOptions;
 
         let pipe_name = format!(r"\\.\pipe\persona-test-agent-{}", Uuid::new_v4());
-        let server = ServerOptions::new()
+        let mut server = ServerOptions::new()
             .first_pipe_instance(true)
             .create(&pipe_name)
             .unwrap();
@@ -1073,6 +1074,7 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
+    #[allow(unused_mut)]
     async fn open_named_pipe_with_retry_waits_for_server() {
         use std::time::Duration;
         use tokio::net::windows::named_pipe::ServerOptions;
