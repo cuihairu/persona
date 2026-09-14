@@ -3,9 +3,8 @@ use std::{path::PathBuf, time::Duration};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::*;
-use data_encoding::{BASE32, BASE32_NOPAD};
-use hmac::{Hmac, Mac};
 use persona_core::{
+    crypto::totp::totp_now,
     models::{CredentialData, CredentialType, SecurityLevel, TwoFactorData},
     PersonaService,
 };
@@ -439,65 +438,9 @@ fn generate_totp_code(template: &FinalTotpConfig) -> Result<(String, u32)> {
 }
 
 fn generate_totp_code_from_data(data: &TwoFactorData) -> Result<(String, u32)> {
-    let secret_bytes = decode_secret(&data.secret_key)?;
-    let now = chrono::Utc::now();
-    let period = data.period.max(1) as u64;
-    let timestamp = now.timestamp().max(0) as u64;
-    let counter = timestamp / period;
-    let digits = data.digits.clamp(4, 10) as u32;
-    let code_num = hotp(&secret_bytes, counter, &data.algorithm)?;
-    // u32: hotp() returns u32; 10^10 exceeds u32::MAX so widen first.
-    let modulo = 10_u64.pow(digits);
-    let value = u64::from(code_num) % modulo;
-    let code = format!("{:0width$}", value, width = digits as usize);
-    let remaining = (period - (timestamp % period)) as u32;
-    Ok((code, remaining))
-}
-
-fn hotp(secret: &[u8], counter: u64, algorithm: &str) -> Result<u32> {
-    let msg = counter.to_be_bytes();
-    let algo = algorithm.to_ascii_uppercase();
-    let hash = if algo == "SHA256" {
-        type HmacSha256 = Hmac<sha2::Sha256>;
-        let mut mac = HmacSha256::new_from_slice(secret).context("Invalid secret")?;
-        mac.update(&msg);
-        mac.finalize().into_bytes().to_vec()
-    } else if algo == "SHA512" {
-        type HmacSha512 = Hmac<sha2::Sha512>;
-        let mut mac = HmacSha512::new_from_slice(secret).context("Invalid secret")?;
-        mac.update(&msg);
-        mac.finalize().into_bytes().to_vec()
-    } else {
-        type HmacSha1 = Hmac<sha1::Sha1>;
-        let mut mac = HmacSha1::new_from_slice(secret).context("Invalid secret")?;
-        mac.update(&msg);
-        mac.finalize().into_bytes().to_vec()
-    };
-
-    let offset = (hash.last().copied().unwrap_or(0) & 0x0f) as usize;
-    if offset + 4 > hash.len() {
-        bail!("Invalid HMAC output");
-    }
-    let slice = &hash[offset..offset + 4];
-    let binary = ((slice[0] as u32 & 0x7f) << 24)
-        | ((slice[1] as u32) << 16)
-        | ((slice[2] as u32) << 8)
-        | slice[3] as u32;
-    Ok(binary)
-}
-
-fn decode_secret(secret: &str) -> Result<Vec<u8>> {
-    let normalized: String = secret
-        .chars()
-        .filter(|c| !c.is_whitespace())
-        .map(|c| c.to_ascii_uppercase())
-        .collect::<String>()
-        .trim_matches('=')
-        .to_string();
-    BASE32_NOPAD
-        .decode(normalized.as_bytes())
-        .or_else(|_| BASE32.decode(normalized.as_bytes()))
-        .map_err(|e| anyhow!("Invalid base32 secret: {}", e))
+    // 协议逻辑统一下沉到 core（RFC 4226/6238），CLI 只做调用。
+    let code = totp_now(data)?;
+    Ok((code.code, code.remaining_seconds))
 }
 
 async fn resolve_identity(service: &mut PersonaService, name: &str) -> Result<Identity> {
@@ -514,6 +457,7 @@ type Identity = persona_core::models::Identity;
 mod tests {
     use super::*;
     use data_encoding::BASE32_NOPAD;
+    use persona_core::crypto::totp::{decode_base32_secret, hotp};
     use persona_core::storage::IdentityRepository;
     use persona_core::Database;
     use persona_core::Repository;
@@ -588,7 +532,7 @@ mod tests {
         #[test]
         fn base32_secret_roundtrip(bytes in collection::vec(any::<u8>(), 8..=64)) {
             let encoded = BASE32_NOPAD.encode(&bytes);
-            let decoded = decode_secret(&encoded).unwrap();
+            let decoded = decode_base32_secret(&encoded).unwrap();
             prop_assert_eq!(decoded, bytes);
         }
     }
@@ -660,17 +604,18 @@ mod tests {
             let code = hotp(secret, 7, algo).unwrap();
             let _ = code; // any u32 is a valid truncation
         }
-        // Empty secret is rejected by HMAC key init.
-        assert!(hotp(b"", 1, "SHA1").is_err() || hotp(b"", 1, "SHA1").is_ok());
+        // Empty secret is rejected before HMAC.
+        assert!(hotp(b"", 1, "SHA1").is_err());
     }
 
     #[test]
     fn decode_secret_accepts_case_whitespace_padding_and_reports_errors() {
-        assert_eq!(decode_secret("ME").unwrap(), b"a");
-        assert_eq!(decode_secret("me").unwrap(), b"a");
-        assert_eq!(decode_secret("M E").unwrap(), b"a");
-        assert_eq!(decode_secret("ME======").unwrap(), b"a");
-        assert!(decode_secret("not base32!!").is_err());
+        assert_eq!(decode_base32_secret("ME").unwrap(), b"a");
+        assert_eq!(decode_base32_secret("me").unwrap(), b"a");
+        assert_eq!(decode_base32_secret("M E").unwrap(), b"a");
+        assert_eq!(decode_base32_secret("ME======").unwrap(), b"a");
+        assert!(decode_base32_secret("not base32!!").is_err());
+        assert!(decode_base32_secret("").is_err());
     }
 
     #[test]
