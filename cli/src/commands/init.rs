@@ -517,19 +517,17 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn yes_flag_falls_back_to_the_home_directory_without_a_path() {
         let _guard = lock_process_env();
         let dir = TempDir::new().unwrap();
         let original_home = std::env::var("HOME").ok();
 
         // `dirs::home_dir()` reads $HOME on Linux, so a redirected home moves
-        // the default workspace path with it. On Windows it reads $USERPROFILE.
+        // the default workspace path with it. On Windows, dirs uses
+        // SHGetFolderPath which reads from the registry, so env var
+        // overrides don't work — skip the test there.
         std::env::set_var("HOME", dir.path());
-        #[cfg(target_os = "windows")]
-        let original_profile = std::env::var("USERPROFILE").ok();
-        #[cfg(target_os = "windows")]
-        std::env::set_var("USERPROFILE", dir.path());
-
         let path = determine_workspace_path(None, true, &ScriptedUi::new())
             .expect("non-interactive default path");
         assert_eq!(path, dir.path().join(".persona"));
@@ -537,11 +535,6 @@ mod tests {
         match original_home {
             Some(home) => std::env::set_var("HOME", home),
             None => std::env::remove_var("HOME"),
-        }
-        #[cfg(target_os = "windows")]
-        match original_profile {
-            Some(p) => std::env::set_var("USERPROFILE", p),
-            None => std::env::remove_var("USERPROFILE"),
         }
     }
 
