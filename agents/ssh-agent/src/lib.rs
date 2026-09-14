@@ -9,12 +9,17 @@
 //!
 //! NOTE: This is an early MVP; enhanced policies/approvals in progress.
 
+pub mod approval;
 pub mod policy;
 pub mod transport;
 
 mod daemon;
 
-pub use daemon::run_agent;
+pub use approval::{
+    fingerprint_for_blob, ApprovalHandler, ApprovalRequest, DenyAllApprovalHandler,
+    TtyApprovalHandler,
+};
+pub use daemon::{run_agent, run_agent_with_approval};
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -49,7 +54,7 @@ pub async fn handle_connection(agent: &mut Agent, mut stream: AgentStream) -> Re
             }
             13 => {
                 // SSH_AGENTC_SIGN_REQUEST
-                let resp = agent.sign_response(&pkt[1..])?;
+                let resp = agent.sign_response(&pkt[1..]).await?;
                 stream.write_all(&resp).await?;
             }
             other => {
@@ -78,6 +83,7 @@ pub struct Agent {
     keys: Vec<AgentKey>,
     policy: Arc<Mutex<PolicyEnforcer>>,
     biometric_provider: Arc<dyn BiometricProvider>,
+    approval_handler: Arc<dyn ApprovalHandler>,
 }
 
 impl Default for Agent {
@@ -97,13 +103,22 @@ impl Agent {
             keys: Vec::new(),
             policy: Arc::new(Mutex::new(enforcer)),
             biometric_provider,
+            approval_handler: Arc::new(approval::TtyApprovalHandler),
         }
     }
+
+    /// Replace the approval handler (desktop/mobile apps inject their own UI).
+    pub fn with_approval_handler(mut self, handler: Arc<dyn ApprovalHandler>) -> Self {
+        self.approval_handler = handler;
+        self
+    }
+
     pub fn clone_shallow(&self) -> Self {
         Self {
             keys: self.keys.clone(),
             policy: self.policy.clone(),
             biometric_provider: self.biometric_provider.clone(),
+            approval_handler: self.approval_handler.clone(),
         }
     }
 
@@ -226,7 +241,7 @@ impl Agent {
         Ok(wrap_packet(payload))
     }
 
-    fn sign_response(&self, mut payload: &[u8]) -> Result<Vec<u8>> {
+    async fn sign_response(&self, mut payload: &[u8]) -> Result<Vec<u8>> {
         use byteorder::{BigEndian, ReadBytesExt};
         // sign_request payload: string key_blob, string data, flags(u32)
         let key_blob = read_ssh_string(&mut payload)?;
@@ -242,19 +257,21 @@ impl Agent {
         // Get target hostname
         let hostname = current_target_host();
 
-        // Policy enforcement using PolicyEnforcer
-        let mut policy_enforcer = self
-            .policy
-            .lock()
-            .map_err(|_| anyhow!("Policy lock poisoned"))?;
-        match policy_enforcer.check_signature(&key.credential_id, hostname.as_deref())? {
+        // Policy enforcement using PolicyEnforcer.
+        // The guard is scoped so it never spans an await (MutexGuard is !Send).
+        let decision = {
+            let mut policy_enforcer = self
+                .policy
+                .lock()
+                .map_err(|_| anyhow!("Policy lock poisoned"))?;
+            policy_enforcer.check_signature(&key.credential_id, hostname.as_deref())?
+        };
+        match decision {
             SignatureDecision::Denied { reason } => {
                 tracing::warn!("Signature denied: {}", reason);
                 return Ok(failure_packet());
             }
             SignatureDecision::RequireBiometric { reason } => {
-                drop(policy_enforcer); // Release lock before biometric check
-
                 // Check if biometric is available
                 if !self.biometric_provider.is_available(detect_platform()) {
                     tracing::warn!(
@@ -264,7 +281,15 @@ impl Agent {
                         "Biometric unavailable. Allow SSH signature for '{}'? [y/N] ",
                         hostname.as_deref().unwrap_or("unknown host")
                     );
-                    if !daemon::prompt_confirm_blocking(&prompt)? {
+                    let request = ApprovalRequest {
+                        key_id: key.credential_id.to_string(),
+                        fingerprint: approval::fingerprint_for_blob(&key.public_blob),
+                        operation: "sign".to_string(),
+                        peer: hostname.clone(),
+                        reason: reason.clone(),
+                        prompt,
+                    };
+                    if !self.approval_handler.confirm(&request).await? {
                         tracing::warn!("Signature denied by user (reason: {})", reason);
                         return Ok(failure_packet());
                     }
@@ -293,30 +318,26 @@ impl Agent {
                         }
                     }
                 }
-
-                policy_enforcer = self
-                    .policy
-                    .lock()
-                    .map_err(|_| anyhow!("Policy lock poisoned"))?;
             }
             SignatureDecision::RequireConfirm { reason } => {
-                drop(policy_enforcer); // Release lock before prompt
-
                 let prompt = if let Some(ref host) = hostname {
                     format!("Allow SSH signature for host '{}'? [y/N] ", host)
                 } else {
                     "Allow SSH signature? [y/N] ".to_string()
                 };
 
-                if !daemon::prompt_confirm_blocking(&prompt)? {
+                let request = ApprovalRequest {
+                    key_id: key.credential_id.to_string(),
+                    fingerprint: approval::fingerprint_for_blob(&key.public_blob),
+                    operation: "sign".to_string(),
+                    peer: hostname.clone(),
+                    reason: reason.clone(),
+                    prompt,
+                };
+                if !self.approval_handler.confirm(&request).await? {
                     tracing::warn!("Signature denied by user (reason: {})", reason);
                     return Ok(failure_packet());
                 }
-
-                policy_enforcer = self
-                    .policy
-                    .lock()
-                    .map_err(|_| anyhow!("Policy lock poisoned"))?;
             }
             SignatureDecision::Allowed => {
                 // Proceed with signing
@@ -324,8 +345,13 @@ impl Agent {
         }
 
         // Record the signature for tracking
-        policy_enforcer.record_signature(&key.credential_id, hostname.as_deref());
-        drop(policy_enforcer); // Release lock before signing
+        {
+            let mut policy_enforcer = self
+                .policy
+                .lock()
+                .map_err(|_| anyhow!("Policy lock poisoned"))?;
+            policy_enforcer.record_signature(&key.credential_id, hostname.as_deref());
+        }
 
         // ed25519 sign
         use ed25519_dalek::{Signature, Signer, SigningKey};
@@ -609,6 +635,7 @@ mod tests {
             keys,
             policy: Arc::new(Mutex::new(enforcer)),
             biometric_provider,
+            approval_handler: Arc::new(approval::DenyAllApprovalHandler),
         }
     }
 
@@ -806,7 +833,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         write_ssh_string(&mut payload, data).unwrap();
         payload.extend_from_slice(&0u32.to_be_bytes()); // flags
 
-        let pkt = agent.sign_response(&payload).unwrap();
+        let pkt = agent.sign_response(&payload).await.unwrap();
         let len = u32::from_be_bytes(pkt[0..4].try_into().unwrap()) as usize;
         assert_eq!(len, pkt.len() - 4);
         assert_eq!(pkt[4], 14u8);
@@ -1102,6 +1129,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
             keys,
             policy: Arc::new(Mutex::new(PolicyEnforcer::new(policy))),
             biometric_provider,
+            approval_handler: Arc::new(approval::DenyAllApprovalHandler),
         }
     }
 
@@ -1166,7 +1194,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
             p.extend_from_slice(&0u32.to_be_bytes());
             p
         };
-        let err = agent.sign_response(&payload).unwrap_err();
+        let err = agent.sign_response(&payload).await.unwrap_err();
         assert!(err.to_string().contains("Key not found"));
     }
 
@@ -1186,6 +1214,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
 
         let pkt = agent
             .sign_response(&sign_payload_for(&key, b"data"))
+            .await
             .unwrap();
         assert_eq!(pkt[4], 5u8, "failure packet");
     }
@@ -1217,6 +1246,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
 
             let pkt = agent
                 .sign_response(&sign_payload_for(&key, b"payload"))
+                .await
                 .unwrap();
             if expect_success {
                 assert_eq!(pkt[4], 14u8, "{}: signature response", name);

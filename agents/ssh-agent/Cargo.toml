@@ -30,6 +30,8 @@ ring = { workspace = true }
 toml = "0.8"
 glob-match = "0.2"
 chrono = { workspace = true }
+sha2 = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -18,14 +18,25 @@
 use anyhow::{anyhow, Context, Result};
 use persona_core::RedactedLoggerBuilder;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{info, warn, Level};
 
+use crate::approval::ApprovalHandler;
 use crate::transport::{default_agent_path, AgentListener};
 use crate::{handle_connection, resolve_persona_db_path, Agent};
 
 /// Run the SSH agent daemon: bind the agent socket, load keys from the
 /// Persona vault, and serve agent requests until the process is killed.
 pub async fn run_agent() -> Result<()> {
+    run_agent_with_approval(None).await
+}
+
+/// Run the SSH agent daemon with a custom approval handler.
+///
+/// `None` keeps the default terminal prompt (TTY); hosts with a GUI
+/// (e.g. the desktop app) inject their own [`ApprovalHandler`] so signature
+/// confirmations surface as UI instead of stdin.
+pub async fn run_agent_with_approval(approval: Option<Arc<dyn ApprovalHandler>>) -> Result<()> {
     RedactedLoggerBuilder::new(Level::INFO)
         .include_target(false)
         .init()?;
@@ -61,6 +72,9 @@ pub async fn run_agent() -> Result<()> {
 
     // Load keys from Persona
     let mut agent = Agent::new();
+    if let Some(handler) = approval {
+        agent = agent.with_approval_handler(handler);
+    }
     agent
         .load_keys_from_persona(&db_path)
         .await
