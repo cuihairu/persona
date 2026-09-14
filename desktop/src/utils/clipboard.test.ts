@@ -3,7 +3,7 @@ import { copyWithAutoClear } from './clipboard';
 const mockTauriWriteText = jest.fn();
 const mockTauriReadText = jest.fn();
 
-jest.mock('@tauri-apps/api/clipboard', () => ({
+jest.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: (...args: any[]) => mockTauriWriteText(...args),
   readText: (...args: any[]) => mockTauriReadText(...args),
 }));

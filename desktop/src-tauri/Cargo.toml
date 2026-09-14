@@ -8,14 +8,17 @@ repository = "https://github.com/cuihairu/persona"
 edition = "2021"
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 persona-core = { path = "../../core" }
 persona-ssh-agent = { path = "../../agents/ssh-agent" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "1.5", features = [ "dialog-save", "fs-read-file", "fs-remove-file", "dialog-ask", "path-all", "fs-write-file", "dialog-confirm", "fs-exists", "dialog-message", "fs-remove-dir", "fs-create-dir", "dialog-open", "clipboard-all", "shell-open"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+async-trait = "0.1"
 tokio = { version = "1.0", features = ["full"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 anyhow = "1.0"
@@ -23,14 +26,14 @@ thiserror = "1.0"
 tracing = "0.1"
 dirs = "5.0"
 byteorder = "1.5"
-chrono = { version = "0.4", features = ["serde"] }
-data-encoding = "2.5"
-hmac = "0.12"
-sha1 = "0.10"
+base64 = "0.22"
+hex = "0.4"
 sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
 
-[features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+[dev-dependencies]
+tempfile = "3"
+# mock_app() for AppHandle in tests; release builds keep tauri without this feature
+tauri = { version = "2", features = ["test"] }
 
 [workspace]

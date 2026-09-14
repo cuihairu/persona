@@ -1,4 +1,4 @@
-import { readText as tauriReadText, writeText as tauriWriteText } from '@tauri-apps/api/clipboard';
+import { readText as tauriReadText, writeText as tauriWriteText } from '@tauri-apps/plugin-clipboard-manager';
 
 const writeClipboardText = async (text: string): Promise<boolean> => {
   try {

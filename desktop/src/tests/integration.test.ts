@@ -5,13 +5,13 @@
  * and the Tauri backend commands.
  */
 
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import type { ApiResponse, Identity, Credential } from '@/types';
 import { personaAPI } from '@/utils/api';
 
 // Mock Tauri invoke for testing
 const mockInvoke = jest.fn();
-jest.mock('@tauri-apps/api/tauri', () => ({
+jest.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
 
