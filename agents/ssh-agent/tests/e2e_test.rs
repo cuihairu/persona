@@ -8,7 +8,7 @@
 //! NOTE: Full E2E tests with actual socket communication are marked as #[ignore]
 //! because they require running the full agent binary.
 
-use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io::Cursor;
 
 /// Encode ed25519 public key in OpenSSH wire format
