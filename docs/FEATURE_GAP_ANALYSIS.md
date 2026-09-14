@@ -20,7 +20,7 @@ Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona 
 - Sharing/Admin
   - Multi-user vaults, RBAC, SCIM/SSO, account recovery: [−] out of scope for a single-principal product (`BOUNDARY.md`)
 - Apps & Interfaces
-  - Desktop app: [−] prototype shell; wiring Tauri commands to core is the deliberate current focus
+  - Desktop app: [≈] full command wiring on Tauri v2 (50+ commands: vault/credential CRUD, TOTP, auto-lock with backend-enforced lock, audit query, passkey seams, reveal + re-auth gating, wallet create/sign confirmations with address-poisoning heuristics, SSH signature approvals via in-app modal + system notification); remaining: biometric unlock, attachments UI, change-history UI, packaged-build acceptance
   - Mobile: [−] placeholder
   - CLI: [=] full CRUD, TOTP (QR setup + watch), password generator, TUI, export/import (gzip + encryption), non-interactive CI mode, migrations
 - Developer

@@ -11,11 +11,12 @@ Milestones 0–3 – Foundation (done)
 - [x] Browser: Chromium extension + Native Messaging bridge (pairing, HMAC request auth, origin binding, user gesture, autofill MVP, phishing resistance); Safari host shell
 
 Milestone 4 – 1Password Parity (current focus)
-- [ ] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (review stage; P1 core/CLI → P2 browser interception)
+- [ ] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (review stage; P1 core/CLI done, P2 browser interception done; P3 desktop GUI approval surface pending)
 - [ ] Watchtower-class health checks: weak/reused/expired detection, breach checks (rules engine, then desktop panels)
-- [ ] Desktop app: wire Tauri commands to core (unlock, lists, CRUD); vault/identity/credential views; search + filters
-- [ ] Desktop: TOTP display; password reveal flow; copy-once clipboard
-- [ ] Desktop: SSH agent controls; signing approvals via notifications
+- [x] Desktop app: wired to core on Tauri v2 (unlock, lists, CRUD; vault/identity/credential views; search + type/tag/favorite filters)
+- [x] Desktop: TOTP display (shared core path, RFC 6238 vectors); password reveal flow (re-auth gate + 30s auto-hide + copy-once clipboard); SshKey/ApiKey/BankCard rendering
+- [x] Desktop: SSH agent controls; signature approvals via in-app modal + system notification (agent stays UI-free behind an ApprovalHandler seam; CLI keeps TTY prompts unchanged)
+- [x] Desktop: auto-lock end-to-end (backend event → countdown banner → enforced lock clears in-memory master key even if the frontend is gone)
 - [ ] Browser: polished TOTP autofill UX
 - [ ] SSH agent: real-host E2E test (`ssh -T git@github.com`); Windows-specific testing and optimization
 - [ ] Reproducible builds
@@ -26,7 +27,8 @@ Existing experimental base: BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana d
 - [ ] keystore JSON import/export (replace the simplified keystore path with standard scrypt/pbkdf2)
 - [ ] PSBT workflow
 - [ ] Signing confirmations verifying recipient address, amount, fees and chain id (anti address-poisoning)
-- [ ] Desktop wallet UI (addresses, QR, confirmations)
+  - [x] Desktop confirmation modal exists: from/to/amount/fee display, address-poisoning heuristic warning, password stays in the modal, signature verified before persisting; backend signing UX policy (threat model) still pending
+- [x] Desktop wallet UI (addresses, QR, confirmations)
 - [ ] Open question: hardware wallets (Ledger/Trezor) in-scope here or a separate later track
 
 Milestone 6 – Server & Sync (optional)

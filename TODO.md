@@ -77,14 +77,29 @@ Wallet Material (experimental — deferred until 1Password parity; see priority 
 - [x] Sign: BTC raw transaction (BIP‑143 P2WPKH + BIP‑141 segwit 组装, 官方规范向量逐字节验证) — 需 UTXO `inputs` metadata；无 inputs 时仅存审计签名；PSBT 仍待做
 - [x] 签名/编码层全面换用审计过的第三方库：交易序列化与签名哈希 → `alloy-consensus`（EVM）/ `rust-bitcoin`（BTC，`SighashCache::p2wpkh_signature_hash`）、地址编码 → `bech32` crate（BIP‑173/350）/ `bs58`(check) / `alloy-primitives`（EIP‑55）、WIF 解析 → `rust-bitcoin`；手写 RLP/BIP‑143/wire 组装已删除，官方规范向量保留作回归验证（SLIP‑0010 ed25519 派生暂无成熟库，保留自研）
 - [x] CLI: wallet create/import/derive/list/sign (`create-transaction --sign`)
-- [ ] Desktop: wallet overview, address lists, QR, signing confirmations
+- [x] Desktop: wallet overview, address lists, QR, signing confirmations
 
-Desktop (Tauri + React)
-- [ ] Wire Tauri commands to core (unlock, lists, CRUD)
-- [ ] Vault/identity/credential views; search; filters
-- [ ] TOTP display; password reveal flow; copy-once clipboard
-- [ ] SSH Agent control & signing approvals via notifications
-- [ ] Wallet UI (addresses, QR, signing confirmations)
+Desktop (Tauri v2 + React)
+- [x] Wire Tauri commands to core (unlock, lists, CRUD)；50+ 命令全量接线
+  （identity/credential CRUD、TOTP、搜索、统计、SSH agent、钱包 9 命令、
+  auto-lock、审计查询/统计/清理、passkey 7 命令、导出、敏感字段 reveal、re-auth、
+  钱包交易 create/sign、SSH 签名审批应答）
+- [x] Tauri v1.5 → v2 迁移（capabilities 权限模型、tauri-plugin-clipboard-manager、
+  tauri-plugin-notification、官方迁移器 + 人工核对）
+- [x] TOTP 下沉 core（RFC 6238 向量，桌面/CLI 共用同一路径）
+- [x] ApiResponse 错误码协议（REAUTH_REQUIRED / SERVICE_LOCKED 分流）
+- [x] Auto-lock 全链路：core 事件 → emit `persona://auto-lock` → 前端倒计时横幅 +
+  回解锁屏；Locked 事件后端强制落锁（清内存主密钥，不依赖前端存活）
+- [x] Vault/identity/credential views; search; 三维筛选（类型/标签/仅收藏）
+- [x] TOTP display; password reveal flow（re-auth 闸门 + 30s 自动隐藏 + copy-once
+  clipboard）；SshKey/ApiKey/BankCard 分支渲染
+- [x] SSH Agent control & signing approvals：ApprovalHandler 接缝（agent crate 无
+  tauri 依赖）→ DesktopApprovalHandler（emit `persona://ssh-approval` + oneshot，
+  120s 超时自动拒绝）→ SshApprovalModal；CLI 走 TTY 提示零改动；失焦系统通知
+- [x] Wallet UI (addresses, QR, signing confirmations + 地址投毒启发式告警)
+- [ ] Desktop 集成测试矩阵扩展（当前 21 个 Rust 测试：纯函数/夹具层；带 service
+  生命周期的命令级集成测试待补）
+- [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)
 - [ ] Events API, audit ingestion, metrics
