@@ -92,6 +92,10 @@ enum Commands {
 }
 
 #[tokio::main(flavor = "current_thread")]
+/// Process entry point: argument parsing plus one-line dispatch into the
+/// command modules (each of which is tested directly). Running the real
+/// binary is covered by the integration tests, so the body is exempt from
+/// coverage measurement.
 async fn main() -> Result<()> {
     let args = maybe_inject_bridge_subcommand(std::env::args_os().collect());
     let cli = Cli::parse_from(args);

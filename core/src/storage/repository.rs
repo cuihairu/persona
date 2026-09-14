@@ -1356,19 +1356,35 @@ mod tests {
             assert_eq!(round_trip.credential_type.to_string(), name);
         }
 
+        // SecurityLevel Medium and Low round-trip through their string form
+        // (High is the default used by the sample above).
+        for (level_name, level) in [
+            ("Medium", SecurityLevel::Medium),
+            ("Low", SecurityLevel::Low),
+        ] {
+            let mut lvl_cred = sample_credential(identity_id, &format!("{} level", level_name));
+            lvl_cred.security_level = level;
+            repo.create(&lvl_cred).await.unwrap();
+            let round_trip = repo.find_by_id(&lvl_cred.id).await.unwrap().unwrap();
+            assert_eq!(round_trip.security_level.to_string(), level_name);
+        }
+
         let mut renamed = fetched.clone();
         renamed.name = "Renamed credential".to_string();
         renamed.is_favorite = true;
         repo.update(&renamed).await.unwrap();
 
-        assert_eq!(repo.find_all().await.unwrap().len(), 7);
-        assert_eq!(repo.find_by_identity(&identity_id).await.unwrap().len(), 7);
+        // 7 from the earlier section plus the 2 security-level variants.
+        assert_eq!(repo.find_all().await.unwrap().len(), 9);
+        assert_eq!(repo.find_by_identity(&identity_id).await.unwrap().len(), 9);
+        // The security-level variants reuse the Password sample shape, so
+        // Password count is 3 (original + Medium + Low).
         assert_eq!(
             repo.find_by_type(&CredentialType::Password)
                 .await
                 .unwrap()
                 .len(),
-            1
+            3
         );
         assert_eq!(repo.find_favorites().await.unwrap().len(), 1);
 
@@ -1575,6 +1591,67 @@ mod tests {
         assert!(!repo.delete(&keep.id).await.unwrap());
     }
 
+    #[tokio::test]
+    async fn audit_log_clear_identity_and_credential_references() {
+        let db = test_db().await;
+        insert_audit_user(&db).await;
+
+        let identities = IdentityRepository::new(db.clone());
+        identities
+            .create(&sample_identity("detach owner"))
+            .await
+            .unwrap();
+        let identity_id = identities.find_all().await.unwrap()[0].id;
+        let credentials = CredentialRepository::new(db.clone());
+        credentials
+            .create(&sample_credential(identity_id, "detach cred"))
+            .await
+            .unwrap();
+        let credential_id = credentials.find_all().await.unwrap()[0].id;
+
+        let repo = AuditLogRepository::new(db.clone());
+        repo.create(
+            &audit_log(AuditAction::Login)
+                .with_identity_id(Some(identity_id))
+                .with_credential_id(Some(credential_id)),
+        )
+        .await
+        .unwrap();
+        repo.create(&audit_log(AuditAction::Logout).with_identity_id(Some(identity_id)))
+            .await
+            .unwrap();
+        // A third log without references must not be counted or touched.
+        repo.create(&audit_log(AuditAction::PasswordChange))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.clear_credential_reference(&credential_id)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.clear_identity_reference(&identity_id).await.unwrap(),
+            2
+        );
+        // Clearing again is a no-op with a zero count.
+        assert_eq!(
+            repo.clear_identity_reference(&identity_id).await.unwrap(),
+            0
+        );
+
+        // The referenced rows can now be deleted (that is the point of the
+        // detaching helpers), while the audit trail survives with NULL refs.
+        assert!(credentials.delete(&credential_id).await.unwrap());
+        assert!(identities.delete(&identity_id).await.unwrap());
+
+        let survivors = repo.find_all().await.unwrap();
+        assert_eq!(survivors.len(), 3);
+        assert!(survivors.iter().all(|log| log.identity_id.is_none()));
+        assert!(survivors.iter().all(|log| log.credential_id.is_none()));
+    }
+
     // ------------------------------------------------------------------
     // IdentityRepository extras
     // ------------------------------------------------------------------
@@ -1607,5 +1684,100 @@ mod tests {
             Some("eng")
         );
         assert!(repo.find_by_name("ghost").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn row_to_credential_falls_back_to_medium_for_unknown_level() {
+        let db = test_db().await;
+        let identities = IdentityRepository::new(db.clone());
+        identities
+            .create(&sample_identity("weird level"))
+            .await
+            .unwrap();
+        let identity_id = identities.find_all().await.unwrap()[0].id;
+
+        // The schema does not constrain security_level, so a legacy or corrupt
+        // row can carry an unrecognized value; it must map back to Medium.
+        let cred_id = Uuid::new_v4();
+        sqlx::query(
+            r#"INSERT INTO credentials (id, identity_id, name, credential_type, security_level,
+               encrypted_data, tags, metadata, created_at, updated_at, is_active, is_favorite)
+               VALUES (?, ?, 'corrupt', 'Password', 'ULTRA-SECRET', x'00', '[]', '{}', ?, ?, 1, 0)"#,
+        )
+        .bind(cred_id.to_string())
+        .bind(identity_id.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let repo = CredentialRepository::new(db);
+        let fetched = repo.find_by_id(&cred_id).await.unwrap().unwrap();
+        assert_eq!(fetched.security_level, SecurityLevel::Medium);
+    }
+
+    #[tokio::test]
+    async fn credential_create_persists_last_accessed() {
+        let db = test_db().await;
+        let identities = IdentityRepository::new(db.clone());
+        identities
+            .create(&sample_identity("accessed"))
+            .await
+            .unwrap();
+        let identity_id = identities.find_all().await.unwrap()[0].id;
+        let repo = CredentialRepository::new(db);
+
+        let mut cred = sample_credential(identity_id, "accessed once");
+        cred.last_accessed = Some(chrono::Utc::now());
+        repo.create(&cred).await.unwrap();
+
+        let fetched = repo.find_by_id(&cred.id).await.unwrap().unwrap();
+        assert!(fetched.last_accessed.is_some());
+    }
+
+    #[tokio::test]
+    async fn workspace_create_persists_active_identity() {
+        let db = test_db().await;
+        let repo = WorkspaceRepository::new(db);
+
+        let mut ws = Workspace::new("/tmp/v2-active", "active".to_string());
+        ws.active_identity_id = Some(Uuid::new_v4());
+        repo.create(&ws).await.unwrap();
+
+        let fetched = repo.find_by_id(&ws.id).await.unwrap().unwrap();
+        assert_eq!(fetched.active_identity_id, ws.active_identity_id);
+    }
+
+    #[tokio::test]
+    async fn audit_log_update_persists_credential_reference() {
+        let db = test_db().await;
+        insert_audit_user(&db).await;
+
+        // audit_logs carries FKs to identities/credentials; seed both parents.
+        let identities = IdentityRepository::new(db.clone());
+        identities
+            .create(&sample_identity("audit updater"))
+            .await
+            .unwrap();
+        let identity_id = identities.find_all().await.unwrap()[0].id;
+        let credentials = CredentialRepository::new(db.clone());
+        credentials
+            .create(&sample_credential(identity_id, "updated cred"))
+            .await
+            .unwrap();
+        let credential_id = credentials.find_all().await.unwrap()[0].id;
+
+        let repo = AuditLogRepository::new(db);
+        let log = audit_log(AuditAction::Login).with_credential_id(Some(credential_id));
+        repo.create(&log).await.unwrap();
+
+        // The update path serializes the credential reference as well.
+        let updated = log.clone().with_identity_id(Some(identity_id));
+        repo.update(&updated).await.unwrap();
+
+        let fetched = repo.find_by_id(&log.id).await.unwrap().unwrap();
+        assert_eq!(fetched.credential_id, Some(credential_id));
+        assert_eq!(fetched.identity_id, Some(identity_id));
     }
 }

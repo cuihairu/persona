@@ -34,65 +34,10 @@ pub trait PromptUi {
     fn multi_select(&self, prompt: &str, options: &[&str]) -> Result<Vec<usize>>;
 }
 
-/// The real terminal, backed by dialoguer.
-pub struct TerminalUi;
-
-impl PromptUi for TerminalUi {
-    fn input(&self, prompt: &str, initial: Option<&str>, allow_empty: bool) -> Result<String> {
-        let mut input = dialoguer::Input::<String>::new()
-            .with_prompt(prompt)
-            .allow_empty(allow_empty);
-        if let Some(initial) = initial {
-            input = input.with_initial_text(initial);
-        }
-        Ok(input.interact_text()?)
-    }
-
-    fn input_with_default(&self, prompt: &str, default: &str) -> Result<String> {
-        Ok(dialoguer::Input::<String>::new()
-            .with_prompt(prompt)
-            .default(default.to_string())
-            .show_default(false)
-            .interact_text()?)
-    }
-
-    fn password(
-        &self,
-        prompt: &str,
-        allow_empty: bool,
-        confirmation: Option<(&str, &str)>,
-    ) -> Result<String> {
-        let mut password = dialoguer::Password::new()
-            .with_prompt(prompt)
-            .allow_empty_password(allow_empty);
-        if let Some((confirm_prompt, mismatch)) = confirmation {
-            password = password.with_confirmation(confirm_prompt, mismatch);
-        }
-        Ok(password.interact()?)
-    }
-
-    fn confirm(&self, prompt: &str, default: bool) -> Result<bool> {
-        Ok(dialoguer::Confirm::new()
-            .with_prompt(prompt)
-            .default(default)
-            .interact()?)
-    }
-
-    fn select(&self, prompt: &str, options: &[&str], default: Option<usize>) -> Result<usize> {
-        let mut select = dialoguer::Select::new().with_prompt(prompt).items(options);
-        if let Some(default) = default {
-            select = select.default(default);
-        }
-        Ok(select.interact()?)
-    }
-
-    fn multi_select(&self, prompt: &str, options: &[&str]) -> Result<Vec<usize>> {
-        Ok(dialoguer::MultiSelect::new()
-            .with_prompt(prompt)
-            .items(options)
-            .interact()?)
-    }
-}
+/// The production [`PromptUi`] implementation lives in
+/// [`crate::utils::terminal_ui`]; re-exported here so callers keep a single
+/// import path.
+pub use crate::utils::terminal_ui::TerminalUi;
 
 #[cfg(test)]
 pub mod scripted {
@@ -280,5 +225,147 @@ pub mod scripted {
         let ui = ScriptedUi::new();
         let ui_dyn: &dyn super::PromptUi = &ui;
         let _ = ui_dyn.confirm("nobody scripted me", true);
+    }
+
+    #[test]
+    fn default_matches_new_and_empty_input_falls_back_to_default() {
+        // `Default` must behave exactly like `new`.
+        let ui = ScriptedUi::default();
+        assert!(ui.exhausted());
+
+        // An empty scripted answer means "accept the default".
+        let ui = ScriptedUi::new().input("");
+        let ui_dyn: &dyn super::PromptUi = &ui;
+        assert_eq!(
+            ui_dyn
+                .input_with_default("name?", "fallback-name")
+                .unwrap(),
+            "fallback-name"
+        );
+        assert!(ui.exhausted());
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn select_index_beyond_options_is_rejected() {
+        let ui = ScriptedUi::new().select(5);
+        let ui_dyn: &dyn super::PromptUi = &ui;
+        let _ = ui_dyn.select("pick", &["a", "b"], None).unwrap();
+    }
+
+    /// Which prompt kind should [`FailOn`] turn into an error.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum PromptKind {
+        Input,
+        InputWithDefault,
+        Password,
+        Confirm,
+        Select,
+        MultiSelect,
+    }
+
+    /// A [`PromptUi`](super::PromptUi) wrapper that fails exactly one prompt
+    /// kind and delegates everything else to an inner UI. Tests use it to
+    /// drive the `?`-error propagation paths of interactive flows, which the
+    /// always-succeeding [`ScriptedUi`] cannot reach.
+    pub struct FailOn<'a> {
+        inner: &'a dyn super::PromptUi,
+        kind: PromptKind,
+    }
+
+    impl<'a> FailOn<'a> {
+        pub fn new(inner: &'a dyn super::PromptUi, kind: PromptKind) -> Self {
+            Self { inner, kind }
+        }
+
+        fn fails(&self, kind: PromptKind) -> bool {
+            self.kind == kind
+        }
+    }
+
+    impl super::PromptUi for FailOn<'_> {
+        fn input(
+            &self,
+            prompt: &str,
+            initial: Option<&str>,
+            allow_empty: bool,
+        ) -> Result<String> {
+            if self.fails(PromptKind::Input) {
+                bail!("failing ui: input prompt: {}", prompt);
+            }
+            self.inner.input(prompt, initial, allow_empty)
+        }
+
+        fn input_with_default(&self, prompt: &str, default: &str) -> Result<String> {
+            if self.fails(PromptKind::InputWithDefault) {
+                bail!("failing ui: default input prompt: {}", prompt);
+            }
+            self.inner.input_with_default(prompt, default)
+        }
+
+        fn password(
+            &self,
+            prompt: &str,
+            allow_empty: bool,
+            confirmation: Option<(&str, &str)>,
+        ) -> Result<String> {
+            if self.fails(PromptKind::Password) {
+                bail!("failing ui: password prompt: {}", prompt);
+            }
+            self.inner.password(prompt, allow_empty, confirmation)
+        }
+
+        fn confirm(&self, prompt: &str, default: bool) -> Result<bool> {
+            if self.fails(PromptKind::Confirm) {
+                bail!("failing ui: confirm prompt: {}", prompt);
+            }
+            self.inner.confirm(prompt, default)
+        }
+
+        fn select(&self, prompt: &str, options: &[&str], default: Option<usize>) -> Result<usize> {
+            if self.fails(PromptKind::Select) {
+                bail!("failing ui: select prompt: {}", prompt);
+            }
+            self.inner.select(prompt, options, default)
+        }
+
+        fn multi_select(&self, prompt: &str, options: &[&str]) -> Result<Vec<usize>> {
+            if self.fails(PromptKind::MultiSelect) {
+                bail!("failing ui: multi-select prompt: {}", prompt);
+            }
+            self.inner.multi_select(prompt, options)
+        }
+    }
+
+    #[test]
+    fn fail_on_only_fails_the_selected_kind() {
+        let inner = ScriptedUi::new()
+            .password("hunter2")
+            .confirm(true)
+            .input("typed");
+        let ui = FailOn::new(&inner, PromptKind::Select);
+        let ui_dyn: &dyn super::PromptUi = &ui;
+
+        // Delegated kinds pass through to the inner UI.
+        assert_eq!(ui_dyn.password("secret?", false, None).unwrap(), "hunter2");
+        assert!(ui_dyn.confirm("yes?", true).unwrap());
+        assert_eq!(ui_dyn.input("text?", None, false).unwrap(), "typed");
+
+        // The selected kind errors.
+        let err = ui_dyn
+            .select("pick", &["a", "b"], None)
+            .expect_err("select must fail");
+        assert!(err.to_string().contains("failing ui: select prompt"));
+
+        // A wrapper around an exhausted inner UI surfaces the inner panic.
+        let empty = ScriptedUi::new();
+        let ui = FailOn::new(&empty, PromptKind::Password);
+        let ui_dyn: &dyn super::PromptUi = &ui;
+        let err = ui_dyn
+            .password("secret?", false, None)
+            .expect_err("password must fail without consulting the inner UI");
+        assert!(err.to_string().contains("failing ui: password prompt"));
+        // FailOn bailed before consulting the inner UI, so its queue is intact.
+        assert!(empty.exhausted());
     }
 }

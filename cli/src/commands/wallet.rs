@@ -1,3 +1,4 @@
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
@@ -13,6 +14,7 @@ use persona_core::{
     },
     storage::{CryptoWalletRepository, Database},
 };
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tabled::{settings::Style, Table, Tabled};
 
@@ -376,6 +378,16 @@ struct AddressTable {
 }
 
 pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
+    handle_wallet_with(args, config, &TerminalUi).await
+}
+
+/// Like [`handle_wallet`], but every interactive prompt is driven through
+/// `ui` so tests can script the terminal (see [`crate::utils::prompt`]).
+pub(crate) async fn handle_wallet_with(
+    args: WalletArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     let repo = init_wallet_repository(config).await?;
     let formatter = OutputFormatter;
 
@@ -619,8 +631,8 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             let network_str = network.to_string();
 
             // Prompt for password
-            formatter.print_info("🔐 Enter a password to encrypt your wallet:");
-            let password = rpassword::read_password().context("Failed to read password")?;
+            let password =
+                ui.password("🔐 Enter a password to encrypt your wallet:", false, None)?;
 
             if password.len() < 8 {
                 bail!("Password must be at least 8 characters long");
@@ -637,9 +649,11 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             formatter
                 .print_warning("This is the ONLY way to recover your wallet if you lose access.\n");
             formatter.print_success(&format!("Recovery Phrase:\n{}\n", mnemonic_phrase));
-            formatter.print_warning("Press Enter after you've written it down securely...");
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
+            ui.input(
+                "Press Enter after you've written it down securely...",
+                None,
+                true,
+            )?;
 
             // Create wallet using import function
             let derivation_path = if hd {
@@ -920,8 +934,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
             // Get password if exporting private data
             let password = if requires_password {
                 formatter.print_warning("⚠️  You are about to export private key data!");
-                formatter.print_info("Enter wallet password:");
-                let pwd = rpassword::read_password().context("Failed to read password")?;
+                let pwd = ui.password("Enter wallet password:", false, None)?;
                 Some(pwd)
             } else {
                 None
@@ -974,8 +987,11 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             let import_format = parse_import_format(&format)?;
 
-            formatter.print_info("Enter a password to encrypt the imported wallet:");
-            let password = rpassword::read_password().context("Failed to read password")?;
+            let password = ui.password(
+                "Enter a password to encrypt the imported wallet:",
+                false,
+                None,
+            )?;
 
             if password.len() < 8 {
                 bail!("Password must be at least 8 characters long");
@@ -988,22 +1004,26 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 data.clone()
             };
 
+            // Wallet rows carry a foreign key into `identities`, so the
+            // imported wallet must belong to the workspace's default identity.
+            let identity_id = resolve_default_identity_id(config).await?;
+
             let wallet = match import_format {
                 ImportFormat::Mnemonic => {
-                    formatter.print_info("Enter network (bitcoin/ethereum/solana):");
-                    let mut network_input = String::new();
-                    std::io::stdin().read_line(&mut network_input)?;
+                    let network_input =
+                        ui.input("Enter network (bitcoin/ethereum/solana):", None, false)?;
                     let network = parse_network(network_input.trim())?;
 
-                    formatter.print_info("Enter number of addresses to derive (default: 20):");
-                    let mut count_input = String::new();
-                    std::io::stdin().read_line(&mut count_input)?;
+                    let count_input = ui.input_with_default(
+                        "Enter number of addresses to derive (default: 20):",
+                        "20",
+                    )?;
                     let address_count = count_input.trim().parse().unwrap_or(20);
 
                     let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
 
                     import_from_mnemonic(
-                        uuid::Uuid::new_v4(),
+                        identity_id,
                         wallet_name,
                         import_data.trim(),
                         "",
@@ -1015,15 +1035,14 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                     .context("Failed to import from mnemonic")?
                 }
                 ImportFormat::PrivateKey => {
-                    formatter.print_info("Enter network (bitcoin/ethereum/solana):");
-                    let mut network_input = String::new();
-                    std::io::stdin().read_line(&mut network_input)?;
+                    let network_input =
+                        ui.input("Enter network (bitcoin/ethereum/solana):", None, false)?;
                     let network = parse_network(network_input.trim())?;
 
                     let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
 
                     import_from_private_key(
-                        uuid::Uuid::new_v4(),
+                        identity_id,
                         wallet_name,
                         import_data.trim(),
                         network,
@@ -1034,16 +1053,11 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 ImportFormat::Wif => {
                     let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
 
-                    import_from_wif(
-                        uuid::Uuid::new_v4(),
-                        wallet_name,
-                        import_data.trim(),
-                        &password,
-                    )
-                    .context("Failed to import from WIF")?
+                    import_from_wif(identity_id, wallet_name, import_data.trim(), &password)
+                        .context("Failed to import from WIF")?
                 }
                 ImportFormat::Json => {
-                    import_from_json(uuid::Uuid::new_v4(), name, import_data.trim(), &password)
+                    import_from_json(identity_id, name, import_data.trim(), &password)
                         .context("Failed to import from JSON export")?
                 }
                 _ => {
@@ -1117,8 +1131,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             // Sign the created request with the wallet's first address key
             let password = if config.ui.interactive {
-                formatter.print_info("Enter wallet password to sign:");
-                rpassword::read_password().context("Failed to read password")?
+                ui.password("Enter wallet password to sign:", false, None)?
             } else {
                 std::env::var("PERSONA_WALLET_PASSWORD")
                     .context("PERSONA_WALLET_PASSWORD must be set in non-interactive mode")?
@@ -1156,14 +1169,21 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
 
             // Bitcoin raw assembly needs the UTXO set; without 'inputs'
             // metadata only the audit signature is recorded.
-            let (raw_bytes, tx_hash) = match build_raw_transaction(&created, &key) {
-                Ok(raw) => (raw.raw, raw.hash),
+            let (raw_bytes, tx_hash, raw_assembled) = match build_raw_transaction(&created, &key) {
+                Ok(raw) => (raw.raw, raw.hash, true),
                 Err(e) => {
                     formatter.print_warning(&format!(
                         "⚠️  Raw transaction not assembled: {e}. \
                          Only the audit signature will be stored."
                     ));
-                    (Vec::new(), String::new())
+                    // The schema requires a non-empty `transaction_hash`; the
+                    // audit-only record is identified by the digest of its
+                    // signature instead of a chain transaction hash.
+                    let audit_hash = format!(
+                        "audit:{}",
+                        hex::encode(Sha256::digest(&signature.signature))
+                    );
+                    (Vec::new(), audit_hash, false)
                 }
             };
 
@@ -1181,7 +1201,7 @@ pub async fn handle_wallet(args: WalletArgs, config: &CliConfig) -> Result<()> {
                 .into_anyhow()?;
 
             formatter.print_success("Transaction signed and stored");
-            if !tx_hash.is_empty() {
+            if raw_assembled {
                 formatter.print_info(&format!("Transaction hash: {}", tx_hash));
                 formatter.print_warning(
                     "⚠️  Broadcast it with your node/RPC provider; Persona does not broadcast.",
@@ -1526,6 +1546,271 @@ mod tests {
     use persona_core::crypto::ExportFormat;
 
     #[test]
+    fn parse_network_accepts_every_alias_case_insensitively() {
+        let cases = [
+            ("bitcoin", "BlockchainNetwork::Bitcoin"),
+            ("btc", ""),
+            ("ethereum", ""),
+            ("eth", ""),
+            ("solana", ""),
+            ("sol", ""),
+            ("bitcoin-cash", ""),
+            ("bch", ""),
+            ("litecoin", ""),
+            ("ltc", ""),
+            ("dogecoin", ""),
+            ("doge", ""),
+            ("polygon", ""),
+            ("matic", ""),
+            ("arbitrum", ""),
+            ("arb", ""),
+            ("optimism", ""),
+            ("op", ""),
+            ("binance", ""),
+            ("bsc", ""),
+            ("bnb", ""),
+        ];
+        for (input, _) in &cases {
+            let parsed = super::parse_network(input).unwrap_or_else(|e| panic!("{input}: {e}"));
+            let reparsed = super::parse_network(&input.to_uppercase())
+                .unwrap_or_else(|e| panic!("{input} upper: {e}"));
+            assert_eq!(parsed, reparsed, "{input} must be case insensitive");
+        }
+
+        // Spot-check the canonical mappings.
+        assert_eq!(
+            super::parse_network("btc").unwrap(),
+            persona_core::models::wallet::BlockchainNetwork::Bitcoin
+        );
+        assert_eq!(
+            super::parse_network("MATIC").unwrap(),
+            persona_core::models::wallet::BlockchainNetwork::Polygon
+        );
+        assert_eq!(
+            super::parse_network("bnb").unwrap(),
+            persona_core::models::wallet::BlockchainNetwork::BinanceSmartChain
+        );
+    }
+
+    #[test]
+    fn parse_network_rejects_unknown_names() {
+        let err = super::parse_network("moon").expect_err("unknown network must fail");
+        assert!(err.to_string().contains("Unsupported network: moon"));
+        assert!(super::parse_network("").is_err());
+    }
+
+    #[test]
+    fn parse_wallet_type_covers_every_variant() {
+        use persona_core::models::wallet::{BipVersion, WalletType};
+
+        assert_eq!(
+            super::parse_wallet_type("single", None, None).unwrap(),
+            WalletType::SingleAddress
+        );
+        assert_eq!(
+            super::parse_wallet_type("Single-Address", None, None).unwrap(),
+            WalletType::SingleAddress
+        );
+        assert_eq!(
+            super::parse_wallet_type("multisig", None, None).unwrap(),
+            WalletType::MultiSignature {
+                required_signatures: 2,
+                total_signers: 3,
+                redeem_script: None,
+            }
+        );
+        assert_eq!(
+            super::parse_wallet_type("multi-signature", None, None).unwrap(),
+            super::parse_wallet_type("multisig", None, None).unwrap()
+        );
+        assert_eq!(
+            super::parse_wallet_type("hardware", None, None).unwrap(),
+            WalletType::Hardware {
+                device_type: "Generic".to_string(),
+                device_fingerprint: None,
+            }
+        );
+        assert_eq!(
+            super::parse_wallet_type("HW", None, None).unwrap(),
+            super::parse_wallet_type("hardware", None, None).unwrap()
+        );
+
+        // HD: every supported BIP version, plus defaults and custom counts.
+        for (bip, expected) in [
+            (Some(32), BipVersion::Bip32),
+            (Some(44), BipVersion::Bip44),
+            (Some(49), BipVersion::Bip49),
+            (Some(84), BipVersion::Bip84),
+            (Some(86), BipVersion::Bip86),
+        ] {
+            assert_eq!(
+                super::parse_wallet_type("hd", bip, Some(7)).unwrap(),
+                WalletType::HierarchicalDeterministic {
+                    bip_version: expected,
+                    address_count: 7,
+                    gap_limit: 20,
+                }
+            );
+        }
+        assert_eq!(
+            super::parse_wallet_type("hierarchical", None, None).unwrap(),
+            WalletType::HierarchicalDeterministic {
+                bip_version: BipVersion::Bip44,
+                address_count: 20,
+                gap_limit: 20,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_wallet_type_rejects_unknown_type_and_bip() {
+        let err = super::parse_wallet_type("paper", None, None)
+            .expect_err("unknown wallet type must fail");
+        assert!(err.to_string().contains("Unsupported wallet type: paper"));
+
+        let err = super::parse_wallet_type("hd", Some(33), None)
+            .expect_err("unknown BIP version must fail");
+        assert!(err.to_string().contains("Unsupported BIP version: 33"));
+    }
+
+    #[test]
+    fn parse_address_type_accepts_known_and_rejects_unknown() {
+        use persona_core::models::wallet::AddressType;
+
+        assert_eq!(
+            super::parse_address_type("P2PKH").unwrap(),
+            AddressType::P2PKH
+        );
+        assert_eq!(
+            super::parse_address_type("p2sh").unwrap(),
+            AddressType::P2SH
+        );
+        assert_eq!(
+            super::parse_address_type("p2wpkh").unwrap(),
+            AddressType::P2WPKH
+        );
+        assert_eq!(
+            super::parse_address_type("p2tr").unwrap(),
+            AddressType::P2TR
+        );
+        assert_eq!(
+            super::parse_address_type("ETH").unwrap(),
+            AddressType::Ethereum
+        );
+        assert_eq!(
+            super::parse_address_type("sol").unwrap(),
+            AddressType::Solana
+        );
+
+        let err = super::parse_address_type("bech32").expect_err("unknown type must fail");
+        assert!(err.to_string().contains("Unsupported address type: bech32"));
+    }
+
+    #[test]
+    fn format_wallet_type_renders_every_variant() {
+        use persona_core::models::wallet::{BipVersion, WalletType};
+
+        assert_eq!(
+            super::format_wallet_type(&WalletType::SingleAddress),
+            "Single"
+        );
+        assert_eq!(
+            super::format_wallet_type(&WalletType::HierarchicalDeterministic {
+                bip_version: BipVersion::Bip44,
+                address_count: 5,
+                gap_limit: 20,
+            }),
+            "HD (BIP-44, 5 addrs)"
+        );
+        // Zero address count suppresses the suffix.
+        assert_eq!(
+            super::format_wallet_type(&WalletType::HierarchicalDeterministic {
+                bip_version: BipVersion::Bip86,
+                address_count: 0,
+                gap_limit: 20,
+            }),
+            "HD (BIP-86)"
+        );
+        assert_eq!(
+            super::format_wallet_type(&WalletType::MultiSignature {
+                required_signatures: 2,
+                total_signers: 3,
+                redeem_script: None,
+            }),
+            "Multi-sig (2/3)"
+        );
+        assert_eq!(
+            super::format_wallet_type(&WalletType::Hardware {
+                device_type: "Ledger".to_string(),
+                device_fingerprint: None,
+            }),
+            "Hardware (Ledger)"
+        );
+    }
+
+    #[test]
+    fn format_address_type_renders_every_variant_including_custom() {
+        use persona_core::models::wallet::AddressType;
+
+        assert_eq!(super::format_address_type(&AddressType::P2PKH), "P2PKH");
+        assert_eq!(super::format_address_type(&AddressType::P2SH), "P2SH");
+        assert_eq!(super::format_address_type(&AddressType::P2WPKH), "P2WPKH");
+        assert_eq!(super::format_address_type(&AddressType::P2TR), "P2TR");
+        assert_eq!(super::format_address_type(&AddressType::Ethereum), "ETH");
+        assert_eq!(super::format_address_type(&AddressType::Solana), "SOL");
+        assert_eq!(
+            super::format_address_type(&AddressType::Custom("taproot-test".to_string())),
+            "taproot-test"
+        );
+    }
+
+    #[test]
+    fn parse_wallet_security_level_accepts_aliases_and_rejects_unknown() {
+        use persona_core::models::wallet::WalletSecurityLevel;
+
+        assert_eq!(
+            super::parse_wallet_security_level("maximum").unwrap(),
+            WalletSecurityLevel::Maximum
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("MAX").unwrap(),
+            WalletSecurityLevel::Maximum
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("High").unwrap(),
+            WalletSecurityLevel::High
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("hi").unwrap(),
+            WalletSecurityLevel::High
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("medium").unwrap(),
+            WalletSecurityLevel::Medium
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("med").unwrap(),
+            WalletSecurityLevel::Medium
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("mid").unwrap(),
+            WalletSecurityLevel::Medium
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("low").unwrap(),
+            WalletSecurityLevel::Low
+        );
+        assert_eq!(
+            super::parse_wallet_security_level("LO").unwrap(),
+            WalletSecurityLevel::Low
+        );
+
+        let err = super::parse_wallet_security_level("ultra").expect_err("unknown level must fail");
+        assert!(err.to_string().contains("Invalid security level: ultra"));
+        assert!(err.to_string().contains("low, medium, high, maximum"));
+    }
+
+    #[test]
     fn mnemonic_export_requires_password_without_include_private() {
         assert!(export_requires_password(ExportFormat::Mnemonic, false));
     }
@@ -1556,7 +1841,23 @@ mod tests {
 mod integration {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
+    use persona_core::models::wallet::BlockchainNetwork;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Serializes env mutations against the bridge, service and switch tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
 
     fn config_for(dir: &TempDir) -> CliConfig {
         let mut config = CliConfig::default();
@@ -1566,6 +1867,11 @@ mod integration {
 
     /// Wallet rows reference `identities(id)` via foreign key, so seed one.
     async fn seed_identity(dir: &TempDir, name: &str) {
+        seed_identity_get_id(dir, name).await;
+    }
+
+    /// Same as [`seed_identity`] but returns the new identity's id.
+    async fn seed_identity_get_id(dir: &TempDir, name: &str) -> uuid::Uuid {
         use persona_core::models::{Identity, IdentityType};
         use persona_core::storage::IdentityRepository;
         use persona_core::Repository;
@@ -1573,10 +1879,104 @@ mod integration {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        IdentityRepository::new(db)
-            .create(&Identity::new(name.to_string(), IdentityType::Personal))
-            .await
-            .unwrap();
+        let identity = Identity::new(name.to_string(), IdentityType::Personal);
+        let id = identity.id;
+        IdentityRepository::new(db).create(&identity).await.unwrap();
+        id
+    }
+
+    /// Insert a wallet directly, bypassing the command layer.
+    async fn insert_wallet(config: &CliConfig, wallet: &CryptoWallet) {
+        let repo = init_wallet_repository(config).await.unwrap();
+        repo.create(wallet).await.unwrap();
+    }
+
+    fn generate_args(name: &str, network: &str, hd: bool, address_count: usize) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::Generate {
+                name: name.to_string(),
+                description: None,
+                network: network.to_string(),
+                hd,
+                bip_version: 44,
+                account: 1,
+                address_count,
+            },
+        }
+    }
+
+    fn import_args(format: &str, data: &str, name: Option<&str>) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::Import {
+                format: format.to_string(),
+                data: data.to_string(),
+                name: name.map(String::from),
+            },
+        }
+    }
+
+    fn export_args(
+        identifier: &str,
+        format: &str,
+        include_private: bool,
+        output: Option<&str>,
+    ) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::Export {
+                wallet_identifier: identifier.to_string(),
+                format: format.to_string(),
+                include_private,
+                output: output.map(String::from),
+            },
+        }
+    }
+
+    fn show_args(identifier: &str) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::Show {
+                wallet_identifier: identifier.to_string(),
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn tx_args(
+        identifier: &str,
+        to: &str,
+        amount: &str,
+        fee: &str,
+        gas_price: Option<&str>,
+        gas_limit: Option<u64>,
+        nonce: Option<u64>,
+        memo: Option<&str>,
+        sign: bool,
+    ) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::CreateTransaction {
+                wallet_identifier: identifier.to_string(),
+                to: to.to_string(),
+                amount: amount.to_string(),
+                fee: fee.to_string(),
+                gas_price: gas_price.map(String::from),
+                gas_limit,
+                nonce,
+                memo: memo.map(String::from),
+                sign,
+                broadcast: false,
+                expires_in: None,
+            },
+        }
+    }
+
+    fn list_tx_args(identifier: &str) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::ListTransactions {
+                wallet_identifier: identifier.to_string(),
+                pending: false,
+                signed: false,
+                broadcast: false,
+            },
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1614,7 +2014,7 @@ mod integration {
         seed_identity(&dir, "alice").await;
 
         // Empty list reports the hint.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::List {
                     network: None,
@@ -1624,21 +2024,23 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("empty list must succeed");
 
         // Watch-only Create without xpub is rejected.
-        let err = handle_wallet(
+        let err = handle_wallet_with(
             create_args("solo", "bitcoin", "single", true, None, None, None),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect_err("watch-only without xpub must fail");
         assert!(err.to_string().contains("require an extended public key"));
 
         // Create a normal wallet and a watch-only wallet.
-        handle_wallet(
+        handle_wallet_with(
             create_args(
                 "vault",
                 "bitcoin",
@@ -1649,12 +2051,14 @@ mod integration {
                 Some("main savings"),
             ),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("create normal wallet");
-        handle_wallet(
+        handle_wallet_with(
             create_args("watcher", "ethereum", "single", true, Some("zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs"), None, None),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("create watch-only wallet");
@@ -1705,7 +2109,12 @@ mod integration {
             },
         ] {
             // The bogus security level must fail; the rest must succeed.
-            let result = handle_wallet(WalletArgs { command: list_args }, &config).await;
+            let result = handle_wallet_with(
+                WalletArgs { command: list_args },
+                &config,
+                &ScriptedUi::new(),
+            )
+            .await;
             match result {
                 Ok(()) => {}
                 Err(e) => assert!(
@@ -1716,50 +2125,22 @@ mod integration {
         }
 
         // Show by name (normal) and by name (watch-only covers xpub rendering).
-        handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Show {
-                    wallet_identifier: "vault".into(),
-                },
-            },
-            &config,
-        )
-        .await
-        .expect("show by name");
-        handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Show {
-                    wallet_identifier: "watcher".into(),
-                },
-            },
-            &config,
-        )
-        .await
-        .expect("show watch-only");
+        handle_wallet_with(show_args("vault"), &config, &ScriptedUi::new())
+            .await
+            .expect("show by name");
+        handle_wallet_with(show_args("watcher"), &config, &ScriptedUi::new())
+            .await
+            .expect("show watch-only");
 
-        let err = handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Show {
-                    wallet_identifier: "ghost".into(),
-                },
-            },
-            &config,
-        )
-        .await
-        .expect_err("unknown wallet must fail");
+        let err = handle_wallet_with(show_args("ghost"), &config, &ScriptedUi::new())
+            .await
+            .expect_err("unknown wallet must fail");
         assert!(err.to_string().to_lowercase().contains("not found"));
 
         // Empty identifier is rejected outright.
-        let err = handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Show {
-                    wallet_identifier: "   ".into(),
-                },
-            },
-            &config,
-        )
-        .await
-        .expect_err("empty identifier must fail");
+        let err = handle_wallet_with(show_args("   "), &config, &ScriptedUi::new())
+            .await
+            .expect_err("empty identifier must fail");
         assert!(err.to_string().contains("cannot be empty"));
 
         // Locate the wallet id through the repository for id-based commands.
@@ -1768,8 +2149,30 @@ mod integration {
         let vault = all.iter().find(|w| w.name == "vault").unwrap().clone();
         drop(repo);
 
+        // Update with an invalid security level fails.
+        let err = handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::Update {
+                    wallet_id: vault.id,
+                    name: None,
+                    description: None,
+                    security_level: Some("ultra".into()),
+                    add_tag: None,
+                    remove_tag: None,
+                    platform: None,
+                    purpose: None,
+                    note: None,
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("invalid update level must fail");
+        assert!(err.to_string().contains("Invalid security level"));
+
         // Update every mutable field.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Update {
                     wallet_id: vault.id,
@@ -1784,12 +2187,13 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("update all fields");
 
         let ghost = uuid::Uuid::new_v4();
-        let err = handle_wallet(
+        let err = handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Update {
                     wallet_id: ghost,
@@ -1804,35 +2208,38 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect_err("update missing wallet must fail");
         assert!(err.to_string().contains("not found"));
 
         // Stats for the wallet and system-wide.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Stats {
                     wallet_identifier: Some("vault2".into()),
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("stats for wallet");
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Stats {
                     wallet_identifier: None,
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("system stats");
 
         // Delete without force only warns.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Delete {
                     wallet_id: vault.id,
@@ -1840,11 +2247,12 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("delete without force warns only");
         // Force delete works and a missing delete reports.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Delete {
                     wallet_id: vault.id,
@@ -1852,10 +2260,11 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("force delete works");
-        let err = handle_wallet(
+        let err = handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::Delete {
                     wallet_id: ghost,
@@ -1863,6 +2272,7 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect_err("delete missing wallet must fail");
@@ -1875,9 +2285,10 @@ mod integration {
         let config = config_for(&dir);
         seed_identity(&dir, "alice").await;
 
-        handle_wallet(
+        handle_wallet_with(
             create_args("hot", "ethereum", "hd", false, None, None, None),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("create hd wallet");
@@ -1888,7 +2299,7 @@ mod integration {
         drop(repo);
 
         // Add an address; unknown wallet fails.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::AddAddress {
                     wallet_id: hot.id,
@@ -1899,10 +2310,11 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("add address");
-        let err = handle_wallet(
+        let err = handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::AddAddress {
                     wallet_id: uuid::Uuid::new_v4(),
@@ -1913,6 +2325,7 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect_err("add address to unknown wallet must fail");
@@ -1924,7 +2337,7 @@ mod integration {
             (false, true, None),
             (false, false, Some(1)),
         ] {
-            handle_wallet(
+            handle_wallet_with(
                 WalletArgs {
                     command: WalletCommand::ListAddresses {
                         wallet_identifier: "hot".into(),
@@ -1934,12 +2347,13 @@ mod integration {
                     },
                 },
                 &config,
+                &ScriptedUi::new(),
             )
             .await
             .expect("list addresses");
         }
         // Filter that matches nothing prints the hint.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::ListAddresses {
                     wallet_identifier: "hot".into(),
@@ -1949,12 +2363,13 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("unused filter prints hint");
 
         // Mark used: success then unknown address error branch.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::MarkUsed {
                     wallet_identifier: "hot".into(),
@@ -1962,10 +2377,11 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("mark used");
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::MarkUsed {
                     wallet_identifier: "hot".into(),
@@ -1973,12 +2389,13 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("mark unknown address reports via formatter");
 
         // Now the used-only filter matches.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::ListAddresses {
                     wallet_identifier: "hot".into(),
@@ -1988,12 +2405,13 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("used filter matches after mark");
 
         // CreateWatchOnly standalone command works.
-        handle_wallet(
+        handle_wallet_with(
             WalletArgs {
                 command: WalletCommand::CreateWatchOnly {
                     name: "cold-watch".into(),
@@ -2004,63 +2422,1090 @@ mod integration {
                 },
             },
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("create watch-only");
 
         // Export xpub to stdout and json (no private data) to a file.
-        handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Export {
-                    wallet_identifier: "cold-watch".into(),
-                    format: "xpub".into(),
-                    include_private: false,
-                    output: None,
-                },
-            },
+        handle_wallet_with(
+            export_args("cold-watch", "xpub", false, None),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("xpub export");
         let out_path = dir.path().join("wallet-export.json");
-        handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Export {
-                    wallet_identifier: "cold-watch".into(),
-                    format: "json".into(),
-                    include_private: false,
-                    output: Some(out_path.display().to_string()),
-                },
-            },
+        handle_wallet_with(
+            export_args(
+                "cold-watch",
+                "json",
+                false,
+                Some(&out_path.display().to_string()),
+            ),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect("json export to file");
         assert!(out_path.exists(), "export file written");
 
         // Unknown export format fails.
-        let err = handle_wallet(
-            WalletArgs {
-                command: WalletCommand::Export {
-                    wallet_identifier: "hot".into(),
-                    format: "yaml".into(),
-                    include_private: false,
-                    output: None,
-                },
-            },
+        let err = handle_wallet_with(
+            export_args("hot", "yaml", false, None),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect_err("unknown export format must fail");
         assert!(err.to_string().contains("Unknown export format"));
 
         // Invalid network is rejected during create.
-        let err = handle_wallet(
+        let err = handle_wallet_with(
             create_args("bad", "moon", "single", false, None, None, None),
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .expect_err("invalid network must fail");
         assert!(err.to_string().contains("Unsupported network"));
+    }
+
+    #[tokio::test]
+    async fn generate_scripts_password_and_press_enter_ack() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        // A too-short password bails before any key material exists.
+        let ui = ScriptedUi::new().password("short");
+        let err = handle_wallet_with(
+            generate_args("never-created", "bitcoin", false, 1),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("short password must fail");
+        assert!(err.to_string().contains("at least 8 characters"));
+        assert!(ui.exhausted());
+
+        // Happy path consumes the password and the "Press Enter" ack.
+        let ui = ScriptedUi::new()
+            .password("long-enough-passphrase")
+            .input("");
+        handle_wallet_with(generate_args("gen", "bitcoin", true, 12), &config, &ui)
+            .await
+            .expect("generate must succeed");
+        assert!(ui.exhausted());
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        let gen = all.iter().find(|w| w.name == "gen").unwrap().clone();
+        drop(repo);
+
+        assert_eq!(gen.addresses.len(), 12);
+        assert!(
+            gen.encrypted_mnemonic.is_some(),
+            "mnemonic stored encrypted"
+        );
+        assert_eq!(
+            gen.derivation_path.as_deref(),
+            Some("m/44'/0'/1'/0"),
+            "hd generation uses the account-aware BIP-44 path"
+        );
+
+        // Showing a wallet with more than 10 addresses exercises the
+        // "... and N more addresses" branch.
+        handle_wallet_with(show_args("gen"), &config, &ScriptedUi::new())
+            .await
+            .expect("show generated wallet");
+    }
+
+    #[tokio::test]
+    async fn import_flows_cover_every_format_and_error_path() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        const WIF: &str = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn";
+
+        // Unknown format fails before any prompt is shown.
+        let err = handle_wallet_with(
+            import_args("yaml", "junk", None),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("unknown import format must fail");
+        assert!(err.to_string().contains("Unknown import format"));
+
+        // Keystore parses but is not implemented; the password is asked first.
+        let ui = ScriptedUi::new().password("import-pass-123");
+        let err = handle_wallet_with(import_args("keystore", "{}", None), &config, &ui)
+            .await
+            .expect_err("keystore import must fail");
+        assert!(err.to_string().contains("not yet fully implemented"));
+        assert!(ui.exhausted());
+
+        // Short password bails.
+        let ui = ScriptedUi::new().password("short");
+        let err = handle_wallet_with(import_args("mnemonic", PHRASE, None), &config, &ui)
+            .await
+            .expect_err("short import password must fail");
+        assert!(err.to_string().contains("at least 8 characters"));
+        assert!(ui.exhausted());
+
+        // Invalid network answer for the mnemonic flow.
+        let ui = ScriptedUi::new().password("import-pass-123").input("moon");
+        let err = handle_wallet_with(import_args("mnemonic", PHRASE, None), &config, &ui)
+            .await
+            .expect_err("bad network answer must fail");
+        assert!(err.to_string().contains("Unsupported network"));
+        assert!(ui.exhausted());
+
+        // Mnemonic import with scripted network and a custom address count.
+        let ui = ScriptedUi::new()
+            .password("import-pass-123")
+            .input("ethereum")
+            .input("3");
+        handle_wallet_with(
+            import_args("mnemonic", PHRASE, Some("imp-mnemonic")),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("mnemonic import");
+        assert!(ui.exhausted());
+
+        // Private-key import (hex) on bitcoin.
+        let ui = ScriptedUi::new()
+            .password("import-pass-123")
+            .input("bitcoin");
+        handle_wallet_with(
+            import_args("private_key", &"11".repeat(32), Some("imp-key")),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("private key import");
+        assert!(ui.exhausted());
+
+        // WIF import asks no network question.
+        let ui = ScriptedUi::new().password("import-pass-123");
+        handle_wallet_with(import_args("wif", WIF, Some("imp-wif")), &config, &ui)
+            .await
+            .expect("wif import");
+        assert!(ui.exhausted());
+
+        // A `data` that points at a file is read from disk.
+        let phrase_file = dir.path().join("phrase.txt");
+        std::fs::write(&phrase_file, PHRASE).unwrap();
+        let ui = ScriptedUi::new()
+            .password("import-pass-123")
+            .input("solana")
+            .input("2");
+        handle_wallet_with(
+            import_args(
+                "mnemonic",
+                &phrase_file.display().to_string(),
+                Some("imp-file"),
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("file-based mnemonic import");
+        assert!(ui.exhausted());
+
+        // JSON export round-trip with a name override.
+        let source = persona_core::crypto::import_from_mnemonic(
+            uuid::Uuid::new_v4(),
+            "json-src".to_string(),
+            PHRASE,
+            "",
+            BlockchainNetwork::Bitcoin,
+            None,
+            2,
+            "export-pass",
+        )
+        .unwrap();
+        let json =
+            persona_core::crypto::export_to_json(&source, true, Some("export-pass")).unwrap();
+        let ui = ScriptedUi::new().password("import-pass-123");
+        handle_wallet_with(import_args("json", &json, Some("renamed")), &config, &ui)
+            .await
+            .expect("json import");
+        assert!(ui.exhausted());
+
+        // Verify what landed in the database.
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        drop(repo);
+
+        let mnemonic_wallet = all.iter().find(|w| w.name == "imp-mnemonic").unwrap();
+        assert_eq!(mnemonic_wallet.addresses.len(), 3);
+        assert_eq!(mnemonic_wallet.network, BlockchainNetwork::Ethereum);
+
+        let key_wallet = all.iter().find(|w| w.name == "imp-key").unwrap();
+        assert_eq!(key_wallet.addresses.len(), 1);
+        assert!(key_wallet.addresses[0].address.starts_with("bc1q"));
+
+        let wif_wallet = all.iter().find(|w| w.name == "imp-wif").unwrap();
+        assert_eq!(wif_wallet.network, BlockchainNetwork::Bitcoin);
+        assert_eq!(wif_wallet.addresses.len(), 1);
+
+        let file_wallet = all.iter().find(|w| w.name == "imp-file").unwrap();
+        assert_eq!(file_wallet.network, BlockchainNetwork::Solana);
+        assert_eq!(file_wallet.addresses.len(), 2);
+
+        let renamed = all.iter().find(|w| w.name == "renamed").unwrap();
+        assert_eq!(renamed.addresses.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn export_private_flows_prompt_for_a_password() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+
+        const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        const ETH_KEY: &str = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b";
+        let password = "export-pass-123";
+
+        let hd = persona_core::crypto::import_from_mnemonic(
+            identity_id,
+            "hd-export".to_string(),
+            PHRASE,
+            "",
+            BlockchainNetwork::Ethereum,
+            None,
+            2,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &hd).await;
+
+        let eth_single = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "eth-single".to_string(),
+            ETH_KEY,
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &eth_single).await;
+
+        let btc_single = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "btc-single".to_string(),
+            &"11".repeat(32),
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &btc_single).await;
+
+        // Wrong password fails the mnemonic decryption.
+        let ui = ScriptedUi::new().password("wrong-pass");
+        let err = handle_wallet_with(
+            export_args("hd-export", "mnemonic", false, None),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Failed to export mnemonic"));
+        assert!(ui.exhausted());
+
+        // Correct password exports the phrase.
+        let ui = ScriptedUi::new().password(password);
+        handle_wallet_with(
+            export_args("hd-export", "mnemonic", false, None),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("mnemonic export");
+        assert!(ui.exhausted());
+
+        // Private key export works for a single-key wallet.
+        let ui = ScriptedUi::new().password(password);
+        handle_wallet_with(
+            export_args("eth-single", "private_key", false, None),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("private key export");
+        assert!(ui.exhausted());
+
+        // WIF export for the bitcoin single-address wallet.
+        let ui = ScriptedUi::new().password(password);
+        handle_wallet_with(export_args("btc-single", "wif", false, None), &config, &ui)
+            .await
+            .expect("wif export");
+        assert!(ui.exhausted());
+
+        // WIF is rejected for non-bitcoin wallets.
+        let ui = ScriptedUi::new().password(password);
+        let err = handle_wallet_with(export_args("eth-single", "wif", false, None), &config, &ui)
+            .await
+            .expect_err("wif export on ethereum must fail");
+        assert!(format!("{:#}", err).contains("only supported for Bitcoin"));
+        assert!(ui.exhausted());
+
+        // JSON export with private data to a file (password branch + warning).
+        let out_path = dir.path().join("private-export.json");
+        let ui = ScriptedUi::new().password(password);
+        handle_wallet_with(
+            export_args(
+                "hd-export",
+                "json",
+                true,
+                Some(&out_path.display().to_string()),
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("json private export");
+        assert!(ui.exhausted());
+        assert!(out_path.exists());
+        let exported = std::fs::read_to_string(&out_path).unwrap();
+        assert!(exported.contains(PHRASE), "mnemonic included in export");
+
+        // A wallet without a stored mnemonic cannot export one.
+        let ui = ScriptedUi::new().password(password);
+        let err = handle_wallet_with(
+            export_args("eth-single", "mnemonic", false, None),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("mnemonic export without mnemonic must fail");
+        assert!(format!("{:#}", err).contains("Wallet has no mnemonic"));
+        assert!(ui.exhausted());
+    }
+
+    #[tokio::test]
+    async fn create_transaction_request_and_listing() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+
+        let eth_single = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "tx-src".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            "unused-here",
+        )
+        .unwrap();
+        insert_wallet(&config, &eth_single).await;
+
+        let fresh = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "quiet-wallet".to_string(),
+            "2222222222222222222222222222222222222222222222222222222222222222",
+            BlockchainNetwork::Ethereum,
+            "unused-here",
+        )
+        .unwrap();
+        insert_wallet(&config, &fresh).await;
+
+        // Create a request without signing (memo covers the listing line).
+        handle_wallet_with(
+            tx_args(
+                "tx-src",
+                "0x1111111111111111111111111111111111111111",
+                "1000000000000000000",
+                "21000",
+                None,
+                None,
+                None,
+                Some("run money"),
+                false,
+            ),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("create transaction request");
+
+        // Listing shows the pending request for one wallet and the empty
+        // hint for the other.
+        handle_wallet_with(list_tx_args("tx-src"), &config, &ScriptedUi::new())
+            .await
+            .expect("list transactions");
+        handle_wallet_with(list_tx_args("quiet-wallet"), &config, &ScriptedUi::new())
+            .await
+            .expect("empty transaction list");
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let pending = repo
+            .get_pending_requests(&eth_single.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].memo.as_deref(), Some("run money"));
+    }
+
+    #[tokio::test]
+    async fn create_transaction_sign_success_and_failure_paths() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let password = "sign-pass-123";
+
+        let eth_single = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "signer".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &eth_single).await;
+
+        let btc_single = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "btc-signer".to_string(),
+            &"11".repeat(32),
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &btc_single).await;
+
+        let sol_hd = persona_core::crypto::import_from_mnemonic(
+            identity_id,
+            "sol-signer".to_string(),
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "",
+            BlockchainNetwork::Solana,
+            None,
+            1,
+            "sol-pass-123",
+        )
+        .unwrap();
+        insert_wallet(&config, &sol_hd).await;
+
+        let watcher = CryptoWallet::new_watch_only(
+            identity_id,
+            "watch-signer".to_string(),
+            BlockchainNetwork::Ethereum,
+            "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYf1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs".to_string(),
+        );
+        insert_wallet(&config, &watcher).await;
+
+        // Ethereum: full sign -> verify -> raw assembly -> stored.
+        let ui = ScriptedUi::new().password(password);
+        handle_wallet_with(
+            tx_args(
+                "signer",
+                "0x1111111111111111111111111111111111111111",
+                "1000000000000000000",
+                "21000",
+                Some("20000000000"),
+                Some(21000),
+                Some(0),
+                None,
+                true,
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("ethereum sign must succeed");
+        assert!(ui.exhausted());
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let stats = repo
+            .get_transaction_stats(&eth_single.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(stats.total_transactions, 1);
+        drop(repo);
+
+        // Wrong password fails key derivation.
+        let ui = ScriptedUi::new().password("wrong-pass");
+        let err = handle_wallet_with(
+            tx_args(
+                "signer",
+                "0x1111111111111111111111111111111111111111",
+                "1",
+                "1",
+                Some("1"),
+                Some(21000),
+                Some(0),
+                None,
+                true,
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Failed to derive signing key"));
+        assert!(ui.exhausted());
+
+        // Watch-only wallets cannot sign.
+        let ui = ScriptedUi::new().password(password);
+        let err = handle_wallet_with(
+            tx_args(
+                "watch-signer",
+                "0x1111111111111111111111111111111111111111",
+                "1",
+                "1",
+                Some("1"),
+                Some(21000),
+                Some(0),
+                None,
+                true,
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("watch-only signing must fail");
+        assert!(format!("{:#}", err).contains("Watch-only wallets cannot sign"));
+        assert!(ui.exhausted());
+
+        // Solana signing requires the serialized message in
+        // `raw_transaction_data`, which the request does not carry -> the
+        // signing itself fails before anything is stored.
+        let ui = ScriptedUi::new().password("sol-pass-123");
+        let err = handle_wallet_with(
+            tx_args(
+                "sol-signer",
+                &sol_hd.addresses[0].address,
+                "1",
+                "1",
+                None,
+                None,
+                None,
+                None,
+                true,
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("solana sign without raw data must fail");
+        assert!(err.to_string().contains("Failed to sign transaction"));
+        assert!(format!("{:#}", err).contains("raw_transaction_data"));
+        assert!(ui.exhausted());
+
+        // Bitcoin without UTXO metadata stores only the audit signature.
+        let ui = ScriptedUi::new().password(password);
+        handle_wallet_with(
+            tx_args(
+                "btc-signer",
+                "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4",
+                "5000",
+                "300",
+                None,
+                None,
+                None,
+                None,
+                true,
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("bitcoin audit sign must succeed");
+        assert!(ui.exhausted());
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let stats = repo
+            .get_transaction_stats(&btc_single.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(stats.total_transactions, 1);
+    }
+
+    #[tokio::test]
+    async fn create_transaction_non_interactive_uses_env_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = false;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let password = "env-pass-123";
+
+        let eth_single = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "env-signer".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &eth_single).await;
+
+        // Missing env var is rejected.
+        let err = handle_wallet_with(
+            tx_args(
+                "env-signer",
+                "0x1111111111111111111111111111111111111111",
+                "1000000000000000000",
+                "21000",
+                Some("20000000000"),
+                Some(21000),
+                Some(0),
+                None,
+                true,
+            ),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("missing env password must fail");
+        assert!(err
+            .to_string()
+            .contains("PERSONA_WALLET_PASSWORD must be set"));
+
+        // The env var supplies the password.
+        std::env::set_var("PERSONA_WALLET_PASSWORD", password);
+        handle_wallet_with(
+            tx_args(
+                "env-signer",
+                "0x1111111111111111111111111111111111111111",
+                "1000000000000000000",
+                "21000",
+                Some("20000000000"),
+                Some(21000),
+                Some(0),
+                None,
+                true,
+            ),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("env-password sign must succeed");
+
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn find_wallet_by_identifier_resolution_paths() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+
+        let mk_wallet = |name: &str, id: Option<uuid::Uuid>| {
+            let mut wallet = CryptoWallet::new(
+                identity_id,
+                name.to_string(),
+                BlockchainNetwork::Bitcoin,
+                persona_core::models::wallet::WalletType::SingleAddress,
+                vec![1, 2, 3, 4],
+            );
+            if let Some(id) = id {
+                wallet.id = id;
+            }
+            wallet
+        };
+
+        // Two wallets whose ids share the "aaaaaaaa" prefix.
+        repo.create(&mk_wallet(
+            "alpha",
+            Some(uuid::Uuid::parse_str("aaaaaaaa-0000-0000-0000-000000000001").unwrap()),
+        ))
+        .await
+        .unwrap();
+        repo.create(&mk_wallet(
+            "gamma",
+            Some(uuid::Uuid::parse_str("aaaaaaaa-0000-0000-0000-000000000002").unwrap()),
+        ))
+        .await
+        .unwrap();
+
+        // A wallet with a hex-like name exercises the prefix-to-name
+        // fall-through, and twins exercise the name/fuzzy ambiguity errors.
+        repo.create(&mk_wallet("deadbeef01", None)).await.unwrap();
+        repo.create(&mk_wallet("twin", None)).await.unwrap();
+        repo.create(&mk_wallet("twin", None)).await.unwrap();
+
+        // A single, uniquely prefixed id is resolvable by its short form.
+        let delta = repo.create(&mk_wallet("delta", None)).await.unwrap();
+        drop(repo);
+
+        // Ambiguous id prefix lists the candidates and bails.
+        let err =
+            find_wallet_by_identifier(&init_wallet_repository(&config).await.unwrap(), "aaaaaaaa")
+                .await
+                .expect_err("ambiguous prefix must fail");
+        let msg = err.to_string();
+        assert!(msg.contains("Multiple wallets match ID prefix 'aaaaaaaa'"));
+        assert!(msg.contains("alpha") && msg.contains("gamma"));
+
+        // Full UUID resolves directly.
+        let wallet = find_wallet_by_identifier(
+            &init_wallet_repository(&config).await.unwrap(),
+            "aaaaaaaa-0000-0000-0000-000000000001",
+        )
+        .await
+        .unwrap();
+        assert_eq!(wallet.name, "alpha");
+
+        // Short unique prefix resolves.
+        let prefix = delta.id.to_string()[..8].to_string();
+        let wallet =
+            find_wallet_by_identifier(&init_wallet_repository(&config).await.unwrap(), &prefix)
+                .await
+                .unwrap();
+        assert_eq!(wallet.name, "delta");
+
+        // A hex-looking name that matches no id falls through to the name.
+        let wallet = find_wallet_by_identifier(
+            &init_wallet_repository(&config).await.unwrap(),
+            "deadbeef01",
+        )
+        .await
+        .unwrap();
+        assert_eq!(wallet.name, "deadbeef01");
+
+        // Ambiguous exact names.
+        let err =
+            find_wallet_by_identifier(&init_wallet_repository(&config).await.unwrap(), "twin")
+                .await
+                .expect_err("duplicate names must fail");
+        assert!(err
+            .to_string()
+            .contains("Multiple wallets are named 'twin'"));
+
+        // Fuzzy match: single and ambiguous.
+        let wallet =
+            find_wallet_by_identifier(&init_wallet_repository(&config).await.unwrap(), "alph")
+                .await
+                .unwrap();
+        assert_eq!(wallet.name, "alpha");
+        let err = find_wallet_by_identifier(&init_wallet_repository(&config).await.unwrap(), "twi")
+            .await
+            .expect_err("ambiguous fuzzy match must fail");
+        assert!(err.to_string().contains("Multiple wallets match 'twi'"));
+
+        // Unknown identifier fails.
+        let err =
+            find_wallet_by_identifier(&init_wallet_repository(&config).await.unwrap(), "ghost")
+                .await
+                .expect_err("unknown identifier must fail");
+        assert!(err.to_string().contains("Wallet 'ghost' not found"));
+    }
+
+    #[tokio::test]
+    async fn create_rejects_unknown_wallet_type_bip_and_security_level() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        let err = handle_wallet_with(
+            create_args("w1", "bitcoin", "paper", false, None, None, None),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("unknown wallet type must fail");
+        assert!(err.to_string().contains("Unsupported wallet type: paper"));
+
+        let err = handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::Create {
+                    name: "w2".into(),
+                    description: None,
+                    network: "bitcoin".into(),
+                    wallet_type: "hd".into(),
+                    bip_version: Some(33),
+                    address_count: None,
+                    watch_only: false,
+                    xpub: None,
+                    security_level: None,
+                    mnemonic: None,
+                    private_key: None,
+                    derivation_path: None,
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("unknown BIP version must fail");
+        assert!(err.to_string().contains("Unsupported BIP version: 33"));
+
+        let err = handle_wallet_with(
+            create_args("w3", "bitcoin", "single", false, None, Some("ultra"), None),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("invalid security level must fail");
+        assert!(err.to_string().contains("Invalid security level"));
+    }
+
+    #[tokio::test]
+    async fn create_wallet_requires_a_seed_identity() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        let err = handle_wallet_with(
+            create_args("orphan", "bitcoin", "single", false, None, None, None),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("creating without any identity must fail");
+        assert!(err.to_string().contains("No identity found"));
+    }
+
+    #[tokio::test]
+    async fn resolve_default_identity_prefers_the_active_workspace_identity() {
+        use persona_core::models::Workspace;
+        use persona_core::storage::WorkspaceRepository;
+        use persona_core::Repository;
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity_get_id(&dir, "first").await;
+        let second = seed_identity_get_id(&dir, "second").await;
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let mut ws = Workspace::new(config.workspace.path.clone(), "ws".to_string());
+        ws.switch_identity(second);
+        WorkspaceRepository::new(db.clone())
+            .create(&ws)
+            .await
+            .unwrap();
+        drop(db);
+
+        assert_eq!(resolve_default_identity_id(&config).await.unwrap(), second);
+    }
+
+    #[tokio::test]
+    async fn resolve_default_identity_falls_back_to_the_first_identity() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let only = seed_identity_get_id(&dir, "only").await;
+
+        assert_eq!(resolve_default_identity_id(&config).await.unwrap(), only);
+    }
+
+    #[tokio::test]
+    async fn resolve_default_identity_requires_an_identity() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        let err = resolve_default_identity_id(&config)
+            .await
+            .expect_err("no identity must fail");
+        assert!(err.to_string().contains("No identity found"));
+    }
+
+    #[tokio::test]
+    async fn terminal_entry_point_and_watch_only_filter_hint() {
+        // The TerminalUi-backed entry point works on a fresh workspace: the
+        // repository bootstraps an empty database and lists zero wallets.
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        handle_wallet(
+            WalletArgs {
+                command: WalletCommand::List {
+                    network: None,
+                    security_level: None,
+                    watch_only: false,
+                    search: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("empty workspace lists zero wallets");
+
+        // A watch-only filter that hides every wallet prints the dedicated
+        // hint instead of the table.
+        seed_identity(&dir, "alice").await;
+        handle_wallet_with(
+            create_args("plain", "bitcoin", "single", false, None, None, None),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("non-watch-only wallet created");
+        handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::List {
+                    network: None,
+                    security_level: None,
+                    watch_only: true,
+                    search: None,
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("watch-only filter with no matches succeeds");
+    }
+
+    #[tokio::test]
+    async fn generate_without_hd_and_failing_ack_prompt() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        // hd=false passes no path, and the core import fills in the
+        // account-0 recommended default.
+        let ui = ScriptedUi::new()
+            .password("long-enough-passphrase")
+            .input("");
+        handle_wallet_with(generate_args("plain-gen", "bitcoin", false, 2), &config, &ui)
+            .await
+            .expect("non-HD generation must succeed");
+        assert!(ui.exhausted());
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        let gen = all.iter().find(|w| w.name == "plain-gen").unwrap().clone();
+        drop(repo);
+        assert_eq!(gen.derivation_path.as_deref(), Some("m/44'/0'/0'/0"));
+
+        // A failing "Press Enter" acknowledgement propagates.
+        let inner = ScriptedUi::new().password("long-enough-passphrase");
+        let ui = FailOn::new(&inner, PromptKind::Input);
+        let err = handle_wallet_with(
+            generate_args("never-created", "bitcoin", true, 1),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("failing acknowledgement must abort");
+        assert!(err.to_string().contains("failing ui: input prompt"));
+    }
+
+    #[tokio::test]
+    async fn update_with_sparse_fields_leaves_the_rest_untouched() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+        handle_wallet_with(
+            create_args(
+                "sparse",
+                "bitcoin",
+                "single",
+                false,
+                None,
+                Some("high"),
+                Some("desc"),
+            ),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("wallet created");
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        let wallet = all.iter().find(|w| w.name == "sparse").unwrap().clone();
+        drop(repo);
+
+        // Only name/description change; level and tag lists are skipped.
+        handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::Update {
+                    wallet_id: wallet.id,
+                    name: Some("sparse2".into()),
+                    description: Some("new desc".into()),
+                    security_level: None,
+                    add_tag: None,
+                    remove_tag: None,
+                    platform: None,
+                    purpose: None,
+                    note: None,
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("sparse update succeeds");
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let all = repo.find_all().await.into_anyhow().unwrap();
+        let updated = all.iter().find(|w| w.name == "sparse2").unwrap().clone();
+        drop(repo);
+        assert_eq!(updated.security_level, wallet.security_level);
+        assert_eq!(updated.metadata.tags, wallet.metadata.tags);
+    }
+
+    #[tokio::test]
+    async fn list_addresses_limit_reports_the_shown_count() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        handle_wallet_with(
+            create_args("limited", "ethereum", "hd", false, None, None, None),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("hd wallet created");
+
+        handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::ListAddresses {
+                    wallet_identifier: "limited".into(),
+                    used: false,
+                    unused: false,
+                    limit: Some(1),
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("limited listing succeeds");
+    }
+
+    #[tokio::test]
+    async fn import_prompt_errors_propagate() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seed_identity(&dir, "alice").await;
+
+        const PHRASE: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        // A failing password prompt aborts the import immediately.
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::Password);
+        let err = handle_wallet_with(import_args("mnemonic", PHRASE, None), &config, &ui)
+            .await
+            .expect_err("failing password must abort");
+        assert!(err.to_string().contains("failing ui: password prompt"));
+
+        // A failing address-count prompt aborts after network selection.
+        let inner = ScriptedUi::new()
+            .password("import-pass-123")
+            .input("bitcoin");
+        let ui = FailOn::new(&inner, PromptKind::InputWithDefault);
+        let err = handle_wallet_with(import_args("mnemonic", PHRASE, None), &config, &ui)
+            .await
+            .expect_err("failing count prompt must abort");
+        assert!(err
+            .to_string()
+            .contains("failing ui: default input prompt"));
     }
 }

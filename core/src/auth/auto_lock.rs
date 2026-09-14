@@ -1075,4 +1075,188 @@ mod tests {
         let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
         manager.stop_background_monitoring().await;
     }
+
+    #[tokio::test]
+    async fn test_update_activity_past_zero_grace_touches_and_emits() {
+        // A zero grace period disables the rapid-call short circuit, so every
+        // update_activity call touches the session and emits Activity again.
+        let config = EnhancedAutoLockConfig {
+            activity_grace_period_secs: 0,
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+
+        let activity_count = Arc::new(AtomicU32::new(0));
+        let counter = activity_count.clone();
+        manager
+            .register_callback(Arc::new(move |event| {
+                if matches!(event, AutoLockEvent::Activity { .. }) {
+                    counter.fetch_add(1, Ordering::Relaxed);
+                }
+            }))
+            .await;
+
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(activity_count.load(Ordering::Relaxed), 1);
+
+        manager.update_activity(&session_id).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(activity_count.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn test_update_sensitive_activity_unknown_session() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+        assert_eq!(
+            manager
+                .update_sensitive_activity("missing")
+                .await
+                .unwrap_err(),
+            "Session not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_force_lock_sensitive_within_timeout_refreshes_timer() {
+        // force_lock_sensitive with a fresh sensitive timestamp: the inner
+        // lock branch is skipped and the timer is merely refreshed.
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                sensitive_operation_timeout_secs: 3600,
+                ..Default::default()
+            },
+            force_lock_sensitive: true,
+            ..Default::default()
+        };
+
+        let manager = AutoLockManager::new(config);
+        let mut session = Session::new("u".to_string(), Duration::from_secs(3600));
+        session.touch_sensitive();
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        assert!(manager.update_sensitive_activity(&session_id).await.is_ok());
+        assert!(manager.is_session_valid(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_session_valid_checks_both_timeouts_when_fresh() {
+        // inactivity enabled but not yet idle, absolute enabled but not yet
+        // exceeded: both checks run and neither trips.
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 60,
+                absolute_timeout_secs: 3600,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+        assert!(manager.is_session_valid(&session_id).await);
+
+        // Same with the absolute timeout disabled: neither check trips.
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 60,
+                absolute_timeout_secs: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+        assert!(manager.is_session_valid(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_session_valid_inactivity_timeout_locks() {
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 1,
+                absolute_timeout_secs: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        assert!(!manager.is_session_valid(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_session_valid_absolute_timeout_locks() {
+        // The session itself is not expired (3600s validity), so is_valid
+        // cannot short-circuit: the absolute-timeout check must trip.
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 0,
+                absolute_timeout_secs: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let manager = AutoLockManager::new(config);
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+        // get_lifetime_seconds truncates to whole seconds, so the 1s timeout
+        // needs a full extra second of headroom.
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        assert!(!manager.is_session_valid(&session_id).await);
+    }
+
+    fn session_info_with_idle_seconds(idle_secs: u64) -> SessionInfo {
+        let mut session = Session::new("u".to_string(), Duration::from_secs(3600));
+        if idle_secs > 0 {
+            session.last_activity = SystemTime::now() - Duration::from_secs(idle_secs);
+        }
+        SessionInfo {
+            session,
+            last_warning_time: None,
+            warning_sent: false,
+        }
+    }
+
+    #[test]
+    fn should_send_warning_is_disabled_by_config_flags() {
+        let info = session_info_with_idle_seconds(120);
+
+        // Warnings disabled entirely.
+        let config = EnhancedAutoLockConfig::default();
+        assert!(!should_send_warning(&config, &info));
+
+        // Enabled but with a zero threshold.
+        let config = EnhancedAutoLockConfig {
+            enable_warnings: true,
+            warning_time_secs: 0,
+            ..Default::default()
+        };
+        assert!(!should_send_warning(&config, &info));
+    }
+
+    #[test]
+    fn get_seconds_until_lock_reports_zero_past_the_timeout() {
+        let mut config = EnhancedAutoLockConfig::default();
+        config.base.inactivity_timeout_secs = 2;
+
+        // Still inside the window: whole seconds remain.
+        let fresh = session_info_with_idle_seconds(0);
+        assert_eq!(get_seconds_until_lock(&config, &fresh), 2);
+
+        // Idle beyond the timeout: nothing remains.
+        let stale = session_info_with_idle_seconds(5);
+        assert_eq!(get_seconds_until_lock(&config, &stale), 0);
+    }
 }

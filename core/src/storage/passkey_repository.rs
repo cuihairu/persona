@@ -309,4 +309,41 @@ mod tests {
             .expect_err("updating a missing passkey must fail");
         assert!(matches!(err, PersonaError::NotFound(_)));
     }
+
+    #[tokio::test]
+    async fn corrupt_tags_and_timestamps_degrade_gracefully() {
+        let db = setup_db().await;
+        let repo = PasskeyRepository::new(db.clone());
+        let identity_id = seed_identity(&db).await;
+
+        // Out-of-chrono-range timestamps and non-JSON tags. The row mapper
+        // must degrade (epoch created_at, None last_used_at, empty tags)
+        // instead of failing the whole lookup.
+        let id = Uuid::new_v4();
+        sqlx::query(
+            r#"
+            INSERT INTO passkeys (
+                id, identity_id, rp_id, user_handle, credential_id,
+                encrypted_private_key, wrapped_item_key, public_key_cose,
+                alg, sign_count, uv_initialized, export_allowed,
+                created_at, last_used_at, tags
+            ) VALUES (?, ?, 'example.com', x'68616e646c65', x'6372656400',
+                      x'00', x'00', x'00', -7, 0, 0, 1,
+                      9999999999999, 9999999999999, 'not-json')
+            "#,
+        )
+        .bind(id.to_string())
+        .bind(identity_id.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let item = repo.find_by_id(&id).await.unwrap().unwrap();
+        assert_eq!(item.created_at, chrono::DateTime::<chrono::Utc>::default());
+        assert!(item.last_used_at.is_none());
+        assert!(item.tags.is_empty());
+
+        // The same degradation applies through the list queries.
+        assert_eq!(repo.find_by_rp_id("example.com").await.unwrap().len(), 1);
+    }
 }

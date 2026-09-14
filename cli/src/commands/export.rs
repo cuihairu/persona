@@ -624,8 +624,14 @@ fn show_export_info(output_path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::CliConfig;
-    use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
-    use persona_core::storage::IdentityRepository;
+    use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
+    use persona_core::auth::authentication::AuthResult;
+    use persona_core::models::{
+        ApiKeyData, CredentialData, CredentialType, Identity as CoreIdentityModel, IdentityType,
+        PasswordCredentialData,
+    };
+    use persona_core::storage::{IdentityRepository, PasskeyRepository};
+    use std::sync::Arc;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -885,6 +891,582 @@ mod tests {
         let csv = std::fs::read_to_string(&csv_out).unwrap();
         assert!(csv.starts_with("Name,Type,Description,Email,Created,Modified"));
         assert!(csv.contains("alice"));
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers for the interactive/authenticated `execute_with` flows.
+    // ------------------------------------------------------------------
+
+    fn with_output(mut a: ExportArgs, out: &Path) -> ExportArgs {
+        a.output = Some(out.to_path_buf());
+        a
+    }
+
+    /// Workspace with an initialized user; identities `alice`/`bob` exist.
+    async fn authenticated_workspace(dir: &TempDir, master: &str) -> CliConfig {
+        let config = config_for(dir);
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        for name in ["alice", "bob"] {
+            repo.create(&CoreIdentityModel::new(
+                name.to_string(),
+                IdentityType::Personal,
+            ))
+            .await
+            .unwrap();
+        }
+        let mut service = PersonaService::new(db).await.unwrap();
+        service.initialize_user(master).await.unwrap();
+        config
+    }
+
+    /// Unlock a fresh service and attach one password + one API-key
+    /// credential to `alice`. Returns their ids.
+    async fn seed_credentials(config: &CliConfig, master: &str) -> (uuid::Uuid, uuid::Uuid) {
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert!(matches!(
+            service.authenticate_user(master).await.unwrap(),
+            AuthResult::Success
+        ));
+        let identity = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+
+        let login = service
+            .create_credential(
+                identity.id,
+                "Web login".to_string(),
+                CredentialType::Password,
+                persona_core::models::SecurityLevel::High,
+                &CredentialData::Password(PasswordCredentialData {
+                    password: "s3cret!".to_string(),
+                    email: Some("alice@example.com".to_string()),
+                    security_questions: Vec::new(),
+                }),
+            )
+            .await
+            .unwrap();
+        let token = service
+            .create_credential(
+                identity.id,
+                "API token".to_string(),
+                CredentialType::ApiKey,
+                persona_core::models::SecurityLevel::Medium,
+                &CredentialData::ApiKey(ApiKeyData {
+                    api_key: "key-123".to_string(),
+                    api_secret: None,
+                    token: None,
+                    permissions: Vec::new(),
+                    expires_at: None,
+                }),
+            )
+            .await
+            .unwrap();
+        (login.id, token.id)
+    }
+
+    fn passkey_client_data() -> Vec<u8> {
+        br#"{"type":"webauthn.create","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#
+            .to_vec()
+    }
+
+    /// Attach a passkey to `alice`; `export_allowed` controls whether the
+    /// export is allowed to carry its private key.
+    async fn seed_passkey(config: &CliConfig, master: &str, export_allowed: bool) -> uuid::Uuid {
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        assert!(matches!(
+            service.authenticate_user(master).await.unwrap(),
+            AuthResult::Success
+        ));
+        let identity = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let pk = service
+            .create_passkey(
+                identity.id,
+                "example.com".to_string(),
+                "https://example.com",
+                &passkey_client_data(),
+                None,
+                Some("alice".to_string()),
+                Some("Alice Example".to_string()),
+                false,
+            )
+            .await
+            .unwrap();
+
+        if !export_allowed {
+            let repo = PasskeyRepository::new(Arc::new(db));
+            let mut item = repo.find_by_id(&pk.id).await.unwrap().unwrap();
+            item.export_allowed = false;
+            repo.update(&item).await.unwrap();
+        }
+        pk.id
+    }
+
+    // ------------------------------------------------------------------
+    // execute_with: confirmation gates and identity selection.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn execute_with_json_export_respects_confirm_gate() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        let out = dir.path().join("out.json");
+
+        // Declining the confirmation writes nothing.
+        let ui = ScriptedUi::new().confirm(false);
+        execute_with(with_output(args(&["alice"], "json"), &out), &config, &ui)
+            .await
+            .expect("cancelling returns success");
+        assert!(ui.exhausted());
+        assert!(!out.exists(), "cancelled export must not write the file");
+
+        // Accepting writes the file.
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(with_output(args(&["alice"], "json"), &out), &config, &ui)
+            .await
+            .expect("confirmed export succeeds");
+        assert!(ui.exhausted());
+        let content = std::fs::read_to_string(&out).unwrap();
+        assert!(content.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn execute_with_sensitive_gate_can_abort_or_proceed() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        let out = dir.path().join("sensitive.json");
+
+        // The second (sensitive) confirmation can still abort.
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.include_sensitive = true;
+        let ui = ScriptedUi::new().confirm(true).confirm(false);
+        execute_with(a, &config, &ui)
+            .await
+            .expect("aborting at the sensitive gate returns success");
+        assert!(ui.exhausted());
+        assert!(!out.exists(), "aborted sensitive export writes nothing");
+
+        // Confirming both gates performs the export.
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.include_sensitive = true;
+        let ui = ScriptedUi::new().confirm(true).confirm(true);
+        execute_with(a, &config, &ui)
+            .await
+            .expect("double-confirmed sensitive export succeeds");
+        assert!(ui.exhausted());
+        assert!(out.exists());
+    }
+
+    #[tokio::test]
+    async fn execute_with_all_identities_and_interactive_selection() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice", "bob", "carol"]).await;
+        let out = dir.path().join("all.json");
+
+        // Empty names means "every identity"; no prompts before the confirm.
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(with_output(args(&[], "json"), &out), &config, &ui)
+            .await
+            .expect("exporting every identity succeeds");
+        assert!(ui.exhausted());
+        let content = std::fs::read_to_string(&out).unwrap();
+        for name in ["alice", "bob", "carol"] {
+            assert!(content.contains(name), "missing {name}");
+        }
+
+        // Interactive mode maps multi_select indices back to names.
+        let out_selected = dir.path().join("selected.json");
+        let ui = ScriptedUi::new().multi_select(&[0, 2]).confirm(true);
+        let mut a = args(&[], "json");
+        a.interactive = true;
+        execute_with(with_output(a, &out_selected), &config, &ui)
+            .await
+            .expect("interactive selection exports the picked identities");
+        assert!(ui.exhausted());
+        let content = std::fs::read_to_string(&out_selected).unwrap();
+        assert!(content.contains("alice"));
+        assert!(content.contains("carol"));
+        assert!(!content.contains("bob"), "unpicked identity stays out");
+
+        // Selecting nothing reports there is nothing to export.
+        let out_empty = dir.path().join("empty.json");
+        let ui = ScriptedUi::new().multi_select(&[]);
+        let mut a = args(&[], "json");
+        a.interactive = true;
+        execute_with(with_output(a, &out_empty), &config, &ui)
+            .await
+            .expect("empty selection returns success");
+        assert!(ui.exhausted());
+        assert!(!out_empty.exists());
+    }
+
+    #[tokio::test]
+    async fn execute_with_unknown_identity_fails_before_any_prompt() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+
+        let ui = ScriptedUi::new();
+        let err = execute_with(
+            with_output(args(&["ghost"], "json"), &dir.path().join("g.json")),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+        assert!(ui.exhausted(), "validation fails before any prompt");
+    }
+
+    #[tokio::test]
+    async fn execute_wrapper_bails_when_no_identities_exist() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        // The interactive selection path bails before any prompt when the
+        // workspace has no identities at all, so the TerminalUi-backed entry
+        // point is safe to exercise here.
+        let mut a = args(&[], "json");
+        a.interactive = true;
+        let err = execute(a, &config)
+            .await
+            .expect_err("empty workspace must fail");
+        assert!(err.to_string().contains("No identities found to export"));
+    }
+
+    // ------------------------------------------------------------------
+    // execute_with: authenticated workspaces.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn authenticated_sensitive_export_includes_credentials_and_passkey() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        seed_credentials(&config, "master-pin").await;
+        seed_passkey(&config, "master-pin", true).await;
+
+        let out = dir.path().join("alice.json");
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.include_sensitive = true;
+        // The unlock prompt is answered twice: once during name validation,
+        // once inside the JSON exporter; include_sensitive adds a second
+        // confirmation between them.
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .confirm(true)
+            .password("master-pin");
+        execute_with(a, &config, &ui)
+            .await
+            .expect("authenticated sensitive export succeeds");
+        assert!(ui.exhausted());
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let identities = value["identities"].as_array().unwrap();
+        assert_eq!(identities.len(), 1);
+        let creds = identities[0]["credentials"].as_array().unwrap();
+        assert_eq!(creds.len(), 2, "both credentials exported");
+        let login = creds
+            .iter()
+            .find(|c| c["name"] == "Web login")
+            .expect("login credential present");
+        assert!(
+            login.get("data").is_some(),
+            "sensitive export decrypts data"
+        );
+        assert!(login.get("encrypted_data").is_none());
+        let token = creds
+            .iter()
+            .find(|c| c["name"] == "API token")
+            .expect("api credential present");
+        assert!(token.get("data").is_some());
+
+        let passkeys = identities[0]["passkeys"].as_array().unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert!(
+            passkeys[0].get("private_key").is_some(),
+            "exportable passkey carries its private key"
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_export_without_sensitive_keeps_encrypted_blob() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        seed_credentials(&config, "master-pin").await;
+        // Non-exportable passkey: even a sensitive export skips the key.
+        seed_passkey(&config, "master-pin", false).await;
+
+        let out = dir.path().join("alice-safe.json");
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .password("master-pin");
+        execute_with(with_output(args(&["alice"], "json"), &out), &config, &ui)
+            .await
+            .expect("authenticated metadata export succeeds");
+        assert!(ui.exhausted());
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let identity = &value["identities"][0];
+        let login = identity["credentials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "Web login")
+            .unwrap()
+            .clone();
+        assert!(
+            login.get("encrypted_data").is_some(),
+            "metadata export keeps the encrypted blob"
+        );
+        assert!(login.get("data").is_none());
+        let passkeys = identity["passkeys"].as_array().unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert!(passkeys[0].get("private_key").is_none());
+    }
+
+    #[tokio::test]
+    async fn sensitive_export_warns_for_non_exportable_passkey() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        seed_passkey(&config, "master-pin", false).await;
+
+        let out = dir.path().join("alice-warn.json");
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.include_sensitive = true;
+        // Two unlocks (validation + JSON exporter) plus the plain and the
+        // sensitive confirmations; the non-exportable passkey only warns.
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .confirm(true)
+            .password("master-pin");
+        execute_with(a, &config, &ui)
+            .await
+            .expect("sensitive export with a non-exportable passkey succeeds");
+        assert!(ui.exhausted());
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let passkeys = value["identities"][0]["passkeys"].as_array().unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert!(
+            passkeys[0].get("private_key").is_none(),
+            "non-exportable passkey must not carry its private key"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_with_wrong_password_fails_during_validation() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+
+        // Name validation unlocks the workspace first: a scripted wrong
+        // password aborts before any export happens.
+        let ui = ScriptedUi::new().password("wrong-pin");
+        let err = execute_with(
+            with_output(args(&["alice"], "json"), &dir.path().join("x.json")),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+        assert!(ui.exhausted());
+    }
+
+    #[tokio::test]
+    async fn authenticated_csv_export_unlocks_with_scripted_password() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        seed_credentials(&config, "master-pin").await;
+
+        let out = dir.path().join("alice.csv");
+        // Name validation unlocks first, then the confirm gate, then the CSV
+        // exporter unlocks again.
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .password("master-pin");
+        execute_with(with_output(args(&["alice"], "csv"), &out), &config, &ui)
+            .await
+            .expect("authenticated csv export succeeds");
+        assert!(ui.exhausted());
+
+        let csv = std::fs::read_to_string(&out).unwrap();
+        assert!(csv.starts_with("Name,Type,Description,Email,Created,Modified"));
+        assert!(csv.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn encrypted_export_round_trips_through_passphrase_prompt() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        let out = dir.path().join("enc.json");
+
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.encrypt = true;
+        let ui = ScriptedUi::new().confirm(true).password("pass-phrase-1");
+        execute_with(a, &config, &ui)
+            .await
+            .expect("encrypted export succeeds");
+        assert!(ui.exhausted());
+
+        // The output is no longer plaintext but decrypts back to the JSON.
+        let raw = std::fs::read(&out).unwrap();
+        assert!(
+            raw.starts_with(b"PERSENC1"),
+            "output carries the magic header"
+        );
+        let decrypted = crate::utils::file_crypto::decrypt_file_to_temp(&out, "pass-phrase-1")
+            .expect("correct passphrase decrypts");
+        let content = std::fs::read_to_string(&decrypted).unwrap();
+        assert!(content.contains("alice"));
+        std::fs::remove_file(&decrypted).unwrap();
+
+        let err = crate::utils::file_crypto::decrypt_file_to_temp(&out, "wrong")
+            .expect_err("wrong passphrase must fail");
+        assert!(err.to_string().contains("Decryption failed"));
+    }
+
+    #[tokio::test]
+    async fn compressed_export_writes_gzip_archive() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        let out = dir.path().join("out.json");
+        let gz = dir.path().join("out.json.gz");
+
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.compression = 6;
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(a, &config, &ui)
+            .await
+            .expect("compressed export succeeds");
+        assert!(ui.exhausted());
+        assert!(!out.exists(), "plaintext file is replaced by the archive");
+        assert!(gz.exists());
+
+        let f = std::fs::File::open(&gz).unwrap();
+        let mut decoder = flate2::read::GzDecoder::new(f);
+        use std::io::Read;
+        let mut restored = String::new();
+        decoder.read_to_string(&mut restored).unwrap();
+        assert!(restored.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn interactive_selection_maps_multi_select_indices() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice", "bob", "carol"]).await;
+
+        // The scripted multi-select indices map back onto the listed
+        // identities. find_all makes no ordering guarantee, so only the set
+        // shape is asserted: indices 0 and 2 resolve to two distinct seeded
+        // names.
+        let ui = ScriptedUi::new().multi_select(&[0, 2]);
+        let selected = select_identities_interactive(&config, &ui)
+            .await
+            .expect("interactive selection resolves names");
+        assert!(ui.exhausted());
+        let mut unique = selected.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 2, "indices 0 and 2 must map to distinct rows");
+        assert!(selected
+            .iter()
+            .all(|n| ["alice", "bob", "carol"].contains(&n.as_str())));
+
+        // A failing multi-select prompt propagates instead of panicking.
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::MultiSelect);
+        let err = select_identities_interactive(&config, &ui)
+            .await
+            .expect_err("failing multi-select must abort");
+        assert!(err.to_string().contains("failing ui: multi-select prompt"));
+    }
+
+    #[tokio::test]
+    async fn sensitive_export_skips_locked_passkey_private_keys() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        seed_passkey(&config, "master-pin", false).await;
+
+        let out = dir.path().join("locked-passkey.json");
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.include_sensitive = true;
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .confirm(true)
+            .password("master-pin");
+        execute_with(a, &config, &ui)
+            .await
+            .expect("sensitive export with a locked passkey still succeeds");
+        assert!(ui.exhausted());
+
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let passkeys = value["identities"][0]["passkeys"].as_array().unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert!(
+            passkeys[0].get("private_key").is_none(),
+            "non-exportable passkeys must not carry a private key"
+        );
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
     }
 }
 

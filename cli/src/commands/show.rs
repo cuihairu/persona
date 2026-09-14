@@ -260,9 +260,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -387,5 +392,38 @@ mod tests {
         assert!(is_sensitive_attribute("api_token"));
         assert!(!is_sensitive_attribute("city"));
         assert!(is_sensitive_attribute("SOCIAL_SECURITY"));
+    }
+
+    #[test]
+    fn table_format_renders_every_value_type_and_optional_section() {
+        let mut attributes = HashMap::new();
+        attributes.insert(
+            "count".to_string(),
+            Value::Number(serde_json::Number::from(7)),
+        );
+        attributes.insert("verified".to_string(), Value::Bool(true));
+        attributes.insert(
+            "nested".to_string(),
+            serde_json::json!({"k": [1, 2]}), // non-scalar → serde_json fallback
+        );
+
+        let details = IdentityDetails {
+            name: "inactive".into(),
+            identity_type: "work".into(),
+            description: "has everything".into(),
+            email: Some("i@example.com".into()),
+            phone: Some("+49123456789".into()),
+            tags: vec!["a".into(), "b".into()],
+            attributes,
+            active: false,
+            created: "2024-01-01 00:00:00".into(),
+            modified: "2024-01-02 00:00:00".into(),
+            last_used: Some("2024-06-01 12:00:00".into()),
+            usage_count: 3,
+        };
+
+        // Inactive identity, contact block, tags, all value types, the
+        // Last Used line — none of it may panic.
+        display_table_format(&details, false).unwrap();
     }
 }

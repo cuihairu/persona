@@ -695,6 +695,79 @@ mod tests {
         assert!(err.to_string().contains("Failed to open QR image"));
     }
 
+    #[test]
+    fn decode_qr_file_reports_images_without_codes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("blank.png");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            200,
+            200,
+            image::Rgb([200, 200, 200]),
+        ));
+        img.save(&path).expect("blank png written");
+
+        let err = decode_qr_file(&path).unwrap_err();
+        assert!(err.to_string().contains("No QR code detected"));
+    }
+
+    #[test]
+    fn parse_otpauth_uri_rejects_bad_scheme_host_and_garbage() {
+        // Not an otpauth URI at all.
+        let err = parse_otpauth_uri("https://totp/GitHub:alice?secret=ABC")
+            .err()
+            .expect("https scheme must be rejected");
+        assert!(err.to_string().contains("otpauth://"));
+
+        // otpauth but not TOTP.
+        let err = parse_otpauth_uri("otpauth://hotp/GitHub:alice?secret=ABC")
+            .err()
+            .expect("hotp must be rejected");
+        assert!(err.to_string().contains("Only otpauth TOTP URIs"));
+
+        // Unparseable garbage.
+        assert!(parse_otpauth_uri("::not a url::").is_err());
+    }
+
+    #[test]
+    fn parse_otpauth_uri_supports_account_only_labels() {
+        let template = parse_otpauth_uri("otpauth://totp/alice?secret=JBSWY3DPEHPK3PXP").unwrap();
+        assert_eq!(template.secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+        assert!(template.issuer.is_none(), "no issuer label");
+        assert_eq!(template.account.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn parse_otpauth_uri_handles_labelless_paths_and_unknown_params() {
+        // No path label at all: both issuer and account stay unset.
+        let template =
+            parse_otpauth_uri("otpauth://totp/?secret=JBSWY3DPEHPK3PXP&x-custom=ignored").unwrap();
+        assert_eq!(template.secret.as_deref(), Some("JBSWY3DPEHPK3PXP"));
+        assert!(template.issuer.is_none());
+        assert!(template.account.is_none());
+
+        // Unknown query parameters are ignored instead of rejected.
+        let template = parse_otpauth_uri(
+            "otpauth://totp/GitHub:alice?secret=JBSWY3DPEHPK3PXP&image=https://x/y.png",
+        )
+        .unwrap();
+        assert_eq!(template.issuer.as_deref(), Some("GitHub"));
+        assert_eq!(template.account.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn generate_totp_code_clamps_digits_lower_bound() {
+        let cfg = FinalTotpConfig {
+            secret: BASE32_NOPAD.encode(b"0123456789abcdef"),
+            issuer: "T".into(),
+            account: "a@b.c".into(),
+            algorithm: "SHA1".into(),
+            digits: 1,
+            period: 30,
+        };
+        let (code, _) = generate_totp_code(&cfg).unwrap();
+        assert_eq!(code.len(), 4, "digits clamped up to 4");
+    }
+
     fn config_for(dir: &TempDir) -> crate::config::CliConfig {
         let mut config = crate::config::CliConfig::default();
         config.workspace.path = dir.path().to_path_buf();
@@ -708,9 +781,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &std::sync::Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -867,6 +945,277 @@ mod tests {
         Database::from_file(config.get_database_path())
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn execute_dispatches_setup_and_code_subcommands() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // Setup through the public dispatch wrapper.
+        execute_with(
+            TotpArgs {
+                command: TotpCommand::Setup {
+                    identity: "alice".to_string(),
+                    name: None,
+                    qr: None,
+                    otpauth: None,
+                    secret: Some(BASE32_NOPAD.encode(b"dispatch")),
+                    issuer: Some("Dispatch".to_string()),
+                    account: Some("alice@dispatch".to_string()),
+                    url: None,
+                    digits: None,
+                    period: None,
+                    algorithm: None,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("dispatched setup succeeds");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let alice = IdentityRepository::new(service_db(&config).await)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(creds.len(), 1);
+        let totp_id = creds[0].id;
+        drop(service);
+
+        // Code generation through the same wrapper.
+        execute_with(
+            TotpArgs {
+                command: TotpCommand::Code {
+                    id: totp_id,
+                    watch: false,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("dispatched code generation succeeds");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn public_execute_wrapper_dispatches_to_terminal_ui() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // The production wrapper shares the TerminalUi-backed path; run the
+        // Setup subcommand through `execute` end to end.
+        execute(
+            TotpArgs {
+                command: TotpCommand::Setup {
+                    identity: "alice".to_string(),
+                    name: None,
+                    qr: None,
+                    otpauth: None,
+                    secret: Some(BASE32_NOPAD.encode(b"wrapper")),
+                    issuer: None,
+                    account: None,
+                    url: None,
+                    digits: None,
+                    period: None,
+                    algorithm: None,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("public execute wrapper performs the setup");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let alice = IdentityRepository::new(service_db(&config).await)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(creds.len(), 1, "credential stored through the wrapper");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn setup_totp_applies_overrides_and_display_name_precedence() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // Raw secret with no issuer anywhere: the display name wins over the
+        // account fallback, and every override lands in the stored credential.
+        setup_totp(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            "alice".to_string(),
+            Some("my authenticator".to_string()),
+            None,
+            None,
+            Some("jbswy3dpehpk3pxp".to_string()), // lowercase → must normalize internally
+            None,
+            None,
+            Some("  https://example.org/login  ".to_string()),
+            Some(8),
+            Some(60),
+            Some("sha512".to_string()),
+        )
+        .await
+        .expect("setup with overrides must succeed");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let alice = IdentityRepository::new(service_db(&config).await)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].name, "my authenticator");
+        assert_eq!(creds[0].url.as_deref(), Some("https://example.org"));
+        assert_eq!(creds[0].username.as_deref(), Some("TOTP")); // default account
+        assert_eq!(
+            creds[0].metadata.get("algorithm").map(String::as_str),
+            Some("SHA512")
+        );
+        assert_eq!(
+            creds[0].metadata.get("digits").map(String::as_str),
+            Some("8")
+        );
+
+        let data = service
+            .get_credential_data(&creds[0].id)
+            .await
+            .into_anyhow()
+            .unwrap()
+            .expect("two-factor data present");
+        match data {
+            CredentialData::TwoFactor(totp) => {
+                assert_eq!(totp.algorithm, "SHA512");
+                assert_eq!(totp.digits, 8);
+                assert_eq!(totp.period, 60);
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+        drop(service);
+
+        // Second credential: no display name and no issuer → the account
+        // label becomes the credential name.
+        setup_totp(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            "alice".to_string(),
+            None,
+            None,
+            Some("otpauth://totp/alice@example.com?secret=JBSWY3DPEHPK3PXP".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("issuer-less setup must succeed");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(creds.len(), 2);
+        let names: Vec<_> = creds.iter().map(|c| c.name.as_str()).collect();
+        assert!(
+            names.contains(&"alice@example.com"),
+            "account fallback used as name: {:?}",
+            names
+        );
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
     #[tokio::test]

@@ -39,7 +39,11 @@ jobs:
       - name: coverage
         run: |
           mkdir -p coverage
-          cargo llvm-cov --workspace --all-features --lcov --output-path coverage/rust-lcov.info
+          # Files excluded here drive real terminals, raw TTY input or process
+          # entry points and cannot execute under the test harness. Their
+          # testable logic lives in sibling files that are measured.
+          cargo llvm-cov --workspace --all-features --lcov --output-path coverage/rust-lcov.info \
+            --ignore-filename-regex '(cli/src/main\.rs|cli/src/commands/tui_runtime\.rs|cli/src/utils/terminal_ui\.rs|server/src/main\.rs|agents/ssh-agent/src/daemon\.rs|agents/ssh-agent/src/main\.rs)'
       - name: Upload coverage (rust) to Codecov
         uses: codecov/codecov-action@v5
         with:

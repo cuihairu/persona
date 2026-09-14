@@ -409,9 +409,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -587,7 +592,31 @@ mod tests {
             .await
             .expect("correct password must switch");
 
+        // An authenticated workspace with a stale active pointer reports no
+        // current identity (the unlock state hides it) and still switches.
+        {
+            let repo = WorkspaceRepository::new(service_db(&config).await);
+            let identity = IdentityRepository::new(service_db(&config).await)
+                .find_by_name("carol")
+                .await
+                .unwrap()
+                .unwrap();
+            let mut ws =
+                Workspace::new(config.workspace.path.clone(), "test-workspace".to_string());
+            ws.switch_identity(identity.id);
+            repo.create(&ws).await.unwrap();
+        }
+        execute(switch_args(Some("carol"), true), &config)
+            .await
+            .expect("re-switch on authenticated workspace succeeds");
+
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    async fn service_db(config: &CliConfig) -> Database {
+        Database::from_file(config.get_database_path())
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -636,5 +665,98 @@ mod tests {
             .await
             .expect_err("empty workspace must fail");
         assert!(err.to_string().contains("No identities found"));
+    }
+
+    #[tokio::test]
+    async fn switch_summary_renders_contact_details_and_tags() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["rich", "plain"]).await;
+        ensure_workspace_row(&db, &config).await;
+
+        // Give the identity email/phone/tags so every summary section prints.
+        {
+            let repo = IdentityRepository::new(db.clone());
+            let mut rich = repo
+                .find_by_name("rich")
+                .await
+                .unwrap()
+                .expect("rich exists");
+            rich.email = Some("rich@example.com".to_string());
+            rich.phone = Some("+49123456789".to_string());
+            rich.tags = vec!["ops".to_string(), "oncall".to_string()];
+            rich.description = Some("the rich one".to_string());
+            repo.update(&rich).await.unwrap();
+        }
+
+        execute(switch_args(Some("rich"), true), &config)
+            .await
+            .expect("switch to a fully-populated identity succeeds");
+
+        // Interactive selection of the other identity renders the summary
+        // for it afterwards. The menu is name-ordered: "plain" sorts first.
+        let ui = ScriptedUi::new().select(0).confirm(true);
+        execute_with(switch_args(None, false), &config, &ui)
+            .await
+            .expect("interactive switch to plain succeeds");
+        assert!(ui.exhausted());
+    }
+
+    #[tokio::test]
+    async fn switch_without_workspace_row_still_succeeds_and_audits() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice"]).await;
+        // Deliberately no workspace row: perform_switch must skip the
+        // workspace update but still record the audit entry.
+
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .expect("switch without a workspace row succeeds");
+
+        let audits = AuditLogRepository::new(db)
+            .find_by_action(&AuditAction::WorkspaceEntered)
+            .await
+            .unwrap();
+        assert_eq!(audits.len(), 1, "switch is audited without a workspace row");
+    }
+
+    #[tokio::test]
+    async fn switch_ignores_a_stale_active_pointer_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice"]).await;
+        ensure_workspace_row(&db, &config).await;
+
+        // Point the workspace at an identity that no longer exists; the
+        // lookup falls through and reports "no current identity".
+        {
+            let repo = WorkspaceRepository::new(db.clone());
+            let mut ws = Workspace::new(
+                config.workspace.path.clone(),
+                "test-workspace".to_string(),
+            );
+            ws.switch_identity(uuid::Uuid::new_v4());
+            repo.create(&ws).await.unwrap();
+        }
+        assert_eq!(get_current_identity(&config).await.unwrap(), None);
+
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .expect("switch with a stale pointer succeeds");
+    }
+
+    #[tokio::test]
+    async fn switch_selection_menu_rejects_out_of_range_choice() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice", "bob"]).await;
+
+        let ui = ScriptedUi::new().select(99);
+        let err = select_identity_interactive(&config, &ui)
+            .await
+            .expect_err("out-of-range selection must fail");
+        assert!(err.to_string().contains("out of range"));
+        assert!(ui.exhausted());
     }
 }

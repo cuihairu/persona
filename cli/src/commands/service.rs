@@ -179,4 +179,37 @@ mod tests {
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
+
+    #[test]
+    fn passphrase_and_secret_prompts_fall_back_to_the_ui_without_env() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+        std::env::remove_var("PERSONA_CREDENTIAL_SECRET");
+
+        use crate::utils::prompt::scripted::ScriptedUi;
+
+        // Without the env vars both prompters consult the UI (with its
+        // confirmation prompt, which the scripted implementation ignores).
+        let ui = ScriptedUi::new().password("payload-pass");
+        assert_eq!(
+            prompt_payload_passphrase("import", &ui).unwrap(),
+            "payload-pass"
+        );
+        assert!(ui.exhausted());
+
+        let ui = ScriptedUi::new().password("cred-secret");
+        assert_eq!(prompt_credential_secret(&ui).unwrap(), "cred-secret");
+        assert!(ui.exhausted());
+
+        // A blank env value falls through to the UI as well.
+        std::env::set_var("PERSONA_PAYLOAD_PASSPHRASE", "   ");
+        let ui = ScriptedUi::new().password("typed-instead");
+        assert_eq!(
+            prompt_payload_passphrase("export", &ui).unwrap(),
+            "typed-instead"
+        );
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+    }
 }

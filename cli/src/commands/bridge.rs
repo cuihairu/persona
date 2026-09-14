@@ -1516,8 +1516,9 @@ fn generate_totp_code_from_data(data: &TwoFactorData) -> Result<(String, u32, u3
     let counter = timestamp / period;
     let digits = data.digits.clamp(4, 10) as u32;
     let code_num = hotp(&secret_bytes, counter, &data.algorithm)?;
-    let modulo = 10_u32.pow(digits);
-    let value = code_num % modulo;
+    // 10^10 exceeds u32::MAX, so the power and modulus are computed in u64.
+    let modulo = 10_u64.pow(digits);
+    let value = u64::from(code_num) % modulo;
     let code = format!("{:0width$}", value, width = digits as usize);
     let remaining = (period - (timestamp % period)) as u32;
     Ok((code, remaining, data.period.max(1)))
@@ -2442,5 +2443,2177 @@ pub(crate) mod tests {
         .await
         .expect_err("copy ghost item must fail");
         assert!(err.to_string().contains("not_found"), "got: {err}");
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage: per-kind branches, helpers, codec, and the
+    // authenticated-session signature flow.
+    // -----------------------------------------------------------------------
+
+    /// Seed a password credential through the service and persist the URL /
+    /// username hints. Requires `PERSONA_MASTER_PASSWORD` to be set already.
+    async fn seed_password_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        url: Option<&str>,
+        username: Option<&str>,
+        password: &str,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::{PasswordCredentialData, SecurityLevel};
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                &CredentialData::Password(PasswordCredentialData {
+                    password: password.to_string(),
+                    email: username.map(|s| s.to_string()),
+                    security_questions: vec![],
+                }),
+            )
+            .await
+            .unwrap();
+        cred.username = username.map(|s| s.to_string());
+        cred.url = url.map(|s| s.to_string());
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
+    /// Seed a TOTP (two-factor) credential with a fixed base32 secret.
+    async fn seed_totp_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        url: Option<&str>,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::SecurityLevel;
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::TwoFactor,
+                SecurityLevel::High,
+                &CredentialData::TwoFactor(TwoFactorData {
+                    secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+                    issuer: "Example".to_string(),
+                    account_name: "alice@example.com".to_string(),
+                    algorithm: "SHA1".to_string(),
+                    digits: 6,
+                    period: 30,
+                }),
+            )
+            .await
+            .unwrap();
+        cred.url = url.map(|s| s.to_string());
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
+    /// Seed an API-key credential (a type the bridge never suggests or fills).
+    async fn seed_api_key_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        url: Option<&str>,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::{ApiKeyData, SecurityLevel};
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::ApiKey,
+                SecurityLevel::High,
+                &CredentialData::ApiKey(ApiKeyData {
+                    api_key: "key".to_string(),
+                    api_secret: None,
+                    token: None,
+                    permissions: vec![],
+                    expires_at: None,
+                }),
+            )
+            .await
+            .unwrap();
+        cred.url = url.map(|s| s.to_string());
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
+    fn clipboard_available() -> bool {
+        ["wl-copy", "xclip", "xsel"].iter().any(|cmd| {
+            Command::new("which")
+                .arg(cmd)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
+    }
+
+    /// Copy outcomes depend on the host having a clipboard utility; assert the
+    /// protocol outcome for whichever way the environment goes.
+    fn assert_copy_outcome(
+        result: anyhow::Result<BridgeResponse<serde_json::Value>>,
+        clip_ok: bool,
+    ) {
+        if clip_ok {
+            let resp = result.expect("copy must succeed when a clipboard tool exists");
+            assert!(resp.ok, "copy must succeed: {:?}", resp.error);
+            assert_eq!(resp.kind, "copy_response");
+            assert_eq!(resp.payload.unwrap()["copied"], true);
+        } else {
+            let err = result.expect_err("copy must fail without a clipboard tool");
+            assert!(err.to_string().contains("copy_failed"), "got: {err}");
+        }
+    }
+
+    /// Build a request with a correctly computed HMAC auth block, mirroring
+    /// `verify_signature`'s canonical signing input.
+    fn signed_request(
+        kind: &str,
+        payload: serde_json::Value,
+        request_id: &str,
+        session_id: &str,
+        key_b64: &str,
+        ts_ms: i64,
+        nonce: &str,
+    ) -> BridgeRequest {
+        let key = URL_SAFE_NO_PAD
+            .decode(key_b64)
+            .expect("pairing key must be valid base64url");
+        let payload_json = serde_json::to_string(&canonicalize_json_value(&payload)).unwrap();
+        let signing_input = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            kind, request_id, payload_json, session_id, ts_ms, nonce
+        );
+        let mut mac = Hmac::<Sha256>::new_from_slice(&key).unwrap();
+        mac.update(signing_input.as_bytes());
+        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        BridgeRequest {
+            request_id: Some(request_id.to_string()),
+            kind: kind.to_string(),
+            payload,
+            auth: Some(BridgeAuth {
+                session_id: Some(session_id.to_string()),
+                ts_ms,
+                nonce: nonce.to_string(),
+                signature,
+            }),
+        }
+    }
+
+    /// Run the full pairing handshake (request, approve, finalize) and return
+    /// the issued session id and shared key.
+    async fn pair_extension(state_dir: &Path, ext: &str, inst: &str) -> (String, String) {
+        let resp = handle_request(
+            Path::new(""),
+            state_dir,
+            request(
+                "pairing_request",
+                serde_json::json!({
+                    "extension_id": ext,
+                    "client_instance_id": inst
+                }),
+            ),
+        )
+        .await
+        .expect("pairing_request must succeed");
+        let code = resp.payload.unwrap()["code"]
+            .as_str()
+            .expect("pairing code present")
+            .to_string();
+        approve_pairing(state_dir, &code).expect("approve pairing");
+        let resp = handle_request(
+            Path::new(""),
+            state_dir,
+            request(
+                "pairing_finalize",
+                serde_json::json!({
+                    "extension_id": ext,
+                    "client_instance_id": inst,
+                    "code": code
+                }),
+            ),
+        )
+        .await
+        .expect("pairing_finalize must succeed");
+        let payload = resp.payload.unwrap();
+        (
+            payload["session_id"].as_str().unwrap().to_string(),
+            payload["pairing_key_b64"].as_str().unwrap().to_string(),
+        )
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_hello_bad_payload_and_pairing_disabled() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        // Malformed payload surfaces the context error.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("hello", serde_json::json!({})),
+        )
+        .await
+        .expect_err("hello without extension_id must fail");
+        assert!(
+            err.to_string().contains("invalid payload for hello"),
+            "got: {err}"
+        );
+
+        // With pairing disabled, hello reports no pairing and no session.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "hello",
+                serde_json::json!({
+                    "extension_id": "ext-hello",
+                    "extension_version": "1.2.3",
+                    "protocol_version": 2,
+                    "client_instance_id": "inst-hello"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "hello must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "hello_response");
+        assert_eq!(resp.request_id.as_deref(), Some("req-1"));
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["pairing_required"], false);
+        assert_eq!(payload["paired"], false);
+        assert!(payload["session_id"].is_null());
+        assert!(payload["session_expires_at_ms"].is_null());
+        assert_eq!(payload["protocol_version"], 2);
+        assert!(payload["server_version"].is_string());
+        let caps = payload["capabilities"].as_array().unwrap();
+        for capability in [
+            "status",
+            "pairing_request",
+            "pairing_finalize",
+            "get_suggestions",
+            "request_fill",
+            "get_totp",
+            "copy",
+        ] {
+            assert!(
+                caps.iter().any(|c| c == capability),
+                "capability {capability} must be advertised"
+            );
+        }
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_status_reports_lock_state_and_active_identity() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        // A fresh database without user rows is locked with no identity.
+        let empty_dir = tempfile::tempdir().unwrap();
+        let empty_db = empty_dir.path().join("empty.db");
+        let resp = handle_request(
+            &empty_db,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "status must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["locked"], true);
+        assert!(payload["active_identity"].is_null());
+
+        // Seeded vault without a master password: locked, identity reported.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["locked"], true);
+        assert_eq!(payload["active_identity"], identity_id.to_string());
+
+        // Correct master password reports the vault as unlocked.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.payload.unwrap()["locked"], false);
+
+        // Wrong password is locked again.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "definitely-wrong");
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.payload.unwrap()["locked"], true);
+
+        // A blank password counts as absent.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "   ");
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("status", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.payload.unwrap()["locked"], true);
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_pairing_request_and_finalize_error_paths() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        // Bad payload -> context error.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_request",
+                serde_json::json!({ "extension_id": "ext-a" }),
+            ),
+        )
+        .await
+        .expect_err("pairing_request missing client_instance_id must fail");
+        assert!(
+            err.to_string()
+                .contains("invalid payload for pairing_request"),
+            "got: {err}"
+        );
+
+        // Blank fields are rejected by create_pairing_request itself.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_request",
+                serde_json::json!({ "extension_id": "ext-a", "client_instance_id": "   " }),
+            ),
+        )
+        .await
+        .expect_err("blank client_instance_id must fail");
+        assert!(
+            err.to_string().starts_with("invalid_payload:"),
+            "got: {err}"
+        );
+
+        // Bad payload for finalize.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("pairing_finalize", serde_json::json!({ "code": "111-222" })),
+        )
+        .await
+        .expect_err("pairing_finalize missing fields must fail");
+        assert!(
+            err.to_string()
+                .contains("invalid payload for pairing_finalize"),
+            "got: {err}"
+        );
+
+        // Unknown finalize code.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_finalize",
+                serde_json::json!({
+                    "extension_id": "ext-a",
+                    "client_instance_id": "inst-a",
+                    "code": "000-000"
+                }),
+            ),
+        )
+        .await
+        .expect_err("unknown code must fail");
+        assert!(
+            err.to_string().contains("pairing_not_found_or_expired"),
+            "got: {err}"
+        );
+
+        // Full pairing, then a duplicate pairing_request reports already_paired.
+        pair_extension(&state_dir, "ext-dup", "inst-dup").await;
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "pairing_request",
+                serde_json::json!({
+                    "extension_id": "ext-dup",
+                    "client_instance_id": "inst-dup"
+                }),
+            ),
+        )
+        .await
+        .expect_err("second pairing_request for a paired client must fail");
+        assert!(err.to_string().contains("already_paired"), "got: {err}");
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_get_suggestions_filters_and_orders_items() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        let exact = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Exact match",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "pw-exact",
+        )
+        .await;
+        let _sub = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Subdomain match",
+            Some("https://api.example.com/signin"),
+            Some("bob@example.com"),
+            "pw-sub",
+        )
+        .await;
+        let _zero = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Unrelated site",
+            Some("https://unrelated.org/x"),
+            Some("eve@example.com"),
+            "pw-zero",
+        )
+        .await;
+        let _nourl = seed_password_credential(
+            &db_path,
+            identity_id,
+            "No URL",
+            None,
+            Some("no-url@example.com"),
+            "pw-nourl",
+        )
+        .await;
+        let inactive = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Inactive entry",
+            Some("https://example.com/inactive"),
+            Some("inactive@example.com"),
+            "pw-inactive",
+        )
+        .await;
+        let _api = seed_api_key_credential(
+            &db_path,
+            identity_id,
+            "API key",
+            Some("https://example.com/api"),
+        )
+        .await;
+
+        // Deactivate one credential directly in the store.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET is_active = 0 WHERE id = ?")
+            .bind(inactive.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // Bad payload -> context error.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("get_suggestions", serde_json::json!({})),
+        )
+        .await
+        .expect_err("get_suggestions without origin must fail");
+        assert!(
+            err.to_string()
+                .contains("invalid payload for get_suggestions"),
+            "got: {err}"
+        );
+
+        // Unparseable origin -> error from origin_to_host.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_suggestions",
+                serde_json::json!({ "origin": "not a url" }),
+            ),
+        )
+        .await
+        .expect_err("invalid origin must fail");
+
+        assert!(!err.to_string().is_empty());
+
+        // Only the exact (100) and subdomain (90) matches survive filtering,
+        // ordered by descending match strength.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_suggestions",
+                serde_json::json!({ "origin": "https://example.com" }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "suggestions must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "suggestions_response");
+        assert_eq!(resp.request_id.as_deref(), Some("req-1"));
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["suggesting_for"], "example.com");
+        let items = payload["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "expected exactly the two matching items");
+        assert_eq!(items[0]["match_strength"], 100);
+        assert_eq!(items[0]["item_id"], exact.to_string());
+        assert_eq!(items[0]["credential_type"], "password");
+        assert_eq!(items[0]["username_hint"], "alice@example.com");
+        assert_eq!(items[1]["match_strength"], 90);
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_request_fill_success_and_error_branches() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Fill me",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+        let totp_id = seed_totp_credential(
+            &db_path,
+            identity_id,
+            "TOTP entry",
+            Some("https://example.com/totp"),
+        )
+        .await;
+
+        // Happy path: kind, request id, and decrypted payload fields.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "fill must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "fill_response");
+        assert_eq!(resp.request_id.as_deref(), Some("req-1"));
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["username"], "alice@example.com");
+        assert_eq!(payload["password"], "hunter2");
+
+        // Bad payload -> context error.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("request_fill", serde_json::json!({})),
+        )
+        .await
+        .expect_err("fill without payload fields must fail");
+        assert!(
+            err.to_string().contains("invalid payload for request_fill"),
+            "got: {err}"
+        );
+
+        // Non-UUID item id.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": "not-a-uuid",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill with a non-uuid item must fail");
+        assert!(
+            err.to_string().starts_with("invalid item_id uuid"),
+            "got: {err}"
+        );
+
+        // Ghost item reports not_found.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill of a ghost item must fail");
+        assert!(err.to_string().contains("not_found"), "got: {err}");
+
+        // Filling a TOTP credential is unsupported.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill of a totp credential must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        // Origin mismatch is rejected.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://evil.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill from a mismatched origin must fail");
+        assert!(err.to_string().starts_with("origin_mismatch"), "got: {err}");
+
+        // Credential owned by another identity.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill for a foreign identity must fail");
+        assert!(err.to_string().starts_with("wrong_identity"), "got: {err}");
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // With the gesture requirement disabled, a gestureless fill passes.
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "0");
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string()
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp.ok,
+            "gestureless fill must pass when requirement disabled: {:?}",
+            resp.error
+        );
+
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_get_totp_success_and_error_branches() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Password entry",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+        let totp_id = seed_totp_credential(
+            &db_path,
+            identity_id,
+            "TOTP entry",
+            Some("https://example.com/totp"),
+        )
+        .await;
+
+        // Happy path: a six digit code for a 30s period.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "totp must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "totp_response");
+        assert_eq!(resp.request_id.as_deref(), Some("req-1"));
+        let payload = resp.payload.unwrap();
+        let code = payload["code"].as_str().unwrap();
+        assert_eq!(code.len(), 6, "code must be six digits");
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(payload["period"], 30);
+        let remaining = payload["remaining_seconds"].as_u64().unwrap();
+        assert!((1..=30).contains(&remaining));
+
+        // Bad payload -> context error.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("get_totp", serde_json::json!({})),
+        )
+        .await
+        .expect_err("get_totp without payload fields must fail");
+        assert!(
+            err.to_string().contains("invalid payload for get_totp"),
+            "got: {err}"
+        );
+
+        // Non-UUID item id.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": "nope",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("get_totp with a non-uuid item must fail");
+        assert!(
+            err.to_string().starts_with("invalid item_id uuid"),
+            "got: {err}"
+        );
+
+        // Ghost item.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("get_totp of a ghost item must fail");
+        assert!(err.to_string().contains("not_found"), "got: {err}");
+
+        // TOTP on a password credential is unsupported.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp of a password credential must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        // Type/data mismatch: row says TwoFactor but the sealed data is a
+        // password. Hit through a direct store rewrite.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET credential_type = 'TwoFactor' WHERE id = ?")
+            .bind(pw_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp with mismatched data must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET credential_type = 'Password' WHERE id = ?")
+            .bind(pw_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // A TOTP entry without a URL has no origin binding.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET url = NULL WHERE id = ?")
+            .bind(totp_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp without a bound URL must fail");
+        assert!(
+            err.to_string().starts_with("origin_binding_required"),
+            "got: {err}"
+        );
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET url = 'https://example.com/totp' WHERE id = ?")
+            .bind(totp_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // Origin mismatch.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://evil.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp from a mismatched origin must fail");
+        assert!(err.to_string().starts_with("origin_mismatch"), "got: {err}");
+
+        // Credential owned by another identity.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp for a foreign identity must fail");
+        assert!(err.to_string().starts_with("wrong_identity"), "got: {err}");
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_copy_success_and_error_branches() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        let clip_ok = clipboard_available();
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Copy target",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+        let totp_id = seed_totp_credential(
+            &db_path,
+            identity_id,
+            "TOTP entry",
+            Some("https://example.com/totp"),
+        )
+        .await;
+        // A credential with no username and no URL; metadata carries an email
+        // so the username fallback can be exercised.
+        let anon_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Anonymous entry",
+            None,
+            None,
+            "anon-pw",
+        )
+        .await;
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET metadata = ? WHERE id = ?")
+            .bind(r#"{"email":"meta@example.com"}"#)
+            .bind(anon_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // Happy path: copy the username.
+        let result = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "username",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await;
+        assert_copy_outcome(result, clip_ok);
+
+        // Happy path: copy the password (case-insensitive field name).
+        let result = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "PASSWORD",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await;
+        assert_copy_outcome(result, clip_ok);
+
+        // Happy path: copy a TOTP code.
+        let result = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "field": "totp",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await;
+        assert_copy_outcome(result, clip_ok);
+
+        // Username falls back to the metadata email.
+        let result = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": anon_id.to_string(),
+                    "field": "username",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await;
+        assert_copy_outcome(result, clip_ok);
+
+        // Clearing metadata leaves no username -> not_found (before clipboard).
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE credentials SET metadata = '{}' WHERE id = ?")
+            .bind(anon_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": anon_id.to_string(),
+                    "field": "username",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy without any username must fail");
+        assert!(
+            err.to_string()
+                .contains("not_found: username not available"),
+            "got: {err}"
+        );
+
+        // Bad payload -> context error.
+        let err = handle_request(&db_path, &state_dir, request("copy", serde_json::json!({})))
+            .await
+            .expect_err("copy without payload fields must fail");
+        assert!(
+            err.to_string().contains("invalid payload for copy"),
+            "got: {err}"
+        );
+
+        // Missing gesture is rejected before anything else.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "password"
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy without a gesture must fail");
+        assert!(
+            err.to_string().starts_with("user_gesture_required"),
+            "got: {err}"
+        );
+
+        // Password field on a TOTP credential is unsupported.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "field": "password",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy password of a totp credential must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        // TOTP field on a password credential is unsupported.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "totp",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy totp of a password credential must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        // Origin mismatch.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://evil.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "username",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy from a mismatched origin must fail");
+        assert!(err.to_string().starts_with("origin_mismatch"), "got: {err}");
+
+        // Credential owned by another identity.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "username",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copy for a foreign identity must fail");
+        assert!(err.to_string().starts_with("wrong_identity"), "got: {err}");
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_passkey_payload_validation_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+        let good_client_data = local_client_data_for("https://example.com", "Y2hhbGxlbmdl");
+
+        // passkey_list: malformed payload.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("passkey_list", serde_json::json!({})),
+        )
+        .await
+        .expect_err("passkey_list without origin must fail");
+        assert!(
+            err.to_string().contains("invalid payload for passkey_list"),
+            "got: {err}"
+        );
+
+        // passkey_create: malformed payload (no request_json at all).
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({ "origin": "https://example.com", "user_gesture": true }),
+            ),
+        )
+        .await
+        .expect_err("passkey_create without request_json must fail");
+        assert!(
+            err.to_string()
+                .contains("invalid payload for passkey_create"),
+            "got: {err}"
+        );
+
+        // passkey_create: client_data_json_b64 is not base64url.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": {
+                        "rp": { "id": "example.com" },
+                        "user": {
+                            "id": URL_SAFE_NO_PAD.encode(b"u"),
+                            "name": "b@example.com"
+                        },
+                        "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }]
+                    },
+                    "client_data_json_b64": "!!!not-base64url!!!"
+                }),
+            ),
+        )
+        .await
+        .expect_err("non-base64url client data must fail");
+        assert!(
+            err.to_string()
+                .contains("client_data_json_b64 must be base64url"),
+            "got: {err}"
+        );
+
+        // passkey_create: creation options rejected by core; the PersonaError
+        // prefix is flattened away by flat_persona_error.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": {
+                        "rp": { "id": "example.com" },
+                        "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }]
+                    },
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&good_client_data)
+                }),
+            ),
+        )
+        .await
+        .expect_err("creation options without user must fail");
+        assert!(
+            err.to_string().starts_with("invalid_request"),
+            "flat_persona_error must strip the human prefix, got: {err}"
+        );
+
+        // passkey_assert: malformed payload.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({ "origin": "https://example.com", "user_gesture": true }),
+            ),
+        )
+        .await
+        .expect_err("passkey_assert without item_id must fail");
+        assert!(
+            err.to_string()
+                .contains("invalid payload for passkey_assert"),
+            "got: {err}"
+        );
+
+        // passkey_assert: non-UUID item id.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": "not-a-uuid",
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&good_client_data)
+                }),
+            ),
+        )
+        .await
+        .expect_err("passkey_assert with a non-uuid item must fail");
+        assert!(
+            err.to_string().starts_with("invalid_request: item_id uuid"),
+            "got: {err}"
+        );
+
+        // passkey_assert: client_data_json_b64 is not base64url.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "client_data_json_b64": "!!!not-base64url!!!"
+                }),
+            ),
+        )
+        .await
+        .expect_err("non-base64url assert client data must fail");
+        assert!(
+            err.to_string()
+                .contains("client_data_json_b64 must be base64url"),
+            "got: {err}"
+        );
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_authenticated_session_signature_enforcement() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_AUTH_MAX_SKEW_MS");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+        let origin_payload = serde_json::json!({ "origin": "https://example.com" });
+
+        // No auth block at all -> pairing_required.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("get_suggestions", origin_payload.clone()),
+        )
+        .await
+        .expect_err("unauthenticated request must fail");
+        assert!(
+            err.to_string().starts_with("pairing_required"),
+            "got: {err}"
+        );
+
+        // Auth block without a session id -> pairing_required.
+        let req = BridgeRequest {
+            request_id: Some("req-1".to_string()),
+            kind: "get_suggestions".to_string(),
+            payload: origin_payload.clone(),
+            auth: Some(BridgeAuth {
+                session_id: None,
+                ts_ms: now_ms(),
+                nonce: "n1".to_string(),
+                signature: "AA".to_string(),
+            }),
+        };
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("auth without session_id must fail");
+        assert!(
+            err.to_string().starts_with("pairing_required"),
+            "got: {err}"
+        );
+
+        // Pair for real so a session and key exist.
+        let (session_id, key_b64) = pair_extension(&state_dir, "ext-sign", "inst-sign").await;
+
+        // Unknown session id -> session_expired.
+        let req = signed_request(
+            "get_suggestions",
+            origin_payload.clone(),
+            "req-1",
+            "00000000-0000-0000-0000-000000000000",
+            &key_b64,
+            now_ms(),
+            "nonce-unknown",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("unknown session must fail");
+        assert!(err.to_string().starts_with("session_expired"), "got: {err}");
+
+        // Valid signature passes.
+        let req = signed_request(
+            "get_suggestions",
+            origin_payload.clone(),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-ok",
+        );
+        let resp = handle_request(&db_path, &state_dir, req).await.unwrap();
+        assert!(
+            resp.ok,
+            "correctly signed request must succeed: {:?}",
+            resp.error
+        );
+
+        // Tampered but well-formed signature -> authentication_failed.
+        let mut req = signed_request(
+            "get_suggestions",
+            origin_payload.clone(),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-bad",
+        );
+        if let Some(auth) = req.auth.as_mut() {
+            auth.signature = "AAAA".to_string();
+        }
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("tampered signature must fail");
+        assert_eq!(err.to_string(), "authentication_failed");
+
+        // Stale timestamp is rejected under the default 5 minute skew.
+        let req = signed_request(
+            "get_suggestions",
+            origin_payload.clone(),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms() - 10 * 60 * 1000,
+            "nonce-stale",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("stale timestamp must fail");
+        assert!(
+            err.to_string()
+                .starts_with("authentication_failed: stale timestamp"),
+            "got: {err}"
+        );
+
+        // A larger configured skew lets the very same request through.
+        std::env::set_var("PERSONA_BRIDGE_AUTH_MAX_SKEW_MS", "3600000");
+        let req = signed_request(
+            "get_suggestions",
+            origin_payload.clone(),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms() - 10 * 60 * 1000,
+            "nonce-skew",
+        );
+        let resp = handle_request(&db_path, &state_dir, req).await.unwrap();
+        assert!(
+            resp.ok,
+            "stale request must pass with a raised skew: {:?}",
+            resp.error
+        );
+        std::env::remove_var("PERSONA_BRIDGE_AUTH_MAX_SKEW_MS");
+
+        // A pairing whose key is not valid base64url -> invalid key.
+        save_state(
+            &state_dir,
+            &BridgeStateFile {
+                version: 1,
+                pairings: vec![PairingInfo {
+                    extension_id: "ext-evil".to_string(),
+                    client_instance_id: "inst-evil".to_string(),
+                    key_b64: "!!!not-base64".to_string(),
+                    paired_at_ms: now_ms(),
+                    session: Some(SessionInfo {
+                        session_id: "session-evil".to_string(),
+                        expires_at_ms: now_ms() + 60_000,
+                    }),
+                }],
+                pending: vec![],
+            },
+        )
+        .unwrap();
+        let req = BridgeRequest {
+            request_id: Some("req-1".to_string()),
+            kind: "get_suggestions".to_string(),
+            payload: origin_payload.clone(),
+            auth: Some(BridgeAuth {
+                session_id: Some("session-evil".to_string()),
+                ts_ms: now_ms(),
+                nonce: "n".to_string(),
+                signature: "AA".to_string(),
+            }),
+        };
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("corrupt pairing key must fail");
+        assert!(
+            err.to_string()
+                .starts_with("authentication_failed: invalid key"),
+            "got: {err}"
+        );
+
+        // A valid key but non-base64url signature encoding.
+        save_state(
+            &state_dir,
+            &BridgeStateFile {
+                version: 1,
+                pairings: vec![PairingInfo {
+                    extension_id: "ext-enc".to_string(),
+                    client_instance_id: "inst-enc".to_string(),
+                    key_b64: URL_SAFE_NO_PAD.encode([9u8; 32]),
+                    paired_at_ms: now_ms(),
+                    session: Some(SessionInfo {
+                        session_id: "session-enc".to_string(),
+                        expires_at_ms: now_ms() + 60_000,
+                    }),
+                }],
+                pending: vec![],
+            },
+        )
+        .unwrap();
+        let req = BridgeRequest {
+            request_id: Some("req-1".to_string()),
+            kind: "get_suggestions".to_string(),
+            payload: origin_payload,
+            auth: Some(BridgeAuth {
+                session_id: Some("session-enc".to_string()),
+                ts_ms: now_ms(),
+                nonce: "n".to_string(),
+                signature: "!!!".to_string(),
+            }),
+        };
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("bad signature encoding must fail");
+        assert!(
+            err.to_string()
+                .starts_with("authentication_failed: invalid signature encoding"),
+            "got: {err}"
+        );
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_AUTH_MAX_SKEW_MS");
+    }
+
+    #[test]
+    fn bridge_pure_helpers_cover_edge_cases() {
+        // ok/err constructors.
+        let ok_resp = ok(
+            Some("r1".to_string()),
+            "kind-x",
+            serde_json::json!({"a": 1}),
+        );
+        assert!(ok_resp.ok);
+        assert_eq!(ok_resp.kind, "kind-x");
+        assert_eq!(ok_resp.request_id.as_deref(), Some("r1"));
+        assert!(ok_resp.error.is_none());
+        assert!(ok_resp.payload.is_some());
+        let err_resp = err::<serde_json::Value>(None, "error", "boom".to_string());
+        assert!(!err_resp.ok);
+        assert_eq!(err_resp.kind, "error");
+        assert!(err_resp.request_id.is_none());
+        assert_eq!(err_resp.error.as_deref(), Some("boom"));
+        assert!(err_resp.payload.is_none());
+
+        // normalize_pairing_code trims, strips spaces, and uppercases.
+        assert_eq!(normalize_pairing_code("  ab c-12 9 "), "ABC-129");
+        assert_eq!(normalize_pairing_code("123-456"), "123-456");
+
+        // state_path and now_ms.
+        assert_eq!(
+            state_path(Path::new("/tmp/s")),
+            PathBuf::from("/tmp/s/state.json")
+        );
+        assert!(now_ms() > 1_600_000_000_000, "now_ms must be plausible");
+
+        // default_true.
+        assert!(default_true());
+
+        // canonicalize_json_value is an identity on parsed JSON, including
+        // nested objects, arrays, and scalars.
+        let input = serde_json::json!({
+            "b": 1,
+            "a": [ { "d": 2, "c": 3 }, null, true, "x", 1.5 ],
+            "nested": { "z": { "m": [] } }
+        });
+        assert_eq!(canonicalize_json_value(&input), input);
+
+        // flat_persona_error strips the human prefix but keeps the wire code.
+        let flat = flat_persona_error(PersonaError::InvalidInput(
+            "invalid_request: missing user".to_string(),
+        ));
+        assert_eq!(flat.to_string(), "invalid_request: missing user");
+        let flat_plain = flat_persona_error(PersonaError::NotFound("item".to_string()));
+        assert_eq!(flat_plain.to_string(), "item");
+
+        // compute_match_strength buckets.
+        assert_eq!(
+            compute_match_strength("github.com", "https://github.com/login"),
+            100
+        );
+        assert_eq!(
+            compute_match_strength("GitHub.COM", "https://github.com"),
+            100
+        );
+        assert_eq!(
+            compute_match_strength("api.github.com", "https://github.com"),
+            90
+        );
+        assert_eq!(
+            compute_match_strength("github.com", "https://api.github.com/x"),
+            90
+        );
+        // Same registrable domain (TLD+1) but no subdomain relation.
+        assert_eq!(
+            compute_match_strength("a.b.example.com", "https://c.d.example.com/"),
+            60
+        );
+        // Legacy contains fallback for non-URL credential values.
+        assert_eq!(
+            compute_match_strength("github.com", "not-a-url-but-mentions-github.com"),
+            80
+        );
+        assert_eq!(
+            compute_match_strength("github.com", "https://gitlab.com/x"),
+            0
+        );
+
+        // validate_origin_binding requires TLD+1 or better (or no URL at all).
+        assert!(validate_origin_binding("example.com", None));
+        assert!(validate_origin_binding(
+            "example.com",
+            Some("https://example.com/login")
+        ));
+        assert!(validate_origin_binding(
+            "a.example.com",
+            Some("https://example.com")
+        ));
+        assert!(!validate_origin_binding(
+            "evil.com",
+            Some("https://example.com")
+        ));
+
+        // origin_to_host accepts origins, bare hosts, and ports, and rejects
+        // schemes without a host part.
+        assert_eq!(
+            origin_to_host("https://Example.com/path?q=1").unwrap(),
+            "example.com"
+        );
+        assert_eq!(origin_to_host("example.com").unwrap(), "example.com");
+        assert_eq!(
+            origin_to_host("http://localhost:8080").unwrap(),
+            "localhost"
+        );
+        assert!(origin_to_host("mailto:user@example.com").is_err());
+        assert!(origin_to_host("").is_err());
+    }
+
+    #[test]
+    fn gesture_required_env_parsing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        assert!(gesture_required(), "default is on");
+
+        for off in ["0", "false", "FALSE"] {
+            std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", off);
+            assert!(!gesture_required(), "{off} must disable the requirement");
+        }
+        for on in ["1", "yes", "true"] {
+            std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", on);
+            assert!(gesture_required(), "{on} must keep the requirement on");
+        }
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+    }
+
+    #[test]
+    fn bridge_state_file_helpers_roundtrip_and_purge() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path();
+        let now = now_ms();
+
+        // Missing file -> default state with version 1.
+        let state = load_state(state_dir).unwrap();
+        assert_eq!(state.version, 1);
+        assert!(state.pairings.is_empty());
+        assert!(state.pending.is_empty());
+
+        // Round trip through save_state.
+        let mut st = BridgeStateFile {
+            version: 1,
+            pairings: vec![PairingInfo {
+                extension_id: "ext".to_string(),
+                client_instance_id: "inst".to_string(),
+                key_b64: URL_SAFE_NO_PAD.encode([1u8; 32]),
+                paired_at_ms: now,
+                session: Some(SessionInfo {
+                    session_id: "s1".to_string(),
+                    expires_at_ms: now + 1_000,
+                }),
+            }],
+            pending: vec![PendingPairing {
+                code: "111-222".to_string(),
+                extension_id: "ext".to_string(),
+                client_instance_id: "inst".to_string(),
+                key_b64: URL_SAFE_NO_PAD.encode([2u8; 32]),
+                requested_at_ms: now,
+                expires_at_ms: now + 1_000,
+                approved: false,
+            }],
+        };
+        save_state(state_dir, &st).unwrap();
+        let loaded = load_state(state_dir).unwrap();
+        assert_eq!(loaded.pairings.len(), 1);
+        assert_eq!(
+            loaded.pairings[0].session.as_ref().unwrap().session_id,
+            "s1"
+        );
+        assert_eq!(loaded.pending.len(), 1);
+
+        // Version 0 files are normalized to 1.
+        std::fs::write(state_path(state_dir), br#"{"version": 0}"#).unwrap();
+        assert_eq!(load_state(state_dir).unwrap().version, 1);
+
+        // Corrupt JSON is an error, not a panic.
+        std::fs::write(state_path(state_dir), b"{nope").unwrap();
+        assert!(load_state(state_dir).is_err());
+
+        // purge_expired drops stale pending requests and clears expired
+        // sessions while leaving live entries untouched.
+        st.pending.push(PendingPairing {
+            code: "999-999".to_string(),
+            extension_id: "old".to_string(),
+            client_instance_id: "old".to_string(),
+            key_b64: URL_SAFE_NO_PAD.encode([3u8; 32]),
+            requested_at_ms: now - 20 * 60_000,
+            expires_at_ms: now - 1,
+            approved: false,
+        });
+        st.pairings.push(PairingInfo {
+            extension_id: "dead".to_string(),
+            client_instance_id: "dead".to_string(),
+            key_b64: URL_SAFE_NO_PAD.encode([4u8; 32]),
+            paired_at_ms: now - 90_000,
+            session: Some(SessionInfo {
+                session_id: "dead-session".to_string(),
+                expires_at_ms: now - 1,
+            }),
+        });
+        purge_expired(&mut st);
+        assert_eq!(st.pending.len(), 1, "only the live pending request remains");
+        assert_eq!(st.pending[0].code, "111-222");
+        assert_eq!(st.pairings.len(), 2);
+        assert!(
+            st.pairings[0].session.is_some(),
+            "live session must survive"
+        );
+        assert!(
+            st.pairings[1].session.is_none(),
+            "expired session must be cleared"
+        );
+    }
+
+    #[test]
+    fn ensure_session_creates_once_and_reuses() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path();
+
+        // Unknown pairing -> no session.
+        assert!(ensure_session(state_dir, "ext-s", "inst-s")
+            .unwrap()
+            .is_none());
+
+        // A stored pairing without a session gets one on the first hello.
+        save_state(
+            state_dir,
+            &BridgeStateFile {
+                version: 1,
+                pairings: vec![PairingInfo {
+                    extension_id: "ext-s".to_string(),
+                    client_instance_id: "inst-s".to_string(),
+                    key_b64: URL_SAFE_NO_PAD.encode([3u8; 32]),
+                    paired_at_ms: now_ms(),
+                    session: None,
+                }],
+                pending: vec![],
+            },
+        )
+        .unwrap();
+        let first = ensure_session(state_dir, "ext-s", "inst-s")
+            .unwrap()
+            .unwrap();
+        let second = ensure_session(state_dir, "ext-s", "inst-s")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            first.session_id, second.session_id,
+            "an existing session must be reused"
+        );
+        assert!(second.expires_at_ms > now_ms());
+
+        // The issued session was persisted.
+        let state = load_state(state_dir).unwrap();
+        assert_eq!(
+            state.pairings[0].session.as_ref().unwrap().session_id,
+            first.session_id
+        );
+    }
+
+    #[test]
+    fn totp_helpers_match_rfc_vectors_and_clamps() {
+        // RFC 4226 Appendix D reference vectors (HMAC-SHA1, 6 digits).
+        let secret = decode_totp_secret("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
+        assert_eq!(secret, b"12345678901234567890".to_vec());
+        assert_eq!(hotp(&secret, 0, "SHA1").unwrap() % 1_000_000, 755224);
+        assert_eq!(hotp(&secret, 1, "SHA1").unwrap() % 1_000_000, 287082);
+        assert_eq!(hotp(&secret, 5, "SHA1").unwrap() % 1_000_000, 254676);
+        assert_eq!(hotp(&secret, 9, "SHA1").unwrap() % 1_000_000, 520489);
+
+        // HMAC-SHA256/SHA512 truncated values cross-checked against an
+        // independent reference implementation (counter 1, 8 digits).
+        // The 30-byte secret "123456789012345678901234567890".
+        let s256 = decode_totp_secret("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ").unwrap();
+        let s512 = decode_totp_secret(
+            "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+        )
+        .unwrap();
+        assert_eq!(hotp(&s256, 1, "SHA256").unwrap() % 100_000_000, 82366409);
+        assert_eq!(hotp(&s512, 1, "SHA512").unwrap() % 100_000_000, 98063437);
+        // Unknown (and lowercase) algorithms fall back to HMAC-SHA1.
+        assert_eq!(hotp(&secret, 1, "sha1").unwrap() % 1_000_000, 287082);
+        assert_eq!(hotp(&secret, 1, "MD5").unwrap() % 1_000_000, 287082);
+
+        // decode_totp_secret normalizes case, whitespace, and padding.
+        assert_eq!(
+            decode_totp_secret("gezd gnbvGY3TQOJQ\nGEZDGNBVGY3TQOJQ").unwrap(),
+            secret
+        );
+        assert_eq!(
+            decode_totp_secret("NBSWY3DPFVZWKY3SMV2C2YLCMM======").unwrap(),
+            b"hello-secret-abc".to_vec()
+        );
+        let err = decode_totp_secret("not!base32!").unwrap_err();
+        assert!(
+            err.to_string().starts_with("invalid_base32_secret"),
+            "got: {err}"
+        );
+
+        // generate_totp_code_from_data: six digits, remaining within period.
+        let (code, remaining, period) = generate_totp_code_from_data(&TwoFactorData {
+            secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+            issuer: "Issuer".to_string(),
+            account_name: "a@b.c".to_string(),
+            algorithm: "SHA1".to_string(),
+            digits: 6,
+            period: 30,
+        })
+        .unwrap();
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+        assert!((1..=30).contains(&remaining));
+        assert_eq!(period, 30);
+
+        // Digits below 4 clamp up; a zero period becomes one second.
+        let (short, remaining0, period0) = generate_totp_code_from_data(&TwoFactorData {
+            secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+            issuer: "Issuer".to_string(),
+            account_name: "a@b.c".to_string(),
+            algorithm: "SHA256".to_string(),
+            digits: 1,
+            period: 0,
+        })
+        .unwrap();
+        assert_eq!(short.len(), 4);
+        assert_eq!(remaining0, 1, "period 1 leaves exactly one second");
+        assert_eq!(period0, 1);
+
+        // Nine digits still works...
+        let (long, _, _) = generate_totp_code_from_data(&TwoFactorData {
+            secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+            issuer: "Issuer".to_string(),
+            account_name: "a@b.c".to_string(),
+            algorithm: "SHA512".to_string(),
+            digits: 9,
+            period: 60,
+        })
+        .unwrap();
+        assert_eq!(long.len(), 9);
+
+        // Regression: 10 digits used to overflow `10_u32.pow(..)` (panic in
+        // debug, wrapped modulus in release). The u64 path must format a full
+        // 10-digit code.
+        let (max_digits, _, _) = generate_totp_code_from_data(&TwoFactorData {
+            secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+            issuer: "Issuer".to_string(),
+            account_name: "a@b.c".to_string(),
+            algorithm: "SHA1".to_string(),
+            digits: 10,
+            period: 30,
+        })
+        .unwrap();
+        assert_eq!(max_digits.len(), 10);
+        assert!(max_digits.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[tokio::test]
+    async fn frame_codec_roundtrip_enforces_length_limits() {
+        // Round trip a JSON payload through write_frame/read_frame.
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        write_frame(&mut client, &serde_json::json!({"hello": "bridge"}))
+            .await
+            .unwrap();
+        let frame = read_frame(&mut server)
+            .await
+            .unwrap()
+            .expect("frame must be present");
+        let value: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        assert_eq!(value["hello"], "bridge");
+
+        // EOF before any bytes means a clean shutdown.
+        let (client, mut server) = tokio::io::duplex(64);
+        drop(client);
+        assert!(read_frame(&mut server).await.unwrap().is_none());
+
+        // A zero length prefix is rejected.
+        let (mut client, mut server) = tokio::io::duplex(64);
+        client.write_all(&0u32.to_le_bytes()).await.unwrap();
+        drop(client);
+        let err = read_frame(&mut server).await.unwrap_err();
+        assert!(
+            err.to_string().contains("invalid_frame_length"),
+            "got: {err}"
+        );
+
+        // Lengths above the 10 MiB cap are rejected.
+        let (mut client, mut server) = tokio::io::duplex(64);
+        client
+            .write_all(&(10u32 * 1024 * 1024 + 1).to_le_bytes())
+            .await
+            .unwrap();
+        drop(client);
+        let err = read_frame(&mut server).await.unwrap_err();
+        assert!(
+            err.to_string().contains("invalid_frame_length"),
+            "got: {err}"
+        );
+
+        // A truncated body is an error, not a hang.
+        let (mut client, mut server) = tokio::io::duplex(64);
+        client.write_all(&64u32.to_le_bytes()).await.unwrap();
+        client.write_all(b"partial").await.unwrap();
+        drop(client);
+        assert!(read_frame(&mut server).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn execute_approve_code_marks_pending_pairing_approved() {
+        let (_dir, _db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        // Create a pending request through the protocol, then approve it via
+        // the CLI flag (leading/trailing whitespace is normalized away).
+        let resp = handle_request(
+            Path::new(""),
+            &state_dir,
+            request(
+                "pairing_request",
+                serde_json::json!({
+                    "extension_id": "ext-cli",
+                    "client_instance_id": "inst-cli"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        let code = resp.payload.unwrap()["code"]
+            .as_str()
+            .expect("pairing code present")
+            .to_string();
+
+        execute(BridgeArgs {
+            db_path: None,
+            approve_code: Some(format!(" {}", code)),
+            state_dir: Some(state_dir.clone()),
+        })
+        .await
+        .expect("approve must succeed");
+
+        let state = load_state(&state_dir).unwrap();
+        assert_eq!(state.pending.len(), 1);
+        assert!(
+            state.pending[0].approved,
+            "pending request must be marked approved"
+        );
+
+        // Unknown codes fail without mutating anything.
+        let err = execute(BridgeArgs {
+            db_path: None,
+            approve_code: Some("000-000".to_string()),
+            state_dir: Some(state_dir.clone()),
+        })
+        .await
+        .expect_err("unknown approval code must fail");
+        assert!(
+            err.to_string().contains("pairing_not_found_or_expired"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn open_db_and_unlocked_service_report_precise_errors() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let (dir, db_path, _state_dir, identity_id) = seeded_bridge().await;
+
+        // A database in a nonexistent directory fails to open.
+        let missing = dir.path().join("no-such-dir").join("missing.db");
+        assert!(open_db(&missing).await.is_err(), "missing file must fail");
+
+        // No password in the environment -> locked.
+        let err = match open_unlocked_service(&db_path).await {
+            Err(e) => e,
+            Ok(_) => panic!("locked vault must not open"),
+        };
+        assert!(err.to_string().starts_with("locked:"), "got: {err}");
+
+        // Wrong password -> authentication_failed.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "definitely-wrong");
+        let err = match open_unlocked_service(&db_path).await {
+            Err(e) => e,
+            Ok(_) => panic!("wrong password must not unlock"),
+        };
+        assert!(
+            err.to_string().starts_with("authentication_failed"),
+            "got: {err}"
+        );
+
+        // Correct password returns the active identity.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        let (_service, active) = open_unlocked_service(&db_path).await.unwrap();
+        assert_eq!(active, Some(identity_id));
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        // get_active_identity_id is None when no workspace row exists.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("DELETE FROM workspaces")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let db = open_db(&db_path).await.unwrap();
+        assert_eq!(get_active_identity_id(&db).await, None);
     }
 }

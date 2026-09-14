@@ -632,4 +632,11 @@ mod tests {
         let expected = ripemd::Ripemd160::digest(Sha256::digest(data));
         assert_eq!(hash160(data), expected.as_slice());
     }
+
+    #[test]
+    fn base58_check_decode_rejects_empty_input() {
+        // An empty string cannot carry a checksum, so decoding must fail.
+        let err = base58_check_decode("").expect_err("empty input must be rejected");
+        assert!(matches!(err, PersonaError::InvalidInput(_)));
+    }
 }

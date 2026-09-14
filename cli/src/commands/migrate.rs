@@ -150,4 +150,59 @@ mod tests {
             .unwrap();
         assert_eq!(logs.len(), 2);
     }
+
+    #[tokio::test]
+    async fn migrate_renames_stale_workspace_row() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        // Pre-seed a workspace row bound to this path under a stale name so
+        // the "name mismatch" update branch runs.
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let repo = WorkspaceRepository::new(db.clone());
+            repo.create(&Workspace::new(
+                config.workspace.path.clone(),
+                "stale-name".to_string(),
+            ))
+            .await
+            .unwrap();
+        }
+
+        execute(MigrateArgs { force: false }, &config)
+            .await
+            .expect("migrate with a stale workspace name must succeed");
+
+        // The row is renamed to the workspace directory name.
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = WorkspaceRepository::new(db.clone());
+        let path_str = dir.path().to_string_lossy().to_string();
+        let ws = repo
+            .find_by_path(&path_str)
+            .await
+            .into_anyhow()
+            .unwrap()
+            .expect("workspace row still present after rename");
+        assert_eq!(
+            ws.name,
+            dir.path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
+        );
+
+        // The migration audit trail still records the run.
+        let audit_repo = AuditLogRepository::new(db);
+        let logs = audit_repo
+            .find_by_action(&AuditAction::DatabaseMigration)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 1);
+    }
 }

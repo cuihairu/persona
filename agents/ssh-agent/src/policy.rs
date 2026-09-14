@@ -900,4 +900,263 @@ mod tests {
         let decision = enforcer.check_signature(&allowed_key, Some(host)).unwrap();
         assert!(matches!(decision, SignatureDecision::Denied { .. }));
     }
+
+    #[test]
+    fn test_from_file_loads_toml_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-policy.toml");
+        std::fs::write(
+            &path,
+            r#"
+[global]
+deny_all = true
+
+[[key_policies.invalid-placeholder]]
+"#,
+        )
+        .unwrap();
+
+        // HashMap<String, KeyPolicy> cannot be expressed as [[...]] arrays;
+        // use an inline table instead.
+        std::fs::write(
+            &path,
+            r#"
+[global]
+deny_all = true
+
+[key_policies.some-key]
+require_biometric = true
+max_uses_per_day = 3
+
+[host_policies."*.example.com"]
+enabled = false
+"#,
+        )
+        .unwrap();
+
+        let mut enforcer = PolicyEnforcer::from_file(&path).unwrap();
+        let cred_id = Uuid::new_v4();
+        let decision = enforcer.check_signature(&cred_id, None).unwrap();
+        assert!(matches!(decision, SignatureDecision::Denied { .. }));
+    }
+
+    #[test]
+    fn test_from_file_missing_file_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.toml");
+        assert!(PolicyEnforcer::from_file(&path).is_err());
+    }
+
+    #[test]
+    fn test_from_env_reads_policy_file_first() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-policy.toml");
+        std::fs::write(&path, "[global]\ndeny_all = true\n").unwrap();
+        std::env::set_var("PERSONA_AGENT_POLICY_FILE", &path);
+        let mut enforcer = PolicyEnforcer::from_env();
+        std::env::remove_var("PERSONA_AGENT_POLICY_FILE");
+
+        let cred_id = Uuid::new_v4();
+        let decision = enforcer.check_signature(&cred_id, None).unwrap();
+        assert!(matches!(decision, SignatureDecision::Denied { .. }));
+    }
+
+    #[test]
+    fn test_from_env_parses_environment_toggles() {
+        let _guard = env_lock();
+        std::env::remove_var("PERSONA_AGENT_POLICY_FILE");
+        std::env::set_var("PERSONA_AGENT_REQUIRE_CONFIRM", "true");
+        std::env::set_var("PERSONA_AGENT_MIN_INTERVAL_MS", "60000");
+        std::env::set_var("PERSONA_AGENT_ENFORCE_KNOWN_HOSTS", "0");
+        std::env::set_var("PERSONA_AGENT_CONFIRM_ON_UNKNOWN", "1");
+
+        let enforcer = PolicyEnforcer::from_env();
+        assert!(enforcer.policy.global.require_confirm);
+        assert_eq!(enforcer.policy.global.min_interval_ms, 60000);
+        assert!(!enforcer.policy.global.enforce_known_hosts);
+        assert!(enforcer.policy.global.confirm_on_unknown_host);
+
+        std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
+        std::env::remove_var("PERSONA_AGENT_MIN_INTERVAL_MS");
+        std::env::remove_var("PERSONA_AGENT_ENFORCE_KNOWN_HOSTS");
+        std::env::remove_var("PERSONA_AGENT_CONFIRM_ON_UNKNOWN");
+    }
+
+    #[test]
+    fn test_record_signature_tracks_key_and_host_usage() {
+        let mut enforcer = PolicyEnforcer::new(SigningPolicy::default());
+        let cred_id = Uuid::new_v4();
+
+        enforcer.record_signature(&cred_id, Some("gitlab.com"));
+        enforcer.record_signature(&cred_id, None);
+
+        let key_usage = enforcer.state.key_usage.get(&cred_id).unwrap();
+        assert_eq!(key_usage.daily_count, 2);
+        assert_eq!(key_usage.total_count, 2);
+
+        let host_usage = enforcer.state.host_usage.get("gitlab.com").unwrap();
+        assert_eq!(host_usage.hourly_count, 1);
+        assert_eq!(host_usage.total_count, 1);
+        assert!(enforcer.state.last_sign.is_some());
+        assert_eq!(enforcer.state.signature_timestamps.len(), 2);
+    }
+
+    #[test]
+    fn test_global_hourly_limit_denies_after_threshold() {
+        let mut policy = SigningPolicy::default();
+        policy.global.max_signatures_per_hour = 1;
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        assert!(matches!(decision, SignatureDecision::Allowed));
+        enforcer.record_signature(&cred_id, Some("github.com"));
+
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        assert!(matches!(decision, SignatureDecision::Denied { .. }));
+    }
+
+    #[test]
+    fn test_min_interval_ms_denies_rapid_signatures() {
+        let mut policy = SigningPolicy::default();
+        policy.global.min_interval_ms = 60_000;
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+
+        let first = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        assert!(matches!(first, SignatureDecision::Allowed));
+        enforcer.record_signature(&cred_id, Some("github.com"));
+
+        let second = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        assert!(matches!(second, SignatureDecision::Denied { .. }));
+    }
+
+    #[test]
+    fn test_disabled_key_and_host_are_denied() {
+        let mut policy = SigningPolicy::default();
+        let cred_id = Uuid::new_v4();
+        policy.key_policies.insert(
+            cred_id.to_string(),
+            KeyPolicy {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        match decision {
+            SignatureDecision::Denied { reason } => assert!(reason.contains("Key is disabled")),
+            other => panic!("expected Denied, got {:?}", other),
+        }
+
+        let mut policy = SigningPolicy::default();
+        policy.host_policies.insert(
+            "github.com".to_string(),
+            HostPolicy {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        match decision {
+            SignatureDecision::Denied { reason } => assert!(reason.contains("is disabled")),
+            other => panic!("expected Denied, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_host_policy_require_confirm() {
+        let mut policy = SigningPolicy::default();
+        policy.host_policies.insert(
+            "prod-*.corp".to_string(),
+            HostPolicy {
+                require_confirm: true,
+                ..Default::default()
+            },
+        );
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+
+        let decision = enforcer
+            .check_signature(&cred_id, Some("prod-7.corp"))
+            .unwrap();
+        match decision {
+            SignatureDecision::RequireConfirm { reason } => {
+                assert!(reason.contains("requires confirmation"))
+            }
+            other => panic!("expected RequireConfirm, got {:?}", other),
+        }
+
+        // Exact-match host policy takes precedence over the pattern policy:
+        // rebuild with both entries and confirm the exact one wins.
+        let mut policy = SigningPolicy::default();
+        policy.host_policies.insert(
+            "prod-*.corp".to_string(),
+            HostPolicy {
+                require_confirm: true,
+                ..Default::default()
+            },
+        );
+        policy.host_policies.insert(
+            "prod-7.corp".to_string(),
+            HostPolicy {
+                enabled: true,
+                ..Default::default()
+            },
+        );
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let decision = enforcer
+            .check_signature(&cred_id, Some("prod-7.corp"))
+            .unwrap();
+        assert!(matches!(decision, SignatureDecision::Allowed));
+    }
+
+    #[test]
+    fn test_invalid_time_range_allows_by_default() {
+        let mut policy = SigningPolicy::default();
+        let cred_id = Uuid::new_v4();
+        policy.key_policies.insert(
+            cred_id.to_string(),
+            KeyPolicy {
+                allowed_time_range: Some("garbage".to_string()),
+                ..Default::default()
+            },
+        );
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let decision = enforcer
+            .check_signature(&cred_id, Some("github.com"))
+            .unwrap();
+        assert!(matches!(decision, SignatureDecision::Allowed));
+    }
+
+    #[test]
+    fn test_from_env_falls_back_when_policy_file_is_invalid() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken-policy.toml");
+        std::fs::write(&path, "this is = not valid toml [[[").unwrap();
+        std::env::set_var("PERSONA_AGENT_POLICY_FILE", &path);
+
+        // Unparseable file -> from_file fails -> fall through to env parsing.
+        let enforcer = PolicyEnforcer::from_env();
+        std::env::remove_var("PERSONA_AGENT_POLICY_FILE");
+
+        assert!(!enforcer.policy.global.deny_all);
+        assert!(!enforcer.policy.global.require_confirm);
+    }
 }

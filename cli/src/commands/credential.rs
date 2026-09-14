@@ -423,6 +423,8 @@ async fn resolve_identity(service: &mut PersonaService, name: &str) -> Result<Id
 mod tests {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::ScriptedUi;
+    use persona_core::models::{ApiKeyData, SshKeyData};
     use persona_core::{Database, PersonaService};
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -434,9 +436,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -678,6 +685,324 @@ mod tests {
         }
 
         std::env::remove_var("PERSONA_CREDENTIAL_SECRET");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn credential_show_reveal_and_remove_decline_paths() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "cara").await;
+
+        execute(add_args("cara", "vault", Some("topsecret"), false), &config)
+            .await
+            .expect("seed credential added");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let cara = service.get_identity_by_name("cara").await.unwrap().unwrap();
+        let creds = service
+            .get_credentials_for_identity(&cara.id)
+            .await
+            .unwrap();
+        let cred_id = creds[0].id;
+        drop(service);
+
+        // Declining the reveal prompt hides the secret.
+        let ui = ScriptedUi::new().confirm(false);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: cred_id,
+                    reveal: true,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("declined reveal succeeds");
+        assert!(ui.exhausted());
+
+        // Accepting it prints the decrypted password.
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: cred_id,
+                    reveal: true,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("accepted reveal succeeds");
+        assert!(ui.exhausted());
+
+        // Removing with a declined confirmation aborts and keeps the row.
+        let ui = ScriptedUi::new().confirm(false);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Remove {
+                    id: cred_id,
+                    yes: false,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("declined removal returns success");
+        assert!(ui.exhausted());
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&cara.id)
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 1, "declined removal must keep the credential");
+        drop(service);
+
+        // Accepting the confirmation deletes it.
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Remove {
+                    id: cred_id,
+                    yes: false,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("confirmed removal deletes");
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn credential_show_reveal_renders_api_key_and_ssh_key_payloads() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "erin").await;
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let erin = service
+            .get_identity_by_name("erin")
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Seed a non-password credential of each decryptable kind directly so
+        // the reveal match arms for ApiKey and SshKey render.
+        let api_id = service
+            .create_credential(
+                erin.id,
+                "api-token".to_string(),
+                CredentialType::ApiKey,
+                SecurityLevel::High,
+                &CredentialData::ApiKey(ApiKeyData {
+                    api_key: "sk-live-123".to_string(),
+                    api_secret: None,
+                    token: None,
+                    permissions: Vec::new(),
+                    expires_at: None,
+                }),
+            )
+            .await
+            .unwrap()
+            .id;
+        let ssh_id = service
+            .create_credential(
+                erin.id,
+                "server-key".to_string(),
+                CredentialType::SshKey,
+                SecurityLevel::High,
+                &CredentialData::SshKey(SshKeyData {
+                    private_key: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+                    public_key: "ssh-ed25519 AAA".to_string(),
+                    key_type: "ed25519".to_string(),
+                    passphrase: None,
+                }),
+            )
+            .await
+            .unwrap()
+            .id;
+        drop(service);
+
+        // Accepting the reveal prints the API key.
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: api_id,
+                    reveal: true,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("api key reveal works");
+        assert!(ui.exhausted());
+
+        // Same for the SSH private key arm.
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: ssh_id,
+                    reveal: true,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("ssh key reveal works");
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn credential_add_prompts_for_secret_and_maps_every_type() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_CREDENTIAL_SECRET");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "dora").await;
+
+        // No --secret and no env var: the interactive input prompt is used.
+        // Username/URL are left unset so the plain-show branch also renders.
+        let mut prompted = add_args("dora", "typed", None, false);
+        if let CredentialCommand::Add {
+            ref mut username,
+            ref mut url,
+            ..
+        } = prompted.command
+        {
+            *username = None;
+            *url = None;
+        }
+        let ui = ScriptedUi::new().input("typed-secret");
+        execute_with(prompted, &config, &ui)
+            .await
+            .expect("prompted secret path works");
+        assert!(ui.exhausted());
+
+        // Every credential type / security level mapping round-trips.
+        let types = [
+            (CredentialTypeOption::ApiKey, SecurityLevelOption::Critical),
+            (CredentialTypeOption::SshKey, SecurityLevelOption::Medium),
+            (CredentialTypeOption::CryptoWallet, SecurityLevelOption::Low),
+            (CredentialTypeOption::BankCard, SecurityLevelOption::High),
+            (
+                CredentialTypeOption::GameAccount,
+                SecurityLevelOption::Medium,
+            ),
+            (
+                CredentialTypeOption::ServerConfig,
+                SecurityLevelOption::High,
+            ),
+            (
+                CredentialTypeOption::Certificate,
+                SecurityLevelOption::Critical,
+            ),
+            (CredentialTypeOption::TwoFactor, SecurityLevelOption::High),
+            (CredentialTypeOption::Custom, SecurityLevelOption::Low),
+        ];
+        for (i, (ctype, level)) in types.iter().enumerate() {
+            let args = CredentialArgs {
+                command: CredentialCommand::Add {
+                    identity: "dora".to_string(),
+                    name: format!("cred{i}"),
+                    credential_type: ctype.clone(),
+                    security_level: level.clone(),
+                    username: Some("u".to_string()),
+                    url: None,
+                    prompt_secret: false,
+                    secret: Some("pw".to_string()),
+                    favorite: false,
+                },
+            };
+            execute(args, &config)
+                .await
+                .unwrap_or_else(|e| panic!("add type {ctype:?} must work: {e}"));
+        }
+
+        // Type filter keeps only matching rows; favorite filter can empty the
+        // list entirely ("No credentials found" path).
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::List {
+                    identity: Some("dora".to_string()),
+                    credential_type: Some("ApiKey".to_string()),
+                    favorite: false,
+                    format: "table".to_string(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("type-filtered list works");
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::List {
+                    identity: Some("dora".to_string()),
+                    credential_type: None,
+                    favorite: true,
+                    format: "table".to_string(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("favorite-only empty list works");
+
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }

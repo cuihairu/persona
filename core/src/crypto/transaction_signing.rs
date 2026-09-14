@@ -2279,4 +2279,81 @@ mod tests {
             "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
         );
     }
+
+    #[test]
+    fn sign_transaction_dispatches_ethereum_secp256k1() {
+        let mut request = eth_request(0);
+        let key = test_key_from_raw([0x46u8; 32]);
+        let expected_address = address_from_verifying_key(key.verifying_key()).unwrap();
+        request.from_address = expected_address.clone();
+
+        let signature = sign_transaction(&request, &WalletSigningKey::Secp256k1(key)).unwrap();
+        assert_eq!(signature.signature_scheme, SignatureScheme::ECDSA);
+        assert!(signature.signature.len() >= 65 && signature.signature.len() <= 67);
+        assert_eq!(signature.signer_address, expected_address);
+        assert!(verify_ethereum_transaction(&request, &signature).unwrap());
+    }
+
+    #[test]
+    fn evm_tx_type_honors_explicit_tx_type_values() {
+        for value in ["eip1559", "2", "Type2", "  EIP1559  "] {
+            let mut request = eth_request(0);
+            request
+                .metadata
+                .insert("tx_type".to_string(), value.to_string());
+            assert!(
+                matches!(evm_tx_type(&request), EvmTxType::Eip1559),
+                "tx_type {value:?} must route to EIP-1559"
+            );
+        }
+
+        // An unrelated tx_type does not route to EIP-1559 by itself.
+        let mut request = eth_request(0);
+        request
+            .metadata
+            .insert("tx_type".to_string(), "legacy".to_string());
+        assert!(matches!(evm_tx_type(&request), EvmTxType::Legacy));
+    }
+
+    #[test]
+    fn recovery_id_for_rejects_unrecoverable_signature() {
+        // A valid signature made by a different key: both recovery candidates
+        // parse but neither reproduces the expected signer.
+        let key = test_key_from_raw([0x46u8; 32]);
+        let impostor = test_key_from_raw([0x99u8; 32]);
+        let prehash = [7u8; 32];
+        let forged = impostor.sign_prehash(&prehash).unwrap();
+
+        let err = recovery_id_for(&key, &prehash, &forged).unwrap_err();
+        assert!(err.to_string().contains("Failed to recover signer"));
+    }
+
+    #[test]
+    fn recovery_id_for_rejects_signature_without_recoverable_point() {
+        let key = test_key_from_raw([0x46u8; 32]);
+        let prehash = [7u8; 32];
+
+        // For roughly half of the possible x coordinates no curve point
+        // exists, so recovery fails outright instead of returning a
+        // mismatched key. Small r values are always in field range.
+        let mut undecodable = None;
+        for r in 1u64..=64 {
+            let mut r_bytes = [0u8; 32];
+            r_bytes[31] = r as u8;
+            let r_field: k256::FieldBytes = r_bytes.into();
+            let s_field: k256::FieldBytes = [1u8; 32].into();
+            // Small r and s=0x0101..01 are always in field range.
+            let sig = Signature::from_scalars(r_field, s_field).unwrap();
+            if VerifyingKey::recover_from_prehash(&prehash, &sig, RecoveryId::new(false, false))
+                .is_err()
+            {
+                undecodable = Some(sig);
+                break;
+            }
+        }
+        let sig = undecodable.expect("secp256k1 has non-residual x coordinates below 64");
+
+        let err = recovery_id_for(&key, &prehash, &sig).unwrap_err();
+        assert!(err.to_string().contains("Failed to recover signer"));
+    }
 }

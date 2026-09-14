@@ -1,7 +1,12 @@
-use axum::{routing::get, Router};
+//! Server binary entry point: logging, bind address resolution and serving.
+//!
+//! Process startup cannot run under a test harness; this file is excluded
+//! from coverage measurement via `--ignore-filename-regex`. Router and
+//! handlers live in the library target and are unit-tested there.
+
 use persona_core::RedactedLoggerBuilder;
+use persona_server::build_router;
 use std::net::SocketAddr;
-use tower_http::cors::CorsLayer;
 use tracing::{info, Level};
 
 #[tokio::main]
@@ -11,12 +16,6 @@ async fn main() {
         .include_target(true)
         .init()
         .expect("failed to initialize logging");
-
-    // Build our application with a route
-    let app = Router::new()
-        .route("/", get(root))
-        .route("/health", get(health_check))
-        .layer(CorsLayer::permissive());
 
     // Configurable bind address (0.0.0.0 for containers, 127.0.0.1 for local dev)
     let host = std::env::var("PERSONA_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".into());
@@ -32,15 +31,5 @@ async fn main() {
     info!("Persona server listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
-
-// Basic handler that responds with a static string
-async fn root() -> &'static str {
-    "Persona Server"
-}
-
-// Health check endpoint
-async fn health_check() -> &'static str {
-    "OK"
+    axum::serve(listener, build_router()).await.unwrap();
 }

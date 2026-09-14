@@ -929,9 +929,12 @@ mod tests {
         .await
         .expect("update works");
 
-        // Deleting a system policy needs --force.
+        // Deleting a system policy needs --force. Flag the renamed policy as
+        // a system policy so the guarded branch actually runs.
         let repo = init_repository(&config_for(&dir)).await.unwrap();
-        let renamed = repo.find_by_id(&custom.id).await.unwrap().unwrap();
+        let mut renamed = repo.find_by_id(&custom.id).await.unwrap().unwrap();
+        renamed.metadata.is_system_policy = true;
+        repo.update(&renamed).await.unwrap();
         drop(repo);
         if renamed.metadata.is_system_policy {
             let err = handler(
@@ -1104,5 +1107,183 @@ mod tests {
         .await
         .expect_err("unknown policy must fail");
         assert!(err.to_string().contains("Policy 'ghost' not found"));
+    }
+
+    #[tokio::test]
+    async fn empty_search_result_reports_no_policies() {
+        let dir = TempDir::new().unwrap();
+
+        handler(
+            AutoLockCommand::List {
+                active: false,
+                security_level: None,
+                search: Some("definitely-missing-policy".to_string()),
+            },
+            &dir,
+        )
+        .await
+        .expect("a non-matching search reports the empty state");
+    }
+
+    #[tokio::test]
+    async fn delete_guards_system_policy_and_warns_without_force() {
+        let dir = TempDir::new().unwrap();
+
+        handler(
+            AutoLockCommand::Create {
+                name: "temp".to_string(),
+                description: None,
+                security_level: AutoLockSecurityLevel::Low,
+                inactivity_timeout: None,
+                absolute_timeout: None,
+                sensitive_timeout: None,
+                max_sessions: None,
+                warnings: false,
+                warning_time: None,
+                force_sensitive: false,
+                use_case: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("create works");
+
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        let all = repo.find_all().await.unwrap();
+        let system = all
+            .iter()
+            .find(|p| p.metadata.is_system_policy)
+            .expect("repository seeds a system policy")
+            .clone();
+        let user_policy = all.iter().find(|p| p.name == "temp").unwrap().clone();
+        drop(repo);
+
+        // A system policy refuses a plain delete.
+        let err = handler(
+            AutoLockCommand::Delete {
+                policy_id: system.id,
+                force: false,
+            },
+            &dir,
+        )
+        .await
+        .expect_err("system policy must refuse a plain delete");
+        assert!(err.to_string().contains("Cannot delete system policy"));
+
+        // A user policy without --force only warns and keeps the row.
+        handler(
+            AutoLockCommand::Delete {
+                policy_id: user_policy.id,
+                force: false,
+            },
+            &dir,
+        )
+        .await
+        .expect("warn-only delete returns success");
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        assert!(
+            repo.find_by_id(&user_policy.id).await.unwrap().is_some(),
+            "policy must survive the warn-only delete"
+        );
+    }
+
+    #[tokio::test]
+    async fn assign_by_policy_uuid_and_rejects_bad_user_ids() {
+        let dir = TempDir::new().unwrap();
+
+        handler(
+            AutoLockCommand::Create {
+                name: "team".to_string(),
+                description: None,
+                security_level: AutoLockSecurityLevel::Low,
+                inactivity_timeout: None,
+                absolute_timeout: None,
+                sensitive_timeout: None,
+                max_sessions: None,
+                warnings: false,
+                warning_time: None,
+                force_sensitive: false,
+                use_case: None,
+            },
+            &dir,
+        )
+        .await
+        .expect("create works");
+
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        let policy = repo
+            .find_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|p| p.name == "team")
+            .unwrap();
+        drop(repo);
+
+        let user = uuid::Uuid::new_v4();
+
+        // Assignment resolved through the policy UUID (not the name).
+        handler(
+            AutoLockCommand::Assign {
+                user_id: user.to_string(),
+                policy_identifier: policy.id.to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("assign by policy uuid works");
+
+        // Non-UUID user ids are rejected everywhere.
+        for command in [
+            AutoLockCommand::Unassign {
+                user_id: "nope".to_string(),
+            },
+            AutoLockCommand::UserPolicy {
+                user_id: "nope".to_string(),
+            },
+        ] {
+            let err = handler(command, &dir)
+                .await
+                .expect_err("bad user id must fail");
+            assert!(err.to_string().contains("valid UUID"));
+        }
+
+        handler(
+            AutoLockCommand::Unassign {
+                user_id: user.to_string(),
+            },
+            &dir,
+        )
+        .await
+        .expect("unassign works");
+    }
+
+    #[tokio::test]
+    async fn system_stats_without_default_warns_and_lock_reports_missing_session() {
+        let dir = TempDir::new().unwrap();
+
+        // Locking an explicit but unknown session reports the failure
+        // gracefully (the handler owns a fresh in-memory SessionManager).
+        handler(
+            AutoLockCommand::Lock {
+                session_id: Some("ghost".to_string()),
+            },
+            &dir,
+        )
+        .await
+        .expect("lock of an unknown session reports gracefully");
+
+        // Migration 008 seeds a default policy, so remove every policy (the
+        // seeded default included) to reach the "no default" warning.
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        for policy in repo.find_all().await.unwrap() {
+            repo.delete(&policy.id).await.unwrap();
+        }
+        assert!(repo.get_default_policy().await.unwrap().is_none());
+        drop(repo);
+
+        handler(AutoLockCommand::Stats { policy_id: None }, &dir)
+            .await
+            .expect("system stats without any policy works");
     }
 }

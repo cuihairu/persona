@@ -299,4 +299,16 @@ mod tests {
         let b = KeyDerivation::generate_salt();
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn test_verifying_key_from_bytes_rejects_invalid_point() {
+        // Not every 32-byte string decompresses to an Edwards curve point:
+        // for a given y only half of the x candidates exist, so some uniform
+        // byte patterns must be rejected.
+        let rejected = (0u8..16).any(|byte| VerifyingKey::from_bytes(&[byte; 32]).is_err());
+        assert!(
+            rejected,
+            "some uniform 32-byte encodings must be invalid points"
+        );
+    }
 }

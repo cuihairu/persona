@@ -412,4 +412,175 @@ mod tests {
         let redacted = policy.redact(msg);
         assert_eq!(redacted, "OTP [REDACTED]");
     }
+
+    #[test]
+    fn redacts_quoted_key_values_and_multiple_occurrences() {
+        let policy = RedactionPolicy::default();
+
+        // Single- and double-quoted values are both covered by the KeyValue rule.
+        assert_eq!(
+            policy.redact(r#"secret="hunter2" passphrase='other'"#),
+            r#"secret=[REDACTED] passphrase=[REDACTED]"#
+        );
+
+        // Case-insensitive keywords, `=` without spaces, several matches per line.
+        assert_eq!(
+            policy.redact("PASSWORD=hunter2 api-key: abcd1234; token,whatever"),
+            "PASSWORD=[REDACTED] api-key: [REDACTED]; token,whatever"
+        );
+    }
+
+    #[test]
+    fn redacts_code_keyword_variants() {
+        let policy = RedactionPolicy::default();
+
+        assert_eq!(policy.redact("totp=987654"), "totp=[REDACTED]");
+        assert_eq!(
+            policy.redact("verification code is 654321"),
+            "verification code is [REDACTED]"
+        );
+        // Short digit runs (fewer than 4) are not treated as codes.
+        assert_eq!(policy.redact("code 42"), "code 42");
+    }
+
+    #[test]
+    fn redacts_bare_secret_and_header_without_scheme() {
+        let policy = RedactionPolicy::default();
+
+        // "is" connector between keyword and value (kept by the mid capture).
+        assert_eq!(
+            policy.redact("the mnemonic is abcdef123456"),
+            "the mnemonic is [REDACTED]"
+        );
+
+        // Authorization header without a bearer/basic scheme.
+        assert_eq!(
+            policy.redact("auth_header: Zm9vYmFyYmF6"),
+            "auth_header: [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn custom_mask_is_used_verbatim() {
+        let policy = RedactionPolicy::new("<hidden>");
+        assert_eq!(policy.redact("password=hunter2"), "password=<hidden>");
+    }
+
+    #[test]
+    fn redact_returns_borrowed_value_when_nothing_matches() {
+        let policy = RedactionPolicy::default();
+        let clean = "nothing sensitive in here";
+        match policy.redact(clean) {
+            Cow::Borrowed(s) => assert_eq!(s, clean),
+            Cow::Owned(s) => panic!("expected a borrowed cow, got owned: {s}"),
+        }
+    }
+
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBuf {
+        type Writer = SharedWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedWriter(self.0.clone())
+        }
+    }
+
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn builder_chain_toggles_configuration_fields() {
+        let builder = RedactedLoggerBuilder::new(tracing::Level::DEBUG)
+            .include_timestamp(false)
+            .include_target(true)
+            .policy(RedactionPolicy::new("[X]".to_string()));
+
+        assert_eq!(builder.level, tracing::Level::DEBUG);
+        assert!(!builder.include_timestamp);
+        assert!(builder.include_target);
+        assert_eq!(builder.policy.mask, "[X]");
+
+        // Default builder state.
+        let default = RedactedLoggerBuilder::new(tracing::Level::INFO);
+        assert!(default.include_timestamp);
+        assert!(!default.include_target);
+    }
+
+    #[test]
+    fn formatter_renders_levels_targets_and_all_field_types() {
+        let formatter = RedactingFormatter::new(RedactionPolicy::default(), false, true);
+        let buf = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .event_format(formatter)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(buf.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "logging::test", "plain message");
+            let secret = "hunter2";
+            let count: i64 = -3;
+            let big: u64 = 7;
+            let flag: bool = true;
+            tracing::warn!(password = secret, "secret field");
+            tracing::info!(count, big, flag, "typed fields");
+            let io_err = std::io::Error::other("disk exploded");
+            let err_ref: &(dyn std::error::Error + 'static) = &io_err;
+            tracing::error!(error = err_ref, "with error");
+        });
+
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert!(out.contains("INFO "), "level rendered: {out}");
+        assert!(out.contains("logging::test"), "target rendered: {out}");
+        assert!(out.contains("plain message"));
+        assert!(
+            out.contains("password=[REDACTED]"),
+            "secret field redacted: {out}"
+        );
+        assert!(out.contains("count=-3"));
+        assert!(out.contains("big=7"));
+        assert!(out.contains("flag=true"));
+        assert!(out.contains("error=disk exploded"), "error recorded: {out}");
+        assert!(!out.contains("hunter2"));
+    }
+
+    #[test]
+    fn formatter_can_omit_target_and_redacts_message() {
+        let formatter = RedactingFormatter::new(RedactionPolicy::default(), true, false);
+        let buf = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let subscriber = tracing_subscriber::fmt()
+            .event_format(formatter)
+            .with_writer(buf.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "hidden::target", "token abcdef0123456789 leaked");
+        });
+
+        let out = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert!(!out.contains("hidden::target"), "no target: {out}");
+        assert!(out.contains("[REDACTED]"), "message redacted: {out}");
+        assert!(out.contains("- "), "timestamp prefix present: {out}");
+    }
+
+    #[test]
+    fn shared_writer_flush_is_a_noop() {
+        let mut writer = SharedWriter(Arc::new(Mutex::new(Vec::new())));
+        std::io::Write::flush(&mut writer).unwrap();
+        assert!(writer.0.lock().unwrap().is_empty());
+    }
 }

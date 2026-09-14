@@ -179,8 +179,23 @@ fn decrypt_import_file(
     println!("🔓 Decrypting import file...");
     let passphrase = super::service::prompt_payload_passphrase("import", ui)?;
     let out = decrypt_file_to_temp(file_path, &passphrase)?;
+    // The decrypted temp file carries a `.tmp` extension; restore the source
+    // extension so format detection keeps working.
+    let detected = out.with_extension(
+        file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("json"),
+    );
+    let final_path = if detected != out {
+        std::fs::rename(&out, &detected)
+            .with_context(|| format!("Failed to finalize decrypted file {}", detected.display()))?;
+        detected
+    } else {
+        out
+    };
     println!("{} File decrypted", "✓".green());
-    Ok(out)
+    Ok(final_path)
 }
 
 fn parse_import_file(file_path: &Path) -> Result<ImportData> {
@@ -688,9 +703,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -736,6 +756,258 @@ mod tests {
         let f = dir.path().join("ok.json");
         std::fs::write(&f, "{}").unwrap();
         validate_import_file(&f).expect("regular file validates");
+    }
+
+    #[test]
+    fn parse_errors_name_the_offending_part() {
+        // Broken JSON.
+        let err = parse_json_import("{not json").expect_err("bad json must fail");
+        assert!(err.to_string().contains("Failed to parse JSON"));
+
+        // Missing export_info.
+        let err = parse_json_import(r#"{"identities": []}"#).expect_err("must fail");
+        assert!(err.to_string().contains("Missing export_info"));
+
+        // Missing identities array.
+        let err = parse_json_import(r#"{"export_info": {}}"#).expect_err("must fail");
+        assert!(err.to_string().contains("identities"));
+
+        // Missing identity name.
+        let err = parse_json_import(r#"{"export_info": {}, "identities": [{"type": "personal"}]}"#)
+            .expect_err("must fail");
+        assert!(err.to_string().contains("Missing identity name"));
+
+        // Broken YAML.
+        let err = parse_yaml_import("identities: [unclosed").expect_err("bad yaml must fail");
+        assert!(err.to_string().contains("YAML"));
+
+        // An empty CSV yields zero identities.
+        let data = parse_csv_import("Name,Type,Description,Email\n").unwrap();
+        assert!(data.identities.is_empty());
+    }
+
+    #[test]
+    fn summary_lists_five_identities_then_folds_the_rest() {
+        let mut data = ImportData {
+            version: "1.0".to_string(),
+            created: "2024-01-01".to_string(),
+            identities: Vec::new(),
+        };
+        for i in 0..7 {
+            data.identities.push(ImportIdentity {
+                name: format!("user{i}"),
+                identity_type: "personal".to_string(),
+                description: String::new(),
+                email: None,
+                phone: None,
+                tags: Vec::new(),
+            });
+        }
+
+        // Dry-run and backup flags toggle their summary lines; more than five
+        // identities fold into "... and N more".
+        let mut summary_args = args(Path::new("/tmp/whatever.json"), true);
+        summary_args.dry_run = true;
+        summary_args.backup = true;
+        show_import_summary(&data, &summary_args).unwrap();
+
+        // Exactly five identities produce no fold line.
+        data.identities.truncate(5);
+        summary_args.dry_run = false;
+        show_import_summary(&data, &summary_args).unwrap();
+    }
+
+    #[test]
+    fn parse_import_file_handles_yml_extension() {
+        let dir = TempDir::new().unwrap();
+        let yml_path = dir.path().join("data.yml");
+        std::fs::write(&yml_path, sample_yaml()).unwrap();
+        let data = parse_import_file(&yml_path).unwrap();
+        assert_eq!(data.identities.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn backup_flag_copies_database_and_dry_run_labels_all_modes() {
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.backup.directory = dir.path().join("backups");
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+
+        // Dry-run labels depend on the mode; with no existing identities and
+        // force=true there are no conflicts, so even an unknown mode never
+        // reaches conflict validation and still dry-runs.
+        for (mode, _label) in [
+            ("merge", "Would merge"),
+            ("replace", "Would replace"),
+            ("skip", "Would skip"),
+            ("bogus", "Would process"),
+        ] {
+            let mut dry_args = args(&json_path, true);
+            dry_args.mode = mode.to_string();
+            dry_args.dry_run = true;
+            execute(dry_args, &config)
+                .await
+                .unwrap_or_else(|e| panic!("dry run with mode {mode} must work: {e}"));
+        }
+
+        // backup=true copies the DB file into the backup directory.
+        let mut backup_args = args(&json_path, true);
+        backup_args.backup = true;
+        execute(backup_args, &config)
+            .await
+            .expect("backup import succeeds");
+        let backups: Vec<_> = std::fs::read_dir(&config.backup.directory)
+            .expect("backup dir exists")
+            .map(|e| e.expect("backup entry readable"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0]
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap()
+            .starts_with("persona_backup_"));
+
+        // The dry runs and the backup import both left exactly the two rows.
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let names: Vec<_> = IdentityRepository::new(db)
+            .find_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|i| i.name)
+            .collect();
+        assert_eq!(names.len(), 2, "dry runs import nothing: {:?}", names);
+    }
+
+    #[tokio::test]
+    async fn decrypt_flag_round_trips_an_encrypted_payload() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let enc_path = dir.path().join("secret.json");
+        std::fs::write(&enc_path, sample_json()).unwrap();
+        crate::utils::file_crypto::encrypt_file_inplace(&enc_path, "payload-pw", None)
+            .expect("payload encrypted");
+
+        std::env::set_var("PERSONA_PAYLOAD_PASSPHRASE", "payload-pw");
+        let mut dec_args = args(&enc_path, true);
+        dec_args.decrypt = true;
+        execute(dec_args, &config)
+            .await
+            .expect("decrypted import succeeds");
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = IdentityRepository::new(db);
+        assert!(repo.find_by_name("alice").await.unwrap().is_some());
+        drop(repo);
+
+        // A wrong passphrase fails instead of importing garbage.
+        std::fs::write(&enc_path, sample_json()).unwrap();
+        crate::utils::file_crypto::encrypt_file_inplace(&enc_path, "payload-pw", None).unwrap();
+        std::env::set_var("PERSONA_PAYLOAD_PASSPHRASE", "wrong-pw");
+        let mut bad_args = args(&enc_path, true);
+        bad_args.decrypt = true;
+        let err = execute(bad_args, &config)
+            .await
+            .expect_err("wrong passphrase must fail");
+        assert!(!err.to_string().contains("Import completed"));
+
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn import_modes_apply_on_authenticated_workspace() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // First import creates both identities through the service path.
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        execute(args(&json_path, true), &config).await.unwrap();
+
+        // Updated payload exercises merge/replace/skip on existing rows.
+        // Note: IdentityType::from_str only accepts the capitalized form.
+        let updated = serde_json::json!({
+            "export_info": {"version": "1.0", "created": "2024-02-01T00:00:00Z"},
+            "identities": [
+                {"name": "alice", "type": "Work", "description": "authed-merge", "phone": "+49123456789"}
+            ]
+        })
+        .to_string();
+        let updated_path = dir.path().join("updated.json");
+        std::fs::write(&updated_path, updated).unwrap();
+
+        let mut merge_args = args(&updated_path, true);
+        merge_args.mode = "merge".to_string();
+        execute(merge_args, &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let alice = IdentityRepository::new(db)
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(alice.description.as_deref(), Some("authed-merge"));
+            assert_eq!(alice.phone.as_deref(), Some("+49123456789"));
+        }
+
+        let mut replace_args = args(&updated_path, true);
+        replace_args.mode = "replace".to_string();
+        execute(replace_args, &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let alice = IdentityRepository::new(db)
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                matches!(
+                    alice.identity_type,
+                    persona_core::models::IdentityType::Work
+                ),
+                "replace rewrote the type"
+            );
+        }
+
+        let mut skip_args = args(&updated_path, true);
+        skip_args.mode = "skip".to_string();
+        execute(skip_args, &config).await.unwrap();
+
+        // Wrong password on the authenticated import path is reported.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let err = execute(args(&updated_path, true), &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
     #[test]

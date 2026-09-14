@@ -819,8 +819,13 @@ fn stop_agent_pid(pid: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::prompt::scripted::ScriptedUi;
+    use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
     use crate::utils::prompt::TerminalUi;
+    use persona_core::auth::authentication::AuthResult;
+    use persona_core::models::{ApiKeyData, IdentityType};
+    use persona_core::storage::IdentityRepository;
+    use persona_core::Repository;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -866,10 +871,9 @@ mod tests {
 
         // Wrong scripted password fails authentication.
         let ui = ScriptedUi::new().password("wrong-pin");
-        let err = ensure_service(&config, &ui)
-            .await
-            .err()
-            .expect("wrong password must fail");
+        let Err(err) = ensure_service(&config, &ui).await else {
+            panic!("wrong password must fail");
+        };
         assert!(err.to_string().contains("Authentication failed"));
         assert!(ui.exhausted());
 
@@ -919,6 +923,17 @@ mod tests {
             .await
             .expect("forced removal returns success");
         assert!(ui.exhausted(), "--yes must not touch the confirm queue");
+
+        // The CLI dispatch arm reaches the same flow.
+        let ui = ScriptedUi::new().password("master-pin").confirm(false);
+        execute_with(
+            ssh_args(SshSubcommand::Remove { id, yes: false }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("dispatched removal cancel works");
+        assert!(ui.exhausted());
     }
 
     #[tokio::test]
@@ -1089,5 +1104,1077 @@ mod tests {
     #[test]
     fn stop_agent_pid_nonexistent_returns_false() {
         assert!(!stop_agent_pid("99999999").unwrap());
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers for the command-level flows.
+    // ------------------------------------------------------------------
+
+    fn ssh_args(command: SshSubcommand) -> SshArgs {
+        SshArgs { command }
+    }
+
+    /// Workspace with an initialized user and the identities `alice`/`bob`.
+    async fn unlocked_workspace(dir: &TempDir, master: &str) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        for name in ["alice", "bob"] {
+            repo.create(&CoreIdentity::new(name.to_string(), IdentityType::Personal))
+                .await
+                .unwrap();
+        }
+        let mut service = PersonaService::new(db).await.unwrap();
+        service.initialize_user(master).await.unwrap();
+        config
+    }
+
+    /// Migrated, userless workspace: `ensure_service` never prompts.
+    async fn userless_workspace(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        config
+    }
+
+    async fn alice_credentials(config: &CliConfig, master: &str) -> Vec<(Uuid, CredentialType)> {
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert!(matches!(
+            service.authenticate_user(master).await.unwrap(),
+            AuthResult::Success
+        ));
+        let identity = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        service
+            .get_credentials_for_identity(&identity.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.id, c.credential_type))
+            .collect()
+    }
+
+    /// Points `PERSONA_AGENT_STATE_DIR` at `dir` for the duration of the
+    /// test so pid/socket files never touch the real home directory.
+    /// Drop-restores the previous value.
+    struct StateDirGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for StateDirGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(prev) => std::env::set_var("PERSONA_AGENT_STATE_DIR", prev),
+                None => std::env::remove_var("PERSONA_AGENT_STATE_DIR"),
+            }
+        }
+    }
+
+    fn sandbox_agent_state_dir(dir: &TempDir) -> StateDirGuard {
+        let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
+        std::env::set_var("PERSONA_AGENT_STATE_DIR", dir.path());
+        StateDirGuard {
+            prev: prev.map(Into::into),
+        }
+    }
+
+    /// Captures an env var and drop-restores it.
+    struct EnvVarGuard {
+        name: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prev = std::env::var(name).ok();
+            std::env::set_var(name, &value);
+            EnvVarGuard {
+                name,
+                prev: prev.map(Into::into),
+            }
+        }
+
+        fn remove(name: &'static str) -> Self {
+            let prev = std::env::var(name).ok();
+            std::env::remove_var(name);
+            EnvVarGuard {
+                name,
+                prev: prev.map(Into::into),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(prev) => std::env::set_var(self.name, prev),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn write_executable(dir: &TempDir, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.path().join(name);
+        std::fs::write(&path, body).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    async fn serve_one_identity_query(listener: tokio::net::UnixListener, count: u32) {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await.unwrap();
+        let req_len = BigEndian::read_u32(&len_buf) as usize;
+        let mut req = vec![0u8; req_len];
+        stream.read_exact(&mut req).await.unwrap();
+        assert_eq!(req, vec![11u8]);
+        let resp = build_identities_answer(count);
+        stream.write_all(&resp).await.unwrap();
+    }
+
+    /// Mock agent that replies with an arbitrary payload.
+    #[cfg(unix)]
+    async fn serve_raw_reply(listener: tokio::net::UnixListener, payload: Vec<u8>) {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await.unwrap();
+        let req_len = BigEndian::read_u32(&len_buf) as usize;
+        let mut req = vec![0u8; req_len];
+        stream.read_exact(&mut req).await.unwrap();
+        assert_eq!(req, vec![11u8]);
+
+        let mut out = Vec::with_capacity(4 + payload.len());
+        let mut len_buf = [0u8; 4];
+        BigEndian::write_u32(&mut len_buf, payload.len() as u32);
+        out.extend_from_slice(&len_buf);
+        out.extend_from_slice(&payload);
+        stream.write_all(&out).await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn query_agent_identities_rejects_bad_responses() {
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // A response with an unexpected type byte is refused.
+        let listener = UnixListener::bind(dir.path().join("bad-type.sock")).unwrap();
+        let server = tokio::spawn(serve_raw_reply(listener, vec![6u8]));
+        let err = query_agent_identities(dir.path().join("bad-type.sock").to_str().unwrap())
+            .await
+            .expect_err("wrong response type must fail");
+        assert!(err.to_string().contains("Unexpected agent response"));
+        server.await.unwrap();
+
+        // A truncated identities answer is refused.
+        let listener = UnixListener::bind(dir.path().join("short.sock")).unwrap();
+        let server = tokio::spawn(serve_raw_reply(listener, vec![12u8]));
+        let err = query_agent_identities(dir.path().join("short.sock").to_str().unwrap())
+            .await
+            .expect_err("truncated response must fail");
+        assert!(err.to_string().contains("Malformed agent response"));
+        server.await.unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // ensure_service: non-interactive env resolution.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn ensure_service_non_interactive_uses_env_password() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = unlocked_workspace(&dir, "master-pin").await;
+        config.ui.interactive = false;
+
+        // Without the env var there is no prompt to fall back to.
+        let ui = ScriptedUi::new();
+        let Err(err) = ensure_service(&config, &ui).await else {
+            panic!("missing env password must fail");
+        };
+        assert!(err.to_string().contains("PERSONA_MASTER_PASSWORD"));
+        assert!(ui.exhausted(), "non-interactive mode never prompts");
+
+        // With the env var set the service unlocks without any prompt.
+        let _pw = EnvVarGuard::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let ui = ScriptedUi::new();
+        let service = ensure_service(&config, &ui)
+            .await
+            .expect("env password unlocks the service");
+        assert!(service.has_users().await.unwrap());
+        assert!(ui.exhausted());
+    }
+
+    // ------------------------------------------------------------------
+    // generate / list / list-all / export-pub.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn generate_list_and_list_all_flows() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        // With no keys anywhere yet, list-all reports the empty state.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(ssh_args(SshSubcommand::ListAll), &config, &ui)
+            .await
+            .expect("list-all on a keyless workspace works");
+        assert!(ui.exhausted());
+
+        // Non-ed25519 key types are refused before anything is unlocked.
+        let ui = ScriptedUi::new();
+        let err = execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                name: None,
+                key_type: "rsa".to_string(),
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("rsa must be refused");
+        assert!(err.to_string().contains("Only ed25519"));
+        assert!(ui.exhausted());
+
+        // Generating with an explicit label and favorite flag.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                name: Some("work-key".to_string()),
+                key_type: "ed25519".to_string(),
+                favorite: true,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("generate with a label works");
+        assert!(ui.exhausted());
+
+        // Generating with the default label.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                name: None,
+                key_type: "ed25519".to_string(),
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("generate with the default label works");
+        assert!(ui.exhausted());
+
+        // Generating against an unknown identity fails during resolution.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "ghost".to_string(),
+                name: None,
+                key_type: "ed25519".to_string(),
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+        assert!(ui.exhausted());
+
+        // List reports alice's keys…
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::List {
+                identity: "alice".to_string(),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("list works");
+        assert!(ui.exhausted());
+
+        // …and the empty state for bob.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::List {
+                identity: "bob".to_string(),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("empty list works");
+        assert!(ui.exhausted());
+
+        // List-all spans identities.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(ssh_args(SshSubcommand::ListAll), &config, &ui)
+            .await
+            .expect("list-all works");
+        assert!(ui.exhausted());
+    }
+
+    #[tokio::test]
+    async fn export_pubkey_branches() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                name: Some("pubkey-src".to_string()),
+                key_type: "ed25519".to_string(),
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("generate works");
+
+        // A non-SSH credential to exercise the type guard.
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            assert!(matches!(
+                service.authenticate_user("master-pin").await.unwrap(),
+                AuthResult::Success
+            ));
+            let identity = service
+                .get_identity_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            service
+                .create_credential(
+                    identity.id,
+                    "token".to_string(),
+                    CredentialType::ApiKey,
+                    SecurityLevel::Medium,
+                    &CredentialData::ApiKey(ApiKeyData {
+                        api_key: "k".to_string(),
+                        api_secret: None,
+                        token: None,
+                        permissions: Vec::new(),
+                        expires_at: None,
+                    }),
+                )
+                .await
+                .unwrap();
+        }
+
+        let creds = alice_credentials(&config, "master-pin").await;
+        let ssh_id = creds
+            .iter()
+            .find(|(_, t)| matches!(t, CredentialType::SshKey))
+            .expect("ssh key present")
+            .0;
+        let api_id = creds
+            .iter()
+            .find(|(_, t)| matches!(t, CredentialType::ApiKey))
+            .expect("api key present")
+            .0;
+
+        // The happy path prints the OpenSSH line.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::ExportPub { id: ssh_id }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("export pubkey works");
+        assert!(ui.exhausted());
+
+        // A non-SSH credential is refused.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::ExportPub { id: api_id }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("non-ssh credential must fail");
+        assert!(err.to_string().contains("Credential is not an SSH key"));
+        assert!(ui.exhausted());
+
+        // An unknown id is refused.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::ExportPub { id: Uuid::new_v4() }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("unknown credential must fail");
+        assert!(err.to_string().contains("Credential not found"));
+        assert!(ui.exhausted());
+    }
+
+    // ------------------------------------------------------------------
+    // import: base64/hex seeds and rejections.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn import_seed_variants_and_rejections() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+        let seed = [9u8; 32];
+
+        // base64 seed with an explicit label.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "alice".to_string(),
+                name: Some("imported-b64".to_string()),
+                seed_base64: Some(BASE64.encode(seed)),
+                seed_hex: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("base64 import works");
+        assert!(ui.exhausted());
+
+        // hex seed (outer whitespace tolerated, default label).
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "alice".to_string(),
+                name: None,
+                seed_base64: None,
+                seed_hex: Some(format!(" {} ", hex::encode(seed))),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("hex import works");
+        assert!(ui.exhausted());
+
+        // Neither seed source.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "alice".to_string(),
+                name: None,
+                seed_base64: None,
+                seed_hex: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("missing seed must fail");
+        assert!(err
+            .to_string()
+            .contains("Provide --seed-base64 or --seed-hex"));
+        assert!(ui.exhausted());
+
+        // A seed of the wrong length.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "alice".to_string(),
+                name: None,
+                seed_base64: Some(BASE64.encode([7u8; 16])),
+                seed_hex: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("short seed must fail");
+        assert!(err.to_string().contains("Seed must be 32 bytes"));
+
+        // Undecodable base64.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "alice".to_string(),
+                name: None,
+                seed_base64: Some("!!not-base64!!".to_string()),
+                seed_hex: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("bad base64 must fail");
+        assert!(err.to_string().contains("Invalid base64 seed"));
+
+        // Undecodable hex.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "alice".to_string(),
+                name: None,
+                seed_base64: None,
+                seed_hex: Some("zz-nothex".to_string()),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("bad hex must fail");
+        assert!(err.to_string().contains("Invalid hex seed"));
+
+        // Unknown identity.
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: "ghost".to_string(),
+                name: None,
+                seed_base64: Some(BASE64.encode(seed)),
+                seed_hex: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+    }
+
+    // ------------------------------------------------------------------
+    // run-with-host and socket resolution.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn current_or_stored_agent_socket_prefers_env_then_file() {
+        let _env = lock_process_env();
+        let _sock = EnvVarGuard::remove("SSH_AUTH_SOCK");
+        let dir = TempDir::new().unwrap();
+        let state = dir.path();
+        let sock_file = state.join("ssh-agent.sock");
+
+        // Nothing recorded: no socket.
+        assert_eq!(current_or_stored_agent_socket(state), None);
+
+        // A stored sock file is picked up.
+        std::fs::write(&sock_file, "/tmp/persona-stored.sock\n").unwrap();
+        assert_eq!(
+            current_or_stored_agent_socket(state).as_deref(),
+            Some("/tmp/persona-stored.sock")
+        );
+
+        // A whitespace-only file counts as absent.
+        std::fs::write(&sock_file, "   \n").unwrap();
+        assert_eq!(current_or_stored_agent_socket(state), None);
+
+        // A non-empty env var wins over the file…
+        std::fs::write(&sock_file, "/tmp/persona-stored.sock").unwrap();
+        let _env_sock = EnvVarGuard::set("SSH_AUTH_SOCK", "/tmp/persona-env.sock");
+        assert_eq!(
+            current_or_stored_agent_socket(state).as_deref(),
+            Some("/tmp/persona-env.sock")
+        );
+
+        // …while a whitespace-only env falls back to the file.
+        let _env_blank = EnvVarGuard::set("SSH_AUTH_SOCK", "   ");
+        assert_eq!(
+            current_or_stored_agent_socket(state).as_deref(),
+            Some("/tmp/persona-stored.sock")
+        );
+    }
+
+    #[tokio::test]
+    async fn run_with_host_validates_command_and_exit_status() {
+        let _env = lock_process_env();
+        let state_dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&state_dir);
+        let dir = TempDir::new().unwrap();
+        let config = userless_workspace(&dir).await;
+
+        // A stored socket file makes the env branch pass the socket down.
+        std::fs::write(
+            agent_state_dir().join("ssh-agent.sock"),
+            "/tmp/persona-run.sock",
+        )
+        .unwrap();
+
+        // An empty command list is refused.
+        let err = run_with_host("example.com", Vec::new(), &config)
+            .await
+            .expect_err("empty command must fail");
+        assert!(err.to_string().contains("Provide a command after --"));
+
+        // A successful command cleans the host file up afterwards. Extra
+        // tokens after the binary are forwarded as arguments.
+        execute_with(
+            ssh_args(SshSubcommand::Run {
+                host: "example.com".to_string(),
+                command: vec!["/bin/echo".to_string(), "persona-ok".to_string()],
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("successful command works");
+        assert!(
+            !agent_state_dir().join("agent-target-host").exists(),
+            "host file cleaned up"
+        );
+
+        // A failing command surfaces its exit status.
+        let err = run_with_host("example.com", vec!["/bin/false".to_string()], &config)
+            .await
+            .expect_err("failing command must fail");
+        assert!(err.to_string().contains("Command exited with status"));
+    }
+
+    // ------------------------------------------------------------------
+    // status / stop / agent lifecycle.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn execute_and_status_dispatch_without_service() {
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&dir);
+        let config = userless_workspace(&dir).await;
+
+        // The thin execute() wrapper (TerminalUi): Status never touches the
+        // service, so it is prompt-free even without a TTY.
+        execute(ssh_args(SshSubcommand::Status), &config)
+            .await
+            .expect("status dispatch works");
+
+        execute_with(
+            ssh_args(SshSubcommand::AgentStatus),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("agent status dispatch works");
+
+        // StopAgent without a PID file just reports.
+        execute_with(
+            ssh_args(SshSubcommand::StopAgent),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("stop without an agent works");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn agent_status_reports_files_and_queries_mock_agent() {
+        use tokio::net::UnixListener;
+
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&dir);
+        let _sock = EnvVarGuard::remove("SSH_AUTH_SOCK");
+        let config = userless_workspace(&dir).await;
+
+        // No state files: reports "not running".
+        agent_status(&config)
+            .await
+            .expect("status without agent works");
+
+        // Socket + pid files are reported.
+        std::fs::write(
+            dir.path().join("ssh-agent.sock"),
+            "/tmp/persona-status.sock\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("ssh-agent.pid"), "424242\n").unwrap();
+        agent_status(&config)
+            .await
+            .expect("status with files works");
+
+        // A reachable agent answers the identity query.
+        let listener = UnixListener::bind(dir.path().join("query.sock")).unwrap();
+        let server = tokio::spawn(serve_one_identity_query(listener, 3));
+        let _env_sock = EnvVarGuard::set(
+            "SSH_AUTH_SOCK",
+            dir.path().join("query.sock").to_string_lossy().to_string(),
+        );
+        agent_status(&config)
+            .await
+            .expect("status with a live agent works");
+        server.await.unwrap();
+
+        // With SSH_AUTH_SOCK unset, the stored socket file is consulted.
+        let _no_env_sock = EnvVarGuard::remove("SSH_AUTH_SOCK");
+        let listener2 = UnixListener::bind(dir.path().join("query2.sock")).unwrap();
+        let server2 = tokio::spawn(serve_one_identity_query(listener2, 1));
+        std::fs::write(
+            dir.path().join("ssh-agent.sock"),
+            dir.path().join("query2.sock").to_string_lossy().to_string(),
+        )
+        .unwrap();
+        agent_status(&config)
+            .await
+            .expect("status via the stored socket file works");
+        server2.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_agent_handles_missing_empty_and_live_pid_files() {
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&dir);
+
+        // No PID file at all.
+        stop_agent().expect("stop without a pid file works");
+
+        // Whitespace-only PID file.
+        std::fs::write(dir.path().join("ssh-agent.pid"), "  \n").unwrap();
+        stop_agent().expect("stop with an empty pid file works");
+
+        // A live process is stopped and the state files are cleaned up.
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep spawns");
+        std::fs::write(dir.path().join("ssh-agent.pid"), child.id().to_string()).unwrap();
+        std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/persona-stop.sock").unwrap();
+        stop_agent().expect("stop with a live pid works");
+        let _ = child.wait(); // reap
+        assert!(
+            !dir.path().join("ssh-agent.pid").exists(),
+            "pid file removed"
+        );
+        assert!(
+            !dir.path().join("ssh-agent.sock").exists(),
+            "sock file removed"
+        );
+
+        // An unkillable pid reports failure without erroring.
+        std::fs::write(dir.path().join("ssh-agent.pid"), "99999999").unwrap();
+        stop_agent().expect("a failed stop reports but does not error");
+    }
+
+    #[test]
+    fn agent_state_dir_falls_back_to_home_when_unset() {
+        let _env = lock_process_env();
+        let _state = EnvVarGuard::remove("PERSONA_AGENT_STATE_DIR");
+
+        let dir = agent_state_dir();
+        assert!(
+            dir.ends_with(".persona"),
+            "unset env falls back to ~/.persona, got {}",
+            dir.display()
+        );
+
+        // The env override wins when present.
+        let custom = TempDir::new().unwrap();
+        let _override = EnvVarGuard::set("PERSONA_AGENT_STATE_DIR", custom.path());
+        assert_eq!(agent_state_dir(), custom.path());
+    }
+
+    #[test]
+    fn resolve_agent_binary_env_overrides_and_fallbacks() {
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+
+        // A valid file path is taken verbatim.
+        let fake = dir.path().join("fake-agent");
+        std::fs::write(&fake, b"#!/bin/sh\n").unwrap();
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &fake);
+        assert_eq!(resolve_agent_binary().unwrap(), fake);
+        drop(_bin);
+
+        // A non-file path is rejected.
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", dir.path().join("missing"));
+        let err = resolve_agent_binary().expect_err("missing binary must fail");
+        assert!(err.to_string().contains("does not point to a file"));
+        drop(_bin);
+
+        // Unset: falls back to a lookup near the current executable or the
+        // bare name (which the shell would resolve).
+        let _bin = EnvVarGuard::remove("PERSONA_SSH_AGENT_BIN");
+        let resolved = resolve_agent_binary().unwrap();
+        assert!(resolved.ends_with(agent_binary_name()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn start_agent_parses_socket_line_and_failure_paths() {
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&dir);
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        // Userless workspace: ensure_service never prompts; the agent's own
+        // password prompt is bypassed by the non-interactive config.
+        let mut config = userless_workspace(&dir).await;
+        config.ui.interactive = false;
+
+        // Success: the agent prints its socket; export lines are printed.
+        let agent = write_executable(
+            &dir,
+            "agent-ok",
+            "#!/bin/sh\necho \"SSH_AUTH_SOCK=/tmp/persona-fake.sock\"\n",
+        );
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent);
+        execute_with(
+            ssh_args(SshSubcommand::StartAgent { print_export: true }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("fake agent with a socket line works");
+
+        // The add-to-agent alias reaches the same code path.
+        execute_with(
+            ssh_args(SshSubcommand::AddToAgent {
+                identity: None,
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("add-to-agent alias works");
+        drop(_bin);
+
+        // Early non-zero exit with stderr. start_agent detects the early exit
+        // after stdout hits EOF; there is an inherent scheduling window where
+        // the child is gone from the pipe but try_wait still reports None, so
+        // retry a few times until the run resolves as a failure.
+        let agent = write_executable(&dir, "agent-fail", "#!/bin/sh\necho boom >&2\nexit 3\n");
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent);
+        let mut err = None;
+        for _ in 0..10 {
+            if let Some(e) = execute_with(
+                ssh_args(SshSubcommand::StartAgent {
+                    print_export: false,
+                }),
+                &config,
+                &ScriptedUi::new(),
+            )
+            .await
+            .err()
+            {
+                err = Some(e);
+                break;
+            }
+        }
+        let err = err.expect("failing agent must fail");
+        assert!(err.to_string().contains("exited early with status"));
+        assert!(err.to_string().contains("boom"), "stderr is surfaced");
+        drop(_bin);
+
+        // Early non-zero exit without stderr.
+        let agent = write_executable(&dir, "agent-silent", "#!/bin/sh\nexit 7\n");
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent);
+        let mut err = None;
+        for _ in 0..10 {
+            if let Some(e) = execute_with(
+                ssh_args(SshSubcommand::StartAgent {
+                    print_export: false,
+                }),
+                &config,
+                &ScriptedUi::new(),
+            )
+            .await
+            .err()
+            {
+                err = Some(e);
+                break;
+            }
+        }
+        let err = err.expect("silently failing agent must fail");
+        assert!(err.to_string().contains("exited early with status"));
+        drop(_bin);
+
+        // Clean exit without a socket line degrades to a warning.
+        let agent = write_executable(&dir, "agent-quiet", "#!/bin/sh\necho hello\n");
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent);
+        execute_with(
+            ssh_args(SshSubcommand::StartAgent {
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("quiet agent returns success");
+        drop(_bin);
+
+        // An interactive config is asked once for the agent's master
+        // password; an empty answer is allowed. The fake agent sleeps so the
+        // spawned process is still alive when start_agent returns.
+        let agent_slow = write_executable(
+            &dir,
+            "agent-slow",
+            "#!/bin/sh\necho \"SSH_AUTH_SOCK=/tmp/persona-slow.sock\"\nsleep 2\n",
+        );
+        let _bin_slow = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent_slow);
+        config.ui.interactive = true;
+        execute_with(
+            ssh_args(SshSubcommand::StartAgent {
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new().password(""),
+        )
+        .await
+        .expect("interactive start accepts an empty agent password");
+
+        // A non-interactive start forwards PERSONA_MASTER_PASSWORD instead.
+        config.ui.interactive = false;
+        let _pw_env = EnvVarGuard::set("PERSONA_MASTER_PASSWORD", "env-pin");
+        execute_with(
+            ssh_args(SshSubcommand::StartAgent {
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("non-interactive start forwards the env password");
+
+        // A failing interactive password prompt aborts before the agent
+        // binary is even resolved.
+        let dir2 = TempDir::new().unwrap();
+        let _state2 = sandbox_agent_state_dir(&dir2);
+        let mut config2 = userless_workspace(&dir2).await;
+        config2.ui.interactive = true;
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::Password);
+        let err = execute_with(
+            ssh_args(SshSubcommand::StartAgent {
+                print_export: false,
+            }),
+            &config2,
+            &ui,
+        )
+        .await
+        .expect_err("failing agent password prompt must abort");
+        assert!(err.to_string().contains("failing ui: password prompt"));
+    }
+
+    #[tokio::test]
+    async fn list_skips_non_ssh_keys_and_agent_resolution_plants_binary() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        // alice owns one SSH key and one API-key credential.
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                name: None,
+                key_type: "ed25519".to_string(),
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("ssh key generated");
+        assert!(ui.exhausted());
+        {
+            let _pw_env = EnvVarGuard::set("PERSONA_MASTER_PASSWORD", "master-pin");
+            let service = ensure_service(&config, &ScriptedUi::new())
+                .await
+                .expect("service unlocks via env");
+            let identity = service
+                .get_identity_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            service
+                .create_credential(
+                    identity.id,
+                    "api-token".to_string(),
+                    persona_core::models::CredentialType::ApiKey,
+                    persona_core::models::SecurityLevel::Medium,
+                    &persona_core::models::CredentialData::ApiKey(ApiKeyData {
+                        api_key: "k".to_string(),
+                        api_secret: None,
+                        token: None,
+                        permissions: Vec::new(),
+                        expires_at: None,
+                    }),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Per-identity and global listings skip the non-SSH row. Each
+        // execute_with call re-unlocks the workspace, so the scripted UI
+        // needs a master password per subcommand.
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::List {
+                identity: "alice".to_string(),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("per-identity list skips non-ssh rows");
+        execute_with(ssh_args(SshSubcommand::ListAll), &config, &ui)
+            .await
+            .expect("global list skips non-ssh rows");
+
+        // A binary planted next to the current executable wins over the bare
+        // PATH fallback once the env override is unset.
+        let exe_dir = std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let planted = exe_dir.join(agent_binary_name());
+        std::fs::write(&planted, b"#!/bin/sh\n").unwrap();
+        let resolved = resolve_agent_binary().unwrap();
+        std::fs::remove_file(&planted).unwrap();
+        assert_eq!(resolved, planted);
     }
 }

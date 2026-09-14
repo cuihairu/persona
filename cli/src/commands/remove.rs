@@ -488,7 +488,7 @@ async fn get_remaining_identities_count(config: &CliConfig, ui: &dyn PromptUi) -
 mod tests {
     use super::*;
     use crate::config::CliConfig;
-    use crate::utils::prompt::scripted::ScriptedUi;
+    use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
     use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -500,9 +500,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -736,7 +741,207 @@ mod tests {
 
         let backups: Vec<_> = std::fs::read_dir(&config.backup.directory)
             .expect("backup directory exists")
+            .map(|e| e.expect("backup entry readable"))
             .collect();
         assert_eq!(backups.len(), 1, "one backup file written");
+
+        // The backup written without a workspace user carries the identity
+        // stub but no credential export.
+        let backup_file = &backups[0].path();
+        let payload: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(backup_file).unwrap()).unwrap();
+        assert_eq!(payload["credentials"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn remove_backup_with_authenticated_workspace_exports_identity() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["erin"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let mut backup_args = args("erin", false, false);
+        backup_args.backup = true;
+        let ui = ScriptedUi::new().input("remove erin");
+        execute_with(backup_args, &config, &ui)
+            .await
+            .expect("authenticated backup removal succeeds");
+        assert!(ui.exhausted());
+
+        // The unlocked path exports the full identity, not the stub.
+        let backups: Vec<_> = std::fs::read_dir(&config.backup.directory)
+            .expect("backup directory exists")
+            .map(|e| e.expect("backup entry readable"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let payload: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(backups[0].path()).unwrap()).unwrap();
+        assert!(payload.get("identity").is_some(), "identity exported");
+        assert!(payload.get("backup_created").is_some());
+
+        // A backup for an unknown identity fails inside the unlocked export
+        // path (the remove flow itself verifies the name up front).
+        let ui = ScriptedUi::new();
+        let err = create_backup("ghost", &config, &ui)
+            .await
+            .expect_err("backup of unknown identity must fail");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn remove_prompt_errors_propagate_to_the_caller() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+
+        // alice is the active identity; a failing confirm prompt aborts
+        // before anything is removed.
+        {
+            let repo = WorkspaceRepository::new(db.clone());
+            let identity = IdentityRepository::new(db.clone())
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            let mut ws = persona_core::models::Workspace::new(
+                config.workspace.path.clone(),
+                "test-workspace".to_string(),
+            );
+            ws.switch_identity(identity.id);
+            repo.create(&ws).await.unwrap();
+        }
+
+        {
+            let inner = ScriptedUi::new();
+            let ui = FailOn::new(&inner, PromptKind::Confirm);
+            let err = execute_with(args("alice", false, false), &config, &ui)
+                .await
+                .expect_err("failing confirm must abort");
+            assert!(err.to_string().contains("failing ui: confirm prompt"));
+            assert!(
+                identity_exists("alice", &config, &crate::utils::prompt::TerminalUi)
+                    .await
+                    .unwrap()
+            );
+        }
+
+        // bob is not active: the first prompt is the typed confirmation.
+        {
+            let inner = ScriptedUi::new();
+            let ui = FailOn::new(&inner, PromptKind::Input);
+            let err = execute_with(args("bob", false, false), &config, &ui)
+                .await
+                .expect_err("failing input must abort");
+            assert!(err.to_string().contains("failing ui: input prompt"));
+            assert!(
+                identity_exists("bob", &config, &crate::utils::prompt::TerminalUi)
+                    .await
+                    .unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_non_active_identity_keeps_the_workspace_pointer() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+
+        // The workspace points at alice; bob is removed without touching it.
+        {
+            let repo = WorkspaceRepository::new(db.clone());
+            let identity = IdentityRepository::new(db.clone())
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            let mut ws = persona_core::models::Workspace::new(
+                config.workspace.path.clone(),
+                "test-workspace".to_string(),
+            );
+            ws.switch_identity(identity.id);
+            repo.create(&ws).await.unwrap();
+        }
+
+        execute(args("bob", true, false), &config)
+            .await
+            .expect("forced removal of the non-active identity succeeds");
+
+        let repo = WorkspaceRepository::new(db.clone());
+        let ws = repo
+            .find_by_path(&config.workspace.path.to_string_lossy())
+            .await
+            .unwrap()
+            .expect("workspace row survives");
+        let alice = IdentityRepository::new(db.clone())
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ws.active_identity_id, Some(alice.id));
+    }
+
+    #[tokio::test]
+    async fn remove_last_identity_reports_empty_remaining_state() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["solo"]).await;
+
+        execute(args("solo", true, false), &config)
+            .await
+            .expect("removing the only identity succeeds");
+
+        // Count 0 hits the "No identities remaining" hint branch.
+        assert_eq!(
+            get_remaining_identities_count(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn is_active_identity_is_false_for_unknown_names_and_empty_workspace() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+
+        // No workspace row at all → not active.
+        assert!(!is_active_identity("alice", &config).await.unwrap());
+
+        // Workspace row exists but points elsewhere / name unknown.
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = WorkspaceRepository::new(db.clone());
+        let identity = IdentityRepository::new(db.clone())
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut ws = persona_core::models::Workspace::new(
+            config.workspace.path.clone(),
+            "test-workspace".to_string(),
+        );
+        ws.switch_identity(identity.id);
+        repo.create(&ws).await.unwrap();
+
+        assert!(is_active_identity("alice", &config).await.unwrap());
+        assert!(
+            !is_active_identity("ghost", &config).await.unwrap(),
+            "unknown identity is never active"
+        );
     }
 }

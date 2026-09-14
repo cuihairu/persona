@@ -333,4 +333,31 @@ mod tests {
         let resolved = PathUtils::ensure_absolute("relative/path").unwrap();
         assert!(resolved.is_absolute());
     }
+
+    #[test]
+    fn test_sync_create_dir_all_and_error_paths() {
+        let temp_dir = tempdir().unwrap();
+
+        // Sync create_dir_all builds the whole nested tree.
+        let nested = temp_dir.path().join("a/b/c");
+        SyncFileSystem::create_dir_all(&nested).unwrap();
+        assert!(SyncFileSystem::is_dir(&nested));
+
+        // Reading a missing file surfaces an Io error.
+        let missing = temp_dir.path().join("missing.txt");
+        let err = SyncFileSystem::read_to_string(&missing).unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<PersonaError>(),
+            Some(PersonaError::Io(_))
+        ));
+
+        // Writing into a nonexistent directory fails too (plain write would
+        // create the file, but the parent directory is never created).
+        let err = SyncFileSystem::write_string(temp_dir.path().join("no-such-dir/f.txt"), "nope")
+            .unwrap_err();
+        assert!(matches!(
+            err.downcast_ref::<PersonaError>(),
+            Some(PersonaError::Io(_))
+        ));
+    }
 }

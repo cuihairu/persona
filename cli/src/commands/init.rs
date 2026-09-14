@@ -282,8 +282,25 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::prompt::scripted::ScriptedUi;
+    use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Serializes env mutations (HOME) against the bridge and service tests.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
+        (
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
+        )
+    }
 
     fn init_args(yes: bool) -> InitArgs {
         InitArgs {
@@ -397,5 +414,141 @@ mod tests {
             service.authenticate_user("from-cli").await.unwrap(),
             persona_core::auth::AuthResult::Success
         ));
+    }
+
+    #[tokio::test]
+    async fn backup_dir_option_lands_in_written_config() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+        let backup_dir = dir.path().join("custom-backups");
+
+        let mut args = init_args(true);
+        args.path = Some(path.clone());
+        args.backup_dir = Some(backup_dir.clone());
+        execute(args, &crate::config::CliConfig::default())
+            .await
+            .expect("init with explicit backup dir must succeed");
+
+        let written = std::fs::read_to_string(path.join("config.toml")).unwrap();
+        assert!(
+            written.contains(&backup_dir.to_string_lossy().to_string()),
+            "config must reference the custom backup dir:\n{}",
+            written
+        );
+    }
+
+    #[tokio::test]
+    async fn non_interactive_init_without_encryption_skips_authentication() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let mut args = init_args(true);
+        args.encrypted = false;
+        args.path = Some(path.clone());
+        execute(args, &crate::config::CliConfig::default())
+            .await
+            .expect("unencrypted init must succeed");
+
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let service = PersonaService::new(db).await.unwrap();
+        assert!(
+            !service.has_users().await.unwrap(),
+            "no user is created without encryption"
+        );
+    }
+
+    #[tokio::test]
+    async fn reinitializing_an_initialized_database_warns_but_succeeds() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let mut first = init_args(true);
+        first.path = Some(path.clone());
+        first.master_password = Some("first-pin".to_string());
+        execute(first, &crate::config::CliConfig::default())
+            .await
+            .expect("first init succeeds");
+
+        // Second init over the same directory: the user already exists, so
+        // authentication setup fails and the warning branch runs instead.
+        let mut second = init_args(true);
+        second.path = Some(path.clone());
+        second.master_password = Some("second-pin".to_string());
+        execute(second, &crate::config::CliConfig::default())
+            .await
+            .expect("re-init still completes");
+
+        // The original credentials keep working.
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert!(matches!(
+            service.authenticate_user("first-pin").await.unwrap(),
+            persona_core::auth::AuthResult::Success
+        ));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn unwritable_workspace_directory_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let mut args = init_args(true);
+        args.path = Some(path.clone());
+        let err = execute(args, &crate::config::CliConfig::default())
+            .await
+            .expect_err("read-only workspace must fail");
+        assert!(
+            err.to_string()
+                .to_lowercase()
+                .contains("failed to create directory"),
+            "unexpected error: {err}"
+        );
+
+        // Restore permissions so TempDir cleanup can delete the tree.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn yes_flag_falls_back_to_the_home_directory_without_a_path() {
+        let _guard = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let original_home = std::env::var("HOME").ok();
+
+        // `dirs::home_dir()` reads $HOME on Linux, so a redirected home moves
+        // the default workspace path with it.
+        std::env::set_var("HOME", dir.path());
+        let path = determine_workspace_path(None, true, &ScriptedUi::new())
+            .expect("non-interactive default path");
+        assert_eq!(path, dir.path().join(".persona"));
+
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn master_password_prompt_errors_propagate() {
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::Password);
+        let err = get_master_password(None, false, &ui)
+            .expect_err("a failing password prompt must abort");
+        assert!(err.to_string().contains("failing ui: password prompt"));
+
+        // An explicit --password short-circuits the prompt entirely.
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::Password);
+        assert_eq!(
+            get_master_password(Some("from-cli".to_string()), false, &ui).unwrap(),
+            Some("from-cli".to_string())
+        );
     }
 }

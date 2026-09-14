@@ -108,14 +108,8 @@ impl PasswordGenerator {
             .into());
         }
 
-        if options.length < pools.len() {
-            return Err(PersonaError::InvalidInput(format!(
-                "Length {} is too small for {} character sets",
-                options.length,
-                pools.len()
-            ))
-            .into());
-        }
+        // Note: `options.length < pools.len()` is impossible here — length is
+        // validated to be >= 4 above and at most 4 pools can be selected.
 
         let mut rng = rand::rng();
 

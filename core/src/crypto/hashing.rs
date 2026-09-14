@@ -167,6 +167,22 @@ mod tests {
         hasher.verify_password("pw", "$argon2id$v=19$m=64,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$")
     }
 
+    #[test]
+    fn test_verify_password_surfaces_parameter_errors() {
+        // p=0 parses at the PHC syntax level but is rejected by the Argon2
+        // parameter validation during verification, which must surface as an
+        // error rather than a plain mismatch.
+        let hasher = PasswordHasher::new();
+        let hash = hasher.hash_password("correct horse").unwrap();
+        assert!(hash.contains(",p=1$"), "unexpected PHC layout: {hash}");
+        let tampered = hash.replacen(",p=1$", ",p=0$", 1);
+
+        let err = hasher
+            .verify_password("correct horse", &tampered)
+            .expect_err("zero parallelism must fail verification");
+        assert!(err.to_string().contains("Verification failed"));
+    }
+
     // SHA-256("abc") per FIPS 180-4.
     #[test]
     fn test_sha256_known_vector() {

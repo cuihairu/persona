@@ -235,6 +235,21 @@ mod tests {
         assert_eq!(&out_buf, b"pong");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_stream_flush_succeeds_on_connected_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("persona-flush-test.sock");
+        let mut listener = AgentListener::bind(&sock_path).await.unwrap();
+
+        let client_task =
+            tokio::spawn(async move { tokio::net::UnixStream::connect(&sock_path).await.unwrap() });
+
+        let mut stream = listener.accept().await.unwrap();
+        let _client = client_task.await.unwrap();
+        stream.flush().await.unwrap();
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn windows_bind_and_accept_named_pipe() {

@@ -439,9 +439,14 @@ mod integration {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -615,6 +620,32 @@ mod integration {
             .expect("declined collectors still create the identity");
         assert!(ui.exhausted());
 
+        // A third run types a non-empty phone number interactively.
+        let ui = ScriptedUi::new()
+            .input("kim")
+            .select(0) // personal
+            .input("") // description
+            .input("") // email
+            .input("+31123456789") // phone, typed at the prompt
+            .confirm(false) // no attributes
+            .confirm(false); // no tags
+        let kim_args = args(None, None, None, None, false);
+        execute_with(kim_args, &config, &ui)
+            .await
+            .expect("typed phone number is stored");
+        assert!(ui.exhausted());
+
+        let kim = persona_core::storage::IdentityRepository::new(
+            Database::from_file(config.get_database_path())
+                .await
+                .unwrap(),
+        )
+        .find_by_name("kim")
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(kim.phone.as_deref(), Some("+31123456789"));
+
         let jon = persona_core::storage::IdentityRepository::new(
             Database::from_file(config.get_database_path())
                 .await
@@ -627,6 +658,114 @@ mod integration {
         assert!(jon.tags.is_empty());
         assert!(jon.attributes.is_empty());
 
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn add_interactive_skips_prompts_for_fields_given_on_cli() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "interactive-pin");
+
+        // Name/type/description/email/phone all come from the CLI, so only
+        // the two optional collectors prompt.
+        let mut partial = args(
+            Some("kara"),
+            Some("Work"),
+            Some("cli desc"),
+            Some("k@x.co"),
+            false,
+        );
+        partial.phone = Some("+49123456789".to_string());
+        let ui = ScriptedUi::new()
+            .confirm(false) // add attributes?
+            .confirm(true) // add tags?
+            .input("ops, sre");
+        execute_with(partial, &config, &ui)
+            .await
+            .expect("interactive add with CLI-provided fields succeeds");
+        assert!(ui.exhausted());
+
+        let kara = persona_core::storage::IdentityRepository::new(
+            Database::from_file(config.get_database_path())
+                .await
+                .unwrap(),
+        )
+        .find_by_name("kara")
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(matches!(kara.identity_type, IdentityType::Work));
+        assert_eq!(kara.phone.as_deref(), Some("+49123456789"));
+        assert_eq!(kara.tags, vec!["ops".to_string(), "sre".to_string()]);
+
+        // An unknown --identity-type string becomes a Custom type.
+        let mut custom = args(Some("myst"), Some("kubernetes-cluster"), None, None, true);
+        custom.phone = None;
+        execute(custom, &config)
+            .await
+            .expect("custom identity type is accepted");
+
+        let myst = persona_core::storage::IdentityRepository::new(
+            Database::from_file(config.get_database_path())
+                .await
+                .unwrap(),
+        )
+        .find_by_name("myst")
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            matches!(myst.identity_type, IdentityType::Custom(ref s) if s == "kubernetes-cluster")
+        );
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn add_rejects_short_phone_and_long_name() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        let mut short_phone = args(Some("p"), None, None, None, true);
+        short_phone.phone = Some("123".to_string());
+        let err = execute(short_phone, &config)
+            .await
+            .expect_err("short phone must fail validation");
+        assert!(err.to_string().contains("Phone number too short"));
+
+        let mut long_name = args(Some(&"x".repeat(51)), None, None, None, true);
+        long_name.phone = None;
+        let err = execute(long_name, &config)
+            .await
+            .expect_err("over-long name must fail validation");
+        assert!(err.to_string().contains("cannot exceed 50"));
+    }
+
+    #[tokio::test]
+    async fn add_from_file_and_set_active_flags_complete() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        // --from-file takes the stub import path and never touches the DB.
+        let mut file_args = args(Some("unused"), None, None, None, true);
+        file_args.from_file = Some("/tmp/identities.json".to_string());
+        execute(file_args, &config)
+            .await
+            .expect("from-file stub reports success");
+
+        // --set-active runs the (currently no-op) activation step.
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "active-pin");
+        let mut active_args = args(Some("spark"), None, None, None, true);
+        active_args.set_active = true;
+        execute(active_args, &config)
+            .await
+            .expect("set-active add succeeds");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }

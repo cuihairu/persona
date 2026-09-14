@@ -2283,4 +2283,336 @@ mod tests {
         assert!(service.delete_identity(&identity2.id).await.unwrap());
         assert!(!service.delete_identity(&identity2.id).await.unwrap());
     }
+
+    // ------------------------------------------------------------------
+    // Credential decryption: legacy (master-key) format and error paths
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_get_credential_data_legacy_and_error_paths() {
+        let (db, service) = unlocked_service().await;
+
+        // Unknown id → Ok(None), never an error.
+        assert!(service
+            .get_credential_data(&Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+
+        let identity = service
+            .create_identity("Legacy Owner".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credentials = crate::storage::CredentialRepository::new(db.clone());
+
+        let plaintext = CredentialData::Password(PasswordCredentialData {
+            password: "legacy-secret".to_string(),
+            email: None,
+            security_questions: vec![],
+        })
+        .to_bytes()
+        .unwrap();
+
+        // Legacy format: sealed directly with the master key, no wrapped item key.
+        let ciphertext = service
+            .get_master_encryption_service()
+            .unwrap()
+            .encrypt(&plaintext)
+            .unwrap();
+        let legacy = Credential::new(
+            identity.id,
+            "Legacy".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Medium,
+            ciphertext,
+            None,
+        );
+        credentials.create(&legacy).await.unwrap();
+
+        let data = service
+            .get_credential_data(&legacy.id)
+            .await
+            .unwrap()
+            .expect("legacy credential must decrypt");
+        match data {
+            CredentialData::Password(pwd) => assert_eq!(pwd.password, "legacy-secret"),
+            other => panic!("expected password credential data, got {:?}", other),
+        }
+
+        // The lookup stamps last_accessed via the repository update.
+        let stored = credentials.find_by_id(&legacy.id).await.unwrap().unwrap();
+        assert!(stored.last_accessed.is_some());
+
+        // Legacy ciphertext that does not decrypt surfaces the legacy error.
+        let broken = Credential::new(
+            identity.id,
+            "Broken Legacy".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Medium,
+            vec![7u8; 64],
+            None,
+        );
+        credentials.create(&broken).await.unwrap();
+        let err = service
+            .get_credential_data(&broken.id)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Failed to decrypt legacy credential"),
+            "unexpected error: {}",
+            err
+        );
+
+        // A validly sealed envelope whose plaintext is not CredentialData
+        // surfaces the deserialization error. Four zero bytes decode to the
+        // Password variant and then run out of input for the payload.
+        let hierarchy =
+            crate::crypto::KeyHierarchy::new(service.get_master_encryption_service().unwrap());
+        let envelope = hierarchy.encrypt_with_new_item_key(&[0u8; 4]).unwrap();
+        let garbage = Credential::new(
+            identity.id,
+            "Garbage".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Medium,
+            envelope.ciphertext,
+            Some(envelope.wrapped_key),
+        );
+        credentials.create(&garbage).await.unwrap();
+        let err = service
+            .get_credential_data(&garbage.id)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("Failed to deserialize credential data"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Attachments: encrypted storage through the service surface
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_attachment_encrypted_store_marks_and_scrambles_content() {
+        let (db, mut service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Encrypted Attach".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential = seed_credential(
+            &service,
+            identity.id,
+            "enc attach",
+            CredentialType::Password,
+        )
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db)
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("secret.bin");
+        std::fs::write(&file_path, b"top-secret-bytes").unwrap();
+
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, true)
+            .await
+            .unwrap();
+
+        let listed = service.get_attachments(&credential.id).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, attachment_id);
+        assert!(listed[0].is_encrypted);
+
+        // Without the decrypt flag the raw ciphertext comes back untouched.
+        let raw = service
+            .retrieve_attachment(&attachment_id, false)
+            .await
+            .unwrap();
+        assert_ne!(raw, b"top-secret-bytes".to_vec());
+
+        // The service derives a throwaway decryption key, so the decrypt
+        // attempt must fail cleanly rather than hand back garbage.
+        assert!(service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .is_err());
+
+        // Saving with decrypt=false still writes the stored bytes to disk.
+        let out_path = dir.path().join("raw-copy.bin");
+        service
+            .save_attachment(&attachment_id, &out_path, false)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out_path).unwrap(), raw);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_sessions_without_current_user_is_empty() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let service = PersonaService::new(db).await.unwrap();
+        assert!(service.get_user_sessions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_session_tracking_paths_with_injected_session() {
+        let (_db, service) = unlocked_service().await;
+
+        // An expired session registered with the auto-lock manager, injected
+        // as the current session id, drives the auto-locked error branch.
+        let expired = crate::auth::session::Session::new(
+            service.current_user.unwrap().to_string(),
+            std::time::Duration::from_secs(0),
+        );
+        let session_id = expired.id.clone();
+        service
+            .auto_lock_manager
+            .add_session(expired)
+            .await
+            .unwrap();
+        *service.current_session_id.write().await = Some(session_id.clone());
+
+        assert!(service.is_session_locked().await);
+
+        let err = service
+            .create_identity("locked-work".to_string(), IdentityType::Personal)
+            .await;
+        let err_text = format!("{:#}", err.unwrap_err());
+        assert!(err_text.contains("auto-locked") || err_text.contains("Session is auto-locked"));
+
+        // Activity updates with a session registered do not error, and
+        // needs_reauth consults the manager through the same branch.
+        service.update_auto_lock_activity().await.unwrap();
+        service.update_sensitive_auto_lock_activity().await.unwrap();
+        let _ = service.needs_reauth().await;
+
+        // A live session keeps the service usable and hits the Some(session)
+        // arm again after replacing the injected id.
+        let live = crate::auth::session::Session::new(
+            "session-user".to_string(),
+            std::time::Duration::from_secs(3600),
+        );
+        let live_id = live.id.clone();
+        service.auto_lock_manager.add_session(live).await.unwrap();
+        *service.current_session_id.write().await = Some(live_id);
+        service.update_auto_lock_activity().await.unwrap();
+        service.update_sensitive_auto_lock_activity().await.unwrap();
+        assert!(!service.needs_reauth().await);
+    }
+
+    #[tokio::test]
+    async fn test_get_identity_by_name_and_id_record_audit() {
+        let (db, service) = unlocked_service().await;
+        let created = service
+            .create_identity("audited-identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let by_name = service
+            .get_identity_by_name("audited-identity")
+            .await
+            .unwrap()
+            .expect("identity found by name");
+        assert_eq!(by_name.id, created.id);
+
+        let by_id = service
+            .get_identity(&created.id)
+            .await
+            .unwrap()
+            .expect("identity found by id");
+        assert_eq!(by_id.id, created.id);
+
+        let missing = service
+            .get_identity_by_name("no-such-identity")
+            .await
+            .unwrap();
+        assert!(missing.is_none());
+
+        // Two IdentityViewed audit entries were recorded for the found reads.
+        let repo = crate::storage::AuditLogRepository::new(db.clone());
+        let logs = repo
+            .find_by_action(&AuditAction::IdentityViewed)
+            .await
+            .unwrap();
+        assert_eq!(logs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_credentials_for_identity_lists_seed() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("cred-listing".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        seed_credential(&service, identity.id, "listed", CredentialType::Password).await;
+
+        let creds = service
+            .get_credentials_for_identity(&identity.id)
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].name, "listed");
+    }
+
+    #[tokio::test]
+    async fn test_get_identities_surface_and_unknown_identity_returns_none() {
+        let (_db, service) = unlocked_service().await;
+        let created = service
+            .create_identity("listed-surface".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // get_identities lists everything, including the fresh identity.
+        let all = service.get_identities().await.unwrap();
+        assert!(all.iter().any(|i| i.id == created.id));
+
+        // A lookup by an unknown id yields None without an audit entry.
+        assert!(service
+            .get_identity(&Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_create_passkey_full_preserves_supplied_user_handle() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("handle-full".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let client_data =
+            br#"{"type":"webauthn.create","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#;
+        let handle = vec![1u8, 2, 3, 4];
+        let creation = service
+            .create_passkey_full(
+                identity.id,
+                "example.com".to_string(),
+                "https://example.com",
+                client_data,
+                Some(handle.clone()),
+                Some("alice@example.com".to_string()),
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+
+        // The caller-supplied handle is stored verbatim instead of a random one.
+        assert_eq!(creation.item.user_handle, handle);
+        assert_eq!(
+            creation.item.user_name.as_deref(),
+            Some("alice@example.com")
+        );
+        assert!(!creation.item.uv_initialized);
+        assert!(!creation.attestation_object.is_empty());
+    }
 }

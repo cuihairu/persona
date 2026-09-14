@@ -408,9 +408,14 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
     ) {
+        // Recover from a poisoned lock: a panicking sibling test must not
+        // cascade into every other env-gated test.
+        fn lock_or_recover(lock: &Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+            lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        }
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            lock_or_recover(&crate::commands::bridge::tests::ENV_LOCK),
+            lock_or_recover(&ENV_LOCK),
         )
     }
 
@@ -667,5 +672,26 @@ mod tests {
         let truncated = truncate_string("a-very-long-identity-name", 10);
         assert_eq!(truncated.len(), 10);
         assert!(truncated.ends_with("..."));
+    }
+
+    #[test]
+    fn detailed_rendering_covers_active_inactive_tags_and_csv() {
+        let mut active = sample("ada", "personal", true);
+        active.tags = vec!["ops".to_string(), "oncall".to_string()];
+        active.description = "a description long enough to be truncated by the table".to_string();
+        active.email = Some("ada@example.com".to_string());
+        active.phone = Some("+49123456789".to_string());
+        let inactive = sample("ben", "work", false);
+
+        // Detailed and plain tables, with both an active and an inactive row.
+        display_table(&[active.clone(), inactive.clone()], true).unwrap();
+        display_table(&[active.clone(), inactive], false).unwrap();
+
+        // CSV in both variants.
+        display_csv(&[active.clone()], true).unwrap();
+        display_csv(std::slice::from_ref(&active), false).unwrap();
+
+        // Summary counts by type.
+        show_summary(&[active]).unwrap();
     }
 }

@@ -1596,4 +1596,46 @@ mod tests {
             .to_string()
             .contains("Unknown export format"));
     }
+
+    #[test]
+    fn signing_key_for_solana_rejects_short_key_material() {
+        let mut wallet = hd_wallet(BlockchainNetwork::Solana, 1);
+        wallet.encrypted_private_key =
+            serde_json::to_vec(&encrypt_private_key(&[7u8; 16], "pw").unwrap()).unwrap();
+        let err = expect_sign_err(
+            signing_key_for_address(&wallet, "pw", &wallet.addresses[0].address),
+            "16-byte Solana key material must be rejected",
+        );
+        assert!(err
+            .to_string()
+            .contains("Invalid Solana key material length"));
+    }
+
+    #[test]
+    fn signing_key_for_solana_rejects_oversized_key_material() {
+        // 40 bytes yield a 32-byte secret but only an 8-byte chain code.
+        let mut wallet = hd_wallet(BlockchainNetwork::Solana, 1);
+        wallet.encrypted_private_key =
+            serde_json::to_vec(&encrypt_private_key(&[7u8; 40], "pw").unwrap()).unwrap();
+        let err = expect_sign_err(
+            signing_key_for_address(&wallet, "pw", &wallet.addresses[0].address),
+            "40-byte Solana key material must be rejected",
+        );
+        assert!(err
+            .to_string()
+            .contains("Invalid Solana key material length"));
+    }
+
+    #[test]
+    fn export_private_key_fails_for_watch_only_wallet() {
+        // Watch-only wallets export no keys at all, so the per-address lookup
+        // and the fallback both miss.
+        let mut wallet = hd_wallet(BlockchainNetwork::Ethereum, 1);
+        wallet.watch_only = true;
+        let err = export_private_key(&wallet, "pw")
+            .expect_err("watch-only wallets expose no private keys");
+        assert!(err
+            .to_string()
+            .contains("does not contain an exportable private key"));
+    }
 }

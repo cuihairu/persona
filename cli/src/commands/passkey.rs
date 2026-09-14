@@ -462,4 +462,115 @@ mod tests {
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
+
+    #[tokio::test]
+    async fn passkey_show_renders_full_metadata_and_client_data_file() {
+        let _guard = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let config = seeded_config(&dir).await;
+
+        // A clientDataJSON supplied from a file takes precedence over the
+        // locally generated challenge, and `uv: false` stores a credential
+        // that does not require user verification.
+        let cd_path = dir.path().join("client-data.json");
+        std::fs::write(
+            &cd_path,
+            local_client_data(CLIENT_DATA_TYPE_CREATE, "https://vault.example.com").unwrap(),
+        )
+        .unwrap();
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::Create {
+                    identity: "alice".to_string(),
+                    rp: "vault.example.com".to_string(),
+                    rp_name: None,
+                    origin: Some("https://vault.example.com".to_string()),
+                    user: Some("alice@example.com".to_string()),
+                    display: Some("Alice's laptop".to_string()),
+                    uv: false,
+                    client_data: Some(cd_path),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("create from client-data file with uv disabled works");
+
+        // The summary table renders the ✗ marks for uv and export.
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::List {
+                    identity: Some("alice".to_string()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("list renders unchecked marks");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let alice = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let id = service.list_passkeys(&alice.id).await.unwrap()[0].id;
+        drop(service);
+
+        // Self-test stamps last_used_at; the follow-up Show renders it.
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::SelfTest { id },
+            },
+            &config,
+        )
+        .await
+        .expect("self-test works");
+
+        // Enrich mutable metadata through the repository so Show renders the
+        // optional RP-name and tags lines too.
+        let db = Database::from_file(config.get_database_path()).await.unwrap();
+        let repo = persona_core::storage::PasskeyRepository::new(std::sync::Arc::new(db));
+        let mut item = repo.find_by_id(&id).await.unwrap().unwrap();
+        item.rp_name = Some("Vault Corp".to_string());
+        item.tags = vec!["work".to_string(), "primary".to_string()];
+        repo.update(&item).await.unwrap();
+
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::Show { id },
+            },
+            &config,
+        )
+        .await
+        .expect("show renders names, usage and tags");
+
+        // An identity without passkeys reports the empty state.
+        {
+            let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+            service
+                .create_identity_full(persona_core::Identity::new(
+                    "bob".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+        }
+        handle_passkey(
+            PasskeyArgs {
+                command: PasskeyCommand::List {
+                    identity: Some("bob".to_string()),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("empty list reports no passkeys");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

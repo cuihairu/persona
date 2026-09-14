@@ -12,70 +12,20 @@
 pub mod policy;
 pub mod transport;
 
-use anyhow::{anyhow, Context, Result};
+mod daemon;
+
+pub use daemon::run_agent;
+
+use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use persona_core::{
-    BiometricPlatform, BiometricPrompt, BiometricProvider, PersonaError, RedactedLoggerBuilder,
-    Repository,
+    BiometricPlatform, BiometricPrompt, BiometricProvider, PersonaError, Repository,
 };
 use policy::{PolicyEnforcer, SignatureDecision};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn, Level};
-use transport::{default_agent_path, AgentListener, AgentStream};
-
-pub async fn run_agent() -> Result<()> {
-    RedactedLoggerBuilder::new(Level::INFO)
-        .include_target(false)
-        .init()?;
-
-    let socket_path = default_agent_path();
-    let db_path = resolve_persona_db_path();
-
-    // Create listener using cross-platform abstraction
-    let mut listener = AgentListener::bind(&socket_path)
-        .await
-        .with_context(|| format!("Failed to bind socket {}", socket_path.display()))?;
-    let mut endpoint = listener.address();
-    if endpoint == "unknown" {
-        endpoint = socket_path.display().to_string();
-    }
-    info!("persona-ssh-agent listening at {}", endpoint);
-    println!("SSH_AUTH_SOCK={}", endpoint);
-
-    // Write state files
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".persona")
-        });
-    let _ = std::fs::create_dir_all(&state_dir);
-    let sock_file = state_dir.join("ssh-agent.sock");
-    let pid_file = state_dir.join("ssh-agent.pid");
-    let _ = std::fs::write(&sock_file, &endpoint);
-    let _ = std::fs::write(&pid_file, std::process::id().to_string());
-
-    // Load keys from Persona
-    let mut agent = Agent::new();
-    agent
-        .load_keys_from_persona(&db_path)
-        .await
-        .map_err(|e| anyhow!(e))?;
-    info!("Loaded {} SSH keys from Persona", agent.keys.len());
-
-    loop {
-        let stream = listener.accept().await?;
-        let mut agent_clone = agent.clone_shallow();
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(&mut agent_clone, stream).await {
-                warn!("Connection error: {}", e);
-            }
-        });
-    }
-}
+use tracing::{info, warn};
+use transport::AgentStream;
 
 pub async fn handle_connection(agent: &mut Agent, mut stream: AgentStream) -> Result<()> {
     use byteorder::{BigEndian, ByteOrder};
@@ -314,7 +264,7 @@ impl Agent {
                         "Biometric unavailable. Allow SSH signature for '{}'? [y/N] ",
                         hostname.as_deref().unwrap_or("unknown host")
                     );
-                    if !prompt_confirm_blocking(&prompt)? {
+                    if !daemon::prompt_confirm_blocking(&prompt)? {
                         tracing::warn!("Signature denied by user (reason: {})", reason);
                         return Ok(failure_packet());
                     }
@@ -358,7 +308,7 @@ impl Agent {
                     "Allow SSH signature? [y/N] ".to_string()
                 };
 
-                if !prompt_confirm_blocking(&prompt)? {
+                if !daemon::prompt_confirm_blocking(&prompt)? {
                     tracing::warn!("Signature denied by user (reason: {})", reason);
                     return Ok(failure_packet());
                 }
@@ -491,32 +441,6 @@ fn failure_packet() -> Vec<u8> {
     BigEndian::write_u32(&mut out[0..4], 1);
     out[4] = 5u8;
     out
-}
-
-fn prompt_confirm_blocking(prompt: &str) -> Result<bool> {
-    use std::io::{Read, Write};
-    // Prefer /dev/tty for interactive consent
-    if let Ok(mut tty) = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/tty")
-    {
-        let _ = write!(tty, "{}", prompt);
-        let _ = tty.flush();
-        let mut buf = [0u8; 3];
-        let n = tty.read(&mut buf).unwrap_or(0);
-        let s = String::from_utf8_lossy(&buf[..n]).to_lowercase();
-        return Ok(s.starts_with('y'));
-    }
-    // Fallback to stdin/stdout
-    print!("{}", prompt);
-    let _ = std::io::stdout().flush();
-    let mut input = String::new();
-    if std::io::stdin().read_line(&mut input).is_ok() {
-        let s = input.trim().to_lowercase();
-        return Ok(s == "y" || s == "yes");
-    }
-    Ok(false)
 }
 
 fn current_target_host() -> Option<String> {
@@ -668,7 +592,10 @@ mod tests {
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| StdMutex::new(())).lock().unwrap()
+        // Recover from a poisoned lock so one failing test does not cascade.
+        LOCK.get_or_init(|| StdMutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn make_test_agent(keys: Vec<AgentKey>) -> Agent {
@@ -823,6 +750,8 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         use byteorder::{BigEndian, ByteOrder};
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        use crate::transport::AgentListener;
+
         let dir = tempfile::tempdir().unwrap();
         let sock_path = dir.path().join("persona-agent-e2e.sock");
 
@@ -893,5 +822,703 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
 
         let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
         verifying.verify_strict(data, &sig).unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // Agent construction / env-based key loading
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn agent_default_and_clone_shallow_share_policy() {
+        let agent = Agent::default();
+        assert!(agent.keys.is_empty());
+
+        let (k, _) = make_ed25519_key("shared");
+        let with_key = Agent {
+            keys: vec![k],
+            ..Agent::default()
+        };
+        let clone = with_key.clone_shallow();
+        assert_eq!(clone.keys.len(), 1);
+        assert_eq!(clone.keys[0].comment, "shared");
+        assert!(Arc::ptr_eq(&with_key.policy, &clone.policy));
+        assert!(Arc::ptr_eq(
+            &with_key.biometric_provider,
+            &clone.biometric_provider
+        ));
+    }
+
+    fn clear_test_key_env() {
+        std::env::remove_var("PERSONA_AGENT_TEST_KEY_SEED");
+        std::env::remove_var("PERSONA_AGENT_TEST_KEY_COMMENT");
+    }
+
+    #[test]
+    fn load_test_key_from_env_covers_all_paths() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        let mut agent = Agent::default();
+
+        // No env var -> no key, no error.
+        assert!(!agent.load_test_key_from_env().unwrap());
+        assert!(agent.keys.is_empty());
+
+        // Malformed base64 -> error.
+        std::env::set_var("PERSONA_AGENT_TEST_KEY_SEED", "!!!not base64!!!");
+        assert!(agent.load_test_key_from_env().is_err());
+
+        // Wrong size payload -> error.
+        std::env::set_var("PERSONA_AGENT_TEST_KEY_SEED", BASE64.encode(b"short"));
+        assert!(agent.load_test_key_from_env().is_err());
+
+        // Valid 32-byte seed -> key loaded with optional comment override.
+        let seed = [7u8; 32];
+        std::env::set_var("PERSONA_AGENT_TEST_KEY_SEED", BASE64.encode(seed));
+        assert!(agent.load_test_key_from_env().unwrap());
+        assert_eq!(agent.keys.len(), 1);
+        assert_eq!(agent.keys[0].comment, "Test Key");
+        assert_eq!(agent.keys[0].secret_seed, seed);
+
+        std::env::set_var("PERSONA_AGENT_TEST_KEY_COMMENT", "custom comment");
+        assert!(agent.load_test_key_from_env().unwrap());
+        assert_eq!(agent.keys.len(), 2);
+        assert_eq!(agent.keys[1].comment, "custom comment");
+
+        clear_test_key_env();
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_test_env_override_short_circuits() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        let seed = [11u8; 32];
+        std::env::set_var("PERSONA_AGENT_TEST_KEY_SEED", BASE64.encode(seed));
+
+        let mut agent = Agent::default();
+        let bogus_path = PathBuf::from("/nonexistent/dir/identities.db");
+        agent.load_keys_from_persona(&bogus_path).await.unwrap();
+        assert_eq!(agent.keys.len(), 1);
+        assert_eq!(agent.keys[0].secret_seed, seed);
+
+        clear_test_key_env();
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_missing_db_parent_errors() {
+        let _guard = env_lock();
+        clear_test_key_env();
+
+        let dir = tempfile::tempdir().unwrap();
+        // Parent directory does not exist -> Database::from_file cannot create it.
+        let db_path = dir.path().join("no-such-dir").join("identities.db");
+        let mut agent = Agent::default();
+        assert!(agent.load_keys_from_persona(&db_path).await.is_err());
+    }
+
+    fn openssh_pub_line(seed: [u8; 32]) -> (String, Vec<u8>) {
+        let signing = ed25519_dalek::SigningKey::from_bytes(&seed);
+        let pub_bytes = signing.verifying_key().to_bytes();
+        let mut blob = Vec::new();
+        write_ssh_string(&mut blob, b"ssh-ed25519").unwrap();
+        write_ssh_string(&mut blob, &pub_bytes).unwrap();
+        (
+            format!("ssh-ed25519 {} test@host", BASE64.encode(&blob)),
+            blob,
+        )
+    }
+
+    fn ssh_credential_data(seed: [u8; 32], pub_line: &str) -> persona_core::models::CredentialData {
+        use persona_core::models::{CredentialData, SshKeyData};
+        CredentialData::SshKey(SshKeyData {
+            private_key: BASE64.encode(seed),
+            public_key: pub_line.to_string(),
+            key_type: "ed25519".to_string(),
+            passphrase: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_loads_valid_ssh_credential() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        let identity = service
+            .create_identity(
+                "agent-test".to_string(),
+                persona_core::models::IdentityType::Personal,
+            )
+            .await
+            .unwrap();
+
+        let seed = [21u8; 32];
+        let (pub_line, pub_blob) = openssh_pub_line(seed);
+        let cred = service
+            .create_credential(
+                identity.id,
+                "my ssh key".to_string(),
+                persona_core::models::CredentialType::SshKey,
+                persona_core::models::SecurityLevel::High,
+                &ssh_credential_data(seed, &pub_line),
+            )
+            .await
+            .unwrap();
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert_eq!(agent.keys.len(), 1);
+        let loaded = &agent.keys[0];
+        assert_eq!(loaded.comment, "my ssh key");
+        assert_eq!(loaded.secret_seed, seed);
+        assert_eq!(loaded.public_blob, pub_blob);
+        assert_eq!(loaded.identity_id, identity.id);
+        assert_eq!(loaded.credential_id, cred.id);
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_skips_invalid_seed_and_pubkey() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        let identity = service
+            .create_identity(
+                "agent-test".to_string(),
+                persona_core::models::IdentityType::Personal,
+            )
+            .await
+            .unwrap();
+
+        // Bad seed size (not 32 bytes) and malformed public key text.
+        let bad_seed =
+            persona_core::models::CredentialData::SshKey(persona_core::models::SshKeyData {
+                private_key: BASE64.encode(b"too short"),
+                public_key: "ssh-ed25519 AAAA".to_string(),
+                key_type: "ed25519".to_string(),
+                passphrase: None,
+            });
+        service
+            .create_credential(
+                identity.id,
+                "bad seed".to_string(),
+                persona_core::models::CredentialType::SshKey,
+                persona_core::models::SecurityLevel::High,
+                &bad_seed,
+            )
+            .await
+            .unwrap();
+
+        let (_, good_blob) = openssh_pub_line([31u8; 32]);
+        let bad_pub =
+            persona_core::models::CredentialData::SshKey(persona_core::models::SshKeyData {
+                private_key: BASE64.encode([32u8; 32]),
+                public_key: "not-a-valid-key-line".to_string(),
+                key_type: "ed25519".to_string(),
+                passphrase: None,
+            });
+        service
+            .create_credential(
+                identity.id,
+                "bad pubkey".to_string(),
+                persona_core::models::CredentialType::SshKey,
+                persona_core::models::SecurityLevel::High,
+                &bad_pub,
+            )
+            .await
+            .unwrap();
+
+        // A valid one to prove loading still works after skips.
+        let seed = [41u8; 32];
+        let (pub_line, _) = openssh_pub_line(seed);
+        service
+            .create_credential(
+                identity.id,
+                "good".to_string(),
+                persona_core::models::CredentialType::SshKey,
+                persona_core::models::SecurityLevel::High,
+                &ssh_credential_data(seed, &pub_line),
+            )
+            .await
+            .unwrap();
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert_eq!(agent.keys.len(), 1, "only the valid credential loads");
+        assert_eq!(agent.keys[0].secret_seed, seed);
+        let _ = good_blob;
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_locked_vault_loads_nothing() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+
+        // Vault has users but no PERSONA_MASTER_PASSWORD: fail closed, no keys.
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        assert!(agent.keys.is_empty());
+
+        // Wrong password also loads nothing.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        assert!(agent.keys.is_empty());
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    // ------------------------------------------------------------------
+    // sign_response policy branches
+    // ------------------------------------------------------------------
+
+    fn agent_with_policy(
+        keys: Vec<AgentKey>,
+        policy: policy::SigningPolicy,
+        biometric_provider: Arc<dyn BiometricProvider>,
+    ) -> Agent {
+        Agent {
+            keys,
+            policy: Arc::new(Mutex::new(PolicyEnforcer::new(policy))),
+            biometric_provider,
+        }
+    }
+
+    enum StubOutcome {
+        Succeed(bool),
+        Fail(String),
+    }
+
+    fn stub_biometric(available: bool, outcome: StubOutcome) -> Arc<dyn BiometricProvider> {
+        struct Stub {
+            available: bool,
+            outcome: StubOutcome,
+        }
+        impl BiometricProvider for Stub {
+            fn is_available(&self, _hint: Option<BiometricPlatform>) -> bool {
+                self.available
+            }
+            fn authenticate(
+                &self,
+                prompt: &BiometricPrompt,
+            ) -> Result<persona_core::BiometricAuthResult> {
+                let verified = match &self.outcome {
+                    StubOutcome::Succeed(v) => *v,
+                    StubOutcome::Fail(msg) => {
+                        return Err(
+                            persona_core::PersonaError::AuthenticationFailed(msg.clone()).into(),
+                        );
+                    }
+                };
+                Ok(persona_core::BiometricAuthResult {
+                    user_id: prompt.user_id,
+                    verified,
+                    platform: prompt
+                        .platform
+                        .unwrap_or(BiometricPlatform::LinuxSecretService),
+                })
+            }
+        }
+        Arc::new(Stub { available, outcome })
+    }
+
+    fn sign_payload_for(key: &AgentKey, data: &[u8]) -> Vec<u8> {
+        let mut payload = Vec::new();
+        write_ssh_string(&mut payload, &key.public_blob).unwrap();
+        write_ssh_string(&mut payload, data).unwrap();
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload
+    }
+
+    #[tokio::test]
+    async fn sign_response_unknown_key_errors() {
+        let agent = make_test_agent(vec![]);
+        let (_, _) = make_ed25519_key("unused");
+        // Blob for a key the agent does not hold.
+        let seed = [3u8; 32];
+        let (pub_line, blob) = openssh_pub_line(seed);
+        let _ = pub_line;
+        let payload = {
+            let mut p = Vec::new();
+            write_ssh_string(&mut p, &blob).unwrap();
+            write_ssh_string(&mut p, b"data").unwrap();
+            p.extend_from_slice(&0u32.to_be_bytes());
+            p
+        };
+        let err = agent.sign_response(&payload).unwrap_err();
+        assert!(err.to_string().contains("Key not found"));
+    }
+
+    #[tokio::test]
+    async fn sign_response_denied_by_deny_all_policy() {
+        let _guard = env_lock();
+        std::env::remove_var("PERSONA_AGENT_TARGET_HOST");
+
+        let mut policy = policy::SigningPolicy::default();
+        policy.global.deny_all = true;
+        let (key, _) = make_ed25519_key("denied");
+        let agent = agent_with_policy(
+            vec![key.clone()],
+            policy,
+            stub_biometric(true, StubOutcome::Succeed(true)),
+        );
+
+        let pkt = agent
+            .sign_response(&sign_payload_for(&key, b"data"))
+            .unwrap();
+        assert_eq!(pkt[4], 5u8, "failure packet");
+    }
+
+    #[tokio::test]
+    async fn sign_response_biometric_branches() {
+        let _guard = env_lock();
+        std::env::remove_var("PERSONA_AGENT_TARGET_HOST");
+
+        for (name, outcome, expect_success) in [
+            ("verified", StubOutcome::Succeed(true), true),
+            ("rejected", StubOutcome::Succeed(false), false),
+            (
+                "error",
+                StubOutcome::Fail("sensor unavailable".to_string()),
+                false,
+            ),
+        ] {
+            let mut policy = policy::SigningPolicy::default();
+            let (key, verifying) = make_ed25519_key("biometric");
+            policy.key_policies.insert(
+                key.credential_id.to_string(),
+                policy::KeyPolicy {
+                    require_biometric: true,
+                    ..Default::default()
+                },
+            );
+            let agent = agent_with_policy(vec![key.clone()], policy, stub_biometric(true, outcome));
+
+            let pkt = agent
+                .sign_response(&sign_payload_for(&key, b"payload"))
+                .unwrap();
+            if expect_success {
+                assert_eq!(pkt[4], 14u8, "{}: signature response", name);
+                let mut slice: &[u8] = &pkt[5..];
+                let sig_blob = read_ssh_string(&mut slice).unwrap();
+                let mut s: &[u8] = &sig_blob;
+                let _algo = read_ssh_string(&mut s).unwrap();
+                let sig_bytes = read_ssh_string(&mut s).unwrap();
+                let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
+                verifying.verify_strict(b"payload", &sig).unwrap();
+            } else {
+                assert_eq!(pkt[4], 5u8, "{}: failure packet", name);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // handle_connection protocol branches
+    // ------------------------------------------------------------------
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_connection_replies_failure_for_unsupported_type() {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("unsupported.sock");
+        let mut listener = crate::transport::AgentListener::bind(&sock_path)
+            .await
+            .unwrap();
+        let mut agent = make_test_agent(vec![]);
+
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await.unwrap();
+            handle_connection(&mut agent, stream).await
+        });
+
+        let mut client = tokio::net::UnixStream::connect(&sock_path).await.unwrap();
+        // Empty payload is skipped entirely.
+        client.write_all(&0u32.to_be_bytes()).await.unwrap();
+        // Unsupported type (9) gets a failure packet (5).
+        let mut req = vec![0u8; 5];
+        BigEndian::write_u32(&mut req[0..4], 1);
+        req[4] = 9u8;
+        client.write_all(&req).await.unwrap();
+
+        let mut len_buf = [0u8; 4];
+        client.read_exact(&mut len_buf).await.unwrap();
+        let mut resp = vec![0u8; BigEndian::read_u32(&len_buf) as usize];
+        client.read_exact(&mut resp).await.unwrap();
+        assert_eq!(resp[0], 5u8);
+
+        // Truncated packet body (declared 16, sent 2) -> connection errors out.
+        client.write_all(&16u32.to_be_bytes()).await.unwrap();
+        client.write_all(b"xy").await.unwrap();
+        drop(client);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), server).await;
+        let handler = result.expect("server should finish").unwrap();
+        assert!(handler.is_err(), "truncated body must surface an error");
+    }
+
+    // ------------------------------------------------------------------
+    // Host detection fallbacks / db path / parsing edges
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn current_target_host_command_and_connection_fallbacks() {
+        let _guard = env_lock();
+        for var in [
+            "PERSONA_AGENT_TARGET_HOST",
+            "PERSONA_AGENT_TARGET_HOST_HINT",
+            "PERSONA_AGENT_SSH_DEST",
+            "SSH_CONNECTION",
+            "SSH_CLIENT",
+            "PERSONA_AGENT_SSH_COMMAND",
+            "SSH_ORIGINAL_COMMAND",
+            "GIT_SSH_COMMAND",
+        ] {
+            std::env::remove_var(var);
+        }
+
+        // SSH_CLIENT second-priority connection var.
+        std::env::set_var("SSH_CLIENT", "10.0.0.9 2222 10.0.0.1 22");
+        assert_eq!(current_target_host().as_deref(), Some("10.0.0.9"));
+        std::env::remove_var("SSH_CLIENT");
+
+        // PERSONA_AGENT_SSH_COMMAND parsed for a bare (dotless) hostname.
+        std::env::set_var("PERSONA_AGENT_SSH_COMMAND", "ssh admin@intranet");
+        assert_eq!(current_target_host().as_deref(), Some("intranet"));
+        std::env::remove_var("PERSONA_AGENT_SSH_COMMAND");
+
+        // SSH_ORIGINAL_COMMAND wins over GIT_SSH_COMMAND and filters flags/paths.
+        std::env::set_var(
+            "SSH_ORIGINAL_COMMAND",
+            "ssh -p 2222 deploy@host.example.com",
+        );
+        std::env::set_var("GIT_SSH_COMMAND", "ssh git@other.example.com");
+        assert_eq!(current_target_host().as_deref(), Some("host.example.com"));
+        std::env::remove_var("SSH_ORIGINAL_COMMAND");
+        std::env::remove_var("GIT_SSH_COMMAND");
+
+        // Only path-like / flag tokens -> None.
+        std::env::set_var("GIT_SSH_COMMAND", "ssh /usr/bin/git-cleanup");
+        assert_eq!(current_target_host(), None);
+        std::env::remove_var("GIT_SSH_COMMAND");
+
+        // A quoted $variable is filtered; nothing else qualifies -> None.
+        std::env::set_var("PERSONA_AGENT_SSH_COMMAND", "ssh \"$TARGET\"");
+        assert_eq!(current_target_host(), None);
+        std::env::remove_var("PERSONA_AGENT_SSH_COMMAND");
+    }
+
+    #[test]
+    fn resolve_persona_db_path_prefers_env_override() {
+        let _guard = env_lock();
+
+        let dir = tempfile::tempdir().unwrap();
+        let custom = dir.path().join("custom.db");
+        std::env::set_var("PERSONA_DB_PATH", &custom);
+        assert_eq!(resolve_persona_db_path(), custom);
+
+        std::env::remove_var("PERSONA_DB_PATH");
+        let fallback = resolve_persona_db_path();
+        assert!(fallback.ends_with(".persona/identities.db"));
+    }
+
+    #[test]
+    fn parse_openssh_pub_to_blob_rejects_malformed_lines() {
+        assert_eq!(parse_openssh_pub_to_blob(""), None);
+        assert_eq!(parse_openssh_pub_to_blob("ssh-ed25519 !!!not-b64!!!"), None);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn audit_sign_with_digest_writes_log_inside_runtime() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("audit.db");
+        std::env::set_var("PERSONA_DB_PATH", &db_path);
+
+        // audit_logs has FKs to identities/credentials: seed real rows first.
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let identity_repo = persona_core::storage::IdentityRepository::new(db.clone());
+        let identity = persona_core::models::Identity::new(
+            "audit-owner".to_string(),
+            persona_core::models::IdentityType::Personal,
+        );
+        identity_repo.create(&identity).await.unwrap();
+        // credential_id also carries an FK to credentials: seed that row too.
+        use persona_core::models::{Credential, CredentialType, SecurityLevel};
+        let mut cred = Credential::new(
+            identity.id,
+            "audit-key".to_string(),
+            CredentialType::SshKey,
+            SecurityLevel::High,
+            vec![7u8; 32],
+            None,
+        );
+        cred.encrypted_data = vec![7u8; 32];
+        let credential_repo = persona_core::storage::CredentialRepository::new(db.clone());
+        credential_repo.create(&cred).await.unwrap();
+        let credential = cred.id;
+        drop(db);
+
+        audit_sign_with_digest(&identity.id, &credential, b"signed-bytes").unwrap();
+
+        // The audit write is spawned in the background; poll briefly for it.
+        let mut found = false;
+        let mut last_err = String::new();
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            match persona_core::Database::from_file(&db_path).await {
+                Ok(db) => match db.migrate().await {
+                    Ok(()) => {
+                        let repo = persona_core::storage::AuditLogRepository::new(db.clone());
+                        match repo
+                            .find_by_action(&persona_core::models::AuditAction::Custom(
+                                "ssh_sign".to_string(),
+                            ))
+                            .await
+                        {
+                            Ok(logs) if !logs.is_empty() => {
+                                found = true;
+                                break;
+                            }
+                            Ok(_) => {}
+                            Err(e) => last_err = format!("find: {e}"),
+                        }
+                    }
+                    Err(e) => last_err = format!("migrate: {e}"),
+                },
+                Err(e) => last_err = format!("open: {e}"),
+            }
+        }
+        std::env::remove_var("PERSONA_DB_PATH");
+        assert!(
+            found,
+            "ssh_sign audit entry should be persisted; last_err={last_err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handle_connection_sign_request_roundtrip() {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("audit.db");
+        std::env::set_var("PERSONA_DB_PATH", &db_path);
+        std::env::remove_var("PERSONA_AGENT_TARGET_HOST");
+
+        let sock_path = dir.path().join("sign.sock");
+        let mut listener = crate::transport::AgentListener::bind(&sock_path)
+            .await
+            .unwrap();
+        let (k, verifying) = make_ed25519_key("signer");
+        let mut agent = make_test_agent(vec![k.clone()]);
+
+        let server = tokio::spawn(async move {
+            let stream = listener.accept().await.unwrap();
+            handle_connection(&mut agent, stream).await
+        });
+
+        let mut client = tokio::net::UnixStream::connect(&sock_path).await.unwrap();
+        let payload = sign_payload_for(&k, b"frame-payload");
+        let mut req = Vec::new();
+        req.extend_from_slice(&((payload.len() + 1) as u32).to_be_bytes());
+        req.push(13u8); // SSH_AGENTC_SIGN_REQUEST
+        req.extend_from_slice(&payload);
+        client.write_all(&req).await.unwrap();
+
+        let mut len_buf = [0u8; 4];
+        client.read_exact(&mut len_buf).await.unwrap();
+        let mut resp = vec![0u8; BigEndian::read_u32(&len_buf) as usize];
+        client.read_exact(&mut resp).await.unwrap();
+        std::env::remove_var("PERSONA_DB_PATH");
+        drop(client);
+
+        assert_eq!(resp[0], 14u8, "signature answer");
+        let mut slice: &[u8] = &resp[1..];
+        let sig_blob = read_ssh_string(&mut slice).unwrap();
+        let mut s: &[u8] = &sig_blob;
+        let algo = read_ssh_string(&mut s).unwrap();
+        let sig_bytes = read_ssh_string(&mut s).unwrap();
+        assert_eq!(algo, b"ssh-ed25519");
+        let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
+        verifying.verify_strict(b"frame-payload", &sig).unwrap();
+
+        let handler = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server should finish")
+            .unwrap();
+        handler.unwrap();
+    }
+
+    #[test]
+    fn audit_sign_with_digest_sync_fallback_builds_runtime() {
+        // Outside any tokio runtime this exercises the synchronous fallback
+        // path that spins up its own current-thread runtime.
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("audit-sync.db");
+        std::env::set_var("PERSONA_DB_PATH", &db_path);
+
+        // Seed the FK rows synchronously.
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let identity_id = rt.block_on(async {
+            let db = persona_core::Database::from_file(&db_path).await.unwrap();
+            db.migrate().await.unwrap();
+            let identity_repo = persona_core::storage::IdentityRepository::new(db.clone());
+            let identity = persona_core::models::Identity::new(
+                "sync-audit".to_string(),
+                persona_core::models::IdentityType::Personal,
+            );
+            identity_repo.create(&identity).await.unwrap();
+            use persona_core::models::{Credential, CredentialType, SecurityLevel};
+            let mut cred = Credential::new(
+                identity.id,
+                "sync-key".to_string(),
+                CredentialType::SshKey,
+                SecurityLevel::High,
+                vec![9u8; 32],
+                None,
+            );
+            cred.encrypted_data = vec![9u8; 32];
+            let credential_repo = persona_core::storage::CredentialRepository::new(db.clone());
+            credential_repo.create(&cred).await.unwrap();
+            (identity.id, cred.id)
+        });
+
+        let result = std::thread::spawn(move || {
+            audit_sign_with_digest(&identity_id.0, &identity_id.1, b"sync-payload")
+        })
+        .join()
+        .unwrap();
+        result.unwrap();
+        std::env::remove_var("PERSONA_DB_PATH");
     }
 }

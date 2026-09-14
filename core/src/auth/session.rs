@@ -614,4 +614,55 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert!(!manager.is_valid(&session.id).await);
     }
+
+    #[tokio::test]
+    async fn test_session_manager_remove_session() {
+        let manager = SessionManager::new();
+        let session = manager.create_session("removable".to_string()).await;
+        assert!(manager.get_session(&session.id).await.is_some());
+
+        manager.remove_session(&session.id).await;
+        assert!(manager.get_session(&session.id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_touch_with_timeouts_disabled() {
+        // Both timeouts disabled: should_auto_lock falls straight through and
+        // the touch succeeds.
+        let manager = SessionManager::with_config(AutoLockConfig {
+            inactivity_timeout_secs: 0,
+            absolute_timeout_secs: 0,
+            ..Default::default()
+        });
+        let session = manager.create_session("u".to_string()).await;
+        assert!(manager.touch(&session.id).await.is_ok());
+        assert!(manager.is_valid(&session.id).await);
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_touch_after_absolute_timeout_locks() {
+        // touch reaches should_auto_lock directly; is_valid would short-circuit
+        // on the expired session without ever consulting it.
+        let manager = SessionManager::with_config(AutoLockConfig {
+            inactivity_timeout_secs: 0,
+            absolute_timeout_secs: 1,
+            ..Default::default()
+        });
+        let session = manager.create_session("u".to_string()).await;
+        // get_lifetime_seconds truncates to whole seconds, so the 1s timeout
+        // needs a full extra second of headroom.
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+
+        let err = manager.touch(&session.id).await.unwrap_err();
+        assert!(err.contains("automatically locked"));
+        assert!(!manager.is_valid(&session.id).await);
+        assert!(manager.get_session(&session.id).await.unwrap().locked);
+    }
+
+    #[tokio::test]
+    async fn session_manager_default_matches_new() {
+        let manager = SessionManager::default();
+        let created = manager.create_session("u".to_string()).await;
+        assert!(manager.get_session(&created.id).await.is_some());
+    }
 }

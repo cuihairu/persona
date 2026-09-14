@@ -102,3 +102,80 @@ pub extern "C" fn persona_list_identities() -> *mut c_char {
         Err(_) => std::ptr::null_mut(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CStr;
+
+    #[test]
+    fn init_returns_success_code() {
+        assert_eq!(persona_init(), 0);
+    }
+
+    #[test]
+    fn version_returns_package_version_and_frees_cleanly() {
+        let ptr = persona_version();
+        assert!(!ptr.is_null());
+        unsafe {
+            let version = CStr::from_ptr(ptr).to_str().unwrap();
+            assert_eq!(version, env!("CARGO_PKG_VERSION"));
+            persona_free_string(ptr);
+        }
+    }
+
+    #[test]
+    fn free_string_accepts_null() {
+        unsafe { persona_free_string(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn create_identity_rejects_null_and_accepts_valid_names() {
+        let result = unsafe { persona_create_identity(std::ptr::null()) };
+        assert!(!result.success);
+
+        let name = CString::new("mobile-alice").unwrap();
+        let result = unsafe { persona_create_identity(name.as_ptr()) };
+        assert!(result.success);
+        assert!(result.error_message.is_null());
+        unsafe { persona_free_result(result) };
+    }
+
+    #[test]
+    fn create_identity_rejects_non_utf8_names() {
+        let name = CString::new(&[0xff, 0xfe][..]).unwrap();
+        let result = unsafe { persona_create_identity(name.as_ptr()) };
+        assert!(!result.success);
+        unsafe {
+            let msg = CStr::from_ptr(result.error_message).to_str().unwrap();
+            assert_eq!(msg, "Invalid UTF-8 in name");
+            persona_free_result(result);
+        }
+    }
+
+    #[test]
+    fn list_identities_returns_empty_json_array() {
+        let ptr = persona_list_identities();
+        assert!(!ptr.is_null());
+        unsafe {
+            let json = CStr::from_ptr(ptr).to_str().unwrap();
+            assert_eq!(json, "[]");
+            persona_free_string(ptr);
+        }
+    }
+
+    #[test]
+    fn result_helpers_round_trip_error_messages() {
+        let ok = PersonaResult::success();
+        assert!(ok.success);
+        assert!(ok.error_message.is_null());
+
+        let err = PersonaResult::error("boom");
+        assert!(!err.success);
+        unsafe {
+            let msg = CStr::from_ptr(err.error_message).to_str().unwrap();
+            assert_eq!(msg, "boom");
+            persona_free_result(err);
+        }
+    }
+}
