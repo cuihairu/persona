@@ -519,6 +519,7 @@ fn test_ssh_start_agent_resolves_local_binary_without_path_entry() -> Result<()>
     Ok(())
 }
 
+#[cfg(not(windows))]
 #[test]
 fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
     let workspace_dir = tempdir()?;
