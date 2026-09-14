@@ -15,12 +15,19 @@ use persona_core::{
     HealthReport, HealthScanConfig, DEFAULT_EXPIRY_WARNING_DAYS, DEFAULT_MIN_PASSWORD_SCORE,
     DEFAULT_STALE_AFTER_DAYS,
 };
+use std::sync::Arc;
 
 #[derive(Args)]
 pub struct WatchtowerArgs {
     /// Print the report as JSON (metadata only, no secrets)
     #[arg(long)]
     pub json: bool,
+
+    /// Also check passwords against the HIBP breach corpus (k-anonymity:
+    /// only a 5-char hash prefix is sent). Network failures degrade to a
+    /// warning; offline rules are unaffected.
+    #[arg(long)]
+    pub check_breaches: bool,
 
     /// Flag passwords whose zxcvbn score (0-4) is below this
     #[arg(long, value_parser = clap::value_parser!(u8).range(..=4))]
@@ -55,9 +62,32 @@ pub(crate) async fn execute_with(
     config: &CliConfig,
     ui: &dyn PromptUi,
 ) -> Result<()> {
+    // `--check-breaches` → HIBP checker; construction failure (rare)
+    // degrades to an offline scan rather than aborting.
+    let checker: Option<Arc<dyn persona_core::BreachChecker>> = if args.check_breaches {
+        match persona_core::HibpBreachChecker::new() {
+            Ok(checker) => Some(Arc::new(checker)),
+            Err(e) => {
+                eprintln!("Warning: breach checker unavailable ({e}); scanning offline.");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    execute_with_checker(args, config, ui, checker).await
+}
+
+/// Test seam: inject a checker directly instead of building the HIBP client.
+pub(crate) async fn execute_with_checker(
+    args: WatchtowerArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    checker: Option<Arc<dyn persona_core::BreachChecker>>,
+) -> Result<()> {
     let service = init_service(config, ui).await?;
     let report = service
-        .scan_health(args.scan_config())
+        .scan_health_with(args.scan_config(), checker.as_deref())
         .await
         .into_anyhow()?;
 
@@ -75,6 +105,7 @@ fn kind_label(kind: &persona_core::HealthIssueKind) -> &'static str {
     match kind {
         WeakPassword { .. } => "weak password",
         ReusedPassword { .. } => "reused password",
+        BreachedPassword { .. } => "breached password",
         Expired => "expired",
         ExpiringSoon { .. } => "expiring soon",
         StaleUnchanged { .. } => "stale",
@@ -167,6 +198,7 @@ mod tests {
     ) -> WatchtowerArgs {
         WatchtowerArgs {
             json: false,
+            check_breaches: false,
             min_score,
             expiry_days,
             stale_days,
@@ -298,6 +330,78 @@ mod tests {
         )
         .await
         .expect("json scan works");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// A stub checker can be injected through `execute_with_checker`; a hit
+    /// flows into the report and the command succeeds end-to-end.
+    #[tokio::test]
+    async fn checker_injection_flags_breached_seed() {
+        use std::collections::HashMap;
+
+        let _guard = lock_process_env();
+        let master = "watchtower-pass";
+
+        let dir = TempDir::new().unwrap();
+        let db = Database::from_file(&dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user(master).await.unwrap();
+        let identity = service
+            .create_identity("Watch".to_string(), persona_core::IdentityType::Personal)
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "weak-item".to_string(),
+                persona_core::CredentialType::Password,
+                persona_core::SecurityLevel::Medium,
+                &persona_core::CredentialData::Password(persona_core::PasswordCredentialData {
+                    password: "hunter2".to_string(),
+                    email: None,
+                    security_questions: vec![],
+                }),
+            )
+            .await
+            .unwrap();
+        drop(service);
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", master);
+
+        struct Stub {
+            counts: HashMap<String, u64>,
+        }
+        #[async_trait::async_trait]
+        impl persona_core::BreachChecker for Stub {
+            async fn breach_counts(
+                &self,
+                sha1_hex: &[String],
+            ) -> persona_core::Result<HashMap<String, u64>> {
+                Ok(sha1_hex
+                    .iter()
+                    .map(|d| (d.clone(), self.counts.get(d).copied().unwrap_or(0)))
+                    .collect())
+            }
+        }
+
+        let checker: Arc<dyn persona_core::BreachChecker> = Arc::new(Stub {
+            counts: HashMap::from([(persona_core::sha1_hex_upper("hunter2"), 37_584)]),
+        });
+
+        let mut breach_args = args(Some(2), None, None);
+        breach_args.check_breaches = true;
+        execute_with_checker(
+            breach_args,
+            &config_for(&dir),
+            &crate::utils::prompt::TerminalUi,
+            Some(checker),
+        )
+        .await
+        .expect("scan with injected checker works");
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

@@ -20,6 +20,8 @@ path = "src/main.rs"
 # Core library
 persona-core = { path = "../core" }
 
+async-trait.workspace = true
+
 # CLI framework
 clap = { version = "4.4", features = ["derive", "color", "suggestions"] }
 clap_complete = "4.4"
