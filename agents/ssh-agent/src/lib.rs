@@ -586,6 +586,7 @@ fn detect_platform() -> Option<BiometricPlatform> {
 }
 
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)] // env_lock must be held across .await for env var isolation in parallel tests
 mod tests {
     use super::*;
     use std::sync::{Mutex as StdMutex, OnceLock};

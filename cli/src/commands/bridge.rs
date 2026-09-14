@@ -1734,7 +1734,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn passkey_bridge_protocol_cases() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
@@ -2165,7 +2165,7 @@ pub(crate) mod tests {
 
     #[test]
     fn path_resolvers_honor_override_and_environment() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PERSONA_DB_PATH");
         std::env::remove_var("PERSONA_BRIDGE_STATE_DIR");
 
@@ -2208,7 +2208,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_pairing_lifecycle() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
 
@@ -2319,7 +2319,7 @@ pub(crate) mod tests {
             CredentialData, PasswordCredentialData, SecurityLevel,
         };
 
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
@@ -2673,7 +2673,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_hello_bad_payload_and_pairing_disabled() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
 
         let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
@@ -2739,7 +2739,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_status_reports_lock_state_and_active_identity() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
@@ -2810,7 +2810,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_pairing_request_and_finalize_error_paths() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
 
         let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
@@ -2905,7 +2905,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_get_suggestions_filters_and_orders_items() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
@@ -3031,7 +3031,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_request_fill_success_and_error_branches() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
@@ -3223,7 +3223,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_get_totp_success_and_error_branches() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
@@ -3467,7 +3467,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_copy_success_and_error_branches() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
@@ -3736,7 +3736,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_passkey_payload_validation_errors() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
 
         let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
@@ -3892,7 +3892,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn bridge_authenticated_session_signature_enforcement() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
         std::env::remove_var("PERSONA_BRIDGE_AUTH_MAX_SKEW_MS");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
@@ -4221,7 +4221,7 @@ pub(crate) mod tests {
 
     #[test]
     fn gesture_required_env_parsing() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
         assert!(gesture_required(), "default is on");
@@ -4573,7 +4573,7 @@ pub(crate) mod tests {
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn open_db_and_unlocked_service_report_precise_errors() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
 
         let (dir, db_path, _state_dir, identity_id) = seeded_bridge().await;
