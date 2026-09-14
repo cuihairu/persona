@@ -140,7 +140,7 @@ Quality & Security
 - [x] Supply chain checks (cargo-deny, npm audit)
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
 - [ ] Watchtower: desktop UI panels
-- [ ] Watchtower: breach check (offline BreachChecker seam → HIBP k-anonymity)
+- [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
 - [ ] Reproducible builds
 
 References

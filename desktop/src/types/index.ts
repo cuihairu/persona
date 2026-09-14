@@ -88,6 +88,7 @@ export interface HealthIssueKindPayload {
   type:
     | 'weak_password'
     | 'reused_password'
+    | 'breached_password'
     | 'expired'
     | 'expiring_soon'
     | 'stale_unchanged';
@@ -95,6 +96,8 @@ export interface HealthIssueKindPayload {
   score?: number;
   /** reused_password：共用同一明文密码的凭据数 */
   group_size?: number;
+  /** breached_password：在泄露库中出现的次数 */
+  count?: number;
   /** expiring_soon / stale_unchanged：距过期/未更新天数 */
   days?: number;
 }
@@ -109,6 +112,7 @@ export interface HealthIssue {
   type: HealthIssueKindPayload['type'];
   score?: number;
   group_size?: number;
+  count?: number;
   days?: number;
 }
 
@@ -127,6 +131,8 @@ export interface HealthScanRequest {
   expiry_warning_days?: number;
   /** 超过该天数未更新判陈旧 */
   stale_after_days?: number;
+  /** 查询 HIBP 泄露库（k-anonymity，仅发送哈希前 5 字符） */
+  check_breaches?: boolean;
 }
 
 /** Passkey 列表项（永不含私钥字段） */

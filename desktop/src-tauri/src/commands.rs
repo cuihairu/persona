@@ -2233,11 +2233,27 @@ pub async fn health_scan(
     request: Option<HealthScanRequest>,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<HealthReport>, String> {
-    let config = build_health_scan_config(&request.unwrap_or_default());
+    let request = request.unwrap_or_default();
+    let config = build_health_scan_config(&request);
+
+    // check_breaches → HIBP k-anonymity checker；构造失败（罕见）降级为
+    // 离线扫描而非报错，网络失败在 scan_health_with 内部也只告警。
+    let checker: Option<std::sync::Arc<dyn persona_core::BreachChecker>> =
+        if request.check_breaches.unwrap_or(false) {
+            match persona_core::HibpBreachChecker::new() {
+                Ok(checker) => Some(std::sync::Arc::new(checker)),
+                Err(e) => {
+                    tracing::warn!("health scan: breach checker unavailable: {e}");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
     let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
-        Some(service) => match service.scan_health(config).await {
+        Some(service) => match service.scan_health_with(config, checker.as_deref()).await {
             Ok(report) => Ok(ApiResponse::success(report)),
             Err(e) => {
                 let (code, msg) = map_persona_error(&e);
@@ -2992,6 +3008,19 @@ mod tests {
                 stale_after_days: persona_core::DEFAULT_STALE_AFTER_DAYS,
             }
         );
+    }
+
+    #[test]
+    fn health_scan_check_breaches_flag_parses_with_default_off() {
+        // 缺省 = 不查泄露库
+        let absent: HealthScanRequest = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(absent.check_breaches, None);
+
+        let on: HealthScanRequest =
+            serde_json::from_value(serde_json::json!({ "check_breaches": true })).unwrap();
+        assert_eq!(on.check_breaches, Some(true));
+        // flag 不影响扫描配置本体
+        assert_eq!(build_health_scan_config(&on), HealthScanConfig::default());
     }
 
     // -------------------------------------------------------------------------

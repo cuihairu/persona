@@ -565,6 +565,9 @@ pub struct HealthScanRequest {
     pub expiry_warning_days: Option<i64>,
     /// 超过该天数未更新的凭据判陈旧
     pub stale_after_days: Option<i64>,
+    /// 同时查询 HIBP 泄露库（k-anonymity：仅发送哈希前 5 字符）；
+    /// 网络失败降级为告警，不影响离线规则
+    pub check_breaches: Option<bool>,
 }
 
 /// 审计统计
