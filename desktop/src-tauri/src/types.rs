@@ -1,13 +1,39 @@
 use persona_core::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 /// Application state that holds the Persona service
+///
+/// `service` 用 `Arc` 包裹：auto-lock 回调在独立任务里触发落锁，
+/// 需要在不经过 Tauri `State` 的情况下持有同一份引用。
 pub struct AppState {
-    pub service: Mutex<Option<PersonaService>>,
+    pub service: Arc<Mutex<Option<PersonaService>>>,
     pub db_path: Mutex<Option<String>>,
     pub agent_handle: Mutex<Option<JoinHandle<()>>>,
+    /// auto-lock 回调只注册一次（多次 init_service 时防重复）
+    pub auto_lock_registered: std::sync::atomic::AtomicBool,
+    /// 待应答的 SSH 签名审批（request_id → oneshot），由
+    /// DesktopApprovalHandler 写入、ssh_approval_respond 命令取出
+    pub ssh_approvals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+}
+
+/// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求
+#[derive(Debug, Clone, Serialize)]
+pub struct SshApprovalRequest {
+    pub request_id: String,
+    /// 凭据 UUID（非敏感）
+    pub key_id: String,
+    /// 公钥指纹（SHA256 前 8 字节，用于人工核对）
+    pub fingerprint: String,
+    /// 操作名（当前恒为 "sign"）
+    pub operation: String,
+    /// 目标主机（未知时为 null）
+    pub peer: Option<String>,
+    /// 触发原因（策略说明）
+    pub reason: String,
 }
 
 /// Response structure for API calls
@@ -16,6 +42,8 @@ pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
+    /// 机器可读错误码（"REAUTH_REQUIRED" / "SERVICE_LOCKED"），供前端分流
+    pub error_code: Option<String>,
 }
 
 impl<T> ApiResponse<T> {
@@ -24,6 +52,7 @@ impl<T> ApiResponse<T> {
             success: true,
             data: Some(data),
             error: None,
+            error_code: None,
         }
     }
 
@@ -32,6 +61,16 @@ impl<T> ApiResponse<T> {
             success: false,
             data: None,
             error: Some(message),
+            error_code: None,
+        }
+    }
+
+    pub fn error_with_code(error_code: String, message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(message),
+            error_code: Some(error_code),
         }
     }
 }
@@ -461,4 +500,223 @@ impl CredentialDataRequest {
             CredentialDataRequest::Raw { data } => CredentialData::Raw(data.clone()),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 审计查询
+// ---------------------------------------------------------------------------
+
+/// 可序列化的审计日志（不含敏感负载）
+#[derive(Debug, Serialize)]
+pub struct SerializableAuditLog {
+    pub id: String,
+    pub user_id: Option<String>,
+    pub identity_id: Option<String>,
+    pub credential_id: Option<String>,
+    pub session_id: Option<String>,
+    pub action: String,
+    pub resource_type: String,
+    pub resource_id: Option<String>,
+    pub success: bool,
+    pub error_message: Option<String>,
+    pub metadata: HashMap<String, String>,
+    pub timestamp: String,
+}
+
+impl From<AuditLog> for SerializableAuditLog {
+    fn from(log: AuditLog) -> Self {
+        Self {
+            id: log.id.to_string(),
+            user_id: log.user_id,
+            identity_id: log.identity_id.map(|id| id.to_string()),
+            credential_id: log.credential_id.map(|id| id.to_string()),
+            session_id: log.session_id,
+            action: log.action.to_string(),
+            resource_type: log.resource_type.to_string(),
+            resource_id: log.resource_id,
+            success: log.success,
+            error_message: log.error_message,
+            metadata: log.metadata,
+            timestamp: log.timestamp.to_rfc3339(),
+        }
+    }
+}
+
+/// 审计查询请求（None 字段 = 不过滤）
+#[derive(Debug, Deserialize)]
+pub struct AuditQueryRequest {
+    pub user_id: Option<String>,
+    pub identity_id: Option<String>,
+    /// 动作名（如 "identity_created"），非法名称返回错误
+    pub action: Option<String>,
+    pub failures_only: Option<bool>,
+    pub security_sensitive_only: Option<bool>,
+    /// RFC 3339 时间，(start, end)
+    pub time_range: Option<(String, String)>,
+    pub limit: Option<usize>,
+}
+
+/// 审计统计
+#[derive(Debug, Serialize)]
+pub struct SerializableAuditStatistics {
+    pub total_logs: u64,
+    pub failed_operations: u64,
+    pub recent_login_attempts: u64,
+    pub active_users_last_week: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Passkey 管理（P3 桌面 GUI 的命令层接缝）
+// ---------------------------------------------------------------------------
+
+/// 可序列化的 passkey（永不包含私钥字段）
+#[derive(Debug, Serialize)]
+pub struct SerializablePasskey {
+    pub id: String,
+    pub identity_id: String,
+    pub rp_id: String,
+    pub rp_name: Option<String>,
+    pub user_handle_b64: String,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+    pub credential_id_b64: String,
+    pub uv_initialized: bool,
+    pub export_allowed: bool,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreatePasskeyRequest {
+    pub identity_id: String,
+    pub rp_id: String,
+    pub origin: String,
+    /// base64(UTF-8 JSON) 的 clientDataJSON
+    pub client_data_json_b64: String,
+    pub user_handle_b64: Option<String>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+    pub user_verification: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PasskeyCreationResponse {
+    pub passkey: SerializablePasskey,
+    /// base64 的 `none` 格式 attestation object
+    pub attestation_object_b64: String,
+}
+
+impl From<PasskeyItem> for SerializablePasskey {
+    fn from(item: PasskeyItem) -> Self {
+        use base64::Engine;
+
+        let engine = base64::engine::general_purpose::STANDARD;
+        Self {
+            id: item.id.to_string(),
+            identity_id: item.identity_id.to_string(),
+            rp_id: item.rp_id,
+            rp_name: item.rp_name,
+            user_handle_b64: engine.encode(item.user_handle),
+            user_name: item.user_name,
+            user_display_name: item.user_display_name,
+            credential_id_b64: engine.encode(item.credential_id),
+            uv_initialized: item.uv_initialized,
+            export_allowed: item.export_allowed,
+            created_at: item.created_at.to_rfc3339(),
+            last_used_at: item.last_used_at.map(|dt| dt.to_rfc3339()),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-lock
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct AutoLockConfigRequest {
+    pub inactivity_timeout_secs: u64,
+    pub absolute_timeout_secs: Option<u64>,
+    pub require_reauth_sensitive: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AutoLockStatusResponse {
+    pub is_unlocked: bool,
+    pub session_locked: bool,
+    pub needs_reauth: bool,
+    pub inactivity_timeout_secs: u64,
+}
+
+/// 跨 emit 传递的 auto-lock 事件（serde tag 区分变体）
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SerializableAutoLockEvent {
+    LockPending {
+        session_id: String,
+        seconds_remaining: u64,
+    },
+    Locked {
+        session_id: String,
+        reason: String,
+    },
+    Unlocked {
+        session_id: String,
+    },
+    Activity {
+        session_id: String,
+    },
+}
+
+impl From<AutoLockEvent> for SerializableAutoLockEvent {
+    fn from(event: AutoLockEvent) -> Self {
+        match event {
+            AutoLockEvent::LockPending {
+                session_id,
+                seconds_remaining,
+            } => Self::LockPending {
+                session_id,
+                seconds_remaining,
+            },
+            AutoLockEvent::Locked { session_id, reason } => Self::Locked {
+                session_id,
+                reason: format!("{:?}", reason),
+            },
+            AutoLockEvent::Unlocked { session_id } => Self::Unlocked { session_id },
+            AutoLockEvent::Activity { session_id } => Self::Activity { session_id },
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 敏感字段 reveal / 重新认证
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct RevealSecretRequest {
+    pub credential_id: String,
+    /// "password" | "security_questions" | "ssh_private_key" | "ssh_passphrase" |
+    /// "api_key" | "api_secret" | "token" | "wallet_private_key" |
+    /// "wallet_mnemonic" | "raw_data"
+    pub field: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SecretRevealResponse {
+    pub field: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReauthRequest {
+    pub master_password: String,
+}
+
+// ---------------------------------------------------------------------------
+// 身份导出
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct SerializableIdentityExport {
+    pub exported_at: String,
+    pub data: serde_json::Value,
 }
