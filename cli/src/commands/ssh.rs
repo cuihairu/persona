@@ -496,12 +496,12 @@ fn format_sock_export_lines(sock_value: &str) -> Vec<String> {
     }
     #[cfg(windows)]
     {
-        return vec![
+        vec![
             "  # PowerShell".to_string(),
             format!("  $env:SSH_AUTH_SOCK = '{}'", sock_value),
             "  # cmd.exe".to_string(),
             format!("  set SSH_AUTH_SOCK={}", sock_value),
-        ];
+        ]
     }
 }
 
@@ -820,6 +820,7 @@ fn stop_agent_pid(pid: &str) -> Result<bool> {
 mod tests {
     use super::*;
     use crate::config::CliConfig;
+    #[allow(unused_imports)]
     use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
     use crate::utils::prompt::TerminalUi;
     use persona_core::auth::authentication::AuthResult;
@@ -1046,7 +1047,7 @@ mod tests {
         use tokio::net::windows::named_pipe::ServerOptions;
 
         let pipe_name = format!(r"\\.\pipe\persona-test-agent-{}", Uuid::new_v4());
-        let mut server = ServerOptions::new()
+        let server = ServerOptions::new()
             .first_pipe_instance(true)
             .create(&pipe_name)
             .unwrap();

@@ -287,8 +287,10 @@ mod tests {
     use tempfile::TempDir;
 
     /// Serializes env mutations (HOME) against the bridge and service tests.
+    #[allow(dead_code)]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    #[allow(dead_code)]
     fn lock_process_env() -> (
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
