@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Select};
 use std::collections::HashMap;
 use tracing::info;
 
 use crate::config::CliConfig;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::models::{AuditAction, AuditLog, ResourceType};
 use persona_core::{
     storage::{IdentityRepository, WorkspaceRepository},
@@ -31,13 +31,21 @@ pub struct SwitchArgs {
 }
 
 pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: SwitchArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!("{}", "🔄 Switching identity...".cyan().bold());
     println!();
 
     let target_identity = if args.previous {
         get_previous_identity(config).await?
     } else if args.interactive || args.name.is_none() {
-        select_identity_interactive(config).await?
+        select_identity_interactive(config, ui).await?
     } else {
         args.name.context("Identity name is required")?
     };
@@ -58,7 +66,7 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     }
 
     // Verify target identity exists
-    verify_identity_exists(&target_identity, config).await?;
+    verify_identity_exists(&target_identity, config, ui).await?;
 
     // Show confirmation if not forced
     if !args.force {
@@ -72,18 +80,14 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
             format!("Switch to '{}'?", target_identity.green())
         };
 
-        if !Confirm::new()
-            .with_prompt(confirmation_message)
-            .default(true)
-            .interact()?
-        {
+        if !ui.confirm(&confirmation_message, true)? {
             println!("{}", "Switch cancelled.".yellow());
             return Ok(());
         }
     }
 
     // Perform the switch
-    perform_switch(&target_identity, current_identity.as_deref(), config).await?;
+    perform_switch(&target_identity, current_identity.as_deref(), config, ui).await?;
 
     println!();
     println!(
@@ -93,7 +97,7 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     );
 
     // Show identity summary
-    show_identity_summary(&target_identity, config).await?;
+    show_identity_summary(&target_identity, config, ui).await?;
 
     Ok(())
 }
@@ -147,8 +151,8 @@ async fn get_previous_identity(_config: &CliConfig) -> Result<String> {
     anyhow::bail!("Previous identity history not available yet")
 }
 
-async fn select_identity_interactive(config: &CliConfig) -> Result<String> {
-    let identities = fetch_available_identities(config).await?;
+async fn select_identity_interactive(config: &CliConfig, ui: &dyn PromptUi) -> Result<String> {
+    let identities = fetch_available_identities(config, ui).await?;
 
     if identities.is_empty() {
         anyhow::bail!("No identities found. Create one with 'persona add'");
@@ -160,15 +164,19 @@ async fn select_identity_interactive(config: &CliConfig) -> Result<String> {
         .map(|info| format!("{} ({})", info.description, info.identity_type))
         .collect();
 
-    let selection = Select::new()
-        .with_prompt("Select identity to switch to")
-        .items(&identity_descriptions)
-        .interact()?;
+    let selection = ui.select(
+        "Select identity to switch to",
+        &identity_descriptions
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        None,
+    )?;
 
     Ok(identity_names[selection].clone())
 }
 
-async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
+async fn verify_identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -185,7 +193,7 @@ async fn verify_identity_exists(name: &str, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -215,6 +223,7 @@ async fn perform_switch(
     target_identity: &str,
     current_identity: Option<&str>,
     config: &CliConfig,
+    ui: &dyn PromptUi,
 ) -> Result<()> {
     info!(
         "Switching from {:?} to {}",
@@ -237,7 +246,7 @@ async fn perform_switch(
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -291,8 +300,8 @@ async fn perform_switch(
     Ok(())
 }
 
-async fn show_identity_summary(name: &str, config: &CliConfig) -> Result<()> {
-    let identities = fetch_available_identities(config).await?;
+async fn show_identity_summary(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
+    let identities = fetch_available_identities(config, ui).await?;
 
     if let Some(info) = identities.get(name) {
         println!();
@@ -326,7 +335,10 @@ struct IdentityInfo {
     tags: Vec<String>,
 }
 
-async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String, IdentityInfo>> {
+async fn fetch_available_identities(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<HashMap<String, IdentityInfo>> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -342,7 +354,7 @@ async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -380,6 +392,7 @@ async fn fetch_available_identities(config: &CliConfig) -> Result<HashMap<String
 mod tests {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::ScriptedUi;
     use persona_core::models::{
         AuditAction, Identity as CoreIdentityModel, IdentityType, Workspace,
     };
@@ -538,7 +551,7 @@ mod tests {
 
         // Interactive selection with an empty database reports the hint.
         let empty = TempDir::new().unwrap();
-        let err = select_identity_interactive(&config_for(&empty))
+        let err = select_identity_interactive(&config_for(&empty), &ScriptedUi::new())
             .await
             .expect_err("empty selection must fail");
         assert!(err.to_string().contains("No identities found"));
@@ -573,5 +586,53 @@ mod tests {
             .expect("correct password must switch");
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn switch_interactive_select_and_confirm_gates() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+        ensure_workspace_row(&db, &config).await;
+
+        // Interactive selection picks the second entry and the confirmation
+        // gate declines → nothing changes.
+        let ui = ScriptedUi::new().select(1).confirm(false);
+        execute_with(switch_args(None, false), &config, &ui)
+            .await
+            .expect("declined interactive switch returns success");
+        assert!(ui.exhausted());
+
+        let repo = WorkspaceRepository::new(db.clone());
+        let path_str = config.workspace.path.to_string_lossy().to_string();
+        let ws = repo.find_by_path(&path_str).await.unwrap().unwrap();
+        assert!(ws.active_identity_id.is_none(), "cancel must not switch");
+
+        // Same run with the confirmation accepted → active pointer moves.
+        let ui = ScriptedUi::new().select(1).confirm(true);
+        execute_with(switch_args(None, false), &config, &ui)
+            .await
+            .expect("confirmed interactive switch succeeds");
+        assert!(ui.exhausted());
+
+        let ws = repo.find_by_path(&path_str).await.unwrap().unwrap();
+        let bob = IdentityRepository::new(db.clone())
+            .find_by_name("bob")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ws.active_identity_id, Some(bob.id));
+    }
+
+    #[tokio::test]
+    async fn switch_select_from_empty_workspace_fails() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &[]).await;
+
+        let err = select_identity_interactive(&config, &ScriptedUi::new())
+            .await
+            .expect_err("empty workspace must fail");
+        assert!(err.to_string().contains("No identities found"));
     }
 }

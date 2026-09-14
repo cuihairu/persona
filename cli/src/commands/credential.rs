@@ -10,6 +10,8 @@ use persona_core::{
     Identity, PersonaService,
 };
 
+use crate::utils::prompt::{PromptUi, TerminalUi};
+
 use super::service::init_service;
 
 #[derive(Args, Debug)]
@@ -152,6 +154,14 @@ struct CredentialRow {
 }
 
 pub async fn execute(args: CredentialArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: CredentialArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     match args.command {
         CredentialCommand::Add {
             identity,
@@ -166,6 +176,7 @@ pub async fn execute(args: CredentialArgs, config: &CliConfig) -> Result<()> {
         } => {
             add_credential(
                 config,
+                ui,
                 identity,
                 name,
                 credential_type,
@@ -183,9 +194,9 @@ pub async fn execute(args: CredentialArgs, config: &CliConfig) -> Result<()> {
             credential_type,
             favorite,
             format,
-        } => list_credentials(config, identity, credential_type, favorite, format).await?,
-        CredentialCommand::Show { id, reveal } => show_credential(config, id, reveal).await?,
-        CredentialCommand::Remove { id, yes } => remove_credential(config, id, yes).await?,
+        } => list_credentials(config, ui, identity, credential_type, favorite, format).await?,
+        CredentialCommand::Show { id, reveal } => show_credential(config, ui, id, reveal).await?,
+        CredentialCommand::Remove { id, yes } => remove_credential(config, ui, id, yes).await?,
     }
     Ok(())
 }
@@ -193,6 +204,7 @@ pub async fn execute(args: CredentialArgs, config: &CliConfig) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 async fn add_credential(
     config: &CliConfig,
+    ui: &dyn PromptUi,
     identity_name: String,
     name: String,
     credential_type: CredentialTypeOption,
@@ -204,18 +216,15 @@ async fn add_credential(
     favorite: bool,
 ) -> Result<()> {
     println!("{}", "➕ Adding credential...".cyan());
-    let mut service = init_service(config).await?;
+    let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
     let secret_value = if prompt_secret {
-        super::service::prompt_credential_secret()?
+        super::service::prompt_credential_secret(ui)?
     } else if let Some(raw) = secret {
         raw
     } else {
-        dialoguer::Input::new()
-            .with_prompt("Secret / password (leave blank to skip)")
-            .allow_empty(true)
-            .interact_text()?
+        ui.input("Secret / password (leave blank to skip)", None, true)?
     };
 
     let credential_data = CredentialData::Password(PasswordCredentialData {
@@ -257,12 +266,13 @@ async fn add_credential(
 
 async fn list_credentials(
     config: &CliConfig,
+    ui: &dyn PromptUi,
     identity_name: Option<String>,
     credential_type: Option<String>,
     favorite_only: bool,
     format: String,
 ) -> Result<()> {
-    let mut service = init_service(config).await?;
+    let mut service = init_service(config, ui).await?;
     let credentials = if let Some(identity_name) = identity_name {
         let identity = resolve_identity(&mut service, &identity_name).await?;
         service
@@ -326,8 +336,13 @@ async fn list_credentials(
     Ok(())
 }
 
-async fn show_credential(config: &CliConfig, id: Uuid, reveal: bool) -> Result<()> {
-    let service = init_service(config).await?;
+async fn show_credential(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    id: Uuid,
+    reveal: bool,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
     let credential = service
         .get_credential(&id)
         .await
@@ -350,9 +365,7 @@ async fn show_credential(config: &CliConfig, id: Uuid, reveal: bool) -> Result<(
     println!("  Security level: {}", credential.security_level);
 
     if reveal {
-        let confirm = dialoguer::Confirm::new()
-            .with_prompt("Reveal secret value? (visible on screen)")
-            .interact()?;
+        let confirm = ui.confirm("Reveal secret value? (visible on screen)", false)?;
         if confirm {
             if let Some(data) = service.get_credential_data(&id).await.into_anyhow()? {
                 match data {
@@ -375,13 +388,15 @@ async fn show_credential(config: &CliConfig, id: Uuid, reveal: bool) -> Result<(
     Ok(())
 }
 
-async fn remove_credential(config: &CliConfig, id: Uuid, yes: bool) -> Result<()> {
-    let service = init_service(config).await?;
+async fn remove_credential(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    id: Uuid,
+    yes: bool,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
     if !yes {
-        let confirm = dialoguer::Confirm::new()
-            .with_prompt(format!("Remove credential {}?", id))
-            .default(false)
-            .interact()?;
+        let confirm = ui.confirm(&format!("Remove credential {}?", id), false)?;
         if !confirm {
             println!("{}", "Aborted.".yellow());
             return Ok(());
@@ -433,9 +448,10 @@ mod tests {
 
     /// Unlocks the workspace and creates the named identity.
     async fn seed(config: &CliConfig, identity: &str) -> persona_core::Identity {
-        let service = crate::commands::service::init_service(config)
-            .await
-            .unwrap();
+        let service =
+            crate::commands::service::init_service(config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
         let created = service
             .create_identity_full(persona_core::Identity::new(
                 identity.to_string(),
@@ -545,9 +561,10 @@ mod tests {
         assert!(err.to_string().contains("Identity 'ghost' not found"));
 
         // Grab the credential id, then show + remove it.
-        let service = crate::commands::service::init_service(&config)
-            .await
-            .unwrap();
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
         let alice = service
             .get_identity_by_name("alice")
             .await
@@ -647,9 +664,10 @@ mod tests {
             .await
             .expect("add via env secret works");
 
-        let service = crate::commands::service::init_service(&config)
-            .await
-            .unwrap();
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
         let bob = service.get_identity_by_name("bob").await.unwrap().unwrap();
         let creds = service.get_credentials_for_identity(&bob.id).await.unwrap();
         assert_eq!(creds.len(), 1);

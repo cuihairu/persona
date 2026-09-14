@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input};
 
 use crate::config::CliConfig;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::models::{AuditAction, AuditLog, ResourceType};
 use persona_core::{
     storage::{IdentityRepository, WorkspaceRepository},
@@ -29,6 +29,14 @@ pub struct RemoveArgs {
 }
 
 pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: RemoveArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!(
         "🗑️ Removing identity '{}'...",
         args.name.bright_red().bold()
@@ -36,7 +44,7 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
     println!();
 
     // Check if identity exists
-    if !identity_exists(&args.name, config).await? {
+    if !identity_exists(&args.name, config, ui).await? {
         anyhow::bail!("Identity '{}' not found", args.name);
     }
 
@@ -49,10 +57,10 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
         );
 
         if !args.force
-            && !Confirm::new()
-                .with_prompt("Do you want to continue removing the active identity?")
-                .default(false)
-                .interact()?
+            && !ui.confirm(
+                "Do you want to continue removing the active identity?",
+                false,
+            )?
         {
             println!("{}", "Removal cancelled.".yellow());
             return Ok(());
@@ -60,7 +68,7 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
     }
 
     // Show identity summary before removal
-    show_removal_summary(&args.name, config).await?;
+    show_removal_summary(&args.name, config, ui).await?;
 
     // Confirmation
     if !args.force {
@@ -68,9 +76,11 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
         println!("{}", "⚠️  This action cannot be undone!".red().bold());
 
         let confirmation_text = format!("remove {}", args.name);
-        let user_input: String = Input::new()
-            .with_prompt(format!("Type '{}' to confirm removal", confirmation_text))
-            .interact_text()?;
+        let user_input = ui.input(
+            &format!("Type '{}' to confirm removal", confirmation_text),
+            None,
+            true,
+        )?;
 
         if user_input != confirmation_text {
             println!(
@@ -83,11 +93,11 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
 
     // Create backup if requested
     if args.backup {
-        create_backup(&args.name, config).await?;
+        create_backup(&args.name, config, ui).await?;
     }
 
     // Perform removal
-    perform_removal(&args.name, args.purge, config).await?;
+    perform_removal(&args.name, args.purge, config, ui).await?;
 
     println!();
     println!(
@@ -97,12 +107,12 @@ pub async fn execute(args: RemoveArgs, config: &CliConfig) -> Result<()> {
     );
 
     // Show next steps
-    show_post_removal_info(config).await?;
+    show_post_removal_info(config, ui).await?;
 
     Ok(())
 }
 
-async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
+async fn identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<bool> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -118,7 +128,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -168,7 +178,7 @@ async fn is_active_identity(name: &str, config: &CliConfig) -> Result<bool> {
     Ok(false)
 }
 
-async fn show_removal_summary(name: &str, config: &CliConfig) -> Result<()> {
+async fn show_removal_summary(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -184,7 +194,7 @@ async fn show_removal_summary(name: &str, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -230,7 +240,7 @@ async fn show_removal_summary(name: &str, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
+async fn create_backup(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     println!("💾 Creating backup...");
 
     let backup_path = config.backup.directory.join(format!(
@@ -261,7 +271,7 @@ async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -331,7 +341,12 @@ async fn create_backup(name: &str, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<()> {
+async fn perform_removal(
+    name: &str,
+    purge: bool,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!("🔄 Removing identity data...");
 
     let db_path = config.get_database_path();
@@ -349,7 +364,7 @@ async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?;
     if has_users {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -412,9 +427,9 @@ async fn perform_removal(name: &str, purge: bool, config: &CliConfig) -> Result<
     Ok(())
 }
 
-async fn show_post_removal_info(config: &CliConfig) -> Result<()> {
+async fn show_post_removal_info(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     // Check if there are remaining identities
-    let remaining_count = get_remaining_identities_count(config).await?;
+    let remaining_count = get_remaining_identities_count(config, ui).await?;
 
     if remaining_count == 0 {
         println!();
@@ -431,7 +446,7 @@ async fn show_post_removal_info(config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
+async fn get_remaining_identities_count(config: &CliConfig, ui: &dyn PromptUi) -> Result<usize> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -447,7 +462,7 @@ async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -473,6 +488,7 @@ async fn get_remaining_identities_count(config: &CliConfig) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::ScriptedUi;
     use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -493,6 +509,9 @@ mod tests {
     fn config_for(dir: &TempDir) -> CliConfig {
         let mut config = CliConfig::default();
         config.workspace.path = dir.path().to_path_buf();
+        // Default's backup dir hangs off the real home; keep it inside the
+        // temp workspace so backups neither leak out nor accumulate.
+        config.backup.directory = dir.path().join("backups");
         config
     }
 
@@ -541,9 +560,22 @@ mod tests {
             .expect("forced removal must succeed");
 
         // The identity is gone; the other one remains.
-        assert!(!identity_exists("alice", &config).await.unwrap());
-        assert!(identity_exists("bob", &config).await.unwrap());
-        assert_eq!(get_remaining_identities_count(&config).await.unwrap(), 1);
+        assert!(
+            !identity_exists("alice", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+        assert!(
+            identity_exists("bob", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            get_remaining_identities_count(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -604,8 +636,107 @@ mod tests {
         execute(args("carol", true, false), &config)
             .await
             .expect("correct password must remove");
-        assert!(!identity_exists("carol", &config).await.unwrap());
+        assert!(
+            !identity_exists("carol", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn remove_interactive_confirmations_accept_and_decline() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+
+        // Make alice the active identity so both confirmation gates trigger.
+        {
+            let repo = WorkspaceRepository::new(db.clone());
+            let identity = IdentityRepository::new(db.clone())
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap();
+            let mut ws = persona_core::models::Workspace::new(
+                config.workspace.path.clone(),
+                "test-workspace".to_string(),
+            );
+            ws.switch_identity(identity.id);
+            repo.create(&ws).await.unwrap();
+        }
+
+        // Declining the active-identity prompt cancels before removal.
+        let ui = ScriptedUi::new().confirm(false);
+        execute_with(args("alice", false, false), &config, &ui)
+            .await
+            .expect("declined prompt returns success");
+        assert!(ui.exhausted());
+        assert!(
+            identity_exists("alice", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+
+        // Accepting, then mistyping the confirmation text, also cancels.
+        let ui = ScriptedUi::new().confirm(true).input("remove alice!");
+        execute_with(args("alice", false, false), &config, &ui)
+            .await
+            .expect("mismatched text returns success");
+        assert!(ui.exhausted());
+        assert!(
+            identity_exists("alice", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+
+        // Accepting and typing the exact phrase removes the identity.
+        let ui = ScriptedUi::new().confirm(true).input("remove alice");
+        execute_with(args("alice", false, false), &config, &ui)
+            .await
+            .expect("confirmed removal succeeds");
+        assert!(ui.exhausted());
+        assert!(
+            !identity_exists("alice", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_typed_confirmation_gates_non_active_identity() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["dave"]).await;
+
+        // Wrong text cancels; identity survives.
+        let ui = ScriptedUi::new().input("nope");
+        execute_with(args("dave", false, false), &config, &ui)
+            .await
+            .expect("mismatched text returns success");
+        assert!(
+            identity_exists("dave", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+
+        // Correct text with a backup removes and writes the backup file.
+        let mut backup_args = args("dave", false, false);
+        backup_args.backup = true;
+        let ui = ScriptedUi::new().input("remove dave");
+        execute_with(backup_args, &config, &ui)
+            .await
+            .expect("confirmed removal with backup succeeds");
+        assert!(
+            !identity_exists("dave", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+
+        let backups: Vec<_> = std::fs::read_dir(&config.backup.directory)
+            .expect("backup directory exists")
+            .collect();
+        assert_eq!(backups.len(), 1, "one backup file written");
     }
 }

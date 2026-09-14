@@ -379,20 +379,36 @@ max_files = 2
         let (_bridge_guard, _guard) = lock_process_env();
 
         // Point the platform config directory at a temp dir so the global
-        // user config does not leak into the test.
+        // user config does not leak into the test. `dirs::config_dir()`
+        // reads %APPDATA% on Windows, $XDG_CONFIG_HOME (falling back to
+        // $HOME/.config) on Linux, and $HOME/Library/Application Support on
+        // macOS.
         let dir = tempfile::TempDir::new().unwrap();
-        let config_root = dir.path().join("xdg-config");
+        let config_root = if cfg!(windows) {
+            dir.path().join("appdata")
+        } else if cfg!(target_os = "macos") {
+            dir.path().join("home")
+        } else {
+            dir.path().join("xdg-config")
+        };
         std::fs::create_dir_all(config_root.join("persona")).unwrap();
 
         let mut saved = Vec::new();
-        saved.push((
-            "XDG_CONFIG_HOME",
-            set_var("XDG_CONFIG_HOME", config_root.to_str().unwrap()),
-        ));
-        if let Ok(home) = std::env::var("HOME") {
-            saved.push(("HOME", Some(home)));
+        if cfg!(windows) {
+            saved.push(("APPDATA", set_var("APPDATA", config_root.to_str().unwrap())));
+        } else if cfg!(target_os = "macos") {
+            let home = dir.path().join("home");
+            saved.push(("HOME", set_var("HOME", home.to_str().unwrap())));
+        } else {
+            saved.push((
+                "XDG_CONFIG_HOME",
+                set_var("XDG_CONFIG_HOME", config_root.to_str().unwrap()),
+            ));
+            if let Ok(home) = std::env::var("HOME") {
+                saved.push(("HOME", Some(home)));
+            }
+            std::env::set_var("HOME", dir.path());
         }
-        std::env::set_var("HOME", dir.path());
 
         // No config file at the resolved path -> built-in default.
         let config = CliConfig::load(None).unwrap();

@@ -74,6 +74,14 @@ pub enum TotpCommand {
 }
 
 pub async fn execute(args: TotpArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &crate::utils::prompt::TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: TotpArgs,
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
     match args.command {
         TotpCommand::Setup {
             identity,
@@ -89,12 +97,12 @@ pub async fn execute(args: TotpArgs, config: &CliConfig) -> Result<()> {
             algorithm,
         } => {
             setup_totp(
-                config, identity, name, qr, otpauth, secret, issuer, account, url, digits, period,
-                algorithm,
+                config, ui, identity, name, qr, otpauth, secret, issuer, account, url, digits,
+                period, algorithm,
             )
             .await?
         }
-        TotpCommand::Code { id, watch } => generate_codes(config, id, watch).await?,
+        TotpCommand::Code { id, watch } => generate_codes(config, ui, id, watch).await?,
     }
     Ok(())
 }
@@ -102,6 +110,7 @@ pub async fn execute(args: TotpArgs, config: &CliConfig) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 async fn setup_totp(
     config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
     identity_name: String,
     display_name: Option<String>,
     qr: Option<PathBuf>,
@@ -115,7 +124,7 @@ async fn setup_totp(
     algorithm_override: Option<String>,
 ) -> Result<()> {
     println!("{}", "🔐 Setting up TOTP credential...".cyan());
-    let mut service = init_service(config).await?;
+    let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
     let mut template = TotpTemplate::default();
@@ -235,8 +244,13 @@ fn normalize_origin_url(raw: &str) -> Result<String> {
     Ok(format!("{scheme}://{host}"))
 }
 
-async fn generate_codes(config: &CliConfig, id: Uuid, watch: bool) -> Result<()> {
-    let service = init_service(config).await?;
+async fn generate_codes(
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+    id: Uuid,
+    watch: bool,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
     let credential = service
         .get_credential(&id)
         .await
@@ -730,6 +744,7 @@ mod tests {
         // Unknown identity is reported before any credential work.
         let err = setup_totp(
             &config,
+            &crate::utils::prompt::TerminalUi,
             "ghost".to_string(),
             None,
             None,
@@ -749,6 +764,7 @@ mod tests {
         // Successful setup through the raw --secret path.
         setup_totp(
             &config,
+            &crate::utils::prompt::TerminalUi,
             "alice".to_string(),
             None,
             None,
@@ -764,7 +780,9 @@ mod tests {
         .await
         .expect("setup must succeed");
 
-        let service = init_service(&config).await.unwrap();
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
         let creds = service
             .get_credentials_for_identity(
                 &IdentityRepository::new(service_db(&config).await)
@@ -783,9 +801,14 @@ mod tests {
         drop(service);
 
         // A missing credential id and a non-TOTP credential both fail.
-        let err = generate_codes(&config, uuid::Uuid::new_v4(), false)
-            .await
-            .expect_err("missing credential must fail");
+        let err = generate_codes(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            uuid::Uuid::new_v4(),
+            false,
+        )
+        .await
+        .expect_err("missing credential must fail");
         assert!(err.to_string().contains("not found"));
 
         let db = service_db(&config).await;
@@ -808,7 +831,9 @@ mod tests {
             .unwrap();
 
         let pw_id = {
-            let service = init_service(&config).await.unwrap();
+            let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
             let id = IdentityRepository::new(service_db(&config).await)
                 .find_by_name("alice")
                 .await
@@ -825,13 +850,13 @@ mod tests {
                 .unwrap()
                 .id
         };
-        let err = generate_codes(&config, pw_id, false)
+        let err = generate_codes(&config, &crate::utils::prompt::TerminalUi, pw_id, false)
             .await
             .expect_err("non-TOTP credential must fail");
         assert!(err.to_string().contains("is not a TOTP entry"));
 
         // The real TOTP credential generates a 6-digit code.
-        generate_codes(&config, totp_id, false)
+        generate_codes(&config, &crate::utils::prompt::TerminalUi, totp_id, false)
             .await
             .expect("code generated");
 
@@ -854,6 +879,7 @@ mod tests {
         // No users: init_service bails before any TOTP work.
         let err = setup_totp(
             &config,
+            &crate::utils::prompt::TerminalUi,
             "alice".to_string(),
             None,
             None,
@@ -881,6 +907,7 @@ mod tests {
         std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-pin");
         let err = setup_totp(
             &config,
+            &crate::utils::prompt::TerminalUi,
             "alice".to_string(),
             None,
             None,

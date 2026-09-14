@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input, Password};
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
 use crate::config::CliConfig;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use crate::utils::{create_directory, validate_workspace_path};
 use persona_core::{Database, PersonaService, Repository};
 
@@ -33,11 +33,19 @@ pub struct InitArgs {
 }
 
 pub async fn execute(args: InitArgs, _config: &CliConfig) -> Result<()> {
+    execute_with(args, _config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: InitArgs,
+    _config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!("{}", "🚀 Initializing Persona workspace...".cyan().bold());
     println!();
 
     // Determine workspace path
-    let workspace_path = determine_workspace_path(args.path, args.yes)?;
+    let workspace_path = determine_workspace_path(args.path, args.yes, ui)?;
 
     // Validate workspace path
     validate_workspace_path(&workspace_path)?;
@@ -55,14 +63,11 @@ pub async fn execute(args: InitArgs, _config: &CliConfig) -> Result<()> {
     let encryption_enabled = if args.yes {
         args.encrypted
     } else {
-        Confirm::new()
-            .with_prompt("Enable encryption for identity data?")
-            .default(true)
-            .interact()?
+        ui.confirm("Enable encryption for identity data?", true)?
     };
 
     let master_password = if encryption_enabled {
-        get_master_password(args.master_password, args.yes)?
+        get_master_password(args.master_password, args.yes, ui)?
     } else {
         None
     };
@@ -97,7 +102,11 @@ pub async fn execute(args: InitArgs, _config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-fn determine_workspace_path(path: Option<PathBuf>, yes: bool) -> Result<PathBuf> {
+fn determine_workspace_path(
+    path: Option<PathBuf>,
+    yes: bool,
+    ui: &dyn PromptUi,
+) -> Result<PathBuf> {
     if let Some(path) = path {
         return Ok(path);
     }
@@ -115,15 +124,16 @@ fn determine_workspace_path(path: Option<PathBuf>, yes: bool) -> Result<PathBuf>
         .context("Failed to get home directory")?
         .join(".persona");
 
-    let path_str: String = Input::new()
-        .with_prompt("Workspace directory")
-        .default(default_path.to_string_lossy().to_string())
-        .interact_text()?;
+    let path_str = ui.input_with_default("Workspace directory", &default_path.to_string_lossy())?;
 
     Ok(PathBuf::from(path_str))
 }
 
-fn get_master_password(provided_password: Option<String>, yes: bool) -> Result<Option<String>> {
+fn get_master_password(
+    provided_password: Option<String>,
+    yes: bool,
+    ui: &dyn PromptUi,
+) -> Result<Option<String>> {
     if let Some(password) = provided_password {
         warn!("Using master password from command line is not recommended for security reasons");
         return Ok(Some(password));
@@ -142,10 +152,11 @@ fn get_master_password(provided_password: Option<String>, yes: bool) -> Result<O
     }
 
     // Interactive mode
-    let password: String = Password::new()
-        .with_prompt("Enter master password")
-        .with_confirmation("Confirm master password", "Passwords don't match")
-        .interact()?;
+    let password = ui.password(
+        "Enter master password",
+        false,
+        Some(("Confirm master password", "Passwords don't match")),
+    )?;
 
     Ok(Some(password))
 }
@@ -266,4 +277,125 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::prompt::scripted::ScriptedUi;
+    use tempfile::TempDir;
+
+    fn init_args(yes: bool) -> InitArgs {
+        InitArgs {
+            // None: interactive mode asks for the workspace directory.
+            path: None,
+            yes,
+            encrypted: true,
+            master_password: None,
+            backup_dir: None,
+        }
+    }
+
+    /// The workspace directory must pre-exist `create_directory`'s parent
+    /// handling; point args at a fresh subdir of the temp dir.
+    fn fresh_subdir(dir: &TempDir) -> PathBuf {
+        dir.path().join("ws")
+    }
+
+    #[tokio::test]
+    async fn yes_flag_initializes_workspace_with_generated_password() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let mut args = init_args(true);
+        args.path = Some(path.clone());
+        execute(args, &crate::config::CliConfig::default())
+            .await
+            .expect("non-interactive init must succeed");
+
+        for sub in ["identities", "backups", "exports", "temp", "logs"] {
+            assert!(path.join(sub).is_dir(), "{} created", sub);
+        }
+        assert!(path.join("config.toml").is_file());
+        assert!(path.join("identities.db").is_file());
+
+        // A random master password was generated and printed; the DB has a
+        // user (authentication configured).
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let service = PersonaService::new(db).await.unwrap();
+        assert!(
+            service.has_users().await.unwrap(),
+            "yes mode seeds a master user"
+        );
+    }
+
+    #[tokio::test]
+    async fn interactive_init_accepts_scripted_answers() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let ui = ScriptedUi::new()
+            .input(path.to_string_lossy().as_ref())
+            .confirm(true) // enable encryption
+            .password("master-pin"); // confirmed master password
+        execute_with(init_args(false), &crate::config::CliConfig::default(), &ui)
+            .await
+            .expect("interactive init must succeed");
+        assert!(ui.exhausted());
+
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert!(service.has_users().await.unwrap());
+        let authed = service.authenticate_user("master-pin").await.unwrap();
+        assert!(matches!(authed, persona_core::auth::AuthResult::Success));
+    }
+
+    #[tokio::test]
+    async fn interactive_init_without_encryption_skips_password() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let ui = ScriptedUi::new()
+            .input(path.to_string_lossy().as_ref())
+            .confirm(false); // decline encryption
+        execute_with(init_args(false), &crate::config::CliConfig::default(), &ui)
+            .await
+            .expect("declined-encryption init must succeed");
+        assert!(ui.exhausted());
+
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let service = PersonaService::new(db).await.unwrap();
+        assert!(!service.has_users().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn cli_provided_master_password_beats_prompting() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let mut args = init_args(false);
+        args.master_password = Some("from-cli".to_string());
+        let ui = ScriptedUi::new()
+            .input(path.to_string_lossy().as_ref())
+            .confirm(true); // encryption accepted, password comes from CLI
+        execute_with(args, &crate::config::CliConfig::default(), &ui)
+            .await
+            .expect("init with CLI password must succeed");
+        assert!(ui.exhausted(), "no password prompt was consumed");
+
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert!(matches!(
+            service.authenticate_user("from-cli").await.unwrap(),
+            persona_core::auth::AuthResult::Success
+        ));
+    }
 }

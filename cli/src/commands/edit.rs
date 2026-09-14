@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input, MultiSelect, Select};
 use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::CliConfig;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::{
     models::{Identity as CoreIdentity, IdentityType},
     storage::IdentityRepository,
@@ -48,6 +48,14 @@ pub struct EditArgs {
 }
 
 pub async fn execute(args: EditArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: EditArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!(
         "✏️ Editing identity '{}'...",
         args.name.bright_cyan().bold()
@@ -55,21 +63,21 @@ pub async fn execute(args: EditArgs, config: &CliConfig) -> Result<()> {
     println!();
 
     // Check if identity exists
-    if !identity_exists(&args.name, config).await? {
+    if !identity_exists(&args.name, config, ui).await? {
         anyhow::bail!("Identity '{}' not found", args.name);
     }
 
     // Load current identity data
-    let mut identity = load_identity(&args.name, config).await?;
+    let mut identity = load_identity(&args.name, config, ui).await?;
 
     // Show current values
     show_current_values(&identity)?;
 
     // Perform editing based on mode
     if args.interactive {
-        edit_interactive(&mut identity)?;
+        edit_interactive(&mut identity, ui)?;
     } else if let Some(field) = args.field {
-        edit_single_field(&mut identity, &field, args.value)?;
+        edit_single_field(&mut identity, &field, args.value, ui)?;
     } else {
         edit_from_args(&mut identity, &args)?;
     }
@@ -81,17 +89,13 @@ pub async fn execute(args: EditArgs, config: &CliConfig) -> Result<()> {
     show_changes_summary(&identity)?;
 
     // Confirm changes
-    if !Confirm::new()
-        .with_prompt("Save changes?")
-        .default(true)
-        .interact()?
-    {
+    if !ui.confirm("Save changes?", true)? {
         println!("{}", "Changes discarded.".yellow());
         return Ok(());
     }
 
     // Save changes
-    save_identity(&identity, config).await?;
+    save_identity(&identity, config, ui).await?;
 
     println!();
     println!(
@@ -116,7 +120,7 @@ struct Identity {
     modified: String,
 }
 
-async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
+async fn identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<bool> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -132,7 +136,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -154,7 +158,7 @@ async fn identity_exists(name: &str, config: &CliConfig) -> Result<bool> {
     }
 }
 
-async fn load_identity(name: &str, config: &CliConfig) -> Result<Identity> {
+async fn load_identity(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<Identity> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -170,7 +174,7 @@ async fn load_identity(name: &str, config: &CliConfig) -> Result<Identity> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -242,8 +246,8 @@ fn show_current_values(identity: &Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_interactive(identity: &mut Identity) -> Result<()> {
-    let fields = vec![
+fn edit_interactive(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
+    let fields = [
         "Type",
         "Description",
         "Email",
@@ -254,18 +258,15 @@ fn edit_interactive(identity: &mut Identity) -> Result<()> {
     ];
 
     loop {
-        let selection = Select::new()
-            .with_prompt("What would you like to edit?")
-            .items(&fields)
-            .interact()?;
+        let selection = ui.select("What would you like to edit?", &fields, None)?;
 
         match selection {
-            0 => edit_identity_type(identity)?,
-            1 => edit_description(identity)?,
-            2 => edit_email(identity)?,
-            3 => edit_phone(identity)?,
-            4 => edit_tags(identity)?,
-            5 => edit_custom_attributes(identity)?,
+            0 => edit_identity_type(identity, ui)?,
+            1 => edit_description(identity, ui)?,
+            2 => edit_email(identity, ui)?,
+            3 => edit_phone(identity, ui)?,
+            4 => edit_tags(identity, ui)?,
+            5 => edit_custom_attributes(identity, ui)?,
             6 => break,
             _ => unreachable!(),
         }
@@ -276,20 +277,25 @@ fn edit_interactive(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_single_field(identity: &mut Identity, field: &str, value: Option<String>) -> Result<()> {
+fn edit_single_field(
+    identity: &mut Identity,
+    field: &str,
+    value: Option<String>,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     match field.to_lowercase().as_str() {
         "type" => {
             if let Some(new_type) = value {
                 identity.identity_type = new_type;
             } else {
-                edit_identity_type(identity)?;
+                edit_identity_type(identity, ui)?;
             }
         }
         "description" => {
             if let Some(new_desc) = value {
                 identity.description = new_desc;
             } else {
-                edit_description(identity)?;
+                edit_description(identity, ui)?;
             }
         }
         "email" => {
@@ -300,7 +306,7 @@ fn edit_single_field(identity: &mut Identity, field: &str, value: Option<String>
                     Some(new_email)
                 };
             } else {
-                edit_email(identity)?;
+                edit_email(identity, ui)?;
             }
         }
         "phone" => {
@@ -311,7 +317,7 @@ fn edit_single_field(identity: &mut Identity, field: &str, value: Option<String>
                     Some(new_phone)
                 };
             } else {
-                edit_phone(identity)?;
+                edit_phone(identity, ui)?;
             }
         }
         _ => anyhow::bail!("Unknown field: {}", field),
@@ -348,8 +354,8 @@ fn edit_from_args(identity: &mut Identity, args: &EditArgs) -> Result<()> {
     Ok(())
 }
 
-fn edit_identity_type(identity: &mut Identity) -> Result<()> {
-    let types = vec![
+fn edit_identity_type(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
+    let types = [
         "personal",
         "work",
         "social",
@@ -366,11 +372,7 @@ fn edit_identity_type(identity: &mut Identity) -> Result<()> {
         .position(|&t| t == identity.identity_type)
         .unwrap_or(0);
 
-    let selection = Select::new()
-        .with_prompt("Select identity type")
-        .items(&types)
-        .default(current_index)
-        .interact()?;
+    let selection = ui.select("Select identity type", &types, Some(current_index))?;
 
     identity.identity_type = types[selection].to_string();
     println!(
@@ -382,11 +384,8 @@ fn edit_identity_type(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_description(identity: &mut Identity) -> Result<()> {
-    let new_description: String = Input::new()
-        .with_prompt("Description")
-        .with_initial_text(&identity.description)
-        .interact_text()?;
+fn edit_description(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
+    let new_description = ui.input("Description", Some(&identity.description), false)?;
 
     identity.description = new_description;
     println!("{} Description updated", "✓".green());
@@ -394,13 +393,9 @@ fn edit_description(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_email(identity: &mut Identity) -> Result<()> {
+fn edit_email(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
     let current_email = identity.email.as_deref().unwrap_or("");
-    let new_email: String = Input::new()
-        .with_prompt("Email (leave empty to remove)")
-        .with_initial_text(current_email)
-        .allow_empty(true)
-        .interact_text()?;
+    let new_email = ui.input("Email (leave empty to remove)", Some(current_email), true)?;
 
     identity.email = if new_email.is_empty() {
         None
@@ -412,13 +407,9 @@ fn edit_email(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_phone(identity: &mut Identity) -> Result<()> {
+fn edit_phone(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
     let current_phone = identity.phone.as_deref().unwrap_or("");
-    let new_phone: String = Input::new()
-        .with_prompt("Phone (leave empty to remove)")
-        .with_initial_text(current_phone)
-        .allow_empty(true)
-        .interact_text()?;
+    let new_phone = ui.input("Phone (leave empty to remove)", Some(current_phone), true)?;
 
     identity.phone = if new_phone.is_empty() {
         None
@@ -430,13 +421,9 @@ fn edit_phone(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_tags(identity: &mut Identity) -> Result<()> {
+fn edit_tags(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
     let current_tags = identity.tags.join(", ");
-    let new_tags: String = Input::new()
-        .with_prompt("Tags (comma-separated)")
-        .with_initial_text(&current_tags)
-        .allow_empty(true)
-        .interact_text()?;
+    let new_tags = ui.input("Tags (comma-separated)", Some(&current_tags), true)?;
 
     identity.tags = new_tags
         .split(',')
@@ -449,8 +436,8 @@ fn edit_tags(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_custom_attributes(identity: &mut Identity) -> Result<()> {
-    let actions = vec![
+fn edit_custom_attributes(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
+    let actions = [
         "Add new attribute",
         "Edit existing attribute",
         "Remove attribute",
@@ -458,15 +445,12 @@ fn edit_custom_attributes(identity: &mut Identity) -> Result<()> {
     ];
 
     loop {
-        let selection = Select::new()
-            .with_prompt("Attribute action")
-            .items(&actions)
-            .interact()?;
+        let selection = ui.select("Attribute action", &actions, None)?;
 
         match selection {
-            0 => add_custom_attribute(identity)?,
-            1 => edit_existing_attribute(identity)?,
-            2 => remove_custom_attribute(identity)?,
+            0 => add_custom_attribute(identity, ui)?,
+            1 => edit_existing_attribute(identity, ui)?,
+            2 => remove_custom_attribute(identity, ui)?,
             3 => break,
             _ => unreachable!(),
         }
@@ -475,12 +459,10 @@ fn edit_custom_attributes(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn add_custom_attribute(identity: &mut Identity) -> Result<()> {
-    let key: String = Input::new().with_prompt("Attribute name").interact_text()?;
+fn add_custom_attribute(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
+    let key = ui.input("Attribute name", None, false)?;
 
-    let value: String = Input::new()
-        .with_prompt(format!("Value for '{}'", key))
-        .interact_text()?;
+    let value = ui.input(&format!("Value for '{}'", key), None, false)?;
 
     identity
         .attributes
@@ -490,17 +472,18 @@ fn add_custom_attribute(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn edit_existing_attribute(identity: &mut Identity) -> Result<()> {
+fn edit_existing_attribute(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
     if identity.attributes.is_empty() {
         println!("{}", "No custom attributes to edit".yellow());
         return Ok(());
     }
 
     let keys: Vec<String> = identity.attributes.keys().cloned().collect();
-    let selection = Select::new()
-        .with_prompt("Select attribute to edit")
-        .items(&keys)
-        .interact()?;
+    let selection = ui.select(
+        "Select attribute to edit",
+        &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+        None,
+    )?;
 
     let key = &keys[selection];
     let current_value = identity
@@ -509,10 +492,11 @@ fn edit_existing_attribute(identity: &mut Identity) -> Result<()> {
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let new_value: String = Input::new()
-        .with_prompt(format!("New value for '{}'", key))
-        .with_initial_text(current_value)
-        .interact_text()?;
+    let new_value = ui.input(
+        &format!("New value for '{}'", key),
+        Some(current_value),
+        false,
+    )?;
 
     identity
         .attributes
@@ -522,17 +506,17 @@ fn edit_existing_attribute(identity: &mut Identity) -> Result<()> {
     Ok(())
 }
 
-fn remove_custom_attribute(identity: &mut Identity) -> Result<()> {
+fn remove_custom_attribute(identity: &mut Identity, ui: &dyn PromptUi) -> Result<()> {
     if identity.attributes.is_empty() {
         println!("{}", "No custom attributes to remove".yellow());
         return Ok(());
     }
 
     let keys: Vec<String> = identity.attributes.keys().cloned().collect();
-    let selections = MultiSelect::new()
-        .with_prompt("Select attributes to remove")
-        .items(&keys)
-        .interact()?;
+    let selections = ui.multi_select(
+        "Select attributes to remove",
+        &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
 
     for &index in &selections {
         let key = &keys[index];
@@ -572,7 +556,7 @@ fn show_changes_summary(identity: &Identity) -> Result<()> {
     Ok(())
 }
 
-async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
+async fn save_identity(identity: &Identity, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -588,7 +572,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -654,6 +638,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
 mod tests {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::ScriptedUi;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -713,31 +698,113 @@ mod tests {
     #[test]
     fn single_field_edits_apply_and_clear_on_empty() {
         let mut identity = sample_identity();
+        let ui = TerminalUi;
 
-        edit_single_field(&mut identity, "email", Some("new@example.com".to_string())).unwrap();
+        edit_single_field(
+            &mut identity,
+            "email",
+            Some("new@example.com".to_string()),
+            &ui,
+        )
+        .unwrap();
         assert_eq!(identity.email.as_deref(), Some("new@example.com"));
 
         // An empty string clears the field.
-        edit_single_field(&mut identity, "email", Some(String::new())).unwrap();
+        edit_single_field(&mut identity, "email", Some(String::new()), &ui).unwrap();
         assert!(identity.email.is_none());
 
-        edit_single_field(&mut identity, "phone", Some("+49123456789".to_string())).unwrap();
+        edit_single_field(
+            &mut identity,
+            "phone",
+            Some("+49123456789".to_string()),
+            &ui,
+        )
+        .unwrap();
         assert_eq!(identity.phone.as_deref(), Some("+49123456789"));
-        edit_single_field(&mut identity, "phone", Some(String::new())).unwrap();
+        edit_single_field(&mut identity, "phone", Some(String::new()), &ui).unwrap();
         assert!(identity.phone.is_none());
 
-        edit_single_field(&mut identity, "description", Some("fresh".to_string())).unwrap();
+        edit_single_field(&mut identity, "description", Some("fresh".to_string()), &ui).unwrap();
         assert_eq!(identity.description, "fresh");
 
-        edit_single_field(&mut identity, "type", Some("work".to_string())).unwrap();
+        edit_single_field(&mut identity, "type", Some("work".to_string()), &ui).unwrap();
         assert_eq!(identity.identity_type, "work");
 
         // Field matching is case-insensitive.
-        edit_single_field(&mut identity, "DESCRIPTION", Some("upper".to_string())).unwrap();
+        edit_single_field(&mut identity, "DESCRIPTION", Some("upper".to_string()), &ui).unwrap();
         assert_eq!(identity.description, "upper");
 
-        let err = edit_single_field(&mut identity, "bogus", Some("x".to_string())).unwrap_err();
+        let err =
+            edit_single_field(&mut identity, "bogus", Some("x".to_string()), &ui).unwrap_err();
         assert!(err.to_string().contains("Unknown field: bogus"));
+    }
+
+    #[test]
+    fn single_field_without_value_prompts_interactively() {
+        let mut identity = sample_identity();
+
+        // `type` without a value opens the selection menu.
+        let ui = ScriptedUi::new().select(3); // → "gaming"
+        edit_single_field(&mut identity, "type", None, &ui).unwrap();
+        assert_eq!(identity.identity_type, "gaming");
+
+        // `email`/`phone`/`description` without a value open a text prompt.
+        let ui = ScriptedUi::new().input("");
+        edit_single_field(&mut identity, "email", None, &ui).unwrap();
+        assert!(identity.email.is_none());
+
+        let ui = ScriptedUi::new().input("+49123456789");
+        edit_single_field(&mut identity, "phone", None, &ui).unwrap();
+        assert_eq!(identity.phone.as_deref(), Some("+49123456789"));
+
+        let ui = ScriptedUi::new().input("brand new");
+        edit_single_field(&mut identity, "description", None, &ui).unwrap();
+        assert_eq!(identity.description, "brand new");
+    }
+
+    #[test]
+    fn edit_interactive_round_trip_with_scripted_answers() {
+        let mut identity = sample_identity();
+
+        // Outer menu: description → email → phone → tags → type →
+        // custom attributes → done. Inside the attribute menu: add → edit →
+        // remove → edit (empty early-return) → remove (empty early-return) →
+        // done. Then the outer menu is closed with "Done".
+        let ui = ScriptedUi::new()
+            .select(1)
+            .input("scripted description")
+            .select(2)
+            .input("") // clears the email
+            .select(3)
+            .input("+49123456789")
+            .select(4)
+            .input("a, b, c")
+            .select(0)
+            .select(1) // type menu → "work"
+            .select(5)
+            .select(0) // add attribute
+            .input("role")
+            .input("admin")
+            .select(1) // edit existing attribute
+            .select(0) // pick "role"
+            .input("super-admin")
+            .select(2) // remove attribute
+            .multi_select(&[0])
+            .select(1) // edit existing — list is empty again, early return
+            .select(2) // remove attribute — list is empty again, early return
+            .select(3) // done with attributes
+            .select(6); // done with editor
+
+        edit_interactive(&mut identity, &ui).unwrap();
+        assert!(ui.exhausted());
+
+        assert_eq!(identity.description, "scripted description");
+        assert!(identity.email.is_none());
+        assert_eq!(identity.phone.as_deref(), Some("+49123456789"));
+        assert_eq!(identity.tags, vec!["a", "b", "c"]);
+        assert_eq!(identity.identity_type, "work");
+        // The attribute was added, edited, then removed again.
+        assert!(identity.attributes.is_empty());
     }
 
     #[test]
@@ -812,6 +879,94 @@ mod tests {
             .await
             .expect_err("wrong password must fail");
         assert!(err.to_string().contains("Authentication failed"));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn edit_interactive_flow_saves_and_discards_through_execute() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+            service
+                .create_identity_full(CoreIdentity::new(
+                    "alice".to_string(),
+                    IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let args = |interactive: bool| EditArgs {
+            name: "alice".to_string(),
+            identity_type: None,
+            description: None,
+            email: None,
+            phone: None,
+            interactive,
+            field: None,
+            value: None,
+        };
+
+        // Interactive mode: change the description, then confirm the save.
+        let ui = ScriptedUi::new()
+            .select(1) // edit description
+            .input("saved via scripted ui")
+            .select(6) // done
+            .confirm(true); // save changes
+        execute_with(args(true), &config, &ui)
+            .await
+            .expect("interactive edit saves");
+        assert!(ui.exhausted());
+
+        // The new description survives a round-trip through the database.
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let alice = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .expect("alice exists");
+        assert_eq!(alice.description.as_deref(), Some("saved via scripted ui"));
+        drop(service);
+
+        // Declining the save confirmation discards the changes.
+        let ui = ScriptedUi::new()
+            .select(1)
+            .input("discarded edit")
+            .select(6)
+            .confirm(false); // discard
+        execute_with(args(true), &config, &ui)
+            .await
+            .expect("discarding returns success");
+        assert!(ui.exhausted());
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let alice = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .expect("alice exists");
+        assert_eq!(
+            alice.description.as_deref(),
+            Some("saved via scripted ui"),
+            "discarded edit must not persist"
+        );
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

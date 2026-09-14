@@ -25,6 +25,14 @@ pub struct ShowArgs {
 }
 
 pub async fn execute(args: ShowArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &crate::utils::prompt::TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: ShowArgs,
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
     println!(
         "👤 Showing identity '{}'...",
         args.name.bright_cyan().bold()
@@ -32,7 +40,7 @@ pub async fn execute(args: ShowArgs, config: &CliConfig) -> Result<()> {
     println!();
 
     // Fetch identity details
-    let identity = fetch_identity_details(&args.name, config).await?;
+    let identity = fetch_identity_details(&args.name, config, ui).await?;
 
     // Display based on format
     match args.format.as_str() {
@@ -61,7 +69,11 @@ struct IdentityDetails {
     usage_count: u32,
 }
 
-async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<IdentityDetails> {
+async fn fetch_identity_details(
+    name: &str,
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<IdentityDetails> {
     // Open DB
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -80,7 +92,7 @@ async fn fetch_identity_details(name: &str, config: &CliConfig) -> Result<Identi
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await

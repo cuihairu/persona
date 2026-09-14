@@ -1,3 +1,4 @@
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -6,7 +7,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use dialoguer::Password;
 use persona_core::{
     auth::AuthResult,
     models::{Credential as CoreCredential, Identity as CoreIdentity},
@@ -37,7 +37,7 @@ pub struct TuiArgs {
 }
 
 pub async fn execute(args: TuiArgs, config: &CliConfig) -> Result<()> {
-    let provider = init_data_provider(config).await?;
+    let provider = init_data_provider(config, &TerminalUi).await?;
     let identity_hint = args.identity.clone();
 
     tokio::task::spawn_blocking(move || {
@@ -52,7 +52,7 @@ pub async fn execute(args: TuiArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn init_data_provider(config: &CliConfig) -> Result<DataProvider> {
+async fn init_data_provider(config: &CliConfig, ui: &dyn PromptUi) -> Result<DataProvider> {
     let db_path = config.get_database_path();
     let db: persona_core::Database = Database::from_file::<std::path::PathBuf>(db_path.to_owned())
         .await
@@ -72,10 +72,8 @@ async fn init_data_provider(config: &CliConfig) -> Result<DataProvider> {
         .await
         .context("Failed to check workspace users")?
     {
-        let password = Password::new()
-            .with_prompt("Enter master password to unlock")
-            .allow_empty_password(false)
-            .interact()
+        let password = ui
+            .password("Enter master password to unlock", false, None)
             .context("Failed to read password")?;
 
         match service
@@ -542,4 +540,64 @@ fn render_credentials(f: &mut ratatui::Frame, area: ratatui::prelude::Rect, app:
     .block(Block::default().title("Credentials").borders(Borders::ALL));
 
     f.render_widget(table, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::utils::prompt::scripted::ScriptedUi;
+    use tempfile::TempDir;
+
+    async fn tui_test_config(dir: &TempDir) -> CliConfig {
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        config
+    }
+
+    #[tokio::test]
+    async fn data_provider_is_direct_without_users() {
+        let dir = TempDir::new().unwrap();
+        let config = tui_test_config(&dir).await;
+        let ui = ScriptedUi::new();
+
+        let provider = init_data_provider(&config, &ui)
+            .await
+            .expect("userless workspace opens directly");
+        assert!(matches!(provider, DataProvider::Direct { .. }));
+        assert!(ui.exhausted(), "no prompt consumed");
+    }
+
+    #[tokio::test]
+    async fn data_provider_unlocks_with_scripted_password() {
+        let dir = TempDir::new().unwrap();
+        let config = tui_test_config(&dir).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // Wrong scripted password is rejected.
+        let ui = ScriptedUi::new().password("wrong-pin");
+        let err = init_data_provider(&config, &ui)
+            .await
+            .err()
+            .expect("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+        assert!(ui.exhausted());
+
+        // Correct scripted password yields the unlocked service provider.
+        let ui = ScriptedUi::new().password("master-pin");
+        let provider = init_data_provider(&config, &ui)
+            .await
+            .expect("correct password unlocks");
+        assert!(matches!(provider, DataProvider::Service(_)));
+        assert!(ui.exhausted());
+    }
 }

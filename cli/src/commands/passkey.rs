@@ -78,7 +78,15 @@ pub enum PasskeyCommand {
 }
 
 pub async fn handle_passkey(args: PasskeyArgs, config: &CliConfig) -> Result<()> {
-    let service = init_service(config).await?;
+    handle_passkey_with(args, config, &crate::utils::prompt::TerminalUi).await
+}
+
+pub(crate) async fn handle_passkey_with(
+    args: PasskeyArgs,
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
 
     match args.command {
         PasskeyCommand::Create {
@@ -306,7 +314,9 @@ mod tests {
             service.initialize_user("master-pin").await.unwrap();
         }
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
-        let service = init_service(&config).await.unwrap();
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
         service
             .create_identity_full(persona_core::Identity::new(
                 "alice".to_string(),
@@ -369,7 +379,9 @@ mod tests {
         .expect("global list works");
 
         // Fetch the created passkey through the service for id-based commands.
-        let service = init_service(&config).await.unwrap();
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
         let alice = service
             .get_identity_by_name("alice")
             .await

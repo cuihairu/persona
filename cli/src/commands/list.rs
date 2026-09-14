@@ -83,11 +83,19 @@ struct DetailedIdentityRow {
 }
 
 pub async fn execute(args: ListArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &crate::utils::prompt::TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: ListArgs,
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
     println!("{}", "📋 Listing identities...".cyan().bold());
     println!();
 
     // Fetch identities from database
-    let mut identities = fetch_identities(config).await?;
+    let mut identities = fetch_identities(config, ui).await?;
 
     // Apply filters
     identities = apply_filters(identities, &args)?;
@@ -135,7 +143,10 @@ struct Identity {
     attributes: HashMap<String, Value>,
 }
 
-async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
+async fn fetch_identities(
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<Vec<Identity>> {
     // Open DB
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -155,7 +166,7 @@ async fn fetch_identities(config: &CliConfig) -> Result<Vec<Identity>> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await

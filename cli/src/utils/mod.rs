@@ -5,6 +5,7 @@ use tracing::{debug, warn};
 pub mod core_ext;
 pub mod file_crypto;
 pub mod progress;
+pub mod prompt;
 /// Create directory if it doesn't exist
 pub fn create_directory<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();

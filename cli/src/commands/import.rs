@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, MultiSelect};
 use std::path::{Path, PathBuf};
 
 use crate::utils::progress::create_progress_bar;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
     models::IdentityType,
@@ -12,7 +12,7 @@ use persona_core::{
     Database, PersonaService,
 };
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub struct ImportArgs {
     /// Import file path
     file: PathBuf,
@@ -43,6 +43,14 @@ pub struct ImportArgs {
 }
 
 pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: ImportArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!("{}", "📥 Importing identities...".cyan().bold());
     println!();
 
@@ -51,7 +59,7 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
 
     // Decrypt file if needed
     let import_file = if args.decrypt {
-        decrypt_import_file(&args.file, config)?
+        decrypt_import_file(&args.file, config, ui)?
     } else {
         args.file.clone()
     };
@@ -64,7 +72,7 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
 
     // Select identities to import
     let selected_identities = if args.interactive {
-        select_identities_interactive(&import_data)?
+        select_identities_interactive(&import_data, ui)?
     } else {
         import_data.identities.clone()
     };
@@ -75,19 +83,13 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
     }
 
     // Check for conflicts
-    let conflicts = check_import_conflicts(&selected_identities, config).await?;
+    let conflicts = check_import_conflicts(&selected_identities, config, ui).await?;
     if !conflicts.is_empty() {
         handle_import_conflicts(&conflicts, &args)?;
     }
 
     // Confirm import
-    if !args.force
-        && !args.dry_run
-        && !Confirm::new()
-            .with_prompt("Proceed with import?")
-            .default(true)
-            .interact()?
-    {
+    if !args.force && !args.dry_run && !ui.confirm("Proceed with import?", true)? {
         println!("{}", "Import cancelled.".yellow());
         return Ok(());
     }
@@ -99,9 +101,9 @@ pub async fn execute(args: ImportArgs, config: &CliConfig) -> Result<()> {
 
     // Perform import
     if args.dry_run {
-        perform_dry_run(&selected_identities, &args, config).await?;
+        perform_dry_run(&selected_identities, &args, config, ui).await?;
     } else {
-        perform_import(&selected_identities, &args, config).await?;
+        perform_import(&selected_identities, &args, config, ui).await?;
     }
 
     println!();
@@ -168,10 +170,14 @@ fn validate_import_file(file_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn decrypt_import_file(file_path: &Path, _config: &CliConfig) -> Result<PathBuf> {
+fn decrypt_import_file(
+    file_path: &Path,
+    _config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<PathBuf> {
     use crate::utils::file_crypto::decrypt_file_to_temp;
     println!("🔓 Decrypting import file...");
-    let passphrase = super::service::prompt_payload_passphrase("import")?;
+    let passphrase = super::service::prompt_payload_passphrase("import", ui)?;
     let out = decrypt_file_to_temp(file_path, &passphrase)?;
     println!("{} File decrypted", "✓".green());
     Ok(out)
@@ -355,17 +361,23 @@ fn show_import_summary(import_data: &ImportData, args: &ImportArgs) -> Result<()
     Ok(())
 }
 
-fn select_identities_interactive(import_data: &ImportData) -> Result<Vec<ImportIdentity>> {
+fn select_identities_interactive(
+    import_data: &ImportData,
+    ui: &dyn PromptUi,
+) -> Result<Vec<ImportIdentity>> {
     let identity_names: Vec<String> = import_data
         .identities
         .iter()
         .map(|id| format!("{} ({})", id.name, id.identity_type))
         .collect();
 
-    let selections = MultiSelect::new()
-        .with_prompt("Select identities to import")
-        .items(&identity_names)
-        .interact()?;
+    let selections = ui.multi_select(
+        "Select identities to import",
+        &identity_names
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    )?;
 
     Ok(selections
         .into_iter()
@@ -376,6 +388,7 @@ fn select_identities_interactive(import_data: &ImportData) -> Result<Vec<ImportI
 async fn check_import_conflicts(
     identities: &[ImportIdentity],
     config: &CliConfig,
+    ui: &dyn PromptUi,
 ) -> Result<Vec<ImportConflict>> {
     let mut conflicts = Vec::new();
 
@@ -388,7 +401,7 @@ async fn check_import_conflicts(
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
     let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
     let names = if service.has_users().await.into_anyhow()? {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service.authenticate_user(&password).await.into_anyhow()? {
             persona_core::auth::authentication::AuthResult::Success => service
                 .get_identities()
@@ -491,6 +504,7 @@ async fn perform_dry_run(
     identities: &[ImportIdentity],
     args: &ImportArgs,
     _config: &CliConfig,
+    _ui: &dyn PromptUi,
 ) -> Result<()> {
     println!("{}", "Dry Run Results:".yellow().bold());
     println!();
@@ -526,6 +540,7 @@ async fn perform_import(
     identities: &[ImportIdentity],
     args: &ImportArgs,
     config: &CliConfig,
+    ui: &dyn PromptUi,
 ) -> Result<()> {
     let pb = create_progress_bar(identities.len() as u64, "Importing identities");
 
@@ -540,7 +555,7 @@ async fn perform_import(
     let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
     let has_users = service.has_users().await.into_anyhow()?;
     if has_users {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service.authenticate_user(&password).await.into_anyhow()? {
             persona_core::auth::authentication::AuthResult::Success => {}
             other => anyhow::bail!("Authentication failed: {:?}", other),
@@ -662,6 +677,7 @@ async fn perform_import(
 mod tests {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::ScriptedUi;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -781,7 +797,7 @@ mod tests {
         let mut dry_args = args(&json_path, true);
         dry_args.dry_run = true;
         execute(dry_args, &config).await.expect("dry run succeeds");
-        assert!(check_import_conflicts(&[], &config)
+        assert!(check_import_conflicts(&[], &config, &ScriptedUi::new())
             .await
             .unwrap()
             .is_empty());
@@ -809,6 +825,7 @@ mod tests {
                 tags: vec![],
             }],
             &config,
+            &ScriptedUi::new(),
         )
         .await
         .unwrap();
@@ -937,7 +954,9 @@ mod tests {
             let service = PersonaService::new(db).await.unwrap();
             // Both identities landed in the encrypted workspace.
             let mut service = service;
-            let password = crate::commands::service::prompt_master_password().unwrap();
+            let password =
+                crate::commands::service::prompt_master_password(&crate::utils::prompt::TerminalUi)
+                    .unwrap();
             let _ = service.authenticate_user(&password).await.unwrap();
             assert!(service
                 .get_identity_by_name("alice")
@@ -947,5 +966,52 @@ mod tests {
         }
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn import_interactive_selection_and_confirm_gates() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let json_path = dir.path().join("data.json");
+        std::fs::write(&json_path, sample_json()).unwrap();
+
+        // Interactive selection picks only the first identity, then declines
+        // the proceed prompt → nothing is imported.
+        let mut select_args = args(&json_path, false);
+        select_args.interactive = true;
+        let ui = ScriptedUi::new().multi_select(&[0]).confirm(false);
+        execute_with(select_args.clone(), &config, &ui)
+            .await
+            .expect("cancelled import returns success");
+        assert!(ui.exhausted());
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = IdentityRepository::new(db.clone());
+        assert!(
+            repo.find_all().await.unwrap().is_empty(),
+            "declined import must not write"
+        );
+        drop(db);
+
+        // Multi-selecting nothing reports "no identities selected".
+        let ui = ScriptedUi::new().multi_select(&[]);
+        execute_with(select_args.clone(), &config, &ui)
+            .await
+            .expect("empty selection returns success");
+        assert!(ui.exhausted());
+
+        // Accepting the proceed prompt imports the selected identities.
+        let ui = ScriptedUi::new().multi_select(&[0, 1]).confirm(true);
+        execute_with(select_args, &config, &ui)
+            .await
+            .expect("confirmed import succeeds");
+        assert!(ui.exhausted());
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = IdentityRepository::new(db);
+        assert!(repo.find_by_name("alice").await.unwrap().is_some());
+        assert!(repo.find_by_name("bob").await.unwrap().is_some());
     }
 }

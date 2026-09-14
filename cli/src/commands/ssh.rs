@@ -3,7 +3,6 @@ use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use clap::{Args, Subcommand};
 use colored::*;
-use dialoguer::{Confirm, Password};
 use persona_core::{
     models::{CredentialData, CredentialType, Identity as CoreIdentity, SecurityLevel, SshKeyData},
     Database, PersonaService,
@@ -105,36 +104,47 @@ pub enum SshSubcommand {
 }
 
 pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result<()> {
+    execute_with(args, config, &crate::utils::prompt::TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: SshArgs,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
     match args.command {
         SshSubcommand::Generate {
             identity,
             name,
             key_type,
             favorite,
-        } => generate_key(&identity, name, &key_type, favorite, config).await,
-        SshSubcommand::List { identity } => list_keys(&identity, config).await,
-        SshSubcommand::Remove { id, yes } => remove_key(id, yes, config).await,
+        } => generate_key(&identity, name, &key_type, favorite, config, ui).await,
+        SshSubcommand::List { identity } => list_keys(&identity, config, ui).await,
+        SshSubcommand::Remove { id, yes } => remove_key(id, yes, config, ui).await,
         SshSubcommand::Status => agent_status(config).await,
         SshSubcommand::AddToAgent {
             identity: _,
             print_export,
-        } => start_agent(config, print_export).await,
+        } => start_agent(config, print_export, ui).await,
         SshSubcommand::AgentStatus => agent_status(config).await,
-        SshSubcommand::StartAgent { print_export } => start_agent(config, print_export).await,
-        SshSubcommand::ListAll => list_all_keys(config).await,
+        SshSubcommand::StartAgent { print_export } => start_agent(config, print_export, ui).await,
+        SshSubcommand::ListAll => list_all_keys(config, ui).await,
         SshSubcommand::Import {
             identity,
             name,
             seed_base64,
             seed_hex,
-        } => import_seed(&identity, name, seed_base64, seed_hex, config).await,
-        SshSubcommand::ExportPub { id } => export_pubkey(id, config).await,
+        } => import_seed(&identity, name, seed_base64, seed_hex, config, ui).await,
+        SshSubcommand::ExportPub { id } => export_pubkey(id, config, ui).await,
         SshSubcommand::StopAgent => stop_agent(),
         SshSubcommand::Run { host, command } => run_with_host(&host, command, config).await,
     }
 }
 
-async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaService> {
+pub(crate) async fn ensure_service(
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<PersonaService> {
     let db_path = config.get_database_path();
     let db: persona_core::Database = Database::from_file::<std::path::PathBuf>(db_path.to_owned())
         .await
@@ -146,9 +156,7 @@ async fn ensure_service(config: &crate::config::CliConfig) -> Result<PersonaServ
         .context("Failed to create PersonaService")?;
     if service.has_users().await? {
         let password = if config.ui.interactive {
-            Password::new()
-                .with_prompt("Enter master password to unlock")
-                .interact()?
+            crate::commands::service::prompt_master_password(ui)?
         } else {
             std::env::var("PERSONA_MASTER_PASSWORD")
                 .context("Master password required but PERSONA_MASTER_PASSWORD not set")?
@@ -174,13 +182,14 @@ async fn generate_key(
     key_type: &str,
     favorite: bool,
     config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
 ) -> Result<()> {
     println!("{}", "🔑 Generating SSH key...".cyan().bold());
     if key_type.to_lowercase() != "ed25519" {
         anyhow::bail!("Only ed25519 is supported currently");
     }
 
-    let service = ensure_service(config).await?;
+    let service = ensure_service(config, ui).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
     // Generate ed25519 keypair
@@ -229,8 +238,12 @@ async fn generate_key(
     Ok(())
 }
 
-async fn list_keys(identity_name: &str, config: &crate::config::CliConfig) -> Result<()> {
-    let service = ensure_service(config).await?;
+async fn list_keys(
+    identity_name: &str,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    let service = ensure_service(config, ui).await?;
     let identity = resolve_identity(&service, identity_name).await?;
     let creds = service.get_credentials_for_identity(&identity.id).await?;
     let mut count = 0usize;
@@ -257,8 +270,11 @@ async fn list_keys(identity_name: &str, config: &crate::config::CliConfig) -> Re
     Ok(())
 }
 
-async fn list_all_keys(config: &crate::config::CliConfig) -> Result<()> {
-    let service = ensure_service(config).await?;
+async fn list_all_keys(
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    let service = ensure_service(config, ui).await?;
     let identities = service.get_identities().await?;
     let mut count = 0usize;
 
@@ -291,14 +307,14 @@ async fn list_all_keys(config: &crate::config::CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn remove_key(id: Uuid, yes: bool, config: &crate::config::CliConfig) -> Result<()> {
-    let service = ensure_service(config).await?;
-    if !yes
-        && !Confirm::new()
-            .with_prompt(format!("Remove SSH key credential {}?", id))
-            .default(false)
-            .interact()?
-    {
+async fn remove_key(
+    id: Uuid,
+    yes: bool,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    let service = ensure_service(config, ui).await?;
+    if !yes && !ui.confirm(&format!("Remove SSH key credential {}?", id), false)? {
         println!("{}", "Cancelled.".yellow());
         return Ok(());
     }
@@ -323,7 +339,11 @@ fn encode_ssh_ed25519_public(pubkey: &[u8; 32], comment: Option<&str>) -> String
     }
 }
 
-async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> Result<()> {
+async fn start_agent(
+    config: &crate::config::CliConfig,
+    print_export: bool,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
     use tokio::process::Command;
     println!("{}", "Starting persona-ssh-agent...".cyan().bold());
@@ -336,14 +356,15 @@ async fn start_agent(config: &crate::config::CliConfig, print_export: bool) -> R
     cmd.env("PERSONA_DB_PATH", db_path.to_string_lossy().to_string());
     cmd.env("PERSONA_AGENT_SOCKET_PATH", &socket_path);
     // if vault encrypted, prompt for master password and pass via env
-    let _ = ensure_service(config).await?; // ensure migrations; may prompt
-                                           // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
-                                           // Here we conservatively ask user again (not stored from ensure_service)
+    let _ = ensure_service(config, ui).await?; // ensure migrations; may prompt
+                                               // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
+                                               // Here we conservatively ask user again (not stored from ensure_service)
     let pass = if config.ui.interactive {
-        Password::new()
-            .with_prompt("Enter master password for agent (leave empty if not set)")
-            .allow_empty_password(true)
-            .interact()?
+        ui.password(
+            "Enter master password for agent (leave empty if not set)",
+            true,
+            None,
+        )?
     } else {
         std::env::var("PERSONA_MASTER_PASSWORD").unwrap_or_default()
     };
@@ -678,9 +699,10 @@ async fn import_seed(
     seed_b64: Option<String>,
     seed_hex: Option<String>,
     config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
 ) -> Result<()> {
     println!("{}", "🔑 Importing SSH seed...".cyan().bold());
-    let service = ensure_service(config).await?;
+    let service = ensure_service(config, ui).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
     let seed = if let Some(b64) = seed_b64 {
@@ -726,8 +748,12 @@ async fn import_seed(
     Ok(())
 }
 
-async fn export_pubkey(id: uuid::Uuid, config: &crate::config::CliConfig) -> Result<()> {
-    let service = ensure_service(config).await?;
+async fn export_pubkey(
+    id: uuid::Uuid,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    let service = ensure_service(config, ui).await?;
     if let Some(cred) = service.get_credential(&id).await? {
         if !matches!(cred.credential_type, CredentialType::SshKey) {
             anyhow::bail!("Credential is not an SSH key");
@@ -793,6 +819,122 @@ fn stop_agent_pid(pid: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::prompt::scripted::ScriptedUi;
+    use crate::utils::prompt::TerminalUi;
+    use std::sync::Mutex;
+    use tempfile::TempDir;
+
+    /// Serializes env reads against the tests that mutate
+    /// `PERSONA_MASTER_PASSWORD` from other threads (env-first prompting
+    /// would otherwise swallow their value instead of the scripted one).
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_process_env() -> (
+        std::sync::MutexGuard<'static, ()>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        (
+            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
+            ENV_LOCK.lock().unwrap(),
+        )
+    }
+
+    async fn ssh_test_config(dir: &TempDir) -> crate::config::CliConfig {
+        let mut config = crate::config::CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        config
+    }
+
+    #[tokio::test]
+    async fn ensure_service_unlocks_with_scripted_password() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = ssh_test_config(&dir).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // Wrong scripted password fails authentication.
+        let ui = ScriptedUi::new().password("wrong-pin");
+        let err = ensure_service(&config, &ui)
+            .await
+            .err()
+            .expect("wrong password must fail");
+        assert!(err.to_string().contains("Authentication failed"));
+        assert!(ui.exhausted());
+
+        // The correct scripted password unlocks the service.
+        let ui = ScriptedUi::new().password("master-pin");
+        let service = ensure_service(&config, &ui)
+            .await
+            .expect("correct password must unlock");
+        assert!(service.has_users().await.unwrap());
+        assert!(ui.exhausted());
+    }
+
+    #[tokio::test]
+    async fn remove_key_confirm_gate_cancels_or_deletes() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = ssh_test_config(&dir).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        let id = uuid::Uuid::new_v4();
+
+        // Declining the confirmation keeps everything untouched. The unlock
+        // password is consumed before the confirm gate.
+        let ui = ScriptedUi::new().password("master-pin").confirm(false);
+        remove_key(id, false, &config, &ui)
+            .await
+            .expect("declined removal returns success");
+        assert!(ui.exhausted());
+
+        // Accepting proceeds (the id does not exist; delete is a no-op).
+        let ui = ScriptedUi::new().password("master-pin").confirm(true);
+        remove_key(id, false, &config, &ui)
+            .await
+            .expect("confirmed removal returns success");
+        assert!(ui.exhausted());
+
+        // --yes skips the confirm prompt entirely.
+        let ui = ScriptedUi::new().password("master-pin");
+        remove_key(id, true, &config, &ui)
+            .await
+            .expect("forced removal returns success");
+        assert!(ui.exhausted(), "--yes must not touch the confirm queue");
+    }
+
+    #[tokio::test]
+    async fn ensure_service_without_users_needs_no_prompt() {
+        let dir = TempDir::new().unwrap();
+        let config = ssh_test_config(&dir).await;
+        let ui = ScriptedUi::new();
+        let service = ensure_service(&config, &ui)
+            .await
+            .expect("userless workspace opens without prompting");
+        assert!(!service.has_users().await.unwrap());
+        assert!(ui.exhausted(), "no prompt consumed");
+
+        // Keep TerminalUi referenced so the import stays honest.
+        let _ = TerminalUi;
+    }
 
     fn build_identities_answer(count: u32) -> Vec<u8> {
         use byteorder::{BigEndian, ByteOrder};

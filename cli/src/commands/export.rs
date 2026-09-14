@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, MultiSelect};
 use std::path::{Path, PathBuf};
 
 use crate::config::CliConfig;
 use crate::utils::file_crypto::encrypt_file_inplace;
 use crate::utils::progress::create_progress_bar;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::Repository;
 use persona_core::{Database, PersonaService};
 
@@ -41,16 +41,24 @@ pub struct ExportArgs {
 }
 
 pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: ExportArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!("{}", "📤 Exporting identities...".cyan().bold());
     println!();
 
     // Determine which identities to export
     let identity_names = if args.interactive {
-        select_identities_interactive(config).await?
+        select_identities_interactive(config, ui).await?
     } else if args.names.is_empty() {
-        get_all_identity_names(config).await?
+        get_all_identity_names(config, ui).await?
     } else {
-        validate_identity_names(&args.names, config).await?;
+        validate_identity_names(&args.names, config, ui).await?;
         args.names.clone()
     };
 
@@ -66,11 +74,7 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
     show_export_summary(&identity_names, &output_path, &args)?;
 
     // Confirm export
-    if !Confirm::new()
-        .with_prompt("Proceed with export?")
-        .default(true)
-        .interact()?
-    {
+    if !ui.confirm("Proceed with export?", true)? {
         println!("{}", "Export cancelled.".yellow());
         return Ok(());
     }
@@ -84,18 +88,14 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
                 .red()
                 .bold()
         );
-        if !Confirm::new()
-            .with_prompt("Are you sure you want to include sensitive data?")
-            .default(false)
-            .interact()?
-        {
+        if !ui.confirm("Are you sure you want to include sensitive data?", false)? {
             println!("{}", "Export cancelled.".yellow());
             return Ok(());
         }
     }
 
     // Perform export
-    perform_export(&identity_names, &output_path, &args, config).await?;
+    perform_export(&identity_names, &output_path, &args, config, ui).await?;
 
     println!();
     println!("{} Export completed successfully!", "✓".green().bold());
@@ -110,17 +110,23 @@ pub async fn execute(args: ExportArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-async fn select_identities_interactive(config: &CliConfig) -> Result<Vec<String>> {
-    let all_identities = get_all_identity_names(config).await?;
+async fn select_identities_interactive(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<Vec<String>> {
+    let all_identities = get_all_identity_names(config, ui).await?;
 
     if all_identities.is_empty() {
         anyhow::bail!("No identities found to export");
     }
 
-    let selections = MultiSelect::new()
-        .with_prompt("Select identities to export")
-        .items(&all_identities)
-        .interact()?;
+    let selections = ui.multi_select(
+        "Select identities to export",
+        &all_identities
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    )?;
 
     Ok(selections
         .into_iter()
@@ -128,7 +134,7 @@ async fn select_identities_interactive(config: &CliConfig) -> Result<Vec<String>
         .collect())
 }
 
-async fn get_all_identity_names(config: &CliConfig) -> Result<Vec<String>> {
+async fn get_all_identity_names(config: &CliConfig, ui: &dyn PromptUi) -> Result<Vec<String>> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -144,7 +150,7 @@ async fn get_all_identity_names(config: &CliConfig) -> Result<Vec<String>> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -166,8 +172,12 @@ async fn get_all_identity_names(config: &CliConfig) -> Result<Vec<String>> {
     Ok(items.into_iter().map(|i| i.name).collect())
 }
 
-async fn validate_identity_names(names: &[String], config: &CliConfig) -> Result<()> {
-    let all_identities = get_all_identity_names(config).await?;
+async fn validate_identity_names(
+    names: &[String],
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
+    let all_identities = get_all_identity_names(config, ui).await?;
 
     for name in names {
         if !all_identities.contains(name) {
@@ -250,6 +260,7 @@ async fn perform_export(
     output_path: &Path,
     args: &ExportArgs,
     config: &CliConfig,
+    ui: &dyn PromptUi,
 ) -> Result<()> {
     let pb = create_progress_bar(identity_names.len() as u64, "Exporting identities");
 
@@ -260,9 +271,9 @@ async fn perform_export(
 
     // Export based on format
     match args.format.as_str() {
-        "json" => export_json(identity_names, output_path, args, config, &pb).await?,
-        "yaml" => export_yaml(identity_names, output_path, args, config, &pb).await?,
-        "csv" => export_csv(identity_names, output_path, args, config, &pb).await?,
+        "json" => export_json(identity_names, output_path, args, config, ui, &pb).await?,
+        "yaml" => export_yaml(identity_names, output_path, args, config, ui, &pb).await?,
+        "csv" => export_csv(identity_names, output_path, args, config, ui, &pb).await?,
         _ => anyhow::bail!("Unsupported export format: {}", args.format),
     }
 
@@ -275,18 +286,20 @@ async fn perform_export(
 
     // Apply encryption if requested
     if args.encrypt {
-        let passphrase = super::service::prompt_payload_passphrase("export")?;
+        let passphrase = super::service::prompt_payload_passphrase("export", ui)?;
         encrypt_file_inplace(output_path, &passphrase, None)?;
     }
 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn export_json(
     identity_names: &[String],
     output_path: &Path,
     args: &ExportArgs,
     config: &CliConfig,
+    ui: &dyn PromptUi,
     pb: &indicatif::ProgressBar,
 ) -> Result<()> {
     // Open service (may require unlock)
@@ -305,7 +318,7 @@ async fn export_json(
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -471,11 +484,12 @@ async fn export_yaml(
     output_path: &Path,
     args: &ExportArgs,
     config: &CliConfig,
+    ui: &dyn PromptUi,
     pb: &indicatif::ProgressBar,
 ) -> Result<()> {
     // First export as JSON, then convert to YAML
     let temp_json = output_path.with_extension("temp.json");
-    export_json(identity_names, &temp_json, args, config, pb).await?;
+    export_json(identity_names, &temp_json, args, config, ui, pb).await?;
 
     let json_content = std::fs::read_to_string(&temp_json)?;
     let json_value: serde_json::Value = serde_json::from_str(&json_content)?;
@@ -494,6 +508,7 @@ async fn export_csv(
     output_path: &Path,
     _args: &ExportArgs,
     config: &CliConfig,
+    ui: &dyn PromptUi,
     pb: &indicatif::ProgressBar,
 ) -> Result<()> {
     let db_path = config.get_database_path();
@@ -511,7 +526,7 @@ async fn export_csv(
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?;
     if has_users {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -697,17 +712,27 @@ mod tests {
         let config = config_for(&dir);
         seeded_db(&dir, &["alice", "bob"]).await;
 
-        let all = get_all_identity_names(&config).await.unwrap();
+        let all = get_all_identity_names(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
         let mut sorted = all.clone();
         sorted.sort();
         assert_eq!(sorted, vec!["alice".to_string(), "bob".to_string()]);
 
-        validate_identity_names(&["alice".to_string()], &config)
-            .await
-            .expect("existing name validates");
-        let err = validate_identity_names(&["ghost".to_string()], &config)
-            .await
-            .expect_err("unknown name must fail");
+        validate_identity_names(
+            &["alice".to_string()],
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("existing name validates");
+        let err = validate_identity_names(
+            &["ghost".to_string()],
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect_err("unknown name must fail");
         assert!(err.to_string().contains("Identity 'ghost' not found"));
     }
 
@@ -744,6 +769,7 @@ mod tests {
             &out,
             &args(&["alice"], "xml"),
             &config,
+            &crate::utils::prompt::TerminalUi,
         )
         .await
         .expect_err("unknown format must fail");
@@ -762,6 +788,7 @@ mod tests {
             &out,
             &args(&["alice", "bob"], "json"),
             &config,
+            &crate::utils::prompt::TerminalUi,
         )
         .await
         .expect("json export must succeed");
@@ -803,6 +830,7 @@ mod tests {
             &out,
             &args(&["carol"], "json"),
             &config,
+            &crate::utils::prompt::TerminalUi,
         )
         .await
         .expect_err("wrong password must fail");
@@ -815,6 +843,7 @@ mod tests {
             &out,
             &args(&["carol"], "json"),
             &config,
+            &crate::utils::prompt::TerminalUi,
         )
         .await
         .expect("correct password must export");
@@ -836,6 +865,7 @@ mod tests {
             &yaml_out,
             &args(&["alice"], "yaml"),
             &config,
+            &crate::utils::prompt::TerminalUi,
         )
         .await
         .expect("yaml export must succeed");
@@ -848,6 +878,7 @@ mod tests {
             &csv_out,
             &args(&["alice"], "csv"),
             &config,
+            &crate::utils::prompt::TerminalUi,
         )
         .await
         .expect("csv export must succeed");

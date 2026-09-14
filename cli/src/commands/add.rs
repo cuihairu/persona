@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use dialoguer::{Confirm, Input, Select};
 use serde_json::Value;
 use std::collections::HashMap;
 use tracing::info;
 
 use crate::config::CliConfig;
+use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::{Database, Identity, IdentityType, PersonaService};
 
 #[derive(Args, Clone)]
@@ -44,6 +44,14 @@ pub struct AddArgs {
 }
 
 pub async fn execute(args: AddArgs, config: &CliConfig) -> Result<()> {
+    execute_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn execute_with(
+    args: AddArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     println!("{}", "➕ Adding new identity...".cyan().bold());
     println!();
 
@@ -54,14 +62,14 @@ pub async fn execute(args: AddArgs, config: &CliConfig) -> Result<()> {
     let identity = if args.yes {
         create_identity_non_interactive(&args)?
     } else {
-        create_identity_interactive(&args)?
+        create_identity_interactive(&args, ui)?
     };
 
     // Validate identity data
     validate_identity(&identity)?;
 
     // Save identity to database
-    save_identity(&identity, config).await?;
+    save_identity(&identity, config, ui).await?;
 
     println!();
     println!(
@@ -97,12 +105,12 @@ pub async fn execute(args: AddArgs, config: &CliConfig) -> Result<()> {
     Ok(())
 }
 
-fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
+fn create_identity_interactive(args: &AddArgs, ui: &dyn PromptUi) -> Result<Identity> {
     // Get identity name
     let name = if let Some(name) = args.name.as_ref() {
         name.clone()
     } else {
-        Input::new().with_prompt("Identity name").interact_text()?
+        ui.input("Identity name", None, false)?
     };
 
     // Get identity type
@@ -120,11 +128,7 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
             .unwrap_or(IdentityType::Custom(t.clone()))
     } else {
         let type_names: Vec<&str> = identity_types.iter().map(|(name, _)| *name).collect();
-        let selection = Select::new()
-            .with_prompt("Identity type")
-            .items(&type_names)
-            .default(0)
-            .interact()?;
+        let selection = ui.select("Identity type", &type_names, Some(0))?;
         identity_types[selection].1.clone()
     };
 
@@ -132,20 +136,14 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     let description = if let Some(desc) = args.description.as_ref() {
         desc.clone()
     } else {
-        Input::new()
-            .with_prompt("Description")
-            .allow_empty(true)
-            .interact_text()?
+        ui.input("Description", None, true)?
     };
 
     // Get email
     let email = if let Some(email) = args.email.as_ref() {
         Some(email.clone())
     } else {
-        let email_input: String = Input::new()
-            .with_prompt("Email (optional)")
-            .allow_empty(true)
-            .interact_text()?;
+        let email_input = ui.input("Email (optional)", None, true)?;
         if email_input.is_empty() {
             None
         } else {
@@ -157,10 +155,7 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     let phone = if let Some(phone) = args.phone.as_ref() {
         Some(phone.clone())
     } else {
-        let phone_input: String = Input::new()
-            .with_prompt("Phone (optional)")
-            .allow_empty(true)
-            .interact_text()?;
+        let phone_input = ui.input("Phone (optional)", None, true)?;
         if phone_input.is_empty() {
             None
         } else {
@@ -169,10 +164,10 @@ fn create_identity_interactive(args: &AddArgs) -> Result<Identity> {
     };
 
     // Get additional attributes
-    let attributes_map = collect_additional_attributes()?;
+    let attributes_map = collect_additional_attributes(ui)?;
 
     // Get tags
-    let tags_vec = collect_tags()?;
+    let tags_vec = collect_tags(ui)?;
 
     // Create identity using persona-core constructor
     let mut identity = Identity::new(name, identity_type);
@@ -233,14 +228,10 @@ fn create_identity_non_interactive(args: &AddArgs) -> Result<Identity> {
     Ok(identity)
 }
 
-fn collect_additional_attributes() -> Result<HashMap<String, Value>> {
+fn collect_additional_attributes(ui: &dyn PromptUi) -> Result<HashMap<String, Value>> {
     let mut attributes = HashMap::new();
 
-    if !Confirm::new()
-        .with_prompt("Add additional attributes?")
-        .default(false)
-        .interact()?
-    {
+    if !ui.confirm("Add additional attributes?", false)? {
         return Ok(attributes);
     }
 
@@ -250,18 +241,13 @@ fn collect_additional_attributes() -> Result<HashMap<String, Value>> {
     );
 
     loop {
-        let key: String = Input::new()
-            .with_prompt("Attribute name")
-            .allow_empty(true)
-            .interact_text()?;
+        let key = ui.input("Attribute name", None, true)?;
 
         if key.is_empty() {
             break;
         }
 
-        let value: String = Input::new()
-            .with_prompt(format!("Value for '{}'", key))
-            .interact_text()?;
+        let value = ui.input(&format!("Value for '{}'", key), None, false)?;
 
         attributes.insert(key, Value::String(value));
     }
@@ -269,18 +255,12 @@ fn collect_additional_attributes() -> Result<HashMap<String, Value>> {
     Ok(attributes)
 }
 
-fn collect_tags() -> Result<Vec<String>> {
-    if !Confirm::new()
-        .with_prompt("Add tags?")
-        .default(false)
-        .interact()?
-    {
+fn collect_tags(ui: &dyn PromptUi) -> Result<Vec<String>> {
+    if !ui.confirm("Add tags?", false)? {
         return Ok(Vec::new());
     }
 
-    let tags_input: String = Input::new()
-        .with_prompt("Tags (comma-separated)")
-        .interact_text()?;
+    let tags_input = ui.input("Tags (comma-separated)", None, false)?;
 
     let tags = tags_input
         .split(',')
@@ -317,7 +297,7 @@ fn validate_identity(identity: &Identity) -> Result<()> {
     Ok(())
 }
 
-async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
+async fn save_identity(identity: &Identity, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
     // Open database
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
@@ -339,7 +319,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
         .await
         .map_err(|e| anyhow!("Failed to check users: {}", e))?
     {
-        let password = super::service::prompt_master_password()?;
+        let password = super::service::prompt_master_password(ui)?;
         match service
             .authenticate_user(&password)
             .await
@@ -351,7 +331,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig) -> Result<()> {
             other => anyhow::bail!("Authentication failed: {:?}", other),
         }
     } else {
-        let password = super::service::prompt_new_master_password()?;
+        let password = super::service::prompt_new_master_password(ui)?;
         let _ = service
             .initialize_user(&password)
             .await
@@ -448,6 +428,7 @@ mod tests {
 mod integration {
     use super::*;
     use crate::config::CliConfig;
+    use crate::utils::prompt::scripted::ScriptedUi;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -572,5 +553,80 @@ mod integration {
         let mut identity = Identity::new("t".to_string(), parsed);
         identity.email = Some("a@b.c".to_string());
         validate_identity(&identity).expect("custom type is fine");
+    }
+
+    #[tokio::test]
+    async fn add_interactive_flow_creates_identity_from_scripted_answers() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "interactive-pin");
+
+        // Fully scripted wizard run: name → type → description → email →
+        // phone → attributes (one pair) → tags.
+        let ui = ScriptedUi::new()
+            .input("ivy") // identity name
+            .select(1) // type "work"
+            .input("wizard description") // description
+            .input("i@x.co") // email
+            .input("") // phone (optional, left empty)
+            .confirm(true) // add attributes?
+            .input("role")
+            .input("admin")
+            .input("") // empty key ends the attribute loop
+            .confirm(true) // add tags?
+            .input("a, b");
+        let mut wizard_args = args(None, None, None, None, false);
+        wizard_args.set_active = false;
+        execute_with(wizard_args, &config, &ui)
+            .await
+            .expect("interactive add creates the identity");
+        assert!(ui.exhausted());
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = persona_core::storage::IdentityRepository::new(db.clone());
+        let ivy = repo.find_by_name("ivy").await.unwrap().unwrap();
+        assert!(matches!(ivy.identity_type, IdentityType::Work));
+        assert_eq!(ivy.description.as_deref(), Some("wizard description"));
+        assert_eq!(ivy.email.as_deref(), Some("i@x.co"));
+        assert!(ivy.phone.is_none());
+        assert_eq!(ivy.tags, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            ivy.attributes.get("role").map(String::as_str),
+            Some("admin")
+        );
+
+        // A second run that declines both optional collectors.
+        let ui = ScriptedUi::new()
+            .input("jon")
+            .select(0) // personal
+            .input("") // description
+            .input("") // email
+            .input("") // phone
+            .confirm(false) // no attributes
+            .confirm(false); // no tags
+        let jon_args = args(None, None, None, None, false);
+        execute_with(jon_args, &config, &ui)
+            .await
+            .expect("declined collectors still create the identity");
+        assert!(ui.exhausted());
+
+        let jon = persona_core::storage::IdentityRepository::new(
+            Database::from_file(config.get_database_path())
+                .await
+                .unwrap(),
+        )
+        .find_by_name("jon")
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(jon.tags.is_empty());
+        assert!(jon.attributes.is_empty());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }
