@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use colored::*;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use tracing::info;
 
 use crate::config::CliConfig;
@@ -335,10 +335,12 @@ struct IdentityInfo {
     tags: Vec<String>,
 }
 
+/// BTreeMap keeps the interactive selection menu ordered by name instead of
+/// HashMap's per-process random iteration order.
 async fn fetch_available_identities(
     config: &CliConfig,
     ui: &dyn PromptUi,
-) -> Result<HashMap<String, IdentityInfo>> {
+) -> Result<BTreeMap<String, IdentityInfo>> {
     let db_path = config.get_database_path();
     let db = Database::from_file(&db_path)
         .await
@@ -372,7 +374,7 @@ async fn fetch_available_identities(
             .await
             .map_err(|e| anyhow!("Failed to list identities: {}", e))?
     };
-    let mut identities = HashMap::new();
+    let mut identities = BTreeMap::new();
     for id in items {
         identities.insert(
             id.name.clone(),

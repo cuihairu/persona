@@ -375,18 +375,23 @@ max_files = 2
     }
 
     #[test]
+    // Skipped on Windows: `dirs::config_dir()` resolves through the Known
+    // Folders API (SHGetKnownFolderPath), which ignores %APPDATA%, so the
+    // platform config directory cannot be redirected into the temp dir and
+    // the test would read the real user profile instead. The env-based
+    // redirection below is honored on Linux ($XDG_CONFIG_HOME) and macOS
+    // ($HOME), where the test runs normally.
+    #[cfg_attr(
+        windows,
+        ignore = "dirs::config_dir() uses the Windows Known Folders API and cannot be redirected via %APPDATA%"
+    )]
     fn load_without_override_uses_default_or_resolved_file() {
         let (_bridge_guard, _guard) = lock_process_env();
 
         // Point the platform config directory at a temp dir so the global
-        // user config does not leak into the test. `dirs::config_dir()`
-        // reads %APPDATA% on Windows, $XDG_CONFIG_HOME (falling back to
-        // $HOME/.config) on Linux, and $HOME/Library/Application Support on
-        // macOS.
+        // user config does not leak into the test.
         let dir = tempfile::TempDir::new().unwrap();
-        let config_root = if cfg!(windows) {
-            dir.path().join("appdata")
-        } else if cfg!(target_os = "macos") {
+        let config_root = if cfg!(target_os = "macos") {
             dir.path().join("home")
         } else {
             dir.path().join("xdg-config")
@@ -394,9 +399,7 @@ max_files = 2
         std::fs::create_dir_all(config_root.join("persona")).unwrap();
 
         let mut saved = Vec::new();
-        if cfg!(windows) {
-            saved.push(("APPDATA", set_var("APPDATA", config_root.to_str().unwrap())));
-        } else if cfg!(target_os = "macos") {
+        if cfg!(target_os = "macos") {
             let home = dir.path().join("home");
             saved.push(("HOME", set_var("HOME", home.to_str().unwrap())));
         } else {
