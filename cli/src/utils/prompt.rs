@@ -237,9 +237,7 @@ pub mod scripted {
         let ui = ScriptedUi::new().input("");
         let ui_dyn: &dyn super::PromptUi = &ui;
         assert_eq!(
-            ui_dyn
-                .input_with_default("name?", "fallback-name")
-                .unwrap(),
+            ui_dyn.input_with_default("name?", "fallback-name").unwrap(),
             "fallback-name"
         );
         assert!(ui.exhausted());
@@ -284,12 +282,7 @@ pub mod scripted {
     }
 
     impl super::PromptUi for FailOn<'_> {
-        fn input(
-            &self,
-            prompt: &str,
-            initial: Option<&str>,
-            allow_empty: bool,
-        ) -> Result<String> {
+        fn input(&self, prompt: &str, initial: Option<&str>, allow_empty: bool) -> Result<String> {
             if self.fails(PromptKind::Input) {
                 bail!("failing ui: input prompt: {}", prompt);
             }

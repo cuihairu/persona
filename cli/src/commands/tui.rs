@@ -917,7 +917,13 @@ mod tests {
             KeyCode::Char('g'),
             key(KeyCode::Char('G'), KeyModifiers::SHIFT).code,
         ] {
-            handle_key(&runtime, &mut provider, &mut app, key(code, KeyModifiers::NONE)).unwrap();
+            handle_key(
+                &runtime,
+                &mut provider,
+                &mut app,
+                key(code, KeyModifiers::NONE),
+            )
+            .unwrap();
         }
         assert!(!app.should_exit);
 
@@ -937,8 +943,11 @@ mod tests {
 
         // Drop "bob" so the list shrinks under the selection.
         let bob_id = runtime.block_on(async {
-            let repo =
-                IdentityRepository::new(Database::from_file(config.get_database_path()).await.unwrap());
+            let repo = IdentityRepository::new(
+                Database::from_file(config.get_database_path())
+                    .await
+                    .unwrap(),
+            );
             let bob = repo.find_by_name("bob").await.unwrap().unwrap();
             repo.delete(&bob.id).await.unwrap();
             bob.id
@@ -947,9 +956,7 @@ mod tests {
         // An out-of-range selection without a hint is clamped to the last
         // remaining identity.
         app.selected = 5;
-        runtime
-            .block_on(app.reload(&mut provider, None))
-            .unwrap();
+        runtime.block_on(app.reload(&mut provider, None)).unwrap();
         assert_eq!(app.selected, 0);
 
         // A hint that no longer resolves falls back to the clamp as well.
@@ -962,7 +969,9 @@ mod tests {
 
     #[test]
     fn credential_rows_tags_and_inactive_styling_render() {
-        use persona_core::models::{Credential as CoreCredentialModel, CredentialType, SecurityLevel};
+        use persona_core::models::{
+            Credential as CoreCredentialModel, CredentialType, SecurityLevel,
+        };
 
         let runtime = spawn_runtime();
         let dir = TempDir::new().unwrap();

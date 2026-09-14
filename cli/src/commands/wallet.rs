@@ -3371,9 +3371,13 @@ mod integration {
         let ui = ScriptedUi::new()
             .password("long-enough-passphrase")
             .input("");
-        handle_wallet_with(generate_args("plain-gen", "bitcoin", false, 2), &config, &ui)
-            .await
-            .expect("non-HD generation must succeed");
+        handle_wallet_with(
+            generate_args("plain-gen", "bitcoin", false, 2),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("non-HD generation must succeed");
         assert!(ui.exhausted());
 
         let repo = init_wallet_repository(&config).await.unwrap();
@@ -3504,8 +3508,6 @@ mod integration {
         let err = handle_wallet_with(import_args("mnemonic", PHRASE, None), &config, &ui)
             .await
             .expect_err("failing count prompt must abort");
-        assert!(err
-            .to_string()
-            .contains("failing ui: default input prompt"));
+        assert!(err.to_string().contains("failing ui: default input prompt"));
     }
 }

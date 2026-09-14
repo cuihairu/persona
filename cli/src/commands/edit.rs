@@ -994,14 +994,12 @@ mod tests {
     #[test]
     fn edit_and_remove_existing_attributes_directly() {
         let mut identity = sample_identity();
-        identity.attributes.insert(
-            "role".to_string(),
-            Value::String("admin".to_string()),
-        );
-        identity.attributes.insert(
-            "team".to_string(),
-            Value::String("core".to_string()),
-        );
+        identity
+            .attributes
+            .insert("role".to_string(), Value::String("admin".to_string()));
+        identity
+            .attributes
+            .insert("team".to_string(), Value::String("core".to_string()));
 
         // Edit the second key in insertion order and retype its value.
         let keys: Vec<String> = identity.attributes.keys().cloned().collect();

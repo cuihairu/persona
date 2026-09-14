@@ -820,11 +820,7 @@ mod tests {
             crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
                 .await
                 .unwrap();
-        let erin = service
-            .get_identity_by_name("erin")
-            .await
-            .unwrap()
-            .unwrap();
+        let erin = service.get_identity_by_name("erin").await.unwrap().unwrap();
 
         // Seed a non-password credential of each decryptable kind directly so
         // the reveal match arms for ApiKey and SshKey render.

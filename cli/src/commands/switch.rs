@@ -732,10 +732,8 @@ mod tests {
         // lookup falls through and reports "no current identity".
         {
             let repo = WorkspaceRepository::new(db.clone());
-            let mut ws = Workspace::new(
-                config.workspace.path.clone(),
-                "test-workspace".to_string(),
-            );
+            let mut ws =
+                Workspace::new(config.workspace.path.clone(), "test-workspace".to_string());
             ws.switch_identity(uuid::Uuid::new_v4());
             repo.create(&ws).await.unwrap();
         }

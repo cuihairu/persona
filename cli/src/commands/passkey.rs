@@ -531,7 +531,9 @@ mod tests {
 
         // Enrich mutable metadata through the repository so Show renders the
         // optional RP-name and tags lines too.
-        let db = Database::from_file(config.get_database_path()).await.unwrap();
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
         let repo = persona_core::storage::PasskeyRepository::new(std::sync::Arc::new(db));
         let mut item = repo.find_by_id(&id).await.unwrap().unwrap();
         item.rp_name = Some("Vault Corp".to_string());
