@@ -4,6 +4,7 @@
 //! including cryptographic operations, secure storage, and identity management.
 
 pub mod auth;
+pub mod breach;
 pub mod crypto;
 pub mod health;
 pub mod logging;
@@ -14,6 +15,7 @@ pub mod storage;
 
 // Re-export commonly used types
 pub use auth::*;
+pub use breach::*;
 pub use crypto::*;
 pub use health::*;
 pub use logging::*;
