@@ -7,11 +7,14 @@ import {
   ArrowUpTrayIcon,
   QrCodeIcon,
   ArrowTrendingUpIcon,
+  PaperAirplaneIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { LoadingSpinner, ErrorDisplay, ErrorBoundary } from '@/components/ErrorHandling';
 import { personaAPI } from '@/utils/api';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import TransactionConfirmModal from '@/components/TransactionConfirmModal';
+import { QRCodeSVG } from 'qrcode.react';
 import type { WalletAddress, WalletGenerateResponse, WalletSummary } from '@/types';
 
 type WalletExportFormat = 'json' | 'xpub' | 'mnemonic' | 'private_key' | 'wif';
@@ -26,6 +29,7 @@ const WalletPanel: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
   const [showAddressQr, setShowAddressQr] = useState<string | null>(null);
+  const [sendWallet, setSendWallet] = useState<WalletSummary | null>(null);
   const [showAddAddressModal, setShowAddAddressModal] = useState(false);
   const [addAddressPassword, setAddAddressPassword] = useState('');
   const [showExportModal, setShowExportModal] = useState(false);
@@ -422,6 +426,21 @@ const WalletPanel: React.FC = () => {
                 {/* Actions */}
                 <div className="mt-4 flex gap-2">
                   <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      // 地址列表用于投毒检测：未选中时先选中（触发地址加载）
+                      if (selectedWallet?.id !== wallet.id) {
+                        setSelectedWallet(wallet);
+                      }
+                      setSendWallet(wallet);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
+                    data-testid={`send-button-${wallet.id}`}
+                  >
+                    <PaperAirplaneIcon className="h-4 w-4" />
+                    Send
+                  </button>
+                  <button
                     onClick={(e) => {
                       e.stopPropagation();
                       exportWallet(wallet.id, wallet.name);
@@ -573,11 +592,13 @@ const WalletPanel: React.FC = () => {
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold mb-4">Receive Address</h3>
-              <div className="bg-gray-100 p-4 rounded-lg mb-4">
-                {/* QR Code would go here - using placeholder for now */}
-                <div className="aspect-square bg-gray-200 rounded flex items-center justify-center">
-                  <QrCodeIcon className="h-32 w-32 text-gray-400" />
-                </div>
+              <div className="bg-gray-100 p-4 rounded-lg mb-4 flex items-center justify-center">
+                <QRCodeSVG
+                  value={showAddressQr}
+                  size={192}
+                  level="M"
+                  data-testid="address-qr"
+                />
               </div>
               <code className="block text-sm text-center text-gray-600 mb-4 break-all">
                 {showAddressQr}
@@ -593,6 +614,21 @@ const WalletPanel: React.FC = () => {
               </button>
             </div>
           </div>
+        )}
+
+        {/* Send / Sign Transaction Modal */}
+        {sendWallet && (
+          <TransactionConfirmModal
+            isOpen
+            onClose={() => setSendWallet(null)}
+            wallet={sendWallet}
+            fromAddress={addresses[0]?.address ?? 'Loading address…'}
+            knownAddresses={
+              selectedWallet?.id === sendWallet.id
+                ? addresses.map((a) => a.address)
+                : []
+            }
+          />
         )}
 
         {/* Create Wallet Modal Placeholder */}

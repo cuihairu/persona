@@ -2,11 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { LockClosedIcon, Cog6ToothIcon, ChartBarIcon } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
+import { useSshApprovals } from '@/hooks/useSshApprovals';
+import { personaAPI } from '@/utils/api';
 import UnlockScreen from '@/components/UnlockScreen';
 import { IdentitySwitcher, CreateIdentityModal } from '@/components/IdentitySwitcher';
 import CredentialList from '@/components/CredentialList';
 import CreateCredentialModal from '@/components/CreateCredentialModal';
 import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorHandling';
+import SshApprovalModal from '@/components/SshApprovalModal';
 import SshAgentPanel from '@/components/SshAgentPanel';
 import WalletPanel from '@/components/WalletPanel';
 import SettingsModal from '@/components/SettingsModal';
@@ -26,6 +30,21 @@ const App: React.FC = () => {
   const [showCreateCredential, setShowCreateCredential] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [currentView, setCurrentView] = useState<'credentials' | 'statistics' | 'sshAgent' | 'wallets'>('credentials');
+
+  // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
+  const { pendingSeconds } = useAutoLockEvents(isUnlocked);
+
+  // SSH 签名审批队列：内嵌 agent 请求确认时弹窗（Allow/Deny）
+  const { pending: pendingApproval, pendingCount, respond } = useSshApprovals(isUnlocked);
+
+  // 解锁后启动后端 auto-lock 监控，锁定后停止
+  useEffect(() => {
+    if (isUnlocked) {
+      personaAPI.startAutoLockMonitoring().catch(() => {});
+    } else {
+      personaAPI.stopAutoLockMonitoring().catch(() => {});
+    }
+  }, [isUnlocked]);
 
   // Load credentials when identity changes
   useEffect(() => {
@@ -67,6 +86,16 @@ const App: React.FC = () => {
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-gray-50">
+        {/* Auto-lock 倒计时横幅 */}
+        {pendingSeconds !== null && (
+          <div
+            data-testid="auto-lock-banner"
+            className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm text-amber-800"
+          >
+            检测到长时间无操作，将在 {pendingSeconds} 秒后自动锁定（移动鼠标或按键可保持解锁）
+          </div>
+        )}
+
         {/* Global error display */}
         {error && (
           <div className="p-4">
@@ -184,6 +213,13 @@ const App: React.FC = () => {
         <SettingsModal
           isOpen={showSettings}
           onClose={() => setShowSettings(false)}
+        />
+
+        {/* SSH 签名审批弹窗 */}
+        <SshApprovalModal
+          request={pendingApproval}
+          pendingCount={pendingCount}
+          onRespond={respond}
         />
 
         {/* Toast Notifications */}

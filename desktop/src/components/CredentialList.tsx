@@ -7,8 +7,6 @@ import {
   ShieldCheckIcon,
   PlusIcon,
   MagnifyingGlassIcon,
-  EyeIcon,
-  EyeSlashIcon,
   DocumentDuplicateIcon,
   HeartIcon,
   TrashIcon,
@@ -19,6 +17,7 @@ import type { Credential } from '@/types';
 import { clsx } from 'clsx';
 import toast from 'react-hot-toast';
 import { copyWithAutoClear } from '@/utils/clipboard';
+import RevealSecretButton from '@/components/RevealSecretButton';
 
 const getCredentialIcon = (type: string) => {
   switch (type) {
@@ -62,6 +61,34 @@ const getSafeHostname = (url: string) => {
   }
 };
 
+/** 筛选条件（各维度为空 = 不过滤；多维度之间 AND） */
+export interface CredentialFilter {
+  query?: string;
+  /** 选中类型集合（空 = 全部类型） */
+  types?: Set<string>;
+  /** 选中标签集合（空 = 全部标签） */
+  tags?: Set<string>;
+  favoritesOnly?: boolean;
+}
+
+/** 本地筛选凭据列表（纯函数，便于单测） */
+export const filterCredentials = (
+  credentials: Credential[],
+  { query, types, tags, favoritesOnly }: CredentialFilter,
+): Credential[] =>
+  credentials.filter((cred) => {
+    const q = (query ?? '').toLowerCase();
+    const matchesQuery =
+      !q ||
+      cred.name.toLowerCase().includes(q) ||
+      cred.credential_type.toLowerCase().includes(q);
+    const matchesType = !types || types.size === 0 || types.has(cred.credential_type);
+    const matchesTag =
+      !tags || tags.size === 0 || cred.tags.some((t) => tags.has(t));
+    const matchesFavorite = !favoritesOnly || cred.is_favorite;
+    return matchesQuery && matchesType && matchesTag && matchesFavorite;
+  });
+
 interface CredentialListProps {
   onCreateCredential: () => void;
 }
@@ -69,14 +96,42 @@ interface CredentialListProps {
 const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) => {
   const { credentials, currentIdentity, getCredentialData } = usePersonaService();
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<Credential | null>(null);
   const [showCredentialData, setShowCredentialData] = useState(false);
   const [credentialData, setCredentialData] = useState<any>(null);
 
-  const filteredCredentials = credentials.filter(cred =>
-    cred.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    cred.credential_type.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // 聚合当前身份下的全部类型/标签（去重排序）
+  const availableTypes = Array.from(new Set(credentials.map((c) => c.credential_type))).sort();
+  const availableTags = Array.from(new Set(credentials.flatMap((c) => c.tags))).sort();
+
+  const hasActiveFilters =
+    selectedTypes.size > 0 || selectedTags.size > 0 || favoritesOnly;
+
+  const clearFilters = () => {
+    setSelectedTypes(new Set());
+    setSelectedTags(new Set());
+    setFavoritesOnly(false);
+  };
+
+  const toggleInSet = (set: Set<string>, value: string): Set<string> => {
+    const next = new Set(set);
+    if (next.has(value)) {
+      next.delete(value);
+    } else {
+      next.add(value);
+    }
+    return next;
+  };
+
+  const filteredCredentials = filterCredentials(credentials, {
+    query: searchQuery,
+    types: selectedTypes,
+    tags: selectedTags,
+    favoritesOnly,
+  });
 
   const handleCredentialClick = async (credential: Credential) => {
     setSelectedCredential(credential);
@@ -137,6 +192,66 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
           placeholder="Search credentials..."
         />
       </div>
+
+      {/* Filters: type / tags / favorites */}
+      {(availableTypes.length > 0 || availableTags.length > 0) && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="credential-filters">
+          <button
+            onClick={() => setFavoritesOnly(!favoritesOnly)}
+            className={clsx(
+              'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
+              favoritesOnly
+                ? 'bg-red-50 text-red-700 border-red-300'
+                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50',
+            )}
+            data-testid="filter-favorites"
+          >
+            ♥ Favorites
+          </button>
+
+          {availableTypes.map((type) => (
+            <button
+              key={type}
+              onClick={() => setSelectedTypes(toggleInSet(selectedTypes, type))}
+              className={clsx(
+                'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
+                selectedTypes.has(type)
+                  ? 'bg-primary-50 text-primary-700 border-primary-300'
+                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50',
+              )}
+              data-testid={`filter-type-${type}`}
+            >
+              {type}
+            </button>
+          ))}
+
+          {availableTags.map((tag) => (
+            <button
+              key={tag}
+              onClick={() => setSelectedTags(toggleInSet(selectedTags, tag))}
+              className={clsx(
+                'px-2.5 py-1 text-xs rounded-full border transition-colors',
+                selectedTags.has(tag)
+                  ? 'bg-blue-50 text-blue-700 border-blue-300'
+                  : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50',
+              )}
+              data-testid={`filter-tag-${tag}`}
+            >
+              #{tag}
+            </button>
+          ))}
+
+          {hasActiveFilters && (
+            <button
+              onClick={clearFilters}
+              className="px-2.5 py-1 text-xs text-gray-500 underline hover:text-gray-700"
+              data-testid="clear-filters"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Credentials Grid */}
       {filteredCredentials.length === 0 ? (
@@ -237,7 +352,6 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
   onCopy,
 }) => {
   const { toggleCredentialFavorite, deleteCredential, getTotpCode } = usePersonaService();
-  const [showSensitive, setShowSensitive] = useState(false);
   const [isFavorite, setIsFavorite] = useState(credential.is_favorite);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -337,27 +451,7 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
             )}
             <div>
               <label className="label text-gray-600">Password</label>
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-mono">
-                  {showSensitive ? data.password : '••••••••••••'}
-                </span>
-                <button
-                  onClick={() => setShowSensitive(!showSensitive)}
-                  className="p-1 hover:bg-gray-100 rounded"
-                >
-                  {showSensitive ? (
-                    <EyeSlashIcon className="w-4 h-4 text-gray-400" />
-                  ) : (
-                    <EyeIcon className="w-4 h-4 text-gray-400" />
-                  )}
-                </button>
-                <button
-                  onClick={() => onCopy(data.password, 'Password')}
-                  className="p-1 hover:bg-gray-100 rounded"
-                >
-                  <DocumentDuplicateIcon className="w-4 h-4 text-gray-400" />
-                </button>
-              </div>
+              <RevealSecretButton credentialId={credential.id} field="password" label="password" />
             </div>
           </div>
         );
@@ -431,6 +525,121 @@ const CredentialDetailModal: React.FC<CredentialDetailModalProps> = ({
                 </p>
               )}
             </div>
+          </div>
+        );
+
+      case 'SshKey':
+        return (
+          <div className="space-y-3">
+            <div>
+              <label className="label text-gray-600">Key Type</label>
+              <span className="text-sm">{data.key_type}</span>
+            </div>
+            {data.public_key && (
+              <div>
+                <label className="label text-gray-600">Public Key</label>
+                <div className="flex items-start gap-2">
+                  <span className="text-sm font-mono break-all">{data.public_key}</span>
+                  <button
+                    onClick={() => onCopy(data.public_key, 'Public key')}
+                    className="p-1 hover:bg-gray-100 rounded shrink-0"
+                  >
+                    <DocumentDuplicateIcon className="w-4 h-4 text-gray-400" />
+                  </button>
+                </div>
+              </div>
+            )}
+            <div>
+              <label className="label text-gray-600">Private Key</label>
+              <RevealSecretButton
+                credentialId={credential.id}
+                field="ssh_private_key"
+                label="private key"
+              />
+            </div>
+            <div>
+              <label className="label text-gray-600">Passphrase</label>
+              <RevealSecretButton
+                credentialId={credential.id}
+                field="ssh_passphrase"
+                label="passphrase"
+              />
+            </div>
+          </div>
+        );
+
+      case 'ApiKey':
+        return (
+          <div className="space-y-3">
+            <div>
+              <label className="label text-gray-600">API Key</label>
+              <RevealSecretButton credentialId={credential.id} field="api_key" label="API key" />
+            </div>
+            <div>
+              <label className="label text-gray-600">API Secret</label>
+              <RevealSecretButton
+                credentialId={credential.id}
+                field="api_secret"
+                label="API secret"
+              />
+            </div>
+            <div>
+              <label className="label text-gray-600">Token</label>
+              <RevealSecretButton credentialId={credential.id} field="token" label="token" />
+            </div>
+            {data.permissions?.length > 0 && (
+              <div>
+                <label className="label text-gray-600">Permissions</label>
+                <div className="flex flex-wrap gap-1">
+                  {data.permissions.map((perm: string) => (
+                    <span
+                      key={perm}
+                      className="px-2 py-0.5 text-xs bg-gray-100 text-gray-700 rounded-full"
+                    >
+                      {perm}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {data.expires_at && (
+              <div>
+                <label className="label text-gray-600">Expires</label>
+                <span className="text-sm">
+                  {new Date(data.expires_at).toLocaleString()}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+
+      case 'BankCard':
+        return (
+          <div className="space-y-3">
+            {data.cardholder_name && (
+              <div>
+                <label className="label text-gray-600">Cardholder</label>
+                <span className="text-sm">{data.cardholder_name}</span>
+              </div>
+            )}
+            {data.bank_name && (
+              <div>
+                <label className="label text-gray-600">Bank</label>
+                <span className="text-sm">{data.bank_name}</span>
+              </div>
+            )}
+            {data.last4 && (
+              <div>
+                <label className="label text-gray-600">Card Number</label>
+                <span className="text-sm font-mono">•••• •••• •••• {data.last4}</span>
+              </div>
+            )}
+            {data.expiry_date && (
+              <div>
+                <label className="label text-gray-600">Expires</label>
+                <span className="text-sm">{data.expiry_date}</span>
+              </div>
+            )}
           </div>
         );
 

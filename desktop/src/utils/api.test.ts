@@ -1,7 +1,7 @@
 import { personaAPI } from './api';
 
 const mockInvoke = jest.fn();
-jest.mock('@tauri-apps/api/tauri', () => ({
+jest.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }));
 

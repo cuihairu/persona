@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import type {
   ApiResponse,
   Identity,
@@ -20,6 +20,21 @@ import type {
   WalletSummary,
   WalletAddress,
   TotpCodeResponse,
+  AutoLockConfigRequest,
+  AutoLockStatus,
+  AuditLogEntry,
+  AuditQueryRequest,
+  AuditStatistics,
+  Passkey,
+  CreatePasskeyRequest,
+  PasskeyCreationResponse,
+  SecretField,
+  SecretReveal,
+  IdentityExport,
+  CreateTransactionRequest,
+  SignTransactionRequest,
+  WalletTransaction,
+  WalletSignedTransaction,
 } from '@/types';
 
 class PersonaAPI {
@@ -154,6 +169,127 @@ class PersonaAPI {
 
   async walletExport(request: WalletExportRequest): Promise<ApiResponse<string>> {
     return invoke('wallet_export', { request });
+  }
+
+  // -------------------------------------------------------------------------
+  // Auto-lock
+  // -------------------------------------------------------------------------
+
+  async configureAutoLock(request: AutoLockConfigRequest): Promise<ApiResponse<boolean>> {
+    return invoke('configure_auto_lock', { request });
+  }
+
+  async getAutoLockStatus(): Promise<ApiResponse<AutoLockStatus>> {
+    return invoke('get_auto_lock_status');
+  }
+
+  async touchActivity(): Promise<ApiResponse<boolean>> {
+    return invoke('touch_activity');
+  }
+
+  async startAutoLockMonitoring(): Promise<ApiResponse<boolean>> {
+    return invoke('start_auto_lock_monitoring');
+  }
+
+  async stopAutoLockMonitoring(): Promise<ApiResponse<boolean>> {
+    return invoke('stop_auto_lock_monitoring');
+  }
+
+  // -------------------------------------------------------------------------
+  // 审计
+  // -------------------------------------------------------------------------
+
+  async auditQuery(request: AuditQueryRequest): Promise<ApiResponse<AuditLogEntry[]>> {
+    return invoke('audit_query', { request });
+  }
+
+  async auditStatistics(): Promise<ApiResponse<AuditStatistics>> {
+    return invoke('audit_statistics');
+  }
+
+  async auditCleanup(retainDays: number): Promise<ApiResponse<number>> {
+    return invoke('audit_cleanup', { retain_days: retainDays });
+  }
+
+  // -------------------------------------------------------------------------
+  // Passkey
+  // -------------------------------------------------------------------------
+
+  async passkeyList(identityId: string): Promise<ApiResponse<Passkey[]>> {
+    return invoke('passkey_list', { identity_id: identityId });
+  }
+
+  async passkeyListByRp(rpId: string): Promise<ApiResponse<Passkey[]>> {
+    return invoke('passkey_list_by_rp', { rp_id: rpId });
+  }
+
+  async passkeyGet(id: string): Promise<ApiResponse<Passkey | null>> {
+    return invoke('passkey_get', { id });
+  }
+
+  async passkeyDelete(id: string): Promise<ApiResponse<boolean>> {
+    return invoke('passkey_delete', { id });
+  }
+
+  async passkeyCreate(request: CreatePasskeyRequest): Promise<ApiResponse<PasskeyCreationResponse>> {
+    return invoke('passkey_create', { request });
+  }
+
+  async passkeySelfTest(id: string): Promise<ApiResponse<boolean>> {
+    return invoke('passkey_self_test', { id });
+  }
+
+  async passkeyExportPrivateKey(id: string): Promise<ApiResponse<string>> {
+    return invoke('passkey_export_private_key', { id });
+  }
+
+  // -------------------------------------------------------------------------
+  // 导出 / 敏感字段 reveal / 重新认证
+  // -------------------------------------------------------------------------
+
+  async exportIdentity(identityId: string): Promise<ApiResponse<IdentityExport>> {
+    return invoke('export_identity', { identity_id: identityId });
+  }
+
+  async revealCredentialSecret(
+    credentialId: string,
+    field: SecretField,
+  ): Promise<ApiResponse<SecretReveal>> {
+    return invoke('reveal_credential_secret', {
+      request: { credential_id: credentialId, field },
+    });
+  }
+
+  async reauthVerify(masterPassword: string): Promise<ApiResponse<boolean>> {
+    return invoke('reauth_verify', { request: { master_password: masterPassword } });
+  }
+
+  // -------------------------------------------------------------------------
+  // 钱包交易
+  // -------------------------------------------------------------------------
+
+  async walletCreateTransaction(
+    request: CreateTransactionRequest,
+  ): Promise<ApiResponse<WalletTransaction>> {
+    return invoke('wallet_create_transaction', { request });
+  }
+
+  async walletPendingTransactions(walletId: string): Promise<ApiResponse<WalletTransaction[]>> {
+    return invoke('wallet_pending_transactions', { wallet_id: walletId });
+  }
+
+  async walletSignTransaction(
+    request: SignTransactionRequest,
+  ): Promise<ApiResponse<WalletSignedTransaction>> {
+    return invoke('wallet_sign_transaction', { request });
+  }
+
+  // -------------------------------------------------------------------------
+  // SSH 签名审批
+  // -------------------------------------------------------------------------
+
+  async sshApprovalRespond(requestId: string, allow: boolean): Promise<ApiResponse<boolean>> {
+    return invoke('ssh_approval_respond', { request: { request_id: requestId, allow } });
   }
 }
 

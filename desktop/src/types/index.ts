@@ -1,7 +1,208 @@
+/**
+ * 后端错误码（与 desktop/src-tauri/src/error.rs 的 map_persona_error 对应）。
+ * REAUTH_REQUIRED：敏感操作需要重新认证 → 前端弹 ReauthModal。
+ * SERVICE_LOCKED：服务已锁定 → 前端回到解锁屏。
+ */
+export type ApiErrorCode = 'REAUTH_REQUIRED' | 'SERVICE_LOCKED';
+
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+  error_code?: ApiErrorCode;
+}
+
+/** persona://auto-lock 事件的载荷（与 Rust 侧 SerializableAutoLockEvent 对应） */
+export type AutoLockEventPayload =
+  | { type: 'lock_pending'; session_id: string; seconds_remaining: number }
+  | { type: 'locked'; session_id: string; reason: string }
+  | { type: 'unlocked'; session_id: string }
+  | { type: 'activity'; session_id: string };
+
+/** persona://ssh-approval 事件的载荷（与 Rust 侧 SshApprovalRequest 对应） */
+export interface SshApprovalRequest {
+  request_id: string;
+  key_id: string;
+  fingerprint: string;
+  operation: string;
+  peer: string | null;
+  timestamp: string;
+}
+
+/** Auto-lock 配置（对应 Rust AutoLockConfigRequest；0 = 禁用） */
+export interface AutoLockConfigRequest {
+  inactivity_timeout_secs: number;
+  absolute_timeout_secs?: number;
+  require_reauth_sensitive?: boolean;
+}
+
+export interface AutoLockStatus {
+  is_unlocked: boolean;
+  session_locked: boolean;
+  needs_reauth: boolean;
+  inactivity_timeout_secs: number;
+}
+
+/** 审计日志条目（只读视图，不含敏感负载） */
+export interface AuditLogEntry {
+  id: string;
+  user_id?: string;
+  identity_id?: string;
+  credential_id?: string;
+  session_id?: string;
+  action: string;
+  resource_type: string;
+  resource_id?: string;
+  success: boolean;
+  error_message?: string;
+  metadata: Record<string, string>;
+  timestamp: string;
+}
+
+/** 审计查询过滤（None 字段 = 不过滤） */
+export interface AuditQueryRequest {
+  user_id?: string;
+  identity_id?: string;
+  action?: string;
+  failures_only?: boolean;
+  security_sensitive_only?: boolean;
+  time_range?: [string, string];
+  limit?: number;
+}
+
+export interface AuditStatistics {
+  total_logs: number;
+  failed_operations: number;
+  recent_login_attempts: number;
+  active_users_last_week: number;
+}
+
+/** Passkey 列表项（永不含私钥字段） */
+export interface Passkey {
+  id: string;
+  identity_id: string;
+  rp_id: string;
+  rp_name?: string;
+  user_handle_b64: string;
+  user_name?: string;
+  user_display_name?: string;
+  credential_id_b64: string;
+  uv_initialized: boolean;
+  export_allowed: boolean;
+  created_at: string;
+  last_used_at?: string;
+}
+
+export interface CreatePasskeyRequest {
+  identity_id: string;
+  rp_id: string;
+  origin: string;
+  /** base64(UTF-8 JSON) 的 clientDataJSON */
+  client_data_json_b64: string;
+  user_handle_b64?: string;
+  user_name?: string;
+  user_display_name?: string;
+  user_verification: boolean;
+}
+
+export interface PasskeyCreationResponse {
+  passkey: Passkey;
+  /** base64 的 `none` 格式 attestation object */
+  attestation_object_b64: string;
+}
+
+/** 敏感字段名（对应 Rust reveal_credential_secret 的 field 集合） */
+export type SecretField =
+  | 'password'
+  | 'security_questions'
+  | 'ssh_private_key'
+  | 'ssh_passphrase'
+  | 'api_key'
+  | 'api_secret'
+  | 'token'
+  | 'wallet_private_key'
+  | 'wallet_mnemonic'
+  | 'raw_data';
+
+export interface SecretReveal {
+  field: SecretField;
+  value: string;
+}
+
+export interface IdentityExport {
+  exported_at: string;
+  data: { identity: Identity; credentials: Credential[] };
+}
+
+// ---------------------------------------------------------------------------
+// 钱包交易（与 Rust TransactionRequest/SignedTransaction 的 serde 输出对应）
+// ---------------------------------------------------------------------------
+
+/** 待签交易请求（由 wallet_create_transaction 返回） */
+export interface WalletTransaction {
+  id: string;
+  wallet_id: string;
+  network: string;
+  from_address: string;
+  to_address: string;
+  /** 最小单位字符串（wei / satoshi / lamport） */
+  amount: string;
+  fee: string;
+  gas_price?: string;
+  gas_limit?: number;
+  nonce?: number;
+  memo?: string;
+  required_signatures: number;
+  created_at: string;
+  expires_at?: string;
+  metadata: Record<string, string>;
+}
+
+export interface WalletSignature {
+  [key: string]: unknown;
+}
+
+/** 已签名交易（由 wallet_sign_transaction 返回） */
+export interface WalletSignedTransaction {
+  id: string;
+  request: WalletTransaction;
+  signatures: WalletSignature[];
+  raw_signed_transaction: number[];
+  transaction_hash: string;
+  signed_at: string;
+  broadcast_status: string;
+}
+
+export interface CreateTransactionRequest {
+  wallet_id: string;
+  to_address: string;
+  amount: string;
+  fee: string;
+  gas_price?: string;
+  gas_limit?: number;
+  nonce?: number;
+  memo?: string;
+  expires_in_minutes?: number;
+}
+
+export interface SignTransactionRequest {
+  transaction_id: string;
+  password: string;
+}
+
+/** persona://ssh-approval 事件负载：待审批的 SSH 签名请求 */
+export interface SshApprovalRequest {
+  request_id: string;
+  /** 凭据 UUID（非敏感） */
+  key_id: string;
+  /** 公钥指纹（SHA256 前 8 字节，用于人工核对） */
+  fingerprint: string;
+  /** 操作名（当前恒为 "sign"） */
+  operation: string;
+  /** 目标主机（未知时为 null） */
+  peer: string | null;
+  /** 触发原因（策略说明） */
+  reason: string;
 }
 
 export interface Identity {
