@@ -216,8 +216,10 @@ mod tests {
         std::sync::MutexGuard<'static, ()>,
     ) {
         (
-            crate::commands::bridge::tests::ENV_LOCK.lock().unwrap(),
-            ENV_LOCK.lock().unwrap(),
+            crate::commands::bridge::tests::ENV_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()),
         )
     }
 

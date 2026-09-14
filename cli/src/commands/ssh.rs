@@ -1748,10 +1748,20 @@ mod tests {
 
         // A successful command cleans the host file up afterwards. Extra
         // tokens after the binary are forwarded as arguments.
+        let echo_cmd = if cfg!(target_os = "windows") {
+            vec![
+                "cmd".to_string(),
+                "/C".to_string(),
+                "echo".to_string(),
+                "persona-ok".to_string(),
+            ]
+        } else {
+            vec!["/bin/echo".to_string(), "persona-ok".to_string()]
+        };
         execute_with(
             ssh_args(SshSubcommand::Run {
                 host: "example.com".to_string(),
-                command: vec!["/bin/echo".to_string(), "persona-ok".to_string()],
+                command: echo_cmd,
             }),
             &config,
             &ScriptedUi::new(),
@@ -1764,7 +1774,17 @@ mod tests {
         );
 
         // A failing command surfaces its exit status.
-        let err = run_with_host("example.com", vec!["/bin/false".to_string()], &config)
+        let fail_cmd = if cfg!(target_os = "windows") {
+            vec![
+                "cmd".to_string(),
+                "/C".to_string(),
+                "exit".to_string(),
+                "1".to_string(),
+            ]
+        } else {
+            vec!["/bin/false".to_string()]
+        };
+        let err = run_with_host("example.com", fail_cmd, &config)
             .await
             .expect_err("failing command must fail");
         assert!(err.to_string().contains("Command exited with status"));

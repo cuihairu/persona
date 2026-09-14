@@ -2565,6 +2565,26 @@ pub(crate) mod tests {
     }
 
     fn clipboard_available() -> bool {
+        if cfg!(target_os = "macos") {
+            return Command::new("which")
+                .arg("pbcopy")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
+        if cfg!(target_os = "windows") {
+            // `cmd /C clip` is always present on Windows; verify it is
+            // callable rather than just checking the binary exists.
+            return Command::new("cmd")
+                .args(["/C", "echo", "test", "|", "clip"])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
         ["wl-copy", "xclip", "xsel"].iter().any(|cmd| {
             Command::new("which")
                 .arg(cmd)
