@@ -26,7 +26,7 @@ profile.cov
 
 # Rust build artifacts
 target/
-.target-i/
+.target-*/
 
 # Go workspace file
 go.work
