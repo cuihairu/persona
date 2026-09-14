@@ -16,9 +16,9 @@ use crate::{
     },
     password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
-        AttachmentManager, AttachmentRepository, AuditLogRepository, BlobStore,
+        AttachmentManager, AttachmentRepository, AuditLogRepository, AuditLogStatistics, BlobStore,
         ChangeHistoryRepository, CredentialRepository, Database, IdentityRepository,
-        PasskeyRepository, Repository, UserAuthRepository,
+        PasskeyRepository, Repository, UserAuthRepository, SECURITY_SENSITIVE_AUDIT_ACTIONS,
     },
     PersonaError, Result,
 };
@@ -30,6 +30,22 @@ use std::{
 };
 use tokio::sync::RwLock;
 use uuid::Uuid;
+
+/// 审计日志查询条件。
+///
+/// 所有条件按 AND 组合：服务层先用最具选择性的数据库查询取数，
+/// 再对剩余条件做内存过滤，`limit` 最后截断。
+#[derive(Debug, Clone, Default)]
+pub struct AuditLogQuery {
+    pub user_id: Option<String>,
+    pub identity_id: Option<Uuid>,
+    pub action: Option<AuditAction>,
+    pub failures_only: bool,
+    pub security_sensitive_only: bool,
+    pub time_range: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)>,
+    /// 最多返回条数（按时间降序取前 N 条）
+    pub limit: Option<usize>,
+}
 
 /// High-level service for managing digital identities and credentials
 pub struct PersonaService {
@@ -208,6 +224,11 @@ impl PersonaService {
         self.auto_lock_timeout = timeout;
     }
 
+    /// Current inactivity auto-lock timeout in seconds.
+    pub fn inactivity_timeout_secs(&self) -> u64 {
+        self.auto_lock_timeout.as_secs()
+    }
+
     /// Reset inactivity timer; call this after sensitive operations to keep the session alive.
     pub fn touch_activity(&self) {
         *self.last_activity.lock().unwrap() = Some(std::time::Instant::now());
@@ -378,7 +399,9 @@ impl PersonaService {
     async fn ensure_sensitive_operation_allowed(&self) -> Result<()> {
         self.ensure_unlocked_with_auto_lock().await?;
         if self.needs_reauth().await {
-            return Err(PersonaError::AuthenticationFailed(
+            // 专用错误变体：客户端（桌面/CLI）据此弹出重新认证流程，
+            // 与普通认证失败区分开。
+            return Err(PersonaError::ReauthRequired(
                 "Re-authentication required for sensitive operation".to_string(),
             )
             .into());
@@ -1079,6 +1102,69 @@ impl PersonaService {
             credential_types,
             security_levels,
         })
+    }
+
+    /// Query audit logs (descending by time). Requires the service to be unlocked.
+    ///
+    /// All conditions are AND-combined: the service layer first uses the most selective
+    /// database query, then filters the remaining conditions in memory.
+    pub async fn query_audit_logs(&self, query: AuditLogQuery) -> Result<Vec<AuditLog>> {
+        self.ensure_unlocked_with_auto_lock().await?;
+
+        let mut logs = if let Some(user_id) = query.user_id.clone() {
+            self.audit_repo.find_by_user(&user_id).await?
+        } else if let Some(identity_id) = query.identity_id {
+            self.audit_repo.find_by_identity(&identity_id).await?
+        } else if let Some(action) = query.action.clone() {
+            self.audit_repo.find_by_action(&action).await?
+        } else if query.failures_only {
+            self.audit_repo.find_failures().await?
+        } else if query.security_sensitive_only {
+            self.audit_repo.find_security_sensitive().await?
+        } else if let Some((start, end)) = query.time_range {
+            self.audit_repo.find_by_time_range(start, end).await?
+        } else {
+            self.audit_repo.find_all().await?
+        };
+
+        logs.retain(|log| {
+            query
+                .user_id
+                .as_ref()
+                .is_none_or(|u| log.user_id.as_ref() == Some(u))
+                && query
+                    .identity_id
+                    .is_none_or(|id| log.identity_id == Some(id))
+                && query
+                    .action
+                    .as_ref()
+                    .is_none_or(|a| log.action.to_string() == a.to_string())
+                && (!query.failures_only || !log.success)
+                && (!query.security_sensitive_only
+                    || SECURITY_SENSITIVE_AUDIT_ACTIONS.contains(&log.action.to_string().as_str()))
+        });
+
+        if let Some((start, end)) = query.time_range {
+            logs.retain(|log| log.timestamp >= start && log.timestamp <= end);
+        }
+
+        if let Some(limit) = query.limit {
+            logs.truncate(limit);
+        }
+
+        Ok(logs)
+    }
+
+    /// Audit statistics (total count / failed operations / recent logins / active users)
+    pub async fn audit_log_statistics(&self) -> Result<AuditLogStatistics> {
+        self.ensure_unlocked_with_auto_lock().await?;
+        self.audit_repo.get_statistics().await
+    }
+
+    /// Clean up audit logs older than the retention period, returning the number of deleted rows
+    pub async fn cleanup_audit_logs(&self, retain_days: u32) -> Result<u64> {
+        self.ensure_unlocked_with_auto_lock().await?;
+        self.audit_repo.cleanup_old_logs(retain_days).await
     }
 
     /// Initialize first-time user with master password
@@ -2614,5 +2700,94 @@ mod tests {
         );
         assert!(!creation.item.uv_initialized);
         assert!(!creation.attestation_object.is_empty());
+    }
+    #[tokio::test]
+    async fn test_audit_query_statistics_and_cleanup() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let mut service = PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+
+        let identity = service
+            .create_identity("Audit Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // 全量查询：初始化 + 建身份至少各留一条，且按时间降序
+        let all = service
+            .query_audit_logs(AuditLogQuery::default())
+            .await
+            .unwrap();
+        assert!(!all.is_empty());
+        assert!(
+            all.windows(2).all(|w| w[0].timestamp >= w[1].timestamp),
+            "audit logs must be ordered by timestamp desc"
+        );
+
+        // 按 identity 过滤
+        let by_identity = service
+            .query_audit_logs(AuditLogQuery {
+                identity_id: Some(identity.id),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!by_identity.is_empty());
+        assert!(by_identity
+            .iter()
+            .all(|l| l.identity_id == Some(identity.id)));
+        assert!(by_identity
+            .iter()
+            .any(|l| l.action.to_string() == "identity_created"));
+
+        // action 过滤（走 find_by_action 主查询 + 内存复核）
+        let created = service
+            .query_audit_logs(AuditLogQuery {
+                action: Some(AuditAction::IdentityCreated),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(created
+            .iter()
+            .all(|l| l.action.to_string() == "identity_created"));
+
+        // limit 截断
+        let limited = service
+            .query_audit_logs(AuditLogQuery {
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(limited.len(), 1);
+
+        // 统计
+        let stats = service.audit_log_statistics().await.unwrap();
+        assert!(stats.total_logs > 0);
+
+        // 时间窗口放在未来 → 空
+        let now = chrono::Utc::now();
+        let future = service
+            .query_audit_logs(AuditLogQuery {
+                time_range: Some((
+                    now + chrono::Duration::hours(1),
+                    now + chrono::Duration::hours(2),
+                )),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(future.is_empty());
+
+        // 清理保留 0 天 → 删光
+        let deleted = service.cleanup_audit_logs(0).await.unwrap();
+        assert!(deleted > 0);
+        let after = service
+            .query_audit_logs(AuditLogQuery::default())
+            .await
+            .unwrap();
+        assert!(after.is_empty());
     }
 }

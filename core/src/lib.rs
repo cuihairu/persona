@@ -47,6 +47,9 @@ pub enum PersonaError {
     #[error("Authentication failed: {0}")]
     AuthenticationFailed(String),
 
+    #[error("Re-authentication required: {0}")]
+    ReauthRequired(String),
+
     #[error("Cryptographic operation failed: {0}")]
     CryptographicError(String),
 

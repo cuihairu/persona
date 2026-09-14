@@ -786,6 +786,20 @@ impl Repository<Workspace> for WorkspaceRepository {
     }
 }
 
+/// 安全敏感的审计动作列表（与 `AuditLogRepository::find_security_sensitive` 保持一致，
+/// 供服务层做内存过滤）。
+pub const SECURITY_SENSITIVE_AUDIT_ACTIONS: [&str; 9] = [
+    "login",
+    "login_failed",
+    "password_change",
+    "credential_decrypted",
+    "credential_exported",
+    "unauthorized_access",
+    "brute_force_detected",
+    "suspicious_activity",
+    "data_exfiltration",
+];
+
 /// Audit log repository for security monitoring
 #[derive(Clone)]
 pub struct AuditLogRepository {
@@ -909,17 +923,7 @@ impl AuditLogRepository {
 
     /// Find security-sensitive operations
     pub async fn find_security_sensitive(&self) -> Result<Vec<AuditLog>> {
-        let security_actions = [
-            "login",
-            "login_failed",
-            "password_change",
-            "credential_decrypted",
-            "credential_exported",
-            "unauthorized_access",
-            "brute_force_detected",
-            "suspicious_activity",
-            "data_exfiltration",
-        ];
+        let security_actions = SECURITY_SENSITIVE_AUDIT_ACTIONS;
 
         let placeholders = security_actions
             .iter()

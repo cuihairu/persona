@@ -564,6 +564,28 @@ impl CryptoWalletRepository {
         Ok(requests)
     }
 
+    /// Get a single transaction request by ID
+    pub async fn get_request_by_id(
+        &self,
+        request_id: &Uuid,
+    ) -> PersonaResult<Option<TransactionRequest>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, wallet_id, network, from_address, to_address, amount, fee,
+                   gas_price, gas_limit, nonce, memo, raw_transaction_data,
+                   required_signatures, created_at, signed_at, expires_at, metadata, status
+            FROM transaction_requests
+            WHERE id = $1
+            "#,
+        )
+        .bind(request_id.to_string())
+        .fetch_optional(self.db.pool())
+        .await?;
+
+        row.map(|r| self.transaction_request_from_row(&r))
+            .transpose()
+    }
+
     /// Get transaction statistics for a wallet
     pub async fn get_transaction_stats(
         &self,
