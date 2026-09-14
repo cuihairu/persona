@@ -198,6 +198,15 @@ async fn scan_health_reports_all_issue_kinds() -> Result<()> {
         audits[0].metadata.get("total_credentials"),
         Some(&"8".to_string())
     );
+    // No checker was supplied: the breach rule records a skip.
+    assert_eq!(
+        audits[0].metadata.get("breach_status"),
+        Some(&"skipped".to_string())
+    );
+    assert_eq!(
+        audits[0].metadata.get("breach_checked"),
+        Some(&"0".to_string())
+    );
 
     Ok(())
 }
@@ -215,6 +224,157 @@ async fn scan_health_requires_unlocked_service() -> Result<()> {
 
     let result = service.scan_health(HealthScanConfig::default()).await;
     assert!(result.is_err(), "locked service must not scan");
+
+    Ok(())
+}
+
+// -------------------------------------------------------------------------
+// Breach rule (scan_health_with)
+// -------------------------------------------------------------------------
+
+use std::collections::HashMap;
+
+/// In-memory BreachChecker: digests it was seeded with report their counts,
+/// everything else reports 0. `fail: true` simulates an unreachable corpus.
+struct StubChecker {
+    counts: HashMap<String, u64>,
+    fail: bool,
+}
+
+#[async_trait::async_trait]
+impl persona_core::BreachChecker for StubChecker {
+    async fn breach_counts(
+        &self,
+        sha1_hex: &[String],
+    ) -> persona_core::Result<HashMap<String, u64>> {
+        if self.fail {
+            anyhow::bail!("corpus unreachable");
+        }
+        Ok(sha1_hex
+            .iter()
+            .map(|d| (d.clone(), self.counts.get(d).copied().unwrap_or(0)))
+            .collect())
+    }
+}
+
+/// A checker hit flags the credential (High severity) and the audit entry
+/// records the completed lookup — digests only, no secret material.
+#[tokio::test]
+async fn scan_health_with_checker_flags_breached_passwords() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let db = Database::from_file(temp_dir.path().join("breach.db")).await?;
+    db.migrate().await?;
+
+    let mut service = PersonaService::new(db).await?;
+    service.initialize_user("master_pw_123").await?;
+    let identity = service
+        .create_identity("Breach".to_string(), IdentityType::Personal)
+        .await?;
+
+    let breached = seed_password(&service, identity.id, "Breached Site", WEAK_UNIQUE).await?;
+    let _clean = seed_password(&service, identity.id, "Clean Site", STRONG).await?;
+
+    let checker = StubChecker {
+        counts: HashMap::from([(persona_core::sha1_hex_upper(WEAK_UNIQUE), 37_584)]),
+        fail: false,
+    };
+    let report = service
+        .scan_health_with(HealthScanConfig::default(), Some(&checker))
+        .await?;
+
+    let breach_issues: Vec<_> = report
+        .issues
+        .iter()
+        .filter(|i| matches!(i.kind, HealthIssueKind::BreachedPassword { .. }))
+        .collect();
+    assert_eq!(breach_issues.len(), 1, "exactly the breached credential");
+    assert_eq!(breach_issues[0].credential_id, breached.id);
+    assert_eq!(breach_issues[0].severity, HealthSeverity::High);
+    assert!(
+        matches!(
+            &breach_issues[0].kind,
+            HealthIssueKind::BreachedPassword { count: 37_584 }
+        ),
+        "count must carry through: {:?}",
+        breach_issues[0].kind
+    );
+    // The clean strong secret must not be flagged by the breach rule.
+    assert!(!report
+        .issues
+        .iter()
+        .any(|i| i.credential_name == "Clean Site"
+            && matches!(i.kind, HealthIssueKind::BreachedPassword { .. })));
+
+    let audits = service
+        .query_audit_logs(AuditLogQuery {
+            action: Some(AuditAction::SecurityScanPerformed),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(audits.len(), 1);
+    assert_eq!(
+        audits[0].metadata.get("breach_status"),
+        Some(&"completed".to_string())
+    );
+    assert_eq!(
+        audits[0].metadata.get("breach_checked"),
+        Some(&"2".to_string()),
+        "one digest per distinct secret"
+    );
+    // Report JSON carries counts as numbers, never the secret itself.
+    let json = serde_json::to_string(&report)?;
+    assert!(!json.contains(WEAK_UNIQUE));
+    assert!(json.contains("37584"));
+
+    Ok(())
+}
+
+/// A failing checker downgrades to a warning: the offline rules still report
+/// and the audit entry records the outage.
+#[tokio::test]
+async fn scan_health_survives_breach_checker_failure() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let db = Database::from_file(temp_dir.path().join("breach-fail.db")).await?;
+    db.migrate().await?;
+
+    let mut service = PersonaService::new(db).await?;
+    service.initialize_user("master_pw_123").await?;
+    let identity = service
+        .create_identity("Breach".to_string(), IdentityType::Personal)
+        .await?;
+
+    // Fresh + strong: the offline rules stay quiet for this credential.
+    let _clean = seed_password(&service, identity.id, "Clean Site", STRONG).await?;
+
+    let checker = StubChecker {
+        counts: HashMap::new(),
+        fail: true,
+    };
+    let report = service
+        .scan_health_with(HealthScanConfig::default(), Some(&checker))
+        .await
+        .expect("checker failure must not fail the scan");
+
+    assert!(!report
+        .issues
+        .iter()
+        .any(|i| matches!(i.kind, HealthIssueKind::BreachedPassword { .. })));
+
+    let audits = service
+        .query_audit_logs(AuditLogQuery {
+            action: Some(AuditAction::SecurityScanPerformed),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(audits.len(), 1);
+    assert_eq!(
+        audits[0].metadata.get("breach_status"),
+        Some(&"unavailable".to_string())
+    );
+    assert_eq!(
+        audits[0].metadata.get("breach_checked"),
+        Some(&"0".to_string())
+    );
 
     Ok(())
 }

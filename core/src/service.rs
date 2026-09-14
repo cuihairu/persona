@@ -5,6 +5,7 @@ use crate::{
         MockRemoteAuthProvider, RemoteAuthChallenge, RemoteAuthProvider, RemoteAuthResult, Session,
         UserAuth,
     },
+    breach::BreachChecker,
     crypto::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
         EncryptionService, KeyHierarchy, Sha256Hasher,
@@ -662,13 +663,28 @@ impl PersonaService {
         Ok(credential_data)
     }
 
+    /// Run a Watchtower-style vault health scan (offline rules only).
+    ///
+    /// See [`Self::scan_health_with`] for the breach-check-enabled variant.
+    pub async fn scan_health(&self, config: HealthScanConfig) -> Result<HealthReport> {
+        self.scan_health_with(config, None).await
+    }
+
     /// Run a Watchtower-style vault health scan.
     ///
     /// Decrypts every credential in memory, evaluates the offline rules
-    /// (weak/reused secrets, expiries, staleness) and returns a
-    /// metadata-only report. One aggregate `SecurityScanPerformed` audit
-    /// entry is written; scanned secrets never leave the call frame.
-    pub async fn scan_health(&self, config: HealthScanConfig) -> Result<HealthReport> {
+    /// (weak/reused secrets, expiries, staleness) and — when a
+    /// [`BreachChecker`] is supplied — the breach rule. The checker works on
+    /// SHA-1 digests only; plaintext secrets never reach it, and nothing
+    /// leaves the call frame. A checker failure downgrades to a warning and
+    /// the offline rules still report. One aggregate
+    /// `SecurityScanPerformed` audit entry is written (`breach_status`:
+    /// `skipped` / `completed` / `unavailable`).
+    pub async fn scan_health_with(
+        &self,
+        config: HealthScanConfig,
+        breach: Option<&dyn BreachChecker>,
+    ) -> Result<HealthReport> {
         self.ensure_unlocked_with_auto_lock().await?;
 
         let credentials = self.credential_repo.find_all().await?;
@@ -782,6 +798,48 @@ impl PersonaService {
             }
         }
 
+        // Breach rule: consult the corpus through SHA-1 digests only.
+        // Failure is not fatal — the offline rules above already reported.
+        let (breach_status, breach_checked): (&str, usize) = match breach {
+            None => ("skipped", 0),
+            Some(checker) => {
+                // One digest per distinct secret; duplicate digests (hash
+                // collisions) are harmless — the checker dedupes by prefix.
+                let digest_of: HashMap<&String, String> = secrets_by_password
+                    .keys()
+                    .map(|secret| (secret, crate::breach::sha1_hex_upper(secret)))
+                    .collect();
+                let digests: Vec<String> = digest_of.values().cloned().collect();
+                match checker.breach_counts(&digests).await {
+                    Ok(counts) => {
+                        for (secret, credential_ids) in &secrets_by_password {
+                            let count = counts.get(&digest_of[secret]).copied().unwrap_or(0);
+                            if count == 0 {
+                                continue;
+                            }
+                            let kind = HealthIssueKind::BreachedPassword { count };
+                            for credential_id in credential_ids {
+                                let (name, credential_type, _) = secrets[credential_id].clone();
+                                issues.push(HealthIssue {
+                                    credential_id: *credential_id,
+                                    credential_name: name,
+                                    credential_type,
+                                    severity: kind.severity(),
+                                    detail: kind.detail(),
+                                    kind: kind.clone(),
+                                });
+                            }
+                        }
+                        ("completed", digests.len())
+                    }
+                    Err(e) => {
+                        tracing::warn!("health scan: breach check unavailable: {e}");
+                        ("unavailable", 0)
+                    }
+                }
+            }
+        };
+
         let report = HealthReport::finalize(now, credentials.len(), issues);
 
         // One aggregate audit entry; the report itself is not persisted and
@@ -795,7 +853,9 @@ impl PersonaService {
             "total_credentials".to_string(),
             report.total_credentials.to_string(),
         )
-        .with_metadata("issue_count".to_string(), report.issues.len().to_string());
+        .with_metadata("issue_count".to_string(), report.issues.len().to_string())
+        .with_metadata("breach_checked".to_string(), breach_checked.to_string())
+        .with_metadata("breach_status".to_string(), breach_status.to_string());
         let _ = self.audit_repo.create(&audit).await;
 
         Ok(report)

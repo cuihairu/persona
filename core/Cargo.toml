@@ -79,6 +79,8 @@ regex.workspace = true
 mockall.workspace = true
 tokio-test = "0.4"
 proptest.workspace = true
+# 集成测试里的 BreachChecker stub 需要 trait 宏
+async-trait.workspace = true
 # RP 侧实现，用作 authenticator 产物的回归裁判；
 # vendored openssl 使 webauthn-rs 在无系统 OpenSSL 头文件的环境可构建（仅测试）
 openssl = { version = "0.10", features = ["vendored"] }

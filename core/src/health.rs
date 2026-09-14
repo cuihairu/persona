@@ -59,6 +59,8 @@ pub enum HealthIssueKind {
     WeakPassword { score: u8 },
     /// The same plaintext secret is shared by `group_size` credentials
     ReusedPassword { group_size: usize },
+    /// The secret appears `count` times in a known breach corpus
+    BreachedPassword { count: u64 },
     /// An expiry date has already passed
     Expired,
     /// An expiry date falls inside the warning window
@@ -71,10 +73,11 @@ impl HealthIssueKind {
     /// Severity used for grouping/sorting in reports.
     pub fn severity(&self) -> HealthSeverity {
         match self {
-            // Reuse and expiry are the highest-impact, exploitable classes.
-            HealthIssueKind::ReusedPassword { .. } | HealthIssueKind::Expired => {
-                HealthSeverity::High
-            }
+            // Reuse, breach hits and expiry are the highest-impact,
+            // exploitable classes.
+            HealthIssueKind::ReusedPassword { .. }
+            | HealthIssueKind::BreachedPassword { .. }
+            | HealthIssueKind::Expired => HealthSeverity::High,
             HealthIssueKind::WeakPassword { score } => {
                 if *score <= 1 {
                     HealthSeverity::High
@@ -95,6 +98,9 @@ impl HealthIssueKind {
             ),
             HealthIssueKind::ReusedPassword { group_size } => format!(
                 "This secret is reused by {group_size} credentials. A breach of one exposes all."
+            ),
+            HealthIssueKind::BreachedPassword { count } => format!(
+                "This password appears {count} time(s) in known breach corpora. Rotate it now."
             ),
             HealthIssueKind::Expired => {
                 "This item has expired and should be replaced or removed.".to_string()
@@ -287,6 +293,17 @@ mod tests {
         // detail() is a fixed template: it must not contain the scanned value.
         let kind = HealthIssueKind::WeakPassword { score: 1 };
         assert!(!kind.detail().contains("hunter2"));
+    }
+
+    #[test]
+    fn breached_password_is_high_severity_with_count_template() {
+        let kind = HealthIssueKind::BreachedPassword { count: 37_584 };
+        assert_eq!(kind.severity(), HealthSeverity::High);
+        let detail = kind.detail();
+        assert!(detail.contains("37584"), "count belongs in the template");
+        // serde tag must serialize as breached_password for the frontend.
+        let json = serde_json::to_string(&kind).unwrap();
+        assert!(json.contains("breached_password"), "{json}");
     }
 
     // ---- find_reused_groups ----
