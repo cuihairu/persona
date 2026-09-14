@@ -16,7 +16,7 @@ Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona 
   - Browser extension: [≈] Chromium extension + Native Messaging bridge MVP (username/password fill, TOTP verb, pairing + HMAC + origin binding + user gesture, domain policies, phishing resistance); Safari host shell present
   - TOTP autofill: [≈] bridge protocol supports it; polished in-page UX pending
 - Watchtower
-  - Breach/weak/reused/expired detection: [−] rules engine to implement — current focus alongside passkeys
+  - Breach/weak/reused/expired detection: [≈] rules engine done (core + `persona watchtower` CLI + desktop `health_scan` command; metadata-only reports, zxcvbn strength/reuse/expiry/staleness); desktop UI panels and HIBP breach check pending
 - Sharing/Admin
   - Multi-user vaults, RBAC, SCIM/SSO, account recovery: [−] out of scope for a single-principal product (`BOUNDARY.md`)
 - Apps & Interfaces

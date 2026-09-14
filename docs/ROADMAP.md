@@ -12,7 +12,9 @@ Milestones 0–3 – Foundation (done)
 
 Milestone 4 – 1Password Parity (current focus)
 - [ ] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (review stage; P1 core/CLI done, P2 browser interception done; P3 desktop GUI approval surface pending)
-- [ ] Watchtower-class health checks: weak/reused/expired detection, breach checks (rules engine, then desktop panels)
+- [x] Watchtower-class health checks: rules engine (weak/reused/expired/stale; core + CLI + desktop command layer, metadata-only reports)
+- [ ] Watchtower: desktop UI panels
+- [ ] Watchtower: breach checks (offline BreachChecker seam, then HIBP k-anonymity)
 - [x] Desktop app: wired to core on Tauri v2 (unlock, lists, CRUD; vault/identity/credential views; search + type/tag/favorite filters)
 - [x] Desktop: TOTP display (shared core path, RFC 6238 vectors); password reveal flow (re-auth gate + 30s auto-hide + copy-once clipboard); SshKey/ApiKey/BankCard rendering
 - [x] Desktop: SSH agent controls; signature approvals via in-app modal + system notification (agent stays UI-free behind an ApprovalHandler seam; CLI keeps TTY prompts unchanged)

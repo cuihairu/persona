@@ -138,6 +138,9 @@ Quality & Security
 - [x] Threat model & periodic security review
 - [x] Fuzz tests for parsers (mnemonic/keystore/QR)
 - [x] Supply chain checks (cargo-deny, npm audit)
+- [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
+- [ ] Watchtower: desktop UI panels
+- [ ] Watchtower: breach check (offline BreachChecker seam → HIBP k-anonymity)
 - [ ] Reproducible builds
 
 References
