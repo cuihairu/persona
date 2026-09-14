@@ -9,6 +9,7 @@ use crate::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
         EncryptionService, KeyHierarchy, Sha256Hasher,
     },
+    health::{HealthIssue, HealthIssueKind, HealthReport, HealthScanConfig},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
         ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType, Identity,
@@ -603,9 +604,6 @@ impl PersonaService {
         self.ensure_sensitive_operation_allowed().await?;
         self.touch_activity();
 
-        let master_encryption = self.get_master_encryption_service()?;
-        let hierarchy = KeyHierarchy::new(master_encryption);
-
         let credential = match self.credential_repo.find_by_id(credential_id).await? {
             Some(cred) => cred,
             None => return Ok(None),
@@ -616,7 +614,31 @@ impl PersonaService {
         credential.mark_accessed();
         self.credential_repo.update(&credential).await?;
 
-        // Decrypt the data
+        let credential_data = self.decrypt_credential(&credential)?;
+        self.log_audit(
+            AuditAction::CredentialDecrypted,
+            ResourceType::Credential,
+            true,
+            Some(credential.id),
+            Some(credential.identity_id),
+            None,
+        )
+        .await;
+
+        self.update_sensitive_auto_lock_activity().await?;
+        Ok(Some(credential_data))
+    }
+
+    /// Decrypt a credential's payload without side effects (no access-time
+    /// update, no per-credential audit entry, no re-auth gate).
+    ///
+    /// The gated path is [`Self::get_credential_data`]; batch operations
+    /// (health scan) use this one and record a single aggregate audit entry
+    /// instead.
+    fn decrypt_credential(&self, credential: &Credential) -> Result<CredentialData> {
+        let master_encryption = self.get_master_encryption_service()?;
+        let hierarchy = KeyHierarchy::new(master_encryption);
+
         let plaintext = match &credential.wrapped_item_key {
             Some(wrapped_key) => {
                 hierarchy.decrypt_with_wrapped_key(wrapped_key, &credential.encrypted_data)?
@@ -637,18 +659,146 @@ impl PersonaService {
                 e
             ))
         })?;
-        self.log_audit(
-            AuditAction::CredentialDecrypted,
-            ResourceType::Credential,
-            true,
-            Some(credential.id),
-            Some(credential.identity_id),
-            None,
-        )
-        .await;
+        Ok(credential_data)
+    }
 
-        self.update_sensitive_auto_lock_activity().await?;
-        Ok(Some(credential_data))
+    /// Run a Watchtower-style vault health scan.
+    ///
+    /// Decrypts every credential in memory, evaluates the offline rules
+    /// (weak/reused secrets, expiries, staleness) and returns a
+    /// metadata-only report. One aggregate `SecurityScanPerformed` audit
+    /// entry is written; scanned secrets never leave the call frame.
+    pub async fn scan_health(&self, config: HealthScanConfig) -> Result<HealthReport> {
+        self.ensure_unlocked_with_auto_lock().await?;
+
+        let credentials = self.credential_repo.find_all().await?;
+        let now = chrono::Utc::now();
+
+        // Secret material collected for the weak/reuse rules; dropped when
+        // the scan frame ends.
+        let mut secrets_by_password: HashMap<String, Vec<Uuid>> = HashMap::new();
+        // credential_id → (name, type) so issues can be attributed later
+        // without holding decrypted data.
+        let mut secrets: HashMap<Uuid, (String, String, String)> = HashMap::new();
+
+        let mut issues: Vec<HealthIssue> = Vec::new();
+        let mut push_issue = |credential: &Credential, kind: HealthIssueKind| {
+            issues.push(HealthIssue {
+                credential_id: credential.id,
+                credential_name: credential.name.clone(),
+                credential_type: credential.credential_type.to_string(),
+                severity: kind.severity(),
+                detail: kind.detail(),
+                kind,
+            });
+        };
+
+        for credential in &credentials {
+            if !credential.is_active {
+                continue;
+            }
+
+            // Expiry rules (no decryption needed)
+            let data = match self.decrypt_credential(credential) {
+                Ok(data) => data,
+                // A credential that fails to decrypt is reported but must
+                // not abort the whole scan.
+                Err(e) => {
+                    tracing::warn!("health scan: failed to decrypt {}: {e}", credential.id);
+                    continue;
+                }
+            };
+
+            match &data {
+                CredentialData::ApiKey(api) => {
+                    if let Some(expires_at) = api.expires_at {
+                        if let Some(kind) =
+                            crate::health::check_expiry(expires_at, now, config.expiry_warning_days)
+                        {
+                            push_issue(credential, kind);
+                        }
+                    }
+                }
+                CredentialData::BankCard(card) => {
+                    if let Some(kind) = crate::health::check_bank_card_expiry(
+                        &card.expiry_date,
+                        now,
+                        config.expiry_warning_days,
+                    ) {
+                        push_issue(credential, kind);
+                    }
+                }
+                _ => {}
+            }
+
+            // Staleness rule (metadata only)
+            if let Some(kind) =
+                crate::health::check_stale(credential.updated_at, now, config.stale_after_days)
+            {
+                push_issue(credential, kind);
+            }
+
+            // Secret strength + reuse rules
+            let secret: Option<&str> = match &data {
+                CredentialData::Password(p) => Some(p.password.as_str()),
+                CredentialData::ServerConfig(s) => s.password.as_deref(),
+                CredentialData::SshKey(k) => k.passphrase.as_deref(),
+                _ => None,
+            };
+            if let Some(secret) = secret {
+                let (score, _suggestions) = crate::health::evaluate_password_strength(secret);
+                if score < config.min_password_score {
+                    push_issue(credential, HealthIssueKind::WeakPassword { score });
+                }
+                secrets_by_password
+                    .entry(secret.to_string())
+                    .or_default()
+                    .push(credential.id);
+                secrets.insert(
+                    credential.id,
+                    (
+                        credential.name.clone(),
+                        credential.credential_type.to_string(),
+                        String::new(),
+                    ),
+                );
+            }
+        }
+
+        // Reuse rule: one issue per credential in any shared group.
+        for group in crate::health::find_reused_groups(&secrets_by_password) {
+            let group_size = group.len();
+            for credential_id in group {
+                let (name, credential_type, _) = secrets[&credential_id].clone();
+                let kind = HealthIssueKind::ReusedPassword { group_size };
+                issues.push(HealthIssue {
+                    credential_id,
+                    credential_name: name,
+                    credential_type,
+                    severity: kind.severity(),
+                    detail: kind.detail(),
+                    kind,
+                });
+            }
+        }
+
+        let report = HealthReport::finalize(now, credentials.len(), issues);
+
+        // One aggregate audit entry; the report itself is not persisted and
+        // contains no secret material.
+        let audit = AuditLog::new(
+            AuditAction::SecurityScanPerformed,
+            ResourceType::System,
+            true,
+        )
+        .with_metadata(
+            "total_credentials".to_string(),
+            report.total_credentials.to_string(),
+        )
+        .with_metadata("issue_count".to_string(), report.issues.len().to_string());
+        let _ = self.audit_repo.create(&audit).await;
+
+        Ok(report)
     }
 
     /// Update a credential

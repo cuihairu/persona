@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod crypto;
+pub mod health;
 pub mod logging;
 pub mod models;
 pub mod password;
@@ -14,6 +15,7 @@ pub mod storage;
 // Re-export commonly used types
 pub use auth::*;
 pub use crypto::*;
+pub use health::*;
 pub use logging::*;
 
 // Selective re-exports from models to avoid conflicts

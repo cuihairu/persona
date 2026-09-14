@@ -101,6 +101,7 @@ pub enum AuditAction {
     ConfigurationChanged,
 
     // 安全事件
+    SecurityScanPerformed,
     UnauthorizedAccess,
     BruteForceDetected,
     SuspiciousActivity,
@@ -147,6 +148,7 @@ impl std::fmt::Display for AuditAction {
             AuditAction::BackupCreated => "backup_created",
             AuditAction::BackupRestored => "backup_restored",
             AuditAction::ConfigurationChanged => "configuration_changed",
+            AuditAction::SecurityScanPerformed => "security_scan_performed",
             AuditAction::UnauthorizedAccess => "unauthorized_access",
             AuditAction::BruteForceDetected => "brute_force_detected",
             AuditAction::SuspiciousActivity => "suspicious_activity",
@@ -196,6 +198,7 @@ impl std::str::FromStr for AuditAction {
             "backup_created" => Ok(AuditAction::BackupCreated),
             "backup_restored" => Ok(AuditAction::BackupRestored),
             "configuration_changed" => Ok(AuditAction::ConfigurationChanged),
+            "security_scan_performed" => Ok(AuditAction::SecurityScanPerformed),
             "unauthorized_access" => Ok(AuditAction::UnauthorizedAccess),
             "brute_force_detected" => Ok(AuditAction::BruteForceDetected),
             "suspicious_activity" => Ok(AuditAction::SuspiciousActivity),
@@ -356,6 +359,7 @@ impl AuditLog {
             AuditAction::Login
                 | AuditAction::LoginFailed
                 | AuditAction::PasswordChange
+                | AuditAction::SecurityScanPerformed
                 | AuditAction::CredentialDecrypted
                 | AuditAction::CredentialExported
                 | AuditAction::PasskeyAsserted
@@ -666,6 +670,7 @@ mod tests {
             AuditAction::Login,
             AuditAction::LoginFailed,
             AuditAction::PasswordChange,
+            AuditAction::SecurityScanPerformed,
             AuditAction::CredentialDecrypted,
             AuditAction::CredentialExported,
             AuditAction::PasskeyAsserted,

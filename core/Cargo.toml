@@ -29,6 +29,7 @@ sha3.workspace = true
 ripemd.workspace = true
 sha1.workspace = true
 data-encoding.workspace = true
+zxcvbn.workspace = true
 hmac.workspace = true
 pbkdf2.workspace = true
 bs58.workspace = true

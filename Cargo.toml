@@ -37,6 +37,7 @@ sha3 = "0.10"
 ripemd = "0.1"
 sha1 = "0.10"
 data-encoding = "2.5"
+zxcvbn = "3"
 hmac = "0.12"
 pbkdf2 = "0.12"
 bs58 = { version = "0.5", features = ["check"] }
