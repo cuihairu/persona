@@ -19,3 +19,4 @@ pub mod totp;
 pub mod tui;
 pub(crate) mod tui_runtime;
 pub mod wallet;
+pub mod watchtower;

@@ -89,6 +89,9 @@ enum Commands {
 
     /// Passkey (WebAuthn software authenticator) management
     Passkey(commands::passkey::PasskeyArgs),
+
+    /// Vault health scan (weak / reused / expired / stale credentials)
+    Watchtower(commands::watchtower::WatchtowerArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -148,6 +151,7 @@ async fn main() -> Result<()> {
         Commands::AutoLock(args) => commands::auto_lock::handle_auto_lock(args, &config).await,
         Commands::Wallet(args) => commands::wallet::handle_wallet(args, &config).await,
         Commands::Passkey(args) => commands::passkey::handle_passkey(args, &config).await,
+        Commands::Watchtower(args) => commands::watchtower::execute(args, &config).await,
     }
 }
 
