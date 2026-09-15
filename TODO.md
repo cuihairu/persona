@@ -130,7 +130,10 @@ Browser & Autofill (future)
   - [x] P2: 浏览器桥接 v2（passkey_list/create/assert 三消息 + protocol_version 2、扩展 MAIN-world
     WebAuthn 拦截 + 选择/确认 UI + 回退原生、conditional mediation/cross-origin iframe 不拦截、
     桥接层 origin↔rp_id 校验与 user gesture 强制、协议文档/README 增补）
-  - [ ] P3: Desktop GUI（系统托盘、指纹/主密码闸门、通知式确认）
+  - [x] P3: 确认闸门链路（bridge↔桌面 Unix socket 审批协议 `passkey-approval.sock` +
+    `PERSONA_BRIDGE_DESKTOP_APPROVAL` auto/require/off 开关、桌面常驻审批服务端、
+    通知式确认 modal（Esc=拒绝）、系统托盘 + 关窗驻留）
+  - [ ] P3: 桌面 passkey 管理页（列表/详情/删除/自检/导出）
   - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入
 - [x] Phishing protections; identity-based context switching
 

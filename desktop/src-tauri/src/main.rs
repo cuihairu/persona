@@ -11,9 +11,20 @@ mod types;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 use tokio::sync::Mutex;
 use types::AppState;
+
+/// 显示主窗口（托盘左键 / Open 菜单共用）
+fn show_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
 
 fn main() {
     tauri::Builder::default()
@@ -42,7 +53,61 @@ fn main() {
                     eprintln!("passkey approval server exited: {err}");
                 }
             });
+
+            // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口
+            let open_item = MenuItem::with_id(app, "open", "Open Persona", true, None::<&str>)?;
+            let lock_item = MenuItem::with_id(app, "lock", "Lock", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let tray_menu = Menu::with_items(app, &[&open_item, &lock_item, &quit_item])?;
+
+            TrayIconBuilder::with_id("persona-tray")
+                .icon(
+                    app.default_window_icon()
+                        .expect("app bundle ships a default window icon")
+                        .clone(),
+                )
+                .tooltip("Persona")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    // 左键点击 = 唤出主窗口（菜单留在右键）
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
+                    }
+                })
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "open" => show_main_window(app),
+                    "lock" => {
+                        // 走事件链（Locked → persona://auto-lock → 前端回解锁屏），
+                        // 再兜底清内存主密钥（与回调同一动作，幂等）
+                        let service = app.state::<AppState>().service.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let mut guard = service.lock().await;
+                            if let Some(service) = guard.as_mut() {
+                                let _ = service.force_lock_session().await;
+                                service.lock();
+                            }
+                        });
+                    }
+                    "quit" => app.exit(0),
+                    _ => {}
+                })
+                .build(app)?;
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // 关闭主窗口 = 隐藏到托盘（passkey/SSH 审批照常工作）；托盘 Quit 才退出
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::init_service,

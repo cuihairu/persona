@@ -489,7 +489,48 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
 2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
-3. CLI 可配置对未确认的请求要求桌面通知确认
+3. CLI 可配置对未确认的请求要求桌面通知确认（见下节）
+
+### 桌面审批（Passkey 确认闸门）
+
+`passkey_create` / `passkey_assert` 在桌面应用运行时可要求第二道确认——独立于扩展的
+user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PASSKEYS_DESIGN.md` §10）。
+
+**传输**：bridge（每个请求的短命进程）作为客户端连接 Unix domain socket
+`<agent state dir>/passkey-approval.sock`（默认 `~/.persona/passkey-approval.sock`，
+可用 `PERSONA_PASSKEY_APPROVAL_SOCKET` 覆盖；权限 0600）。一请求一连接、JSON 行协议：
+
+请求（bridge → 桌面）：
+
+```json
+{"v":1,"op":"passkey_assert","rp_id":"github.com","origin":"https://github.com","user_name":"alice","item_id":"<uuid>"}
+```
+
+- `op` 仅接受 `passkey_create` / `passkey_assert`；`passkey_list` 非敏感不走审批
+
+响应（桌面 → bridge）：
+
+```json
+{"approved":true}
+{"approved":false,"reason":"denied"}
+```
+
+- `reason` 取值：`denied`（用户/前端拒绝）、`timeout`（桌面 120s 无应答；bridge 侧
+  150s 兜底断开）、`locked`（桌面已锁定，直接拒绝不弹窗）、`unsupported`（坏 JSON /
+  未知版本 / 未知 op）
+
+**开关** `PERSONA_BRIDGE_DESKTOP_APPROVAL`（默认 `auto`）：
+
+| 值 | 行为 |
+| --- | --- |
+| `auto` | socket 存在 → 必须桌面批准；桌面未运行/连接失败 → 现有行为（gesture 闸门照旧） |
+| `require` | 策略强制：socket 不在也拒绝该 passkey 请求（fail closed） |
+| `off` | 永不询问 |
+
+拒绝时 bridge 对该请求返回错误 `passkey request denied by desktop approval (<reason>)`。
+
+此协议是本地实现细节，不占用桥接协议版本号（`protocol_version` 保持 2；v3 的方向
+见 `CLIENT_COMMUNICATION_ARCHITECTURE.md`）。
 
 ### 会话管理（可选）
 
