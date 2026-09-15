@@ -5,6 +5,7 @@ pub mod credential;
 pub mod edit;
 pub mod export;
 pub mod import;
+pub mod import_1pux;
 pub mod init;
 pub mod list;
 pub mod migrate;

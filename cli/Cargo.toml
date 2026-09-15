@@ -86,6 +86,8 @@ tabled = "0.15"
 
 [dev-dependencies]
 tempfile = "3.8"
+# 1PUX 测试 fixture 现场打包 ZIP 容器
+zip.workspace = true
 assert_cmd = "2.0"
 predicates = "3.0"
 proptest = { workspace = true }

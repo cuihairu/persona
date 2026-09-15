@@ -63,6 +63,9 @@ enum Commands {
     /// Import identities
     Import(commands::import::ImportArgs),
 
+    /// Migrate from a 1Password export (.1pux)
+    Import1Pux(commands::import_1pux::Import1PuxArgs),
+
     /// Migrate database schema (e.g., Workspace v2)
     Migrate(commands::migrate::MigrateArgs),
 
@@ -142,6 +145,7 @@ async fn main() -> Result<()> {
         Commands::Edit(args) => commands::edit::execute(args, &config).await,
         Commands::Export(args) => commands::export::execute(args, &config).await,
         Commands::Import(args) => commands::import::execute(args, &config).await,
+        Commands::Import1Pux(args) => commands::import_1pux::execute(args, &config).await,
         Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
         Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
         Commands::Credential(args) => commands::credential::execute(args, &config).await,
