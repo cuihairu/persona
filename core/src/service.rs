@@ -2173,6 +2173,57 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[tokio::test]
+    async fn test_sensitive_operation_gated_behind_reauth() {
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Reauth Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "Gated", CredentialType::Password).await;
+
+        // Swap in a manager that demands re-authentication for sensitive
+        // operations (the default config keeps this off).
+        service.auto_lock_manager =
+            AutoLockManager::with_basic_config(crate::auth::AutoLockConfig {
+                require_reauth_sensitive: true,
+                sensitive_operation_timeout_secs: 3600,
+                ..Default::default()
+            });
+        let session = Session::new("reauth-user".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        service
+            .auto_lock_manager
+            .add_session(session)
+            .await
+            .unwrap();
+        *service.current_session_id.write().await = Some(session_id.clone());
+
+        // A freshly registered session has no sensitive-activity history, so
+        // the gate must reject the read with the dedicated error variant.
+        assert!(service.needs_reauth().await);
+        let err = service.get_credential_data(&cred.id).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Re-authentication required"),
+            "unexpected error: {err}"
+        );
+
+        // Once sensitive activity is recorded, the same call goes through and
+        // (via the success path) refreshes the sensitive timer again.
+        service
+            .auto_lock_manager
+            .update_sensitive_activity(&session_id)
+            .await
+            .unwrap();
+        assert!(!service.needs_reauth().await);
+        let data = service
+            .get_credential_data(&cred.id)
+            .await
+            .unwrap()
+            .expect("credential exists");
+        assert!(matches!(data, CredentialData::Password(_)));
+    }
+
+    #[tokio::test]
     async fn test_session_auto_lock_surface() {
         let (_db, service) = unlocked_service().await;
 
@@ -2911,6 +2962,119 @@ mod tests {
         assert!(!creation.item.uv_initialized);
         assert!(!creation.attestation_object.is_empty());
     }
+    #[tokio::test]
+    async fn test_query_audit_log_filter_branches() {
+        let (_db, service) = unlocked_service().await;
+        // The real user (already `current_user`): audit rows carry an FK to
+        // user_auth, so only an existing user id can label the logs.
+        let user_id = service.current_user.expect("initialize_user set the user");
+
+        let identity = service
+            .create_identity("Filter Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // Curated rows so every branch has deterministic data: a failure, a
+        // security-sensitive success, and a plain success.
+        service
+            .log_audit(
+                AuditAction::CredentialCreated,
+                ResourceType::Credential,
+                false,
+                None,
+                Some(identity.id),
+                Some("seed failure".to_string()),
+            )
+            .await;
+        service
+            .log_audit(
+                AuditAction::CredentialDecrypted,
+                ResourceType::Credential,
+                true,
+                None,
+                Some(identity.id),
+                None,
+            )
+            .await;
+
+        // user_id filter: dedicated query + in-memory re-check.
+        let mine = service
+            .query_audit_logs(AuditLogQuery {
+                user_id: Some(user_id.to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!mine.is_empty());
+        let uid_str = user_id.to_string();
+        assert!(mine
+            .iter()
+            .all(|l| l.user_id.as_deref() == Some(uid_str.as_str())));
+
+        let foreign = service
+            .query_audit_logs(AuditLogQuery {
+                user_id: Some("no-such-user".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(foreign.is_empty());
+
+        // failures_only: dedicated query + the success-negation re-check.
+        let failures = service
+            .query_audit_logs(AuditLogQuery {
+                failures_only: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!failures.is_empty());
+        assert!(failures.iter().all(|l| !l.success));
+
+        // security_sensitive_only: only the sensitive-action rows survive.
+        let sensitive = service
+            .query_audit_logs(AuditLogQuery {
+                security_sensitive_only: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!sensitive.is_empty());
+        assert!(sensitive.iter().all(|l| {
+            SECURITY_SENSITIVE_AUDIT_ACTIONS.contains(&l.action.to_string().as_str())
+        }));
+
+        // Combined filter: the user branch stays the primary query while the
+        // failure condition is re-checked in memory.
+        let my_failures = service
+            .query_audit_logs(AuditLogQuery {
+                user_id: Some(user_id.to_string()),
+                failures_only: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!my_failures.is_empty());
+        assert!(my_failures
+            .iter()
+            .all(|l| !l.success && l.user_id.as_deref() == Some(uid_str.as_str())));
+
+        // time_range: a window covering "now" matches (the existing suite
+        // only checks the empty future window).
+        let now = chrono::Utc::now();
+        let in_window = service
+            .query_audit_logs(AuditLogQuery {
+                time_range: Some((
+                    now - chrono::Duration::hours(1),
+                    now + chrono::Duration::hours(1),
+                )),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(!in_window.is_empty());
+    }
+
     #[tokio::test]
     async fn test_audit_query_statistics_and_cleanup() {
         let db = Database::in_memory().await.unwrap();

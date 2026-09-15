@@ -378,3 +378,126 @@ async fn scan_health_survives_breach_checker_failure() -> Result<()> {
 
     Ok(())
 }
+
+/// Inactive credentials are skipped entirely (even a weak secret stays
+/// unreported), and a credential whose payload no longer decrypts is
+/// skipped without aborting the scan.
+#[tokio::test]
+async fn scan_health_skips_inactive_and_undecryptable_credentials() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let db = Database::from_file(temp_dir.path().join("edges.db")).await?;
+    db.migrate().await?;
+
+    let mut service = PersonaService::new(db.clone()).await?;
+    service.initialize_user("master_pw_123").await?;
+
+    let identity = service
+        .create_identity("Edge Identity".to_string(), IdentityType::Personal)
+        .await?;
+    let healthy = seed_password(&service, identity.id, "Healthy Site", STRONG).await?;
+    let inactive = seed_password(&service, identity.id, "Retired Site", WEAK_UNIQUE).await?;
+    let corrupted = seed_password(&service, identity.id, "Corrupted Site", STRONG).await?;
+
+    let repo = CredentialRepository::new(db.clone());
+    // Retire one credential: its weak secret must never reach the report.
+    let mut retired = repo.find_by_id(&inactive.id).await?.expect("seeded");
+    retired.is_active = false;
+    repo.update(&retired).await?;
+
+    // Corrupt another one's ciphertext: decryption fails, scan survives.
+    let mut broken = repo.find_by_id(&corrupted.id).await?.expect("seeded");
+    broken.encrypted_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+    repo.update(&broken).await?;
+
+    let report = service.scan_health(HealthScanConfig::default()).await?;
+
+    let issue_ids: HashSet<Uuid> = report.issues.iter().map(|i| i.credential_id).collect();
+    assert!(
+        !issue_ids.contains(&inactive.id),
+        "inactive credential must be skipped even with a weak secret"
+    );
+    assert!(
+        !issue_ids.contains(&corrupted.id),
+        "undecryptable credential must be skipped, not reported or fatal"
+    );
+    assert!(
+        !issue_ids.contains(&healthy.id),
+        "strong active credential must stay clean"
+    );
+    // The scan itself still recorded its aggregate audit entry.
+    let audits = service
+        .query_audit_logs(AuditLogQuery {
+            action: Some(AuditAction::SecurityScanPerformed),
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(audits.len(), 1);
+    // Only the healthy credential produced rules output.
+    assert_eq!(
+        audits[0].metadata.get("issue_count"),
+        Some(&"0".to_string())
+    );
+
+    Ok(())
+}
+
+/// Secret-strength rules also apply to SSH-key passphrases, and an expiry
+/// date far beyond the warning window raises no issue.
+#[tokio::test]
+async fn scan_health_covers_sshkey_passphrase_and_far_future_expiry() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let db = Database::from_file(temp_dir.path().join("edges2.db")).await?;
+    db.migrate().await?;
+
+    let mut service = PersonaService::new(db.clone()).await?;
+    service.initialize_user("master_pw_123").await?;
+
+    let identity = service
+        .create_identity("Edge Identity 2".to_string(), IdentityType::Personal)
+        .await?;
+
+    // Weak passphrase on an SSH key joins the strength rules.
+    service
+        .create_credential(
+            identity.id,
+            "Key with weak passphrase".to_string(),
+            CredentialType::SshKey,
+            SecurityLevel::High,
+            &CredentialData::SshKey(SshKeyData {
+                private_key: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+                public_key: "ssh-ed25519 AAAATEST".to_string(),
+                key_type: "ed25519".to_string(),
+                passphrase: Some(WEAK_UNIQUE.to_string()),
+            }),
+        )
+        .await?;
+
+    // API key expiring well past the warning window: Some(expires_at) but no
+    // issue (as opposed to the already-covered expired/soon-expiring cases).
+    seed_api_key(
+        &service,
+        identity.id,
+        "Far future token",
+        Some(chrono::Utc::now() + chrono::Duration::days(400)),
+    )
+    .await?;
+
+    let report = service.scan_health(HealthScanConfig::default()).await?;
+
+    let weak_ssh = report
+        .issues
+        .iter()
+        .find(|i| matches!(i.kind, HealthIssueKind::WeakPassword { .. }))
+        .expect("weak SSH passphrase must be reported");
+    assert!(weak_ssh.credential_name.contains("weak passphrase"));
+
+    assert!(
+        !report
+            .issues
+            .iter()
+            .any(|i| matches!(i.kind, HealthIssueKind::ExpiringSoon { .. })),
+        "an expiry 400 days out is not 'expiring soon'"
+    );
+
+    Ok(())
+}
