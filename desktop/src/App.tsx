@@ -13,6 +13,7 @@ import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorH
 import SshApprovalModal from '@/components/SshApprovalModal';
 import SshAgentPanel from '@/components/SshAgentPanel';
 import WalletPanel from '@/components/WalletPanel';
+import WatchtowerPanel from '@/components/WatchtowerPanel';
 import SettingsModal from '@/components/SettingsModal';
 
 const App: React.FC = () => {
@@ -29,7 +30,7 @@ const App: React.FC = () => {
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateCredential, setShowCreateCredential] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [currentView, setCurrentView] = useState<'credentials' | 'statistics' | 'sshAgent' | 'wallets'>('credentials');
+  const [currentView, setCurrentView] = useState<'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'watchtower'>('credentials');
 
   // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
@@ -171,6 +172,16 @@ const App: React.FC = () => {
                   >
                     Wallets
                   </button>
+                  <button
+                    onClick={() => setCurrentView('watchtower')}
+                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                      currentView === 'watchtower'
+                        ? 'bg-white text-gray-900 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Watchtower
+                  </button>
                 </div>
 
                 {/* Action Buttons */}
@@ -197,6 +208,7 @@ const App: React.FC = () => {
           {currentView === 'statistics' && <StatisticsView />}
           {currentView === 'sshAgent' && <SshAgentPanel />}
           {currentView === 'wallets' && <WalletPanel />}
+          {currentView === 'watchtower' && <WatchtowerPanel />}
         </main>
 
         {/* Modals */}

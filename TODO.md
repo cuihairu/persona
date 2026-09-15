@@ -139,7 +139,7 @@ Quality & Security
 - [x] Fuzz tests for parsers (mnemonic/keystore/QR)
 - [x] Supply chain checks (cargo-deny, npm audit)
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
-- [ ] Watchtower: desktop UI panels
+- [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
 - [ ] Reproducible builds
 
