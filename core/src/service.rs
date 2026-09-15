@@ -2267,6 +2267,69 @@ mod tests {
         assert!(service.get_auto_lock_statistics().await.is_ok());
     }
 
+    #[tokio::test]
+    async fn test_auto_lock_timeout_configuration_semantics() {
+        let (_db, mut service) = unlocked_service().await;
+
+        // set_auto_lock_timeout and inactivity_timeout_secs round-trip.
+        service.set_auto_lock_timeout(Duration::from_secs(90));
+        assert_eq!(service.inactivity_timeout_secs(), 90);
+
+        // configure_auto_lock propagates the configured inactivity timeout.
+        service
+            .configure_auto_lock(crate::auth::AutoLockConfig {
+                inactivity_timeout_secs: 120,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(service.inactivity_timeout_secs(), 120);
+
+        // touch_activity keeps the service unlocked inside the window ...
+        service.set_auto_lock_timeout(Duration::from_secs(60));
+        service.touch_activity();
+        assert!(service.is_unlocked());
+
+        // ... and a zero window is expired the moment it is touched.
+        service.set_auto_lock_timeout(Duration::ZERO);
+        service.touch_activity();
+        assert!(!service.is_unlocked());
+    }
+
+    #[tokio::test]
+    async fn test_monitoring_lifecycle_registers_user_and_sessions() {
+        let (_db, service) = unlocked_service().await;
+        let user_id = service.current_user.expect("initialized user");
+
+        // A session registered on the manager is visible through the service.
+        let session = Session::new(user_id.to_string(), Duration::from_secs(600));
+        let session_id = session.id.clone();
+        service
+            .auto_lock_manager
+            .add_session(session)
+            .await
+            .unwrap();
+        *service.current_session_id.write().await = Some(session_id.clone());
+
+        let sessions = service.get_user_sessions().await.unwrap();
+        assert!(sessions.iter().any(|s| s.id == session_id));
+
+        // Starting monitoring with a current user wires it into the manager;
+        // stopping is idempotent and the session stays registered.
+        service.start_auto_lock_monitoring().await.unwrap();
+        service.stop_auto_lock_monitoring().await;
+        service.stop_auto_lock_monitoring().await;
+
+        let stats = service.get_auto_lock_statistics().await.unwrap();
+        assert!(stats.total_sessions >= 1);
+        assert!(service
+            .get_user_sessions()
+            .await
+            .unwrap()
+            .iter()
+            .any(|s| s.id == session_id));
+    }
+
     // ------------------------------------------------------------------
     // Remote auth / biometric providers
     // ------------------------------------------------------------------
