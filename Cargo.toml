@@ -26,6 +26,7 @@ rand = { version = "0.10", features = ["sys_rng", "thread_rng"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
 zeroize = { version = "1.8", features = ["derive"] }
 flate2 = "1.0"
+zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # 密码学 - BIP/加密货币相关
 bip39 = "2.0"

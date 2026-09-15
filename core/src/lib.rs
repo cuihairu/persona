@@ -7,6 +7,7 @@ pub mod auth;
 pub mod breach;
 pub mod crypto;
 pub mod health;
+pub mod import_1pux;
 pub mod logging;
 pub mod models;
 pub mod password;
@@ -18,6 +19,7 @@ pub use auth::*;
 pub use breach::*;
 pub use crypto::*;
 pub use health::*;
+pub use import_1pux::*;
 pub use logging::*;
 
 // Selective re-exports from models to avoid conflicts

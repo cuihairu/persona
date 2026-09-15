@@ -74,6 +74,9 @@ hex.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
 regex.workspace = true
+url.workspace = true
+# 1PUX（1Password 导出）ZIP 容器解析
+zip.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
@@ -85,7 +88,6 @@ async-trait.workspace = true
 # vendored openssl 使 webauthn-rs 在无系统 OpenSSL 头文件的环境可构建（仅测试）
 openssl = { version = "0.10", features = ["vendored"] }
 webauthn-rs.workspace = true
-url.workspace = true
 
 [features]
 default = ["sqlite", "hibp"]
