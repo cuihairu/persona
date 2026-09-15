@@ -4,6 +4,7 @@ import { LockClosedIcon, Cog6ToothIcon, ChartBarIcon } from '@heroicons/react/24
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
 import { useSshApprovals } from '@/hooks/useSshApprovals';
+import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
 import { personaAPI } from '@/utils/api';
 import UnlockScreen from '@/components/UnlockScreen';
 import { IdentitySwitcher, CreateIdentityModal } from '@/components/IdentitySwitcher';
@@ -11,6 +12,7 @@ import CredentialList from '@/components/CredentialList';
 import CreateCredentialModal from '@/components/CreateCredentialModal';
 import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorHandling';
 import SshApprovalModal from '@/components/SshApprovalModal';
+import PasskeyApprovalModal from '@/components/PasskeyApprovalModal';
 import SshAgentPanel from '@/components/SshAgentPanel';
 import WalletPanel from '@/components/WalletPanel';
 import WatchtowerPanel from '@/components/WatchtowerPanel';
@@ -37,6 +39,13 @@ const App: React.FC = () => {
 
   // SSH 签名审批队列：内嵌 agent 请求确认时弹窗（Allow/Deny）
   const { pending: pendingApproval, pendingCount, respond } = useSshApprovals(isUnlocked);
+
+  // Passkey 审批队列：bridge 转来的 create/assert 请求弹窗（Allow/Deny）
+  const {
+    pending: pendingPasskeyApproval,
+    pendingCount: pendingPasskeyCount,
+    respond: respondPasskey,
+  } = usePasskeyApprovals(isUnlocked);
 
   // 解锁后启动后端 auto-lock 监控，锁定后停止
   useEffect(() => {
@@ -232,6 +241,13 @@ const App: React.FC = () => {
           request={pendingApproval}
           pendingCount={pendingCount}
           onRespond={respond}
+        />
+
+        {/* Passkey 审批弹窗（bridge 请求） */}
+        <PasskeyApprovalModal
+          request={pendingPasskeyApproval}
+          pendingCount={pendingPasskeyCount}
+          onRespond={respondPasskey}
         />
 
         {/* Toast Notifications */}

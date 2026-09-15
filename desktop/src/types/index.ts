@@ -29,6 +29,21 @@ export interface SshApprovalRequest {
   timestamp: string;
 }
 
+/** persona://passkey-approval 事件的负载（与 Rust 侧 PasskeyApprovalRequest 对应） */
+export interface PasskeyApprovalRequest {
+  request_id: string;
+  /** bridge wire 的操作名："passkey_create" | "passkey_assert" */
+  operation: string;
+  /** 人工核对的 relying party（assert 时为 null：rp 存在 vault item 上） */
+  rp_id: string | null;
+  /** 发起请求的完整页面 origin */
+  origin: string;
+  /** create 时的账号名 */
+  user_name: string | null;
+  /** assert 时对应 vault item 的 UUID */
+  item_id: string | null;
+}
+
 /** Auto-lock 配置（对应 Rust AutoLockConfigRequest；0 = 禁用） */
 export interface AutoLockConfigRequest {
   inactivity_timeout_secs: number;

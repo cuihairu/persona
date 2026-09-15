@@ -301,6 +301,14 @@ class PersonaAPI {
   async sshApprovalRespond(requestId: string, allow: boolean): Promise<ApiResponse<boolean>> {
     return invoke('ssh_approval_respond', { request: { request_id: requestId, allow } });
   }
+
+  // -------------------------------------------------------------------------
+  // Passkey 审批（bridge 经 Unix socket 转来的 create/assert 请求）
+  // -------------------------------------------------------------------------
+
+  async passkeyApprovalRespond(requestId: string, allow: boolean): Promise<ApiResponse<boolean>> {
+    return invoke('passkey_approval_respond', { request: { request_id: requestId, allow } });
+  }
 }
 
 export const personaAPI = new PersonaAPI();
