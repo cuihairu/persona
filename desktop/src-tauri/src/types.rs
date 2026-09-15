@@ -18,6 +18,10 @@ pub struct AppState {
     /// 待应答的 SSH 签名审批（request_id → oneshot），由
     /// DesktopApprovalHandler 写入、ssh_approval_respond 命令取出
     pub ssh_approvals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// 待应答的 bridge passkey 审批（request_id → oneshot），由
+    /// passkey_bridge 服务端写入、passkey_approval_respond 命令取出
+    pub passkey_approvals:
+        Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
 }
 
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求
@@ -34,6 +38,23 @@ pub struct SshApprovalRequest {
     pub peer: Option<String>,
     /// 触发原因（策略说明）
     pub reason: String,
+}
+
+/// `persona://passkey-approval` 事件负载：一条待审批的 bridge passkey 请求。
+/// 只含 origin/rp/账号等元数据 —— clientDataJSON 永不出 bridge 进程。
+#[derive(Debug, Clone, Serialize)]
+pub struct PasskeyApprovalRequest {
+    pub request_id: String,
+    /// 沿用 bridge wire 的操作名："passkey_create" | "passkey_assert"
+    pub operation: String,
+    /// 人工核对的 relying party（assert 时为 None：rp 存在 vault item 上）
+    pub rp_id: Option<String>,
+    /// 发起请求的完整页面 origin
+    pub origin: String,
+    /// create 时的账号名（assert 时在存储 item 上，桌面无从得知）
+    pub user_name: Option<String>,
+    /// assert 时对应 vault item 的 UUID
+    pub item_id: Option<String>,
 }
 
 /// Response structure for API calls

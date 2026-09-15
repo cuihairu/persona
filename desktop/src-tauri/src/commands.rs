@@ -1008,6 +1008,36 @@ pub async fn ssh_approval_respond(
     }
 }
 
+/// Answer a pending bridge passkey approval (from the approval modal).
+///
+/// Unknown/already-answered ids resolve to deny so double-clicks and
+/// stale modals can never approve anything.
+#[derive(serde::Deserialize)]
+pub struct PasskeyApprovalRespondRequest {
+    pub request_id: String,
+    pub allow: bool,
+}
+
+#[command]
+pub async fn passkey_approval_respond(
+    request: PasskeyApprovalRespondRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let delivered = crate::approval::resolve_from_map(
+        &state.passkey_approvals,
+        &request.request_id,
+        request.allow,
+    );
+    if delivered {
+        Ok(ApiResponse::success(true))
+    } else {
+        Ok(ApiResponse::error(format!(
+            "Unknown or expired approval request: {}",
+            request.request_id
+        )))
+    }
+}
+
 /// List stored SSH key credentials
 #[command]
 pub async fn get_ssh_keys(
@@ -2690,7 +2720,7 @@ pub async fn reauth_verify(
 // SSH agent 状态探测（平台相关 helper，供命令与测试共用）
 // ---------------------------------------------------------------------------
 
-fn agent_state_dir() -> PathBuf {
+pub(crate) fn agent_state_dir() -> PathBuf {
     std::env::var("PERSONA_AGENT_STATE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {

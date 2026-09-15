@@ -4,12 +4,14 @@
 mod approval;
 mod commands;
 mod error;
+mod passkey_bridge;
 #[cfg(test)]
 mod test_support;
 mod types;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use tauri::Manager;
 use tokio::sync::Mutex;
 use types::AppState;
 
@@ -23,6 +25,24 @@ fn main() {
             agent_handle: Mutex::new(None),
             auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
             ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        })
+        .setup(|app| {
+            // Passkey 审批服务端常驻监听：无论保险库是否解锁都运行 ——
+            // 锁定会话直接回 locked，不弹 GUI。
+            let (pending, service) = {
+                let state = app.state::<AppState>();
+                (state.passkey_approvals.clone(), state.service.clone())
+            };
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(err) =
+                    passkey_bridge::run_passkey_approval_server(handle, pending, service).await
+                {
+                    eprintln!("passkey approval server exited: {err}");
+                }
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::init_service,
@@ -49,6 +69,7 @@ fn main() {
             commands::start_ssh_agent,
             commands::stop_ssh_agent,
             commands::ssh_approval_respond,
+            commands::passkey_approval_respond,
             commands::get_ssh_keys,
             commands::wallet_list,
             commands::wallet_list_addresses,
