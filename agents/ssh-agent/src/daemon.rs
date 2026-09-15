@@ -1,19 +1,15 @@
 //! Daemon lifecycle for the Persona SSH Agent.
 //!
-//! This module hosts the process-level code that cannot run inside a test
-//! process:
+//! This module hosts the process-level entry points:
 //! - [`run_agent`]: initializes the global logger, binds the platform socket,
 //!   writes agent state files, loads keys, and loops forever accepting
-//!   connections. The accept loop never returns, so it cannot be exercised by
-//!   a unit test.
+//!   connections. The accept loop never returns on its own; the integration
+//!   test in `tests/daemon_test.rs` drives it through the real socket with
+//!   env-injected paths and keys, then aborts the task.
 //! - [`prompt_confirm_blocking`]: interactive consent prompt attached to
-//!   `/dev/tty` (with a stdin/stdout fallback). It requires a real terminal,
-//!   which does not exist in a test harness.
-//!
-//! Both functions are excluded from coverage measurement by passing this file
-//! to `cargo llvm-cov` via `--ignore-filename-regex` (e.g.
-//! `--ignore-filename-regex 'agents/ssh-agent/src/daemon.rs'`). Everything
-//! testable lives in `lib.rs`, `policy.rs`, and `transport.rs`.
+//!   `/dev/tty` (with a stdin/stdout fallback). It needs a real terminal, so
+//!   only its decision parsing (`tty_confirm_from_bytes` /
+//!   `stdin_confirm_from_line`) is unit-tested here.
 
 use anyhow::{anyhow, Context, Result};
 use persona_core::RedactedLoggerBuilder;
@@ -108,16 +104,59 @@ pub(crate) fn prompt_confirm_blocking(prompt: &str) -> Result<bool> {
         let _ = tty.flush();
         let mut buf = [0u8; 3];
         let n = tty.read(&mut buf).unwrap_or(0);
-        let s = String::from_utf8_lossy(&buf[..n]).to_lowercase();
-        return Ok(s.starts_with('y'));
+        return Ok(tty_confirm_from_bytes(&buf[..n]));
     }
     // Fallback to stdin/stdout
     print!("{}", prompt);
     let _ = std::io::stdout().flush();
     let mut input = String::new();
     if std::io::stdin().read_line(&mut input).is_ok() {
-        let s = input.trim().to_lowercase();
-        return Ok(s == "y" || s == "yes");
+        return Ok(stdin_confirm_from_line(&input));
     }
     Ok(false)
+}
+
+/// Parse a `/dev/tty` confirmation: the first bytes already decide, so "y",
+/// "Y", and "yes" all allow (anything else denies).
+pub(crate) fn tty_confirm_from_bytes(bytes: &[u8]) -> bool {
+    String::from_utf8_lossy(bytes)
+        .to_lowercase()
+        .starts_with('y')
+}
+
+/// Parse a stdin confirmation line: only the exact answers "y"/"yes" (case
+/// and surrounding whitespace insensitive) allow.
+pub(crate) fn stdin_confirm_from_line(line: &str) -> bool {
+    let s = line.trim().to_lowercase();
+    s == "y" || s == "yes"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tty_confirm_accepts_y_prefix_answers() {
+        for input in [&b"y"[..], &b"Y"[..], b"yes", b"ye!", b"Yes?"] {
+            assert!(tty_confirm_from_bytes(input), "{input:?} should allow");
+        }
+    }
+
+    #[test]
+    fn tty_confirm_denies_everything_else() {
+        for input in [&b"n"[..], b"no", b"", &b"\n"[..], b"0xff!?"] {
+            assert!(!tty_confirm_from_bytes(input), "{input:?} should deny");
+        }
+    }
+
+    #[test]
+    fn stdin_confirm_requires_exact_answer() {
+        assert!(stdin_confirm_from_line("y"));
+        assert!(stdin_confirm_from_line("YES"));
+        assert!(stdin_confirm_from_line("  yes\r\n"));
+        assert!(!stdin_confirm_from_line("ye"));
+        assert!(!stdin_confirm_from_line("yes please"));
+        assert!(!stdin_confirm_from_line(""));
+        assert!(!stdin_confirm_from_line("no"));
+    }
 }
