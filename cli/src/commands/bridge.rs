@@ -767,6 +767,27 @@ async fn handle_request(
             let options = parse_creation_options(&parsed.request_json, &parsed.origin)
                 .map_err(flat_persona_error)?;
 
+            // Second consent line: a running desktop must approve before
+            // anything is signed or stored.
+            match desktop_approval_gate(
+                "passkey_create",
+                Some(&options.rp_id),
+                &parsed.origin,
+                options.user_name.as_deref(),
+                None,
+            )
+            .await?
+            {
+                DesktopApproval::Approved => {}
+                DesktopApproval::Denied(reason) => {
+                    warn!(origin = %parsed.origin, %reason, "passkey_create denied by desktop");
+                    return Err(anyhow!(
+                        "passkey_desktop_denied: creation rejected by desktop approval ({reason})"
+                    ));
+                }
+                DesktopApproval::Unavailable => {}
+            }
+
             let (service, active_identity_id) = open_unlocked_service(db_path).await?;
             let identity_id = active_identity_id.ok_or_else(|| {
                 anyhow!("no_active_identity: switch to an identity before creating a passkey")
@@ -818,6 +839,28 @@ async fn handle_request(
                 return Err(anyhow!(
                     "user_gesture_required: passkey assertions require an explicit selection click"
                 ));
+            }
+
+            // Second consent line: a running desktop must approve before
+            // anything is signed. rp_id/user_name live on the stored item;
+            // the desktop dialog shows origin + item id.
+            match desktop_approval_gate(
+                "passkey_assert",
+                None,
+                &parsed.origin,
+                None,
+                Some(&parsed.item_id),
+            )
+            .await?
+            {
+                DesktopApproval::Approved => {}
+                DesktopApproval::Denied(reason) => {
+                    warn!(origin = %parsed.origin, %reason, "passkey_assert denied by desktop");
+                    return Err(anyhow!(
+                        "passkey_desktop_denied: assertion rejected by desktop approval ({reason})"
+                    ));
+                }
+                DesktopApproval::Unavailable => {}
             }
 
             let item_id = uuid::Uuid::parse_str(&parsed.item_id)
@@ -951,6 +994,172 @@ fn gesture_required() -> bool {
     std::env::var("PERSONA_BRIDGE_REQUIRE_GESTURE")
         .map(|v| v != "0" && v.to_lowercase() != "false")
         .unwrap_or(true)
+}
+
+// ---------------------------------------------------------------------------
+// Desktop approval gate (Passkeys P3)
+//
+// A running Persona desktop app exposes a local confirmation socket; before
+// signing or storing anything for a passkey request, the bridge can ask it
+// for an explicit approval — a second consent line behind the extension's
+// own selection/confirmation UI (defense against a compromised extension).
+// ---------------------------------------------------------------------------
+
+/// Overall deadline for one approval round-trip. The desktop side denies on
+/// its own after 120s; this only guards against a hung server.
+const DESKTOP_APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopApprovalMode {
+    /// Consult the desktop when its approval socket exists (default).
+    Auto,
+    /// Always require desktop approval; fail closed when unreachable.
+    Require,
+    /// Never ask the desktop.
+    Off,
+}
+
+fn desktop_approval_mode() -> DesktopApprovalMode {
+    match std::env::var("PERSONA_BRIDGE_DESKTOP_APPROVAL") {
+        Ok(v) if v.eq_ignore_ascii_case("require") => DesktopApprovalMode::Require,
+        Ok(v) if v.eq_ignore_ascii_case("off") || v == "0" || v.eq_ignore_ascii_case("false") => {
+            DesktopApprovalMode::Off
+        }
+        _ => DesktopApprovalMode::Auto,
+    }
+}
+
+/// Approval socket next to the SSH agent state dir (`~/.persona/` by
+/// default); `PERSONA_PASSKEY_APPROVAL_SOCKET` overrides (tests).
+fn desktop_approval_socket_path() -> PathBuf {
+    std::env::var("PERSONA_PASSKEY_APPROVAL_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            let dir = std::env::var("PERSONA_AGENT_STATE_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join(".persona")
+                });
+            dir.join("passkey-approval.sock")
+        })
+}
+
+/// What the desktop answered for one passkey request.
+#[derive(Debug, PartialEq, Eq)]
+enum DesktopApproval {
+    Approved,
+    Denied(String),
+    /// No desktop to ask (socket missing/unreachable, or a platform without
+    /// Unix sockets): the caller falls back to the existing gesture gate.
+    Unavailable,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopApprovalRequest<'a> {
+    v: u8,
+    op: &'a str,
+    rp_id: Option<&'a str>,
+    origin: &'a str,
+    user_name: Option<&'a str>,
+    item_id: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DesktopApprovalResponse {
+    #[serde(default)]
+    approved: bool,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+/// Ask the running desktop app to confirm one passkey request.
+///
+/// `PERSONA_BRIDGE_DESKTOP_APPROVAL` controls the policy: `auto` (default)
+/// consults the desktop when its socket exists and falls back to the plain
+/// gesture gate otherwise; `require` fails the request when the desktop
+/// cannot be reached; `off` skips the gate entirely.
+async fn desktop_approval_gate(
+    op: &str,
+    rp_id: Option<&str>,
+    origin: &str,
+    user_name: Option<&str>,
+    item_id: Option<&str>,
+) -> Result<DesktopApproval> {
+    let mode = desktop_approval_mode();
+    if mode == DesktopApprovalMode::Off {
+        return Ok(DesktopApproval::Unavailable);
+    }
+
+    #[cfg(unix)]
+    {
+        let request = DesktopApprovalRequest {
+            v: 1,
+            op,
+            rp_id,
+            origin,
+            user_name,
+            item_id,
+        };
+        match ask_desktop_approval(&request, &desktop_approval_socket_path()).await {
+            Ok(resp) if resp.approved => Ok(DesktopApproval::Approved),
+            Ok(resp) => Ok(DesktopApproval::Denied(
+                resp.reason.unwrap_or_else(|| "denied".to_string()),
+            )),
+            Err(e) => {
+                warn!(op, error = %e, "desktop approval unavailable");
+                if mode == DesktopApprovalMode::Require {
+                    Err(anyhow!(
+                        "passkey_desktop_approval_required: desktop approval is mandatory but the desktop app is unreachable"
+                    ))
+                } else {
+                    Ok(DesktopApproval::Unavailable)
+                }
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (op, rp_id, origin, user_name, item_id);
+        if mode == DesktopApprovalMode::Require {
+            return Err(anyhow!(
+                "passkey_desktop_approval_required: desktop approval is mandatory but unavailable on this platform"
+            ));
+        }
+        Ok(DesktopApproval::Unavailable)
+    }
+}
+
+/// One request, one connection: send the JSON line, read the answer.
+#[cfg(unix)]
+async fn ask_desktop_approval(
+    request: &DesktopApprovalRequest<'_>,
+    socket_path: &Path,
+) -> Result<DesktopApprovalResponse> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut line = serde_json::to_string(request)?;
+    line.push('\n');
+
+    let io = async {
+        let stream = tokio::net::UnixStream::connect(socket_path).await?;
+        let mut stream = stream;
+        stream.write_all(line.as_bytes()).await?;
+        let mut reader = BufReader::new(stream);
+        let mut answer = String::new();
+        reader.read_line(&mut answer).await?;
+        Ok::<_, std::io::Error>(answer)
+    };
+    let answer = tokio::time::timeout(DESKTOP_APPROVAL_TIMEOUT, io)
+        .await
+        .map_err(|_| anyhow!("desktop approval timed out"))??;
+
+    if answer.trim().is_empty() {
+        return Err(anyhow!("desktop approval closed the connection"));
+    }
+    serde_json::from_str(&answer).with_context(|| format!("invalid approval response: {answer}"))
 }
 
 /// Flatten a `PersonaError` into a wire message that starts with the protocol
@@ -1738,6 +1947,14 @@ pub(crate) mod tests {
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        // Deterministic desktop-approval state: auto mode with no socket, so
+        // every case below exercises the plain gesture-gate behavior.
+        std::env::remove_var("PERSONA_BRIDGE_DESKTOP_APPROVAL");
+        let no_socket = std::env::temp_dir().join(format!(
+            "persona-no-approval-{}-passkey-protocol",
+            std::process::id()
+        ));
+        std::env::set_var("PERSONA_PASSKEY_APPROVAL_SOCKET", &no_socket);
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
 
@@ -2158,9 +2375,182 @@ pub(crate) mod tests {
         assert!(err.to_string().starts_with("locked:"));
         std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
 
+        // ---- passkey_create: require mode with no desktop fails closed ----
+        std::env::set_var("PERSONA_BRIDGE_DESKTOP_APPROVAL", "require");
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": options_json,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(local_client_data_for(
+                        "https://example.com",
+                        "Y3JlYXRlLWNoYWxsZW5nZQ",
+                    )),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("passkey_desktop_approval_required"),
+            "got: {err}"
+        );
+        std::env::remove_var("PERSONA_BRIDGE_DESKTOP_APPROVAL");
+
+        std::env::remove_var("PERSONA_PASSKEY_APPROVAL_SOCKET");
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    // ---- desktop approval gate (Passkeys P3) ----
+
+    /// A fake desktop approval server: accepts one connection, reads the
+    /// request line, replies with the configured verdict, and resolves with
+    /// the received line so tests can pin the wire format. The `TempDir`
+    /// keeps the socket file alive for the duration of the test.
+    async fn spawn_fake_desktop(
+        approved: bool,
+        reason: Option<&'static str>,
+    ) -> (tempfile::TempDir, PathBuf, tokio::task::JoinHandle<String>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("passkey-approval.sock");
+        let listener = tokio::net::UnixListener::bind(&path).unwrap();
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut line = String::new();
+            let mut reader = BufReader::new(stream);
+            reader.read_line(&mut line).await.unwrap();
+            let mut writer = reader.into_inner();
+            let reply = serde_json::json!({ "approved": approved, "reason": reason });
+            let _ = writer.write_all(format!("{reply}\n").as_bytes()).await;
+            line
+        });
+        (dir, path, handle)
+    }
+
+    /// Points the gate at `path` (or nowhere) under the caller's env lock.
+    fn set_gate_env(socket: Option<&Path>, mode: Option<&str>) {
+        match socket {
+            Some(p) => std::env::set_var("PERSONA_PASSKEY_APPROVAL_SOCKET", p),
+            None => std::env::remove_var("PERSONA_PASSKEY_APPROVAL_SOCKET"),
+        }
+        match mode {
+            Some(m) => std::env::set_var("PERSONA_BRIDGE_DESKTOP_APPROVAL", m),
+            None => std::env::remove_var("PERSONA_BRIDGE_DESKTOP_APPROVAL"),
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn desktop_approval_roundtrip_pins_wire_format() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let (_dir, path, server) = spawn_fake_desktop(true, None).await;
+        set_gate_env(Some(&path), None); // auto
+
+        let verdict = desktop_approval_gate(
+            "passkey_assert",
+            None,
+            "https://example.com",
+            None,
+            Some("item-uuid"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(verdict, DesktopApproval::Approved);
+
+        let line = server.await.unwrap();
+        let req: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(req["v"], 1);
+        assert_eq!(req["op"], "passkey_assert");
+        assert_eq!(req["origin"], "https://example.com");
+        assert_eq!(req["item_id"], "item-uuid");
+        // Privacy pin: the approval wire carries request metadata only.
+        assert!(
+            line.trim().len() < 200,
+            "no client data on the wire: {line}"
+        );
+        assert!(!line.contains("client_data"), "no client data: {line}");
+
+        set_gate_env(None, None);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn desktop_approval_denied_and_auto_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Explicit denial from the desktop.
+        let (_dir, path, _server) = spawn_fake_desktop(false, Some("timeout")).await;
+        set_gate_env(Some(&path), None);
+        let verdict =
+            desktop_approval_gate("passkey_assert", None, "https://example.com", None, None)
+                .await
+                .unwrap();
+        assert_eq!(verdict, DesktopApproval::Denied("timeout".to_string()));
+
+        // auto + unreachable socket → fall back to the gesture gate.
+        let nowhere = std::env::temp_dir().join(format!(
+            "persona-no-approval-{}-fallback",
+            std::process::id()
+        ));
+        set_gate_env(Some(&nowhere), None);
+        let verdict =
+            desktop_approval_gate("passkey_assert", None, "https://example.com", None, None)
+                .await
+                .unwrap();
+        assert_eq!(verdict, DesktopApproval::Unavailable);
+
+        set_gate_env(None, None);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn desktop_approval_require_fails_closed_and_off_skips() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // require + no desktop → hard error (fail closed).
+        let nowhere = std::env::temp_dir().join(format!(
+            "persona-no-approval-{}-require",
+            std::process::id()
+        ));
+        set_gate_env(Some(&nowhere), Some("require"));
+        let err = desktop_approval_gate(
+            "passkey_create",
+            Some("example.com"),
+            "https://example.com",
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("passkey_desktop_approval_required"),
+            "got: {err}"
+        );
+
+        // off → never contacts the desktop, even when a socket exists.
+        let (_dir, path, server) = spawn_fake_desktop(true, None).await;
+        set_gate_env(Some(&path), Some("off"));
+        let verdict =
+            desktop_approval_gate("passkey_assert", None, "https://example.com", None, None)
+                .await
+                .unwrap();
+        assert_eq!(verdict, DesktopApproval::Unavailable);
+        tokio::time::timeout(std::time::Duration::from_millis(150), server)
+            .await
+            .expect_err("off mode must not contact the fake desktop");
+
+        set_gate_env(None, None);
     }
 
     #[test]
@@ -2585,15 +2975,23 @@ pub(crate) mod tests {
                 .map(|s| s.success())
                 .unwrap_or(false);
         }
-        ["wl-copy", "xclip", "xsel"].iter().any(|cmd| {
-            Command::new("which")
-                .arg(cmd)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        })
+        // A clipboard binary alone isn't enough on headless machines:
+        // wl-copy needs WAYLAND_DISPLAY, xclip/xsel need DISPLAY. Mirror the
+        // real preconditions so the probe agrees with actual copy success.
+        let has_display = !std::env::var("WAYLAND_DISPLAY")
+            .unwrap_or_default()
+            .is_empty()
+            || !std::env::var("DISPLAY").unwrap_or_default().is_empty();
+        has_display
+            && ["wl-copy", "xclip", "xsel"].iter().any(|cmd| {
+                Command::new("which")
+                    .arg(cmd)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            })
     }
 
     /// Copy outcomes depend on the host having a clipboard utility; assert the
