@@ -482,6 +482,9 @@ async fn scan_health_covers_sshkey_passphrase_and_far_future_expiry() -> Result<
     )
     .await?;
 
+    // API key with no expiry at all: the expiry rule simply does not apply.
+    seed_api_key(&service, identity.id, "No-expiry token", None).await?;
+
     let report = service.scan_health(HealthScanConfig::default()).await?;
 
     let weak_ssh = report
