@@ -133,7 +133,8 @@ Browser & Autofill (future)
   - [x] P3: 确认闸门链路（bridge↔桌面 Unix socket 审批协议 `passkey-approval.sock` +
     `PERSONA_BRIDGE_DESKTOP_APPROVAL` auto/require/off 开关、桌面常驻审批服务端、
     通知式确认 modal（Esc=拒绝）、系统托盘 + 关窗驻留）
-  - [ ] P3: 桌面 passkey 管理页（列表/详情/删除/自检/导出）
+  - [x] P3: 桌面 passkey 管理页（跨身份列表、详情、删除、自检、导出 hex 私钥，
+    敏感操作走 REAUTH_REQUIRED → ReauthModal → 自动重试）
   - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入
 - [x] Phishing protections; identity-based context switching
 
