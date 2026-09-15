@@ -12,6 +12,7 @@ Milestones 0–3 – Foundation (done)
 
 Milestone 4 – 1Password Parity (current focus)
 - [ ] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (review stage; P1 core/CLI done, P2 browser interception done, P3 desktop done — confirmation gate via tray app + passkey management page with list/detail/delete/self-test/export)
+- [x] 1Password migration: 1PUX import — parser + pure import planner in core (`import_1pux`), `persona import-1pux --dry-run` plan preview (per-vault identities, Login/API Credential/SSH Key mapping, TOTP split into dedicated credentials, skip reporting for unmapped categories/archived items/attachments)
 - [x] Watchtower-class health checks: rules engine (weak/reused/expired/stale; core + CLI + desktop command layer, metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach checks via HIBP k-anonymity (offline BreachChecker seam; `persona watchtower --check-breaches` + desktop `health_scan` flag; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)

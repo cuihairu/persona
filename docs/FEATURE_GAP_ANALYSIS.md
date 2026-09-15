@@ -22,7 +22,7 @@ Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona 
 - Apps & Interfaces
   - Desktop app: [≈] full command wiring on Tauri v2 (50+ commands: vault/credential CRUD, TOTP, auto-lock with backend-enforced lock, audit query, passkey seams, reveal + re-auth gating, wallet create/sign confirmations with address-poisoning heuristics, SSH signature approvals via in-app modal + system notification, passkey approval gate for browser bridge requests via Unix socket + approval modal + system tray with close-to-tray, passkey management page: cross-identity list/detail/delete/self-test/private-key export); remaining: biometric unlock, attachments UI, change-history UI, packaged-build acceptance
   - Mobile: [−] placeholder
-  - CLI: [=] full CRUD, TOTP (QR setup + watch), password generator, TUI, export/import (gzip + encryption), non-interactive CI mode, migrations
+  - CLI: [=] full CRUD, TOTP (QR setup + watch), password generator, TUI, export/import (gzip + encryption), 1Password migration (`import-1pux`: per-vault identities, Login/API Credential/SSH Key mapping, TOTP split-out, skip reporting), non-interactive CI mode, migrations
 - Developer
   - SSH Agent: [+] first-class: policy engine (per-key/per-host rules, rate limits, known_hosts, glob allow/deny, biometric gating), E2E tests — exceeds 1Password's agent controls
   - Secrets automation: [−] planned (server optional)

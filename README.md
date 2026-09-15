@@ -138,6 +138,20 @@ persona export --format yaml --compression 9 --encrypt --output backup.yaml
 persona import backup.enc --decrypt --mode merge --backup
 ```
 
+### Migrating from 1Password
+Export an unencrypted `.1pux` file from 1Password (Settings → Export),
+then preview and import it:
+```bash
+persona import-1pux export.1pux --dry-run   # show the plan, touch nothing
+persona import-1pux export.1pux             # confirm, then import
+```
+Each 1Password vault becomes one identity (same-name identities are reused);
+Login items map to password credentials with TOTP secrets split into their own
+credentials, and API Credential / SSH Key items map to their persona
+equivalents. Unsupported categories, archived items, and attachments are
+reported and skipped — nothing is silently dropped or forced into a lossy
+shape.
+
 ### SSH Agent (Developer Enhancements)
 ```bash
 # Generate an SSH key (ed25519) and store it in the vault

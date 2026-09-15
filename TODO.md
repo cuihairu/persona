@@ -135,7 +135,11 @@ Browser & Autofill (future)
     通知式确认 modal（Esc=拒绝）、系统托盘 + 关窗驻留）
   - [x] P3: 桌面 passkey 管理页（跨身份列表、详情、删除、自检、导出 hex 私钥，
     敏感操作走 REAUTH_REQUIRED → ReauthModal → 自动重试）
-  - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入
+  - [x] P4: 1PUX 导入（1Password 迁移）：core 解析器 + import planner（纯函数、
+    桌面可复用）+ `persona import-1pux --dry-run` 预览/确认/落库；vault→identity、
+    Login/API Credential/SSH Key 映射、TOTP 拆独立凭据、未映射类别跳过并报告；
+    真实 .1pux 导出待人工验收
+  - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation
 - [x] Phishing protections; identity-based context switching
 
 Quality & Security
