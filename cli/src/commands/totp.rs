@@ -1069,13 +1069,11 @@ mod tests {
                     "pw entry".to_string(),
                     persona_core::CredentialType::Password,
                     persona_core::SecurityLevel::Medium,
-                    &persona_core::CredentialData::Password(
-                        persona_core::PasswordCredentialData {
-                            password: "hunter2".to_string(),
-                            email: None,
-                            security_questions: vec![],
-                        },
-                    ),
+                    &persona_core::CredentialData::Password(persona_core::PasswordCredentialData {
+                        password: "hunter2".to_string(),
+                        email: None,
+                        security_questions: vec![],
+                    }),
                 )
                 .await
                 .unwrap();

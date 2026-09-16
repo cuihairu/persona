@@ -823,22 +823,34 @@ mod tests {
         let err = perform_removal("carol", false, &config, &ui)
             .await
             .expect_err("wrong password must abort removal");
-        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
 
         let err = create_backup("carol", &config, &ui)
             .await
             .expect_err("wrong password must abort the backup");
-        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
 
         let err = show_removal_summary("carol", &config, &ui)
             .await
             .expect_err("wrong password must abort the summary");
-        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
 
         let err = get_remaining_identities_count(&config, &ui)
             .await
             .expect_err("wrong password must abort the count");
-        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
 
         // Verification reads through the authenticated path: use the real
         // password so the read succeeds and proves nothing was removed.

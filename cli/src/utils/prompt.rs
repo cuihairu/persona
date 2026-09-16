@@ -370,9 +370,7 @@ pub mod scripted {
 
         // A non-selected defaulted-input kind delegates to the inner UI.
         assert_eq!(
-            ui_dyn
-                .input_with_default("name?", "fallback")
-                .unwrap(),
+            ui_dyn.input_with_default("name?", "fallback").unwrap(),
             "typed"
         );
         // Delegated select returns the scripted index.

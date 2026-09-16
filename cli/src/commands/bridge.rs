@@ -2616,7 +2616,8 @@ pub(crate) mod tests {
         set_gate_env(Some(&sock), None);
 
         let get_client_data =
-            r#"{"type":"webauthn.get","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#.to_string()
+            r#"{"type":"webauthn.get","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#
+                .to_string()
                 .into_bytes();
         let err = handle_request(
             &db_path,
@@ -3148,7 +3149,10 @@ pub(crate) mod tests {
 
         std::env::remove_var("WAYLAND_DISPLAY");
         std::env::remove_var("DISPLAY");
-        assert!(!clipboard_available(), "headless machines report no clipboard");
+        assert!(
+            !clipboard_available(),
+            "headless machines report no clipboard"
+        );
 
         std::env::set_var("DISPLAY", ":99");
         // The binary probe decides the verdict; both outcomes are valid.

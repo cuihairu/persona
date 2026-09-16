@@ -524,12 +524,9 @@ mod integration {
         let dir = TempDir::new().unwrap();
         let config = config_for(&dir);
         std::env::set_var("PERSONA_MASTER_PASSWORD", "real-add-pin");
-        execute(
-            args(Some("alice"), None, None, None, true),
-            &config,
-        )
-        .await
-        .expect("first add initializes the workspace");
+        execute(args(Some("alice"), None, None, None, true), &config)
+            .await
+            .expect("first add initializes the workspace");
 
         std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-add-pin");
         let err = execute(args(Some("bob"), None, None, None, true), &config)
