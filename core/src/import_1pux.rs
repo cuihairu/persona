@@ -678,6 +678,7 @@ fn collect_totp_values(item: &Item) -> Vec<String> {
     out
 }
 
+#[derive(Debug)]
 struct TotpParams {
     secret_key: Option<String>,
     issuer: Option<String>,
@@ -1196,6 +1197,244 @@ mod tests {
     fn unexpected_version_parses_with_warning() {
         let bytes = make_1pux(&attributes_json(2), &json!({ "accounts": [] }).to_string());
         assert!(parse_1pux(&bytes).is_ok());
+    }
+
+    #[test]
+    fn unsupported_category_reports_unknown_category_name() {
+        let item = json!({
+            "uuid": "item-x",
+            "categoryUuid": "999",
+            "overview": { "title": "Mystery" },
+            "details": { "sections": [] }
+        });
+        let plan = plan_from_items(json!([item]));
+
+        assert!(plan.credentials.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert_eq!(plan.skipped[0].title, "Mystery");
+        assert_eq!(plan.skipped[0].category, "Unknown category (999)");
+        assert!(plan.skipped[0].reason.contains("not supported"));
+    }
+
+    #[test]
+    fn api_key_number_field_value_is_filtered_to_empty() {
+        // A numeric section value deserializes (untagged Number) but renders
+        // as an empty string, so no key can be extracted and the item is
+        // reported as skipped instead of importing an empty secret.
+        let item = json!({
+            "uuid": "item-n",
+            "categoryUuid": "112",
+            "overview": { "title": "Numeric" },
+            "details": {
+                "sections": [{ "fields": [{ "title": "Credential", "value": 7 }] }]
+            }
+        });
+        let plan = plan_from_items(json!([item]));
+
+        assert!(plan.credentials.is_empty());
+        assert_eq!(plan.skipped.len(), 1);
+        assert!(plan.skipped[0].reason.contains("not found"));
+    }
+
+    #[test]
+    fn api_key_concealed_fallback_skips_credential_id_and_blanks() {
+        let item = json!({
+            "uuid": "item-c",
+            "categoryUuid": "112",
+            "overview": { "title": "Concealed" },
+            "details": {
+                "sections": [{
+                    "fields": [
+                        { "id": "credential", "value": "   " },
+                        { "title": "blank", "value": { "concealed": "   " } },
+                        { "title": "real", "value": { "concealed": "  the-secret  " } }
+                    ]
+                }]
+            }
+        });
+        let plan = plan_from_items(json!([item]));
+
+        let cred = &plan.credentials[0];
+        match &cred.credential_data {
+            CredentialData::ApiKey(a) => assert_eq!(a.api_key, "the-secret"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn login_urls_fall_back_to_overview_url() {
+        let missing = json!({
+            "uuid": "item-u1",
+            "categoryUuid": "001",
+            "overview": { "title": "NoUrls", "url": "https://fallback.example" },
+            "details": { "loginFields": [] }
+        });
+        let blank = json!({
+            "uuid": "item-u2",
+            "categoryUuid": "001",
+            "overview": {
+                "title": "BlankUrls",
+                "url": "https://blank.example",
+                "urls": [
+                    { "label": "spaces", "href": "   " },
+                    { "label": "empty", "href": "" }
+                ]
+            },
+            "details": { "loginFields": [] }
+        });
+        let plan = plan_from_items(json!([missing, blank]));
+
+        assert_eq!(plan.credentials.len(), 2);
+        let by_name = |n: &str| {
+            plan.credentials
+                .iter()
+                .find(|c| c.name == n)
+                .unwrap_or_else(|| panic!("credential {n} missing"))
+        };
+        assert_eq!(
+            by_name("NoUrls").url.as_deref(),
+            Some("https://fallback.example")
+        );
+        assert_eq!(
+            by_name("BlankUrls").url.as_deref(),
+            Some("https://blank.example")
+        );
+        // Neither item produced secondary URLs.
+        assert!(!by_name("NoUrls").metadata.contains_key("alt_urls"));
+    }
+
+    #[test]
+    fn ssh_key_type_inference_from_public_key_prefix() {
+        let mk = |uuid: &str, title: &str, public: &str| {
+            json!({
+                "uuid": uuid,
+                "categoryUuid": "114",
+                "overview": { "title": title },
+                "details": {
+                    "sections": [{
+                        "fields": [
+                            { "id": "private key", "value": "-----BEGIN OPENSSH PRIVATE KEY-----" },
+                            { "id": "public key", "value": public }
+                        ]
+                    }]
+                }
+            })
+        };
+        let plan = plan_from_items(json!([
+            mk(
+                "item-k1",
+                "Prefixed",
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI comment"
+            ),
+            mk("item-k2", "Unprefixed", "not-a-known-key-format")
+        ]));
+
+        assert_eq!(plan.credentials.len(), 2);
+        let key_type_of = |name: &str| match &plan
+            .credentials
+            .iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .credential_data
+        {
+            CredentialData::SshKey(k) => k.key_type.clone(),
+            other => panic!("unexpected credential data: {other:?}"),
+        };
+        assert_eq!(key_type_of("Prefixed"), "ssh-ed25519");
+        assert_eq!(key_type_of("Unprefixed"), "unknown");
+    }
+
+    #[test]
+    fn section_values_match_by_title_when_id_is_missing() {
+        let item = json!({
+            "uuid": "item-t",
+            "categoryUuid": "112",
+            "overview": { "title": "TitleOnly" },
+            "details": {
+                "sections": [{
+                    "fields": [
+                        { "value": "no-label-ignored" },
+                        { "title": "Credential", "value": "tok-by-title" }
+                    ]
+                }]
+            }
+        });
+        let plan = plan_from_items(json!([item]));
+
+        match &plan.credentials[0].credential_data {
+            CredentialData::ApiKey(a) => assert_eq!(a.api_key, "tok-by-title"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn totp_section_field_matched_by_title_with_blank_filtered() {
+        let item = json!({
+            "uuid": "item-otp",
+            "categoryUuid": "001",
+            "overview": { "title": "TitleOtp" },
+            "details": {
+                "loginFields": [
+                    { "id": "password", "type": "P", "designation": "password", "value": "pw" }
+                ],
+                "sections": [{
+                    "fields": [
+                        { "id": "totp", "value": "   " },
+                        { "id": "custom", "title": "One Time Password", "value": "otpauth://totp/TitleOtp?secret=TITLESECRET" }
+                    ]
+                }]
+            }
+        });
+        let plan = plan_from_items(json!([item]));
+
+        // The blank `totp` field is filtered out; only the title-matched URI
+        // yields a credential.
+        assert_eq!(plan.skipped.len(), 0);
+        assert_eq!(plan.credentials.len(), 2);
+        let totp = plan
+            .credentials
+            .iter()
+            .find(|c| c.credential_type == CredentialType::TwoFactor)
+            .expect("TOTP credential");
+        match &totp.credential_data {
+            CredentialData::TwoFactor(t) => assert_eq!(t.secret_key, "TITLESECRET"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_otpauth_uri_validates_scheme_and_type() {
+        // Unparseable input fails at URL parsing.
+        let err = format!("{:#}", parse_otpauth_uri("").unwrap_err());
+        assert!(err.contains("invalid otpauth URI"), "{err}");
+        // A valid URL with the wrong scheme is rejected.
+        let err = format!(
+            "{:#}",
+            parse_otpauth_uri("https://example.com/x?secret=A").unwrap_err()
+        );
+        assert!(err.contains("otpauth"), "{err}");
+        // Counter-based HOTP URIs are not supported.
+        let err = format!(
+            "{:#}",
+            parse_otpauth_uri("otpauth://hotp/x?secret=A").unwrap_err()
+        );
+        assert!(err.contains("totp"), "{err}");
+    }
+
+    #[test]
+    fn parse_otpauth_uri_ignores_unknown_params_and_bad_numbers() {
+        let params = parse_otpauth_uri(
+            "otpauth://totp/Issuer:acct?secret=ABCD&foo=bar&digits=abc&period=45",
+        )
+        .unwrap();
+        assert_eq!(params.secret_key.as_deref(), Some("ABCD"));
+        assert_eq!(params.issuer.as_deref(), Some("Issuer"));
+        assert_eq!(params.account_name.as_deref(), Some("acct"));
+        assert_eq!(
+            params.digits, None,
+            "non-numeric digits fall back to the default"
+        );
+        assert_eq!(params.period, Some(45));
     }
 
     proptest! {
