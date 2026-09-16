@@ -1038,6 +1038,75 @@ mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// `generate_codes` refuses credentials whose decrypted payload is not
+    /// TOTP data even when the row exists.
+    #[tokio::test]
+    async fn generate_codes_rejects_non_totp_credential_data() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let pw_cred_id: uuid::Uuid;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let identity = IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+            // A password credential: type says TwoFactor is required below.
+            let mut cred = service
+                .create_credential(
+                    identity.id,
+                    "pw entry".to_string(),
+                    persona_core::CredentialType::Password,
+                    persona_core::SecurityLevel::Medium,
+                    &persona_core::CredentialData::Password(
+                        persona_core::PasswordCredentialData {
+                            password: "hunter2".to_string(),
+                            email: None,
+                            security_questions: vec![],
+                        },
+                    ),
+                )
+                .await
+                .unwrap();
+            // Mislabel the row as TwoFactor so the type gate passes and the
+            // decrypted payload mismatch is what surfaces.
+            use persona_core::Repository;
+            cred.credential_type = persona_core::CredentialType::TwoFactor;
+            persona_core::storage::CredentialRepository::new(service_db(&config).await)
+                .update(&cred)
+                .await
+                .unwrap();
+            pw_cred_id = cred.id;
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let err = generate_codes(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            pw_cred_id,
+            false,
+        )
+        .await
+        .expect_err("password payload must not be shown as TOTP");
+        assert!(
+            err.to_string().contains("does not contain TOTP data"),
+            "got: {err}"
+        );
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
     #[tokio::test]
     async fn setup_totp_applies_overrides_and_display_name_precedence() {
         let _guard = lock_process_env();

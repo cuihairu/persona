@@ -515,6 +515,40 @@ mod integration {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// Once a master user exists, a wrong `PERSONA_MASTER_PASSWORD` aborts
+    /// in `save_identity` before any identity is written.
+    #[tokio::test]
+    async fn add_with_wrong_master_password_fails_authentication() {
+        let _guard = lock_process_env();
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "real-add-pin");
+        execute(
+            args(Some("alice"), None, None, None, true),
+            &config,
+        )
+        .await
+        .expect("first add initializes the workspace");
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-add-pin");
+        let err = execute(args(Some("bob"), None, None, None, true), &config)
+            .await
+            .expect_err("wrong password must fail");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = persona_core::storage::IdentityRepository::new(db);
+        assert!(repo.find_by_name("bob").await.unwrap().is_none());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
     #[tokio::test]
     async fn add_requires_name_in_non_interactive_mode() {
         let dir = TempDir::new().unwrap();

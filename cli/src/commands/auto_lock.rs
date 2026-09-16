@@ -1089,6 +1089,14 @@ mod tests {
             .await
             .expect("lock without id works");
         handler(
+            AutoLockCommand::Lock {
+                session_id: Some("ghost".to_string()),
+            },
+            &dir,
+        )
+        .await
+        .expect("lock unknown session reports gracefully");
+        handler(
             AutoLockCommand::Unlock {
                 session_id: "ghost".to_string(),
             },

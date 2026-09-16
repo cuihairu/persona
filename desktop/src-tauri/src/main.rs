@@ -169,3 +169,36 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    /// mock_app 的 mock runtime 与测试 tokio reactor 的共存性探针：
+    /// 若 sqlx 在 mock_app 之后挂起，这里会先于所有命令级测试失败，
+    /// 给出明确根因（参见 passkey_bridge.rs 中 FakeSink 的注释）。
+    #[tokio::test]
+    async fn sqlite_works_after_mock_app_creation() {
+        let _app = tauri::test::mock_app();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("smoke.db");
+        let db = persona_core::storage::Database::from_file(db_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        let migrated = tokio::time::timeout(std::time::Duration::from_secs(20), db.migrate())
+            .await
+            .expect("sqlx never completed under mock_app — reactor poisoned");
+        migrated.unwrap();
+
+        // 一条真实查询 + 一条真实写入，确认 reactor 干扰不限于 migrate。
+        use persona_core::storage::Repository;
+        let repo = persona_core::storage::IdentityRepository::new(db);
+        let identity = persona_core::models::Identity::new(
+            "Smoke".to_string(),
+            persona_core::models::IdentityType::Personal,
+        );
+        let created = repo.create(&identity).await.unwrap();
+        let fetched = repo.find_by_id(&created.id).await.unwrap();
+        assert!(fetched.is_some());
+    }
+}

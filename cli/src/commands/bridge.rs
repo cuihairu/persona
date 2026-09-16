@@ -2553,6 +2553,100 @@ pub(crate) mod tests {
         set_gate_env(None, None);
     }
 
+    /// A running desktop that answers "denied" surfaces as the
+    /// `passkey_desktop_denied` error codes from both passkey handlers
+    /// (before anything is signed or stored).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn desktop_denial_reaches_the_passkey_handlers() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        // ---- passkey_create denied by the desktop ----
+        let (desk_dir, sock, server) = spawn_fake_desktop(false, Some("not now")).await;
+        set_gate_env(Some(&sock), None); // auto
+
+        let options_json = serde_json::json!({
+            "rp": { "id": "example.com", "name": "Example" },
+            "user": {
+                "id": URL_SAFE_NO_PAD.encode(b"denied-user-handle"),
+                "name": "alice@example.com",
+                "displayName": "Alice"
+            },
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
+        });
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_create",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "request_json": options_json,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(local_client_data_for(
+                        "https://example.com",
+                        "Y3JlYXRlLWNoYWxsZW5nZQ",
+                    )),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().starts_with("passkey_desktop_denied"),
+            "got: {err}"
+        );
+        assert!(err.to_string().contains("not now"), "got: {err}");
+        let _line = server.await.unwrap();
+        drop(desk_dir);
+
+        // ---- passkey_assert denied by the desktop ----
+        let db = open_db(&db_path).await.unwrap();
+        let repo = persona_core::storage::PasskeyRepository::new(std::sync::Arc::new(db));
+        let stored = repo.find_by_rp_id("example.com").await.unwrap();
+        let item_id = stored[0].id.to_string();
+        drop(repo);
+
+        let (desk_dir, sock, server) = spawn_fake_desktop(false, Some("user refused")).await;
+        set_gate_env(Some(&sock), None);
+
+        let get_client_data =
+            r#"{"type":"webauthn.get","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#.to_string()
+                .into_bytes();
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().starts_with("passkey_desktop_denied"),
+            "got: {err}"
+        );
+        assert!(err.to_string().contains("user refused"), "got: {err}");
+        let _line = server.await.unwrap();
+        drop(desk_dir);
+
+        set_gate_env(None, None);
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
     #[test]
     fn path_resolvers_honor_override_and_environment() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -3043,6 +3137,24 @@ pub(crate) mod tests {
             let err = result.expect_err("copy must fail without a clipboard tool");
             assert!(err.to_string().contains("copy_failed"), "got: {err}");
         }
+    }
+
+    /// The clipboard probe mirrors the real preconditions: without a display
+    /// variable it short-circuits false; with one it consults the clipboard
+    /// binaries. Either way it must terminate without panicking.
+    #[test]
+    fn clipboard_probe_handles_display_and_headless_environments() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        std::env::remove_var("WAYLAND_DISPLAY");
+        std::env::remove_var("DISPLAY");
+        assert!(!clipboard_available(), "headless machines report no clipboard");
+
+        std::env::set_var("DISPLAY", ":99");
+        // The binary probe decides the verdict; both outcomes are valid.
+        let _ = clipboard_available();
+
+        std::env::remove_var("DISPLAY");
     }
 
     /// Build a request with a correctly computed HMAC auth block, mirroring

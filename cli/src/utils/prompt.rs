@@ -361,4 +361,46 @@ pub mod scripted {
         // FailOn bailed before consulting the inner UI, so its queue is intact.
         assert!(empty.exhausted());
     }
+
+    #[test]
+    fn fail_on_delegates_defaulted_select_and_multiselect_kinds() {
+        let inner = ScriptedUi::new().input("typed").select(1);
+        let ui = FailOn::new(&inner, PromptKind::Input);
+        let ui_dyn: &dyn super::PromptUi = &ui;
+
+        // A non-selected defaulted-input kind delegates to the inner UI.
+        assert_eq!(
+            ui_dyn
+                .input_with_default("name?", "fallback")
+                .unwrap(),
+            "typed"
+        );
+        // Delegated select returns the scripted index.
+        assert_eq!(ui_dyn.select("pick", &["a", "b"], None).unwrap(), 1);
+        assert!(inner.exhausted());
+    }
+
+    #[test]
+    fn fail_on_multi_select_fails_only_when_selected() {
+        let inner = ScriptedUi::new().multi_select(&[0, 2]);
+        let ui = FailOn::new(&inner, PromptKind::MultiSelect);
+        let ui_dyn: &dyn super::PromptUi = &ui;
+
+        let err = ui_dyn
+            .multi_select("pick many", &["a", "b", "c"])
+            .expect_err("multi-select must fail");
+        assert!(err.to_string().contains("failing ui: multi-select prompt"));
+        // FailOn bailed before consuming the inner queue.
+        assert!(!inner.exhausted());
+
+        // With a different failing kind the same call delegates.
+        let inner = ScriptedUi::new().multi_select(&[0, 2]);
+        let ui = FailOn::new(&inner, PromptKind::Confirm);
+        let ui_dyn: &dyn super::PromptUi = &ui;
+        assert_eq!(
+            ui_dyn.multi_select("pick many", &["a", "b", "c"]).unwrap(),
+            vec![0, 2]
+        );
+        assert!(inner.exhausted());
+    }
 }

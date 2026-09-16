@@ -405,4 +405,27 @@ mod tests {
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
+
+    /// The public `execute` wrapper resolves the same seeded workspace the
+    /// `execute_with` seam does (it forwards to the terminal UI path).
+    #[tokio::test]
+    async fn execute_runs_the_terminal_ui_path() {
+        let _guard = lock_process_env();
+        let master = "watchtower-execute-pass";
+
+        let dir = TempDir::new().unwrap();
+        let db = Database::from_file(&dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user(master).await.unwrap();
+        drop(service);
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", master);
+        execute(args(None, None, None), &config_for(&dir))
+            .await
+            .expect("execute wrapper must scan the seeded workspace");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

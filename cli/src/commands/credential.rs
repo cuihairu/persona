@@ -894,6 +894,69 @@ mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// Kinds without a dedicated reveal line fall through to the generic
+    /// debug formatter instead of being skipped.
+    #[tokio::test]
+    async fn credential_show_reveal_renders_generic_payload_kinds() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "faye").await;
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let faye = service.get_identity_by_name("faye").await.unwrap().unwrap();
+
+        let totp_id = service
+            .create_credential(
+                faye.id,
+                "login-otp".to_string(),
+                CredentialType::TwoFactor,
+                SecurityLevel::Medium,
+                &CredentialData::TwoFactor(persona_core::TwoFactorData {
+                    secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+                    issuer: "Example".to_string(),
+                    account_name: "faye".to_string(),
+                    algorithm: "SHA1".to_string(),
+                    digits: 6,
+                    period: 30,
+                }),
+            )
+            .await
+            .unwrap()
+            .id;
+        drop(service);
+
+        let ui = ScriptedUi::new().confirm(true);
+        execute_with(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: totp_id,
+                    reveal: true,
+                },
+            },
+            &config,
+            &ui,
+        )
+        .await
+        .expect("two-factor reveal renders via the generic arm");
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
     #[tokio::test]
     async fn credential_add_prompts_for_secret_and_maps_every_type() {
         let _guard = lock_process_env();

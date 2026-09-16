@@ -800,6 +800,58 @@ mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// A wrong master password surfaces as `Authentication failed` from every
+    /// helper that unlocks the service (removal, backup, summary, count)
+    /// without touching the stored identity.
+    #[tokio::test]
+    async fn wrong_master_password_fails_all_unlocking_helpers() {
+        let _guard = lock_process_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-master");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["carol"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("real-master").await.unwrap();
+        }
+        let ui = ScriptedUi::new();
+
+        let err = perform_removal("carol", false, &config, &ui)
+            .await
+            .expect_err("wrong password must abort removal");
+        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+
+        let err = create_backup("carol", &config, &ui)
+            .await
+            .expect_err("wrong password must abort the backup");
+        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+
+        let err = show_removal_summary("carol", &config, &ui)
+            .await
+            .expect_err("wrong password must abort the summary");
+        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+
+        let err = get_remaining_identities_count(&config, &ui)
+            .await
+            .expect_err("wrong password must abort the count");
+        assert!(err.to_string().contains("Authentication failed"), "got: {err}");
+
+        // Verification reads through the authenticated path: use the real
+        // password so the read succeeds and proves nothing was removed.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "real-master");
+        assert!(
+            identity_exists("carol", &config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap()
+        );
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
     #[tokio::test]
     async fn remove_prompt_errors_propagate_to_the_caller() {
         let dir = TempDir::new().unwrap();

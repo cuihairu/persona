@@ -214,4 +214,32 @@ mod tests {
 
         std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
     }
+
+    #[test]
+    fn new_master_password_prefers_env_and_falls_back_to_ui() {
+        let _guard = lock_process_env();
+        use crate::utils::prompt::scripted::ScriptedUi;
+
+        // A non-blank env value wins without consulting the UI.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "env-master-pass");
+        let untouched = ScriptedUi::new();
+        assert_eq!(
+            prompt_new_master_password(&untouched).unwrap(),
+            "env-master-pass"
+        );
+        assert!(untouched.exhausted());
+
+        // No env value (or a blank one) prompts, including confirmation.
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let ui = ScriptedUi::new().password("typed-master");
+        assert_eq!(prompt_new_master_password(&ui).unwrap(), "typed-master");
+        assert!(ui.exhausted());
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "   ");
+        let ui = ScriptedUi::new().password("typed-again");
+        assert_eq!(prompt_new_master_password(&ui).unwrap(), "typed-again");
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

@@ -664,7 +664,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig, ui: &dyn PromptU
 mod tests {
     use super::*;
     use crate::config::CliConfig;
-    use crate::utils::prompt::scripted::ScriptedUi;
+    use crate::utils::prompt::scripted::{FailOn, PromptKind, ScriptedUi};
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -1017,6 +1017,147 @@ mod tests {
         remove_custom_attribute(&mut identity, &ui).unwrap();
         assert!(ui.exhausted());
         assert!(identity.attributes.is_empty());
+    }
+
+    /// The interactive main menu reaches the custom-attributes submenu,
+    /// edits one attribute there, and exits cleanly.
+    #[test]
+    fn edit_interactive_attributes_submenu_edits_and_exits() {
+        let mut identity = sample_identity();
+        identity
+            .attributes
+            .insert("role".to_string(), Value::String("admin".to_string()));
+
+        // main: custom attributes → edit "role" → submenu done → main done.
+        let ui = ScriptedUi::new()
+            .select(5) // main menu: custom attributes
+            .select(1) // submenu: edit existing attribute
+            .select(0) // pick "role"
+            .input("root")
+            .select(3) // submenu: done
+            .select(6); // main menu: done
+        edit_interactive(&mut identity, &ui).unwrap();
+        assert!(ui.exhausted());
+        assert_eq!(
+            identity.attributes.get("role").and_then(|v| v.as_str()),
+            Some("root")
+        );
+    }
+
+    /// Prompt failures inside the attribute helpers propagate (the `?` on
+    /// each scripted prompt) without mutating the identity.
+    #[test]
+    fn attribute_edit_and_remove_propagate_prompt_errors() {
+        let mut identity = sample_identity();
+        identity
+            .attributes
+            .insert("role".to_string(), Value::String("admin".to_string()));
+
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::Select);
+        let err = edit_existing_attribute(&mut identity, &ui).unwrap_err();
+        assert!(err.to_string().contains("failing ui: select prompt"));
+
+        let inner = ScriptedUi::new().select(0);
+        let ui = FailOn::new(&inner, PromptKind::Input);
+        let err = edit_existing_attribute(&mut identity, &ui).unwrap_err();
+        assert!(err.to_string().contains("failing ui: input prompt"));
+
+        let inner = ScriptedUi::new();
+        let ui = FailOn::new(&inner, PromptKind::MultiSelect);
+        let err = remove_custom_attribute(&mut identity, &ui).unwrap_err();
+        assert!(err.to_string().contains("failing ui: multi-select prompt"));
+        assert_eq!(
+            identity.attributes.get("role").and_then(|v| v.as_str()),
+            Some("admin")
+        );
+    }
+
+    /// On a master-password workspace: a wrong password aborts the load, a
+    /// correct one loads and saves through the authenticated service, and
+    /// `save_identity` with no id resolves the row by name.
+    #[tokio::test]
+    async fn edit_auth_paths_cover_password_arms_and_name_lookup() {
+        let _guard = lock_process_env();
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("edit-master").await.unwrap();
+        }
+
+        let args = |description: Option<&str>| EditArgs {
+            name: "alice".to_string(),
+            identity_type: None,
+            description: description.map(str::to_string),
+            email: None,
+            phone: None,
+            interactive: false,
+            field: None,
+            value: None,
+        };
+
+        // Wrong password aborts while loading the identity.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "wrong-edit-pin");
+        let err = execute_with(
+            args(Some("nope")),
+            &config,
+            &ScriptedUi::new().confirm(true),
+        )
+        .await
+        .expect_err("wrong password must abort the edit");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
+
+        // A direct save with the wrong password fails the same way.
+        let mut ghost = sample_identity();
+        ghost.name = "alice".to_string();
+        ghost.id = None;
+        let err = save_identity(&ghost, &config, &crate::utils::prompt::TerminalUi)
+            .await
+            .expect_err("wrong password must abort the save");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
+
+        // The correct password unlocks, edits, and saves by name (no id).
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "edit-master");
+        execute_with(
+            args(Some("via auth")),
+            &config,
+            &ScriptedUi::new().confirm(true),
+        )
+        .await
+        .expect("authenticated edit saves");
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let saved = IdentityRepository::new(db)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved.description.as_deref(), Some("via auth"));
+
+        // A no-id identity saves through the by-name lookup arm.
+        let mut no_id = sample_identity();
+        no_id.id = None;
+        no_id.name = "alice".to_string();
+        no_id.description = "by name".to_string();
+        save_identity(&no_id, &config, &crate::utils::prompt::TerminalUi)
+            .await
+            .expect("save by name through the authenticated service");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
     #[tokio::test]
