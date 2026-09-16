@@ -2917,6 +2917,40 @@ pub(crate) mod tests {
         cred.id
     }
 
+    /// Seed a credential whose row type is Password but whose sealed payload
+    /// is arbitrary `data` — the type gate passes while the fill match takes
+    /// the defensive arms.
+    async fn seed_password_typed_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        url: Option<&str>,
+        data: &CredentialData,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::SecurityLevel;
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                data,
+            )
+            .await
+            .unwrap();
+        cred.url = url.map(|s| s.to_string());
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
     /// Seed an API-key credential (a type the bridge never suggests or fills).
     async fn seed_api_key_credential(
         db_path: &Path,
@@ -3634,6 +3668,158 @@ pub(crate) mod tests {
         );
 
         std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_fill_mismatched_payload_arms_and_totp_gates() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        // A credential whose row type is Password but whose sealed payload is
+        // raw bytes: the type gate passes and the fill match takes the Raw
+        // arm (username only, no password).
+        let raw_id = seed_password_typed_credential(
+            &db_path,
+            identity_id,
+            "Raw payload",
+            Some("https://example.com/raw"),
+            &CredentialData::Raw(vec![1, 2, 3]),
+        )
+        .await;
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com/raw",
+                    "item_id": raw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp.ok,
+            "fill of raw payload must succeed: {:?}",
+            resp.error
+        );
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["password"], serde_json::Value::Null);
+        assert_eq!(payload["username"], serde_json::Value::Null);
+
+        // The catch-all arm: row type Password, sealed payload an API key.
+        let api_id = seed_password_typed_credential(
+            &db_path,
+            identity_id,
+            "Api payload",
+            Some("https://example.com/api"),
+            &CredentialData::ApiKey(persona_core::models::ApiKeyData {
+                api_key: "sk-1".to_string(),
+                api_secret: None,
+                token: None,
+                permissions: Vec::new(),
+                expires_at: None,
+            }),
+        )
+        .await;
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com/api",
+                    "item_id": api_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp.ok,
+            "fill of api payload must succeed: {:?}",
+            resp.error
+        );
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["password"], serde_json::Value::Null);
+
+        // get_totp: gesture gate rejects background requests.
+        let totp_id = seed_totp_credential(
+            &db_path,
+            identity_id,
+            "TOTP entry",
+            Some("https://example.com/totp"),
+        )
+        .await;
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com/totp",
+                    "item_id": totp_id.to_string()
+                }),
+            ),
+        )
+        .await
+        .expect_err("gestureless totp must fail");
+        assert!(
+            err.to_string().starts_with("user_gesture_required"),
+            "got: {err}"
+        );
+
+        // get_totp: origin mismatch with the credential URL.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://evil.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp from a mismatched origin must fail");
+        assert!(err.to_string().starts_with("origin_mismatch"), "got: {err}");
+
+        // get_totp: credential owned by the (now) inactive identity.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com/totp",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("totp for a foreign identity must fail");
+        assert!(err.to_string().starts_with("wrong_identity"), "got: {err}");
+
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

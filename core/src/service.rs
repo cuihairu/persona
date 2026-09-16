@@ -2173,6 +2173,24 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[tokio::test]
+    async fn test_authenticated_user_start_monitoring_registers_current_user() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        assert!(service.is_unlocked());
+        // The full login path goes through authenticate_user; monitoring
+        // started afterwards must propagate the current user into the
+        // auto-lock manager.
+        assert!(matches!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        ));
+        service.start_auto_lock_monitoring().await.unwrap();
+        service.stop_auto_lock_monitoring().await;
+    }
+
+    #[tokio::test]
     async fn test_sensitive_operation_gated_behind_reauth() {
         let (_db, mut service) = unlocked_service().await;
         let identity = service
