@@ -1627,6 +1627,38 @@ mod tests {
     }
 
     #[test]
+    fn test_import_bitcoin_private_key_yields_p2wkh_address() {
+        let identity_id = Uuid::new_v4();
+        let password = "test_password";
+        let private_key = "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b";
+
+        let wallet = import_from_private_key(
+            identity_id,
+            "BTC Single".to_string(),
+            private_key,
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+
+        assert_eq!(wallet.network, BlockchainNetwork::Bitcoin);
+        assert_eq!(wallet.addresses.len(), 1);
+        assert_eq!(
+            wallet.addresses[0].address_type,
+            crate::models::wallet::AddressType::P2WPKH
+        );
+        assert!(
+            wallet.addresses[0].address.starts_with("bc1q"),
+            "bech32 P2WPKH address, got {}",
+            wallet.addresses[0].address
+        );
+
+        // The key round-trips through WIF export (compressed mainnet).
+        let wif = export_to_wif(&wallet, password).unwrap();
+        assert!(wif.starts_with('K') || wif.starts_with('L'));
+    }
+
+    #[test]
     fn export_private_key_fails_for_watch_only_wallet() {
         // Watch-only wallets export no keys at all, so the per-address lookup
         // and the fallback both miss.

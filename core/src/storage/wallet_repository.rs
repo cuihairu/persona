@@ -1316,6 +1316,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_request_by_id_roundtrip_and_missing() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let identity_id = seed_identity(&db).await;
+        let repo = CryptoWalletRepository::new(Arc::new(db.clone()));
+
+        let wallet = make_wallet(identity_id, "By Id Wallet");
+        let created = repo.create(&wallet).await.unwrap();
+
+        let request = TransactionRequest {
+            id: Uuid::new_v4(),
+            wallet_id: created.id,
+            network: BlockchainNetwork::Ethereum,
+            from_address: "0x1111111111111111111111111111111111111111".to_string(),
+            to_address: "0x2222222222222222222222222222222222222222".to_string(),
+            amount: "5".to_string(),
+            fee: "21000".to_string(),
+            gas_price: Some("20".to_string()),
+            gas_limit: Some(21000),
+            nonce: None,
+            memo: None,
+            raw_transaction_data: None,
+            required_signatures: 2,
+            created_at: chrono::Utc::now(),
+            expires_at: None,
+            metadata: std::collections::HashMap::new(),
+        };
+        repo.create_transaction_request(&request).await.unwrap();
+
+        let found = repo.get_request_by_id(&request.id).await.unwrap().unwrap();
+        assert_eq!(found.id, request.id);
+        assert_eq!(found.wallet_id, created.id);
+        assert_eq!(found.network, BlockchainNetwork::Ethereum);
+        assert_eq!(found.to_address, request.to_address);
+        assert_eq!(found.gas_price.as_deref(), Some("20"));
+        assert_eq!(found.gas_limit, Some(21000));
+        assert_eq!(found.nonce, None);
+        assert_eq!(found.required_signatures, 2);
+        assert!(found.memo.is_none());
+        assert!(found.expires_at.is_none());
+
+        // An unknown id maps to None rather than an error.
+        let missing = repo.get_request_by_id(&Uuid::new_v4()).await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
     async fn test_wallet_metadata_roundtrip_and_default_fallback() {
         let db = Database::in_memory().await.unwrap();
         db.migrate().await.unwrap();

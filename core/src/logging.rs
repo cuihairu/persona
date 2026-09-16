@@ -583,4 +583,14 @@ mod tests {
         std::io::Write::flush(&mut writer).unwrap();
         assert!(writer.0.lock().unwrap().is_empty());
     }
+
+    #[test]
+    fn init_redacted_tracing_installs_at_most_once() {
+        // A process accepts exactly one global subscriber. The first call
+        // installs it (or loses a race with a parallel test); a second call
+        // must report the conflict cleanly instead of panicking.
+        let _first = init_redacted_tracing(tracing::Level::INFO);
+        let second = init_redacted_tracing(tracing::Level::INFO);
+        assert!(second.is_err(), "a second global init must fail cleanly");
+    }
 }

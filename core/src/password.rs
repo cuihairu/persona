@@ -413,4 +413,27 @@ mod tests {
                 || SYMBOLS.contains(c)
         }));
     }
+
+    #[test]
+    fn generators_reject_empty_character_sets_directly() {
+        // generate() validates up front, so the duplicated guards inside the
+        // private generators are exercised directly here.
+        let no_sets = PasswordGeneratorOptions {
+            length: 12,
+            include_lowercase: false,
+            include_uppercase: false,
+            include_numbers: false,
+            include_symbols: false,
+            pronounceable: false,
+        };
+        let err = PasswordGenerator::generate_random(&no_sets).unwrap_err();
+        assert!(err.to_string().contains("At least one character set"));
+
+        let mut pronounceable = no_sets;
+        pronounceable.pronounceable = true;
+        let err = PasswordGenerator::generate_pronounceable(&pronounceable).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Pronounceable passwords require at least one letter set"));
+    }
 }

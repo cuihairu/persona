@@ -307,6 +307,39 @@ mod tests {
     }
 
     #[test]
+    fn test_ethereum_address_from_uncompressed_pubkey_validation() {
+        // Too short (64 instead of 65 bytes).
+        let err = generate_ethereum_address_from_uncompressed_pubkey(&[0x04; 64]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Invalid uncompressed secp256k1 pubkey"));
+
+        // Right length but a compressed-marker prefix instead of 0x04.
+        let err = generate_ethereum_address_from_uncompressed_pubkey(&[0x02; 65]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Invalid uncompressed secp256k1 pubkey"));
+
+        // A well-formed 0x04-prefixed key yields a 20-byte 0x address.
+        let mut valid = [0u8; 65];
+        valid[0] = 0x04;
+        let address = generate_ethereum_address_from_uncompressed_pubkey(&valid).unwrap();
+        assert_eq!(address.len(), 42);
+        assert!(address.starts_with("0x"));
+    }
+
+    #[test]
+    fn test_apply_eip55_checksum_vectors() {
+        // Malformed input falls back to the input string unchanged.
+        let malformed = "not-an-address";
+        assert_eq!(apply_eip55_checksum(malformed), malformed);
+
+        // The canonical EIP-55 example address gets its documented casing.
+        let checksummed = apply_eip55_checksum("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed");
+        assert_eq!(checksummed, "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed");
+    }
+
+    #[test]
     fn test_bitcoin_address_generation() {
         let mnemonic = SecureMnemonic::generate(MnemonicWordCount::Words12).unwrap();
         let master = MasterKey::from_mnemonic(&mnemonic, "").unwrap();
