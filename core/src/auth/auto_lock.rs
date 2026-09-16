@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 /// Auto-lock event types for callbacks
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum AutoLockEvent {
     /// Session will be locked soon (warning)
     LockPending {
@@ -28,7 +28,7 @@ pub enum AutoLockEvent {
 }
 
 /// Reasons for auto-locking
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum LockReason {
     /// Inactivity timeout reached
     Inactivity,

@@ -1,12 +1,12 @@
-use super::{
-    auto_lock::{AutoLockEvent, AutoLockManager, LockReason},
-    cached_auto_lock::CachedAutoLockManager,
-    security_strategies::{SecurityContext, SecurityStrategy},
+use super::auto_lock::{AutoLockEvent, LockReason};
+use super::auto_lock_cached::{
+    CachedAutoLockManager, PerformanceMetrics as ManagerPerformanceMetrics,
 };
-use crate::models::auto_lock_policy::{AutoLockPolicy, PolicyStatistics};
+use super::security_strategies::{SecurityContext, SecurityStrategy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -30,7 +30,7 @@ pub struct DashboardMetrics {
     pub locked_sessions: usize,
 
     /// Number of sessions about to be locked (within warning period)
-    expiring_soon: usize,
+    pub expiring_soon: usize,
 
     /// Total users currently active
     pub active_users: usize,
@@ -58,7 +58,7 @@ pub struct DashboardMetrics {
 }
 
 /// System health indicators
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SystemHealth {
     /// Overall health score (0-100)
     pub health_score: u8,
@@ -83,9 +83,10 @@ pub struct SystemHealth {
 }
 
 /// Service status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceStatus {
+    #[default]
     Healthy,
     Warning,
     Critical,
@@ -109,7 +110,7 @@ pub struct HealthAlert {
 }
 
 /// Alert severity levels
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum AlertSeverity {
     Info,
@@ -413,6 +414,29 @@ pub struct TimeRangeFilter {
     pub relative: Option<String>,
 }
 
+/// Project the session manager's raw metrics onto the dashboard's view.
+///
+/// Fields the manager does not track yet (request rate, error rate) are
+/// reported as zero rather than invented.
+fn to_dashboard_performance(
+    raw: &ManagerPerformanceMetrics,
+    cache_hit_ratio: f64,
+) -> PerformanceMetrics {
+    PerformanceMetrics {
+        cache_hit_ratio,
+        avg_response_time_ms: raw.avg_lookup_time_us / 1000.0,
+        requests_per_second: 0.0,
+        error_rate_percent: 0.0,
+        memory_usage_mb: raw.memory_usage_bytes as f64 / 1024.0 / 1024.0,
+        background_task_performance: BackgroundTaskMetrics {
+            tasks_completed: raw.background_checks_performed,
+            tasks_failed: 0,
+            avg_task_duration_ms: raw.background_check_time_us / 1000.0,
+            queue_size: 0,
+        },
+    }
+}
+
 impl AutoLockDashboard {
     /// Create a new auto-lock dashboard
     pub fn new(session_manager: Arc<CachedAutoLockManager>) -> Self {
@@ -426,7 +450,9 @@ impl AutoLockDashboard {
     }
 
     /// Initialize the dashboard
-    pub async fn initialize(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    pub async fn initialize(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         // Initialize default security strategies
         self.initialize_default_strategies().await?;
 
@@ -445,7 +471,10 @@ impl AutoLockDashboard {
         let session_metrics = self.session_manager.get_performance_metrics().await;
         let mut dashboard_metrics = self.dashboard_metrics.read().await.clone();
 
-        dashboard_metrics.performance = session_metrics;
+        dashboard_metrics.performance = to_dashboard_performance(
+            &session_metrics,
+            self.session_manager.cache_hit_ratio().await,
+        );
         dashboard_metrics.active_sessions = session_metrics.active_sessions;
 
         // Update other metrics
@@ -461,10 +490,11 @@ impl AutoLockDashboard {
     }
 
     /// Get dashboard view
+    ///
+    /// The nil UUID requests the default view; persisted custom views are not
+    /// implemented yet, so any other id resolves to `None`.
     pub async fn get_dashboard_view(&self, view_id: &Uuid) -> Option<DashboardView> {
-        // This would typically load from a repository or configuration
-        // For now, return a default view
-        if *view_id == Uuid::new_v4() {
+        if *view_id == Uuid::nil() {
             Some(self.create_default_view())
         } else {
             None
@@ -495,7 +525,8 @@ impl AutoLockDashboard {
 
         // Sort by risk level and priority
         results.sort_by(|(a, _), (b, _)| {
-            b.risk_level.cmp(&a.risk_level)
+            b.risk_level
+                .cmp(&a.risk_level)
                 .then_with(|| b.priority.cmp(&a.priority))
         });
 
@@ -536,9 +567,11 @@ impl AutoLockDashboard {
 
     // Private methods
 
-    async fn initialize_default_strategies(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    async fn initialize_default_strategies(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         use super::security_strategies::{
-            AuthMethod, SecurityAction, SecurityCategory, SecurityCondition, SecurityContext, SecurityStrategy, TimeRule,
+            AuthMethod, SecurityAction, SecurityCategory, SecurityCondition, TimeRule,
         };
 
         // Strategy: After-hours lock
@@ -572,7 +605,9 @@ impl AutoLockDashboard {
         Ok(())
     }
 
-    async fn start_background_monitoring(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    async fn start_background_monitoring(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         // Start session manager background monitoring
         self.session_manager.start_background_monitoring().await?;
 
@@ -582,7 +617,9 @@ impl AutoLockDashboard {
         Ok(())
     }
 
-    async fn register_event_listeners(&self) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
+    async fn register_event_listeners(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         let events = self.active_events.clone();
 
         let listener = std::sync::Arc::new(move |event: AutoLockEvent| {
@@ -604,7 +641,8 @@ impl AutoLockDashboard {
 
                 // Keep only last 1000 events
                 if events.len() > 1000 {
-                    events.drain(0..events.len() - 1000);
+                    let excess = events.len() - 1000;
+                    events.drain(0..excess);
                 }
             });
         });
@@ -626,21 +664,27 @@ impl AutoLockDashboard {
 
     async fn calculate_system_health(&self) -> SystemHealth {
         let performance_metrics = self.session_manager.get_performance_metrics().await;
+        let cache_hit_ratio = self.session_manager.cache_hit_ratio().await;
 
-        let health_score = if performance_metrics.cache_hit_ratio > 0.8
-            && performance_metrics.avg_lookup_time_us < 1000.0 {
-            90
-        } else if performance_metrics.cache_hit_ratio > 0.6 {
-            70
-        } else {
-            50
-        };
+        let health_score =
+            if cache_hit_ratio > 0.8 && performance_metrics.avg_lookup_time_us < 1000.0 {
+                90
+            } else if cache_hit_ratio > 0.6 {
+                70
+            } else {
+                50
+            };
 
         SystemHealth {
             health_score,
             auto_lock_service_status: ServiceStatus::Healthy,
             database_status: ServiceStatus::Healthy,
-            memory_usage_percent: (performance_metrics.memory_usage_bytes as f64 / 1024.0 / 1024.0 / 1024.0 * 100.0).min(100.0),
+            memory_usage_percent: (performance_metrics.memory_usage_bytes as f64
+                / 1024.0
+                / 1024.0
+                / 1024.0
+                * 100.0)
+                .min(100.0),
             cpu_usage_percent: 0.0, // Would need system monitoring
             last_check: chrono::Utc::now(),
             alerts: vec![], // Would be populated based on thresholds
@@ -653,13 +697,12 @@ impl AutoLockDashboard {
     }
 
     fn create_default_view(&self) -> DashboardView {
-        use super::security_strategies::{ChartType, DashboardComponent};
-        use uuid::Uuid;
-
         DashboardView {
             id: Uuid::new_v4(),
             name: "Auto-Lock Overview".to_string(),
-            description: Some("Comprehensive view of auto-lock system status and metrics".to_string()),
+            description: Some(
+                "Comprehensive view of auto-lock system status and metrics".to_string(),
+            ),
             components: vec![
                 DashboardComponent::SessionOverview {
                     active_only: false,
@@ -681,7 +724,7 @@ impl AutoLockDashboard {
                 },
             ],
             layout: LayoutConfiguration {
-                layout_type: super::security_strategies::LayoutType::Grid,
+                layout_type: LayoutType::Grid,
                 grid_size: (2, 2),
                 component_positions: HashMap::new(),
             },
@@ -706,11 +749,12 @@ impl AutoLockDashboard {
             loop {
                 interval.tick().await;
 
-                let performance_metrics = session_manager.get_performance_metrics().await;
+                let raw = session_manager.get_performance_metrics().await;
+                let ratio = session_manager.cache_hit_ratio().await;
                 let mut dashboard_metrics = metrics.write().await;
 
-                dashboard_metrics.performance = performance_metrics;
-                dashboard_metrics.active_sessions = performance_metrics.active_sessions;
+                dashboard_metrics.performance = to_dashboard_performance(&raw, ratio);
+                dashboard_metrics.active_sessions = raw.active_sessions;
             }
         });
     }
@@ -783,7 +827,7 @@ impl AutoLockDashboard {
 }
 
 /// Report types for dashboard
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ReportType {
     Summary,
@@ -859,7 +903,7 @@ mod tests {
     #[tokio::test]
     async fn test_dashboard_creation() {
         let session_manager = Arc::new(CachedAutoLockManager::new(
-            crate::auth::EnhancedAutoLockConfig::default()
+            crate::auth::EnhancedAutoLockConfig::default(),
         ));
 
         let dashboard = AutoLockDashboard::new(session_manager);
@@ -874,7 +918,7 @@ mod tests {
     #[tokio::test]
     async fn test_default_view() {
         let session_manager = Arc::new(CachedAutoLockManager::new(
-            crate::auth::EnhancedAutoLockConfig::default()
+            crate::auth::EnhancedAutoLockConfig::default(),
         ));
 
         let dashboard = AutoLockDashboard::new(session_manager);
@@ -888,7 +932,7 @@ mod tests {
     #[tokio::test]
     async fn test_notification_settings() {
         let session_manager = Arc::new(CachedAutoLockManager::new(
-            crate::auth::EnhancedAutoLockConfig::default()
+            crate::auth::EnhancedAutoLockConfig::default(),
         ));
 
         let dashboard = AutoLockDashboard::new(session_manager);
@@ -911,5 +955,259 @@ mod tests {
         let updated_settings = dashboard.get_notification_settings().await;
         assert!(!updated_settings.desktop_notifications);
         assert!(updated_settings.email_notifications);
+    }
+
+    fn sample_context(location: &str) -> SecurityContext {
+        SecurityContext {
+            user_id: "user123".to_string(),
+            session_id: "session456".to_string(),
+            location: location.to_string(),
+            device_id: "device789".to_string(),
+            network: "Corporate LAN".to_string(),
+            current_time: chrono::Utc::now(),
+            session_duration_secs: 3600,
+            daily_usage_secs: 7200,
+            inactivity_duration_secs: 300,
+            risk_score: 0.2,
+            session_locked: false,
+            session_timeout_extended_by: 0,
+            reauth_required: false,
+            reauth_method: None,
+            notifications: Vec::new(),
+            security_events: Vec::new(),
+            restricted_features: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dashboard_view_lookup() {
+        let session_manager = Arc::new(CachedAutoLockManager::new(
+            crate::auth::EnhancedAutoLockConfig::default(),
+        ));
+        let dashboard = AutoLockDashboard::new(session_manager);
+
+        // The nil UUID resolves to the default view.
+        let view = dashboard
+            .get_dashboard_view(&Uuid::nil())
+            .await
+            .expect("nil UUID must yield the default view");
+        assert_eq!(view.name, "Auto-Lock Overview");
+
+        // Any other id has no persisted view yet.
+        assert!(dashboard
+            .get_dashboard_view(&Uuid::new_v4())
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn test_initialize_registers_strategies_and_all_reports() {
+        let session_manager = Arc::new(CachedAutoLockManager::new(
+            crate::auth::EnhancedAutoLockConfig::default(),
+        ));
+        let dashboard = AutoLockDashboard::new(session_manager);
+
+        dashboard.initialize().await.unwrap();
+
+        // The security report counts the two default strategies.
+        let report = dashboard.generate_report(ReportType::Security).await;
+        assert!(matches!(
+            report.content,
+            ReportContent::Security {
+                active_strategies: 2,
+                ..
+            }
+        ));
+
+        let summary = dashboard.generate_report(ReportType::Summary).await;
+        assert!(matches!(summary.content, ReportContent::Summary { .. }));
+        assert_eq!(summary.report_type, ReportType::Summary);
+
+        let performance = dashboard.generate_report(ReportType::Performance).await;
+        assert!(matches!(
+            performance.content,
+            ReportContent::Performance { .. }
+        ));
+
+        let compliance = dashboard.generate_report(ReportType::Compliance).await;
+        assert!(matches!(
+            compliance.content,
+            ReportContent::Compliance { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_security_strategies_triggers_and_sorts() {
+        use crate::auth::security_strategies::{
+            EventSeverity, RiskLevel, SecurityAction, SecurityCategory, SecurityCondition,
+        };
+
+        let session_manager = Arc::new(CachedAutoLockManager::new(
+            crate::auth::EnhancedAutoLockConfig::default(),
+        ));
+        // No default strategies here: they carry empty condition lists and
+        // would trigger on every context, muddying the assertions.
+        let dashboard = AutoLockDashboard::new(session_manager);
+
+        // A triggering strategy at medium risk that locks the session.
+        let triggering = SecurityStrategy::new(
+            "Office Lock".to_string(),
+            SecurityCategory::LocationBased,
+            RiskLevel::Medium,
+        )
+        .with_condition(SecurityCondition::LocationCondition {
+            location: "Office".to_string(),
+            trusted_locations: vec!["Office".to_string()],
+        })
+        .with_action(SecurityAction::LockSession {
+            reason: "office policy".to_string(),
+            duration_secs: None,
+        })
+        .with_action(SecurityAction::LogEvent {
+            category: "policy".to_string(),
+            details: HashMap::new(),
+            severity: EventSeverity::Low,
+        });
+
+        // A triggering strategy at critical risk (should sort first).
+        let critical = SecurityStrategy::new(
+            "Critical Lock".to_string(),
+            SecurityCategory::LocationBased,
+            RiskLevel::Critical,
+        )
+        .with_condition(SecurityCondition::LocationCondition {
+            location: "Headquarters".to_string(),
+            trusted_locations: vec!["Office".to_string()],
+        });
+
+        // Strategies whose conditions never match for this context: a
+        // location outside its trust list and an untrusted device.
+        let dormant = SecurityStrategy::new(
+            "Dormant".to_string(),
+            SecurityCategory::LocationBased,
+            RiskLevel::Critical,
+        )
+        .with_condition(SecurityCondition::LocationCondition {
+            location: "Vault".to_string(),
+            trusted_locations: vec!["Vault".to_string()],
+        });
+        let untrusted_device = SecurityStrategy::new(
+            "BYOD Lock".to_string(),
+            SecurityCategory::DeviceBased,
+            RiskLevel::Critical,
+        )
+        .with_condition(SecurityCondition::DeviceCondition {
+            device_id: "device789".to_string(),
+            trusted: false,
+            device_type: "laptop".to_string(),
+        });
+
+        dashboard.add_security_strategy(triggering).await;
+        dashboard.add_security_strategy(critical).await;
+        dashboard.add_security_strategy(dormant).await;
+        dashboard.add_security_strategy(untrusted_device).await;
+
+        let mut results = dashboard
+            .evaluate_security_strategies(&sample_context("Office"))
+            .await;
+        assert_eq!(results.len(), 2, "only the two matching strategies fire");
+        assert_eq!(
+            results[0].0.name, "Critical Lock",
+            "critical risk sorts first"
+        );
+        assert_eq!(results[1].0.name, "Office Lock");
+
+        // The office strategy ran both of its actions.
+        let (_, actions) = results.pop().expect("office strategy present");
+        assert_eq!(actions.len(), 2);
+        assert!(actions[0].contains("Session locked"));
+
+        // A context outside every condition triggers nothing.
+        let none = dashboard
+            .evaluate_security_strategies(&sample_context("Cafe"))
+            .await;
+        assert!(none.is_empty(), "no strategy should fire, got {none:?}");
+    }
+
+    #[tokio::test]
+    async fn test_events_recorded_and_acknowledged() {
+        let config = crate::auth::EnhancedAutoLockConfig {
+            base: crate::auth::AutoLockConfig {
+                inactivity_timeout_secs: 3600, // keep the idle arm quiet
+                ..Default::default()
+            },
+            enable_warnings: false,
+            ..Default::default()
+        };
+        let manager = Arc::new(CachedAutoLockManager::new(config));
+        let dashboard = AutoLockDashboard::new(Arc::clone(&manager));
+
+        dashboard.initialize_default_strategies().await.unwrap();
+        dashboard.register_event_listeners().await.unwrap();
+
+        // Fast monitoring loop plus an already-expired session.
+        manager
+            .start_background_monitoring_with_interval(Duration::from_millis(10))
+            .await
+            .unwrap();
+        let session = crate::auth::Session::new("user123".to_string(), Duration::from_secs(0));
+        manager.add_session(session).await.unwrap();
+
+        // The dashboard's log fills with the add-session Activity event
+        // first; keep polling until the background loop's Locked event lands.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let events = loop {
+            let events = dashboard.get_active_events().await;
+            if events
+                .iter()
+                .any(|e| matches!(e.event_type, AutoLockEvent::Locked { .. }))
+            {
+                break events;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lock event was never recorded"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+
+        let record = events
+            .iter()
+            .find(|e| matches!(e.event_type, AutoLockEvent::Locked { .. }))
+            .expect("locked event present");
+        assert!(matches!(record.event_type, AutoLockEvent::Locked { .. }));
+        assert!(!record.acknowledged);
+
+        // Acknowledging works exactly once per id, and unknown ids fail.
+        assert!(dashboard.acknowledge_event(&record.id).await);
+        assert!(!dashboard.acknowledge_event(&Uuid::new_v4()).await);
+
+        manager.stop_background_monitoring().await;
+    }
+
+    #[tokio::test]
+    async fn test_metrics_reflect_session_activity() {
+        let session_manager = Arc::new(CachedAutoLockManager::new(
+            crate::auth::EnhancedAutoLockConfig::default(),
+        ));
+        let dashboard = AutoLockDashboard::new(session_manager.clone());
+
+        let session = crate::auth::Session::new("user123".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        session_manager.add_session(session).await.unwrap();
+
+        // A single valid lookup: one hit, no misses.
+        assert!(session_manager.is_session_valid(&session_id).await);
+
+        let metrics = dashboard.get_metrics().await;
+        assert_eq!(metrics.active_sessions, 1);
+        assert_eq!(metrics.performance.cache_hit_ratio, 1.0);
+        assert!(metrics.performance.memory_usage_mb >= 0.0);
+        // All-hits lookups are fast: the health score takes the top branch.
+        assert_eq!(metrics.system_health.health_score, 90);
+        assert_eq!(
+            metrics.system_health.auto_lock_service_status,
+            ServiceStatus::Healthy
+        );
     }
 }

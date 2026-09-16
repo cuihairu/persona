@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::time::Duration;
 use uuid::Uuid;
 
 /// Advanced security strategies for auto-lock management
@@ -63,7 +62,7 @@ pub enum SecurityCategory {
 }
 
 /// Risk levels for security assessment
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
     Critical = 5,
@@ -74,7 +73,7 @@ pub enum RiskLevel {
 }
 
 /// Configuration for security strategies
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct StrategyConfiguration {
     /// Time-based settings
     pub time_settings: Option<TimeBasedSettings>,
@@ -501,6 +500,19 @@ pub enum AuthMethod {
     Custom(String),
 }
 
+impl std::fmt::Display for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMethod::Password => write!(f, "password"),
+            AuthMethod::Biometric => write!(f, "biometric"),
+            AuthMethod::TwoFactor => write!(f, "two_factor"),
+            AuthMethod::SecurityKey => write!(f, "security_key"),
+            AuthMethod::SmartCard => write!(f, "smart_card"),
+            AuthMethod::Custom(name) => write!(f, "custom:{name}"),
+        }
+    }
+}
+
 /// Notification severity levels
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -522,7 +534,7 @@ pub enum EventSeverity {
 }
 
 /// Strategy metadata
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StrategyMetadata {
     /// Strategy version
     pub version: u32,
@@ -557,11 +569,7 @@ pub struct StrategyMetadata {
 
 impl SecurityStrategy {
     /// Create a new security strategy
-    pub fn new(
-        name: String,
-        category: SecurityCategory,
-        risk_level: RiskLevel,
-    ) -> Self {
+    pub fn new(name: String, category: SecurityCategory, risk_level: RiskLevel) -> Self {
         Self {
             id: Uuid::new_v4(),
             name,
@@ -608,9 +616,9 @@ impl SecurityStrategy {
         }
 
         // Evaluate all conditions (AND logic by default)
-        self.conditions.iter().all(|condition| {
-            self.evaluate_condition(condition, context)
-        })
+        self.conditions
+            .iter()
+            .all(|condition| self.evaluate_condition(condition, context))
     }
 
     /// Evaluate a single condition
@@ -619,31 +627,47 @@ impl SecurityStrategy {
             SecurityCondition::TimeCondition { time_rule } => {
                 self.evaluate_time_rule(time_rule, context)
             }
-            SecurityCondition::LocationCondition { location, trusted_locations } => {
-                trusted_locations.contains(location)
+            SecurityCondition::LocationCondition {
+                trusted_locations, ..
+            } => {
+                // The condition's own `location` field is descriptive only;
+                // triggering depends on the context's current location.
+                trusted_locations.contains(&context.location)
             }
-            SecurityCondition::DeviceCondition { trusted, .. } => {
-                *trusted
+            SecurityCondition::DeviceCondition { trusted, .. } => *trusted,
+            SecurityCondition::BehavioralCondition {
+                risk_score,
+                anomaly_detected,
+                pattern_deviation,
+            } => {
+                // Threshold comes from the strategy's behavioral settings.
+                let threshold = self
+                    .configuration
+                    .behavioral_settings
+                    .as_ref()
+                    .map(|s| s.risk_score_threshold)
+                    .unwrap_or(0.5);
+                *risk_score > threshold || *anomaly_detected || *pattern_deviation > threshold
             }
-            SecurityCondition::BehavioralCondition { risk_score, threshold, .. } => {
-                *risk_score > *threshold
-            }
-            SecurityCondition::NetworkCondition { is_encrypted, .. } => {
-                *is_encrypted
-            }
-            SecurityCondition::CompositeCondition { operator, conditions } => {
-                match operator {
-                    LogicalOperator::And => conditions.iter().all(|c| self.evaluate_condition(c, context)),
-                    LogicalOperator::Or => conditions.iter().any(|c| self.evaluate_condition(c, context)),
-                    LogicalOperator::Not => {
-                        if let Some(first) = conditions.first() {
-                            !self.evaluate_condition(first, context)
-                        } else {
-                            true
-                        }
+            SecurityCondition::NetworkCondition { is_encrypted, .. } => *is_encrypted,
+            SecurityCondition::CompositeCondition {
+                operator,
+                conditions,
+            } => match operator {
+                LogicalOperator::And => conditions
+                    .iter()
+                    .all(|c| self.evaluate_condition(c, context)),
+                LogicalOperator::Or => conditions
+                    .iter()
+                    .any(|c| self.evaluate_condition(c, context)),
+                LogicalOperator::Not => {
+                    if let Some(first) = conditions.first() {
+                        !self.evaluate_condition(first, context)
+                    } else {
+                        true
                     }
                 }
-            }
+            },
             SecurityCondition::CustomCondition { .. } => {
                 // Custom conditions would need external evaluation
                 false
@@ -669,9 +693,7 @@ impl SecurityStrategy {
             TimeRule::SessionDurationExceeds { limit_secs } => {
                 context.session_duration_secs > *limit_secs
             }
-            TimeRule::DailyUsageExceeds { limit_secs } => {
-                context.daily_usage_secs > *limit_secs
-            }
+            TimeRule::DailyUsageExceeds { limit_secs } => context.daily_usage_secs > *limit_secs,
             TimeRule::InactivityExceeds { threshold_secs } => {
                 context.inactivity_duration_secs > *threshold_secs
             }
@@ -697,7 +719,10 @@ impl SecurityStrategy {
                 context.session_locked = true;
                 format!("Session locked: {}", reason)
             }
-            SecurityAction::ExtendTimeout { extension_secs, reason } => {
+            SecurityAction::ExtendTimeout {
+                extension_secs,
+                reason,
+            } => {
                 context.session_timeout_extended_by = *extension_secs;
                 format!("Timeout extended by {}s: {}", extension_secs, reason)
             }
@@ -706,17 +731,36 @@ impl SecurityStrategy {
                 context.reauth_method = Some(method.clone());
                 format!("Re-authentication required ({}): {}", method, message)
             }
-            SecurityAction::Notify { message, severity, .. } => {
-                context.notifications.push((message.clone(), severity.clone()));
+            SecurityAction::Notify {
+                message, severity, ..
+            } => {
+                context
+                    .notifications
+                    .push((message.clone(), severity.clone()));
                 format!("Notification sent: {}", message)
             }
-            SecurityAction::LogEvent { category, details, severity } => {
-                context.security_events.push((category.clone(), details.clone(), severity.clone()));
+            SecurityAction::LogEvent {
+                category,
+                details,
+                severity,
+            } => {
+                context
+                    .security_events
+                    .push((category.clone(), details.clone(), severity.clone()));
                 format!("Security event logged: {}", category)
             }
-            SecurityAction::RestrictFunctionality { restricted_features, reason } => {
-                context.restricted_features.extend(restricted_features.clone());
-                format!("Functionality restricted: {} - {}", reason, restricted_features.join(", "))
+            SecurityAction::RestrictFunctionality {
+                restricted_features,
+                reason,
+            } => {
+                context
+                    .restricted_features
+                    .extend(restricted_features.clone());
+                format!(
+                    "Functionality restricted: {} - {}",
+                    reason,
+                    restricted_features.join(", ")
+                )
             }
             SecurityAction::CustomAction { name, .. } => {
                 format!("Custom action executed: {}", name)
@@ -778,19 +822,6 @@ pub struct SecurityContext {
 
     /// Restricted features
     pub restricted_features: Vec<String>,
-}
-
-impl Default for StrategyConfiguration {
-    fn default() -> Self {
-        Self {
-            time_settings: None,
-            location_settings: None,
-            device_settings: None,
-            behavioral_settings: None,
-            network_settings: None,
-            custom_settings: HashMap::new(),
-        }
-    }
 }
 
 impl Default for StrategyMetadata {
@@ -875,7 +906,7 @@ mod tests {
 
     #[test]
     fn test_security_context() {
-        let mut context = SecurityContext {
+        let context = SecurityContext {
             user_id: "user123".to_string(),
             session_id: "session456".to_string(),
             location: "Office".to_string(),
@@ -899,5 +930,361 @@ mod tests {
         assert_eq!(context.session_duration_secs, 3600);
         assert_eq!(context.risk_score, 0.2);
         assert!(!context.session_locked);
+    }
+
+    fn context_at(location: &str) -> SecurityContext {
+        SecurityContext {
+            user_id: "user123".to_string(),
+            session_id: "session456".to_string(),
+            location: location.to_string(),
+            device_id: "device789".to_string(),
+            network: "Corporate LAN".to_string(),
+            current_time: chrono::Utc::now(),
+            session_duration_secs: 3600,
+            daily_usage_secs: 7200,
+            inactivity_duration_secs: 300,
+            risk_score: 0.2,
+            session_locked: false,
+            session_timeout_extended_by: 0,
+            reauth_required: false,
+            reauth_method: None,
+            notifications: Vec::new(),
+            security_events: Vec::new(),
+            restricted_features: Vec::new(),
+        }
+    }
+
+    fn triggers(condition: SecurityCondition, context: &SecurityContext) -> bool {
+        SecurityStrategy::new(
+            "probe".to_string(),
+            SecurityCategory::Custom,
+            RiskLevel::Low,
+        )
+        .with_condition(condition)
+        .should_trigger(context)
+    }
+
+    #[test]
+    fn test_time_rules_evaluate_against_context() {
+        let context = context_at("Office");
+
+        // Numeric rules compare against the context fields (strict >).
+        assert!(triggers(
+            SecurityCondition::TimeCondition {
+                time_rule: TimeRule::SessionDurationExceeds { limit_secs: 1800 },
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::TimeCondition {
+                time_rule: TimeRule::SessionDurationExceeds { limit_secs: 3600 },
+            },
+            &context,
+        ));
+        assert!(triggers(
+            SecurityCondition::TimeCondition {
+                time_rule: TimeRule::DailyUsageExceeds { limit_secs: 3600 },
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::TimeCondition {
+                time_rule: TimeRule::DailyUsageExceeds { limit_secs: 7200 },
+            },
+            &context,
+        ));
+        assert!(triggers(
+            SecurityCondition::TimeCondition {
+                time_rule: TimeRule::InactivityExceeds {
+                    threshold_secs: 120
+                },
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::TimeCondition {
+                time_rule: TimeRule::InactivityExceeds {
+                    threshold_secs: 300
+                },
+            },
+            &context,
+        ));
+
+        // Calendar rules are placeholders that never fire yet.
+        for rule in [
+            TimeRule::IsRestrictedHours,
+            TimeRule::IsWeekend,
+            TimeRule::IsHoliday,
+        ] {
+            assert!(
+                !triggers(
+                    SecurityCondition::TimeCondition { time_rule: rule },
+                    &context,
+                ),
+                "placeholder rule must not trigger"
+            );
+        }
+    }
+
+    #[test]
+    fn test_behavioral_condition_thresholds() {
+        let context = context_at("Office");
+        let behavioral =
+            |risk: f64, anomaly: bool, deviation: f64| SecurityCondition::BehavioralCondition {
+                risk_score: risk,
+                anomaly_detected: anomaly,
+                pattern_deviation: deviation,
+            };
+
+        // Default threshold is 0.5.
+        assert!(triggers(behavioral(0.6, false, 0.0), &context));
+        assert!(!triggers(behavioral(0.4, false, 0.4), &context));
+        // An anomaly alone trips the condition regardless of score.
+        assert!(triggers(behavioral(0.0, true, 0.0), &context));
+        assert!(triggers(behavioral(0.0, false, 0.7), &context));
+
+        // A configured threshold overrides the default.
+        let mut strategy = SecurityStrategy::new(
+            "Strict Behavior".to_string(),
+            SecurityCategory::Behavioral,
+            RiskLevel::High,
+        )
+        .with_condition(behavioral(0.6, false, 0.0));
+        strategy.configuration.behavioral_settings = Some(BehavioralSettings {
+            anomaly_detection: true,
+            typing_analysis: false,
+            mouse_pattern_analysis: false,
+            access_pattern_analysis: true,
+            risk_score_threshold: 0.9,
+            learning_period_days: 14,
+            baseline_update_frequency_hours: 24,
+        });
+        assert!(!strategy.should_trigger(&context));
+
+        // ...but a detected anomaly still trips it.
+        let mut strategy = strategy.clone();
+        strategy.conditions = vec![behavioral(0.6, true, 0.0)];
+        assert!(strategy.should_trigger(&context));
+    }
+
+    #[test]
+    fn test_device_and_network_conditions() {
+        let context = context_at("Office");
+
+        assert!(triggers(
+            SecurityCondition::DeviceCondition {
+                device_id: "device789".to_string(),
+                trusted: true,
+                device_type: "laptop".to_string(),
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::DeviceCondition {
+                device_id: "device789".to_string(),
+                trusted: false,
+                device_type: "laptop".to_string(),
+            },
+            &context,
+        ));
+
+        assert!(triggers(
+            SecurityCondition::NetworkCondition {
+                network: "Corporate LAN".to_string(),
+                connection_type: "wired".to_string(),
+                is_vpn: false,
+                is_encrypted: true,
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::NetworkCondition {
+                network: "Public WiFi".to_string(),
+                connection_type: "wifi".to_string(),
+                is_vpn: false,
+                is_encrypted: false,
+            },
+            &context,
+        ));
+    }
+
+    #[test]
+    fn test_composite_or_not_and_custom_conditions() {
+        let context = context_at("Office");
+        // Matching depends on the context's location being trusted, so a
+        // condition whose trust list excludes "Office" never fires.
+        let office = SecurityCondition::LocationCondition {
+            location: "Office".to_string(),
+            trusted_locations: vec!["Office".to_string()],
+        };
+        let cafe = SecurityCondition::LocationCondition {
+            location: "Cafe".to_string(),
+            trusted_locations: vec!["Vault".to_string()],
+        };
+
+        // Or: at least one matching sub-condition.
+        assert!(triggers(
+            SecurityCondition::CompositeCondition {
+                operator: LogicalOperator::Or,
+                conditions: vec![cafe.clone(), office.clone()],
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::CompositeCondition {
+                operator: LogicalOperator::Or,
+                conditions: vec![cafe.clone()],
+            },
+            &context,
+        ));
+
+        // Not: negates the first sub-condition only.
+        assert!(triggers(
+            SecurityCondition::CompositeCondition {
+                operator: LogicalOperator::Not,
+                conditions: vec![cafe.clone()],
+            },
+            &context,
+        ));
+        assert!(!triggers(
+            SecurityCondition::CompositeCondition {
+                operator: LogicalOperator::Not,
+                conditions: vec![office.clone()],
+            },
+            &context,
+        ));
+        // Not over an empty list is vacuously true.
+        assert!(triggers(
+            SecurityCondition::CompositeCondition {
+                operator: LogicalOperator::Not,
+                conditions: vec![],
+            },
+            &context,
+        ));
+
+        // Custom conditions need external evaluation and never fire.
+        assert!(!triggers(
+            SecurityCondition::CustomCondition {
+                name: "external".to_string(),
+                parameters: HashMap::new(),
+            },
+            &context,
+        ));
+    }
+
+    #[test]
+    fn test_disabled_strategy_and_priority_builder() {
+        let context = context_at("Office");
+        let always_matching = SecurityCondition::DeviceCondition {
+            device_id: "device789".to_string(),
+            trusted: true,
+            device_type: "laptop".to_string(),
+        };
+
+        let strategy = SecurityStrategy::new(
+            "Disabled".to_string(),
+            SecurityCategory::Custom,
+            RiskLevel::Low,
+        )
+        .with_condition(always_matching)
+        .with_priority(80)
+        .with_enabled(false);
+
+        assert_eq!(strategy.priority, 80);
+        assert!(!strategy.enabled);
+        assert!(
+            !strategy.should_trigger(&context),
+            "disabled never triggers"
+        );
+
+        // Re-enabling lets the same condition fire again.
+        let strategy = strategy.with_enabled(true);
+        assert!(strategy.should_trigger(&context));
+    }
+
+    #[test]
+    fn test_execute_all_action_kinds_mutates_context() {
+        let strategy = SecurityStrategy::new(
+            "Kitchen Sink".to_string(),
+            SecurityCategory::Custom,
+            RiskLevel::Medium,
+        )
+        .with_action(SecurityAction::LockSession {
+            reason: "policy".to_string(),
+            duration_secs: None,
+        })
+        .with_action(SecurityAction::ExtendTimeout {
+            extension_secs: 300,
+            reason: "long task".to_string(),
+        })
+        .with_action(SecurityAction::RequireReauth {
+            method: AuthMethod::TwoFactor,
+            message: "verify".to_string(),
+        })
+        .with_action(SecurityAction::Notify {
+            recipients: vec!["admin".to_string()],
+            message: "suspicious activity".to_string(),
+            severity: NotificationSeverity::Warning,
+        })
+        .with_action(SecurityAction::LogEvent {
+            category: "audit".to_string(),
+            details: HashMap::new(),
+            severity: EventSeverity::Low,
+        })
+        .with_action(SecurityAction::RestrictFunctionality {
+            restricted_features: vec!["export".to_string(), "sharing".to_string()],
+            reason: "least privilege".to_string(),
+        })
+        .with_action(SecurityAction::CustomAction {
+            name: "rotate-keys".to_string(),
+            parameters: HashMap::new(),
+        });
+
+        let mut context = context_at("Office");
+        let results = strategy.execute_actions(&mut context);
+
+        assert_eq!(results.len(), 7);
+        assert_eq!(results[0], "Session locked: policy");
+        assert_eq!(results[1], "Timeout extended by 300s: long task");
+        assert_eq!(
+            results[2],
+            "Re-authentication required (two_factor): verify"
+        );
+        assert_eq!(results[3], "Notification sent: suspicious activity");
+        assert_eq!(results[4], "Security event logged: audit");
+        assert_eq!(
+            results[5],
+            "Functionality restricted: least privilege - export, sharing"
+        );
+        assert_eq!(results[6], "Custom action executed: rotate-keys");
+
+        // Every action left its mark on the context.
+        assert!(context.session_locked);
+        assert_eq!(context.session_timeout_extended_by, 300);
+        assert!(context.reauth_required);
+        assert_eq!(context.reauth_method, Some(AuthMethod::TwoFactor));
+        assert_eq!(context.notifications.len(), 1);
+        assert_eq!(
+            context.notifications[0],
+            (
+                "suspicious activity".to_string(),
+                NotificationSeverity::Warning
+            )
+        );
+        assert_eq!(context.security_events.len(), 1);
+        assert_eq!(context.restricted_features, ["export", "sharing"]);
+    }
+
+    #[test]
+    fn test_auth_method_display() {
+        assert_eq!(AuthMethod::Password.to_string(), "password");
+        assert_eq!(AuthMethod::Biometric.to_string(), "biometric");
+        assert_eq!(AuthMethod::TwoFactor.to_string(), "two_factor");
+        assert_eq!(AuthMethod::SecurityKey.to_string(), "security_key");
+        assert_eq!(AuthMethod::SmartCard.to_string(), "smart_card");
+        assert_eq!(
+            AuthMethod::Custom("yubikey-otp".to_string()).to_string(),
+            "custom:yubikey-otp"
+        );
     }
 }
