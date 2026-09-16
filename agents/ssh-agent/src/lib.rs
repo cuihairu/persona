@@ -1552,4 +1552,225 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         result.unwrap();
         std::env::remove_var("PERSONA_DB_PATH");
     }
+
+    // ------------------------------------------------------------------
+    // Approval fallback / host resolution / locked-vault loading
+    // ------------------------------------------------------------------
+
+    /// Approval handler with a fixed decision that records every prompt.
+    struct RecordingApproval {
+        allow: bool,
+        prompts: StdMutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl approval::ApprovalHandler for RecordingApproval {
+        async fn confirm(&self, request: &approval::ApprovalRequest) -> anyhow::Result<bool> {
+            self.prompts.lock().unwrap().push(request.prompt.clone());
+            Ok(self.allow)
+        }
+    }
+
+    fn biometric_policy_for(key: &AgentKey) -> policy::SigningPolicy {
+        let mut policy = policy::SigningPolicy::default();
+        policy.key_policies.insert(
+            key.credential_id.to_string(),
+            policy::KeyPolicy {
+                require_biometric: true,
+                ..Default::default()
+            },
+        );
+        policy
+    }
+
+    fn agent_with(
+        key: AgentKey,
+        policy: policy::SigningPolicy,
+        approval: Arc<dyn approval::ApprovalHandler>,
+        biometric: Arc<dyn BiometricProvider>,
+    ) -> Agent {
+        Agent {
+            keys: vec![key],
+            policy: Arc::new(Mutex::new(PolicyEnforcer::new(policy))),
+            biometric_provider: biometric,
+            approval_handler: approval,
+        }
+    }
+
+    /// Parse a signature response and return the raw signature bytes.
+    fn extract_signature(pkt: &[u8]) -> Vec<u8> {
+        assert_eq!(pkt[4], 14u8, "signature response");
+        let mut slice: &[u8] = &pkt[5..];
+        let sig_blob = read_ssh_string(&mut slice).unwrap();
+        let mut s: &[u8] = &sig_blob;
+        let algo = read_ssh_string(&mut s).unwrap();
+        assert_eq!(algo, b"ssh-ed25519");
+        read_ssh_string(&mut s).unwrap()
+    }
+
+    #[tokio::test]
+    async fn sign_response_biometric_unavailable_falls_back_to_approval() {
+        let _guard = env_lock();
+        std::env::remove_var("PERSONA_AGENT_TARGET_HOST");
+
+        // Approval allows: the signature still succeeds through the fallback.
+        let (key, verifying) = make_ed25519_key("biometric-fallback");
+        let allow = Arc::new(RecordingApproval {
+            allow: true,
+            prompts: StdMutex::new(Vec::new()),
+        });
+        let agent = agent_with(
+            key.clone(),
+            biometric_policy_for(&key),
+            allow.clone(),
+            stub_biometric(false, StubOutcome::Succeed(true)),
+        );
+        let pkt = agent
+            .sign_response(&sign_payload_for(&key, b"fallback-allow"))
+            .await
+            .unwrap();
+        let sig = extract_signature(&pkt);
+        let sig = ed25519_dalek::Signature::from_slice(&sig).unwrap();
+        verifying.verify_strict(b"fallback-allow", &sig).unwrap();
+        let prompts = allow.prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(prompts[0].contains("Biometric unavailable"));
+
+        // Approval denies: the request is refused without a signature.
+        let deny = Arc::new(RecordingApproval {
+            allow: false,
+            prompts: StdMutex::new(Vec::new()),
+        });
+        let agent = agent_with(
+            key.clone(),
+            biometric_policy_for(&key),
+            deny.clone(),
+            stub_biometric(false, StubOutcome::Succeed(true)),
+        );
+        let pkt = agent
+            .sign_response(&sign_payload_for(&key, b"fallback-deny"))
+            .await
+            .unwrap();
+        assert_eq!(pkt[4], 5u8, "denied fallback must fail");
+        assert_eq!(deny.prompts.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sign_response_require_confirm_without_hostname_prompts_generically() {
+        let _guard = env_lock();
+        for var in [
+            "PERSONA_AGENT_TARGET_HOST",
+            "PERSONA_AGENT_TARGET_HOST_HINT",
+            "PERSONA_AGENT_SSH_DEST",
+            "SSH_CONNECTION",
+            "SSH_CLIENT",
+            "PERSONA_AGENT_SSH_COMMAND",
+            "SSH_ORIGINAL_COMMAND",
+            "GIT_SSH_COMMAND",
+        ] {
+            std::env::remove_var(var);
+        }
+
+        let mut policy = policy::SigningPolicy::default();
+        policy.global.require_confirm = true;
+        let (key, _) = make_ed25519_key("confirm-no-host");
+        let allow = Arc::new(RecordingApproval {
+            allow: true,
+            prompts: StdMutex::new(Vec::new()),
+        });
+        let agent = agent_with(
+            key.clone(),
+            policy,
+            allow.clone(),
+            stub_biometric(true, StubOutcome::Succeed(true)),
+        );
+        let pkt = agent
+            .sign_response(&sign_payload_for(&key, b"no-host"))
+            .await
+            .unwrap();
+        assert_eq!(pkt[4], 14u8);
+        // Without any host hint the prompt is the generic form.
+        let prompts = allow.prompts.lock().unwrap();
+        assert_eq!(prompts[0], "Allow SSH signature? [y/N] ");
+    }
+
+    #[test]
+    fn current_target_host_skips_invalid_tokens_and_blank_hints() {
+        let _guard = env_lock();
+        for var in [
+            "PERSONA_AGENT_TARGET_HOST",
+            "PERSONA_AGENT_TARGET_HOST_HINT",
+            "PERSONA_AGENT_SSH_DEST",
+            "SSH_CONNECTION",
+            "SSH_CLIENT",
+            "PERSONA_AGENT_SSH_COMMAND",
+            "SSH_ORIGINAL_COMMAND",
+            "GIT_SSH_COMMAND",
+        ] {
+            std::env::remove_var(var);
+        }
+
+        // A token that is not a hostname (illegal characters) is skipped and
+        // no fallback host remains.
+        std::env::set_var("GIT_SSH_COMMAND", "ssh user@bad!host.example");
+        assert_eq!(current_target_host(), None);
+        std::env::remove_var("GIT_SSH_COMMAND");
+
+        // Blank hint/dest values are skipped and SSH_CONNECTION wins.
+        std::env::set_var("PERSONA_AGENT_TARGET_HOST_HINT", "   ");
+        std::env::set_var("PERSONA_AGENT_SSH_DEST", "");
+        std::env::set_var("SSH_CONNECTION", "9.9.9.9 1 2");
+        assert_eq!(current_target_host().as_deref(), Some("9.9.9.9"));
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_locked_vault_and_mismatched_type() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        let identity = service
+            .create_identity(
+                "locked-vault".to_string(),
+                persona_core::models::IdentityType::Personal,
+            )
+            .await
+            .unwrap();
+
+        // A vault with users but no PERSONA_MASTER_PASSWORD loads nothing.
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        assert!(agent.keys.is_empty());
+
+        // An unlocked vault with a credential typed SshKey whose payload is
+        // not SSH key material is skipped as well.
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        let mismatched = persona_core::models::CredentialData::Password(
+            persona_core::models::PasswordCredentialData {
+                password: "not-an-ssh-key".to_string(),
+                email: None,
+                security_questions: vec![],
+            },
+        );
+        service
+            .create_credential(
+                identity.id,
+                "mismatched".to_string(),
+                persona_core::models::CredentialType::SshKey,
+                persona_core::models::SecurityLevel::High,
+                &mismatched,
+            )
+            .await
+            .unwrap();
+
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert!(agent.keys.is_empty());
+    }
 }

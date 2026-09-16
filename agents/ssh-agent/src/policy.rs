@@ -1159,4 +1159,133 @@ enabled = false
         assert!(!enforcer.policy.global.deny_all);
         assert!(!enforcer.policy.global.require_confirm);
     }
+
+    #[test]
+    fn test_from_env_reads_env_vars_after_corrupt_policy_file() {
+        let _guard = env_lock();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken-policy.toml");
+        std::fs::write(&path, "this is = not valid toml [[[").unwrap();
+        std::env::set_var("PERSONA_AGENT_POLICY_FILE", &path);
+        std::env::set_var("PERSONA_AGENT_REQUIRE_CONFIRM", "1");
+
+        // The corrupt file is ignored and the env fallback is actually read.
+        let mut enforcer = PolicyEnforcer::from_env();
+        std::env::remove_var("PERSONA_AGENT_POLICY_FILE");
+        std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
+
+        match enforcer.check_signature(&Uuid::new_v4(), None).unwrap() {
+            SignatureDecision::RequireConfirm { .. } => {}
+            other => panic!("expected RequireConfirm, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_host_policy_glob_patterns_match_and_miss() {
+        let mut policy = SigningPolicy::default();
+        policy.host_policies.insert(
+            "*.internal".to_string(),
+            HostPolicy {
+                require_confirm: true,
+                ..Default::default()
+            },
+        );
+        policy.host_policies.insert(
+            "*.github.com".to_string(),
+            HostPolicy {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+
+        // A non-matching pattern is skipped; the matching glob disables.
+        match enforcer
+            .check_signature(&cred_id, Some("api.github.com"))
+            .unwrap()
+        {
+            SignatureDecision::Denied { reason } => {
+                assert!(reason.contains("disabled"), "{reason}")
+            }
+            other => panic!("expected Denied, got {:?}", other),
+        }
+        // The other glob asks for confirmation.
+        match enforcer
+            .check_signature(&cred_id, Some("build.internal"))
+            .unwrap()
+        {
+            SignatureDecision::RequireConfirm { reason } => {
+                assert!(reason.contains("requires confirmation"), "{reason}")
+            }
+            other => panic!("expected RequireConfirm, got {:?}", other),
+        }
+        // No pattern matches: the default policy allows.
+        match enforcer
+            .check_signature(&cred_id, Some("example.org"))
+            .unwrap()
+        {
+            SignatureDecision::Allowed => {}
+            other => panic!("expected Allowed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_is_within_time_range_invalid_formats_allow() {
+        let enforcer = PolicyEnforcer::new(SigningPolicy::default());
+        // Malformed ranges (wrong arity, unparsable times) allow by default.
+        assert!(enforcer.is_within_time_range("09:00"));
+        assert!(enforcer.is_within_time_range(""));
+        assert!(enforcer.is_within_time_range("25:00-99:00"));
+        // An overnight range spanning the whole day (start > end with
+        // now >= start || now <= end) is always satisfied.
+        assert!(enforcer.is_within_time_range("12:00-11:59"));
+    }
+
+    #[test]
+    fn test_usage_state_counters_reset_after_their_windows() {
+        let mut key_state = KeyUsageState {
+            daily_count: 3,
+            last_reset: Instant::now() - Duration::from_secs(86_460),
+            total_count: 9,
+        };
+        key_state.reset_if_needed();
+        assert_eq!(key_state.daily_count, 0);
+        assert_eq!(key_state.total_count, 9);
+
+        // Inside the window the counter is kept.
+        let mut fresh = KeyUsageState {
+            daily_count: 5,
+            last_reset: Instant::now(),
+            total_count: 5,
+        };
+        fresh.reset_if_needed();
+        assert_eq!(fresh.daily_count, 5);
+
+        let mut host_state = HostUsageState {
+            hourly_count: 2,
+            last_reset: Instant::now() - Duration::from_secs(3_660),
+            total_count: 7,
+        };
+        host_state.reset_if_needed();
+        assert_eq!(host_state.hourly_count, 0);
+        assert_eq!(host_state.total_count, 7);
+    }
+
+    #[test]
+    fn test_min_interval_rate_limit_allows_the_first_signature() {
+        let mut policy = SigningPolicy::default();
+        policy.global.min_interval_ms = 60_000;
+        let mut enforcer = PolicyEnforcer::new(policy);
+
+        // A fresh state has no previous signature, so the interval does not
+        // apply and the first request is allowed.
+        match enforcer
+            .check_signature(&Uuid::new_v4(), Some("github.com"))
+            .unwrap()
+        {
+            SignatureDecision::Allowed => {}
+            other => panic!("expected Allowed, got {:?}", other),
+        }
+    }
 }
