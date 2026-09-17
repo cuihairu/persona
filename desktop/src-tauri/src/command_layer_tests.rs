@@ -3570,3 +3570,346 @@ fn query_agent_key_count_fails_on_dead_socket() {
 
     server.join().unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// 第十一批：active_identity DB 失败、默认 db_path、活跃身份清理、
+// 锁定态凭据/审计错误、wallet_generate 类型拒绝、pending 交易与缺 db_path
+// ---------------------------------------------------------------------------
+
+/// 互斥地把 XDG_DATA_HOME 指到临时目录（dirs::data_dir 的 Linux 读法），
+/// 驱动 init_service 的默认 db_path 分支而不触碰真实用户目录。
+struct XdgDataDirGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    prev: Option<std::ffi::OsString>,
+}
+
+impl XdgDataDirGuard {
+    fn sandbox(dir: &tempfile::TempDir) -> Self {
+        static XDG_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        let mutex = XDG_LOCK.get_or_init(|| std::sync::Mutex::new(()));
+        let lock = mutex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var("XDG_DATA_HOME").ok();
+        std::env::set_var("XDG_DATA_HOME", dir.path());
+        XdgDataDirGuard {
+            _lock: lock,
+            prev: prev.map(Into::into),
+        }
+    }
+}
+
+impl Drop for XdgDataDirGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(prev) => std::env::set_var("XDG_DATA_HOME", prev),
+            None => std::env::remove_var("XDG_DATA_HOME"),
+        }
+    }
+}
+
+/// init_service 的 db_path=None 默认分支：落在 XDG 数据目录的 persona/
+/// 子目录下，而非真实用户目录。
+#[tokio::test]
+async fn init_service_default_db_path_uses_xdg_data_dir() {
+    let xdg = tempfile::tempdir().unwrap();
+    let _guard = XdgDataDirGuard::sandbox(&xdg);
+
+    let app = mock_app();
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: None,
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let expected = xdg.path().join("persona").join("persona.db");
+    assert!(
+        expected.exists(),
+        "default db should live at {}, exists: {:?}",
+        expected.display(),
+        std::fs::read_dir(xdg.path()).ok().map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .collect::<Vec<_>>()
+        })
+    );
+}
+
+/// get/set/clear_active_identity 在 db_path 打不开时大声报错
+///（from_file/migrate 错误臂）。
+#[tokio::test]
+async fn active_identity_commands_report_db_failures() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    let state = || app.state::<AppState>();
+
+    // 垃圾文件：connect 打开成功、migrate 才报 not a database。
+    let dir = tempfile::tempdir().unwrap();
+    let junk = dir.path().join("junk.db");
+    std::fs::write(&junk, b"still not a database").unwrap();
+    std::mem::forget(dir);
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = Some(junk.to_string_lossy().to_string());
+    }
+
+    let err = get_active_identity(state()).await.unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+
+    let err = set_active_identity(uuid::Uuid::new_v4().to_string(), state())
+        .await
+        .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+
+    let err = clear_active_identity(state()).await.unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+
+    // 不存在目录：from_file 的 connect 直接失败。
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = Some("/nonexistent-dir-for-persona-tests/x.db".to_string());
+    }
+    let err = get_active_identity(state()).await.unwrap_err();
+    assert!(err.starts_with("Database connection failed"), "got: {err}");
+}
+
+/// 删除当前活跃的 identity 时，workspace 的 active_identity_id 指针被清空。
+#[tokio::test]
+async fn delete_active_identity_clears_workspace_pointer() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let resp = set_active_identity(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = get_active_identity(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(Some(identity_id.clone())));
+
+    let resp = delete_identity(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = get_active_identity(app.state::<AppState>()).await.unwrap();
+    assert_eq!(
+        resp.data,
+        Some(None),
+        "deleting the active identity must clear the pointer"
+    );
+}
+
+/// 锁定态下凭据/身份命令的 service 错误臂（这批臂输出普通错误消息，
+/// 不映射错误码）+ 审计三命令的映射错误码臂。
+#[tokio::test]
+async fn locked_service_credential_error_surface() {
+    let (app, identity_id) = app_with_identity().await;
+    let existing = uuid::Uuid::new_v4().to_string();
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    // update_identity 的 get_identity Err 臂。
+    let resp = update_identity(
+        UpdateIdentityRequest {
+            id: existing.clone(),
+            name: "n".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+            tags: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to get identity"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // toggle_credential_favorite 的 get_credential Err 臂。
+    let resp = toggle_credential_favorite(existing.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to get credential"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // delete_credential 的 delete Err 臂。
+    let resp = delete_credential(existing.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to delete credential"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 审计三命令的 query/statistics/cleanup Err 臂。
+    let resp = audit_query(
+        AuditQueryRequest {
+            user_id: None,
+            identity_id: None,
+            action: None,
+            failures_only: None,
+            security_sensitive_only: None,
+            time_range: None,
+            limit: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = audit_statistics(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = audit_cleanup(30, app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    // 解锁恢复后统计可正常返回（保证上面的失败只来自锁定）。
+    let resp = reauth_verify(
+        ReauthRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = audit_statistics(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    // identity_id 仍在（上述操作都失败回滚）。
+    let resp = get_identities(app.state::<AppState>()).await.unwrap();
+    assert!(resp.data.unwrap().iter().any(|i| i.id == identity_id));
+}
+
+/// wallet_generate 拒绝未支持的 wallet_type。
+#[tokio::test]
+async fn wallet_generate_rejects_unsupported_wallet_type() {
+    let (app, identity_id) = app_with_identity().await;
+    let resp = wallet_generate(
+        identity_id,
+        WalletGenerateRequest {
+            name: "w".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "ledger".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Unsupported wallet_type 'ledger'. Use 'hd'.")
+    );
+}
+
+/// wallet_pending_transactions 列出未签名请求；db_path 缺失时报
+/// "Database path unavailable"（wallet_db 的 None 臂）。
+#[tokio::test]
+async fn wallet_pending_transactions_round_trip_and_missing_db() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let resp = wallet_generate(
+        identity_id,
+        WalletGenerateRequest {
+            name: "Pending Wallet".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let wallet = resp.data.expect("wallet generated");
+
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: wallet.wallet_id.clone(),
+            to_address: "0x2222222222222222222222222222222222222222".to_string(),
+            amount: "1000000000000000000".to_string(),
+            fee: "21000".to_string(),
+            gas_price: Some("20000000000".to_string()),
+            gas_limit: None,
+            nonce: None,
+            memo: None,
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let created = resp.data.expect("pending request created");
+    let request_id = created["id"].as_str().expect("request id").to_string();
+
+    // 列出 pending：包含刚创建的请求。
+    let resp = wallet_pending_transactions(wallet.wallet_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let pending = resp.data.expect("pending list");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["id"].as_str(), Some(request_id.as_str()));
+
+    // db_path 缺失：wallet_db 报 "Database path unavailable"。
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = None;
+    }
+    let err = wallet_pending_transactions(wallet.wallet_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+    let err = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: wallet.wallet_id,
+            to_address: "0x2222222222222222222222222222222222222222".to_string(),
+            amount: "1".to_string(),
+            fee: "21000".to_string(),
+            gas_price: None,
+            gas_limit: None,
+            nonce: None,
+            memo: None,
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+}
