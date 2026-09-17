@@ -764,6 +764,34 @@ async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
     assert!(resp.success, "{:?}", resp.error);
     assert!(resp.data.unwrap(), "self test passes");
 
+    // Assertion lives at the service layer (no desktop command wraps it) and
+    // stamps last_used_at; the next get surfaces it as a timestamp.
+    let assertion_client_data =
+        br#"{"type":"webauthn.get","challenge":"YXNzZXJ0aW9u","origin":"https://example.com"}"#;
+    {
+        let state = app.state::<AppState>();
+        let mut guard = state.service.lock().await;
+        let service = guard.as_mut().expect("service initialized");
+        let assertion = service
+            .passkey_assertion(
+                &uuid::Uuid::parse_str(&passkey_id).unwrap(),
+                "https://example.com",
+                assertion_client_data,
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(!assertion.credential_id.is_empty());
+    }
+    let resp = passkey_get(passkey_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    let found = resp.data.unwrap().expect("passkey found");
+    assert!(
+        found.last_used_at.is_some(),
+        "assertion stamps last_used_at"
+    );
+
     let resp = passkey_export_private_key(passkey_id.clone(), app.state::<AppState>())
         .await
         .unwrap();
@@ -3911,5 +3939,615 @@ async fn wallet_pending_transactions_round_trip_and_missing_db() {
     assert_eq!(
         err,
         "Database path unavailable. Initialize the service first."
+    );
+}
+
+/// 已解锁但 DB 是垃圾文件的 service：sqlx 连接惰性打开，任何 repo 查询才
+/// 报错。init_service 到不了这个状态（migrate 会先失败），所以手工构造
+/// service——用它驱动命令层不可绕过的 repo 错误臂。db_path 也指向同一
+/// 垃圾文件，让自建连接的 workspace/wallet 命令共享同一错误路径。
+async fn app_with_garbage_db_service() -> tauri::App<tauri::test::MockRuntime> {
+    let app = mock_app();
+    let dir = tempfile::tempdir().unwrap();
+    let bad_path = dir.path().join("garbage.db");
+    std::fs::write(&bad_path, "not a sqlite database").unwrap();
+    // Leak the TempDir: the service keeps the file open for the whole test.
+    std::mem::forget(dir);
+    let db = persona_core::Database::from_file(&bad_path).await.unwrap();
+    let mut service = persona_core::PersonaService::new(db).await.unwrap();
+    let salt = service.generate_salt();
+    service.unlock("correct-horse", &salt).unwrap();
+    *app.state::<AppState>().service.lock().await = Some(service);
+    *app.state::<AppState>().db_path.lock().await = Some(bad_path.to_string_lossy().to_string());
+    app
+}
+
+#[tokio::test]
+async fn identity_commands_surface_db_errors_from_garbage_vault() {
+    let app = app_with_garbage_db_service().await;
+    let state = app.state::<AppState>();
+    let bogus = "00000000-0000-0000-0000-000000000000".to_string();
+    let expect_db_err = |msg: &str| {
+        assert!(
+            msg.contains("file is not a database"),
+            "expected sqlite error, got: {msg}"
+        );
+    };
+
+    // list 走精确消息（探针验证过的形态），其余断言前缀 + 底层错误。
+    let resp = get_identities(state.clone()).await.unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Failed to get identities: Database operation failed: error returned from database: (code: 26) file is not a database")
+    );
+
+    let resp = get_identity(bogus.clone(), state.clone()).await.unwrap();
+    expect_db_err(resp.error.as_deref().unwrap_or_default());
+
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "X".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.error.as_deref().map(|m| &m[..17]),
+        Some("Failed to create ")
+    );
+    expect_db_err(resp.error.as_deref().unwrap_or_default());
+
+    let resp = update_identity(
+        UpdateIdentityRequest {
+            id: bogus.clone(),
+            name: "X".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+            tags: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to get identity"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = delete_identity(bogus.clone(), state.clone()).await.unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to delete identity"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = export_identity(bogus.clone(), state.clone()).await.unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to export identity"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = get_statistics(state.clone()).await.unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to get statistics"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = search_credentials("needle".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to search credentials"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // touch 只动内存时间戳，坏库也必须成功。
+    let resp = touch_activity(state).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(true));
+}
+
+#[tokio::test]
+async fn credential_commands_surface_db_errors_from_garbage_vault() {
+    let app = app_with_garbage_db_service().await;
+    let state = app.state::<AppState>();
+    let bogus = "00000000-0000-0000-0000-000000000000".to_string();
+
+    let resp = get_credentials_for_identity(bogus.clone(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to get credentials"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = create_credential(password_credential_request(&bogus), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to create credential"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = toggle_credential_favorite(bogus.clone(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to get credential"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = delete_credential(bogus.clone(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to delete credential"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = get_credential_data(bogus.clone(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to get credential data"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // totp 走 Result<_, String>：错误直接上抛，绕过 ApiResponse。
+    let err = get_totp_code(bogus.clone(), state.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("file is not a database"),
+        "expected sqlite error, got: {err}"
+    );
+
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: bogus.clone(),
+            field: "password".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to reveal secret"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 扫描靠 repo 拉全量凭据，坏库必须给出错误报告（Ok 包错误体）。
+    let resp = health_scan(None, state).await.unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("file is not a database"),
+        "got: {:?}",
+        resp.error
+    );
+}
+
+#[tokio::test]
+async fn audit_commands_surface_db_errors_from_garbage_vault() {
+    let app = app_with_garbage_db_service().await;
+    let state = app.state::<AppState>();
+
+    let resp = audit_query(
+        AuditQueryRequest {
+            user_id: None,
+            identity_id: None,
+            action: None,
+            failures_only: None,
+            security_sensitive_only: None,
+            time_range: None,
+            limit: Some(50),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success, "audit query must fail on a dead db");
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("file is not a database"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = audit_statistics(state.clone()).await.unwrap();
+    assert!(!resp.success, "audit stats must fail on a dead db");
+
+    let resp = audit_cleanup(30, state).await.unwrap();
+    assert!(!resp.success, "audit cleanup must fail on a dead db");
+}
+
+#[tokio::test]
+async fn passkey_commands_surface_db_errors_from_garbage_vault() {
+    use base64::Engine;
+
+    let app = app_with_garbage_db_service().await;
+    let state = app.state::<AppState>();
+    let bogus = "00000000-0000-0000-0000-000000000000".to_string();
+
+    let resp = passkey_list(bogus.clone(), state.clone()).await.unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to list passkeys"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = passkey_list_by_rp("example.com".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Failed to list passkeys"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = passkey_get(bogus.clone(), state.clone()).await.unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("file is not a database"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = passkey_delete(bogus.clone(), state.clone()).await.unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("file is not a database"),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = passkey_self_test(bogus.clone(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success, "self test must fail on a dead db");
+
+    let resp = passkey_export_private_key(bogus.clone(), state.clone())
+        .await
+        .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("Failed to export passkey private key"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 注册请求合法（client_data 可解析），最后一步落到 repo 才报错。
+    let client_data = serde_json::json!({
+        "type": "webauthn.create",
+        "challenge": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"create-challenge"),
+        "origin": "https://example.com",
+    });
+    let resp = passkey_create(
+        CreatePasskeyRequest {
+            identity_id: bogus.clone(),
+            rp_id: "example.com".to_string(),
+            origin: "https://example.com".to_string(),
+            client_data_json_b64: base64::engine::general_purpose::STANDARD
+                .encode(client_data.to_string()),
+            user_handle_b64: Some(
+                base64::engine::general_purpose::STANDARD.encode(b"passkey-user-handle"),
+            ),
+            user_name: Some("alice@example.com".to_string()),
+            user_display_name: Some("Alice".to_string()),
+            user_verification: false,
+        },
+        state,
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("file is not a database"),
+        "got: {:?}",
+        resp.error
+    );
+}
+
+#[tokio::test]
+async fn auto_lock_and_reauth_commands_require_initialized_service() {
+    let app = mock_app();
+    let state = app.state::<AppState>();
+    let expect_uninit = |resp: &ApiResponse<bool>| {
+        assert_eq!(
+            resp.error.as_deref(),
+            Some("Service not initialized"),
+            "got: {:?}",
+            resp.error
+        );
+        assert!(!resp.success);
+    };
+
+    let resp = configure_auto_lock(
+        AutoLockConfigRequest {
+            inactivity_timeout_secs: 900,
+            absolute_timeout_secs: None,
+            require_reauth_sensitive: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    expect_uninit(&resp);
+
+    let resp = start_auto_lock_monitoring(state.clone()).await.unwrap();
+    expect_uninit(&resp);
+
+    let resp = stop_auto_lock_monitoring(state.clone()).await.unwrap();
+    expect_uninit(&resp);
+
+    let resp = reauth_verify(
+        ReauthRequest {
+            master_password: "whatever".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    expect_uninit(&resp);
+
+    let resp = touch_activity(state).await.unwrap();
+    expect_uninit(&resp);
+}
+
+#[tokio::test]
+async fn init_service_reauthenticates_existing_user_and_rejects_wrong_password() {
+    let app = mock_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("same-vault.db");
+    // Leak the TempDir: the vault keeps the file open for the whole test.
+    std::mem::forget(dir);
+    let db_path = db_path.to_string_lossy().to_string();
+
+    // First init creates the user; second init on the same vault takes the
+    // existing-user branch and re-authenticates instead.
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(db_path.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "first init must succeed: {:?}", resp.error);
+
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(db_path.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "re-init must succeed: {:?}", resp.error);
+
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(true));
+
+    // Wrong password on the same vault is rejected.
+    let resp = init_service(
+        InitRequest {
+            master_password: "wrong-password".to_string(),
+            db_path: Some(db_path),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Invalid master password"),
+        "got: {:?}",
+        resp.error
+    );
+}
+
+#[tokio::test]
+async fn missing_and_malformed_ids_take_their_own_error_arms() {
+    let app = mock_app();
+
+    // 未初始化：各命令的 None service 臂。
+    let resp = get_identity(
+        "00000000-0000-0000-0000-000000000000".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "X".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = create_credential(
+        password_credential_request("00000000-0000-0000-0000-000000000000"),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = toggle_credential_favorite(
+        "00000000-0000-0000-0000-000000000000".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    // 初始化后：合法 UUID 但不存在的资源。
+    let (app, _identity_id) = app_with_identity().await;
+    let bogus = "00000000-0000-0000-0000-000000000000".to_string();
+
+    // get 对缺失 id 返回 Ok(None)（success=true，无 error）。
+    let resp = get_identity(bogus.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success);
+    assert!(
+        matches!(resp.data, Some(None)),
+        "missing identity returns Ok(None)"
+    );
+
+    // update 先查再改：缺失 id 在查询步就被拒。
+    let resp = update_identity(
+        UpdateIdentityRequest {
+            id: bogus.clone(),
+            name: "X".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+            tags: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Identity not found"));
+
+    let resp = create_credential(
+        password_credential_request("not-a-uuid"),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
+
+    let resp = toggle_credential_favorite(bogus.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Credential not found"));
+
+    let resp = delete_credential(bogus.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.data, Some(false), "delete of missing id is a no-op");
+
+    // 非法 UUID 先于 repo 到达自己的错误臂。
+    let resp = delete_credential("not-a-uuid".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+}
+
+#[tokio::test]
+async fn reauth_verify_surfaces_db_errors_from_garbage_vault() {
+    let app = app_with_garbage_db_service().await;
+
+    // 坏库下 authenticate_user 查不到用户表 → Err → map_persona_error 分流。
+    let resp = reauth_verify(
+        ReauthRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.is_some() || resp.error_code.is_some(),
+        "got: {:?}",
+        resp
+    );
+}
+
+#[tokio::test]
+async fn get_active_identity_without_db_path_degrades_loudly() {
+    let app = mock_app();
+
+    let resp = get_active_identity(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
     );
 }
