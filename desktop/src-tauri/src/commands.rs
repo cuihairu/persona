@@ -2611,7 +2611,10 @@ pub async fn export_identity(
 /// Pure function so the full field×type matrix is unit-testable.
 /// Returns `Err` on invalid field names and on field/type mismatches
 /// (e.g. requesting "ssh_private_key" from a Password credential).
-fn extract_secret_field(data: &CredentialData, field: &str) -> std::result::Result<String, String> {
+pub(crate) fn extract_secret_field(
+    data: &CredentialData,
+    field: &str,
+) -> std::result::Result<String, String> {
     match (data, field) {
         (CredentialData::Password(p), "password") => Ok(p.password.clone()),
         (CredentialData::Password(p), "security_questions") => serde_json::to_string(
@@ -2779,7 +2782,7 @@ fn read_agent_status(running_hint: bool) -> SshAgentStatus {
 }
 
 #[cfg(unix)]
-fn query_agent_key_count(sock_path: &str) -> std::result::Result<usize, String> {
+pub(crate) fn query_agent_key_count(sock_path: &str) -> std::result::Result<usize, String> {
     use byteorder::{BigEndian, ByteOrder};
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;

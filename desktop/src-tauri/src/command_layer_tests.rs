@@ -788,15 +788,27 @@ async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
 // ---------------------------------------------------------------------------
 
 /// 沙箱 agent 状态目录：`PERSONA_AGENT_STATE_DIR` 指向 tempdir，drop 恢复。
+///
+/// env 是进程全局的：并行测试各自 sandbox 会互相改道（socket 落错目录、
+/// 状态断言失败），所以持一把进程级锁——同一时刻只有一个测试在改 env。
 struct StateDirGuard {
+    // 先声明先构造、最后 drop：env 先恢复，锁才释放。
+    _lock: std::sync::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
 }
 
 impl StateDirGuard {
     fn sandbox(dir: &tempfile::TempDir) -> Self {
+        static STATE_DIR_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+            std::sync::OnceLock::new();
+        let mutex = STATE_DIR_LOCK.get_or_init(|| std::sync::Mutex::new(()));
+        let lock = mutex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
         std::env::set_var("PERSONA_AGENT_STATE_DIR", dir.path());
         StateDirGuard {
+            _lock: lock,
             prev: prev.map(Into::into),
         }
     }
@@ -2050,4 +2062,504 @@ async fn audit_query_filters_and_workspace_repath() {
     .await
     .unwrap();
     assert!(resp.success, "repath init failed: {:?}", resp.error);
+}
+
+// ---------------------------------------------------------------------------
+// 第六批：reveal 类型矩阵 / 导出与审计门禁 / reauth 余量分支
+// ---------------------------------------------------------------------------
+
+/// `extract_secret_field` 的字段×类型全矩阵（纯函数，无需服务）。
+#[test]
+fn extract_secret_field_type_matrix() {
+    use persona_core::models::credential::{
+        ApiKeyData, CredentialData, CryptoWalletData, PasswordCredentialData, SecurityQuestion,
+        SshKeyData,
+    };
+
+    // Password：明文密码 + 安全问题 JSON 序列化；跨类型字段拒绝。
+    let password = CredentialData::Password(PasswordCredentialData {
+        password: "pw-1".to_string(),
+        email: None,
+        security_questions: vec![SecurityQuestion {
+            question: "pet?".to_string(),
+            answer: "cat".to_string(),
+        }],
+    });
+    assert_eq!(extract_secret_field(&password, "password").unwrap(), "pw-1");
+    let questions = extract_secret_field(&password, "security_questions").unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&questions).unwrap();
+    assert_eq!(parsed[0]["question"], "pet?");
+    assert_eq!(parsed[0]["answer"], "cat");
+    assert!(extract_secret_field(&password, "ssh_private_key").is_err());
+
+    // CryptoWallet：私钥/助记词可选，缺失时给出可读错误。
+    let wallet = |mnemonic: Option<&str>, key: Option<&str>| {
+        CredentialData::CryptoWallet(CryptoWalletData {
+            wallet_type: "hd".to_string(),
+            mnemonic_phrase: mnemonic.map(str::to_string),
+            private_key: key.map(str::to_string),
+            public_key: "pub".to_string(),
+            address: "addr".to_string(),
+            network: "Ethereum".to_string(),
+        })
+    };
+    assert_eq!(
+        extract_secret_field(&wallet(Some("m words"), Some("0xk")), "wallet_private_key").unwrap(),
+        "0xk"
+    );
+    assert_eq!(
+        extract_secret_field(&wallet(Some("m words"), None), "wallet_mnemonic").unwrap(),
+        "m words"
+    );
+    assert_eq!(
+        extract_secret_field(&wallet(None, None), "wallet_private_key").unwrap_err(),
+        "This wallet has no stored private key"
+    );
+    assert_eq!(
+        extract_secret_field(&wallet(None, None), "wallet_mnemonic").unwrap_err(),
+        "This wallet has no stored mnemonic phrase"
+    );
+    assert!(extract_secret_field(&wallet(None, None), "api_key").is_err());
+
+    // SshKey：私钥必有；口令可选。
+    let ssh = |passphrase: Option<&str>| {
+        CredentialData::SshKey(SshKeyData {
+            private_key: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+            public_key: "ssh-ed25519 AAA".to_string(),
+            key_type: "ed25519".to_string(),
+            passphrase: passphrase.map(str::to_string),
+        })
+    };
+    assert!(extract_secret_field(&ssh(None), "ssh_private_key")
+        .unwrap()
+        .starts_with("-----BEGIN"));
+    assert_eq!(
+        extract_secret_field(&ssh(Some("pp")), "ssh_passphrase").unwrap(),
+        "pp"
+    );
+    assert_eq!(
+        extract_secret_field(&ssh(None), "ssh_passphrase").unwrap_err(),
+        "This SSH key has no stored passphrase"
+    );
+
+    // ApiKey：secret 与 token 可选。
+    let api = |secret: Option<&str>, token: Option<&str>| {
+        CredentialData::ApiKey(ApiKeyData {
+            api_key: "AK123".to_string(),
+            api_secret: secret.map(str::to_string),
+            token: token.map(str::to_string),
+            permissions: vec![],
+            expires_at: None,
+        })
+    };
+    assert_eq!(
+        extract_secret_field(&api(None, None), "api_key").unwrap(),
+        "AK123"
+    );
+    assert_eq!(
+        extract_secret_field(&api(Some("sec"), None), "api_secret").unwrap(),
+        "sec"
+    );
+    assert_eq!(
+        extract_secret_field(&api(None, Some("tok")), "token").unwrap(),
+        "tok"
+    );
+    assert_eq!(
+        extract_secret_field(&api(None, None), "api_secret").unwrap_err(),
+        "This API credential has no stored secret"
+    );
+    assert_eq!(
+        extract_secret_field(&api(None, None), "token").unwrap_err(),
+        "This API credential has no stored token"
+    );
+
+    // Raw：必须能按 UTF-8 解码。
+    let raw_utf8 = CredentialData::Raw("plain-bytes".as_bytes().to_vec());
+    assert_eq!(
+        extract_secret_field(&raw_utf8, "raw_data").unwrap(),
+        "plain-bytes"
+    );
+    let raw_binary = CredentialData::Raw(vec![0xff, 0xfe, 0x00]);
+    assert_eq!(
+        extract_secret_field(&raw_binary, "raw_data").unwrap_err(),
+        "Raw data is not valid UTF-8"
+    );
+
+    // 未知字段名一律拒绝。
+    assert_eq!(
+        extract_secret_field(&password, "nonexistent").unwrap_err(),
+        "Field 'nonexistent' is not available for this credential type"
+    );
+}
+
+/// reveal 命令的错误路径 + ApiKey 凭据的成功 reveal（覆盖
+/// `CredentialDataRequest::ApiKey` 的转换与序列化链）。
+#[tokio::test]
+async fn reveal_secret_paths_and_api_key_round_trip() {
+    let app = mock_app();
+
+    // 未初始化：服务缺失分支。
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: uuid::Uuid::new_v4().to_string(),
+            field: "password".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let (app, identity_id) = app_with_identity().await;
+
+    // 坏 UUID 在拿服务之前就被拒。
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: "not-a-uuid".to_string(),
+            field: "password".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    // ApiKey 凭据：创建 → reveal api_key 命中成功臂。
+    let mut req = password_credential_request(&identity_id);
+    req.name = "Service API".to_string();
+    req.credential_type = "ApiKey".to_string();
+    req.credential_data = CredentialDataRequest::ApiKey {
+        api_key: "AKIA-example".to_string(),
+        api_secret: Some("shhh".to_string()),
+        token: None,
+        permissions: vec!["read".to_string()],
+        expires_at: None,
+    };
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let api_cred = resp.data.expect("api credential created");
+
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: api_cred.id.clone(),
+            field: "api_key".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let revealed = resp.data.expect("secret revealed");
+    assert_eq!(revealed.field, "api_key");
+    assert_eq!(revealed.value, "AKIA-example");
+
+    // 类型不匹配：对 ApiKey 凭据要 password 字段。
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: api_cred.id.clone(),
+            field: "password".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("not available for this credential type"));
+
+    // 不存在的凭据 id。
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: uuid::Uuid::new_v4().to_string(),
+            field: "api_key".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Credential not found"));
+}
+
+/// export_identity 的成功/错误路径 + audit_cleanup 与 reauth 的门禁。
+#[tokio::test]
+async fn export_identity_and_audit_cleanup_gates() {
+    let app = mock_app();
+    let bad_uuid = uuid::Uuid::new_v4().to_string();
+
+    // 无服务分支：export/audit_cleanup/reauth 全部降级报错；
+    // passkey 导出则先在本地拒绝坏 UUID。
+    let resp = export_identity(bad_uuid.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = audit_cleanup(30, app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = reauth_verify(
+        ReauthRequest {
+            master_password: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = passkey_export_private_key("not-a-uuid".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    let (app, identity_id) = app_with_identity().await;
+
+    let resp = create_credential(
+        password_credential_request(&identity_id),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 导出成功：身份 + 凭据 JSON 负载（元数据，不含密文）。
+    let resp = export_identity(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let export = resp.data.expect("identity exported");
+    assert_eq!(export.data["identity"]["name"], "Cred Holder");
+    assert_eq!(export.data["credentials"].as_array().map(Vec::len), Some(1));
+    assert!(!export.exported_at.is_empty());
+
+    // 不存在的身份：无专用错误码 → 常规错误串。
+    let resp = export_identity(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Failed to export identity"));
+
+    // 锁定后：export/audit_cleanup 都带 SERVICE_LOCKED 错误码。
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = export_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = audit_cleanup(30, app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+}
+
+/// `query_agent_key_count` 走 std 同步 socket（不经过 tokio reactor，不受
+/// mock 运行时毒化影响）：起一个本地假 agent 服务端按脚本回协议响应，
+/// 覆盖成功计数与各错误分支。
+#[cfg(unix)]
+#[test]
+fn query_agent_key_count_protocol_matrix() {
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().unwrap();
+
+    // 假 agent：读 5 字节 request_identities 请求，回 `payload`。
+    // 返回 (socket 路径, responder 句柄)；join 必须发生在客户端连接之后，
+    // 否则 responder 卡在 accept 而客户端还没跑起来，直接死锁。
+    let serve_once = |payload: Vec<u8>| -> (String, std::thread::JoinHandle<()>) {
+        let sock_path = dir
+            .path()
+            .join(format!("agent-{}.sock", uuid::Uuid::new_v4()));
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut req = [0u8; 5];
+            stream.read_exact(&mut req).unwrap();
+            // SSH_AGENTC_REQUEST_IDENTITIES = 11
+            assert_eq!(req[4], 11, "client must ask for identities");
+            let mut resp = vec![0, 0, 0, payload.len() as u8];
+            resp.extend_from_slice(&payload);
+            stream.write_all(&resp).unwrap();
+        });
+        let path = sock_path.to_string_lossy().to_string();
+        (path, handle)
+    };
+
+    // 成功：SSH_AGENT_IDENTITIES_ANSWER(12) + 3 把钥匙。
+    let (path, responder) = serve_once(vec![12, 0, 0, 0, 3]);
+    assert_eq!(query_agent_key_count(&path).unwrap(), 3);
+    responder.join().unwrap();
+
+    // 首 byte 非 12 → "Unexpected agent response"。
+    let (path, responder) = serve_once(vec![99, 0, 0, 0, 3]);
+    assert_eq!(
+        query_agent_key_count(&path).unwrap_err(),
+        "Unexpected agent response"
+    );
+    responder.join().unwrap();
+
+    // 响应过短 → "Malformed agent response"。
+    let (path, responder) = serve_once(vec![12, 0]);
+    assert_eq!(
+        query_agent_key_count(&path).unwrap_err(),
+        "Malformed agent response"
+    );
+    responder.join().unwrap();
+
+    // 连不上 → 连接错误。
+    let err = query_agent_key_count(&dir.path().join("absent.sock").to_string_lossy()).unwrap_err();
+    assert!(err.starts_with("Failed to connect to agent"), "{}", err);
+}
+
+/// 状态文件内容畸形时不 panic：pid 解析失败降级为 None。
+#[cfg(unix)]
+#[tokio::test]
+async fn ssh_agent_status_tolerates_malformed_state_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&dir);
+    let app = mock_app();
+
+    std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/empty-sock\n").unwrap();
+    std::fs::write(dir.path().join("ssh-agent.pid"), "not-a-number").unwrap();
+
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    let status = resp.data.unwrap();
+    assert!(status.running, "socket file alone still means running");
+    assert_eq!(status.socket_path.as_deref(), Some("/tmp/empty-sock"));
+    assert_eq!(status.pid, None, "unparseable pid degrades to None");
+}
+
+/// 多链签名路径（命令层可达部分）：
+/// - Bitcoin：命令层无法提供 UTXO inputs（metadata 恒空），build_raw 失败 →
+///   走 audit-only 落库（raw 为空、hash 带 `audit:` 前缀）——这是无 UTXO
+///   集时唯一可落库的签名记录路径。
+/// - Solana：命令层无法携带 raw_transaction_data，签名直接被拒。
+#[tokio::test]
+async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
+    let (app, identity_id) = app_with_identity().await;
+    let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+    // Bitcoin 单地址钱包（mnemonic 派生 P2WPKH）。
+    let resp = wallet_import(
+        identity_id.clone(),
+        WalletImportRequest {
+            name: "Btc Sign".to_string(),
+            network: "Bitcoin".to_string(),
+            import_type: "mnemonic".to_string(),
+            data: mnemonic.to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let btc = resp.data.expect("btc wallet");
+
+    // 创建 pending BTC 交易。
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: btc.id.clone(),
+            to_address: "bc1qexample0recipient0address".to_string(),
+            amount: "1000".to_string(),
+            fee: "150".to_string(),
+            gas_price: None,
+            gas_limit: None,
+            nonce: None,
+            memo: Some("audit-only".to_string()),
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let pending = resp.data.expect("pending btc tx");
+    let tx_id = pending["id"].as_str().expect("tx id").to_string();
+
+    // 签名落库：audit-only 记录。
+    let resp = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id,
+            password: "wallet-pass-123".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "btc sign failed: {:?}", resp.error);
+    let signed = resp.data.expect("signed btc tx");
+    assert!(
+        signed["transaction_hash"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("audit:"),
+        "audit-only record must carry an audit: hash, got {signed}"
+    );
+    assert!(
+        signed["raw_signed_transaction"]
+            .as_array()
+            .is_some_and(|raw| raw.is_empty()),
+        "audit-only record must not carry raw bytes"
+    );
+
+    // Solana 钱包：签名因缺 raw_transaction_data 被拒。
+    let resp = wallet_import(
+        identity_id,
+        WalletImportRequest {
+            name: "Sol Sign".to_string(),
+            network: "Solana".to_string(),
+            import_type: "mnemonic".to_string(),
+            data: mnemonic.to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let sol = resp.data.expect("sol wallet");
+
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: sol.id.clone(),
+            to_address: "SolanaRecipientAddress11111111111111111111111".to_string(),
+            amount: "1000".to_string(),
+            fee: "5000".to_string(),
+            gas_price: None,
+            gas_limit: None,
+            nonce: None,
+            memo: None,
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let pending = resp.data.expect("pending sol tx");
+    let tx_id = pending["id"].as_str().expect("tx id").to_string();
+
+    let err = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id,
+            password: "wallet-pass-123".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.contains("Failed to sign transaction"),
+        "solana sign must fail without raw_transaction_data: {err}"
+    );
 }

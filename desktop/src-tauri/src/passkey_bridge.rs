@@ -451,6 +451,69 @@ mod tests {
         );
     }
 
+    /// End-to-end over a real Unix socket: serve_on's accept loop hands
+    /// connections to handle_connection, answers each client, and survives
+    /// a client that hangs up without sending anything. This module never
+    /// creates a mock app, so the tokio reactor stays healthy for socket IO.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn serve_on_accepts_real_sockets_and_survives_silent_clients() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("serve-on.sock");
+        let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
+
+        let service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+        let pending: PendingApprovals = Arc::new(StdMutex::new(HashMap::new()));
+        let sink = FakeSink {
+            payloads: Arc::new(StdMutex::new(Vec::new())),
+        };
+        tokio::spawn(serve_on(
+            listener,
+            Arc::new(sink),
+            pending,
+            service,
+            Duration::from_secs(5),
+        ));
+
+        // A silent client: connect, send nothing, hang up.
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::net::UnixStream::connect(&sock_path),
+        )
+        .await
+        .expect("connect 1")
+        .unwrap();
+
+        // A real query still gets answered afterwards.
+        let mut client = tokio::time::timeout(
+            Duration::from_secs(3),
+            tokio::net::UnixStream::connect(&sock_path),
+        )
+        .await
+        .expect("connect 2")
+        .unwrap();
+        client
+            .write_all(
+                concat!(
+                    r#"{"v":1,"op":"passkey_assert","origin":"https://github.com","item_id":"abc"}"#,
+                    "\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut answer))
+            .await
+            .expect("server answered in time")
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(answer).unwrap().trim(),
+            r#"{"approved":false,"reason":"locked"}"#,
+            "locked vault denies over the real socket"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn frontend_allow_reaches_the_bridge() {
         let service = Arc::new(tokio::sync::Mutex::new(Some(unlocked_service().await)));
