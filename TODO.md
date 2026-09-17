@@ -97,14 +97,17 @@ Desktop (Tauri v2 + React)
   tauri 依赖）→ DesktopApprovalHandler（emit `persona://ssh-approval` + oneshot，
   120s 超时自动拒绝）→ SshApprovalModal；CLI 走 TTY 提示零改动；失焦系统通知
 - [x] Wallet UI (addresses, QR, signing confirmations + 地址投毒启发式告警)
-- [ ] Desktop 集成测试矩阵扩展（当前 61 个 Rust 测试，commands.rs 行覆盖 ~79%；
+- [ ] Desktop 集成测试矩阵扩展（当前 79 个 Rust 测试，commands.rs 行覆盖 ~84%；
   命令级集成测试基建已建：`command_layer_tests.rs` 经 `tauri::test::mock_app`
-  直驱 30+ 命令处理器，含 wallet 交易 create/sign 多链路径（EVM 全链路、
+  直驱 40+ 命令处理器，含 wallet 交易 create/sign 多链路径（EVM 全链路、
   BTC audit-only 落库、Solana 缺 raw 数据拒绝）、SSH agent start/stop 生命周期
   （agent 挂 tauri::async_runtime 绕开 mock reactor 毒化）、agent key-count
   协议矩阵（std 同步 socket 假服务端）、passkey 审批 serve_on 端到端（真
-  Unix socket）、reveal 类型矩阵、export/audit 门禁。待补：main.rs 托盘/
-  窗口路径（无头环境不可测）、passkey_bridge Tauri sink、剩余错误分流臂）
+  Unix socket）、reveal 类型矩阵、export/audit 门禁、identity/credential
+  类型与安全级字符串矩阵、get_credential_data 全 8 变体标签、锁定态
+  SERVICE_LOCKED 错误码矩阵、wallet DB 路径失败分流。待补：main.rs 托盘/
+  窗口路径（无头环境不可测）、passkey_bridge Tauri sink、不可达防御性
+  错误臂（parse_network 永不失败等））
 - [x] fix(desktop): init_service 持锁调用 register_auto_lock_bridge 的死锁
   （tokio Mutex 非重入；2026-09 命令级测试发现并修复）
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）

@@ -652,4 +652,54 @@ mod tests {
             "empty request must be closed, not answered"
         );
     }
+
+    /// emit 失败（GUI 通道断开）→ 回复 deny 且 pending map 不留悬挂条目
+    ///（ask_frontend 的 emit-request 错误臂）。
+    #[tokio::test]
+    async fn failing_sink_denies_and_cleans_pending() {
+        struct BrokenSink;
+
+        impl PasskeyApprovalSink for BrokenSink {
+            fn emit_request(&self, _payload: &PasskeyApprovalRequest) -> anyhow::Result<()> {
+                Err(anyhow::anyhow!("gui channel gone"))
+            }
+        }
+
+        let service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>> =
+            Arc::new(tokio::sync::Mutex::new(Some(unlocked_service().await)));
+        let pending: PendingApprovals = Arc::new(StdMutex::new(HashMap::new()));
+        let (mut client, server) = tokio::io::duplex(1024);
+        let writer = tokio::spawn(async move {
+            client
+                .write_all(concat!(r#"{"v":1,"op":"passkey_assert","origin":"https://github.com","item_id":"abc"}"#, "\n").as_bytes())
+                .await
+                .unwrap();
+            let mut answer = Vec::new();
+            client.read_to_end(&mut answer).await.unwrap();
+            String::from_utf8(answer).unwrap()
+        });
+        let next_id = AtomicU64::new(1);
+        let _ = handle_connection(
+            server,
+            &BrokenSink,
+            &pending,
+            &service,
+            &next_id,
+            Duration::from_secs(5),
+        )
+        .await;
+        let answer = tokio::time::timeout(Duration::from_secs(3), writer)
+            .await
+            .expect("server answered in time")
+            .unwrap();
+
+        let decision: serde_json::Value =
+            serde_json::from_str(answer.trim()).expect("decision line");
+        assert_eq!(decision["approved"], serde_json::Value::Bool(false));
+        assert_eq!(decision["reason"], "denied");
+        assert!(
+            pending.lock().unwrap().is_empty(),
+            "failed emit must remove the pending entry"
+        );
+    }
 }

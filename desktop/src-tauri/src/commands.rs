@@ -3121,4 +3121,87 @@ mod tests {
         bad.identity_id = Some("not-a-uuid".to_string());
         assert!(build_audit_query(&bad).is_err());
     }
+
+    /// parse_network 的全部别名臂（大小写不敏感，未知值 → Custom）。
+    #[test]
+    fn parse_network_covers_every_alias_arm() {
+        use persona_core::models::wallet::BlockchainNetwork;
+
+        let cases: &[(&str, BlockchainNetwork)] = &[
+            ("bitcoin", BlockchainNetwork::Bitcoin),
+            ("BTC", BlockchainNetwork::Bitcoin),
+            ("ethereum", BlockchainNetwork::Ethereum),
+            ("ETH", BlockchainNetwork::Ethereum),
+            ("solana", BlockchainNetwork::Solana),
+            ("SOL", BlockchainNetwork::Solana),
+            ("bitcoin-cash", BlockchainNetwork::BitcoinCash),
+            ("Bitcoin Cash", BlockchainNetwork::BitcoinCash),
+            ("bitcoincash", BlockchainNetwork::BitcoinCash),
+            ("BCH", BlockchainNetwork::BitcoinCash),
+            ("litecoin", BlockchainNetwork::Litecoin),
+            ("LTC", BlockchainNetwork::Litecoin),
+            ("dogecoin", BlockchainNetwork::Dogecoin),
+            ("DOGE", BlockchainNetwork::Dogecoin),
+            ("polygon", BlockchainNetwork::Polygon),
+            ("MATIC", BlockchainNetwork::Polygon),
+            ("arbitrum", BlockchainNetwork::Arbitrum),
+            ("ARB", BlockchainNetwork::Arbitrum),
+            ("optimism", BlockchainNetwork::Optimism),
+            ("OP", BlockchainNetwork::Optimism),
+            ("binance", BlockchainNetwork::BinanceSmartChain),
+            ("bsc", BlockchainNetwork::BinanceSmartChain),
+            ("BNB", BlockchainNetwork::BinanceSmartChain),
+            ("Binance Smart Chain", BlockchainNetwork::BinanceSmartChain),
+            (
+                "Fancy Chain",
+                BlockchainNetwork::Custom("fancy chain".to_string()),
+            ),
+        ];
+        for (input, expected) in cases {
+            // to_lowercase 在函数内做，输入大小写自由。
+            let got = parse_network(&input.to_lowercase())
+                .unwrap_or_else(|e| panic!("parse_network({input}) errored: {e}"));
+            assert_eq!(&got, expected, "arm for {input}");
+        }
+        // 直接传原样输入（不做预 lowercase）再验一次未知臂路径。
+        let custom = parse_network("FancyChain").unwrap();
+        assert_eq!(custom, BlockchainNetwork::Custom("fancychain".to_string()));
+    }
+
+    /// serialize_wallet_address 的全部 AddressType 标签臂 + 余额缺省。
+    #[test]
+    fn serialize_wallet_address_covers_every_address_type() {
+        use persona_core::models::wallet::{AddressType, WalletAddress};
+
+        let addr = |address_type: AddressType| WalletAddress {
+            address: "addr".to_string(),
+            address_type,
+            derivation_path: Some("m/0".to_string()),
+            index: 3,
+            used: true,
+            balance: None,
+            last_activity: None,
+            metadata: std::collections::HashMap::new(),
+            created_at: chrono::Utc::now(),
+        };
+
+        let cases = [
+            (AddressType::P2PKH, "P2PKH"),
+            (AddressType::P2SH, "P2SH"),
+            (AddressType::P2WPKH, "P2WPKH"),
+            (AddressType::P2TR, "P2TR"),
+            (AddressType::Ethereum, "ETH"),
+            (AddressType::Solana, "SOL"),
+        ];
+        for (address_type, label) in cases {
+            let serialized = serialize_wallet_address(addr(address_type.clone()));
+            assert_eq!(serialized.address_type, label);
+            assert_eq!(serialized.index, 3);
+            assert!(serialized.used);
+            assert_eq!(serialized.balance, "-", "missing balance renders as dash");
+            assert_eq!(serialized.derivation_path.as_deref(), Some("m/0"));
+        }
+        let custom = serialize_wallet_address(addr(AddressType::Custom("nft-vault".to_string())));
+        assert_eq!(custom.address_type, "nft-vault");
+    }
 }

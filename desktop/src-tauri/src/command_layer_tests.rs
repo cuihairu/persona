@@ -813,6 +813,23 @@ impl StateDirGuard {
             prev: prev.map(Into::into),
         }
     }
+
+    /// 互斥地移除 PERSONA_AGENT_STATE_DIR：驱动 `agent_state_dir` 的
+    /// home 回退臂。持有同一把进程级锁，恢复时 Drop 会移除 env（prev=None）。
+    fn without_env() -> Self {
+        static STATE_DIR_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
+            std::sync::OnceLock::new();
+        let mutex = STATE_DIR_LOCK.get_or_init(|| std::sync::Mutex::new(()));
+        let lock = mutex
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
+        std::env::remove_var("PERSONA_AGENT_STATE_DIR");
+        StateDirGuard {
+            _lock: lock,
+            prev: prev.map(Into::into),
+        }
+    }
 }
 
 impl Drop for StateDirGuard {
@@ -2961,4 +2978,595 @@ fn workspace_path_for_db_path_handles_bare_names() {
     assert_eq!(workspace_path_for_db_path("bare.db"), "");
 }
 
+// ---------------------------------------------------------------------------
+// 第十批：类型/等级矩阵、get_credential_data 全变体标签、锁定错误码矩阵、
+// wallet 网络/DB 失败分支、agent 状态目录回退、agent 协议读错误
+// ---------------------------------------------------------------------------
 
+/// update_identity 的 identity_type 全臂 + 可选字段"空白即清除"归一化。
+#[tokio::test]
+async fn identity_update_type_matrix_and_optional_field_normalization() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // 逐个驱动 identity_type 的映射臂（Personal 已由既有测试覆盖）。
+    for (type_str, expected) in [
+        ("Work", "Work"),
+        ("Social", "Social"),
+        ("Financial", "Financial"),
+        ("Gaming", "Gaming"),
+        ("Team Secret", "Team Secret"),
+    ] {
+        let resp = update_identity(
+            UpdateIdentityRequest {
+                id: identity_id.clone(),
+                name: "Matrix Identity".to_string(),
+                identity_type: type_str.to_string(),
+                description: None,
+                email: None,
+                phone: None,
+                tags: None,
+            },
+            app.state::<AppState>(),
+        )
+        .await
+        .unwrap();
+        assert!(resp.success, "{type_str}: {:?}", resp.error);
+        let updated = resp.data.expect("identity updated");
+        assert_eq!(updated.identity_type, expected, "arm for {type_str}");
+    }
+
+    // description/email/phone 传纯空白 → 归一化为 None（三个 and_then 臂）。
+    let resp = update_identity(
+        UpdateIdentityRequest {
+            id: identity_id.clone(),
+            name: "Cleared".to_string(),
+            identity_type: "personal".to_string(),
+            tags: None,
+            description: Some("   ".to_string()),
+            email: Some(" \t ".to_string()),
+            phone: Some("  ".to_string()),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let updated = resp.data.expect("identity updated");
+    assert_eq!(updated.description, None);
+    assert_eq!(updated.email, None);
+    assert_eq!(updated.phone, None);
+
+    // 不存在的 id → "Identity not found"。
+    let resp = update_identity(
+        UpdateIdentityRequest {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "Ghost".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+            tags: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Identity not found"));
+}
+
+/// create_credential 的 credential_type/security_level 字符串臂矩阵，
+/// 以及 url/username/notes/tags 的归一化臂。
+#[tokio::test]
+async fn create_credential_type_and_security_level_matrix() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let base = |name: &str, type_str: &str, level: &str| CreateCredentialRequest {
+        identity_id: identity_id.clone(),
+        name: name.to_string(),
+        credential_type: type_str.to_string(),
+        security_level: level.to_string(),
+        url: Some("https://matrix.example".to_string()),
+        username: Some("alice".to_string()),
+        notes: Some("  kept  ".to_string()),
+        tags: Some(vec!["a".to_string(), "  ".to_string(), "b".to_string()]),
+        credential_data: CredentialDataRequest::Raw {
+            data: vec![1, 2, 3],
+        },
+    };
+
+    // credential_type 的非 Password 臂（Password/TwoFactor 已有测试覆盖）。
+    for type_str in [
+        "CryptoWallet",
+        "SshKey",
+        "ApiKey",
+        "BankCard",
+        "GameAccount",
+        "ServerConfig",
+        "Certificate",
+        "CustomStyle",
+    ] {
+        let resp = create_credential(
+            base("Matrix", type_str, "Critical"),
+            app.state::<AppState>(),
+        )
+        .await
+        .unwrap();
+        assert!(resp.success, "{type_str}: {:?}", resp.error);
+        let cred = resp.data.expect("credential created");
+        assert_eq!(cred.credential_type, type_str);
+        assert_eq!(cred.security_level, "Critical");
+        assert_eq!(cred.url.as_deref(), Some("https://matrix.example"));
+        assert_eq!(cred.username.as_deref(), Some("alice"));
+        assert_eq!(cred.notes.as_deref(), Some("kept"));
+        assert_eq!(cred.tags, vec!["a".to_string(), "b".to_string()]);
+
+        // security_level 的其余臂 + 未知值回落 Medium。
+        for (level, expected) in [("High", "High"), ("Low", "Low"), ("Bogus", "Medium")] {
+            let mut req = base("Levels", type_str, level);
+            req.name = format!("Levels-{type_str}-{level}");
+            let resp = create_credential(req, app.state::<AppState>())
+                .await
+                .unwrap();
+            assert!(resp.success, "{type_str}/{level}: {:?}", resp.error);
+            assert_eq!(resp.data.expect("credential").security_level, expected);
+        }
+
+        let resp = delete_credential(cred.id, app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(resp.success, "{:?}", resp.error);
+    }
+
+    // 坏 identity UUID 在 get_credentials_for_identity 上同样失败关闭。
+    let resp = get_credentials_for_identity("not-a-uuid".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+}
+
+/// get_credential_data 对全部 8 种 CredentialData 变体输出正确的类型标签。
+/// BankCard/ServerConfig 没有对应的命令层请求变体，直接经 service 构造。
+#[tokio::test]
+async fn get_credential_data_returns_type_labels_for_all_variants() {
+    use persona_core::models::credential::{BankCardData, ServerConfigData};
+
+    let (app, identity_id) = app_with_identity().await;
+    let identity_uuid = uuid::Uuid::parse_str(&identity_id).unwrap();
+
+    // 经命令层建 6 种（Password/CryptoWallet/SshKey/ApiKey/TwoFactor/Raw）。
+    let request_for = |name: &str, data: CredentialDataRequest| CreateCredentialRequest {
+        identity_id: identity_id.clone(),
+        name: name.to_string(),
+        credential_type: "Raw".to_string(),
+        security_level: "Medium".to_string(),
+        url: None,
+        username: None,
+        notes: None,
+        tags: None,
+        credential_data: data,
+    };
+    let mut ids: Vec<(String, String)> = Vec::new();
+    let variants: Vec<(&str, CredentialDataRequest)> = vec![
+        (
+            "PW",
+            CredentialDataRequest::Password {
+                password: "s3cret".to_string(),
+                email: None,
+                security_questions: vec![],
+            },
+        ),
+        (
+            "CW",
+            CredentialDataRequest::CryptoWallet {
+                wallet_type: "hd".to_string(),
+                mnemonic_phrase: None,
+                private_key: None,
+                public_key: "pub".to_string(),
+                address: "0xabc".to_string(),
+                network: "Ethereum".to_string(),
+            },
+        ),
+        (
+            "SSH",
+            CredentialDataRequest::SshKey {
+                private_key: "priv".to_string(),
+                public_key: "pub".to_string(),
+                key_type: "ed25519".to_string(),
+                passphrase: None,
+            },
+        ),
+        (
+            "API",
+            CredentialDataRequest::ApiKey {
+                api_key: "key".to_string(),
+                api_secret: None,
+                token: None,
+                permissions: vec![],
+                expires_at: None,
+            },
+        ),
+        (
+            "TOTP",
+            CredentialDataRequest::TwoFactor {
+                secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+                issuer: "i".to_string(),
+                account_name: "a".to_string(),
+                algorithm: "SHA1".to_string(),
+                digits: 6,
+                period: 30,
+            },
+        ),
+        ("RAW", CredentialDataRequest::Raw { data: vec![9] }),
+    ];
+    for (name, data) in variants {
+        let resp = create_credential(request_for(name, data), app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(resp.success, "{name}: {:?}", resp.error);
+        ids.push((resp.data.expect("created").id, name.to_string()));
+    }
+
+    // BankCard/ServerConfig 直经 service 建（命令层请求枚举没有这两种）。
+    {
+        let state = app.state::<AppState>();
+        let guard = state.service.lock().await;
+        let service = guard.as_ref().expect("service initialized");
+        for data in [
+            persona_core::models::credential::CredentialData::BankCard(BankCardData {
+                card_number: "4111111111111111".to_string(),
+                cardholder_name: "Alice".to_string(),
+                expiry_date: "12/30".to_string(),
+                cvv: "123".to_string(),
+                bank_name: "Test Bank".to_string(),
+                card_type: "visa".to_string(),
+            }),
+            persona_core::models::credential::CredentialData::ServerConfig(ServerConfigData {
+                hostname: "server.example".to_string(),
+                ip_address: None,
+                port: 22,
+                protocol: "ssh".to_string(),
+                username: "root".to_string(),
+                password: None,
+                ssh_key_id: None,
+                additional_config: std::collections::HashMap::new(),
+            }),
+        ] {
+            let cred = service
+                .create_credential(
+                    identity_uuid,
+                    format!("direct-{}", ids.len()),
+                    persona_core::models::credential::CredentialType::Custom("Direct".into()),
+                    persona_core::models::credential::SecurityLevel::Medium,
+                    &data,
+                )
+                .await
+                .unwrap();
+            ids.push((cred.id.to_string(), "DIRECT".to_string()));
+        }
+    }
+
+    // 逐一读回：类型标签与存储变体一一对应。
+    for (id, _) in &ids {
+        let resp = get_credential_data(id.clone(), app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(resp.success, "{id}: {:?}", resp.error);
+        let wrapper = resp.data.expect("data returned").expect("data present");
+        assert!(
+            [
+                "Password",
+                "CryptoWallet",
+                "SshKey",
+                "ApiKey",
+                "TwoFactor",
+                "Raw",
+                "BankCard",
+                "ServerConfig"
+            ]
+            .contains(&wrapper.credential_type.as_str()),
+            "unexpected label {}",
+            wrapper.credential_type
+        );
+    }
+    // 8 个凭据的标签合计必须覆盖全部 8 种。
+    let mut labels = std::collections::HashSet::new();
+    for (id, _) in &ids {
+        let resp = get_credential_data(id.clone(), app.state::<AppState>())
+            .await
+            .unwrap();
+        labels.insert(resp.data.unwrap().unwrap().credential_type);
+    }
+    assert_eq!(labels.len(), 8, "all 8 variant labels covered: {labels:?}");
+
+    // 坏 UUID 仍是格式错误。
+    let resp = get_credential_data("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+}
+
+/// 锁定态下所有"直调 service"的命令都会得到 SERVICE_LOCKED 错误码
+/// （map_persona_error → error_with_code 臂）。
+#[tokio::test]
+async fn locked_service_error_code_matrix() {
+    use base64::Engine as _;
+
+    let (app, _identity_id) = app_with_identity().await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    // get_credential_data
+    let resp = get_credential_data(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    // configure_auto_lock 锁定时仍允许（core 不做 ensure_unlocked）
+    let resp = configure_auto_lock(
+        AutoLockConfigRequest {
+            inactivity_timeout_secs: 300,
+            absolute_timeout_secs: None,
+            require_reauth_sensitive: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // start_auto_lock_monitoring 锁定时也允许（core 无 ensure_unlocked，
+    // 监控本身不泄密）；stop 一并驱动。
+    let resp = start_auto_lock_monitoring(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = stop_auto_lock_monitoring(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // health_scan（含 check_breaches=true 的 checker 构造分支）
+    let resp = health_scan(
+        Some(HealthScanRequest {
+            min_password_score: None,
+            expiry_warning_days: None,
+            stale_after_days: None,
+            check_breaches: Some(true),
+        }),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    // passkey 家族（request 先经 UUID/解码检查，用合法输入深入到 service）
+    let resp = passkey_self_test(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp =
+        passkey_export_private_key(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+            .await
+            .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = passkey_create(
+        CreatePasskeyRequest {
+            identity_id: uuid::Uuid::new_v4().to_string(),
+            rp_id: "example.com".to_string(),
+            origin: "https://example.com".to_string(),
+            // 合法 base64 的 client_data（锁定错误在 service 调用层触发）
+            client_data_json_b64: base64::engine::general_purpose::STANDARD
+                .encode(br#"{"challenge":"c"}"#),
+            user_handle_b64: None,
+            user_name: None,
+            user_display_name: None,
+            user_verification: false,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    // reveal_credential_secret（凭据不存在也会先撞 ensure_unlocked）
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: uuid::Uuid::new_v4().to_string(),
+            field: "password".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+}
+
+/// wallet_add_address 的 Bitcoin P2WPKH 派生臂与 Solana"未实现"拒绝臂。
+#[tokio::test]
+async fn wallet_add_address_bitcoin_and_unsupported_network() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // BTC HD 钱包（1 地址）→ 追加地址走 Bitcoin P2WPKH 派生臂。
+    let resp = wallet_import(
+        identity_id.clone(),
+        WalletImportRequest {
+            name: "BTC HD".to_string(),
+            network: "bitcoin".to_string(),
+            import_type: "mnemonic".to_string(),
+            data: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let btc = resp.data.expect("btc imported");
+
+    let resp = wallet_add_address(
+        btc.id.clone(),
+        "wallet-pass-123".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let addr = resp.data.expect("address added");
+    assert!(
+        addr.address.starts_with("bc1"),
+        "P2WPKH bech32 address, got {}",
+        addr.address
+    );
+    assert_eq!(addr.address_type, "P2WPKH");
+    assert_eq!(addr.index, 1, "next index after the seeded first address");
+
+    // 地址生成未实现的网络：core 的 import/generate 都在派生阶段就拒绝
+    //（derive_addresses 对非 BTC/ETH 系报 not implemented），所以拿已导入
+    // 的 BTC HD 钱包把 network 改写为 Litecoin（等价于旧版本遗留钱包），
+    // 让 add_address 走完派生后撞上命令层的 not-implemented 拒绝臂。
+    let wallet_id = uuid::Uuid::parse_str(&btc.id).unwrap();
+    {
+        let db_path = app
+            .state::<AppState>()
+            .db_path
+            .lock()
+            .await
+            .clone()
+            .expect("db path set by wallet_import");
+        let db = persona_core::storage::Database::from_file(&db_path)
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = persona_core::storage::CryptoWalletRepository::new(std::sync::Arc::new(db));
+        let mut wallet = repo
+            .find_by_id(&wallet_id)
+            .await
+            .unwrap()
+            .expect("wallet persisted");
+        wallet.network = persona_core::models::wallet::BlockchainNetwork::Litecoin;
+        repo.update(&wallet).await.unwrap();
+    }
+
+    let resp = wallet_add_address(
+        btc.id.clone(),
+        "wallet-pass-123".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let msg = resp.error.expect("error message");
+    assert!(
+        msg.contains("Address generation not implemented for Litecoin"),
+        "got: {msg}"
+    );
+}
+
+/// db_path 坏文件/坏目录时 wallet 命令大声报连接或迁移错误（sqlx 惰性
+/// 连接：from_file 不检查文件内容，migrate 才暴露 "not a database"）。
+#[tokio::test]
+async fn wallet_commands_report_db_path_failures_loudly() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // 指向不存在目录 → 连接失败。
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = Some("/nonexistent-dir-for-persona-tests/bad.db".to_string());
+    }
+    let err = wallet_list(None, app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(err.starts_with("Database connection failed"), "got: {err}");
+
+    // 垃圾文件：from_file 的 connect 能打开任意可读文件，migrate 执行时
+    // 才撞上 (code: 26) file is not a database → "Database migration failed"。
+    let dir = tempfile::tempdir().unwrap();
+    let junk = dir.path().join("junk.db");
+    std::fs::write(&junk, b"definitely not a sqlite database").unwrap();
+    let junk_path = junk.to_string_lossy().to_string();
+    // 保留 tempdir 到测试结束（list/addresses/import/generate 均复用）。
+    std::mem::forget(dir);
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = Some(junk_path.clone());
+    }
+
+    let err = wallet_list(None, app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(
+        err.starts_with("Database migration failed") && err.contains("not a database"),
+        "got: {err}"
+    );
+
+    let err = wallet_list_addresses(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+
+    let err = wallet_import(
+        identity_id.clone(),
+        WalletImportRequest {
+            name: "w".to_string(),
+            network: "Ethereum".to_string(),
+            import_type: "mnemonic".to_string(),
+            data: "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+
+    let err = wallet_generate(
+        identity_id,
+        WalletGenerateRequest {
+            name: "g".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+}
+
+/// PERSONA_AGENT_STATE_DIR 未设置时 agent_state_dir 回落 ~/.persona。
+#[test]
+fn agent_state_dir_falls_back_to_home_when_env_unset() {
+    let _guard = crate::command_layer_tests::StateDirGuard::without_env();
+    let dir = agent_state_dir();
+    assert!(
+        dir.ends_with(".persona"),
+        "fallback should be ~/.persona, got {dir:?}"
+    );
+}
+
+/// agent key-count 协议：服务端 accept 后立即断开 → 客户端读响应
+/// 长度时命中 EOF，返回 Err 而非挂死。
+#[test]
+fn query_agent_key_count_fails_on_dead_socket() {
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().unwrap();
+    let sock_path = dir.path().join("dead.sock");
+    let listener = UnixListener::bind(&sock_path).unwrap();
+
+    // 服务端：接受连接后立刻丢弃，制造对端 EOF。
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("client connects");
+        drop(stream);
+    });
+
+    let result = query_agent_key_count(sock_path.to_str().unwrap());
+    assert!(result.is_err(), "dead socket must error, not hang");
+
+    server.join().unwrap();
+}
