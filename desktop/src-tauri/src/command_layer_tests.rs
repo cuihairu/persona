@@ -2819,3 +2819,146 @@ fn serializable_audit_log_maps_option_ids() {
     assert_eq!(json["resource_type"], "identity");
     assert_eq!(json["success"], true);
 }
+
+// ---------------------------------------------------------------------------
+// 第九批：init_service 错误臂 / auto-lock 事件桥闭环 / 路径工具
+// ---------------------------------------------------------------------------
+
+/// init_service 的可触发错误臂：垃圾 DB 文件在迁移时暴露（sqlx 连接是
+/// 惰性的，打开不报错）、无法创建的路径在连接时暴露；同一 vault 连续输错
+/// 5 次后，正确密码也只得到账号锁定。
+#[tokio::test]
+async fn init_service_degrades_loudly_on_bad_db_and_account_lockout() {
+    let app = mock_app();
+    let dir = tempfile::tempdir().unwrap();
+    let bad_path = dir.path().join("garbage.db");
+    let db_path = dir.path().join("lockout.db");
+    // Leak the TempDir: the vault keeps the file open for the whole test.
+    std::mem::forget(dir);
+
+    // 垃圾文件不是合法 sqlite：连接惰性成功，迁移时才失败。
+    std::fs::write(&bad_path, "this is not a sqlite database").unwrap();
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(bad_path.to_string_lossy().to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Database migration failed"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 打不开的路径（目录不存在）→ 连接失败。
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some("/proc/persona-must-not-exist/x.db".to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Database connection failed"),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 真实 vault：5 次失败触发账号锁定（第 6 次即使密码正确也拒绝）。
+    let init_with = |password: &str| {
+        init_service(
+            InitRequest {
+                master_password: password.to_string(),
+                db_path: Some(db_path.to_string_lossy().to_string()),
+            },
+            app.state::<AppState>(),
+            app.handle().clone(),
+        )
+    };
+    let resp = init_with("correct-horse").await.unwrap();
+    assert!(resp.success, "vault setup failed: {:?}", resp.error);
+
+    for attempt in 0..5 {
+        let resp = init_with("wrong").await.unwrap();
+        assert_eq!(
+            resp.error.as_deref(),
+            Some("Invalid master password"),
+            "attempt {}",
+            attempt + 1
+        );
+    }
+    let resp = init_with("correct-horse").await.unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Account is locked due to too many failed attempts")
+    );
+}
+
+/// auto-lock 事件桥的闭环：Locked 事件触发后，回调 emit 事件并在后台任务
+/// 里强制 `service.lock()` 清掉内存主密钥（不依赖前端存活）。
+#[tokio::test]
+async fn auto_lock_event_bridge_force_locks_on_locked_event() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    // init_service 已注册 bridge 回调。
+
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(true), "fresh init must be unlocked");
+
+    {
+        let state = app.state::<AppState>();
+        let mut guard = state.service.lock().await;
+        let service = guard.as_mut().expect("service initialized");
+
+        // 首次 init 只调 initialize_user，不建立 auto-lock session（真实
+        // 产品行为：会话在认证时创建）；走一次 lock → 认证来建立 session，
+        // 与前端「初始化 → 锁定 → 再解锁」的真实链路一致。
+        service.lock();
+        let result = service.authenticate_user("correct-horse").await.unwrap();
+        assert!(matches!(result, persona_core::AuthResult::Success));
+
+        // 通过公开 API 手动触发 Locked 事件（与超时监控同一 emit 路径，
+        // 无需等待真实定时器）。
+        service.force_lock_session().await.expect("force lock");
+    }
+
+    // 回调异步执行：轮询等待强制落锁生效。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+        if resp.data == Some(false) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "bridge never force-locked the service after a Locked event"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// workspace 路径推导：裸文件名的 parent 是空串而非 None
+/// （Path::parent 语义），落库时由上层 filter 回落到默认名。
+#[test]
+fn workspace_path_for_db_path_handles_bare_names() {
+    assert_eq!(workspace_path_for_db_path("/tmp/x/vault.db"), "/tmp/x");
+    // Path::new("bare.db").parent() == Some("")，不触发 unwrap_or_else。
+    assert_eq!(workspace_path_for_db_path("bare.db"), "");
+}
+
+

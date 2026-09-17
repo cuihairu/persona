@@ -1429,6 +1429,23 @@ impl PersonaService {
             let salt = user_auth.get_master_key_salt()?;
             self.unlock(master_password, &salt)?;
             self.current_user = Some(user_auth.user_id);
+            self.touch_activity();
+
+            // Create and register session for auto-lock management. 之前只有
+            // 底层 authenticate 原语建 session，而生产登录全部走本方法——
+            // session 从未建立，auto-lock 监控与 Locked 事件强制落锁对
+            // 正常登录路径完全失效。
+            let session = Session::new(user_auth.user_id.to_string(), self.auto_lock_timeout);
+            let session_id = session.id.clone();
+            *self.current_session_id.write().await = Some(session_id.clone());
+            self.auto_lock_manager
+                .add_session(session)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.auto_lock_manager
+                .set_current_user(user_auth.user_id)
+                .await;
+
             self.log_audit(
                 AuditAction::Login,
                 ResourceType::User,
