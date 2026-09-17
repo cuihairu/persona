@@ -417,3 +417,368 @@ async fn generate_password_and_statistics_serve_values() {
     let stats = resp.data.expect("statistics returned");
     assert!(stats.is_object(), "statistics is a JSON object: {stats}");
 }
+
+// ---------------------------------------------------------------------------
+// 第二批：credential / wallet / reveal / export / passkey
+// ---------------------------------------------------------------------------
+
+/// 建一个已初始化服务的 app + 一条已存在的身份，返回 (app, identity_id)。
+async fn app_with_identity() -> (tauri::App<tauri::test::MockRuntime>, String) {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Cred Holder".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let identity = resp.data.expect("identity created");
+    (app, identity.id)
+}
+
+fn password_credential_request(identity_id: &str) -> CreateCredentialRequest {
+    CreateCredentialRequest {
+        identity_id: identity_id.to_string(),
+        name: "Example Login".to_string(),
+        credential_type: "Password".to_string(),
+        security_level: "High".to_string(),
+        url: Some("https://example.com".to_string()),
+        username: Some("alice".to_string()),
+        notes: Some("  note with padding  ".to_string()),
+        tags: Some(vec![
+            "web".to_string(),
+            "  ".to_string(),
+            "work".to_string(),
+        ]),
+        credential_data: CredentialDataRequest::Password {
+            password: "s3cret-password".to_string(),
+            email: Some("alice@example.com".to_string()),
+            security_questions: vec![SecurityQuestionRequest {
+                question: "pet?".to_string(),
+                answer: "cat".to_string(),
+            }],
+        },
+    }
+}
+
+#[tokio::test]
+async fn credential_commands_round_trip_search_favorite_and_totp() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // Create (also normalizes notes/tags whitespace).
+    let resp = create_credential(
+        password_credential_request(&identity_id),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let cred = resp.data.expect("credential created");
+    assert_eq!(cred.name, "Example Login");
+    assert_eq!(cred.tags, vec!["web".to_string(), "work".to_string()]);
+    assert_eq!(cred.notes.as_deref(), Some("note with padding"));
+
+    // List for identity.
+    let resp = get_credentials_for_identity(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().len(), 1);
+
+    // Decrypted data round-trips through the encrypted vault.
+    let resp = get_credential_data(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.expect("credential data returned");
+    let data = data.expect("data is present");
+    assert_eq!(data.credential_type, "Password");
+    assert_eq!(data.data["password"], "s3cret-password");
+
+    // Search by name.
+    let resp = search_credentials("example".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().iter().any(|c| c.id == cred.id));
+
+    // Toggle favorite twice: on, then off.
+    let resp = toggle_credential_favorite(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_favorite);
+    let resp = toggle_credential_favorite(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.data.unwrap().is_favorite == false);
+
+    // TOTP credential: create with an RFC-vector secret and read a code.
+    let mut totp_req = password_credential_request(&identity_id);
+    totp_req.name = "GitHub TOTP".to_string();
+    totp_req.credential_type = "TwoFactor".to_string();
+    totp_req.credential_data = CredentialDataRequest::TwoFactor {
+        secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+        issuer: "GitHub".to_string(),
+        account_name: "alice@example.com".to_string(),
+        algorithm: "SHA1".to_string(),
+        digits: 6,
+        period: 30,
+    };
+    let resp = create_credential(totp_req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let totp_cred = resp.data.expect("totp credential created");
+
+    let resp = get_totp_code(totp_cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let code = resp.data.expect("totp code returned");
+    assert_eq!(code.code.len(), 6);
+    assert!(code.remaining_seconds <= 30);
+
+    // Delete both credentials; the identity listing empties out.
+    for id in [cred.id, totp_cred.id] {
+        let resp = delete_credential(id, app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(resp.success, "{:?}", resp.error);
+        assert!(resp.data.unwrap());
+    }
+    let resp = get_credentials_for_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.data.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn wallet_commands_round_trip_generate_list_export_delete() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // Empty listing before anything exists.
+    let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().wallets.is_empty());
+
+    // Generate an HD wallet (24-word mnemonic, 3 addresses).
+    let resp = wallet_generate(
+        identity_id.clone(),
+        WalletGenerateRequest {
+            name: "Desktop HD".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(3),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let generated = resp.data.expect("wallet generated");
+    assert_eq!(generated.mnemonic.split_whitespace().count(), 24);
+    assert!(generated.first_address.starts_with("0x"));
+
+    // Short passwords are rejected up front.
+    let resp = wallet_generate(
+        identity_id.clone(),
+        WalletGenerateRequest {
+            name: "Bad".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "short".to_string(),
+            address_count: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Wallet password must be at least 8 characters")
+    );
+
+    // Listing now contains the wallet.
+    let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let wallets = resp.data.unwrap().wallets;
+    assert_eq!(wallets.len(), 1);
+    assert_eq!(wallets[0].id, generated.wallet_id);
+
+    // Address listing shows the generated count.
+    let resp = wallet_list_addresses(generated.wallet_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().addresses.len(), 3);
+
+    // JSON export (no private material) succeeds.
+    let resp = wallet_export(
+        WalletExportRequest {
+            wallet_id: generated.wallet_id.clone(),
+            format: "json".to_string(),
+            include_private: false,
+            password: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let exported: serde_json::Value =
+        serde_json::from_str(&resp.data.unwrap()).expect("export is valid JSON");
+    assert_eq!(exported["name"], "Desktop HD");
+
+    // Delete the wallet.
+    let resp = wallet_delete(generated.wallet_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap());
+    let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
+    assert!(resp.data.unwrap().wallets.is_empty());
+}
+
+#[tokio::test]
+async fn reveal_credential_secret_round_trip_and_unknown_field() {
+    let (app, identity_id) = app_with_identity().await;
+    let resp = create_credential(
+        password_credential_request(&identity_id),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let cred = resp.data.expect("credential created");
+
+    // The password reveals after decryption.
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: cred.id.clone(),
+            field: "password".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let reveal = resp.data.expect("reveal returned");
+    assert_eq!(reveal.field, "password");
+    assert_eq!(reveal.value, "s3cret-password");
+
+    // Unknown fields are rejected with a clear message.
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: cred.id.clone(),
+            field: "not_a_field".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success, "unknown field must not reveal");
+}
+
+#[tokio::test]
+async fn export_identity_command_returns_exportable_json() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let resp = export_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let export = resp.data.expect("export returned");
+    assert!(!export.exported_at.is_empty());
+    assert!(export.data.is_object(), "export payload is JSON");
+}
+
+#[tokio::test]
+async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
+    use base64::Engine;
+
+    let (app, identity_id) = app_with_identity().await;
+
+    let client_data = serde_json::json!({
+        "type": "webauthn.create",
+        "challenge": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"create-challenge"),
+        "origin": "https://example.com",
+    });
+    let client_data_b64 = base64::engine::general_purpose::STANDARD.encode(client_data.to_string());
+    let user_handle_b64 = base64::engine::general_purpose::STANDARD.encode(b"passkey-user-handle");
+
+    // Register.
+    let resp = passkey_create(
+        CreatePasskeyRequest {
+            identity_id: identity_id.clone(),
+            rp_id: "example.com".to_string(),
+            origin: "https://example.com".to_string(),
+            client_data_json_b64: client_data_b64,
+            user_handle_b64: Some(user_handle_b64),
+            user_name: Some("alice@example.com".to_string()),
+            user_display_name: Some("Alice".to_string()),
+            user_verification: false,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let creation = resp.data.expect("passkey created");
+    let passkey_id = creation.passkey.id.clone();
+    assert!(
+        !creation.attestation_object_b64.is_empty(),
+        "attestation object returned"
+    );
+
+    // List by identity and by rp id; get one.
+    let resp = passkey_list(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().len(), 1);
+
+    let resp = passkey_list_by_rp("example.com".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().len(), 1);
+
+    let resp = passkey_get(passkey_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().expect("passkey found").id, passkey_id);
+
+    // Self-test (sign + verify round trip) and private-key export.
+    let resp = passkey_self_test(passkey_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap(), "self test passes");
+
+    let resp = passkey_export_private_key(passkey_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let pk = base64::engine::general_purpose::STANDARD
+        .decode(resp.data.unwrap())
+        .expect("private key is base64");
+    assert_eq!(pk.len(), 32, "P-256 scalar is 32 bytes");
+
+    // Delete and confirm gone.
+    let resp = passkey_delete(passkey_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = passkey_get(passkey_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.data.unwrap().is_none());
+}
