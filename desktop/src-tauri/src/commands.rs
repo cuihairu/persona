@@ -147,8 +147,10 @@ pub async fn init_service(
                         // First-time setup: initialize user with master password
                         match service.initialize_user(&request.master_password).await {
                             Ok(_user_id) => {
-                                let mut service_guard = state.service.lock().await;
-                                *service_guard = Some(service);
+                                // 在语句内完成存入并立即释放 guard：
+                                // register_auto_lock_bridge 会再次锁 state.service，
+                                // 若 guard 跨越该调用，tokio Mutex 非重入 → 死锁
+                                *state.service.lock().await = Some(service);
                                 register_auto_lock_bridge(&state, &app).await;
                                 Ok(ApiResponse::success(true))
                             }
@@ -162,8 +164,8 @@ pub async fn init_service(
                         match service.authenticate_user(&request.master_password).await {
                             Ok(auth_result) => match auth_result {
                                 persona_core::AuthResult::Success => {
-                                    let mut service_guard = state.service.lock().await;
-                                    *service_guard = Some(service);
+                                    // 同上：先释放 guard 再注册 auto-lock 桥
+                                    *state.service.lock().await = Some(service);
                                     register_auto_lock_bridge(&state, &app).await;
                                     Ok(ApiResponse::success(true))
                                 }
