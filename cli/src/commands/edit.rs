@@ -1160,6 +1160,51 @@ mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// The existence check and the load each authenticate separately. With
+    /// the password supplied per-prompt (no env), the check can pass while
+    /// the load fails — reaching the bail `identity_exists` normally shadows.
+    #[tokio::test]
+    async fn edit_load_identity_rejects_wrong_password_after_check_passes() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        seeded_db(&dir, &["alice"]).await;
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("edit-master").await.unwrap();
+        }
+
+        let args = EditArgs {
+            name: "alice".to_string(),
+            identity_type: None,
+            description: Some("nope".to_string()),
+            email: None,
+            phone: None,
+            interactive: false,
+            field: None,
+            value: None,
+        };
+
+        let ui = ScriptedUi::new()
+            .password("edit-master") // identity_exists
+            .password("wrong-pin"); // load_identity
+        let err = execute_with(args, &config, &ui)
+            .await
+            .expect_err("wrong password must abort the load");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "got: {err}"
+        );
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
     #[tokio::test]
     async fn save_identity_reports_missing_identity() {
         let dir = TempDir::new().unwrap();

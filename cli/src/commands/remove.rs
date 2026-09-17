@@ -800,6 +800,28 @@ mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// A backup directory path occupied by a regular file fails loudly when
+    /// the backup scaffolding tries to create it.
+    #[tokio::test]
+    async fn backup_directory_creation_failure_is_reported() {
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        seeded_db(&dir, &["carol"]).await;
+
+        let blocker = dir.path().join("blocker");
+        std::fs::write(&blocker, b"not a directory").unwrap();
+        config.backup.directory = blocker;
+
+        let err = create_backup("carol", &config, &ScriptedUi::new())
+            .await
+            .expect_err("occupied backup directory must fail");
+        assert!(
+            err.to_string()
+                .contains("Failed to create backup directory"),
+            "got: {err}"
+        );
+    }
+
     /// A wrong master password surfaces as `Authentication failed` from every
     /// helper that unlocks the service (removal, backup, summary, count)
     /// without touching the stored identity.

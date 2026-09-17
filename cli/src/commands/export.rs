@@ -1215,6 +1215,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn authenticated_sensitive_export_warns_on_corrupt_passkey_key() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        let pk_id = seed_passkey(&config, "master-pin", true).await;
+
+        // Corrupt the sealed key material so unsealing fails at export time.
+        // (The repository's update() does not persist key columns, so poke
+        // the row directly.)
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            sqlx::query("UPDATE passkeys SET encrypted_private_key = $2 WHERE id = $1")
+                .bind(pk_id.to_string())
+                .bind(vec![0xDEu8, 0xAD, 0xBE, 0xEF])
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+
+        let out = dir.path().join("alice-corrupt.json");
+        let mut a = with_output(args(&["alice"], "json"), &out);
+        a.include_sensitive = true;
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .confirm(true)
+            .password("master-pin");
+        execute_with(a, &config, &ui)
+            .await
+            .expect("export succeeds despite the corrupt passkey");
+        assert!(ui.exhausted());
+
+        // The metadata row survives; only the private key is skipped.
+        let value: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        let passkeys = value["identities"][0]["passkeys"].as_array().unwrap();
+        assert_eq!(passkeys.len(), 1);
+        assert!(
+            passkeys[0].get("private_key").is_none(),
+            "corrupt key is skipped with a warning"
+        );
+    }
+
+    #[tokio::test]
     async fn authenticated_export_without_sensitive_keeps_encrypted_blob() {
         let _env = lock_process_env();
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
@@ -1339,6 +1388,36 @@ mod tests {
         let csv = std::fs::read_to_string(&out).unwrap();
         assert!(csv.starts_with("Name,Type,Description,Email,Created,Modified"));
         assert!(csv.contains("alice"));
+    }
+
+    #[tokio::test]
+    async fn authenticated_csv_export_rejects_late_wrong_password() {
+        let _env = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        let config = authenticated_workspace(&dir, "master-pin").await;
+        seed_credentials(&config, "master-pin").await;
+
+        // The name validation unlocks with the right password, then the CSV
+        // exporter's own unlock fails — reaching the exporter's bail that a
+        // single env-provided password can never hit.
+        let out = dir.path().join("alice.csv");
+        let ui = ScriptedUi::new()
+            .password("master-pin")
+            .confirm(true)
+            .password("wrong-pin");
+        let err = execute_with(with_output(args(&["alice"], "csv"), &out), &config, &ui)
+            .await
+            .expect_err("late wrong password must abort the csv export");
+        assert!(
+            err.to_string()
+                .contains("Authentication failed: InvalidCredentials"),
+            "got: {err}"
+        );
+        assert!(ui.exhausted());
+        assert!(!out.exists(), "failed export writes nothing");
     }
 
     #[tokio::test]

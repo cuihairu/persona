@@ -2080,6 +2080,34 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_get_master_encryption_service_reports_locked() {
+        // The public operations gate through ensure_unlocked first, so the
+        // accessor's own locked branch is exercised directly (the same-module
+        // legacy-decryption tests already poke the success side).
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+
+        // A fresh service carries no encryption material at all.
+        let err = service
+            .get_master_encryption_service()
+            .err()
+            .expect("fresh service must be locked");
+        assert!(err.to_string().contains("Service is locked"));
+
+        // After a successful unlock, lock() drops the material again and the
+        // same error surfaces.
+        service.initialize_user("master-pin").await.unwrap();
+        assert!(service.get_master_encryption_service().is_ok());
+        service.lock();
+        let err = service
+            .get_master_encryption_service()
+            .err()
+            .expect("locked service must report locked");
+        assert!(err.to_string().contains("Service is locked"));
+    }
+
     // ------------------------------------------------------------------
     // User lifecycle / authentication
     // ------------------------------------------------------------------

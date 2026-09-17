@@ -293,8 +293,23 @@ pub async fn execute(args: BridgeArgs) -> Result<()> {
     let mut stdin = tokio::io::stdin();
     let mut stdout = tokio::io::stdout();
 
+    run_bridge(&db_path, &state_dir, &mut stdin, &mut stdout).await
+}
+
+/// The frame loop, split from `execute` so tests can drive it over
+/// in-memory pipes instead of the process stdio.
+async fn run_bridge<R, W>(
+    db_path: &Path,
+    state_dir: &Path,
+    reader: &mut R,
+    writer: &mut W,
+) -> Result<()>
+where
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+{
     loop {
-        let frame = match read_frame(&mut stdin).await {
+        let frame = match read_frame(reader).await {
             Ok(Some(frame)) => frame,
             Ok(None) => break, // EOF
             Err(e) => {
@@ -313,13 +328,13 @@ pub async fn execute(args: BridgeArgs) -> Result<()> {
                     error: Some(format!("invalid_json: {e}")),
                     payload: None,
                 };
-                write_frame(&mut stdout, &resp).await?;
+                write_frame(writer, &resp).await?;
                 continue;
             }
         };
 
         let request_id = req.request_id.clone();
-        let resp = handle_request(&db_path, &state_dir, req)
+        let resp = handle_request(db_path, state_dir, req)
             .await
             .unwrap_or_else(|e| BridgeResponse::<serde_json::Value> {
                 request_id,
@@ -329,7 +344,7 @@ pub async fn execute(args: BridgeArgs) -> Result<()> {
                 payload: None,
             });
 
-        write_frame(&mut stdout, &resp).await?;
+        write_frame(writer, &resp).await?;
     }
 
     Ok(())
@@ -686,24 +701,14 @@ async fn handle_request(
 
             copy_text_to_clipboard(&text)?;
 
-            info!(
-                event = "bridge_copy_success",
-                origin = %parsed.origin,
-                host = %host,
-                item_id = %parsed.item_id,
-                item_name = %cred.name,
-                field = %field,
-                "copied to clipboard"
-            );
-
-            Ok(ok(
+            copy_success_response(
                 req.request_id,
-                "copy_response",
-                serde_json::to_value(CopyResponse {
-                    copied: true,
-                    clear_after_seconds: None,
-                })?,
-            ))
+                &parsed.origin,
+                &host,
+                &parsed.item_id,
+                &cred.name,
+                &field,
+            )
         }
         "passkey_list" => {
             require_authenticated_session(state_dir, &req)?;
@@ -1779,22 +1784,55 @@ fn decode_totp_secret(secret: &str) -> Result<Vec<u8>> {
         .map_err(|e| anyhow!("invalid_base32_secret: {e}"))
 }
 
+/// Log a successful copy and build the wire response. Split out so the
+/// success tail stays reachable on headless machines without a clipboard.
+fn copy_success_response(
+    request_id: Option<String>,
+    origin: &str,
+    host: &str,
+    item_id: &str,
+    item_name: &str,
+    field: &str,
+) -> Result<BridgeResponse<serde_json::Value>> {
+    info!(
+        event = "bridge_copy_success",
+        origin = %origin,
+        host = %host,
+        item_id = %item_id,
+        item_name = %item_name,
+        field = %field,
+        "copied to clipboard"
+    );
+
+    Ok(ok(
+        request_id,
+        "copy_response",
+        serde_json::to_value(CopyResponse {
+            copied: true,
+            clear_after_seconds: None,
+        })?,
+    ))
+}
+
+#[cfg(target_os = "macos")]
 fn copy_text_to_clipboard(text: &str) -> Result<()> {
-    if cfg!(target_os = "macos") {
-        return pipe_to_command("pbcopy", &[], text);
-    }
+    pipe_to_command("pbcopy", &[], text)
+}
 
-    if cfg!(target_os = "windows") {
-        if pipe_to_command("cmd", &["/C", "clip"], text).is_ok() {
-            return Ok(());
-        }
-        return pipe_to_command(
-            "powershell",
-            &["-NoProfile", "-Command", "Set-Clipboard"],
-            text,
-        );
+#[cfg(target_os = "windows")]
+fn copy_text_to_clipboard(text: &str) -> Result<()> {
+    if pipe_to_command("cmd", &["/C", "clip"], text).is_ok() {
+        return Ok(());
     }
+    pipe_to_command(
+        "powershell",
+        &["-NoProfile", "-Command", "Set-Clipboard"],
+        text,
+    )
+}
 
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn copy_text_to_clipboard(text: &str) -> Result<()> {
     // Linux / other unix: try wl-copy (Wayland), then xclip/xsel (X11).
     if pipe_to_command("wl-copy", &[], text).is_ok() {
         return Ok(());
@@ -3083,27 +3121,32 @@ pub(crate) mod tests {
         cred.id
     }
 
+    #[cfg(target_os = "macos")]
     fn clipboard_available() -> bool {
-        if cfg!(target_os = "macos") {
-            return Command::new("which")
-                .arg("pbcopy")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-        }
-        if cfg!(target_os = "windows") {
-            // `cmd /C clip` is always present on Windows; verify it is
-            // callable rather than just checking the binary exists.
-            return Command::new("cmd")
-                .args(["/C", "echo", "test", "|", "clip"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-        }
+        Command::new("which")
+            .arg("pbcopy")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(target_os = "windows")]
+    fn clipboard_available() -> bool {
+        // `cmd /C clip` is always present on Windows; verify it is
+        // callable rather than just checking the binary exists.
+        Command::new("cmd")
+            .args(["/C", "echo", "test", "|", "clip"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    fn clipboard_available() -> bool {
         // A clipboard binary alone isn't enough on headless machines:
         // wl-copy needs WAYLAND_DISPLAY, xclip/xsel need DISPLAY. Mirror the
         // real preconditions so the probe agrees with actual copy success.
@@ -5335,5 +5378,382 @@ pub(crate) mod tests {
         drop(db);
         let db = open_db(&db_path).await.unwrap();
         assert_eq!(get_active_identity_id(&db).await, None);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn bridge_run_bridge_frame_loop_round_trips() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        let (mut client, server) = tokio::io::duplex(4096);
+        let (mut server_rd, mut server_wr) = tokio::io::split(server);
+        let handle = tokio::spawn({
+            let db_path = db_path.clone();
+            let state_dir = state_dir.clone();
+            async move { run_bridge(&db_path, &state_dir, &mut server_rd, &mut server_wr).await }
+        });
+
+        // A malformed frame is answered with an invalid_json error, and the
+        // loop keeps reading afterwards.
+        let junk = b"{not json";
+        client
+            .write_all(&(junk.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
+        client.write_all(junk).await.unwrap();
+        let frame = read_frame(&mut client).await.unwrap().unwrap();
+        let resp: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        assert_eq!(resp["ok"], false);
+        assert_eq!(resp["type"], "error");
+        assert!(
+            resp["error"].as_str().unwrap().starts_with("invalid_json"),
+            "got: {resp}"
+        );
+
+        // A well-formed hello request gets a real response frame.
+        let hello = serde_json::to_vec(&serde_json::json!({
+            "request_id": "req-1",
+            "type": "hello",
+            "payload": {
+                "extension_id": "ext-loop",
+                "extension_version": "1.0",
+                "protocol_version": 2,
+                "client_instance_id": "inst-loop"
+            }
+        }))
+        .unwrap();
+        client
+            .write_all(&(hello.len() as u32).to_le_bytes())
+            .await
+            .unwrap();
+        client.write_all(&hello).await.unwrap();
+        let frame = read_frame(&mut client).await.unwrap().unwrap();
+        let resp: serde_json::Value = serde_json::from_slice(&frame).unwrap();
+        assert_eq!(resp["ok"], true, "hello must succeed: {resp}");
+        assert_eq!(resp["type"], "hello_response");
+
+        // EOF on the reader side ends the loop cleanly.
+        drop(client);
+        handle.await.unwrap().unwrap();
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+    }
+
+    #[tokio::test]
+    async fn bridge_run_bridge_rejects_zero_length_frame() {
+        // A zero-length frame header is rejected before any request handling.
+        let mut reader = std::io::Cursor::new(0u32.to_le_bytes().to_vec());
+        let mut writer = Vec::new();
+        let err = run_bridge(Path::new(""), Path::new(""), &mut reader, &mut writer)
+            .await
+            .expect_err("zero-length frame must fail");
+        assert!(
+            err.to_string().contains("invalid_frame_length"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_fill_rejects_totp_credential_and_origin_mismatch() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let totp_id = seed_totp_credential(
+            &db_path,
+            identity_id,
+            "TOTP entry",
+            Some("https://example.com/totp"),
+        )
+        .await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Password entry",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+
+        // Filling is only allowed for password credentials.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": totp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill of a totp credential must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        // Fill enforces origin binding like copy does.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://evil.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("fill from a mismatched origin must fail");
+        assert!(err.to_string().starts_with("origin_mismatch"), "got: {err}");
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_get_totp_rejects_password_credential() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Password entry",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+
+        // get_totp only serves two-factor credentials.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("get_totp of a password credential must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_passkey_assert_rejects_foreign_identity() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        // The seeded passkey belongs to the seeded identity; read its id.
+        let item_id: String = {
+            let db = open_db(&db_path).await.unwrap();
+            let row = sqlx::query("SELECT id FROM passkeys LIMIT 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+            let id: String = sqlx::Row::get(&row, "id");
+            drop(db);
+            id
+        };
+
+        // Point the workspace at another identity: the assertion preflight
+        // must refuse the passkey with wrong_identity.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": item_id,
+                    "client_data_json_b64": "e30",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("assert for a foreign identity must fail");
+        assert!(err.to_string().starts_with("wrong_identity"), "got: {err}");
+
+        // Restore the active identity so other assertions hold.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[test]
+    fn copy_success_response_builds_wire_payload() {
+        let resp = copy_success_response(
+            Some("req-c".to_string()),
+            "https://example.com",
+            "example.com",
+            "00000000-0000-0000-0000-000000000001",
+            "Copy target",
+            "password",
+        )
+        .unwrap();
+        assert!(resp.ok);
+        assert_eq!(resp.kind, "copy_response");
+        assert_eq!(resp.request_id.as_deref(), Some("req-c"));
+        assert_eq!(resp.payload.unwrap()["copied"], true);
+    }
+
+    #[test]
+    fn compute_match_strength_contains_fallback() {
+        // Unparseable credential URL falls back to the legacy contains
+        // heuristic: 80 when the raw URL embeds the request host.
+        assert_eq!(compute_match_strength("shop", "https://shop.example"), 80);
+        // No relation at all scores zero.
+        assert_eq!(
+            compute_match_strength("elsewhere", "https://example.com"),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn get_active_identity_id_survives_repository_error() {
+        let (_dir, db_path, _state_dir, _identity_id) = seeded_bridge().await;
+
+        // A broken workspaces table makes find_all fail; the helper must
+        // swallow the error and report no active identity.
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("DROP TABLE workspaces")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let db = open_db(&db_path).await.unwrap();
+        assert_eq!(get_active_identity_id(&db).await, None);
+    }
+
+    #[test]
+    fn finalize_pairing_promotes_approved_pending_to_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path();
+        let now = now_ms();
+
+        // An approved pending request plus a stale pairing row for the same
+        // extension: finalizing must replace the row and mint a session.
+        let mut st = BridgeStateFile {
+            version: 1,
+            pairings: vec![PairingInfo {
+                extension_id: "ext".to_string(),
+                client_instance_id: "client-1".to_string(),
+                key_b64: URL_SAFE_NO_PAD.encode([1u8; 32]),
+                paired_at_ms: now - 1000,
+                session: None,
+            }],
+            pending: vec![PendingPairing {
+                code: "123 456".to_string(),
+                extension_id: "ext".to_string(),
+                client_instance_id: "client-1".to_string(),
+                key_b64: URL_SAFE_NO_PAD.encode([7u8; 32]),
+                requested_at_ms: now,
+                expires_at_ms: now + 5 * 60_000,
+                approved: true,
+            }],
+        };
+        save_state(state_dir, &st).unwrap();
+
+        // The code is matched after normalization (spaces and case ignored).
+        let info = finalize_pairing(
+            state_dir,
+            PairingFinalizePayload {
+                extension_id: "ext".to_string(),
+                client_instance_id: "client-1".to_string(),
+                code: " 123456 ".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(info.extension_id, "ext");
+        assert_eq!(info.key_b64, URL_SAFE_NO_PAD.encode([7u8; 32]));
+        let session = info.session.expect("finalized pairing carries a session");
+        assert!(!session.session_id.is_empty());
+
+        let loaded = load_state(state_dir).unwrap();
+        assert!(loaded.pending.is_empty(), "pending entry consumed");
+        assert_eq!(loaded.pairings.len(), 1, "stale row replaced, not doubled");
+        assert!(loaded.pairings[0].session.is_some());
+
+        // Re-finalizing finds no pending entry anymore.
+        let err = finalize_pairing(
+            state_dir,
+            PairingFinalizePayload {
+                extension_id: "ext".to_string(),
+                client_instance_id: "client-1".to_string(),
+                code: "123456".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "pairing_not_found_or_expired");
+
+        // An unapproved pending request never mints a session.
+        st.pending.push(PendingPairing {
+            code: "777-888".to_string(),
+            extension_id: "ext2".to_string(),
+            client_instance_id: "client-2".to_string(),
+            key_b64: URL_SAFE_NO_PAD.encode([8u8; 32]),
+            requested_at_ms: now,
+            expires_at_ms: now + 5 * 60_000,
+            approved: false,
+        });
+        save_state(state_dir, &st).unwrap();
+        let err = finalize_pairing(
+            state_dir,
+            PairingFinalizePayload {
+                extension_id: "ext2".to_string(),
+                client_instance_id: "client-2".to_string(),
+                code: "777-888".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "pairing_not_approved");
     }
 }

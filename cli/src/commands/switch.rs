@@ -757,4 +757,81 @@ mod tests {
         assert!(err.to_string().contains("out of range"));
         assert!(ui.exhausted());
     }
+
+    #[tokio::test]
+    async fn switch_late_auth_failures_reach_the_deep_gates() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+        ensure_workspace_row(&db, &config).await;
+        {
+            let mut service = PersonaService::new(service_db(&config).await)
+                .await
+                .unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // The interactive menu's identity fetch authenticates on its own: a
+        // wrong password fails there before any selection is offered.
+        let ui = ScriptedUi::new().password("wrong-pin");
+        let err = select_identity_interactive(&config, &ui)
+            .await
+            .expect_err("wrong password must fail the menu fetch");
+        assert!(
+            err.to_string()
+                .contains("Authentication failed: InvalidCredentials"),
+            "got: {err}"
+        );
+        assert!(ui.exhausted());
+
+        // The full interactive flow authenticates three times (menu fetch,
+        // verify, perform). Failing only the last one reaches the bail in
+        // perform_switch that the earlier gates can never hit with a single
+        // env-provided password.
+        let ui = ScriptedUi::new()
+            .password("master-pin") // menu fetch
+            .select(1) // bob
+            .password("master-pin") // verify_identity_exists
+            .password("wrong-pin"); // perform_switch
+        let err = execute_with(switch_args(None, true), &config, &ui)
+            .await
+            .expect_err("late auth failure must abort the switch");
+        assert!(
+            err.to_string()
+                .contains("Authentication failed: InvalidCredentials"),
+            "got: {err}"
+        );
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn switch_current_identity_resolves_active_pointer_by_id() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+
+        // A workspace row whose active pointer targets alice resolves her
+        // name through the by-id lookup.
+        let alice = IdentityRepository::new(db.clone())
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut ws = Workspace::new(config.workspace.path.clone(), "test-workspace".to_string());
+        ws.switch_identity(alice.id);
+        WorkspaceRepository::new(db.clone())
+            .create(&ws)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_current_identity(&config).await.unwrap().as_deref(),
+            Some("alice")
+        );
+    }
 }
