@@ -2022,7 +2022,9 @@ pub async fn configure_auto_lock(
                 inactivity_timeout_secs: request.inactivity_timeout_secs,
                 absolute_timeout_secs: request.absolute_timeout_secs.unwrap_or(0),
                 require_reauth_sensitive: request.require_reauth_sensitive.unwrap_or(false),
-                ..Default::default()
+                sensitive_operation_timeout_secs: request
+                    .sensitive_operation_timeout_secs
+                    .unwrap_or(300),
             };
             match service.configure_auto_lock(config).await {
                 Ok(()) => Ok(ApiResponse::success(true)),

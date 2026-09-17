@@ -238,9 +238,11 @@ impl PersonaService {
 
     /// Configure auto-lock settings
     pub async fn configure_auto_lock(&mut self, config: crate::auth::AutoLockConfig) -> Result<()> {
-        // This would require recreating the auto-lock manager with new config
-        // For now, we'll just update the timeout
         self.auto_lock_timeout = Duration::from_secs(config.inactivity_timeout_secs);
+        // 同步进管理器（含 require_reauth_sensitive / sensitive_operation_timeout_secs）：
+        // 管理器不能重建——重建会丢掉在管 session、后台任务与回调，所以
+        // 之前只更新了超时副本，命令层的敏感操作再认证开关从未生效。
+        self.auto_lock_manager.update_base_config(config);
         Ok(())
     }
 
@@ -1435,7 +1437,11 @@ impl PersonaService {
             // 底层 authenticate 原语建 session，而生产登录全部走本方法——
             // session 从未建立，auto-lock 监控与 Locked 事件强制落锁对
             // 正常登录路径完全失效。
-            let session = Session::new(user_auth.user_id.to_string(), self.auto_lock_timeout);
+            let mut session = Session::new(user_auth.user_id.to_string(), self.auto_lock_timeout);
+            // 登录/再认证本身就是一次敏感验证：记录敏感活动，否则打开
+            // require_reauth_sensitive 后，刚登录的用户连第一个敏感操作都
+            // 会被闸——而敏感计时器只能由成功的敏感操作刷新，形成死锁。
+            session.touch_sensitive();
             let session_id = session.id.clone();
             *self.current_session_id.write().await = Some(session_id.clone());
             self.auto_lock_manager
@@ -2284,6 +2290,68 @@ mod tests {
             .unwrap()
             .expect("credential exists");
         assert!(matches!(data, CredentialData::Password(_)));
+    }
+
+    /// 公开 API 的完整回路：configure_auto_lock 打开敏感闸门 → 登录
+    /// （authenticate_user）记录敏感活动即放行 → 窗口过后被
+    /// ReauthRequired 拦下 → 再认证恢复 → 关闭闸门同样恢复。
+    /// 此前的测试只能换私有 manager 字段，公开路径下开关从未生效。
+    #[tokio::test]
+    async fn test_configure_auto_lock_gate_round_trip_via_public_api() {
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Gate Round Trip".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(
+            &service,
+            identity.id,
+            "Gated Three",
+            CredentialType::Password,
+        )
+        .await;
+
+        // 打开闸门，敏感窗口 1 秒。
+        service
+            .configure_auto_lock(crate::auth::AutoLockConfig {
+                inactivity_timeout_secs: 900,
+                absolute_timeout_secs: 0,
+                require_reauth_sensitive: true,
+                sensitive_operation_timeout_secs: 1,
+            })
+            .await
+            .unwrap();
+
+        // 生产登录路径建立 session，并把登录本身记为一次敏感验证——
+        // 刚登录的用户应能直接做敏感操作（否则闸门无法自愈：计时器只能
+        // 由成功的敏感操作刷新）。
+        let auth = service.authenticate_user("master-pin").await.unwrap();
+        assert!(matches!(auth, AuthResult::Success));
+        assert!(!service.needs_reauth().await);
+        assert!(service.get_credential_data(&cred.id).await.is_ok());
+
+        // 窗口过后，同一操作被专用错误变体拦下。
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        assert!(service.needs_reauth().await);
+        let err = service.get_credential_data(&cred.id).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Re-authentication required"),
+            "unexpected error: {err}"
+        );
+
+        // 再认证（同一登录路径）刷新敏感计时器，操作恢复放行。
+        let auth = service.authenticate_user("master-pin").await.unwrap();
+        assert!(matches!(auth, AuthResult::Success));
+        assert!(!service.needs_reauth().await);
+
+        // 关闭闸门后，即使窗口再次过期也放行。
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        service
+            .configure_auto_lock(crate::auth::AutoLockConfig::default())
+            .await
+            .unwrap();
+        assert!(!service.needs_reauth().await);
+        assert!(service.get_credential_data(&cred.id).await.is_ok());
     }
 
     #[tokio::test]

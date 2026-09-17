@@ -3,7 +3,7 @@ use crate::models::{AuditAction, ResourceType};
 use crate::storage::{AuditLogRepository, Repository};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock as SyncRwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
@@ -115,7 +115,11 @@ pub type AutoLockCallback = Arc<dyn Fn(AutoLockEvent) + Send + Sync>;
 
 /// Enhanced auto-lock manager with advanced features
 pub struct AutoLockManager {
-    config: EnhancedAutoLockConfig,
+    /// 配置快照。锁保护的目的是支持运行期更新（`update_base_config`）：
+    /// 服务层把命令传来的设置同步进来，而管理器不能重建——重建会丢掉
+    /// 在管 session、后台任务与回调。读侧全是短临界区同步访问，用
+    /// std 锁即可（不跨 await）。
+    config: SyncRwLock<EnhancedAutoLockConfig>,
     sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     callbacks: Arc<RwLock<Vec<AutoLockCallback>>>,
     audit_repo: Option<AuditLogRepository>,
@@ -135,7 +139,7 @@ impl AutoLockManager {
     /// Create a new auto-lock manager
     pub fn new(config: EnhancedAutoLockConfig) -> Self {
         Self {
-            config,
+            config: SyncRwLock::new(config),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             callbacks: Arc::new(RwLock::new(Vec::new())),
             audit_repo: None,
@@ -147,6 +151,19 @@ impl AutoLockManager {
     /// Create with basic auto-lock config
     pub fn with_basic_config(config: AutoLockConfig) -> Self {
         Self::new(config.into())
+    }
+
+    /// Update the base auto-lock configuration in place.
+    ///
+    /// [`crate::PersonaService::configure_auto_lock`] 经此同步命令层传来的
+    /// 设置。只换 `base`：其余增强字段（并发上限、宽限期等）保持不变，
+    /// 在管 session 与后台任务也不受影响。
+    pub fn update_base_config(&self, base: AutoLockConfig) {
+        let mut config = self
+            .config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        config.base = base;
     }
 
     /// Set audit repository for logging
@@ -167,6 +184,11 @@ impl AutoLockManager {
         let user_id = session.user_id.clone();
 
         // Check concurrent session limit
+        let max_concurrent_sessions = self
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .max_concurrent_sessions;
         {
             let sessions = self.sessions.read().await;
             let user_sessions = sessions
@@ -174,10 +196,9 @@ impl AutoLockManager {
                 .filter(|s| s.session.user_id == user_id && s.session.is_valid())
                 .count();
 
-            if user_sessions >= self.config.max_concurrent_sessions {
+            if user_sessions >= max_concurrent_sessions {
                 return Err(format!(
-                    "Maximum concurrent sessions ({}) exceeded",
-                    self.config.max_concurrent_sessions
+                    "Maximum concurrent sessions ({max_concurrent_sessions}) exceeded"
                 ));
             }
         }
@@ -209,12 +230,17 @@ impl AutoLockManager {
 
     /// Update session activity
     pub async fn update_activity(&self, session_id: &str) -> Result<(), String> {
+        let grace_period_secs = self
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .activity_grace_period_secs;
         let mut sessions = self.sessions.write().await;
         if let Some(session_info) = sessions.get_mut(session_id) {
             // Apply grace period for rapid successive calls
             let now = SystemTime::now();
             if let Ok(elapsed) = now.duration_since(session_info.session.last_activity) {
-                if elapsed.as_secs() < self.config.activity_grace_period_secs {
+                if elapsed.as_secs() < grace_period_secs {
                     return Ok(());
                 }
             }
@@ -236,12 +262,21 @@ impl AutoLockManager {
 
     /// Update sensitive operation activity
     pub async fn update_sensitive_activity(&self, session_id: &str) -> Result<(), String> {
+        let (force_lock_sensitive, sensitive_timeout_secs) = {
+            let config = self
+                .config
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (
+                config.force_lock_sensitive,
+                config.base.sensitive_operation_timeout_secs,
+            )
+        };
         let mut sessions = self.sessions.write().await;
         if let Some(session_info) = sessions.get_mut(session_id) {
             // Force lock if enabled and sensitive timeout is reached
-            if self.config.force_lock_sensitive {
-                let timeout =
-                    Duration::from_secs(self.config.base.sensitive_operation_timeout_secs);
+            if force_lock_sensitive {
+                let timeout = Duration::from_secs(sensitive_timeout_secs);
                 if session_info.session.requires_sensitive_reauth(timeout) {
                     session_info.session.lock();
                     drop(sessions);
@@ -327,7 +362,17 @@ impl AutoLockManager {
 
     /// Check if session requires re-authentication for sensitive operations
     pub async fn requires_sensitive_auth(&self, session_id: &str) -> bool {
-        if !self.config.base.require_reauth_sensitive {
+        let (require_reauth_sensitive, sensitive_timeout_secs) = {
+            let config = self
+                .config
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (
+                config.base.require_reauth_sensitive,
+                config.base.sensitive_operation_timeout_secs,
+            )
+        };
+        if !require_reauth_sensitive {
             return false;
         }
 
@@ -335,9 +380,7 @@ impl AutoLockManager {
         if let Some(session_info) = sessions.get(session_id) {
             session_info
                 .session
-                .requires_sensitive_reauth(Duration::from_secs(
-                    self.config.base.sensitive_operation_timeout_secs,
-                ))
+                .requires_sensitive_reauth(Duration::from_secs(sensitive_timeout_secs))
         } else {
             true // No session = require auth
         }
@@ -361,6 +404,16 @@ impl AutoLockManager {
 
     /// Get auto-lock statistics
     pub async fn get_statistics(&self) -> AutoLockStatistics {
+        let (inactivity_timeout_secs, max_concurrent_sessions) = {
+            let config = self
+                .config
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (
+                config.base.inactivity_timeout_secs,
+                config.max_concurrent_sessions,
+            )
+        };
         let sessions = self.sessions.read().await;
         let total_sessions = sessions.len();
         let active_sessions = sessions.values().filter(|si| si.session.is_valid()).count();
@@ -369,9 +422,9 @@ impl AutoLockManager {
             .values()
             .filter(|si| {
                 si.session.is_valid()
-                    && si.session.is_idle(Duration::from_secs(
-                        self.config.base.inactivity_timeout_secs,
-                    ))
+                    && si
+                        .session
+                        .is_idle(Duration::from_secs(inactivity_timeout_secs))
             })
             .count();
 
@@ -380,16 +433,24 @@ impl AutoLockManager {
             active_sessions,
             locked_sessions,
             idle_sessions,
-            max_concurrent_sessions: self.config.max_concurrent_sessions,
+            max_concurrent_sessions,
         }
     }
 
     /// Start background monitoring task
     pub async fn start_background_monitoring(&self) {
-        let interval = Duration::from_secs(self.config.background_check_interval_secs);
+        let (interval, config) = {
+            let config = self
+                .config
+                .read()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            (
+                Duration::from_secs(config.background_check_interval_secs),
+                config.clone(),
+            )
+        };
         let sessions = self.sessions.clone();
         let callbacks = self.callbacks.clone();
-        let config = self.config.clone();
         let audit_repo = self.audit_repo.clone();
 
         let handle = tokio::spawn(async move {
@@ -514,17 +575,22 @@ impl AutoLockManager {
     // Private helper methods
 
     fn should_lock_session(&self, session: &Session) -> bool {
+        let config = self
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
         // Check inactivity timeout
-        if self.config.base.inactivity_timeout_secs > 0 {
-            let inactivity = Duration::from_secs(self.config.base.inactivity_timeout_secs);
+        if config.base.inactivity_timeout_secs > 0 {
+            let inactivity = Duration::from_secs(config.base.inactivity_timeout_secs);
             if session.is_idle(inactivity) {
                 return true;
             }
         }
 
         // Check absolute timeout
-        if self.config.base.absolute_timeout_secs > 0 {
-            let absolute = Duration::from_secs(self.config.base.absolute_timeout_secs);
+        if config.base.absolute_timeout_secs > 0 {
+            let absolute = Duration::from_secs(config.base.absolute_timeout_secs);
             if session.get_lifetime_seconds() > absolute.as_secs() {
                 return true;
             }
@@ -1258,5 +1324,38 @@ mod tests {
         // Idle beyond the timeout: nothing remains.
         let stale = session_info_with_idle_seconds(5);
         assert_eq!(get_seconds_until_lock(&config, &stale), 0);
+    }
+
+    /// update_base_config 原地翻转敏感操作再认证闸门（服务层
+    /// configure_auto_lock 的传递路径），无需重建管理器。
+    #[tokio::test]
+    async fn update_base_config_toggles_sensitive_reauth_gate_in_place() {
+        let manager = AutoLockManager::with_basic_config(AutoLockConfig::default());
+        let session = Session::new("gate-user".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        // 默认配置不设闸。
+        assert!(!manager.requires_sensitive_auth(&session_id).await);
+
+        // 原地开闸：无敏感历史的 session 立即被要求再认证。
+        manager.update_base_config(AutoLockConfig {
+            require_reauth_sensitive: true,
+            sensitive_operation_timeout_secs: 0,
+            ..AutoLockConfig::default()
+        });
+        assert!(manager.requires_sensitive_auth(&session_id).await);
+
+        // timeout 为 0 → 刚记录的敏感活动也视为过期（elapsed > 0 恒真）。
+        manager
+            .update_sensitive_activity(&session_id)
+            .await
+            .unwrap();
+        assert!(manager.requires_sensitive_auth(&session_id).await);
+
+        // 关闭闸门同样原地生效，session 依然在管。
+        manager.update_base_config(AutoLockConfig::default());
+        assert!(!manager.requires_sensitive_auth(&session_id).await);
+        assert!(manager.get_session(&session_id).await.is_some());
     }
 }

@@ -675,6 +675,8 @@ pub struct AutoLockConfigRequest {
     pub inactivity_timeout_secs: u64,
     pub absolute_timeout_secs: Option<u64>,
     pub require_reauth_sensitive: Option<bool>,
+    /// 敏感操作再认证的窗口（秒）；不传用 core 默认（300）。
+    pub sensitive_operation_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Serialize)]

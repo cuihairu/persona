@@ -309,6 +309,7 @@ async fn auto_lock_commands_configure_status_and_monitoring() {
             inactivity_timeout_secs: 300,
             absolute_timeout_secs: Some(3600),
             require_reauth_sensitive: Some(true),
+            sensitive_operation_timeout_secs: None,
         },
         app.state::<AppState>(),
     )
@@ -3334,6 +3335,7 @@ async fn locked_service_error_code_matrix() {
             inactivity_timeout_secs: 300,
             absolute_timeout_secs: None,
             require_reauth_sensitive: None,
+            sensitive_operation_timeout_secs: None,
         },
         app.state::<AppState>(),
     )
@@ -4335,6 +4337,7 @@ async fn auto_lock_and_reauth_commands_require_initialized_service() {
             inactivity_timeout_secs: 900,
             absolute_timeout_secs: None,
             require_reauth_sensitive: None,
+            sensitive_operation_timeout_secs: None,
         },
         state.clone(),
     )
@@ -4550,4 +4553,115 @@ async fn get_active_identity_without_db_path_degrades_loudly() {
         resp.error.as_deref(),
         Some("Database path unavailable. Initialize the service first.")
     );
+}
+
+#[tokio::test]
+async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    let state = app.state::<AppState>();
+
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Gate Holder".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    let identity_id = resp.data.expect("identity created").id;
+    let resp = create_credential(password_credential_request(&identity_id), state.clone())
+        .await
+        .unwrap();
+    let cred_id = resp.data.expect("credential created").id;
+
+    // 公开配置 API 打开闸门：1 秒敏感窗口。修复前这个开关只改了超时
+    // 副本，管理器从不感知——闸门从未生效。
+    let resp = configure_auto_lock(
+        AutoLockConfigRequest {
+            inactivity_timeout_secs: 900,
+            absolute_timeout_secs: None,
+            require_reauth_sensitive: Some(true),
+            sensitive_operation_timeout_secs: Some(1),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // reauth_verify（authenticate_user）建 session，并把登录本身记为
+    // 一次敏感验证 → 刚认证的用户直接过闸。
+    let resp = reauth_verify(
+        ReauthRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: cred_id.clone(),
+            field: "password".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.success,
+        "just-authenticated user passes the gate: {:?}",
+        resp
+    );
+
+    // 窗口过后：专用错误码 REAUTH_REQUIRED（分流前端弹再认证 modal）。
+    tokio::time::sleep(std::time::Duration::from_millis(1300)).await;
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: cred_id.clone(),
+            field: "password".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some("REAUTH_REQUIRED"),
+        "got: {:?}",
+        resp
+    );
+
+    let resp = get_auto_lock_status(state.clone()).await.unwrap();
+    assert!(resp.data.expect("status").needs_reauth);
+
+    // 再认证 → 恢复放行。
+    let resp = reauth_verify(
+        ReauthRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = reveal_credential_secret(
+        RevealSecretRequest {
+            credential_id: cred_id,
+            field: "password".to_string(),
+        },
+        state,
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp);
+    assert_eq!(resp.data.expect("reveal").value, "s3cret-password");
 }

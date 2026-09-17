@@ -90,6 +90,13 @@ Desktop (Tauri v2 + React)
 - [x] ApiResponse 错误码协议（REAUTH_REQUIRED / SERVICE_LOCKED 分流）
 - [x] Auto-lock 全链路：core 事件 → emit `persona://auto-lock` → 前端倒计时横幅 +
   回解锁屏；Locked 事件后端强制落锁（清内存主密钥，不依赖前端存活）
+- [x] fix: `require_reauth_sensitive` 开关真正生效（2026-09 命令级测试发现）
+  — `configure_auto_lock` 此前只改超时副本，管理器配置不可变导致敏感操作
+  再认证闸门从未开启；现经 `AutoLockManager::update_base_config`（同步
+  RwLock 原地更新）传递，`AutoLockConfigRequest` 透传 sensitive 窗口；
+  `authenticate_user` 登录即记敏感活动（否则开闸后首个敏感操作被闸且
+  无法自愈）；端到端：开闸 → 登录放行 → 窗口过期 REAUTH_REQUIRED →
+  再认证恢复
 - [x] Vault/identity/credential views; search; 三维筛选（类型/标签/仅收藏）
 - [x] TOTP display; password reveal flow（re-auth 闸门 + 30s 自动隐藏 + copy-once
   clipboard）；SshKey/ApiKey/BankCard 分支渲染
