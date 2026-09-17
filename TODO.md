@@ -104,19 +104,26 @@ Desktop (Tauri v2 + React)
   tauri 依赖）→ DesktopApprovalHandler（emit `persona://ssh-approval` + oneshot，
   120s 超时自动拒绝）→ SshApprovalModal；CLI 走 TTY 提示零改动；失焦系统通知
 - [x] Wallet UI (addresses, QR, signing confirmations + 地址投毒启发式告警)
-- [ ] Desktop 集成测试矩阵扩展（当前 95 个 Rust 测试，总体行覆盖 ~89%，
-  commands.rs ~89%、types.rs 100%、passkey_bridge ~95%；命令级集成测试
+- [ ] Desktop 集成测试矩阵扩展（当前 102 个 Rust 测试，总体行覆盖 ~90%，
+  commands.rs ~90.6%、types.rs 100%、passkey_bridge ~94.5%；命令级集成测试
   基建已建：`command_layer_tests.rs` 经 `tauri::test::mock_app` 直驱 50+
   命令处理器，含 wallet 交易 create/sign 多链路径、SSH agent start/stop
   生命周期、passkey 审批 serve_on 端到端（真 Unix socket）+ service 层
   passkey_assertion（last_used_at 时间戳回写）、锁定态 SERVICE_LOCKED
   矩阵、**坏库 service 批测**（sqlx 惰性连接：手工构造已解锁但 DB 为
   垃圾文件的 service，驱动 init_service 无法到达的各命令 repo 错误臂）、
-  init 幂等（existing-user 再认证 + 错密码拒绝 + 账号锁定）。已知不可达：
+  init 幂等（existing-user 再认证 + 错密码拒绝 + 账号锁定）、wallet 五命令
+  前置臂 × 死库矩阵、active identity 前置臂矩阵、AddressType 标签全臂、
+  passkey_create 非法 base64 门。已知不可达（~10% 剩余构成）：
   main.rs 托盘/窗口路径（无头环境不可测，86 行）、passkey_bridge Tauri
-  sink（mock runtime 毒化同进程 socket 测试，有意绕过）、防御性错误臂
+  sink（mock runtime 毒化同进程 socket 测试，需 lib 化解锁）、防御性错误臂
   （parse_network 永不失败、恒 Ok 方法的 Err 分支、wallet 签名后本地
-  verify 拒绝臂、`require_reauth_sensitive` 无公开置位路径））
+  verify 拒绝臂、emit 失败臂）。可达上限约 91%——98% 纯行覆盖不可达）
+- [ ] 产品缺口：`password_change_required` 强制改密机制仅存 schema
+  （user_auth 表列 + `AuthResult::PasswordChangeRequired` + init_service
+  拒绝臂），生产代码无任何置位路径（INSERT 恒 0）——密码过期/轮换策略
+  未实现，init_service 的 "Password change required" 分支永不触发
+  （2026-09 覆盖率分析发现，非链路断裂而是功能本体缺失）
 - [x] fix(desktop): init_service 持锁调用 register_auto_lock_bridge 的死锁
   （tokio Mutex 非重入；2026-09 命令级测试发现并修复）
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）

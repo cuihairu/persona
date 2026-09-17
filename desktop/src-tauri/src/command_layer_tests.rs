@@ -4665,3 +4665,501 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
     assert!(resp.success, "{:?}", resp);
     assert_eq!(resp.data.expect("reveal").value, "s3cret-password");
 }
+
+// ---------------------------------------------------------------------------
+// 第十六批：active identity / wallet / ssh 命令的前置条件与死库矩阵
+// ---------------------------------------------------------------------------
+
+/// active identity 三命令的前置臂：未初始化、锁定、非法 UUID、db_path 缺失，
+/// 外加 clear_active_identity 的成功路径（此前只有失败路径有覆盖）。
+#[tokio::test]
+async fn active_identity_precondition_matrix() {
+    // 未初始化：None service 臂在 UUID 解析之前拦下 set。
+    let app = mock_app();
+    let resp = set_active_identity("not-even-a-uuid".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = clear_active_identity(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    // 锁定态：unlock 检查在 UUID 解析之前。
+    let (app, identity_id) = app_with_identity().await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = set_active_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    let resp = clear_active_identity(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+
+    // 已解锁：UUID 解析在 db_path 检查之前，非法 UUID 走自己的 Err 臂。
+    let (app, identity_id) = app_with_identity().await;
+    let err = set_active_identity("bad-uuid".to_string(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(err, "Invalid identity UUID format");
+
+    // db_path 缺失：set/clear 都上抛同一句 Err。
+    let original_db_path = {
+        let state = app.state::<AppState>();
+        let path = state.db_path.lock().await.clone();
+        *state.db_path.lock().await = None;
+        path.expect("init_service_ok set a db path")
+    };
+    let err = set_active_identity(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+    let err = clear_active_identity(app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+
+    // 恢复路径后 clear 走完整成功链（ensure_workspace → 清指针 → 落库）。
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = Some(original_db_path);
+    }
+    let resp = set_active_identity(identity_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = clear_active_identity(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = get_active_identity(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(None), "clear must remove the pointer");
+}
+
+/// 五个此前只覆盖成功/半覆盖路径的 wallet 命令（add_address/delete/export/
+/// create_transaction/sign_transaction）的前置臂与死库矩阵：
+/// None service → Ok(error)（wallet_db 路径为 Err）、locked → 同型、
+/// 短密码专属臂、db_path 缺失 → Err、垃圾库 → migrate 失败。
+#[tokio::test]
+async fn wallet_five_commands_precondition_and_dead_db_matrix() {
+    let export_request = || WalletExportRequest {
+        wallet_id: uuid::Uuid::new_v4().to_string(),
+        format: "json".to_string(),
+        include_private: false,
+        password: None,
+    };
+    let create_request = |wallet_id: &str| WalletCreateTransactionRequest {
+        wallet_id: wallet_id.to_string(),
+        to_address: "0x2222222222222222222222222222222222222222".to_string(),
+        amount: "1".to_string(),
+        fee: "21000".to_string(),
+        gas_price: None,
+        gas_limit: None,
+        nonce: None,
+        memo: None,
+        expires_in_minutes: None,
+    };
+    let sign_request = |wallet_id: &str| WalletSignTransactionRequest {
+        transaction_id: wallet_id.to_string(),
+        password: "wallet-pass-123".to_string(),
+    };
+
+    // 场景 A：未初始化。add/delete/export 返回 Ok 包错误体；
+    // create/sign 先解析 UUID 再走 wallet_db 的 Err 臂。
+    let app = mock_app();
+    let resp = wallet_add_address(
+        uuid::Uuid::new_v4().to_string(),
+        "pw".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = wallet_delete(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = wallet_export(export_request(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let err = wallet_create_transaction(
+        create_request(&uuid::Uuid::new_v4().to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "Service not initialized");
+    let err = wallet_sign_transaction(
+        sign_request(&uuid::Uuid::new_v4().to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "Service not initialized");
+
+    // 场景 B：锁定。同型消息，wallet_db 路径也是 Err。
+    let (app, _identity_id) = app_with_identity().await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = wallet_add_address(
+        uuid::Uuid::new_v4().to_string(),
+        "pw".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    let resp = wallet_delete(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    let resp = wallet_export(export_request(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    let err = wallet_create_transaction(
+        create_request(&uuid::Uuid::new_v4().to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "Service is locked");
+    let err = wallet_sign_transaction(
+        sign_request(&uuid::Uuid::new_v4().to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "Service is locked");
+
+    // 场景 C/D：已解锁。短密码专属臂、db_path 缺失、垃圾库 migrate 失败。
+    let (app, _identity_id) = app_with_identity().await;
+
+    // add_address：合法 UUID 但密码太短（UUID 解析之后、db_path 之前）。
+    let resp = wallet_add_address(
+        uuid::Uuid::new_v4().to_string(),
+        "short".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Wallet password must be at least 8 characters")
+    );
+    // delete 的 UUID 解析在 db_path 之后——用非法 UUID 顺带钉住顺序。
+    let err = wallet_delete("bad-uuid".to_string(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(err, "Invalid wallet UUID format");
+
+    let dir = tempfile::tempdir().unwrap();
+    let junk = dir.path().join("junk.db");
+    std::fs::write(&junk, b"junk for wallet matrix").unwrap();
+    let junk_path = junk.to_string_lossy().to_string();
+    std::mem::forget(dir);
+
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = None;
+    }
+    let wallet_uuid = uuid::Uuid::new_v4().to_string();
+    let err = wallet_add_address(
+        wallet_uuid.clone(),
+        "wallet-pass-123".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+    let err = wallet_delete(wallet_uuid.clone(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+    let err = wallet_export(export_request(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+    let err = wallet_sign_transaction(sign_request(&wallet_uuid), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+
+    // 垃圾库：migrate 才撞 not a database。
+    {
+        let state = app.state::<AppState>();
+        *state.db_path.lock().await = Some(junk_path);
+    }
+    let err = wallet_add_address(
+        wallet_uuid.clone(),
+        "wallet-pass-123".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.starts_with("Database migration failed") && err.contains("not a database"),
+        "got: {err}"
+    );
+    let err = wallet_delete(wallet_uuid.clone(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+    let err = wallet_export(export_request(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+    let err = wallet_sign_transaction(sign_request(&wallet_uuid), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+    let err = wallet_create_transaction(create_request(&wallet_uuid), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(err.contains("not a database"), "got: {err}");
+}
+
+/// get_ssh_keys 的未初始化/死库臂与 stop_ssh_agent 的空转臂（无 agent 可停
+/// 也要返回成功并清理环境变量）。
+#[tokio::test]
+async fn ssh_key_listing_and_agent_stop_small_arms() {
+    let app = mock_app();
+    let resp = get_ssh_keys(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = stop_ssh_agent(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(true));
+
+    // 已解锁但 DB 是垃圾文件：get_identities 的 repo 错误上抛。
+    let app = app_with_garbage_db_service().await;
+    let err = get_ssh_keys(app.state::<AppState>()).await.unwrap_err();
+    assert!(
+        err.starts_with("Failed to load identities") && err.contains("not a database"),
+        "got: {err}"
+    );
+}
+
+/// create_identity 的 identity_type 大写/自定义全臂（354-359 的 match）。
+#[tokio::test]
+async fn create_identity_type_match_arms_all_reachable() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+
+    // 大写形式走专用枚举臂，任意其他字符串走 Custom 原样回显。
+    for label in [
+        "Personal",
+        "Work",
+        "Social",
+        "Financial",
+        "Gaming",
+        "banking-alt",
+    ] {
+        let resp = create_identity(
+            CreateIdentityRequest {
+                name: format!("Typed {label}"),
+                identity_type: label.to_string(),
+                description: None,
+                email: None,
+                phone: None,
+            },
+            app.state::<AppState>(),
+        )
+        .await
+        .unwrap();
+        assert!(resp.success, "{label}: {:?}", resp.error);
+        let identity = resp.data.expect("identity created");
+        assert_eq!(identity.name, format!("Typed {label}"));
+    }
+}
+
+/// ensure_workspace_for_path 的 create 分支：workspace_path 无 file_name
+/// （如 "/"）时工作区名叫 "Persona"。需要空库——已有单个 workspace 时
+/// 先走 len==1 迁移分支（改写 path 返回），到不了 name 计算。
+#[tokio::test]
+async fn workspace_name_falls_back_to_persona_for_root_paths() {
+    assert_eq!(workspace_path_for_db_path("/"), ".");
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = persona_core::Database::from_file(dir.path().join("w.db"))
+        .await
+        .unwrap();
+    db.migrate().await.unwrap();
+
+    let ws = ensure_workspace_for_path(&db, "/").await.unwrap();
+    assert_eq!(ws.name, "Persona");
+    assert_eq!(ws.path.to_string_lossy(), "/");
+
+    // 同路径二次调用走 find 分支，名字不被重建覆盖。
+    let ws = ensure_workspace_for_path(&db, "/").await.unwrap();
+    assert_eq!(ws.name, "Persona");
+}
+
+/// wallet_list_addresses 的 AddressType 标签全臂（命令内联 match，与
+/// serialize_wallet_address 单测不共享）；wallet_generate 的非法 UUID 臂；
+/// passkey_create 的非法 base64 两臂。
+#[tokio::test]
+async fn wallet_address_labels_and_passkey_create_base64_gates() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // wallet_generate：非法 identity_id 在任何 db 操作前拦下。
+    let err = wallet_generate(
+        "bad-uuid".to_string(),
+        WalletGenerateRequest {
+            name: "g".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err, "Invalid identity UUID format");
+
+    // 手工插一个七种地址类型齐全的钱包，驱动命令内联 match 全臂。
+    let db_path = {
+        let state = app.state::<AppState>();
+        let guard = state.db_path.lock().await;
+        guard.clone().expect("db path set")
+    };
+    let db = Arc::new(persona_core::Database::from_file(&db_path).await.unwrap());
+    db.migrate().await.unwrap();
+    let mut wallet = persona_core::models::wallet::CryptoWallet::new(
+        uuid::Uuid::parse_str(&identity_id).unwrap(),
+        "All Address Types".to_string(),
+        persona_core::models::wallet::BlockchainNetwork::Bitcoin,
+        persona_core::models::wallet::WalletType::HierarchicalDeterministic {
+            bip_version: persona_core::models::wallet::BipVersion::Bip84,
+            address_count: 7,
+            gap_limit: 20,
+        },
+        vec![1, 2, 3],
+    );
+    let cases = [
+        (persona_core::models::wallet::AddressType::P2PKH, "P2PKH"),
+        (persona_core::models::wallet::AddressType::P2SH, "P2SH"),
+        (persona_core::models::wallet::AddressType::P2WPKH, "P2WPKH"),
+        (persona_core::models::wallet::AddressType::P2TR, "P2TR"),
+        (persona_core::models::wallet::AddressType::Ethereum, "ETH"),
+        (persona_core::models::wallet::AddressType::Solana, "SOL"),
+    ];
+    for (i, (address_type, _)) in cases.iter().enumerate() {
+        wallet
+            .addresses
+            .push(persona_core::models::wallet::WalletAddress {
+                address: format!("addr-{i}"),
+                address_type: address_type.clone(),
+                derivation_path: Some(format!("m/0/{i}")),
+                index: i as u32,
+                used: false,
+                balance: None,
+                last_activity: None,
+                metadata: HashMap::new(),
+                created_at: chrono::Utc::now(),
+            });
+    }
+    // Custom 变体的标签就是自定义名本身。
+    wallet
+        .addresses
+        .push(persona_core::models::wallet::WalletAddress {
+            address: "addr-custom".to_string(),
+            address_type: persona_core::models::wallet::AddressType::Custom(
+                "my-custom-chain".to_string(),
+            ),
+            derivation_path: None,
+            index: 99,
+            used: false,
+            balance: Some("1.5".to_string()),
+            last_activity: None,
+            metadata: HashMap::new(),
+            created_at: chrono::Utc::now(),
+        });
+    persona_core::storage::wallet_repository::CryptoWalletRepository::new(db.clone())
+        .create(&wallet)
+        .await
+        .unwrap();
+
+    let resp = wallet_list_addresses(wallet.id.to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let addresses = resp.data.expect("addresses").addresses;
+    assert_eq!(addresses.len(), cases.len() + 1);
+    for (addr, (_, label)) in addresses.iter().zip(cases.iter()) {
+        assert_eq!(addr.address_type, *label);
+    }
+    assert_eq!(
+        addresses.last().unwrap().address_type,
+        "my-custom-chain",
+        "custom type renders its own name"
+    );
+
+    // passkey_create：client_data_json_b64 非法 base64 → 专属错误体。
+    let resp = passkey_create(
+        CreatePasskeyRequest {
+            identity_id: identity_id.clone(),
+            rp_id: "example.com".to_string(),
+            origin: "https://example.com".to_string(),
+            client_data_json_b64: "!!!not-base64!!!".to_string(),
+            user_handle_b64: None,
+            user_name: None,
+            user_display_name: None,
+            user_verification: false,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Invalid client_data_json_b64")),
+        "got: {:?}",
+        resp.error
+    );
+
+    // user_handle_b64 非法 base64 → 第二道门。
+    let resp = passkey_create(
+        CreatePasskeyRequest {
+            identity_id,
+            rp_id: "example.com".to_string(),
+            origin: "https://example.com".to_string(),
+            client_data_json_b64: "e30=".to_string(), // "{}"
+            user_handle_b64: Some("@@@".to_string()),
+            user_name: None,
+            user_display_name: None,
+            user_verification: false,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Invalid user_handle_b64")),
+        "got: {:?}",
+        resp.error
+    );
+}
