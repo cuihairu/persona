@@ -8,6 +8,7 @@
 
 use crate::commands::*;
 use crate::types::*;
+use persona_core::models::credential::CredentialData;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::Manager;
@@ -2072,8 +2073,7 @@ async fn audit_query_filters_and_workspace_repath() {
 #[test]
 fn extract_secret_field_type_matrix() {
     use persona_core::models::credential::{
-        ApiKeyData, CredentialData, CryptoWalletData, PasswordCredentialData, SecurityQuestion,
-        SshKeyData,
+        ApiKeyData, CryptoWalletData, PasswordCredentialData, SecurityQuestion, SshKeyData,
     };
 
     // Password：明文密码 + 安全问题 JSON 序列化；跨类型字段拒绝。
@@ -2562,4 +2562,260 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
         err.contains("Failed to sign transaction"),
         "solana sign must fail without raw_transaction_data: {err}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// 第八批：types 层纯函数矩阵（序列化脱敏 + 转换 + 事件映射）
+// ---------------------------------------------------------------------------
+
+/// `credential_data_to_json` 覆盖全部凭据类型的序列化臂，并验证各敏感
+/// 字段（密码、私钥、助记词、API secret、完整卡号）一律不出现在 JSON 里。
+#[test]
+fn credential_data_to_json_type_matrix_and_redaction() {
+    use persona_core::models::credential::{
+        ApiKeyData, BankCardData, CryptoWalletData, PasswordCredentialData, SecurityQuestion,
+        ServerConfigData, SshKeyData, TwoFactorData,
+    };
+
+    let password = CredentialData::Password(PasswordCredentialData {
+        password: "plain-secret".to_string(),
+        email: Some("a@b.c".to_string()),
+        security_questions: vec![SecurityQuestion {
+            question: "q".to_string(),
+            answer: "a".to_string(),
+        }],
+    });
+    let json = credential_data_to_json(&password);
+    assert_eq!(json["type"], "Password");
+    assert_eq!(json["email"], "a@b.c");
+    // 分层契约：登录密码是 UI 主视图数据（get_credential_data 直接携带），
+    // 而钱包私钥/SSH 私钥/API secret/TOTP 种子等更高级别的敏感材料一律
+    // 不进序列化负载，只能走 reveal_credential_secret。
+    assert_eq!(json["password"], "plain-secret");
+
+    let wallet = CredentialData::CryptoWallet(CryptoWalletData {
+        wallet_type: "hd".to_string(),
+        mnemonic_phrase: Some("never leak".to_string()),
+        private_key: Some("never leak".to_string()),
+        public_key: "pub".to_string(),
+        address: "addr".to_string(),
+        network: "Ethereum".to_string(),
+    });
+    let json = credential_data_to_json(&wallet);
+    assert_eq!(json["type"], "CryptoWallet");
+    assert_eq!(json["address"], "addr");
+    assert!(
+        !json.to_string().contains("never leak"),
+        "wallet secret leaked: {json}"
+    );
+
+    let ssh = CredentialData::SshKey(SshKeyData {
+        private_key: "PRIVATE".to_string(),
+        public_key: "ssh-ed25519 AAA".to_string(),
+        key_type: "ed25519".to_string(),
+        passphrase: Some("pp".to_string()),
+    });
+    let json = credential_data_to_json(&ssh);
+    assert_eq!(json["type"], "SshKey");
+    assert_eq!(json["key_type"], "ed25519");
+    assert!(!json.to_string().contains("PRIVATE"));
+
+    let api = CredentialData::ApiKey(ApiKeyData {
+        api_key: "AKIA-leak".to_string(),
+        api_secret: Some("SECRET-leak".to_string()),
+        token: Some("TOKEN-leak".to_string()),
+        permissions: vec!["read".to_string()],
+        expires_at: None,
+    });
+    let json = credential_data_to_json(&api);
+    assert_eq!(json["type"], "ApiKey");
+    assert_eq!(json["permissions"][0], "read");
+    assert!(!json.to_string().contains("leak"));
+
+    let card = CredentialData::BankCard(BankCardData {
+        card_number: "4111 1111 1111 1234".to_string(),
+        cardholder_name: "Cred Holder".to_string(),
+        expiry_date: "12/30".to_string(),
+        cvv: "999".to_string(),
+        bank_name: "Example Bank".to_string(),
+        card_type: "visa".to_string(),
+    });
+    let json = credential_data_to_json(&card);
+    assert_eq!(json["type"], "BankCard");
+    assert_eq!(json["last4"], "1234");
+    assert!(
+        !json.to_string().contains("4111"),
+        "full PAN leaked: {json}"
+    );
+    assert!(!json.to_string().contains("999"));
+
+    let server = CredentialData::ServerConfig(ServerConfigData {
+        hostname: "web01".to_string(),
+        ip_address: Some("10.0.0.5".to_string()),
+        port: 22,
+        protocol: "ssh".to_string(),
+        username: "deploy".to_string(),
+        password: Some("SERVER-leak".to_string()),
+        ssh_key_id: None,
+        additional_config: HashMap::new(),
+    });
+    let json = credential_data_to_json(&server);
+    assert_eq!(json["type"], "ServerConfig");
+    assert_eq!(json["port"], 22);
+    assert!(!json.to_string().contains("SERVER-leak"));
+
+    let totp = CredentialData::TwoFactor(TwoFactorData {
+        secret_key: "TOTP-leak".to_string(),
+        issuer: "GitHub".to_string(),
+        account_name: "alice@example.com".to_string(),
+        algorithm: "SHA1".to_string(),
+        digits: 6,
+        period: 30,
+    });
+    let json = credential_data_to_json(&totp);
+    assert_eq!(json["type"], "TwoFactor");
+    assert_eq!(json["issuer"], "GitHub");
+    assert!(!json.to_string().contains("TOTP-leak"));
+
+    let json = credential_data_to_json(&CredentialData::Raw(vec![1, 2, 3]));
+    assert_eq!(json["type"], "Raw");
+    assert_eq!(json["message"], "Binary data");
+}
+
+/// `CredentialDataRequest::to_credential_data` 的剩余转换臂：
+/// CryptoWallet / SshKey / Raw，以及 ApiKey 的 expires_at RFC3339 解析。
+#[test]
+fn credential_data_request_conversion_extras() {
+    let wallet = CredentialDataRequest::CryptoWallet {
+        wallet_type: "hd".to_string(),
+        mnemonic_phrase: Some("words".to_string()),
+        private_key: Some("0xk".to_string()),
+        public_key: "pub".to_string(),
+        address: "addr".to_string(),
+        network: "Ethereum".to_string(),
+    };
+    match wallet.to_credential_data() {
+        CredentialData::CryptoWallet(w) => {
+            assert_eq!(w.mnemonic_phrase.as_deref(), Some("words"));
+            assert_eq!(w.private_key.as_deref(), Some("0xk"));
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+
+    let ssh = CredentialDataRequest::SshKey {
+        private_key: "PRIVATE".to_string(),
+        public_key: "pub".to_string(),
+        key_type: "ed25519".to_string(),
+        passphrase: Some("pp".to_string()),
+    };
+    match ssh.to_credential_data() {
+        CredentialData::SshKey(k) => assert_eq!(k.passphrase.as_deref(), Some("pp")),
+        other => panic!("wrong variant: {other:?}"),
+    }
+
+    let api = CredentialDataRequest::ApiKey {
+        api_key: "AK".to_string(),
+        api_secret: None,
+        token: None,
+        permissions: vec![],
+        expires_at: Some("2030-01-01T00:00:00Z".to_string()),
+    };
+    match api.to_credential_data() {
+        CredentialData::ApiKey(a) => assert!(a.expires_at.is_some(), "rfc3339 parsed"),
+        other => panic!("wrong variant: {other:?}"),
+    }
+
+    let raw = CredentialDataRequest::Raw {
+        data: vec![9, 9, 9],
+    };
+    match raw.to_credential_data() {
+        CredentialData::Raw(bytes) => assert_eq!(bytes, vec![9, 9, 9]),
+        other => panic!("wrong variant: {other:?}"),
+    }
+}
+
+/// `SerializableAutoLockEvent` 四个变体的映射与 serde tag。
+#[test]
+fn serializable_auto_lock_event_variants() {
+    use persona_core::auth::LockReason;
+
+    let events = vec![
+        persona_core::auth::AutoLockEvent::LockPending {
+            session_id: "s1".to_string(),
+            seconds_remaining: 30,
+        },
+        persona_core::auth::AutoLockEvent::Locked {
+            session_id: "s1".to_string(),
+            reason: LockReason::Inactivity,
+        },
+        persona_core::auth::AutoLockEvent::Unlocked {
+            session_id: "s2".to_string(),
+        },
+        persona_core::auth::AutoLockEvent::Activity {
+            session_id: "s3".to_string(),
+        },
+    ];
+
+    let tags: Vec<String> = events
+        .into_iter()
+        .map(|e| {
+            let value = serde_json::to_value(SerializableAutoLockEvent::from(e)).unwrap();
+            value["type"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(tags, ["lock_pending", "locked", "unlocked", "activity"]);
+
+    let locked = serde_json::to_value(SerializableAutoLockEvent::from(
+        persona_core::auth::AutoLockEvent::Locked {
+            session_id: "s1".to_string(),
+            reason: LockReason::Inactivity,
+        },
+    ))
+    .unwrap();
+    // reason 经 Debug 格式（枚举名），session 透传。
+    assert_eq!(locked["session_id"], "s1");
+    assert_eq!(locked["reason"], "Inactivity");
+
+    let pending = serde_json::to_value(SerializableAutoLockEvent::from(
+        persona_core::auth::AutoLockEvent::LockPending {
+            session_id: "s1".to_string(),
+            seconds_remaining: 30,
+        },
+    ))
+    .unwrap();
+    assert_eq!(pending["seconds_remaining"], 30);
+}
+
+/// `From<AuditLog>`：可选身份/凭据 id 转字符串、动作与资源类型可读化。
+#[test]
+fn serializable_audit_log_maps_option_ids() {
+    use persona_core::models::{AuditAction, ResourceType};
+
+    let log = persona_core::models::AuditLog {
+        id: uuid::Uuid::new_v4(),
+        user_id: Some("user-1".to_string()),
+        identity_id: Some(uuid::Uuid::new_v4()),
+        credential_id: Some(uuid::Uuid::new_v4()),
+        session_id: Some("sess".to_string()),
+        action: AuditAction::IdentityCreated,
+        resource_type: ResourceType::Identity,
+        resource_id: Some("res-1".to_string()),
+        ip_address: None,
+        user_agent: None,
+        success: true,
+        error_message: None,
+        metadata: HashMap::new(),
+        timestamp: chrono::Utc::now(),
+    };
+
+    let json = serde_json::to_value(SerializableAuditLog::from(log)).unwrap();
+    assert_eq!(json["user_id"], "user-1");
+    assert!(json["identity_id"].as_str().is_some_and(|s| !s.is_empty()));
+    assert!(json["credential_id"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    // 动作与资源类型序列化为 snake_case（与 AuditAction::from_str 对称）。
+    assert_eq!(json["action"], "identity_created");
+    assert_eq!(json["resource_type"], "identity");
+    assert_eq!(json["success"], true);
 }
