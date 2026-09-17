@@ -1773,3 +1773,281 @@ async fn get_ssh_keys_and_health_scan() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data.unwrap().total_credentials, 2);
 }
+
+// ---------------------------------------------------------------------------
+// 第五批：passkey 门禁与错误码、TOTP/凭据数据拒绝路径、审计过滤、工作区改道
+// ---------------------------------------------------------------------------
+
+/// passkey 家族的未初始化/坏 UUID/锁定（SERVICE_LOCKED 错误码）门禁。
+#[tokio::test]
+async fn passkey_gates_fail_closed_with_error_codes() {
+    let app = mock_app();
+
+    let resp = passkey_list(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = passkey_list_by_rp("example.com".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = passkey_get(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = passkey_delete(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    init_service_ok(&app, "correct-horse").await;
+
+    // 坏 UUID 都是 ApiResponse 错误（命令内匹配，不用 `?` 传播）。
+    let resp = passkey_list("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    let resp = passkey_get("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    let resp = passkey_delete("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    // 锁定后：ensure_unlocked 的 AuthenticationFailed("Service is locked")
+    // 被 map_persona_error 映射成机器可读的 SERVICE_LOCKED。
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = passkey_list(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = passkey_list_by_rp("example.com".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = passkey_get(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+
+    let resp = passkey_delete(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+}
+
+/// get_totp_code / get_credential_data 的拒绝路径 + search 行为。
+#[tokio::test]
+async fn totp_and_credential_data_rejections() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // 密码凭据（非 TOTP）。
+    let resp = create_credential(
+        password_credential_request(&identity_id),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let password_cred = resp.data.expect("password credential");
+
+    // TOTP 凭据。
+    let mut totp_req = password_credential_request(&identity_id);
+    totp_req.name = "GitHub TOTP".to_string();
+    totp_req.credential_data = CredentialDataRequest::TwoFactor {
+        secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+        issuer: "GitHub".to_string(),
+        account_name: "alice@example.com".to_string(),
+        algorithm: "SHA1".to_string(),
+        digits: 6,
+        period: 30,
+    };
+    let resp = create_credential(totp_req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let totp_cred = resp.data.expect("totp credential");
+
+    // get_credential_data：坏 UUID（ApiResponse）。
+    let resp = get_credential_data("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    // get_totp_code：坏 UUID / 未知凭据 / 非 TOTP 凭据 —— 该命令用 `?`
+    // 传播为 Err(String)。
+    let err = get_totp_code("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(err, "Invalid UUID format");
+
+    let err = get_totp_code(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert_eq!(err, "Credential not found");
+
+    let resp = get_totp_code(password_cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Credential is not a TwoFactor entry")
+    );
+
+    // 正常 TOTP 出码（RFC 向量 secret）。
+    let resp = get_totp_code(totp_cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.expect("totp code").code.len(), 6);
+
+    // 搜索：空查询返回全部，精确子串过滤。
+    let resp = search_credentials(String::new(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().len(), 2);
+
+    let resp = search_credentials("GitHub TOTP".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let hits = resp.data.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].name, "GitHub TOTP");
+}
+
+/// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
+#[tokio::test]
+async fn audit_query_filters_and_workspace_repath() {
+    let (app, _identity_id) = app_with_identity().await;
+
+    // 合法 action 过滤（空结果）。
+    let resp = audit_query(
+        AuditQueryRequest {
+            user_id: None,
+            identity_id: None,
+            action: Some("login".to_string()),
+            failures_only: Some(true),
+            security_sensitive_only: None,
+            time_range: None,
+            limit: Some(10),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_empty());
+
+    // AuditAction::from_str 把未知动作映射成 Custom、从不失败，所以
+    // build_audit_query 的 "Unknown audit action" 分支只是防御性死代码。
+    let resp = audit_query(
+        AuditQueryRequest {
+            user_id: None,
+            identity_id: None,
+            action: Some("NotAnAction".to_string()),
+            failures_only: None,
+            security_sensitive_only: None,
+            time_range: None,
+            limit: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "custom action accepted: {:?}", resp.error);
+
+    let resp = audit_query(
+        AuditQueryRequest {
+            user_id: None,
+            identity_id: Some("bad-uuid".to_string()),
+            action: None,
+            failures_only: None,
+            security_sensitive_only: None,
+            time_range: None,
+            limit: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .map(|e| e.contains("Invalid identity_id"))
+            .unwrap_or(false),
+        "got: {:?}",
+        resp.error
+    );
+
+    let resp = audit_query(
+        AuditQueryRequest {
+            user_id: None,
+            identity_id: None,
+            action: None,
+            failures_only: None,
+            security_sensitive_only: None,
+            time_range: Some(("not-a-date".to_string(), "2026-01-01T00:00:00Z".to_string())),
+            limit: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        resp.error
+            .as_deref()
+            .map(|e| e.contains("Invalid time_range start"))
+            .unwrap_or(false),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 工作区改道：把 tempdir 挪到新路径后再 init，库内唯一工作区
+    // （指向旧路径）会被改道到新路径（ensure_workspace_for_path 分支）。
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("repath.db");
+    std::mem::forget(dir);
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(db_path.to_string_lossy().to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "first init failed: {:?}", resp.error);
+
+    let old_path = std::path::PathBuf::from(&db_path);
+    // 挪到 /tmp 下的兄弟目录（不能挪进自身内部，EINVAL）。
+    let new_dir = std::env::temp_dir().join(format!("persona-repath-{}", uuid::Uuid::new_v4()));
+    std::fs::rename(old_path.parent().unwrap(), &new_dir).unwrap();
+    let new_db = new_dir.join("repath.db");
+
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(new_db.to_string_lossy().to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "repath init failed: {:?}", resp.error);
+}
