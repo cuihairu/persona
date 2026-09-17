@@ -702,4 +702,77 @@ mod tests {
             "failed emit must remove the pending entry"
         );
     }
+
+    /// run_passkey_approval_server_with 全链路：bind 到 sandbox 状态目录、
+    /// 设置 0600 权限、清掉遗留 socket，真实连接得到 locked 应答。
+    #[tokio::test]
+    async fn approval_server_binds_sandbox_socket_with_owner_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        // 与 agent 测试同一把进程级锁：env 是全局的，并行测试会互相改道。
+        let _guard = crate::command_layer_tests::StateDirGuard::sandbox(&dir);
+
+        let service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>> =
+            Arc::new(tokio::sync::Mutex::new(None));
+        let pending: PendingApprovals = Arc::new(StdMutex::new(HashMap::new()));
+
+        // 预先放一个遗留 socket 文件：server 必须清掉再 bind。
+        let stale = dir.path().join(APPROVAL_SOCKET_NAME);
+        std::fs::write(&stale, b"stale").unwrap();
+
+        let sink = FakeSink {
+            payloads: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let server = tokio::spawn(run_passkey_approval_server_with(sink, pending, service));
+
+        // 等待 socket 就绪并完成一次 locked 应答。
+        let answer = {
+            let mut client = None;
+            for _ in 0..100 {
+                // 尚未就绪（连接拒绝/超时）时让出调度权后重试
+                if let Ok(Ok(c)) = tokio::time::timeout(
+                    Duration::from_millis(50),
+                    tokio::net::UnixStream::connect(dir.path().join(APPROVAL_SOCKET_NAME)),
+                )
+                .await
+                {
+                    client = Some(c);
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            let mut client = client.expect("socket became connectable");
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            client
+                .write_all(concat!(
+                    r#"{"v":1,"op":"passkey_assert","origin":"https://github.com","item_id":"abc"}"#,
+                    "\n"
+                )
+                .as_bytes())
+                .await
+                .unwrap();
+            let mut buf = Vec::new();
+            tokio::time::timeout(Duration::from_secs(3), client.read_to_end(&mut buf))
+                .await
+                .expect("answer in time")
+                .unwrap();
+            String::from_utf8(buf).unwrap()
+        };
+
+        server.abort();
+
+        assert_eq!(
+            answer.trim(),
+            r#"{"approved":false,"reason":"locked"}"#,
+            "locked service answers locked"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join(APPROVAL_SOCKET_NAME))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600, "socket must be owner-only");
+        }
+    }
 }

@@ -792,14 +792,14 @@ async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
 ///
 /// env 是进程全局的：并行测试各自 sandbox 会互相改道（socket 落错目录、
 /// 状态断言失败），所以持一把进程级锁——同一时刻只有一个测试在改 env。
-struct StateDirGuard {
+pub(crate) struct StateDirGuard {
     // 先声明先构造、最后 drop：env 先恢复，锁才释放。
     _lock: std::sync::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
 }
 
 impl StateDirGuard {
-    fn sandbox(dir: &tempfile::TempDir) -> Self {
+    pub(crate) fn sandbox(dir: &tempfile::TempDir) -> Self {
         static STATE_DIR_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
             std::sync::OnceLock::new();
         let mutex = STATE_DIR_LOCK.get_or_init(|| std::sync::Mutex::new(()));
@@ -3584,7 +3584,7 @@ struct XdgDataDirGuard {
 }
 
 impl XdgDataDirGuard {
-    fn sandbox(dir: &tempfile::TempDir) -> Self {
+    pub(crate) fn sandbox(dir: &tempfile::TempDir) -> Self {
         static XDG_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         let mutex = XDG_LOCK.get_or_init(|| std::sync::Mutex::new(()));
         let lock = mutex
