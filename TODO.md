@@ -97,8 +97,12 @@ Desktop (Tauri v2 + React)
   tauri 依赖）→ DesktopApprovalHandler（emit `persona://ssh-approval` + oneshot，
   120s 超时自动拒绝）→ SshApprovalModal；CLI 走 TTY 提示零改动；失焦系统通知
 - [x] Wallet UI (addresses, QR, signing confirmations + 地址投毒启发式告警)
-- [ ] Desktop 集成测试矩阵扩展（当前 21 个 Rust 测试：纯函数/夹具层；带 service
-  生命周期的命令级集成测试待补）
+- [ ] Desktop 集成测试矩阵扩展（当前 43 个 Rust 测试；命令级集成测试基建已建：
+  `command_layer_tests.rs` 经 `tauri::test::mock_app` 直驱 12 个命令处理器，
+  commands.rs 行覆盖 14%→53%。待补：start/stop_ssh_agent、wallet 交易
+  create/sign、passkey_approval_respond、reauth 错误码分流、main.rs 托盘/窗口路径）
+- [x] fix(desktop): init_service 持锁调用 register_auto_lock_bridge 的死锁
+  （tokio Mutex 非重入；2026-09 命令级测试发现并修复）
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)
