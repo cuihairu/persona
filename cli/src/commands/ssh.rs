@@ -400,7 +400,21 @@ async fn start_agent(
             print_sock_export(sock_value);
         }
     } else {
-        if let Some(status) = child.try_wait()? {
+        // The child closed stdout without a socket line. try_wait can
+        // transiently report None for a child that already exited (it is
+        // not reaped yet), which would misread an early crash as a healthy
+        // agent — so poll briefly before concluding the agent is alive.
+        let mut status = None;
+        for _ in 0..20 {
+            match child.try_wait()? {
+                Some(exit) => {
+                    status = Some(exit);
+                    break;
+                }
+                None => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+            }
+        }
+        if let Some(status) = status {
             let mut stderr_output = String::new();
             if let Some(mut stderr) = child.stderr.take() {
                 let _ = stderr.read_to_string(&mut stderr_output).await;
