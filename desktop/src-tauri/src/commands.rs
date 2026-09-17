@@ -900,7 +900,7 @@ pub async fn get_ssh_agent_status(
         .lock()
         .await
         .as_ref()
-        .map(|handle| !handle.is_finished())
+        .map(|handle| !handle.inner().is_finished())
         .unwrap_or(false);
     let status = read_agent_status(running);
     Ok(ApiResponse::success(status))
@@ -925,7 +925,7 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         .lock()
         .await
         .as_ref()
-        .map(|handle| !handle.is_finished())
+        .map(|handle| !handle.inner().is_finished())
         .unwrap_or(false);
     if already_running {
         return get_ssh_agent_status(state).await;
@@ -943,7 +943,9 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         app,
         state.ssh_approvals.clone(),
     ));
-    let handle = tokio::spawn(async move {
+    // tauri 全局运行时而非调用方的 tokio 上下文：mock_app（测试）的
+    // reactor 上 socket IO 永不唤醒，agent 必须活在健康的多线程运行时里。
+    let handle = tauri::async_runtime::spawn(async move {
         if let Some(pass) = password {
             std::env::set_var("PERSONA_MASTER_PASSWORD", pass);
         } else {

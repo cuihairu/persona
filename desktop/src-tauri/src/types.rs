@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
+
+// agent 任务挂在 tauri 管理的全局运行时上（而非任意调用方的 tokio
+// 上下文）：命令处理器之外的环境（含测试）不一定有可用 reactor。
+use tauri::async_runtime::JoinHandle;
 
 /// Application state that holds the Persona service
 ///

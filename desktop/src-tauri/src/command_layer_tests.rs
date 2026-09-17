@@ -517,7 +517,7 @@ async fn credential_commands_round_trip_search_favorite_and_totp() {
     let resp = toggle_credential_favorite(cred.id.clone(), app.state::<AppState>())
         .await
         .unwrap();
-    assert!(resp.data.unwrap().is_favorite == false);
+    assert!(!resp.data.unwrap().is_favorite);
 
     // TOTP credential: create with an RFC-vector secret and read a code.
     let mut totp_req = password_credential_request(&identity_id);
@@ -781,4 +781,392 @@ async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
         .await
         .unwrap();
     assert!(resp.data.unwrap().is_none());
+}
+
+// ---------------------------------------------------------------------------
+// 第三批：wallet 交易 / approval respond / SSH agent 状态与生命周期
+// ---------------------------------------------------------------------------
+
+/// 沙箱 agent 状态目录：`PERSONA_AGENT_STATE_DIR` 指向 tempdir，drop 恢复。
+struct StateDirGuard {
+    prev: Option<std::ffi::OsString>,
+}
+
+impl StateDirGuard {
+    fn sandbox(dir: &tempfile::TempDir) -> Self {
+        let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
+        std::env::set_var("PERSONA_AGENT_STATE_DIR", dir.path());
+        StateDirGuard {
+            prev: prev.map(Into::into),
+        }
+    }
+}
+
+impl Drop for StateDirGuard {
+    fn drop(&mut self) {
+        match self.prev.take() {
+            Some(prev) => std::env::set_var("PERSONA_AGENT_STATE_DIR", prev),
+            None => std::env::remove_var("PERSONA_AGENT_STATE_DIR"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn wallet_transaction_commands_round_trip_and_rejections() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let resp = wallet_generate(
+        identity_id.clone(),
+        WalletGenerateRequest {
+            name: "Tx Wallet".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let wallet = resp.data.expect("wallet generated");
+
+    // Bad UUID and unknown wallet rejections come before any DB work.
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: "not-a-uuid".to_string(),
+            to_address: "0x1111111111111111111111111111111111111111".to_string(),
+            amount: "1".to_string(),
+            fee: "21000".to_string(),
+            gas_price: None,
+            gas_limit: None,
+            nonce: None,
+            memo: None,
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(resp, "Invalid wallet_id");
+
+    let missing = uuid::Uuid::new_v4().to_string();
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: missing.clone(),
+            to_address: "0x1111111111111111111111111111111111111111".to_string(),
+            amount: "1".to_string(),
+            fee: "21000".to_string(),
+            gas_price: None,
+            gas_limit: None,
+            nonce: None,
+            memo: None,
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Wallet not found"));
+
+    // Create the pending request with full gas metadata (legacy EIP-155).
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id: wallet.wallet_id.clone(),
+            to_address: "0x1111111111111111111111111111111111111111".to_string(),
+            amount: "1000000000000000000".to_string(),
+            fee: "21000".to_string(),
+            gas_price: Some("20000000000".to_string()),
+            gas_limit: Some(21000),
+            nonce: Some(0),
+            memo: Some("integration".to_string()),
+            expires_in_minutes: Some(30),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let tx = resp.data.expect("transaction created");
+    let tx_id = tx["id"].as_str().expect("transaction id").to_string();
+    assert_eq!(
+        tx["to_address"],
+        "0x1111111111111111111111111111111111111111"
+    );
+    assert_eq!(tx["network"], "Ethereum");
+
+    // The pending listing contains it.
+    let resp = wallet_pending_transactions(wallet.wallet_id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let pending = resp.data.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0]["id"].as_str(), Some(tx_id.as_str()));
+
+    // Bad uuid / unknown transaction on the sign path.
+    let resp = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: "not-a-uuid".to_string(),
+            password: "wallet-pass-123".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(resp, "Invalid transaction_id");
+
+    let resp = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: uuid::Uuid::new_v4().to_string(),
+            password: "wallet-pass-123".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Transaction not found"));
+
+    // Wrong password fails key derivation without storing a signature.
+    // The sign command propagates signing failures with `?`, so the caller
+    // sees Err(String) rather than an ApiResponse error body.
+    let err = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id.clone(),
+            password: "wrong-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("Failed to derive signing key"), "got: {err}");
+
+    // Correct password: sign → local verify → raw assembly → stored.
+    let resp = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id.clone(),
+            password: "wallet-pass-123".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let signed = resp.data.expect("signed transaction returned");
+    let hash = signed["transaction_hash"].as_str().expect("tx hash");
+    assert!(
+        hash.starts_with("0x") && hash.len() == 66,
+        "EIP-155 hash is a 32-byte hex: {hash}"
+    );
+    // raw_signed_transaction is a Vec<u8>, so it arrives as a JSON array of
+    // bytes — a non-empty one proves the EIP-155 assembly succeeded (the
+    // audit-only fallback would leave it empty).
+    assert!(
+        signed["raw_signed_transaction"]
+            .as_array()
+            .is_some_and(|raw| !raw.is_empty()),
+        "raw transaction assembled"
+    );
+
+    // Re-signing the same request reproduces the identical RFC 6979
+    // deterministic signature and hash, which the store's
+    // UNIQUE(transaction_hash) guard refuses to duplicate. That rejection is
+    // the current dedup contract (prevents double-broadcast records).
+    let err = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id,
+            password: "wallet-pass-123".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.contains("Failed to store signed transaction"),
+        "got: {err}"
+    );
+}
+
+#[tokio::test]
+async fn approval_respond_commands_resolve_and_reject_unknown() {
+    let app = mock_app();
+
+    // Unknown ids (double click, stale modal) are rejected, never approved.
+    let resp = ssh_approval_respond(
+        SshApprovalRespondRequest {
+            request_id: "ghost".to_string(),
+            allow: true,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("ghost"));
+
+    let resp = passkey_approval_respond(
+        PasskeyApprovalRespondRequest {
+            request_id: "ghost".to_string(),
+            allow: true,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("ghost"));
+
+    // A registered approval resolves through the oneshot with the verdict.
+    let (ssh_tx, ssh_rx) = tokio::sync::oneshot::channel();
+    {
+        let state = app.state::<AppState>();
+        state
+            .ssh_approvals
+            .lock()
+            .unwrap()
+            .insert("req-ssh".to_string(), ssh_tx);
+    }
+    let resp = ssh_approval_respond(
+        SshApprovalRespondRequest {
+            request_id: "req-ssh".to_string(),
+            allow: true,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(ssh_rx.await.unwrap(), "allow verdict delivered");
+
+    let (pk_tx, pk_rx) = tokio::sync::oneshot::channel();
+    {
+        let state = app.state::<AppState>();
+        state
+            .passkey_approvals
+            .lock()
+            .unwrap()
+            .insert("req-pk".to_string(), pk_tx);
+    }
+    let resp = passkey_approval_respond(
+        PasskeyApprovalRespondRequest {
+            request_id: "req-pk".to_string(),
+            allow: false,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(!pk_rx.await.unwrap(), "deny verdict delivered");
+
+    // Second answer for the same id is "unknown" (already consumed).
+    let resp = passkey_approval_respond(
+        PasskeyApprovalRespondRequest {
+            request_id: "req-pk".to_string(),
+            allow: true,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success, "double answer must not re-deliver");
+}
+
+#[tokio::test]
+async fn ssh_agent_status_reflects_state_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&dir);
+
+    // No handle, no state files: not running.
+    let app = mock_app();
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.unwrap();
+    assert!(!status.running);
+    assert_eq!(status.socket_path, None);
+    assert_eq!(status.pid, None);
+    assert_eq!(status.state_dir, dir.path().to_string_lossy().to_string());
+
+    // A socket file alone flips running and surfaces the path; the fake
+    // socket accepts no connection, so key_count stays None.
+    std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/nowhere.sock").unwrap();
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    let status = resp.data.unwrap();
+    assert!(status.running, "socket file means running");
+    assert_eq!(status.socket_path.as_deref(), Some("/tmp/nowhere.sock"));
+    assert_eq!(status.key_count, None);
+
+    // A pid file surfaces the parsed pid.
+    std::fs::write(dir.path().join("ssh-agent.pid"), "424242\n").unwrap();
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    let status = resp.data.unwrap();
+    assert_eq!(status.pid, Some(424242));
+}
+
+#[tokio::test]
+async fn start_stop_ssh_agent_lifecycle() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&dir);
+    let app = mock_app();
+
+    // Start before initialization: db path unknown. The command propagates
+    // this failure with `?`, so the caller sees Err(String).
+    let err = start_ssh_agent(
+        StartAgentRequest {
+            master_password: Some("correct-horse".to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err,
+        "Database path unavailable. Initialize the service first."
+    );
+
+    init_service_ok(&app, "correct-horse").await;
+
+    // Start boots the in-process agent; status reports running.
+    let resp = start_ssh_agent(
+        StartAgentRequest {
+            master_password: Some("correct-horse".to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "agent start failed: {:?}", resp.error);
+    assert!(resp.data.unwrap().running, "agent handle is alive");
+
+    // The agent bound its socket in the sandboxed state dir.
+    let sock = dir.path().join("ssh-agent.sock");
+    let bound = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !sock.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(bound.is_ok(), "agent socket never appeared at {sock:?}");
+
+    // A second start while running returns the current status (no reboot).
+    let resp = start_ssh_agent(
+        StartAgentRequest {
+            master_password: Some("correct-horse".to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().running);
+
+    // Stop aborts the agent and clears pending approvals.
+    let resp = stop_ssh_agent(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap());
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.data.unwrap().running, "no handle and no socket left");
 }
