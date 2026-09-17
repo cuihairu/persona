@@ -2686,6 +2686,140 @@ pub(crate) mod tests {
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
+    /// The Approved verdict flows through both passkey handlers end to end,
+    /// and a desktop that accepts the connection but never answers fails
+    /// closed in require mode.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn desktop_approval_allows_the_passkey_handlers_and_silent_fails_closed() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "0");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        let options_json = serde_json::json!({
+            "rp": { "id": "example.com", "name": "Example" },
+            "user": {
+                "id": URL_SAFE_NO_PAD.encode(b"approved-user-handle"),
+                "name": "alice@example.com",
+                "displayName": "Alice"
+            },
+            "pubKeyCredParams": [{ "type": "public-key", "alg": -7 }],
+        });
+        let create_payload = || {
+            serde_json::json!({
+                "origin": "https://example.com",
+                "user_gesture": true,
+                "request_json": options_json,
+                "client_data_json_b64": URL_SAFE_NO_PAD.encode(local_client_data_for(
+                    "https://example.com",
+                    "Y3JlYXRlLWNoYWxsZW5nZQ",
+                )),
+            })
+        };
+
+        // ---- Approved: passkey_create signs and stores ----
+        let (desk_dir, sock, server) = spawn_fake_desktop(true, None).await;
+        set_gate_env(Some(&sock), None); // auto
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("passkey_create", create_payload()),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "approved creation must succeed: {:?}", resp.error);
+        let _line = server.await.unwrap();
+        drop(desk_dir);
+
+        // ---- Approved: passkey_assert signs the seeded credential ----
+        let db = open_db(&db_path).await.unwrap();
+        let repo = persona_core::storage::PasskeyRepository::new(std::sync::Arc::new(db));
+        let stored = repo.find_by_rp_id("example.com").await.unwrap();
+        let item_id = stored[0].id.to_string();
+        drop(repo);
+
+        let (desk_dir, sock, server) = spawn_fake_desktop(true, None).await;
+        set_gate_env(Some(&sock), None);
+        let get_client_data =
+            r#"{"type":"webauthn.get","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#
+                .to_string()
+                .into_bytes();
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "approved assertion must succeed: {:?}", resp.error);
+        let _line = server.await.unwrap();
+        drop(desk_dir);
+
+        // ---- A desktop that goes silent (empty answer) fails closed in
+        // require mode instead of hanging on the connection ----
+        let desk_dir = tempfile::tempdir().unwrap();
+        let silent_sock = desk_dir.path().join("passkey-approval.sock");
+        let silent_listener = tokio::net::UnixListener::bind(&silent_sock).unwrap();
+        tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            if let Ok((stream, _)) = silent_listener.accept().await {
+                let mut line = String::new();
+                let _ = BufReader::new(stream).read_line(&mut line).await;
+                // Drop the connection without ever answering.
+            }
+        });
+        set_gate_env(Some(&silent_sock), Some("require"));
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("passkey_create", create_payload()),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .starts_with("passkey_desktop_approval_required"),
+            "got: {err}"
+        );
+        drop(desk_dir);
+
+        set_gate_env(None, None);
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// The `--approve-code` entry point resolves paths from the args and
+    /// reports an unknown code without ever touching stdio.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_execute_approve_code_reports_missing_pairing() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("bridge-state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        let err = execute(BridgeArgs {
+            db_path: Some(dir.path().join("identities.db")),
+            approve_code: Some("000-000".to_string()),
+            state_dir: Some(state_dir),
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "pairing_not_found_or_expired");
+    }
+
     #[test]
     fn path_resolvers_honor_override_and_environment() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

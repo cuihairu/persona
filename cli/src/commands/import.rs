@@ -1286,4 +1286,206 @@ mod tests {
         assert!(repo.find_by_name("alice").await.unwrap().is_some());
         assert!(repo.find_by_name("bob").await.unwrap().is_some());
     }
+
+    #[test]
+    fn validate_warns_on_oversized_file_and_csv_maps_empty_email() {
+        let dir = TempDir::new().unwrap();
+        // A sparse file reports >100 MB without occupying that much disk;
+        // validation still passes (the size check only warns).
+        let big = dir.path().join("huge.json");
+        let f = std::fs::File::create(&big).unwrap();
+        f.set_len(101 * 1024 * 1024).unwrap();
+        drop(f);
+        validate_import_file(&big).expect("oversized file still validates");
+
+        // A CSV row with an empty email column stores None, not Some("").
+        let data = parse_csv_import("Name,Type,Description,Email\nzed,personal,quiet,\n").unwrap();
+        assert_eq!(data.identities.len(), 1);
+        assert_eq!(data.identities[0].name, "zed");
+        assert_eq!(data.identities[0].description, "quiet");
+        assert_eq!(data.identities[0].email, None);
+    }
+
+    #[test]
+    fn decrypt_import_file_with_tmp_source_needs_no_rename() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_PAYLOAD_PASSPHRASE");
+
+        let dir = TempDir::new().unwrap();
+        // A source whose extension already is `tmp` restores to the same
+        // path the decryptor produced, so the rename step is skipped.
+        let src = dir.path().join("secret.tmp");
+        std::fs::write(&src, b"plaintext payload").unwrap();
+        crate::utils::file_crypto::encrypt_file_inplace(&src, "payload-pw", None)
+            .expect("source encrypted");
+
+        let ui = ScriptedUi::new().password("payload-pw");
+        let out = decrypt_import_file(&src, &config_for(&dir), &ui)
+            .expect("decrypt with tmp extension succeeds");
+        assert!(ui.exhausted());
+        assert_eq!(
+            out.file_name().and_then(|n| n.to_str()),
+            Some("secret.decrypted.tmp"),
+            "restored path equals the decrypted temp file: {out:?}"
+        );
+        assert!(out.exists(), "decrypted payload is on disk");
+    }
+
+    #[tokio::test]
+    async fn import_mode_labels_and_descriptionless_rows() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+
+        // A row without a description exercises the empty-description →
+        // None arm on the create path.
+        let fresh_path = dir.path().join("fresh.json");
+        std::fs::write(
+            &fresh_path,
+            serde_json::json!({
+                "export_info": {"version": "1.0", "created": "2024-03-01T00:00:00Z"},
+                "identities": [
+                    {"name": "descless", "type": "personal"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        execute(args(&fresh_path, true), &config)
+            .await
+            .expect("descriptionless import succeeds");
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = IdentityRepository::new(db);
+            let descless = repo.find_by_name("descless").await.unwrap().unwrap();
+            assert_eq!(descless.description, None, "empty description is None");
+        }
+
+        // skip mode over a non-conflicting row still imports it (the
+        // conflict guard does not match), labelling it "Skipped".
+        let skip_path = dir.path().join("skip.json");
+        std::fs::write(
+            &skip_path,
+            serde_json::json!({
+                "export_info": {"version": "1.0", "created": "2024-03-02T00:00:00Z"},
+                "identities": [
+                    {"name": "skipuser", "type": "personal", "description": "kept"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut skip_args = args(&skip_path, true);
+        skip_args.mode = "skip".to_string();
+        execute(skip_args, &config)
+            .await
+            .expect("skip mode over a new row imports it");
+
+        // An unknown mode with no conflicts never reaches conflict
+        // validation; the row is created and labelled "Imported".
+        let odd_path = dir.path().join("odd.json");
+        std::fs::write(
+            &odd_path,
+            serde_json::json!({
+                "export_info": {"version": "1.0", "created": "2024-03-03T00:00:00Z"},
+                "identities": [
+                    {"name": "odduser", "type": "personal", "description": "via default arm"}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut odd_args = args(&odd_path, true);
+        odd_args.mode = "bogus".to_string();
+        execute(odd_args, &config)
+            .await
+            .expect("unknown mode without conflicts imports");
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let repo = IdentityRepository::new(db);
+        assert!(repo.find_by_name("skipuser").await.unwrap().is_some());
+        assert!(repo.find_by_name("odduser").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn import_deep_auth_failure_and_replace_arms() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+
+        // Both the conflict check and the importer prompt separately; with
+        // the password supplied per-prompt both are answered correctly.
+        let seeded_path = dir.path().join("seeded.json");
+        std::fs::write(
+            &seeded_path,
+            serde_json::json!({
+                "export_info": {"version": "1.0", "created": "2024-04-01T00:00:00Z"},
+                "identities": [
+                    {"name": "descless", "type": "personal", "tags": ["ops"]}
+                ]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let ui = ScriptedUi::new()
+            .password("master-pin") // conflict check
+            .password("master-pin"); // perform_import
+        execute_with(args(&seeded_path, true), &config, &ui)
+            .await
+            .expect("seeded import succeeds");
+        assert!(ui.exhausted());
+
+        // Replace with an empty description clears the stored field and
+        // carries the non-empty tags through.
+        let ui = ScriptedUi::new()
+            .password("master-pin") // conflict check
+            .password("master-pin"); // perform_import
+        let mut replace_args = args(&seeded_path, true);
+        replace_args.mode = "replace".to_string();
+        execute_with(replace_args, &config, &ui)
+            .await
+            .expect("replace import succeeds");
+        assert!(ui.exhausted());
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = IdentityRepository::new(db);
+            let descless = repo.find_by_name("descless").await.unwrap().unwrap();
+            assert_eq!(descless.description, None, "replace cleared description");
+            assert_eq!(descless.tags, vec!["ops".to_string()], "replace set tags");
+        }
+
+        // Failing only the importer's own unlock reaches the bail the
+        // conflict check can never hit with a single env password.
+        let ui = ScriptedUi::new()
+            .password("master-pin") // conflict check passes
+            .password("wrong-pin"); // perform_import fails
+        let mut replace_args = args(&seeded_path, true);
+        replace_args.mode = "replace".to_string();
+        let err = execute_with(replace_args, &config, &ui)
+            .await
+            .expect_err("late wrong password must abort the import");
+        assert!(
+            err.to_string()
+                .contains("Authentication failed: InvalidCredentials"),
+            "got: {err}"
+        );
+        assert!(ui.exhausted());
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
 }

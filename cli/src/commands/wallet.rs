@@ -2333,6 +2333,24 @@ mod integration {
         .expect_err("add address to unknown wallet must fail");
         assert!(err.to_string().contains("not found"));
 
+        // A second address makes the limited listing truncate, printing the
+        // "Showing N of M" notice.
+        handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::AddAddress {
+                    wallet_id: hot.id,
+                    address: "0x999888777666555444333222111000fffdddcccbb".into(),
+                    address_type: "ethereum".into(),
+                    index: 1,
+                    derivation_path: Some("m/44'/60'/0'/0/1".into()),
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("add second address");
+
         // ListAddresses: all, unused-only, limit.
         for (used, unused, limit) in [
             (false, false, None),

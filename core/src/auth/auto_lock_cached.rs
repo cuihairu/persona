@@ -986,4 +986,142 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1200)).await;
         assert!(!manager.is_session_valid(&session_id).await);
     }
+
+    #[tokio::test]
+    async fn test_update_activity_after_grace_period_touches_and_emits() {
+        let manager = CachedAutoLockManager::new(EnhancedAutoLockConfig::default());
+
+        let session = Session::new("user123".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        // The Debug rendering finishes non-exhaustively over the internal
+        // RwLocks; it must still produce output.
+        let rendered = format!("{:?}", manager);
+        assert!(
+            rendered.contains("CachedAutoLockManager"),
+            "got: {rendered}"
+        );
+
+        // The callback is registered after the add, so only the real update
+        // below (past the 100 ms grace window) reaches the channel.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        manager
+            .register_callback(Arc::new(move |event| {
+                let _ = tx.send(event);
+            }))
+            .await;
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        manager.update_activity(&session_id).await.unwrap();
+
+        let event = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("activity event must arrive")
+            .expect("channel open");
+        match event {
+            AutoLockEvent::Activity { session_id: id } => assert_eq!(id, session_id),
+            other => panic!("expected Activity, got {other:?}"),
+        }
+
+        // An immediate follow-up lands inside the grace window: it succeeds
+        // but skips the processing path, so no second event is emitted.
+        manager.update_activity(&session_id).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), rx.recv())
+                .await
+                .is_err(),
+            "grace-window update must not emit"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_uuid_user_without_repository_falls_back_to_session_validity() {
+        // A UUID-shaped user on a repository-less manager resolves through
+        // the no-policy tail instead of the non-UUID early return.
+        let manager = CachedAutoLockManager::with_cache_config(
+            EnhancedAutoLockConfig::default(),
+            Duration::from_secs(0), // force the compliance recheck
+            1000,
+        );
+
+        let session = Session::new(Uuid::new_v4().to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        // No policy governs the session, so the recheck falls back to plain
+        // session validity.
+        assert!(manager.is_session_valid(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_policy_repository_error_surfaces() {
+        let db = Database::in_memory().await.expect("in-memory database");
+        db.migrate().await.expect("migrate");
+        let pool = db.pool().clone();
+        let repo = Arc::new(AutoLockPolicyRepository::new(Arc::new(db)));
+
+        let manager = CachedAutoLockManager::new(EnhancedAutoLockConfig::default())
+            .with_policy_repository(repo);
+
+        // Closing the underlying pool makes the policy lookup fail; the
+        // error must surface instead of being swallowed into a default.
+        pool.close().await;
+        let session = Session::new(Uuid::new_v4().to_string(), Duration::from_secs(3600));
+        let err = manager.add_session(session).await.unwrap_err();
+        assert!(err.contains("Failed to fetch policy"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn test_compliance_recheck_enforces_policy_absolute_timeout() {
+        let repo = policy_repository().await;
+        let user = Uuid::new_v4();
+        let mut policy = AutoLockPolicy::new(
+            "Flash".to_string(),
+            AutoLockSecurityLevel::Low,
+            3600, // inactivity: never trips within the test's lifetime
+        );
+        // A one-second lifetime so only the absolute-timeout check can fail.
+        policy.absolute_timeout_secs = 1;
+        let policy = repo.create(&policy).await.unwrap();
+        repo.assign_to_user(&policy.id, &user).await.unwrap();
+
+        let manager = CachedAutoLockManager::with_cache_config(
+            EnhancedAutoLockConfig::default(),
+            Duration::from_secs(0), // force the compliance recheck
+            1000,
+        )
+        .with_policy_repository(repo);
+
+        let session = Session::new(user.to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        // Fresh session: the lifetime check passes.
+        assert!(manager.is_session_valid(&session_id).await);
+
+        // Past the one-second absolute timeout the recheck fails it (the
+        // lifetime is measured in whole seconds, so wait past two).
+        tokio::time::sleep(Duration::from_millis(2200)).await;
+        assert!(!manager.is_session_valid(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_optimize_caches_keeps_expired_but_idle_sessions() {
+        let manager = CachedAutoLockManager::new(EnhancedAutoLockConfig::default());
+
+        // One long-lived session plus one that is expired the moment it is
+        // added (but unlocked and recently active): the optimizer's retain
+        // clause must evaluate the expired branch and still keep it.
+        let live = Session::new("live-user".to_string(), Duration::from_secs(3600));
+        manager.add_session(live).await.unwrap();
+        let expired = Session::new("gone-user".to_string(), Duration::from_secs(0));
+        manager.add_session(expired).await.unwrap();
+
+        let result = manager.optimize_caches().await;
+        assert_eq!(
+            result.removed_sessions, 0,
+            "expired-but-idle session is kept"
+        );
+    }
 }
