@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod approval;
+#[cfg(test)]
+mod command_layer_tests;
 mod commands;
 mod error;
 mod passkey_bridge;

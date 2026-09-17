@@ -16,7 +16,7 @@ use tauri::{command, Emitter, State};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
-fn workspace_path_for_db_path(db_path: &str) -> String {
+pub(crate) fn workspace_path_for_db_path(db_path: &str) -> String {
     Path::new(db_path)
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -24,7 +24,7 @@ fn workspace_path_for_db_path(db_path: &str) -> String {
         .to_string()
 }
 
-async fn ensure_workspace_for_path(
+pub(crate) async fn ensure_workspace_for_path(
     db: &Database,
     workspace_path: &str,
 ) -> std::result::Result<persona_core::models::Workspace, String> {
@@ -64,7 +64,10 @@ async fn ensure_workspace_for_path(
 ///   不依赖前端存活（AutoLockManager 只锁 session，不清主密钥）
 ///
 /// 回调只注册一次（`AtomicBool` 防重复，多次 init_service 安全）。
-async fn register_auto_lock_bridge(state: &State<'_, AppState>, app: &tauri::AppHandle) {
+pub(crate) async fn register_auto_lock_bridge<R: tauri::Runtime>(
+    state: &State<'_, AppState>,
+    app: &tauri::AppHandle<R>,
+) {
     use std::sync::atomic::Ordering;
 
     if state.auto_lock_registered.swap(true, Ordering::SeqCst) {
@@ -99,10 +102,10 @@ async fn register_auto_lock_bridge(state: &State<'_, AppState>, app: &tauri::App
 
 /// Initialize the Persona service with master password
 #[command]
-pub async fn init_service(
+pub async fn init_service<R: tauri::Runtime>(
     request: InitRequest,
     state: State<'_, AppState>,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
     let db_path = request.db_path.unwrap_or_else(|| {
         let app_data_dir = dirs::data_dir()
@@ -905,10 +908,10 @@ pub async fn get_ssh_agent_status(
 
 /// Start the embedded SSH agent
 #[command]
-pub async fn start_ssh_agent(
+pub async fn start_ssh_agent<R: tauri::Runtime>(
     request: StartAgentRequest,
     state: State<'_, AppState>,
-    app: tauri::AppHandle,
+    app: tauri::AppHandle<R>,
 ) -> std::result::Result<ApiResponse<SshAgentStatus>, String> {
     let db_path = {
         let guard = state.db_path.lock().await;
