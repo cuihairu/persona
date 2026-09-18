@@ -158,7 +158,11 @@ describe('hooks/usePersonaService', () => {
 
   it('lockService clears session state on success', async () => {
     mockUnlockedOnMount();
-    useAppStore.setState({ isUnlocked: true });
+    useAppStore.setState({
+      isUnlocked: true,
+      selectedCredentialId: 'c1',
+      pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
+    });
     jest.spyOn(personaAPI, 'lockService').mockResolvedValue({
       success: true,
       data: true,
@@ -174,6 +178,9 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().identities).toEqual([]);
     expect(useAppStore.getState().currentIdentity).toBeNull();
     expect(useAppStore.getState().credentials).toEqual([]);
+    // 选中与待注入跳转随锁作废
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
     expect(toastSuccess).toHaveBeenCalledWith('Service locked');
   });
 

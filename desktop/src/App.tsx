@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { ChartBarIcon } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { useGlobalShortcut } from '@/hooks/useGlobalShortcut';
 import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
 import { useSshApprovals } from '@/hooks/useSshApprovals';
 import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
@@ -49,6 +50,17 @@ const App: React.FC = () => {
   const [showCreateCredential, setShowCreateCredential] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [currentView, setCurrentView] = useState<ViewId>('credentials');
+
+  // ⌘L 锁定：App 恒挂载，enabled=isUnlocked 保证锁定屏无监听。
+  // 顺带修既有边界：锁前开着的 modal 在解锁后会自动重开（App 不卸载、
+  // 本地 bool 残留），锁定时一并复位。
+  const handleLock = () => {
+    setShowCreateIdentity(false);
+    setShowCreateCredential(false);
+    setShowSettings(false);
+    void lockService();
+  };
+  useGlobalShortcut('l', handleLock, isUnlocked);
 
   // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
@@ -169,7 +181,7 @@ const App: React.FC = () => {
             onNavigate={setCurrentView}
             onCreateIdentity={() => setShowCreateIdentity(true)}
             onOpenSettings={() => setShowSettings(true)}
-            onLock={lockService}
+            onLock={handleLock}
           />
 
           {/* 主列：窄工具栏 + 独立滚动的主区 */}

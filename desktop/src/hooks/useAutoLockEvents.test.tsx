@@ -37,6 +37,10 @@ describe('hooks/useAutoLockEvents', () => {
       identities: [{ id: 'id-1' }] as any,
       currentIdentity: { id: 'id-1' } as any,
       credentials: [{ id: 'c1' }] as any,
+      selectedCredentialId: 'c1',
+      pendingCredentialSelection: { identityId: 'id-1', credentialId: 'c1' },
+      faviconCache: { 'a.com': { mime_type: 'image/png', data: 'AAA' } },
+      faviconMisses: { 'b.com': true },
       error: null,
     });
   });
@@ -90,6 +94,11 @@ describe('hooks/useAutoLockEvents', () => {
     expect(state.identities).toEqual([]);
     expect(state.currentIdentity).toBeNull();
     expect(state.credentials).toEqual([]);
+    // 与手动 lockService 清理对齐：favicon、选中、待注入跳转一并作废
+    expect(state.faviconCache).toEqual({});
+    expect(state.faviconMisses).toEqual({});
+    expect(state.selectedCredentialId).toBeNull();
+    expect(state.pendingCredentialSelection).toBeNull();
   });
 
   it('unsubscribes on unmount and cancels a pending subscription', async () => {

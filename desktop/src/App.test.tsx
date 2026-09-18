@@ -305,6 +305,25 @@ describe('App', () => {
     expect(lockService).toHaveBeenCalledTimes(1);
   });
 
+  it('locks via cmd+L and closes any open modals', () => {
+    serviceState.isUnlocked = true;
+    const { rerender } = render(<App />);
+
+    // 先开设置：⌘L 后 modal 复位，解锁后不会自动重开
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'l', metaKey: true });
+    expect(lockService).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('settings-modal')).not.toBeInTheDocument();
+
+    // 锁定屏上再按 ⌘L 无监听，不重复触发
+    serviceState.isUnlocked = false;
+    rerender(<App />);
+    fireEvent.keyDown(window, { key: 'l', metaKey: true });
+    expect(lockService).toHaveBeenCalledTimes(1);
+  });
+
   it('opens the create-identity and create-credential modals from their triggers', () => {
     serviceState.isUnlocked = true;
     render(<App />);

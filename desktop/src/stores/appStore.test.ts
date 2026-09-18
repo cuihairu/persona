@@ -18,6 +18,7 @@ describe('stores/appStore', () => {
       theme: 'system',
       sidebarFilter: DEFAULT_SIDEBAR_FILTER,
       pendingCredentialSelection: null,
+      selectedCredentialId: null,
       faviconCache: {},
       faviconMisses: {},
     });
@@ -113,6 +114,17 @@ describe('stores/appStore', () => {
 
     useAppStore.getState().clearPendingCredentialSelection();
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+  });
+
+  it('selectedCredentialId defaults to null and setSelectedCredentialId replaces it', () => {
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
+
+    useAppStore.getState().setSelectedCredentialId('c1');
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
+
+    // 锁屏清空走同一 action（null 即清）
+    useAppStore.getState().setSelectedCredentialId(null);
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
   });
 
   it('setFaviconEntries merges into cache and clears hits from misses', () => {

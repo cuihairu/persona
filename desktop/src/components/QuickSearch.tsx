@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { useGlobalShortcut } from '@/hooks/useGlobalShortcut';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import { getCredentialIcon } from './credentialDisplay';
@@ -48,16 +49,7 @@ const QuickSearch = () => {
   searchRef.current = searchCredentials;
 
   // ⌘K / Ctrl+K 全局打开（组件只挂在解锁后的 workspace 内，锁定态天然无监听）
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setOpen(true);
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  useGlobalShortcut('k', () => setOpen(true));
 
   // debounce 搜索；空查询直接清结果不发请求
   useEffect(() => {

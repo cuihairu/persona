@@ -26,6 +26,9 @@ export const useAutoLockEvents = (enabled: boolean) => {
   const setIdentities = useAppStore((s) => s.setIdentities);
   const setCurrentIdentity = useAppStore((s) => s.setCurrentIdentity);
   const setCredentials = useAppStore((s) => s.setCredentials);
+  const clearFaviconCache = useAppStore((s) => s.clearFaviconCache);
+  const clearPendingCredentialSelection = useAppStore((s) => s.clearPendingCredentialSelection);
+  const setSelectedCredentialId = useAppStore((s) => s.setSelectedCredentialId);
 
   useEffect(() => {
     if (!enabled) {
@@ -44,11 +47,15 @@ export const useAutoLockEvents = (enabled: boolean) => {
           break;
         case 'locked':
           // 后端已落锁：前端只负责清理本地状态，回到解锁屏
+          // （清理项与手动 lockService 对齐：favicon 缓存、选中、待注入跳转一并作废）
           setPendingSeconds(null);
           setUnlocked(false);
           setIdentities([]);
           setCurrentIdentity(null);
           setCredentials([]);
+          clearFaviconCache();
+          clearPendingCredentialSelection();
+          setSelectedCredentialId(null);
           break;
         case 'unlocked':
           setPendingSeconds(null);
@@ -65,7 +72,16 @@ export const useAutoLockEvents = (enabled: boolean) => {
       disposed = true;
       unlisten?.();
     };
-  }, [enabled, setUnlocked, setIdentities, setCurrentIdentity, setCredentials]);
+  }, [
+    enabled,
+    setUnlocked,
+    setIdentities,
+    setCurrentIdentity,
+    setCredentials,
+    clearFaviconCache,
+    clearPendingCredentialSelection,
+    setSelectedCredentialId,
+  ]);
 
   useEffect(() => {
     if (!enabled) return;

@@ -51,6 +51,8 @@ interface AppState {
   sidebarFilter: SidebarFilter;
   /** 待注入的凭据选中项（QuickSearch 写、CredentialList 消费后清除） */
   pendingCredentialSelection: PendingCredentialSelection | null;
+  /** 当前选中凭据 id（CredentialList 派生详情对象；锁屏清空） */
+  selectedCredentialId: string | null;
   /** favicon 缓存（host → 条目；命中渲染，锁屏清空、身份切换不清——跨身份共享） */
   faviconCache: Record<string, FaviconEntry>;
   /** favicon 负缓存：批量读未命中的 host，避免重复 IPC（Fetch 成功后移除） */
@@ -70,6 +72,7 @@ interface AppState {
   resetSidebarFilter: () => void;
   setPendingCredentialSelection: (selection: PendingCredentialSelection) => void;
   clearPendingCredentialSelection: () => void;
+  setSelectedCredentialId: (id: string | null) => void;
   /** 批量合并 favicon 缓存，并把命中的 host 从负缓存移除 */
   setFaviconEntries: (entries: FaviconData[]) => void;
   /** 标记批量读未命中的 host（已缓存的忽略） */
@@ -96,6 +99,7 @@ export const useAppStore = create<AppState>((set) => ({
   theme: readStoredTheme(),
   sidebarFilter: DEFAULT_SIDEBAR_FILTER,
   pendingCredentialSelection: null,
+  selectedCredentialId: null,
   faviconCache: {},
   faviconMisses: {},
 
@@ -113,6 +117,7 @@ export const useAppStore = create<AppState>((set) => ({
   resetSidebarFilter: () => set({ sidebarFilter: DEFAULT_SIDEBAR_FILTER }),
   setPendingCredentialSelection: (selection) => set({ pendingCredentialSelection: selection }),
   clearPendingCredentialSelection: () => set({ pendingCredentialSelection: null }),
+  setSelectedCredentialId: (id) => set({ selectedCredentialId: id }),
   setFaviconEntries: (entries) =>
     set((state) => {
       const faviconCache = { ...state.faviconCache };

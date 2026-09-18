@@ -27,6 +27,8 @@ export const usePersonaService = () => {
     clearError,
     setFaviconEntries,
     clearFaviconCache,
+    clearPendingCredentialSelection,
+    setSelectedCredentialId,
   } = useAppStore();
 
   // Check if service is unlocked on mount
@@ -92,6 +94,9 @@ export const usePersonaService = () => {
         // favicon 缓存随锁清空（后端 vault 未锁文件仍在，前端不落盘无害；
         // 重新解锁后按需重读）
         clearFaviconCache();
+        // 选中与待注入的跨身份跳转都随锁作废（否则解锁后可能自动选中陈旧条目）
+        clearPendingCredentialSelection();
+        setSelectedCredentialId(null);
         toast.success('Service locked');
       } else {
         toast.error(response.error || 'Failed to lock service');
