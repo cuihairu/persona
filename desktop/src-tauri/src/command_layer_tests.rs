@@ -22,6 +22,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         db_path: Mutex::new(None),
         agent_handle: Mutex::new(None),
         auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
+        passkey_server_started: std::sync::atomic::AtomicBool::new(false),
         ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
     });
@@ -5162,4 +5163,193 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
         "got: {:?}",
         resp.error
     );
+}
+
+// ---------------------------------------------------------------------------
+// Workspace settings / feature flags / passkey 审批服务端门禁
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    // 全新 vault：flags 默认全关，其余字段保持 core 默认
+    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("settings present");
+    assert!(!settings.features.ssh_agent);
+    assert!(!settings.features.wallet);
+    assert!(!settings.features.passkeys);
+    assert!(settings.encryption_enabled);
+    assert_eq!(settings.session_timeout_seconds, 3600);
+
+    // 窄写 features，返回更新后的全量 settings
+    let resp = set_feature_flags(true, true, true, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("updated settings returned");
+    assert!(settings.features.ssh_agent);
+    assert!(settings.features.wallet);
+    assert!(settings.features.passkeys);
+
+    // get 反映持久化结果
+    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    let settings = resp.data.expect("settings present");
+    assert!(settings.features.ssh_agent);
+
+    // 部分开启：只动 features 三个位
+    let resp = set_feature_flags(true, false, false, app.state::<AppState>())
+        .await
+        .unwrap();
+    let settings = resp.data.expect("updated settings returned");
+    assert!(settings.features.ssh_agent);
+    assert!(!settings.features.wallet);
+    assert!(!settings.features.passkeys);
+}
+
+#[tokio::test]
+async fn set_feature_flags_requires_unlocked_service() {
+    let app = mock_app();
+
+    // 未初始化：set 拒绝
+    let resp = set_feature_flags(true, false, false, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    init_service_ok(&app, "master-pw-123").await;
+
+    // get 免解锁约束（解锁屏也要按 flags 裁剪 UI），set 需要解锁
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "get must work while locked: {:?}", resp.error);
+
+    let resp = set_feature_flags(true, false, false, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+}
+
+#[tokio::test]
+async fn workspace_settings_commands_fail_without_db_path() {
+    let app = mock_app();
+
+    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
+    );
+
+    // set 在解锁检查处先拒绝（Service not initialized）
+    let resp = set_feature_flags(true, true, true, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+}
+
+#[tokio::test]
+async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunlock() {
+    let state_dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&state_dir);
+    let app = mock_app();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    let db_path = vault_dir.path().join("gate.db");
+    // Leak: the service holds the vault file open for the whole test.
+    std::mem::forget(vault_dir);
+    let db_path_str = db_path.to_string_lossy().to_string();
+
+    // 首次解锁：flag 默认关，门禁不 spawn
+    let resp = init_service(
+        InitRequest {
+            master_password: "master-pw-123".to_string(),
+            db_path: Some(db_path_str.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let socket = state_dir.path().join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!socket.exists(), "gate closed: no approval socket");
+
+    // 打开 passkeys 开关（当前已解锁，允许写）
+    let resp = set_feature_flags(false, false, true, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // lock→unlock（重新 init）：门禁读到开关后 spawn
+    let resp = init_service(
+        InitRequest {
+            master_password: "master-pw-123".to_string(),
+            db_path: Some(db_path_str.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !socket.exists() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(socket.exists(), "flag on + re-unlock must spawn the server");
+    assert!(app
+        .state::<AppState>()
+        .passkey_server_started
+        .load(std::sync::atomic::Ordering::SeqCst));
+
+    // 幂等：已启动后重复 init 不再 spawn（标记保持，无 panic/重复绑定报错）
+    let resp = init_service(
+        InitRequest {
+            master_password: "master-pw-123".to_string(),
+            db_path: Some(db_path_str.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn passkey_gate_stays_off_for_missing_vault_and_default_flags() {
+    let state_dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&state_dir);
+    let app = mock_app();
+    let socket = state_dir.path().join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
+
+    // vault 打不开：只读探测失败 → 视为关，不 spawn、不置标记
+    crate::commands::maybe_start_passkey_server(
+        "/nonexistent/vault/gate.db",
+        &app.state::<AppState>(),
+        app.handle(),
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!socket.exists());
+    assert!(!app
+        .state::<AppState>()
+        .passkey_server_started
+        .load(std::sync::atomic::Ordering::SeqCst));
+
+    // 正常 vault 但 flag 保持默认关：init 尾部的门禁同样跳过
+    init_service_ok(&app, "master-pw-123").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert!(!socket.exists());
+    assert!(!app
+        .state::<AppState>()
+        .passkey_server_started
+        .load(std::sync::atomic::Ordering::SeqCst));
 }

@@ -27,6 +27,20 @@ pub struct Workspace {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// 高级功能开关（1Password 式默认关闭、用户 opt-in）。
+///
+/// 主航道功能（凭据/统计/Watchtower）恒开，不在此列。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeatureFlags {
+    /// SSH agent（浏览器/终端经 socket 取钥签名）
+    pub ssh_agent: bool,
+    /// 钱包面板
+    pub wallet: bool,
+    /// Passkey 管理与审批服务端
+    pub passkeys: bool,
+}
+
 /// Workspace configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
@@ -47,6 +61,10 @@ pub struct WorkspaceSettings {
 
     /// Default identity type for new identities
     pub default_identity_type: String,
+
+    /// 高级功能开关（旧 JSON 缺键时回退全关）
+    #[serde(default)]
+    pub features: FeatureFlags,
 }
 
 impl Default for WorkspaceSettings {
@@ -58,6 +76,7 @@ impl Default for WorkspaceSettings {
             session_timeout_seconds: 3600,
             require_confirmation: true,
             default_identity_type: "personal".to_string(),
+            features: FeatureFlags::default(),
         }
     }
 }
@@ -164,5 +183,41 @@ mod tests {
         assert_eq!(restored.id, ws.id);
         assert_eq!(restored.active_identity_id, Some(id));
         assert_eq!(restored.settings.auto_backup_hours, 12);
+    }
+
+    #[test]
+    fn test_feature_flags_default_all_off() {
+        let flags = FeatureFlags::default();
+        assert!(!flags.ssh_agent);
+        assert!(!flags.wallet);
+        assert!(!flags.passkeys);
+        assert_eq!(flags, FeatureFlags { ssh_agent: false, wallet: false, passkeys: false });
+    }
+
+    #[test]
+    fn test_settings_without_features_key_falls_back_to_defaults() {
+        // 旧版本持久化的 settings JSON 没有 features 键：反序列化应静默回退
+        let legacy = r#"{
+            "encryption_enabled": true,
+            "auto_backup_hours": 24,
+            "backup_retention_count": 7,
+            "session_timeout_seconds": 3600,
+            "require_confirmation": true,
+            "default_identity_type": "personal"
+        }"#;
+        let settings: WorkspaceSettings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(settings.features, FeatureFlags::default());
+    }
+
+    #[test]
+    fn test_feature_flags_serde_round_trip() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        ws.settings.features = FeatureFlags { ssh_agent: true, wallet: false, passkeys: true };
+
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert!(restored.settings.features.ssh_agent);
+        assert!(!restored.settings.features.wallet);
+        assert!(restored.settings.features.passkeys);
     }
 }

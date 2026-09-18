@@ -18,6 +18,8 @@ pub struct AppState {
     pub agent_handle: Mutex<Option<JoinHandle<()>>>,
     /// auto-lock 回调只注册一次（多次 init_service 时防重复）
     pub auto_lock_registered: std::sync::atomic::AtomicBool,
+    /// passkey 审批服务端本会话已启动（workspace 开关门禁的幂等标记）
+    pub passkey_server_started: std::sync::atomic::AtomicBool,
     /// 待应答的 SSH 签名审批（request_id → oneshot），由
     /// DesktopApprovalHandler 写入、ssh_approval_respond 命令取出
     pub ssh_approvals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,

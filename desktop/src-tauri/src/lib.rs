@@ -1,7 +1,8 @@
 //! Persona 桌面端库入口。
 //!
-//! 应用装配（Builder 链、托盘、审批服务端常驻）放在这里，`main.rs` 只留
-//! 薄入口。lib 化让集成测试可以经 `tests/` 独立进程直驱带 mock runtime 的
+//! 应用装配（Builder 链、托盘）放在这里，`main.rs` 只留薄入口。passkey
+//! 审批服务端由 init_service 按 workspace 开关门禁启动（见
+//! `commands::maybe_start_passkey_server`）。lib 化让集成测试可以经 `tests/` 独立进程直驱带 mock runtime 的
 //! `AppHandle`（mock runtime 会毒化所在进程的 tokio socket IO 探测，见
 //! `passkey_bridge::tests` 中 FakeSink 的注释）——bin 单进程时代这些路径
 //! 只能用 FakeSink 绕过。
@@ -106,25 +107,11 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             db_path: Mutex::new(None),
             agent_handle: Mutex::new(None),
             auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
+            passkey_server_started: std::sync::atomic::AtomicBool::new(false),
             ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         })
         .setup(|app| {
-            // Passkey 审批服务端常驻监听：无论保险库是否解锁都运行 ——
-            // 锁定会话直接回 locked，不弹 GUI。
-            let (pending, service) = {
-                let state = app.state::<AppState>();
-                (state.passkey_approvals.clone(), state.service.clone())
-            };
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Err(err) =
-                    passkey_bridge::run_passkey_approval_server(handle, pending, service).await
-                {
-                    eprintln!("passkey approval server exited: {err}");
-                }
-            });
-
             // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。
             // 无显示会话（CI/容器/ssh-only）下 muda 菜单会直接 panic，
             // 跳过托盘降级运行 —— 审批链路不依赖托盘存活。
@@ -154,6 +141,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::get_active_identity,
             commands::set_active_identity,
             commands::clear_active_identity,
+            commands::get_workspace_settings,
+            commands::set_feature_flags,
             commands::update_identity,
             commands::delete_identity,
             commands::create_credential,

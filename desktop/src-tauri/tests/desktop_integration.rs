@@ -26,6 +26,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         db_path: Mutex::new(None),
         agent_handle: Mutex::new(None),
         auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
+        passkey_server_started: std::sync::atomic::AtomicBool::new(false),
         ssh_approvals: Arc::new(StdMutex::new(HashMap::new())),
         passkey_approvals: Arc::new(StdMutex::new(HashMap::new())),
     });
@@ -270,11 +271,12 @@ fn show_main_window_focuses_existing_main_window() {
     assert!(app.get_webview_window("main").is_some());
 }
 
-/// build() 整链：mock context 跑完整装配 —— AppState manage、passkey 审批
-/// 服务端常驻 spawn（sandbox env 下绑临时 socket）、托盘 + 菜单构建、
-/// 全部命令注册。等价于生产 main() 的装配段，事件循环本身除外。
+/// build() 整链：mock context 跑完整装配 —— AppState manage、托盘 + 菜单
+/// 构建、全部命令注册。等价于生产 main() 的装配段，事件循环本身除外。
+/// passkey 审批服务端默认关闭：装配后 socket 不应出现（spawn 由
+/// init_service 按 workspace 开关门禁，见 commands::maybe_start_passkey_server）。
 #[test]
-fn build_assembles_full_app_with_tray_and_passkey_server() {
+fn build_assembles_full_app_with_tray() {
     let _env = env_lock();
     let state_dir = tempfile::tempdir().unwrap();
     let _guard = StateDirGuard::sandbox(&state_dir);
@@ -284,8 +286,8 @@ fn build_assembles_full_app_with_tray_and_passkey_server() {
     ));
 
     // setup 闭包延迟到第一次事件循环迭代才执行（Builder::build 不跑它），
-    // 这里手动驱动一次触发审批服务端 spawn + 托盘构建（仅 mock runtime，
-    // 单次调用，不涉及文档警告的循环 busy-loop 场景）。
+    // 这里手动驱动一次触发托盘构建（仅 mock runtime，单次调用，不涉及
+    // 文档警告的循环 busy-loop 场景）。
     #[allow(deprecated)]
     {
         app.run_iteration(|_handle, _event| {});
@@ -294,26 +296,15 @@ fn build_assembles_full_app_with_tray_and_passkey_server() {
     // manage 生效：命令层读得到 AppState。
     assert!(app.try_state::<AppState>().is_some());
 
-    // setup spawn 的审批服务端已把 socket 绑在 sandbox 状态目录。
+    // 默认 feature flags 全关：审批服务端不应被装配段启动。
     let socket = state_dir
         .path()
         .join(persona_desktop::passkey_bridge::APPROVAL_SOCKET_NAME);
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while !socket.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(socket.exists(), "passkey approval socket must be listening");
-    // 0600：只有本用户进程可连。
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&socket).unwrap().permissions().mode();
-        assert_eq!(
-            mode & 0o777,
-            0o600,
-            "socket must be owner-only, got {mode:o}"
-        );
-    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !socket.exists(),
+        "passkey approval socket must not listen until the workspace flag is on"
+    );
 
     // 托盘按显示会话分流：有 display 构建（mock tray 走完整 API 面），
     // 无 display（CI/容器）走 headless 分支不建托盘。

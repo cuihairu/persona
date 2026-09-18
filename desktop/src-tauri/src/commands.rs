@@ -155,6 +155,7 @@ pub async fn init_service<R: tauri::Runtime>(
                                 // 若 guard 跨越该调用，tokio Mutex 非重入 → 死锁
                                 *state.service.lock().await = Some(service);
                                 register_auto_lock_bridge(&state, &app).await;
+                                maybe_start_passkey_server(&db_path, &state, &app).await;
                                 Ok(ApiResponse::success(true))
                             }
                             Err(e) => Ok(ApiResponse::error(format!(
@@ -170,6 +171,7 @@ pub async fn init_service<R: tauri::Runtime>(
                                     // 同上：先释放 guard 再注册 auto-lock 桥
                                     *state.service.lock().await = Some(service);
                                     register_auto_lock_bridge(&state, &app).await;
+                                    maybe_start_passkey_server(&db_path, &state, &app).await;
                                     Ok(ApiResponse::success(true))
                                 }
                                 persona_core::AuthResult::InvalidCredentials => {
@@ -339,6 +341,126 @@ pub async fn clear_active_identity(
     repo.update(&ws).await.map_err(|e| e.to_string())?;
 
     Ok(ApiResponse::success(true))
+}
+
+/// Get the full workspace settings（免解锁：解锁屏也要按开关裁剪 UI 外壳）。
+#[command]
+pub async fn get_workspace_settings(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    Ok(ApiResponse::success(ws.settings))
+}
+
+/// 窄写高级功能开关：只动 `settings.features` 三个位，返回更新后的全量
+/// settings 作为服务端真相（避免前端 clobber 其它设置字段）。
+#[command]
+pub async fn set_feature_flags(
+    ssh_agent: bool,
+    wallet: bool,
+    passkeys: bool,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    ws.settings.features = FeatureFlags {
+        ssh_agent,
+        wallet,
+        passkeys,
+    };
+    ws.touch();
+    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    Ok(ApiResponse::success(updated.settings))
+}
+
+/// 只读 passkey 开关：vault 打不开/行不存在一律视为关（审批链路另有
+/// 解锁门禁兜底，静默跳过安全）。
+async fn passkeys_flag_enabled(db_path: &str) -> bool {
+    let Ok(db) = Database::from_file(db_path).await else {
+        return false;
+    };
+    if db.migrate().await.is_err() {
+        return false;
+    }
+    let workspace_path = workspace_path_for_db_path(db_path);
+    let repo = WorkspaceRepository::new(db);
+    match repo.find_by_path(&workspace_path).await {
+        Ok(Some(ws)) => ws.settings.features.passkeys,
+        _ => false,
+    }
+}
+
+/// 按 workspace 开关门禁启动 passkey 审批服务端（init_service 成功尾部调用）。
+///
+/// 不放 setup：setup 时 db_path 尚未写入，猜默认路径会读错 vault。只读
+/// `find_by_path` 不开 workspace 行；开关关闭/读取失败 → 不 spawn。设置页
+/// 打开开关后，下一次 lock→unlock（重新 init_service）即生效，无需重启。
+/// `passkey_server_started` 保证多次 init_service 只 spawn 一次。
+pub(crate) async fn maybe_start_passkey_server<R: tauri::Runtime>(
+    db_path: &str,
+    state: &State<'_, AppState>,
+    app: &tauri::AppHandle<R>,
+) {
+    use std::sync::atomic::Ordering;
+
+    if state.passkey_server_started.load(Ordering::SeqCst) {
+        return;
+    }
+    if !passkeys_flag_enabled(db_path).await {
+        return;
+    }
+
+    let (pending, service) = (state.passkey_approvals.clone(), state.service.clone());
+    let handle = app.clone();
+    state.passkey_server_started.store(true, Ordering::SeqCst);
+    tauri::async_runtime::spawn(async move {
+        if let Err(err) =
+            crate::passkey_bridge::run_passkey_approval_server(handle, pending, service).await
+        {
+            eprintln!("passkey approval server exited: {err}");
+        }
+    });
 }
 
 /// Create a new identity
