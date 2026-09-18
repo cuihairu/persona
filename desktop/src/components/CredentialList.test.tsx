@@ -94,8 +94,8 @@ describe('components/CredentialList', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (copyWithAutoClear as jest.Mock).mockResolvedValue(true);
-    // 真 store 单例跨用例存活：树筛选复位为"全部条目"
-    useAppStore.setState({ sidebarFilter: { kind: 'all' } });
+    // 真 store 单例跨用例存活：树筛选复位为"全部条目"，清掉残留的待注入选中
+    useAppStore.setState({ sidebarFilter: { kind: 'all' }, pendingCredentialSelection: null });
   });
 
   it('renders placeholder when no identity selected', () => {
@@ -195,6 +195,41 @@ describe('components/CredentialList', () => {
     expect(screen.getByText('No credentials found')).toBeInTheDocument();
     expect(screen.getByText('Try a different category in the sidebar')).toBeInTheDocument();
     expect(screen.queryByText('Add Your First Credential')).not.toBeInTheDocument();
+  });
+
+  it('injects the pending selection once the target credential is present', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    setupList([makeCred({ id: 'c1', name: 'Jumped' })], { getCredentialData });
+
+    act(() => {
+      useAppStore.setState({
+        pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
+      });
+    });
+
+    await screen.findByTestId('detail-pane');
+    expect(getCredentialData).toHaveBeenCalledWith('c1');
+    // 消费后即清除，避免下次进列表时再次弹选中
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+  });
+
+  it('keeps the pending selection when it belongs to another identity', () => {
+    setupList([makeCred({ id: 'c1', name: 'Jumped' })]);
+
+    act(() => {
+      useAppStore.setState({
+        pendingCredentialSelection: { identityId: 'other', credentialId: 'c1' },
+      });
+    });
+
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    expect(useAppStore.getState().pendingCredentialSelection).toEqual({
+      identityId: 'other',
+      credentialId: 'c1',
+    });
   });
 
   it('renders row variants: security colors, hostnames and favorites', () => {

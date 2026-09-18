@@ -492,6 +492,12 @@ export type SidebarFilter =
   | { kind: 'type'; value: string }
   | { kind: 'tag'; value: string };
 
+/**
+ * 待注入的凭据选中项（全局搜索跨身份跳转用）：QuickSearch 写入，
+ * CredentialList 在目标身份的凭据加载完成后消费并清除。
+ */
+export type PendingCredentialSelection = { identityId: string; credentialId: string };
+
 export interface InitRequest {
   master_password: string;
   db_path?: string;

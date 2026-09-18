@@ -17,6 +17,7 @@ describe('stores/appStore', () => {
       error: null,
       theme: 'system',
       sidebarFilter: DEFAULT_SIDEBAR_FILTER,
+      pendingCredentialSelection: null,
     });
   });
 
@@ -96,5 +97,18 @@ describe('stores/appStore', () => {
 
     useAppStore.getState().resetSidebarFilter();
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
+  });
+
+  it('pendingCredentialSelection defaults to null and set/clear replace it', () => {
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+
+    useAppStore.getState().setPendingCredentialSelection({ identityId: 'i2', credentialId: 'c9' });
+    expect(useAppStore.getState().pendingCredentialSelection).toEqual({
+      identityId: 'i2',
+      credentialId: 'c9',
+    });
+
+    useAppStore.getState().clearPendingCredentialSelection();
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
   });
 });

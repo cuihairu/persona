@@ -7,6 +7,7 @@ import type {
   FeatureFlags,
   ThemePreference,
   SidebarFilter,
+  PendingCredentialSelection,
 } from '@/types';
 import { readStoredTheme } from '@/utils/theme';
 
@@ -40,6 +41,8 @@ interface AppState {
   theme: ThemePreference;
   /** 侧栏分类树选中项（单选；Sidebar 写、CredentialList 读，换身份时 reset） */
   sidebarFilter: SidebarFilter;
+  /** 待注入的凭据选中项（QuickSearch 写、CredentialList 消费后清除） */
+  pendingCredentialSelection: PendingCredentialSelection | null;
 
   // Actions
   setUnlocked: (unlocked: boolean) => void;
@@ -53,6 +56,8 @@ interface AppState {
   setTheme: (theme: ThemePreference) => void;
   setSidebarFilter: (filter: SidebarFilter) => void;
   resetSidebarFilter: () => void;
+  setPendingCredentialSelection: (selection: PendingCredentialSelection) => void;
+  clearPendingCredentialSelection: () => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
@@ -72,6 +77,7 @@ export const useAppStore = create<AppState>((set) => ({
   error: null,
   theme: readStoredTheme(),
   sidebarFilter: DEFAULT_SIDEBAR_FILTER,
+  pendingCredentialSelection: null,
 
   // Actions
   setUnlocked: (unlocked) => set({ isUnlocked: unlocked }),
@@ -85,6 +91,8 @@ export const useAppStore = create<AppState>((set) => ({
   setTheme: (theme) => set({ theme }),
   setSidebarFilter: (filter) => set({ sidebarFilter: filter }),
   resetSidebarFilter: () => set({ sidebarFilter: DEFAULT_SIDEBAR_FILTER }),
+  setPendingCredentialSelection: (selection) => set({ pendingCredentialSelection: selection }),
+  clearPendingCredentialSelection: () => set({ pendingCredentialSelection: null }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),

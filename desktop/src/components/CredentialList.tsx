@@ -57,6 +57,8 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   const [selectedCredential, setSelectedCredential] = useState<Credential | null>(null);
   const [credentialData, setCredentialData] = useState<any>(null);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
+  const pendingSelection = useAppStore((s) => s.pendingCredentialSelection);
+  const clearPendingCredentialSelection = useAppStore((s) => s.clearPendingCredentialSelection);
 
   // 侧栏分类树（单选）→ CredentialFilter 纯派生；搜索词独立叠加（AND）
   const treeFilter = useMemo<CredentialFilter>(() => {
@@ -90,6 +92,16 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     setSelectedCredential(null);
     setCredentialData(null);
   }, [currentIdentity?.id]);
+
+  // 全局搜索跨身份跳转：目标身份的凭据就绪后注入选中并清除 pending
+  // （声明在清选中 effect 之后；凭据异步加载完成会再次触发本 effect）
+  useEffect(() => {
+    if (!pendingSelection || pendingSelection.identityId !== currentIdentity?.id) return;
+    const target = credentials.find((c) => c.id === pendingSelection.credentialId);
+    if (!target) return;
+    handleCredentialClick(target);
+    clearPendingCredentialSelection();
+  }, [pendingSelection, credentials, currentIdentity, handleCredentialClick, clearPendingCredentialSelection]);
 
   const copyToClipboard = async (text: string, label: string) => {
     const ok = await copyWithAutoClear(text, 30_000);
