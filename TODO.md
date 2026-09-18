@@ -165,6 +165,20 @@ Desktop (Tauri v2 + React)
   - 开关持久化到 workspace settings（schema v2 已有 settings 字段）
   - backend 联动：SSH agent 审批服务端/托盘仅在开启时启动；
     钱包/passkey 后端命令可保留（已有解锁 + re-auth 门禁），仅隐藏 UI 入口
+- [ ] UI 对齐 1Password 8 交互范式（分阶段；身份维度保留为 Persona 特色，
+  信息架构不照搬——1Password 无身份/上下文概念，IdentitySwitcher 语义是
+  "身份"而非"账户"）
+  - [ ] 双栏布局：中间条目列表（图标+标题+副标题，行内复制/详情按钮）+
+    右侧常驻详情面板，取代凭据卡片网格 + 点击弹 modal
+  - [ ] 全局快速搜索（⌘K / 顶栏搜索框，跨身份跨类型结果分组；范围天然
+    受功能开关约束）
+  - [ ] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
+    变体，宜早不宜迟）
+  - [ ] 侧栏分类导航（类型/标签/收藏树，取代筛选 chip 行）；
+    IdentitySwitcher 移至侧栏顶部（对应 1Password 账户切换器的位置）
+  - [ ] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
+    （隐私红线：不常驻外联，不默认抓取——1Password 同款做法）
+  - [ ] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名等；优先级最低）
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)
