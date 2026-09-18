@@ -1,6 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { personaAPI } from '@/utils/api';
+import { copyToClipboardWithToast } from '@/utils/clipboard';
+import toast from 'react-hot-toast';
 import { useAppStore } from '@/stores/appStore';
 
 // -- hooks：可变返回值，由 beforeEach 重置 -----------------------------------
@@ -106,6 +108,11 @@ jest.mock('react-hot-toast', () => ({
   Toaster: () => null,
 }));
 
+jest.mock('@/utils/clipboard', () => ({
+  __esModule: true,
+  copyToClipboardWithToast: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('@/utils/api', () => ({
   personaAPI: {
     startAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
@@ -134,6 +141,9 @@ describe('App', () => {
     useAppStore.setState({
       featureFlags: { ssh_agent: false, wallet: false, passkeys: false, fetch_favicons: false },
       sidebarFilter: { kind: 'all' },
+      credentials: [],
+      selectedCredentialId: null,
+      currentIdentity: null,
     });
     serviceState = {
       isUnlocked: false,
@@ -322,6 +332,67 @@ describe('App', () => {
     rerender(<App />);
     fireEvent.keyDown(window, { key: 'l', metaKey: true });
     expect(lockService).toHaveBeenCalledTimes(1);
+  });
+
+  it('copies the selected credential\'s username with cmd+E', () => {
+    serviceState.isUnlocked = true;
+    useAppStore.setState({
+      credentials: [{ id: 'c1', identity_id: 'i1', username: 'alice', tags: [] } as any],
+      selectedCredentialId: 'c1',
+      currentIdentity: { id: 'i1', name: 'Me' } as any,
+    });
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: 'e', metaKey: true });
+    expect(copyToClipboardWithToast).toHaveBeenCalledWith('alice', 'Username');
+  });
+
+  it('prompts to select an entry on cmd+E without a selection', () => {
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: 'e', ctrlKey: true });
+    expect(toast.error).toHaveBeenCalledWith('Select an entry first');
+    expect(copyToClipboardWithToast).not.toHaveBeenCalled();
+  });
+
+  it('reports entries without a username on cmd+E', () => {
+    serviceState.isUnlocked = true;
+    useAppStore.setState({
+      credentials: [{ id: 'c1', identity_id: 'i1', username: null, tags: [] } as any],
+      selectedCredentialId: 'c1',
+      currentIdentity: { id: 'i1', name: 'Me' } as any,
+    });
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: 'e', metaKey: true });
+    expect(toast.error).toHaveBeenCalledWith('This entry has no username');
+    expect(copyToClipboardWithToast).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stale selection from another identity on cmd+E', () => {
+    serviceState.isUnlocked = true;
+    useAppStore.setState({
+      credentials: [{ id: 'c1', identity_id: 'other', username: 'bob', tags: [] } as any],
+      selectedCredentialId: 'c1',
+      currentIdentity: { id: 'i1', name: 'Me' } as any,
+    });
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: 'e', metaKey: true });
+    expect(toast.error).toHaveBeenCalledWith('Select an entry first');
+    expect(copyToClipboardWithToast).not.toHaveBeenCalled();
+  });
+
+  it('toggles the settings modal with cmd+comma', () => {
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    expect(screen.queryByTestId('settings-modal')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: ',', metaKey: true });
+    expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: ',', metaKey: true });
+    expect(screen.queryByTestId('settings-modal')).not.toBeInTheDocument();
   });
 
   it('opens the create-identity and create-credential modals from their triggers', () => {

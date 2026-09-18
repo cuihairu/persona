@@ -1,4 +1,5 @@
 import { readText as tauriReadText, writeText as tauriWriteText } from '@tauri-apps/plugin-clipboard-manager';
+import toast from 'react-hot-toast';
 
 const writeClipboardText = async (text: string): Promise<boolean> => {
   try {
@@ -66,4 +67,14 @@ export const copyWithAutoClear = async (
   }, clearAfterMs);
 
   return true;
+};
+
+/** 复制 + 结果 toast（30s 自动清除）。CredentialList 行内按钮与全局 ⌘E 共用 */
+export const copyToClipboardWithToast = async (text: string, label: string): Promise<void> => {
+  const ok = await copyWithAutoClear(text, 30_000);
+  if (ok) {
+    toast.success(`${label} copied (clears in 30s)`);
+  } else {
+    toast.error('Failed to copy to clipboard');
+  }
 };

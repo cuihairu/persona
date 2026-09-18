@@ -1,17 +1,29 @@
-import { copyWithAutoClear } from './clipboard';
+import { copyWithAutoClear, copyToClipboardWithToast } from './clipboard';
 
 const mockTauriWriteText = jest.fn();
 const mockTauriReadText = jest.fn();
+const mockToastSuccess = jest.fn();
+const mockToastError = jest.fn();
 
 jest.mock('@tauri-apps/plugin-clipboard-manager', () => ({
   writeText: (...args: any[]) => mockTauriWriteText(...args),
   readText: (...args: any[]) => mockTauriReadText(...args),
 }));
 
+jest.mock('react-hot-toast', () => ({
+  __esModule: true,
+  default: {
+    success: (...args: any[]) => mockToastSuccess(...args),
+    error: (...args: any[]) => mockToastError(...args),
+  },
+}));
+
 describe('utils/clipboard', () => {
   beforeEach(() => {
     mockTauriWriteText.mockReset();
     mockTauriReadText.mockReset();
+    mockToastSuccess.mockReset();
+    mockToastError.mockReset();
   });
 
   it('writes via tauri clipboard and auto-clears when content unchanged', async () => {
@@ -140,6 +152,28 @@ describe('utils/clipboard', () => {
     restore();
 
     jest.useRealTimers();
+  });
+
+  it('copyToClipboardWithToast toasts success with the 30s hint', async () => {
+    mockTauriWriteText.mockResolvedValue(undefined);
+
+    await copyToClipboardWithToast('alice', 'Username');
+
+    expect(mockTauriWriteText).toHaveBeenCalledWith('alice');
+    expect(mockToastSuccess).toHaveBeenCalledWith('Username copied (clears in 30s)');
+    expect(mockToastError).not.toHaveBeenCalled();
+  });
+
+  it('copyToClipboardWithToast toasts the failure message on failure', async () => {
+    mockTauriWriteText.mockRejectedValue(new Error('no backend'));
+    setNavigatorClipboard(undefined);
+    const execCommand = jest.fn().mockReturnValue(false);
+    document.execCommand = execCommand as any;
+
+    await copyToClipboardWithToast('alice', 'Username');
+
+    expect(mockToastSuccess).not.toHaveBeenCalled();
+    expect(mockToastError).toHaveBeenCalledWith('Failed to copy to clipboard');
   });
 });
 

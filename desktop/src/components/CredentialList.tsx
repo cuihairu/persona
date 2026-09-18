@@ -10,8 +10,7 @@ import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import type { Credential } from '@/types';
 import { clsx } from 'clsx';
-import toast from 'react-hot-toast';
-import { copyWithAutoClear } from '@/utils/clipboard';
+import { copyToClipboardWithToast } from '@/utils/clipboard';
 import { getCredentialIcon, getSecurityColor, getSafeHostname } from './credentialDisplay';
 import CredentialDetailPane from './CredentialDetailPane';
 import FaviconImg from './FaviconImg';
@@ -58,11 +57,18 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   // flag 开时批量预取列表页 favicon（纯缓存读；miss 不触发抓取）
   useFavicons(credentials.map((c) => c.url));
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCredential, setSelectedCredential] = useState<Credential | null>(null);
   const [credentialData, setCredentialData] = useState<any>(null);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
   const pendingSelection = useAppStore((s) => s.pendingCredentialSelection);
   const clearPendingCredentialSelection = useAppStore((s) => s.clearPendingCredentialSelection);
+  const selectedCredentialId = useAppStore((s) => s.selectedCredentialId);
+  const setSelectedCredentialId = useAppStore((s) => s.setSelectedCredentialId);
+
+  // 选中提升进 store（全局 ⌘E 复制用户名需要），对象从列表派生
+  const selectedCredential = useMemo(
+    () => credentials.find((c) => c.id === selectedCredentialId) ?? null,
+    [credentials, selectedCredentialId],
+  );
 
   // 侧栏分类树（单选）→ CredentialFilter 纯派生；搜索词独立叠加（AND）
   const treeFilter = useMemo<CredentialFilter>(() => {
@@ -86,14 +92,14 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   const handleCredentialClick = async (credential: Credential) => {
     // 先清空旧数据再选中：同一批 setState，面板首帧即新条目 + loading，不闪现上一条
     setCredentialData(null);
-    setSelectedCredential(credential);
+    setSelectedCredentialId(credential.id);
     const data = await getCredentialData(credential.id);
     setCredentialData(data);
   };
 
   // 切身份后旧选中项悬空：清空右栏选中
   useEffect(() => {
-    setSelectedCredential(null);
+    setSelectedCredentialId(null);
     setCredentialData(null);
   }, [currentIdentity?.id]);
 
@@ -106,15 +112,6 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     handleCredentialClick(target);
     clearPendingCredentialSelection();
   }, [pendingSelection, credentials, currentIdentity, handleCredentialClick, clearPendingCredentialSelection]);
-
-  const copyToClipboard = async (text: string, label: string) => {
-    const ok = await copyWithAutoClear(text, 30_000);
-    if (ok) {
-      toast.success(`${label} copied (clears in 30s)`);
-    } else {
-      toast.error('Failed to copy to clipboard');
-    }
-  };
 
   if (!currentIdentity) {
     return (
@@ -236,7 +233,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        copyToClipboard(credential.username!, 'Username');
+                        void copyToClipboardWithToast(credential.username!, 'Username');
                       }}
                       className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 opacity-0 focus:opacity-100 group-hover:opacity-100 shrink-0"
                       title="Copy username"
@@ -257,10 +254,10 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                 credential={selectedCredential}
                 credentialData={credentialData}
                 onClose={() => {
-                  setSelectedCredential(null);
+                  setSelectedCredentialId(null);
                   setCredentialData(null);
                 }}
-                onCopy={copyToClipboard}
+                onCopy={copyToClipboardWithToast}
               />
             ) : (
               <div

@@ -191,12 +191,13 @@ const Sidebar: React.FC<SidebarProps> = ({
         data-testid="sidebar-footer"
         className="mt-auto border-t border-gray-200 dark:border-gray-700 p-3 flex items-center gap-1"
       >
-        <button className="btn-ghost" aria-label="Settings" onClick={onOpenSettings}>
+        <button className="btn-ghost" aria-label="Settings" title="Settings (⌘,)" onClick={onOpenSettings}>
           <Cog6ToothIcon className="w-4 h-4" />
         </button>
         <button
           className="btn-ghost text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
           aria-label="Lock session"
+          title="Lock (⌘L)"
           onClick={onLock}
         >
           <LockClosedIcon className="w-4 h-4" />

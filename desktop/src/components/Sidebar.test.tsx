@@ -96,10 +96,16 @@ describe('components/Sidebar', () => {
   it('calls settings and lock from the footer', () => {
     const { onOpenSettings, onLock } = renderSidebar();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Lock session' }));
+    const settings = screen.getByRole('button', { name: 'Settings' });
+    fireEvent.click(settings);
+    const lock = screen.getByRole('button', { name: 'Lock session' });
+    fireEvent.click(lock);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onLock).toHaveBeenCalledTimes(1);
+
+    // 快捷键提示（title 不影响可访问名）
+    expect(settings).toHaveAttribute('title', 'Settings (⌘,)');
+    expect(lock).toHaveAttribute('title', 'Lock (⌘L)');
   });
 
   it('renders all/favorites nodes always and type/tag groups only when present', () => {

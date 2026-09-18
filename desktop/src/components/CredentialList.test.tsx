@@ -2,7 +2,6 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import CredentialList, { filterCredentials } from './CredentialList';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
-import { copyWithAutoClear } from '@/utils/clipboard';
 import toast from 'react-hot-toast';
 import type { SidebarFilter } from '@/types';
 
@@ -15,8 +14,21 @@ jest.mock('react-hot-toast', () => ({
   default: { success: jest.fn(), error: jest.fn() },
 }));
 
+const mockTauriWriteText = jest.fn();
+const mockTauriReadText = jest.fn();
+
+jest.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  writeText: (...args: any[]) => mockTauriWriteText(...args),
+  readText: (...args: any[]) => mockTauriReadText(...args),
+}));
+
 jest.mock('@/utils/clipboard', () => ({
-  copyWithAutoClear: jest.fn().mockResolvedValue(true),
+  __esModule: true,
+  // 保留真实 copyToClipboardWithToast（行内复制与全局 ⌘E 共用，toast 文案
+  // 断言才有意义）；其写入链路走上面 mock 的 tauri 插件。
+  // 注意：不能在这里覆盖 copyWithAutoClear——真实函数引用的是模块内部
+  // 绑定，mock 导出拦不到。
+  ...jest.requireActual('@/utils/clipboard'),
 }));
 
 // 面板（CredentialDetailPane）经 transitive 生效：哑渲染避免拖入真实 reveal 链路
@@ -93,11 +105,14 @@ describe('filterCredentials (pure)', () => {
 describe('components/CredentialList', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (copyWithAutoClear as jest.Mock).mockResolvedValue(true);
+    // 真实 copyToClipboardWithToast 的写入主路（tauri 插件）默认成功
+    mockTauriWriteText.mockReset().mockResolvedValue(undefined);
+    mockTauriReadText.mockReset();
     // 真 store 单例跨用例存活：树筛选复位为"全部条目"，清掉残留的待注入选中
     useAppStore.setState({
       sidebarFilter: { kind: 'all' },
       pendingCredentialSelection: null,
+      selectedCredentialId: null,
       featureFlags: { ...DEFAULT_FEATURE_FLAGS },
       faviconCache: {},
       faviconMisses: {},
@@ -220,6 +235,8 @@ describe('components/CredentialList', () => {
     expect(getCredentialData).toHaveBeenCalledWith('c1');
     // 消费后即清除，避免下次进列表时再次弹选中
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+    // 注入同时写入 store 选中 id（全局 ⌘E 依赖同一事实源）
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
   });
 
   it('keeps the pending selection when it belongs to another identity', () => {
@@ -267,6 +284,24 @@ describe('components/CredentialList', () => {
     expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
     expect(screen.getByText('Select an item to see details')).toBeInTheDocument();
     expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
+  });
+
+  it('derives the selection from the store id (shared with global ⌘E)', async () => {
+    setupList([makeCred({ id: 'c1', name: 'One' })]);
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+
+    // 外部（全局快捷键路径）直接写 store id → 面板打开且行高亮
+    act(() => {
+      useAppStore.setState({ selectedCredentialId: 'c1' });
+    });
+    expect(screen.getByTestId('detail-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('credential-row-c1').className).toContain('bg-primary-50');
+
+    // id 清空 → 回占位
+    act(() => {
+      useAppStore.setState({ selectedCredentialId: null });
+    });
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
   });
 
   it('selecting a row opens the pane and highlights it', async () => {
@@ -362,7 +397,10 @@ describe('components/CredentialList', () => {
     fireEvent.click(screen.getByText('Example'));
     await screen.findByTitle('Close');
 
-    (copyWithAutoClear as jest.Mock).mockResolvedValueOnce(false);
+    // 真实写入链失败：tauri 插件拒绝 → navigator.clipboard 不可用 →
+    // execCommand 返回 false
+    mockTauriWriteText.mockRejectedValueOnce(new Error('no backend'));
+    document.execCommand = jest.fn().mockReturnValue(false) as any;
     clickCopyNextTo('bob');
     await act(async () => {});
     expect(toast.error).toHaveBeenCalledWith('Failed to copy to clipboard');

@@ -213,8 +213,15 @@ Desktop (Tauri v2 + React)
     拒缓存；前后端 host 归一化边缘差异（只影响键匹配，降级静态图标）；
     无 TTL/刷新；抓取不进 audit log（公开数据）。follow-up：HTML link
     解析 + TTL、audit log、IPv6/IDN 显示归一
-  - [ ] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名等；优先级最低；
-    ⌘K 已随全局快速搜索落地）
+  - [x] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名、⌘, 设置开关）
+    ——c2fd6861 useGlobalShortcut hook（⌘K 重构为首个消费者）+ ⌘L 锁定
+    + 锁屏清理补齐（modal bool 复位、pending/selected/favicon 随锁作废，
+    auto-lock 与手动锁对齐）/ 本条 selectedCredentialId 提升进 store
+    （CredentialList 派生消费）+ copyToClipboardWithToast 收口 + ⌘E/⌘,
+    + 按钮 title 提示。已知限制：纯前端层（非系统级全局键）；部分
+    浏览器保留键如 Ctrl+E/L 在 WebView 外不保证拦截。follow-up：密码/
+    TOTP 全局复制（需把组件级 useReauth 提升到 App 级）、Escape 统一
+    关 modal、快捷键速查面板
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)

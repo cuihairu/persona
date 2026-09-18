@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Toaster } from 'react-hot-toast';
+import toast, { Toaster } from 'react-hot-toast';
 import { ChartBarIcon } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useGlobalShortcut } from '@/hooks/useGlobalShortcut';
@@ -8,6 +8,7 @@ import { useSshApprovals } from '@/hooks/useSshApprovals';
 import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
 import { useTheme } from '@/hooks/useTheme';
 import { personaAPI } from '@/utils/api';
+import { copyToClipboardWithToast } from '@/utils/clipboard';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import UnlockScreen from '@/components/UnlockScreen';
 import { CreateIdentityModal } from '@/components/IdentitySwitcher';
@@ -61,6 +62,26 @@ const App: React.FC = () => {
     void lockService();
   };
   useGlobalShortcut('l', handleLock, isUnlocked);
+
+  // ⌘, 开/关设置 modal
+  useGlobalShortcut(',', () => setShowSettings((v) => !v), isUnlocked);
+
+  // ⌘E 复制当前选中凭据的用户名（按键时现读 store，不订阅、无陈旧闭包）
+  const handleCopyUsername = () => {
+    const { credentials, selectedCredentialId, currentIdentity } = useAppStore.getState();
+    const selected = credentials.find((c) => c.id === selectedCredentialId);
+    // 无选中 / 选中已悬空（停在别的视图时切身份会残留跨身份 id）都按"未选中"提示
+    if (!selected || (currentIdentity && selected.identity_id !== currentIdentity.id)) {
+      toast.error('Select an entry first');
+      return;
+    }
+    if (!selected.username) {
+      toast.error('This entry has no username');
+      return;
+    }
+    void copyToClipboardWithToast(selected.username, 'Username');
+  };
+  useGlobalShortcut('e', handleCopyUsername, isUnlocked);
 
   // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
