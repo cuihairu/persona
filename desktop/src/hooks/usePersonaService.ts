@@ -25,6 +25,8 @@ export const usePersonaService = () => {
     setLoading,
     setError,
     clearError,
+    setFaviconEntries,
+    clearFaviconCache,
   } = useAppStore();
 
   // Check if service is unlocked on mount
@@ -87,6 +89,9 @@ export const usePersonaService = () => {
         setIdentities([]);
         setCurrentIdentity(null);
         setCredentials([]);
+        // favicon 缓存随锁清空（后端 vault 未锁文件仍在，前端不落盘无害；
+        // 重新解锁后按需重读）
+        clearFaviconCache();
         toast.success('Service locked');
       } else {
         toast.error(response.error || 'Failed to lock service');
@@ -345,6 +350,23 @@ export const usePersonaService = () => {
     }
   };
 
+  /** 按需抓取凭据站点 favicon（唯一外联入口；成功并入缓存，失败 toast） */
+  const fetchFavicon = async (credentialId: string) => {
+    try {
+      const response = await personaAPI.fetchCredentialFavicon(credentialId);
+      if (response.success && response.data) {
+        setFaviconEntries([response.data]);
+        toast.success('Icon fetched');
+        return response.data;
+      }
+      toast.error(response.error || 'Failed to fetch icon');
+      return null;
+    } catch {
+      toast.error('Failed to fetch icon');
+      return null;
+    }
+  };
+
   const deleteCredential = async (credentialId: string) => {
     try {
       const response = await personaAPI.deleteCredential(credentialId);
@@ -442,6 +464,7 @@ export const usePersonaService = () => {
     getCredentialData,
     getTotpCode,
     toggleCredentialFavorite,
+    fetchFavicon,
     deleteCredential,
     refreshSshAgentStatus,
     startSshAgent,

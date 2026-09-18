@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ArrowPathIcon,
   DocumentDuplicateIcon,
   HeartIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { useAppStore } from '@/stores/appStore';
+import FaviconImg from './FaviconImg';
+import { useFavicons } from '@/hooks/useFavicons';
 import type { Credential } from '@/types';
 import { clsx } from 'clsx';
 import RevealSecretButton from '@/components/RevealSecretButton';
@@ -29,7 +33,12 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   onClose,
   onCopy,
 }) => {
-  const { toggleCredentialFavorite, deleteCredential, getTotpCode } = usePersonaService();
+  const { toggleCredentialFavorite, deleteCredential, getTotpCode, fetchFavicon } =
+    usePersonaService();
+  const faviconsEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
+  // 头部图标预取（列表页通常已拉好，这里幂等兜底）
+  useFavicons([credential.url]);
+  const [isFetchingIcon, setIsFetchingIcon] = useState(false);
   const [isFavorite, setIsFavorite] = useState(credential.is_favorite);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -80,6 +89,16 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     refreshTotp();
   }, [credential.credential_type, refreshTotp, totpRemaining]);
 
+  const handleFetchIcon = async () => {
+    if (isFetchingIcon) return;
+    setIsFetchingIcon(true);
+    try {
+      await fetchFavicon(credential.id);
+    } finally {
+      setIsFetchingIcon(false);
+    }
+  };
+
   const handleToggleFavorite = async () => {
     if (isTogglingFavorite) return;
     setIsTogglingFavorite(true);
@@ -120,6 +139,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                   <span className="text-sm font-mono">{data.email}</span>
                   <button
                     onClick={() => onCopy(data.email, 'Email')}
+                    aria-label="Copy Email"
                     className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                   >
                     <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
@@ -147,6 +167,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                 <span className="text-sm font-mono break-all">{data.address}</span>
                 <button
                   onClick={() => onCopy(data.address, 'Address')}
+                  aria-label="Copy Address"
                   className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                 >
                   <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
@@ -183,6 +204,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                 </span>
                 <button
                   onClick={() => totpCode && onCopy(totpCode, 'TOTP')}
+                  aria-label="Copy TOTP"
                   disabled={!totpCode}
                   className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
                   title="Copy code"
@@ -220,6 +242,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                   <span className="text-sm font-mono break-all">{data.public_key}</span>
                   <button
                     onClick={() => onCopy(data.public_key, 'Public key')}
+                    aria-label="Copy Public key"
                     className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                   >
                     <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
@@ -338,7 +361,11 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center">
           <div className="p-2 bg-primary-50 dark:bg-primary-500/10 rounded-lg mr-3">
-            <IconComponent className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+            <FaviconImg
+              url={credential.url}
+              fallbackIcon={IconComponent}
+              className="text-primary-600 dark:text-primary-400"
+            />
           </div>
           <div>
             <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">{credential.name}</h2>
@@ -380,10 +407,27 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
               <span className="text-sm break-all">{credential.url}</span>
               <button
                 onClick={() => onCopy(credential.url!, 'URL')}
+                aria-label="Copy URL"
                 className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
               >
                 <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
               </button>
+              {faviconsEnabled && (
+                <button
+                  onClick={handleFetchIcon}
+                  disabled={isFetchingIcon}
+                  aria-label="Fetch icon"
+                  title="Fetch icon"
+                  data-testid="fetch-favicon"
+                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded disabled:opacity-50"
+                >
+                  <ArrowPathIcon
+                    className={`w-4 h-4 text-gray-400 dark:text-gray-500 ${
+                      isFetchingIcon ? 'animate-spin' : ''
+                    }`}
+                  />
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -395,6 +439,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
               <span className="text-sm">{credential.username}</span>
               <button
                 onClick={() => onCopy(credential.username!, 'Username')}
+                aria-label="Copy Username"
                 className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
               >
                 <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />

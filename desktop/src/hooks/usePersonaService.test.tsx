@@ -609,6 +609,43 @@ describe('hooks/usePersonaService', () => {
     expect(toastError).toHaveBeenCalledWith('busy');
   });
 
+  it('fetchFavicon caches the entry and toasts both ways', async () => {
+    mockUnlockedOnMount();
+
+    const fav = jest.spyOn(personaAPI, 'fetchCredentialFavicon');
+    fav.mockResolvedValueOnce({
+      success: true,
+      data: { host: 'a.com', mime_type: 'image/png', data: 'AAA' },
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      const entry = await result.current.fetchFavicon('c1');
+      expect(entry).toEqual({ host: 'a.com', mime_type: 'image/png', data: 'AAA' });
+    });
+    expect(useAppStore.getState().faviconCache['a.com']).toEqual({
+      mime_type: 'image/png',
+      data: 'AAA',
+    });
+    expect(toastSuccess).toHaveBeenCalledWith('Icon fetched');
+
+    // 失败臂：不写缓存
+    fav.mockResolvedValueOnce({ success: false, data: undefined, error: '404' });
+    await act(async () => {
+      expect(await result.current.fetchFavicon('c1')).toBeNull();
+    });
+    expect(toastError).toHaveBeenCalledWith('404');
+    expect(useAppStore.getState().faviconCache['a.com']).toBeDefined();
+
+    // 抛错臂：统一 toast
+    fav.mockRejectedValueOnce(new Error('ipc down'));
+    await act(async () => {
+      expect(await result.current.fetchFavicon('c1')).toBeNull();
+    });
+    expect(toastError).toHaveBeenCalledWith('Failed to fetch icon');
+  });
+
   it('deleteCredential filters it out of the list and reports failures', async () => {
     mockUnlockedOnMount();
     useAppStore.setState({ credentials: [makeCredential('c1'), makeCredential('c2')] });

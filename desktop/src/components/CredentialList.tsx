@@ -14,6 +14,8 @@ import toast from 'react-hot-toast';
 import { copyWithAutoClear } from '@/utils/clipboard';
 import { getCredentialIcon, getSecurityColor, getSafeHostname } from './credentialDisplay';
 import CredentialDetailPane from './CredentialDetailPane';
+import FaviconImg from './FaviconImg';
+import { useFavicons } from '@/hooks/useFavicons';
 
 /** 筛选条件（各维度为空 = 不过滤；多维度之间 AND） */
 export interface CredentialFilter {
@@ -53,6 +55,8 @@ interface CredentialListProps {
  */
 const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) => {
   const { credentials, currentIdentity, getCredentialData } = usePersonaService();
+  // flag 开时批量预取列表页 favicon（纯缓存读；miss 不触发抓取）
+  useFavicons(credentials.map((c) => c.url));
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCredential, setSelectedCredential] = useState<Credential | null>(null);
   const [credentialData, setCredentialData] = useState<any>(null);
@@ -201,7 +205,11 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                   )}
                 >
                   <div className="p-2 bg-primary-50 dark:bg-primary-500/10 rounded-lg shrink-0">
-                    <IconComponent className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                    <FaviconImg
+                      url={credential.url}
+                      fallbackIcon={IconComponent}
+                      className="text-primary-600 dark:text-primary-400"
+                    />
                   </div>
                   <div className="flex-1 min-w-0">
                     <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">

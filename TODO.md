@@ -201,8 +201,18 @@ Desktop (Tauri v2 + React)
     3f7060ec 分类树（单选 SidebarFilter 入 store，取代 chip 行；换身份
     自动复位）。已知限制：锁屏→再解锁树选中残留（与旧 chip 等价）；
     筛选变化不自动清详情面板选中（follow-up）
-  - [ ] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
+  - [x] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
     （隐私红线：不常驻外联，不默认抓取——1Password 同款做法）
+    ——7fe5b07b core（favicon_cache 表 + FaviconFetcher：SSRF 六规则校验、
+    redirect 不跟随、512KiB 双保险、text/* 拒收）/ d54fc666 开关第 4 位
+    fetch_favicons（默认关）+ 命令层（后端 flag 兜底）/ 本条 渲染接入
+    （useFavicons 批量预取 + FaviconImg 三态收口 + 详情面板 Fetch icon
+    按钮；缓存 host 级共享、锁屏清空）。已知限制：DNS rebinding 不防
+    （校验只覆盖 URL 字面 host）；仅 GET favicon.ico（无 HTML link 解析，
+    404 站点抓不到）；重定向不跟随（301 跳 favicon 的站点失败）；text/*
+    拒缓存；前后端 host 归一化边缘差异（只影响键匹配，降级静态图标）；
+    无 TTL/刷新；抓取不进 audit log（公开数据）。follow-up：HTML link
+    解析 + TTL、audit log、IPv6/IDN 显示归一
   - [ ] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名等；优先级最低；
     ⌘K 已随全局快速搜索落地）
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）

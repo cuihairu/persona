@@ -1,9 +1,17 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import CredentialDetailPane from './CredentialDetailPane';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
+}));
+
+// flag 开时面板会挂 useFavicons 预取；这里哑掉 IPC（缓存命中路径另有专测）
+jest.mock('@/utils/api', () => ({
+  personaAPI: {
+    getFavicons: jest.fn().mockResolvedValue({ success: true, data: [] }),
+  },
 }));
 
 // 单独测过 reveal 重试编排，这里哑渲染并暴露 field 传参
@@ -58,15 +66,23 @@ const setupPane = (
   return { service, onCopy, onClose };
 };
 
-/** 点击紧挨着给定文本右侧的复制按钮（span 与按钮同处一个 flex 容器） */
+/** 点击紧挨着给定文本右侧的复制按钮（URL 行可能还有 Fetch icon 按钮，
+ * 因此按复制按钮的 aria-label 定位，而不是 flex 容器里的第一个 button） */
 const clickCopyNextTo = (text: string) => {
-  const btn = screen.getByText(text).parentElement!.querySelector('button');
+  const btn = screen
+    .getByText(text)
+    .parentElement!.querySelector('button[aria-label^="Copy"]');
   fireEvent.click(btn!);
 };
 
 describe('components/CredentialDetailPane', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    useAppStore.setState({
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS },
+      faviconCache: {},
+      faviconMisses: {},
+    });
   });
 
   it('shows a loading hint while credential data has not arrived', () => {
@@ -303,5 +319,42 @@ describe('components/CredentialDetailPane', () => {
     await act(async () => {});
     expect(onClose).toHaveBeenCalledTimes(1);
     confirmSpy.mockRestore();
+  });
+
+  it('hides the fetch-icon button and favicon img when the flag is off', () => {
+    setupPane({ url: 'https://site.com' });
+    expect(screen.queryByTestId('fetch-favicon')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('favicon-img')).not.toBeInTheDocument();
+  });
+
+  it('fetches the icon on demand when the flag is on', async () => {
+    const fetchFavicon = jest
+      .fn()
+      .mockResolvedValue({ host: 'site.com', mime_type: 'image/png', data: 'AAA' });
+    useAppStore.setState({
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS, fetch_favicons: true },
+    });
+    setupPane({ url: 'https://site.com' }, null, { fetchFavicon });
+
+    const btn = screen.getByTestId('fetch-favicon');
+    fireEvent.click(btn);
+    await act(async () => {});
+    expect(fetchFavicon).toHaveBeenCalledWith('c1');
+  });
+
+  it('renders a cached favicon in place of the static icon', () => {
+    useAppStore.setState({
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS, fetch_favicons: true },
+      faviconCache: { 'site.com': { mime_type: 'image/png', data: 'AAA' } },
+    });
+    setupPane({ url: 'https://site.com' });
+
+    // 头部图标被 favicon 替换（无 url 字段的静态图标不受影响）
+    const img = screen.getByTestId('favicon-img');
+    expect(img).toHaveAttribute('src', 'data:image/png;base64,AAA');
+
+    // 破图回退：onError 后回到静态 heroicon
+    fireEvent.error(img);
+    expect(screen.queryByTestId('favicon-img')).not.toBeInTheDocument();
   });
 });

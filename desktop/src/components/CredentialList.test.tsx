@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import CredentialList, { filterCredentials } from './CredentialList';
 import { usePersonaService } from '@/hooks/usePersonaService';
-import { useAppStore } from '@/stores/appStore';
+import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import { copyWithAutoClear } from '@/utils/clipboard';
 import toast from 'react-hot-toast';
 import type { SidebarFilter } from '@/types';
@@ -95,7 +95,13 @@ describe('components/CredentialList', () => {
     jest.clearAllMocks();
     (copyWithAutoClear as jest.Mock).mockResolvedValue(true);
     // 真 store 单例跨用例存活：树筛选复位为"全部条目"，清掉残留的待注入选中
-    useAppStore.setState({ sidebarFilter: { kind: 'all' }, pendingCredentialSelection: null });
+    useAppStore.setState({
+      sidebarFilter: { kind: 'all' },
+      pendingCredentialSelection: null,
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS },
+      faviconCache: {},
+      faviconMisses: {},
+    });
   });
 
   it('renders placeholder when no identity selected', () => {
@@ -397,5 +403,20 @@ describe('components/CredentialList', () => {
     // 列表数组是静态 mock：只断言面板回占位，不断言行消失
     expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
     confirmSpy.mockRestore();
+  });
+
+  it('renders cached favicons on rows when the flag is on', () => {
+    useAppStore.setState({
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS, fetch_favicons: true },
+      // 预置缓存 → useFavicons 的批量读无 pending，不发 IPC
+      faviconCache: { 'site.com': { mime_type: 'image/png', data: 'AAA' } },
+    });
+    setupList([
+      makeCred({ id: 'c-fav', name: 'Fav Site', url: 'https://site.com/x' }),
+      makeCred({ id: 'c-plain', name: 'Plain Site' }),
+    ]);
+
+    const img = screen.getByTestId('favicon-img');
+    expect(img).toHaveAttribute('src', 'data:image/png;base64,AAA');
   });
 });

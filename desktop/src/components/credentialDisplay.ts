@@ -54,3 +54,11 @@ export const getSafeHostname = (url: string) => {
     return url;
   }
 };
+
+/**
+ * URL → favicon 缓存键（useFavicons 批量读与 FaviconImg 查缓存共用，
+ * 保证两侧命中同一 key；与后端 extract_favicon_host 的归一化可能存在
+ * 边缘差异——只影响缓存键匹配不上，降级为静态图标，无害）。
+ */
+export const getFaviconCacheKey = (url: string) =>
+  getSafeHostname(url).trim().toLowerCase();

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import QuickSearch from './QuickSearch';
 import { usePersonaService } from '@/hooks/usePersonaService';
-import { useAppStore } from '@/stores/appStore';
+import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
@@ -60,7 +60,13 @@ describe('components/QuickSearch', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     jest.useFakeTimers();
-    useAppStore.setState({ identities: IDENTITIES, pendingCredentialSelection: null });
+    useAppStore.setState({
+      identities: IDENTITIES,
+      pendingCredentialSelection: null,
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS },
+      faviconCache: {},
+      faviconMisses: {},
+    });
   });
 
   afterEach(() => {
@@ -255,5 +261,19 @@ describe('components/QuickSearch', () => {
     expect(screen.queryByTestId('quick-search-item')).not.toBeInTheDocument();
     expect(switchIdentity).not.toHaveBeenCalled();
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+  });
+
+  it('renders cached favicons in results when the flag is on', async () => {
+    useAppStore.setState({
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS, fetch_favicons: true },
+      // 预置缓存 → useFavicons 的批量读无 pending，不发 IPC
+      faviconCache: { 'github.com': { mime_type: 'image/png', data: 'AAA' } },
+    });
+    const { searchCredentials } = setup();
+    fireEvent.click(screen.getByTestId('quick-search-trigger'));
+    await searchFor(searchCredentials, [makeCred({ url: 'https://github.com/x' })]);
+
+    const img = screen.getByTestId('favicon-img');
+    expect(img).toHaveAttribute('src', 'data:image/png;base64,AAA');
   });
 });

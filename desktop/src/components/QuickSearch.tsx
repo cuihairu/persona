@@ -3,6 +3,8 @@ import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import { getCredentialIcon } from './credentialDisplay';
+import FaviconImg from './FaviconImg';
+import { useFavicons } from '@/hooks/useFavicons';
 import type { Credential, Identity } from '@/types';
 
 /** 输入停顿 200ms 才发起后端搜索（本地 SQLite LIKE 查询，无需更长） */
@@ -37,6 +39,8 @@ const QuickSearch = () => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Credential[]>([]);
+  // flag 开时预取结果页 favicon（overlay 关闭也不影响缓存复用）
+  useFavicons(results.map((c) => c.url));
   const [isSearching, setIsSearching] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -197,7 +201,12 @@ const QuickSearch = () => {
                                 : 'hover:bg-gray-50 dark:hover:bg-gray-800'
                             }`}
                           >
-                            <TypeIcon className="w-4 h-4 shrink-0 text-gray-400 dark:text-gray-500" />
+                            <FaviconImg
+                              url={credential.url}
+                              fallbackIcon={TypeIcon}
+                              sizeClass="w-4 h-4"
+                              className="text-gray-400 dark:text-gray-500"
+                            />
                             <span className="text-sm text-gray-900 dark:text-gray-100 truncate">
                               {credential.name}
                             </span>
