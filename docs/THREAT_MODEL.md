@@ -38,7 +38,7 @@
 3. **工作区边界**：SQLite、附件和配置文件属于同一个本地工作区；迁移必须保持向后兼容和最小权限。
 4. **浏览器桥接边界**：浏览器扩展通过 Native Messaging 调用 `persona bridge`，敏感操作必须经过配对、HMAC、短期 session、origin binding 和 user gesture。
 5. **SSH Agent 边界**：OpenSSH 客户端通过 socket/pipe 请求签名；agent 只暴露公钥列表和签名能力，不导出私钥。
-6. **可选服务端边界**：server/sync 只能处理事件摘要、密文或同步元数据，不得成为明文解密方。
+6. **可选服务端边界**：server/sync 只能处理事件摘要、密文或同步元数据，不得成为明文解密方。已落地的 events API 仅接收审计事件摘要（action、资源类型、可选 ID、时间戳、成功标记与受限 metadata），以单 Bearer 令牌认证，未配置令牌即整体禁用（fail-closed）。
 7. **自动化边界**：非交互模式允许用环境变量注入主密码，适合 CI，但环境变量由调用方负责隔离和清理。
 
 ## 主要威胁与控制
@@ -50,6 +50,7 @@
 | Tampering | 本地 SQLite 或配置被离线篡改 | AES-GCM 认证加密保护凭据密文，迁移测试覆盖 schema | 明文元数据和审计日志仍可能被本地攻击者修改 |
 | Tampering | 导入文件或 Native Messaging 消息被构造为恶意输入 | JSON 解析、长度前缀协议、格式解析测试与 fuzz 路径 | 需把新增解析器纳入 fuzz 清单 |
 | Repudiation | 用户否认敏感操作 | 审计记录身份 CRUD、凭据解密、导出、SSH 签名摘要 | 审计日志当前不是防篡改账本 |
+| Repudiation | 客户端向 server 伪造/重放上报审计事件 | server 明确不宣称防抵赖；events API 仅作聚合观测（单 Bearer 令牌门禁、`client_event_id` 幂等去重） | per-client 设备身份与防抵赖（SRP/事件签名）留待同步轨道 |
 | Information Disclosure | 工作区文件被复制并离线攻击 | Argon2id/PBKDF2 派生、AES-256-GCM、单项 item key 包裹 | 主密码强度仍是核心风险；KDF 参数需周期性复审 |
 | Information Disclosure | 浏览器后台页面悄悄读取密码/TOTP | user gesture、origin binding、活动身份过滤、只返回匹配凭据 | 没有 URL 的凭据无法绑定来源，应在 UI/CLI 中提示风险 |
 | Information Disclosure | 日志泄露 secret、token、验证码 | 日志脱敏策略和单元测试覆盖常见 secret/key/value 形式 | 新增日志字段必须先确认不含明文 |
@@ -74,6 +75,7 @@
 - `PERSONA_MASTER_PASSWORD` 适合自动化，但会暴露给同一执行环境中的进程/日志风险；CI 必须使用 secret store 并禁用命令回显。
 - 没有 URL 的浏览器凭据无法做严格 origin binding；高价值凭据必须绑定 URL。
 - 可选 Server/Sync 仍是后续方向；在 E2EE 同步完成前，不应把服务端当作恢复或信任根。
+- persona-server 的 events API 是单令牌门禁的观测面：接受客户端自报的事件摘要（`client_timestamp` 不可信，排序只用 server 的 `received_at`），无保留策略（事件库无界增长），不构成防篡改审计账本。
 - 钱包能力仍是实验性，不能用当前主线安全承诺覆盖生产级资金安全。
 
 ## 安全复审节奏
@@ -109,3 +111,13 @@
 - 改变浏览器桥接、Native Messaging、SSH Agent、自动化环境变量的认证/授权规则。
 - 改变审计日志结构、脱敏策略、敏感 metadata 或日志保留策略。
 - 引入新的生产网络 API、生产遥测或云端存储路径。
+
+## 可选同步服务器（persona-server）
+
+Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的第一批生产网络端点，按"变更门槛"在此登记：
+
+- **数据处理范围**：仅接收与存储审计事件摘要与元数据——action、resource_type、可选的 user/identity/credential/session ID、时间戳、成功标记、受限 metadata（≤32 条、键值长度有界）。协议上不承载明文 secret 或密钥材料；请求体限 1 MiB、单批 ≤500 条。
+- **认证**：单共享 Bearer 令牌（`PERSONA_SERVER_TOKEN`），常量时间比较；未配置即 503 整体禁用（fail-closed）。`/`、`/health`、`/metrics` 免认证。
+- **明确不宣称**：该存储不是防篡改账本，不提供防抵赖保证——持有令牌的客户端可上报任意内容，`client_timestamp` 不可信；审计语义以各端本地审计日志为准，server 侧只作聚合观测。
+- **指标面**：`/metrics` 输出请求计数（方法 + 路由模板 + 状态码）与事件接入计数，标签基数有界，不含用户数据或路径参数。
+- **已知限制**：无保留策略（事件库无界增长）；无速率限制与配额；`ip_address`/`user_agent` 为客户端自报字段；permissive CORS（当前客户端非浏览器）；单令牌无 per-client 身份。

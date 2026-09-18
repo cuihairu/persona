@@ -39,6 +39,12 @@ chrono.workspace = true
 # UUID
 uuid.workspace = true
 
+# 游标编码（/api/v1/events 的 next_cursor）
+base64.workspace = true
+
+# Bearer 令牌常量时间比较
+subtle.workspace = true
+
 # 配置管理
 config.workspace = true
 
@@ -47,3 +53,4 @@ dotenvy = "0.15"
 
 [dev-dependencies]
 mockall.workspace = true
+tempfile.workspace = true
