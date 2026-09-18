@@ -93,3 +93,228 @@ describe('utils/api PersonaAPI', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 剩余命令映射补全：每个 personaAPI 方法对应一个 tauri invoke 及参数命名
+// （camelCase → snake_case 映射是这里唯一的逻辑）。
+// ---------------------------------------------------------------------------
+
+describe('utils/api command mapping coverage', () => {
+  beforeEach(() => {
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+  });
+
+  it('service lifecycle methods', async () => {
+    await personaAPI.initService({ master_password: 'pw', db_path: '/tmp/x.db' });
+    expect(mockInvoke).toHaveBeenCalledWith('init_service', {
+      request: { master_password: 'pw', db_path: '/tmp/x.db' },
+    });
+
+    await personaAPI.lockService();
+    expect(mockInvoke).toHaveBeenCalledWith('lock_service');
+
+    await personaAPI.isServiceUnlocked();
+    expect(mockInvoke).toHaveBeenCalledWith('is_service_unlocked');
+  });
+
+  it('identity CRUD methods', async () => {
+    await personaAPI.createIdentity({
+      name: 'n',
+      identity_type: 'personal',
+      description: null,
+      email: null,
+      phone: null,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('create_identity', {
+      request: { name: 'n', identity_type: 'personal', description: null, email: null, phone: null },
+    });
+
+    await personaAPI.updateIdentity({ id: 'i1', name: 'n2' } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('update_identity', {
+      request: { id: 'i1', name: 'n2' },
+    });
+
+    await personaAPI.getIdentities();
+    expect(mockInvoke).toHaveBeenCalledWith('get_identities');
+
+    await personaAPI.getIdentity('i1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_identity', { id: 'i1' });
+  });
+
+  it('credential methods', async () => {
+    await personaAPI.createCredential({ identity_id: 'i1' } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('create_credential', {
+      request: { identity_id: 'i1' },
+    });
+
+    await personaAPI.getCredentialsForIdentity('i1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_credentials_for_identity', { identity_id: 'i1' });
+
+    await personaAPI.getCredentialData('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_credential_data', { credential_id: 'c1' });
+
+    await personaAPI.getTotpCode('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_totp_code', { credential_id: 'c1' });
+
+    await personaAPI.searchCredentials('git');
+    expect(mockInvoke).toHaveBeenCalledWith('search_credentials', { query: 'git' });
+
+    await personaAPI.generatePassword(20, false);
+    expect(mockInvoke).toHaveBeenCalledWith('generate_password', { length: 20, include_symbols: false });
+
+    await personaAPI.getStatistics();
+    expect(mockInvoke).toHaveBeenCalledWith('get_statistics');
+
+    await personaAPI.toggleCredentialFavorite('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('toggle_credential_favorite', { credential_id: 'c1' });
+
+    await personaAPI.deleteCredential('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('delete_credential', { credential_id: 'c1' });
+  });
+
+  it('ssh agent methods', async () => {
+    await personaAPI.getSshAgentStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('get_ssh_agent_status');
+
+    await personaAPI.stopSshAgent();
+    expect(mockInvoke).toHaveBeenCalledWith('stop_ssh_agent');
+
+    await personaAPI.getSshKeys();
+    expect(mockInvoke).toHaveBeenCalledWith('get_ssh_keys');
+  });
+
+  it('wallet address and lifecycle methods', async () => {
+    await personaAPI.walletListAddresses('w1');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_list_addresses', { wallet_id: 'w1' });
+
+    await personaAPI.walletGenerate('i1', { name: 'g', network: 'Ethereum', wallet_type: 'hd' } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_generate', {
+      identity_id: 'i1',
+      request: { name: 'g', network: 'Ethereum', wallet_type: 'hd' },
+    });
+
+    await personaAPI.walletAddAddress('w1', 'wallet-pass');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_add_address', { wallet_id: 'w1', password: 'wallet-pass' });
+
+    await personaAPI.walletDelete('w1');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_delete', { wallet_id: 'w1' });
+
+    await personaAPI.walletExport({ wallet_id: 'w1', format: 'json', include_private: false } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_export', {
+      request: { wallet_id: 'w1', format: 'json', include_private: false },
+    });
+  });
+
+  it('auto-lock methods', async () => {
+    await personaAPI.configureAutoLock({ inactivity_timeout_secs: 300 } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('configure_auto_lock', {
+      request: { inactivity_timeout_secs: 300 },
+    });
+
+    await personaAPI.getAutoLockStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('get_auto_lock_status');
+
+    await personaAPI.touchActivity();
+    expect(mockInvoke).toHaveBeenCalledWith('touch_activity');
+
+    await personaAPI.startAutoLockMonitoring();
+    expect(mockInvoke).toHaveBeenCalledWith('start_auto_lock_monitoring');
+
+    await personaAPI.stopAutoLockMonitoring();
+    expect(mockInvoke).toHaveBeenCalledWith('stop_auto_lock_monitoring');
+  });
+
+  it('audit methods', async () => {
+    await personaAPI.auditQuery({ limit: 10 } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('audit_query', { request: { limit: 10 } });
+
+    await personaAPI.auditStatistics();
+    expect(mockInvoke).toHaveBeenCalledWith('audit_statistics');
+
+    await personaAPI.auditCleanup(30);
+    expect(mockInvoke).toHaveBeenCalledWith('audit_cleanup', { retain_days: 30 });
+  });
+
+  it('health scan defaults empty request when omitted', async () => {
+    await personaAPI.healthScan();
+    expect(mockInvoke).toHaveBeenCalledWith('health_scan', { request: {} });
+
+    await personaAPI.healthScan({ min_password_score: 2 });
+    expect(mockInvoke).toHaveBeenCalledWith('health_scan', {
+      request: { min_password_score: 2 },
+    });
+  });
+
+  it('passkey methods', async () => {
+    await personaAPI.passkeyList('i1');
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_list', { identity_id: 'i1' });
+
+    await personaAPI.passkeyListByRp('example.com');
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_list_by_rp', { rp_id: 'example.com' });
+
+    await personaAPI.passkeyGet('p1');
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_get', { id: 'p1' });
+
+    await personaAPI.passkeyDelete('p1');
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_delete', { id: 'p1' });
+
+    await personaAPI.passkeyCreate({ identity_id: 'i1' } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_create', {
+      request: { identity_id: 'i1' },
+    });
+
+    await personaAPI.passkeySelfTest('p1');
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_self_test', { id: 'p1' });
+
+    await personaAPI.passkeyExportPrivateKey('p1');
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_export_private_key', { id: 'p1' });
+  });
+
+  it('export / reveal / reauth methods', async () => {
+    await personaAPI.exportIdentity('i1');
+    expect(mockInvoke).toHaveBeenCalledWith('export_identity', { identity_id: 'i1' });
+
+    await personaAPI.revealCredentialSecret('c1', 'password');
+    expect(mockInvoke).toHaveBeenCalledWith('reveal_credential_secret', {
+      request: { credential_id: 'c1', field: 'password' },
+    });
+
+    await personaAPI.reauthVerify('pw');
+    expect(mockInvoke).toHaveBeenCalledWith('reauth_verify', {
+      request: { master_password: 'pw' },
+    });
+  });
+
+  it('wallet transaction and approval methods', async () => {
+    await personaAPI.walletCreateTransaction({ wallet_id: 'w1' } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_create_transaction', {
+      request: { wallet_id: 'w1' },
+    });
+
+    await personaAPI.walletPendingTransactions('w1');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_pending_transactions', { wallet_id: 'w1' });
+
+    await personaAPI.walletSignTransaction({ transaction_id: 't1' } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_sign_transaction', {
+      request: { transaction_id: 't1' },
+    });
+
+    await personaAPI.sshApprovalRespond('r1', true);
+    expect(mockInvoke).toHaveBeenCalledWith('ssh_approval_respond', {
+      request: { request_id: 'r1', allow: true },
+    });
+
+    await personaAPI.passkeyApprovalRespond('r1', false);
+    expect(mockInvoke).toHaveBeenCalledWith('passkey_approval_respond', {
+      request: { request_id: 'r1', allow: false },
+    });
+  });
+
+  it('propagates invoke rejections to callers', async () => {
+    mockInvoke.mockReset();
+    mockInvoke.mockRejectedValue(new Error('bridge down'));
+
+    await expect(personaAPI.lockService()).rejects.toThrow('bridge down');
+  });
+});

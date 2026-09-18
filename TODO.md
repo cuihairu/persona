@@ -138,6 +138,17 @@ Desktop (Tauri v2 + React)
   （2026-09 覆盖率分析发现，非链路断裂而是功能本体缺失）
 - [x] fix(desktop): init_service 持锁调用 register_auto_lock_bridge 的死锁
   （tokio Mutex 非重入；2026-09 命令级测试发现并修复）
+- [x] 前端测试第一批~三批（2026-09，jest 30 + testing-library）：115 → 202 测试，
+  覆盖率 48.13% → 77.62% statements（branches 34.54→62.71、functions
+  41.16→72.7、lines 47.71→77.91）。api.ts 55 方法 invoke 映射全量断言、
+  usePersonaService 全 action 成功/失败/异常臂、useAutoLockEvents 事件流 +
+  节流回传、clipboard fallback 链、TransactionConfirmModal 签名全流程 +
+  地址投毒告警、CreateCredentialModal 全类型分支 + otpauth URI 解析、
+  useReauth/ReauthModal promise 化重认证、RevealSecretButton REAUTH 重试编排
+  （mock useReauth，绕开 jsdom act 外 modal 限制）、App.tsx 六视图切换 +
+  auto-lock 横幅 + 审批弹窗 + statistics。
+  剩余低覆盖大组件（后续）：WalletPanel 46%、IdentitySwitcher 43%、
+  CredentialList 55%、ErrorHandling 68%
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)

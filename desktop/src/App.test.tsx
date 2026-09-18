@@ -1,0 +1,271 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import App from './App';
+import { personaAPI } from '@/utils/api';
+
+// -- hooks：可变返回值，由 beforeEach 重置 -----------------------------------
+let serviceState: any;
+let pendingSeconds: number | null = null;
+let sshPending: any = null;
+let passkeyPending: any = null;
+
+jest.mock('@/hooks/usePersonaService', () => ({
+  usePersonaService: () => serviceState,
+}));
+jest.mock('@/hooks/useAutoLockEvents', () => ({
+  useAutoLockEvents: () => ({ pendingSeconds }),
+}));
+jest.mock('@/hooks/useSshApprovals', () => ({
+  useSshApprovals: () => ({
+    pending: sshPending,
+    pendingCount: sshPending ? 2 : 0,
+    respond: jest.fn(),
+  }),
+}));
+jest.mock('@/hooks/usePasskeyApprovals', () => ({
+  usePasskeyApprovals: () => ({
+    pending: passkeyPending,
+    pendingCount: passkeyPending ? 1 : 0,
+    respond: jest.fn(),
+  }),
+}));
+
+// -- 子组件：哑渲染，暴露 props 驱动钩子 -------------------------------------
+jest.mock('@/components/UnlockScreen', () => ({
+  __esModule: true,
+  default: () => <div data-testid="unlock-screen" />,
+}));
+jest.mock('@/components/IdentitySwitcher', () => ({
+  IdentitySwitcher: (props: any) => (
+    <div data-testid="identity-switcher" onClick={props.onCreateIdentity} />
+  ),
+  CreateIdentityModal: (props: any) =>
+    props.isOpen ? <div data-testid="create-identity-modal" /> : null,
+}));
+jest.mock('@/components/CredentialList', () => ({
+  __esModule: true,
+  default: (props: any) => (
+    <div data-testid="credential-list" onClick={props.onCreateCredential} />
+  ),
+}));
+jest.mock('@/components/CreateCredentialModal', () => ({
+  __esModule: true,
+  default: (props: any) =>
+    props.isOpen ? <div data-testid="create-credential-modal" /> : null,
+}));
+// 注意：mock 组件里不能用 Fragment 简写 <>…</>（jsx-runtime 互操作下
+// Fragment 会解析成 undefined → "Element type is invalid"），用 div 包裹。
+jest.mock('@/components/ErrorHandling', () => ({
+  ErrorBoundary: ({ children }: any) => <div>{children}</div>,
+  ErrorDisplay: (props: any) => (
+    <div data-testid="error-display" onClick={props.onDismiss}>
+      {props.error}
+    </div>
+  ),
+  LoadingSpinner: ({ message }: any) => <div data-testid="loading-spinner">{message}</div>,
+}));
+jest.mock('@/components/SshApprovalModal', () => ({
+  __esModule: true,
+  default: (props: any) =>
+    props.request ? (
+      <div data-testid="ssh-approval-modal" data-count={props.pendingCount} />
+    ) : null,
+}));
+jest.mock('@/components/PasskeyApprovalModal', () => ({
+  __esModule: true,
+  default: (props: any) =>
+    props.request ? (
+      <div data-testid="passkey-approval-modal" data-count={props.pendingCount} />
+    ) : null,
+}));
+jest.mock('@/components/SshAgentPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="ssh-agent-panel" />,
+}));
+jest.mock('@/components/WalletPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="wallet-panel" />,
+}));
+jest.mock('@/components/WatchtowerPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="watchtower-panel" />,
+}));
+jest.mock('@/components/PasskeyPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="passkey-panel" />,
+}));
+jest.mock('@/components/SettingsModal', () => ({
+  __esModule: true,
+  default: (props: any) =>
+    props.isOpen ? <div data-testid="settings-modal" /> : null,
+}));
+
+jest.mock('react-hot-toast', () => ({
+  __esModule: true,
+  default: { success: jest.fn(), error: jest.fn() },
+  Toaster: () => null,
+}));
+
+jest.mock('@/utils/api', () => ({
+  personaAPI: {
+    startAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
+    stopAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
+    getStatistics: jest.fn(),
+  },
+}));
+
+
+describe('App', () => {
+  const lockService = jest.fn();
+  const loadCredentialsForIdentity = jest.fn();
+  const clearError = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    pendingSeconds = null;
+    sshPending = null;
+    passkeyPending = null;
+    serviceState = {
+      isUnlocked: false,
+      currentIdentity: null,
+      error: null,
+      isLoading: false,
+      lockService,
+      loadCredentialsForIdentity,
+      clearError,
+    };
+  });
+
+  it('shows the spinner while initializing', () => {
+    serviceState.isLoading = true;
+    render(<App />);
+    expect(screen.getByTestId('loading-spinner')).toHaveTextContent('Initializing Persona...');
+  });
+
+  it('shows the unlock screen with a dismissible error when locked', () => {
+    serviceState.error = 'bridge down';
+    render(<App />);
+
+    expect(screen.getByTestId('unlock-screen')).toBeInTheDocument();
+    expect(screen.getByTestId('error-display')).toHaveTextContent('bridge down');
+
+    fireEvent.click(screen.getByTestId('error-display'));
+    expect(clearError).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts auto-lock monitoring when unlocked and stops on lock', () => {
+    const { rerender } = render(<App />);
+    expect(personaAPI.stopAutoLockMonitoring).toHaveBeenCalled();
+
+    serviceState.isUnlocked = true;
+    rerender(<App />);
+    expect(personaAPI.startAutoLockMonitoring).toHaveBeenCalled();
+  });
+
+  it('renders the full workspace for an unlocked session', () => {
+    serviceState.isUnlocked = true;
+    serviceState.currentIdentity = { id: 'id-1', name: 'Personal' };
+    render(<App />);
+
+    expect(screen.getByTestId('credential-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('auto-lock-banner')).not.toBeInTheDocument();
+
+    // 身份变化时拉取凭据
+    expect(loadCredentialsForIdentity).toHaveBeenCalledWith('id-1');
+  });
+
+  it('shows the auto-lock countdown banner while a lock is pending', () => {
+    serviceState.isUnlocked = true;
+    pendingSeconds = 25;
+    render(<App />);
+    expect(screen.getByTestId('auto-lock-banner').textContent).toContain('25 秒');
+  });
+
+  it('switches between all six views', () => {
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    const nav = (label: string) => fireEvent.click(screen.getByRole('button', { name: label }));
+
+    nav('Statistics');
+    expect(screen.getByText('Statistics')).toBeInTheDocument();
+    nav('SSH Agent');
+    expect(screen.getByTestId('ssh-agent-panel')).toBeInTheDocument();
+    nav('Wallets');
+    expect(screen.getByTestId('wallet-panel')).toBeInTheDocument();
+    nav('Watchtower');
+    expect(screen.getByTestId('watchtower-panel')).toBeInTheDocument();
+    nav('Passkeys');
+    expect(screen.getByTestId('passkey-panel')).toBeInTheDocument();
+    nav('Credentials');
+    expect(screen.getByTestId('credential-list')).toBeInTheDocument();
+  });
+
+  it('locks the session and opens settings from the header actions', () => {
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    // 两个 btn-ghost：设置（齿轮）与锁定。按 title/顺序取。
+    const ghostButtons = screen.getAllByRole('button').filter((b) => b.className.includes('btn-ghost'));
+    expect(ghostButtons).toHaveLength(2);
+
+    fireEvent.click(ghostButtons[0]); // 设置
+    expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
+
+    fireEvent.click(ghostButtons[1]); // 锁定
+    expect(lockService).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the create-identity and create-credential modals from their triggers', () => {
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    fireEvent.click(screen.getByTestId('identity-switcher'));
+    expect(screen.getByTestId('create-identity-modal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('credential-list'));
+    expect(screen.getByTestId('create-credential-modal')).toBeInTheDocument();
+  });
+
+  it('renders ssh and passkey approval modals only with pending requests', () => {
+    serviceState.isUnlocked = true;
+    sshPending = { request_id: 'r1' };
+    passkeyPending = { request_id: 'r2' };
+    render(<App />);
+
+    expect(screen.getByTestId('ssh-approval-modal').getAttribute('data-count')).toBe('2');
+    expect(screen.getByTestId('passkey-approval-modal').getAttribute('data-count')).toBe('1');
+  });
+
+  it('statistics view loads data and renders the cards, or survives failure', async () => {
+    serviceState.isUnlocked = true;
+    (personaAPI.getStatistics as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: {
+        total_identities: 3,
+        total_credentials: 11,
+        active_credentials: 7,
+        favorite_credentials: 2,
+        credential_types: { Login: 6, ApiKey: 5 },
+        security_levels: { High: 9 },
+      },
+    });
+
+    render(<App />);
+    fireEvent.click(screen.getByRole('button', { name: 'Statistics' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Total Identities')).toBeInTheDocument();
+    });
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('Login')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
+
+    // 失败分支：静默 console.error，保持加载态
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
+    (personaAPI.getStatistics as jest.Mock).mockRejectedValueOnce(new Error('x'));
+    fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Statistics' }));
+    await act(async () => {});
+    consoleError.mockRestore();
+  });
+});
