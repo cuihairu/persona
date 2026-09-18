@@ -1,3 +1,4 @@
+#![cfg(unix)]
 //! Integration tests for the daemon event loop (`run_agent_with_approval`).
 //!
 //! The daemon is driven through its real socket: paths, state directory and
