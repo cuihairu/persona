@@ -17,7 +17,7 @@ jest.mock('@/utils/clipboard', () => ({
   copyWithAutoClear: jest.fn().mockResolvedValue(true),
 }));
 
-// 单独测过 reveal 重试编排，这里哑渲染并暴露 field 传参
+// 面板（CredentialDetailPane）经 transitive 生效：哑渲染避免拖入真实 reveal 链路
 jest.mock('@/components/RevealSecretButton', () => ({
   __esModule: true,
   default: ({ field, label }: any) => (
@@ -55,20 +55,6 @@ const setupList = (credentials: any[], serviceOver: Record<string, any> = {}) =>
   };
   (usePersonaService as jest.Mock).mockReturnValue(service);
   render(<CredentialList onCreateCredential={() => {}} />);
-  return service;
-};
-
-/** 打开第一张卡片的详情 modal（默认 credentialData 与列表类型一致、data 为空对象） */
-const openModal = async (creds: any[], serviceOver: Record<string, any> = {}) => {
-  const service = setupList(creds, {
-    getCredentialData: jest.fn().mockResolvedValue({
-      credential_type: creds[0].credential_type,
-      data: {},
-    }),
-    ...serviceOver,
-  });
-  fireEvent.click(screen.getByText(creds[0].name));
-  await screen.findByTitle('Close');
   return service;
 };
 
@@ -185,7 +171,7 @@ describe('components/CredentialList', () => {
     expect(screen.queryByText('Fav-one')).not.toBeInTheDocument();
   });
 
-  it('renders card variants: security colors, icons, hostnames and metadata', () => {
+  it('renders row variants: security colors, hostnames and favorites', () => {
     setupList([
       makeCred({ id: 'c1', name: 'N-Critical', credential_type: 'Password', security_level: 'Critical' }),
       makeCred({ id: 'c2', name: 'N-Medium', credential_type: 'CryptoWallet', security_level: 'Medium', url: 'https://wallet.example.com/x' }),
@@ -205,256 +191,150 @@ describe('components/CredentialList', () => {
     expect(screen.getByText('wallet.example.com')).toBeInTheDocument();
     expect(screen.getByText('not-a-url')).toBeInTheDocument();
 
-    // 收藏小红心 + 最后使用时间
+    // 收藏小红心（Last used 断言已迁到 CredentialDetailPane.test.tsx）
     expect(document.querySelector('svg.text-red-500')).not.toBeNull();
-    expect(screen.getByText(/Last used:/).textContent).toMatch(/2024/);
   });
 
-  it('opens credential modal and toggles favorite', async () => {
+  it('shows the placeholder panel when nothing is selected', () => {
+    setupList([makeCred()]);
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    expect(screen.getByText('Select an item to see details')).toBeInTheDocument();
+    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
+  });
+
+  it('selecting a row opens the pane and highlights it', async () => {
     const getCredentialData = jest.fn().mockResolvedValue({
       credential_type: 'Password',
-      data: { email: 'a@b.com', password: 'secret' },
+      data: {},
     });
-    const toggleCredentialFavorite = jest.fn().mockResolvedValue({ is_favorite: true });
-
     setupList(
-      [makeCred({ url: 'https://example.com', username: 'user' })],
-      { getCredentialData, toggleCredentialFavorite },
+      [makeCred({ id: 'c1', name: 'One' }), makeCred({ id: 'c2', name: 'Two' })],
+      { getCredentialData },
     );
 
-    fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('Favorite');
-
-    fireEvent.click(screen.getByTitle('Favorite'));
-    await act(async () => {});
-    expect(toggleCredentialFavorite).toHaveBeenCalledWith('c1');
-
-    // 上一步已切为已收藏：按钮标题变为 Unfavorite
-    fireEvent.click(screen.getByTitle('Unfavorite'));
-    await act(async () => {});
-    expect(toggleCredentialFavorite).toHaveBeenCalledTimes(2);
-
-    // favorite 返回空（如失败）：状态不翻转、不崩
-    (toggleCredentialFavorite as jest.Mock).mockResolvedValue(null);
-    fireEvent.click(screen.getByTitle('Unfavorite'));
-    await act(async () => {});
-    expect(screen.getByTitle('Unfavorite')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('One'));
+    await screen.findByTitle('Close');
+    expect(getCredentialData).toHaveBeenCalledWith('c1');
+    expect(screen.getByTestId('detail-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('credential-row-c1').className).toContain('bg-primary-50');
+    expect(screen.getByTestId('credential-row-c2').className).not.toContain('bg-primary-50');
   });
 
-  it('Password modal: renders fields, copies url/username/email and closes', async () => {
-    await openModal(
-      [makeCred({ name: 'Site', url: 'https://site.com', username: 'bob', notes: 'my note', tags: ['zebra'] })],
-      {
-        getCredentialData: jest.fn().mockResolvedValue({
-          credential_type: 'Password',
-          data: { email: 'a@b.com', password: 'x' },
-        }),
-      },
-    );
+  it('activates row selection with the keyboard, but not from the inline copy button', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    setupList([makeCred({ username: 'alice' })], { getCredentialData });
 
-    expect(await screen.findByText('a@b.com')).toBeInTheDocument();
-    expect(screen.getByTestId('reveal-password')).toBeInTheDocument(); // 密码走 reveal 流程
-    expect(screen.getByText('my note')).toBeInTheDocument();
-    expect(screen.getByText('zebra')).toBeInTheDocument();
+    // 行上按 Enter：选中
+    fireEvent.keyDown(screen.getByTestId('credential-row-c1'), { key: 'Enter' });
+    await screen.findByTitle('Close');
+    expect(getCredentialData).toHaveBeenCalledWith('c1');
 
-    clickCopyNextTo('https://site.com');
-    await act(async () => {});
-    expect(toast.success).toHaveBeenCalledWith('URL copied (clears in 30s)');
+    // 焦点在行内复制按钮上时，Enter 不触发选中（先清掉再验证）
+    fireEvent.click(screen.getByTitle('Close'));
+    fireEvent.keyDown(screen.getAllByTitle('Copy username')[0], { key: 'Enter' });
+    expect(getCredentialData).toHaveBeenCalledTimes(1);
+  });
 
-    clickCopyNextTo('bob');
+  it('inline copy copies the username without selecting the row', async () => {
+    setupList([
+      makeCred({ id: 'c1', name: 'One', username: 'alice' }),
+      makeCred({ id: 'c2', name: 'Two', username: 'bob' }),
+    ]);
+
+    fireEvent.click(screen.getAllByTitle('Copy username')[1]);
     await act(async () => {});
     expect(toast.success).toHaveBeenCalledWith('Username copied (clears in 30s)');
+    // stopPropagation 生效：未触发选中
+    expect(screen.queryByTitle('Close')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
+  });
 
-    clickCopyNextTo('a@b.com');
-    await act(async () => {});
-    expect(toast.success).toHaveBeenCalledWith('Email copied (clears in 30s)');
+  it('switching selection updates the pane', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    setupList(
+      [makeCred({ id: 'c1', name: 'One' }), makeCred({ id: 'c2', name: 'Two' })],
+      { getCredentialData },
+    );
 
-    // 复制失败：toast.error
+    fireEvent.click(screen.getByText('One'));
+    await screen.findByTitle('Close');
+    fireEvent.click(screen.getByText('Two'));
+    await screen.findByText('Two', { selector: 'h2' });
+    expect(getCredentialData).toHaveBeenCalledTimes(2);
+    expect(getCredentialData).toHaveBeenNthCalledWith(1, 'c1');
+    expect(getCredentialData).toHaveBeenNthCalledWith(2, 'c2');
+  });
+
+  it('closing the pane clears the selection', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    setupList([makeCred()], { getCredentialData });
+
+    fireEvent.click(screen.getByText('Example'));
+    await screen.findByTitle('Close');
+    fireEvent.click(screen.getByTitle('Close'));
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
+  });
+
+  it('surfaces the error toast when copying fails', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    setupList([makeCred({ username: 'bob' })], { getCredentialData });
+
+    fireEvent.click(screen.getByText('Example'));
+    await screen.findByTitle('Close');
+
     (copyWithAutoClear as jest.Mock).mockResolvedValueOnce(false);
     clickCopyNextTo('bob');
     await act(async () => {});
     expect(toast.error).toHaveBeenCalledWith('Failed to copy to clipboard');
-
-    fireEvent.click(screen.getByTitle('Close'));
-    expect(screen.queryByTitle('Close')).not.toBeInTheDocument();
   });
 
-  it('CryptoWallet modal: renders wallet fields and copies the address', async () => {
-    await openModal([makeCred({ name: 'Cold', credential_type: 'CryptoWallet' })], {
-      getCredentialData: jest.fn().mockResolvedValue({
-        credential_type: 'CryptoWallet',
-        data: { wallet_type: 'MetaMask', address: '0xabc123', network: 'Ethereum' },
-      }),
-    });
-
-    expect(await screen.findByText('MetaMask')).toBeInTheDocument();
-    expect(screen.getByText('0xabc123')).toBeInTheDocument();
-    expect(screen.getByText('Ethereum')).toBeInTheDocument();
-
-    clickCopyNextTo('0xabc123');
-    await act(async () => {});
-    expect(toast.success).toHaveBeenCalledWith('Address copied (clears in 30s)');
-  });
-
-  it('SshKey modal: renders key material with three reveal seams', async () => {
-    await openModal([makeCred({ name: 'Server key', credential_type: 'SshKey' })], {
-      getCredentialData: jest.fn().mockResolvedValue({
-        credential_type: 'SshKey',
-        data: { key_type: 'ed25519', public_key: 'ssh-ed25519 AAA' },
-      }),
-    });
-
-    expect(await screen.findByText('ed25519')).toBeInTheDocument();
-    expect(screen.getByText('ssh-ed25519 AAA')).toBeInTheDocument();
-    expect(screen.getByTestId('reveal-ssh_private_key')).toBeInTheDocument();
-    expect(screen.getByTestId('reveal-ssh_passphrase')).toBeInTheDocument();
-
-    clickCopyNextTo('ssh-ed25519 AAA');
-    await act(async () => {});
-    expect(toast.success).toHaveBeenCalledWith('Public key copied (clears in 30s)');
-  });
-
-  it('ApiKey modal: renders three reveal seams, permissions and expiry', async () => {
-    await openModal([makeCred({ name: 'API', credential_type: 'ApiKey' })], {
-      getCredentialData: jest.fn().mockResolvedValue({
-        credential_type: 'ApiKey',
-        data: {
-          permissions: ['read', 'write'],
-          expires_at: '2030-01-01T00:00:00Z',
-        },
-      }),
-    });
-
-    expect(await screen.findByTestId('reveal-api_key')).toBeInTheDocument();
-    expect(screen.getByTestId('reveal-api_secret')).toBeInTheDocument();
-    expect(screen.getByTestId('reveal-token')).toBeInTheDocument();
-    expect(screen.getByText('read')).toBeInTheDocument();
-    expect(screen.getByText('write')).toBeInTheDocument();
-    expect(screen.getByText(/2030/)).toBeInTheDocument();
-  });
-
-  it('BankCard modal: renders masked number and card fields', async () => {
-    await openModal([makeCred({ name: 'Card', credential_type: 'BankCard' })], {
-      getCredentialData: jest.fn().mockResolvedValue({
-        credential_type: 'BankCard',
-        data: { cardholder_name: 'C. Ui', bank_name: 'Test Bank', last4: '4242', expiry_date: '09/29' },
-      }),
-    });
-
-    expect(await screen.findByText('C. Ui')).toBeInTheDocument();
-    expect(screen.getByText('Test Bank')).toBeInTheDocument();
-    expect(screen.getByText('•••• •••• •••• 4242')).toBeInTheDocument();
-    expect(screen.getByText('09/29')).toBeInTheDocument();
-  });
-
-  it('unknown credential types fall back to the encrypted notice', async () => {
-    await openModal([makeCred({ name: 'Note', credential_type: 'SecureNote' })], {
-      getCredentialData: jest.fn().mockResolvedValue({
-        credential_type: 'SecureNote',
-        data: { body: 'whatever' },
-      }),
-    });
-
-    expect(
-      await screen.findByText('Credential data is encrypted and secure.'),
-    ).toBeInTheDocument();
-  });
-
-  it('TwoFactor modal: shows the live code, copies it and refreshes on demand', async () => {
-    const getTotpCode = jest.fn()
-      .mockResolvedValueOnce({ code: 'AAA111', remaining_seconds: 30 })
-      .mockResolvedValueOnce({ code: 'BBB222', remaining_seconds: 60 });
-
-    await openModal([makeCred({ name: '2FA', credential_type: 'TwoFactor' })], {
-      getCredentialData: jest.fn().mockResolvedValue({
-        credential_type: 'TwoFactor',
-        data: { issuer: 'GitHub', account_name: 'me@example.com' },
-      }),
-      getTotpCode,
-    });
-
-    expect(await screen.findByText('AAA111')).toBeInTheDocument();
-    expect(screen.getByText('Expires in 30s')).toBeInTheDocument();
-    expect(screen.getByText('GitHub')).toBeInTheDocument();
-    expect(screen.getByText('me@example.com')).toBeInTheDocument();
-
-    clickCopyNextTo('AAA111');
-    await act(async () => {});
-    expect(toast.success).toHaveBeenCalledWith('TOTP copied (clears in 30s)');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
-    await screen.findByText('BBB222');
-    expect(getTotpCode).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('Expires in 60s')).toBeInTheDocument();
-  });
-
-  it('TwoFactor modal counts down each second and auto-refreshes at zero', async () => {
-    jest.useFakeTimers();
-    try {
-      const getTotpCode = jest.fn()
-        .mockResolvedValueOnce({ code: 'AAA111', remaining_seconds: 2 })
-        .mockResolvedValueOnce({ code: 'BBB222', remaining_seconds: 30 });
-      setupList([makeCred({ name: 'Ticker', credential_type: 'TwoFactor' })], {
-        getCredentialData: jest.fn().mockResolvedValue({
-          credential_type: 'TwoFactor',
-          data: {},
-        }),
-        getTotpCode,
-      });
-      fireEvent.click(screen.getByText('Ticker'));
-
-      // flush：modal 挂载 + 首次 refreshTotp
-      await act(async () => {});
-      expect(screen.getByText('AAA111')).toBeInTheDocument();
-      expect(screen.getByText('Expires in 2s')).toBeInTheDocument();
-
-      act(() => {
-        jest.advanceTimersByTime(1000);
-      });
-      expect(screen.getByText('Expires in 1s')).toBeInTheDocument();
-
-      // 归零后自动重新拉取
-      act(() => {
-        jest.advanceTimersByTime(1000);
-      });
-      expect(screen.getByText('Expires in 0s')).toBeInTheDocument();
-
-      await act(async () => {});
-      expect(screen.getByText('BBB222')).toBeInTheDocument();
-      expect(screen.getByText('Expires in 30s')).toBeInTheDocument();
-      expect(getTotpCode).toHaveBeenCalledTimes(2);
-    } finally {
-      jest.useRealTimers();
-    }
-  });
-
-  it('delete flow: cancel keeps the modal, confirm+ok closes it', async () => {
-    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
-    const deleteCredential = jest.fn().mockResolvedValue(true);
-
-    await openModal([makeCred({ name: 'Victim' })], { deleteCredential });
-
-    // 取消确认：不删除，modal 保留
-    fireEvent.click(screen.getByTitle('Delete'));
-    expect(confirmSpy).toHaveBeenCalledWith(
-      'Delete "Victim"? This cannot be undone.',
+  it('shows a loading state while credential data is in flight', async () => {
+    let resolveData: (v: any) => void = () => {};
+    const getCredentialData = jest.fn(
+      () => new Promise((resolve) => { resolveData = resolve; }),
     );
-    expect(deleteCredential).not.toHaveBeenCalled();
-    expect(screen.getByTitle('Close')).toBeInTheDocument();
+    setupList([makeCred()], { getCredentialData });
 
-    // 确认但后端返回 false：modal 同样保留
-    confirmSpy.mockReturnValue(true);
-    (deleteCredential as jest.Mock).mockResolvedValue(false);
+    fireEvent.click(screen.getByText('Example'));
+    expect(await screen.findByTestId('detail-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('reveal-password')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveData({ credential_type: 'Password', data: { email: 'a@b.com' } });
+    });
+    expect(screen.getByText('a@b.com')).toBeInTheDocument();
+    expect(screen.queryByTestId('detail-loading')).not.toBeInTheDocument();
+  });
+
+  it('deleting the selected credential clears the pane', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    const deleteCredential = jest.fn().mockResolvedValue(true);
+    setupList([makeCred()], { getCredentialData, deleteCredential });
+
+    fireEvent.click(screen.getByText('Example'));
+    await screen.findByTitle('Close');
     fireEvent.click(screen.getByTitle('Delete'));
     await act(async () => {});
     expect(deleteCredential).toHaveBeenCalledWith('c1');
-    expect(screen.getByTitle('Close')).toBeInTheDocument();
-
-    // 确认且成功：modal 关闭
-    (deleteCredential as jest.Mock).mockResolvedValue(true);
-    fireEvent.click(screen.getByTitle('Delete'));
-    await act(async () => {});
-    expect(screen.queryByTitle('Close')).not.toBeInTheDocument();
+    // 列表数组是静态 mock：只断言面板回占位，不断言行消失
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
     confirmSpy.mockRestore();
   });
 });

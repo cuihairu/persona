@@ -1,6 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import CreateCredentialModal from './CreateCredentialModal';
-import { usePersonaService } from '@/hooks/usePersonaService';
 import type { Identity } from '@/types';
 
 // jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
