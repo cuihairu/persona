@@ -6,6 +6,7 @@ import type {
   SshAgentKey,
   FeatureFlags,
   ThemePreference,
+  SidebarFilter,
 } from '@/types';
 import { readStoredTheme } from '@/utils/theme';
 
@@ -15,6 +16,9 @@ export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
   wallet: false,
   passkeys: false,
 };
+
+/** 侧栏分类树出厂筛选：全部条目（换身份时 reset 回此值） */
+export const DEFAULT_SIDEBAR_FILTER: SidebarFilter = { kind: 'all' };
 
 interface AppState {
   // Authentication state
@@ -34,6 +38,8 @@ interface AppState {
   error: string | null;
   /** 主题偏好（'system' 跟随系统；<html>.dark 的唯一应用点是 useTheme） */
   theme: ThemePreference;
+  /** 侧栏分类树选中项（单选；Sidebar 写、CredentialList 读，换身份时 reset） */
+  sidebarFilter: SidebarFilter;
 
   // Actions
   setUnlocked: (unlocked: boolean) => void;
@@ -45,6 +51,8 @@ interface AppState {
   setSshKeys: (keys: SshAgentKey[]) => void;
   setFeatureFlags: (flags: FeatureFlags) => void;
   setTheme: (theme: ThemePreference) => void;
+  setSidebarFilter: (filter: SidebarFilter) => void;
+  resetSidebarFilter: () => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
@@ -63,6 +71,7 @@ export const useAppStore = create<AppState>((set) => ({
   isLoading: false,
   error: null,
   theme: readStoredTheme(),
+  sidebarFilter: DEFAULT_SIDEBAR_FILTER,
 
   // Actions
   setUnlocked: (unlocked) => set({ isUnlocked: unlocked }),
@@ -74,6 +83,8 @@ export const useAppStore = create<AppState>((set) => ({
   setSshKeys: (keys) => set({ sshKeys: keys }),
   setFeatureFlags: (flags) => set({ featureFlags: { ...flags } }),
   setTheme: (theme) => set({ theme }),
+  setSidebarFilter: (filter) => set({ sidebarFilter: filter }),
+  resetSidebarFilter: () => set({ sidebarFilter: DEFAULT_SIDEBAR_FILTER }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),

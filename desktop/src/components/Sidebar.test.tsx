@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import Sidebar from './Sidebar';
-import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
+import { useAppStore, DEFAULT_FEATURE_FLAGS, DEFAULT_SIDEBAR_FILTER } from '@/stores/appStore';
 
 jest.mock('@/components/IdentitySwitcher', () => ({
   __esModule: true,
@@ -8,6 +8,24 @@ jest.mock('@/components/IdentitySwitcher', () => ({
     <div data-testid="identity-switcher" onClick={props.onCreateIdentity} />
   ),
 }));
+
+const makeCred = (over: Record<string, any> = {}) => ({
+  id: 'c1',
+  identity_id: 'i1',
+  name: 'Example',
+  credential_type: 'Password',
+  security_level: 'High',
+  url: null,
+  username: null,
+  notes: null,
+  tags: [] as string[],
+  last_accessed: null,
+  created_at: '2023-01-01T00:00:00Z',
+  updated_at: '2023-01-01T00:00:00Z',
+  is_active: true,
+  is_favorite: false,
+  ...over,
+});
 
 const ALL_FLAGS_ON = { ssh_agent: true, wallet: true, passkeys: true };
 
@@ -28,7 +46,11 @@ const renderSidebar = (overrides: Partial<SidebarProps> = {}) => {
 
 describe('components/Sidebar', () => {
   beforeEach(() => {
-    useAppStore.setState({ featureFlags: { ...DEFAULT_FEATURE_FLAGS } });
+    useAppStore.setState({
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS },
+      credentials: [],
+      sidebarFilter: DEFAULT_SIDEBAR_FILTER,
+    });
   });
 
   it('renders always-on nav entries and hides flag-gated ones while flags are off', () => {
@@ -78,5 +100,68 @@ describe('components/Sidebar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Lock session' }));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders all/favorites nodes always and type/tag groups only when present', () => {
+    renderSidebar();
+
+    expect(screen.getByTestId('filter-all')).toBeInTheDocument();
+    expect(screen.getByTestId('filter-favorites')).toBeInTheDocument();
+    expect(screen.queryByTestId('filter-type-ApiKey')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('filter-tag-dev')).not.toBeInTheDocument();
+
+    act(() => {
+      useAppStore.setState({
+        credentials: [makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'] })],
+      });
+    });
+    expect(screen.getByTestId('filter-type-ApiKey')).toBeInTheDocument();
+    expect(screen.getByTestId('filter-tag-dev')).toBeInTheDocument();
+  });
+
+  it('selecting a tree node replaces the store filter (single-select)', () => {
+    useAppStore.setState({
+      credentials: [makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'] })],
+    });
+    renderSidebar();
+
+    fireEvent.click(screen.getByTestId('filter-type-ApiKey'));
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'type', value: 'ApiKey' });
+
+    fireEvent.click(screen.getByTestId('filter-tag-dev'));
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'tag', value: 'dev' });
+
+    fireEvent.click(screen.getByTestId('filter-all'));
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
+  });
+
+  it('maps the favorites node to the favorites-only filter', () => {
+    renderSidebar();
+
+    fireEvent.click(screen.getByTestId('filter-favorites'));
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'favorites' });
+  });
+
+  it('renders per-node counts', () => {
+    useAppStore.setState({
+      credentials: [
+        makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'], is_favorite: true }),
+        makeCred({ id: '2', credential_type: 'ApiKey', tags: ['dev'] }),
+        makeCred({ id: '3', credential_type: 'Password' }),
+      ],
+    });
+    renderSidebar();
+
+    expect(screen.getByTestId('filter-all')).toHaveTextContent('3');
+    expect(screen.getByTestId('filter-favorites')).toHaveTextContent('1');
+    expect(screen.getByTestId('filter-type-ApiKey')).toHaveTextContent('2');
+    expect(screen.getByTestId('filter-type-Password')).toHaveTextContent('1');
+    expect(screen.getByTestId('filter-tag-dev')).toHaveTextContent('2');
+  });
+
+  it('hides the tree outside the credentials view', () => {
+    renderSidebar({ currentView: 'wallets' });
+
+    expect(screen.queryByTestId('sidebar-filters')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   KeyIcon,
   PlusIcon,
@@ -7,6 +7,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { useAppStore } from '@/stores/appStore';
 import type { Credential } from '@/types';
 import { clsx } from 'clsx';
 import toast from 'react-hot-toast';
@@ -53,40 +54,27 @@ interface CredentialListProps {
 const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) => {
   const { credentials, currentIdentity, getCredentialData } = usePersonaService();
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set());
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
-  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<Credential | null>(null);
   const [credentialData, setCredentialData] = useState<any>(null);
+  const sidebarFilter = useAppStore((s) => s.sidebarFilter);
 
-  // 聚合当前身份下的全部类型/标签（去重排序）
-  const availableTypes = Array.from(new Set(credentials.map((c) => c.credential_type))).sort();
-  const availableTags = Array.from(new Set(credentials.flatMap((c) => c.tags))).sort();
-
-  const hasActiveFilters =
-    selectedTypes.size > 0 || selectedTags.size > 0 || favoritesOnly;
-
-  const clearFilters = () => {
-    setSelectedTypes(new Set());
-    setSelectedTags(new Set());
-    setFavoritesOnly(false);
-  };
-
-  const toggleInSet = (set: Set<string>, value: string): Set<string> => {
-    const next = new Set(set);
-    if (next.has(value)) {
-      next.delete(value);
-    } else {
-      next.add(value);
+  // 侧栏分类树（单选）→ CredentialFilter 纯派生；搜索词独立叠加（AND）
+  const treeFilter = useMemo<CredentialFilter>(() => {
+    switch (sidebarFilter.kind) {
+      case 'all':
+        return {};
+      case 'favorites':
+        return { favoritesOnly: true };
+      case 'type':
+        return { types: new Set([sidebarFilter.value]) };
+      case 'tag':
+        return { tags: new Set([sidebarFilter.value]) };
     }
-    return next;
-  };
+  }, [sidebarFilter]);
 
   const filteredCredentials = filterCredentials(credentials, {
     query: searchQuery,
-    types: selectedTypes,
-    tags: selectedTags,
-    favoritesOnly,
+    ...treeFilter,
   });
 
   const handleCredentialClick = async (credential: Credential) => {
@@ -156,75 +144,19 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
         />
       </div>
 
-      {/* Filters: type / tags / favorites */}
-      {(availableTypes.length > 0 || availableTags.length > 0) && (
-        <div className="flex flex-wrap items-center gap-2" data-testid="credential-filters">
-          <button
-            onClick={() => setFavoritesOnly(!favoritesOnly)}
-            className={clsx(
-              'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
-              favoritesOnly
-                ? 'bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 border-red-300 dark:border-red-500/40'
-                : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800',
-            )}
-            data-testid="filter-favorites"
-          >
-            ♥ Favorites
-          </button>
-
-          {availableTypes.map((type) => (
-            <button
-              key={type}
-              onClick={() => setSelectedTypes(toggleInSet(selectedTypes, type))}
-              className={clsx(
-                'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
-                selectedTypes.has(type)
-                  ? 'bg-primary-50 dark:bg-primary-500/10 text-primary-700 dark:text-primary-300 border-primary-300 dark:border-primary-500/40'
-                  : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800',
-              )}
-              data-testid={`filter-type-${type}`}
-            >
-              {type}
-            </button>
-          ))}
-
-          {availableTags.map((tag) => (
-            <button
-              key={tag}
-              onClick={() => setSelectedTags(toggleInSet(selectedTags, tag))}
-              className={clsx(
-                'px-2.5 py-1 text-xs rounded-full border transition-colors',
-                selectedTags.has(tag)
-                  ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-500/40'
-                  : 'bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800',
-              )}
-              data-testid={`filter-tag-${tag}`}
-            >
-              #{tag}
-            </button>
-          ))}
-
-          {hasActiveFilters && (
-            <button
-              onClick={clearFilters}
-              className="px-2.5 py-1 text-xs text-gray-500 dark:text-gray-400 underline hover:text-gray-700 dark:hover:text-gray-200"
-              data-testid="clear-filters"
-            >
-              Clear filters
-            </button>
-          )}
-        </div>
-      )}
-
       {/* 空态跨整宽；右栏不渲染（选中项保留在 state，清筛选后面板原样回来） */}
       {filteredCredentials.length === 0 ? (
         <div className="text-center py-12">
           <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
           <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No credentials found</h3>
           <p className="text-gray-500 dark:text-gray-400 mb-4">
-            {searchQuery ? 'Try adjusting your search terms' : 'Get started by adding your first credential'}
+            {searchQuery
+              ? 'Try adjusting your search terms'
+              : sidebarFilter.kind === 'all'
+                ? 'Get started by adding your first credential'
+                : 'Try a different category in the sidebar'}
           </p>
-          {!searchQuery && (
+          {!searchQuery && sidebarFilter.kind === 'all' && (
             <button onClick={onCreateCredential} className="btn-primary">
               Add Your First Credential
             </button>

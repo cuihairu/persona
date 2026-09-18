@@ -42,6 +42,7 @@ const App: React.FC = () => {
 
   const featureFlags = useAppStore((s) => s.featureFlags);
   const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
+  const resetSidebarFilter = useAppStore((s) => s.resetSidebarFilter);
 
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateCredential, setShowCreateCredential] = useState(false);
@@ -102,6 +103,8 @@ const App: React.FC = () => {
     if (currentIdentity) {
       loadCredentialsForIdentity(currentIdentity.id);
     }
+    // 换身份丢弃旧分类树选中（新身份未必还有该类型/标签）
+    resetSidebarFilter();
   }, [currentIdentity]);
 
   // Show loading state during initialization

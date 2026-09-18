@@ -1,4 +1,4 @@
-import { useAppStore, DEFAULT_FEATURE_FLAGS } from './appStore';
+import { useAppStore, DEFAULT_FEATURE_FLAGS, DEFAULT_SIDEBAR_FILTER } from './appStore';
 import { THEME_STORAGE_KEY } from '@/utils/theme';
 
 describe('stores/appStore', () => {
@@ -16,6 +16,7 @@ describe('stores/appStore', () => {
       isLoading: false,
       error: null,
       theme: 'system',
+      sidebarFilter: DEFAULT_SIDEBAR_FILTER,
     });
   });
 
@@ -84,5 +85,16 @@ describe('stores/appStore', () => {
     expect(state.theme).toBe('dark');
     expect(state.isUnlocked).toBe(true);
     expect(state.error).toBeNull();
+  });
+
+  it('sidebarFilter defaults to all and set/resetSidebarFilter replace it', () => {
+    expect(DEFAULT_SIDEBAR_FILTER).toEqual({ kind: 'all' });
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
+
+    useAppStore.getState().setSidebarFilter({ kind: 'tag', value: 'dev' });
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'tag', value: 'dev' });
+
+    useAppStore.getState().resetSidebarFilter();
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
   });
 });

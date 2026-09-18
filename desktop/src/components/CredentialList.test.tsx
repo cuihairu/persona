@@ -1,8 +1,10 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import CredentialList, { filterCredentials } from './CredentialList';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { useAppStore } from '@/stores/appStore';
 import { copyWithAutoClear } from '@/utils/clipboard';
 import toast from 'react-hot-toast';
+import type { SidebarFilter } from '@/types';
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
@@ -92,6 +94,8 @@ describe('components/CredentialList', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (copyWithAutoClear as jest.Mock).mockResolvedValue(true);
+    // 真 store 单例跨用例存活：树筛选复位为"全部条目"
+    useAppStore.setState({ sidebarFilter: { kind: 'all' } });
   });
 
   it('renders placeholder when no identity selected', () => {
@@ -141,34 +145,56 @@ describe('components/CredentialList', () => {
     expect(screen.queryByText('Add Your First Credential')).not.toBeInTheDocument();
   });
 
-  it('toggles favorites/type/tag filters and clears them', () => {
+  it('applies the sidebar tree filter to the list (single-select)', () => {
     setupList([
       makeCred({ id: '1', name: 'Fav-one', credential_type: 'Password', tags: ['work'], is_favorite: true }),
       makeCred({ id: '2', name: 'Dev-two', credential_type: 'ApiKey', tags: ['dev'] }),
     ]);
 
+    const setFilter = (filter: SidebarFilter) =>
+      act(() => {
+        useAppStore.setState({ sidebarFilter: filter });
+      });
+
     // 仅收藏
-    fireEvent.click(screen.getByTestId('filter-favorites'));
+    setFilter({ kind: 'favorites' });
     expect(screen.getByText('1 credential')).toBeInTheDocument();
     expect(screen.getByText('Fav-one')).toBeInTheDocument();
 
-    // 收藏 ∩ ApiKey = 空
-    fireEvent.click(screen.getByTestId('filter-type-ApiKey'));
-    expect(screen.getByText('No credentials found')).toBeInTheDocument();
-
-    // 类型再点一次取消（toggle off），回到仅收藏
-    fireEvent.click(screen.getByTestId('filter-type-ApiKey'));
-    expect(screen.queryByText('No credentials found')).not.toBeInTheDocument();
-
-    // 清除全部筛选
-    fireEvent.click(screen.getByTestId('clear-filters'));
-    expect(screen.getByText('2 credentials')).toBeInTheDocument();
-    expect(screen.getByText('Dev-two')).toBeInTheDocument();
-
-    // 仅标签
-    fireEvent.click(screen.getByTestId('filter-tag-dev'));
+    // 单选：切类型即替换收藏筛选
+    setFilter({ kind: 'type', value: 'ApiKey' });
+    expect(screen.getByText('1 credential')).toBeInTheDocument();
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
     expect(screen.queryByText('Fav-one')).not.toBeInTheDocument();
+
+    // 切标签同样替换（不再叠加）
+    setFilter({ kind: 'tag', value: 'dev' });
+    expect(screen.getByText('Dev-two')).toBeInTheDocument();
+
+    // 搜索词与树筛选 AND
+    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+      target: { value: 'zzz' },
+    });
+    expect(screen.getByText('No credentials found')).toBeInTheDocument();
+
+    // 回全部条目并清搜索
+    setFilter({ kind: 'all' });
+    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+      target: { value: '' },
+    });
+    expect(screen.getByText('2 credentials')).toBeInTheDocument();
+  });
+
+  it('shows the generic empty hint when a tree filter matches nothing', () => {
+    setupList([makeCred({ id: '1', name: 'Bank one', credential_type: 'Password' })]);
+
+    act(() => {
+      useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'Nope' } });
+    });
+
+    expect(screen.getByText('No credentials found')).toBeInTheDocument();
+    expect(screen.getByText('Try a different category in the sidebar')).toBeInTheDocument();
+    expect(screen.queryByText('Add Your First Credential')).not.toBeInTheDocument();
   });
 
   it('renders row variants: security colors, hostnames and favorites', () => {

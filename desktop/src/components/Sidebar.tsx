@@ -1,9 +1,15 @@
 import * as React from 'react';
 import { useMemo } from 'react';
-import { Cog6ToothIcon, LockClosedIcon } from '@heroicons/react/24/outline';
-import { useAppStore } from '@/stores/appStore';
+import {
+  Cog6ToothIcon,
+  HeartIcon,
+  LockClosedIcon,
+  Squares2X2Icon,
+} from '@heroicons/react/24/outline';
+import { useAppStore, DEFAULT_SIDEBAR_FILTER } from '@/stores/appStore';
 import { IdentitySwitcher } from './IdentitySwitcher';
-import type { FeatureFlags } from '@/types';
+import { getCredentialIcon } from './credentialDisplay';
+import type { FeatureFlags, SidebarFilter } from '@/types';
 import { clsx } from 'clsx';
 
 export type ViewId = 'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'watchtower' | 'passkeys';
@@ -42,11 +48,50 @@ const Sidebar: React.FC<SidebarProps> = ({
   onLock,
 }) => {
   const featureFlags = useAppStore((s) => s.featureFlags);
+  const credentials = useAppStore((s) => s.credentials);
+  const sidebarFilter = useAppStore((s) => s.sidebarFilter);
+  const setSidebarFilter = useAppStore((s) => s.setSidebarFilter);
 
   const visibleNav = useMemo(
     () => NAV_ITEMS.filter((item) => !item.flag || featureFlags[item.flag]),
     [featureFlags]
   );
+
+  // 分类树聚合（仅当前身份的凭据；类型是自由 string，按数据动态收集）
+  const availableTypes = useMemo(
+    () => Array.from(new Set(credentials.map((c) => c.credential_type))).sort(),
+    [credentials]
+  );
+  const availableTags = useMemo(
+    () => Array.from(new Set(credentials.flatMap((c) => c.tags))).sort(),
+    [credentials]
+  );
+  const favoriteCount = useMemo(
+    () => credentials.filter((c) => c.is_favorite).length,
+    [credentials]
+  );
+  const typeCounts = useMemo(
+    () => new Map(availableTypes.map((t) => [t, credentials.filter((c) => c.credential_type === t).length])),
+    [credentials, availableTypes]
+  );
+  const tagCounts = useMemo(
+    () => new Map(availableTags.map((g) => [g, credentials.filter((c) => c.tags.includes(g)).length])),
+    [credentials, availableTags]
+  );
+
+  const isNodeActive = (filter: SidebarFilter) =>
+    JSON.stringify(filter) === JSON.stringify(sidebarFilter);
+
+  const nodeClass = (active: boolean) =>
+    clsx(
+      'w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors',
+      active
+        ? 'bg-primary-50 text-primary-900 dark:bg-primary-500/10 dark:text-primary-100'
+        : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
+    );
+  const countClass = 'ml-auto text-xs text-gray-400 dark:text-gray-500';
+  const groupTitleClass =
+    'px-3 mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500';
 
   return (
     <aside
@@ -78,6 +123,68 @@ const Sidebar: React.FC<SidebarProps> = ({
           </button>
         ))}
       </nav>
+
+      {/* 分类树：仅凭据视图；单选，点中即替换 store 筛选 */}
+      {currentView === 'credentials' && (
+        <div data-testid="sidebar-filters" className="px-3 pb-3 space-y-1">
+          <button
+            data-testid="filter-all"
+            onClick={() => setSidebarFilter(DEFAULT_SIDEBAR_FILTER)}
+            className={nodeClass(isNodeActive(DEFAULT_SIDEBAR_FILTER))}
+          >
+            <Squares2X2Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">All Items</span>
+            <span className={countClass}>{credentials.length}</span>
+          </button>
+          <button
+            data-testid="filter-favorites"
+            onClick={() => setSidebarFilter({ kind: 'favorites' })}
+            className={nodeClass(isNodeActive({ kind: 'favorites' }))}
+          >
+            <HeartIcon className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">Favorites</span>
+            <span className={countClass}>{favoriteCount}</span>
+          </button>
+
+          {availableTypes.length > 0 && (
+            <div className="pt-3">
+              <p className={groupTitleClass}>Types</p>
+              {availableTypes.map((type) => {
+                const TypeIcon = getCredentialIcon(type);
+                return (
+                  <button
+                    key={type}
+                    data-testid={`filter-type-${type}`}
+                    onClick={() => setSidebarFilter({ kind: 'type', value: type })}
+                    className={nodeClass(isNodeActive({ kind: 'type', value: type }))}
+                  >
+                    <TypeIcon className="w-4 h-4 shrink-0" aria-hidden="true" />
+                    <span className="truncate">{type}</span>
+                    <span className={countClass}>{typeCounts.get(type)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {availableTags.length > 0 && (
+            <div className="pt-3">
+              <p className={groupTitleClass}>Tags</p>
+              {availableTags.map((tag) => (
+                <button
+                  key={tag}
+                  data-testid={`filter-tag-${tag}`}
+                  onClick={() => setSidebarFilter({ kind: 'tag', value: tag })}
+                  className={nodeClass(isNodeActive({ kind: 'tag', value: tag }))}
+                >
+                  <span className="truncate">#{tag}</span>
+                  <span className={countClass}>{tagCounts.get(tag)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 底部操作区：设置 + 锁定 */}
       <div

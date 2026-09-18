@@ -133,6 +133,7 @@ describe('App', () => {
     // 真实 zustand store 跨用例共享：复位为出厂全关，由各用例经拉取/ setState 驱动
     useAppStore.setState({
       featureFlags: { ssh_agent: false, wallet: false, passkeys: false },
+      sidebarFilter: { kind: 'all' },
     });
     serviceState = {
       isUnlocked: false,
@@ -273,6 +274,19 @@ describe('App', () => {
     expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
+  });
+
+  it('resets the sidebar filter when the identity changes', () => {
+    serviceState.isUnlocked = true;
+    serviceState.currentIdentity = { id: 'id-1', name: 'A' };
+    useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'ApiKey' } });
+    const { rerender } = render(<App />);
+
+    serviceState.currentIdentity = { id: 'id-2', name: 'B' };
+    rerender(<App />);
+
+    // 换身份丢弃旧分类树选中（新身份未必还有该类型/标签）
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
   });
 
   it('locks the session and opens settings from the sidebar footer', () => {

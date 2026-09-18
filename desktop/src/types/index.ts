@@ -485,6 +485,13 @@ export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';
 /** 主题偏好三档；'system' 跟随 prefers-color-scheme */
 export type ThemePreference = 'system' | 'light' | 'dark';
 
+/** 侧栏分类树的单选筛选态（默认 { kind: 'all' }；不做 localStorage 持久化） */
+export type SidebarFilter =
+  | { kind: 'all' }
+  | { kind: 'favorites' }
+  | { kind: 'type'; value: string }
+  | { kind: 'tag'; value: string };
+
 export interface InitRequest {
   master_password: string;
   db_path?: string;
