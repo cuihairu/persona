@@ -104,8 +104,9 @@ Desktop (Tauri v2 + React)
   tauri 依赖）→ DesktopApprovalHandler（emit `persona://ssh-approval` + oneshot，
   120s 超时自动拒绝）→ SshApprovalModal；CLI 走 TTY 提示零改动；失焦系统通知
 - [x] Wallet UI (addresses, QR, signing confirmations + 地址投毒启发式告警)
-- [ ] Desktop 集成测试矩阵扩展（当前 102 个 Rust 测试，总体行覆盖 ~90%，
-  commands.rs ~90.6%、types.rs 100%、passkey_bridge ~94.5%；命令级集成测试
+- [ ] Desktop 集成测试矩阵扩展（当前 107 个 Rust 测试（102 lib 单测 +
+  5 集成），总体行覆盖 ~91.1%（lib 化前 89%）；commands.rs ~90.6%、
+  types.rs 100%、passkey_bridge ~97.4%、approval ~96.5%；命令级集成测试
   基建已建：`command_layer_tests.rs` 经 `tauri::test::mock_app` 直驱 50+
   命令处理器，含 wallet 交易 create/sign 多链路径、SSH agent start/stop
   生命周期、passkey 审批 serve_on 端到端（真 Unix socket）+ service 层
@@ -114,11 +115,22 @@ Desktop (Tauri v2 + React)
   垃圾文件的 service，驱动 init_service 无法到达的各命令 repo 错误臂）、
   init 幂等（existing-user 再认证 + 错密码拒绝 + 账号锁定）、wallet 五命令
   前置臂 × 死库矩阵、active identity 前置臂矩阵、AddressType 标签全臂、
-  passkey_create 非法 base64 门。已知不可达（~10% 剩余构成）：
-  main.rs 托盘/窗口路径（无头环境不可测，86 行）、passkey_bridge Tauri
-  sink（mock runtime 毒化同进程 socket 测试，需 lib 化解锁）、防御性错误臂
-  （parse_network 永不失败、恒 Ok 方法的 Err 分支、wallet 签名后本地
-  verify 拒绝臂、emit 失败臂）。可达上限约 91%——98% 纯行覆盖不可达）
+  passkey_create 非法 base64 门。**lib 化**（src/lib.rs + 薄 main.rs +
+  `tests/desktop_integration.rs` 独立进程）解锁：TauriApprovalSink 真
+  emit 全链路（真 socket → 真事件 → passkey_approval_respond → 应答回
+  socket）、锁定直接应答不弹 GUI、show_main_window 有/无窗口双臂、
+  build() 整链装配（mock context + run_iteration 驱动 setup：AppState
+  manage、审批服务端 spawn + socket 0600、托盘按显示会话分流）。
+  剩余不可达（~9%）：setup_tray ~40 行（muda 菜单直连 GTK，需真实显示
+  服务器，mock runtime 管不到）、run() 事件循环、commands.rs 防御臂
+  （恒 Ok 方法的 Err 分支、签名后本地 verify 拒绝臂、emit 失败臂）——
+  91% 即可达上限）
+- [x] fix(desktop): lib 化顺带修复无显示会话启动崩溃（2026-09 测试发现）
+  — muda 菜单/托盘不经 Runtime trait 直连 GTK，DISPLAY/WAYLAND 缺失时
+  `gtk::Menu::new` 直接 panic；现 `display_session_available()` 守卫下
+  降级为无托盘运行（审批链路不依赖托盘存活），有显示环境行为不变；
+  另 `default_window_icon` 缺失时回退 `include_image!` 内嵌图标（原
+  fail-fast panic 改为回退，dev/测试环境更稳）
 - [ ] 产品缺口：`password_change_required` 强制改密机制仅存 schema
   （user_auth 表列 + `AuthResult::PasswordChangeRequired` + init_service
   拒绝臂），生产代码无任何置位路径（INSERT 恒 0）——密码过期/轮换策略

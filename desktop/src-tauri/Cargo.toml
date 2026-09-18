@@ -7,6 +7,9 @@ license = "MIT"
 repository = "https://github.com/cuihairu/persona"
 edition = "2021"
 
+[lib]
+name = "persona_desktop"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
