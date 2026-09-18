@@ -43,7 +43,8 @@ coset.workspace = true
 base64.workspace = true
 
 # Watchtower 泄露检查（HIBP k-anonymity）——可选：trait 与解析纯函数不依赖网络
-reqwest = { workspace = true, optional = true }
+# json feature：ServerEventSink 的 .json() 请求体需要（workspace 默认未开）
+reqwest = { workspace = true, optional = true, features = ["json"] }
 
 # 数据库
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }
@@ -90,9 +91,12 @@ openssl = { version = "0.10", features = ["vendored"] }
 webauthn-rs.workspace = true
 
 [features]
-default = ["sqlite", "hibp", "favicon"]
+default = ["sqlite", "hibp", "favicon", "events-server"]
 sqlite = ["sqlx"]
 # HIBP k-anonymity HTTP 客户端；trait 与解析纯函数无需此 feature
 hibp = ["dep:reqwest"]
 # favicon 按需抓取 HTTP 客户端（独立于 hibp：关掉一个不影响另一个）
 favicon = ["dep:reqwest"]
+# ServerEventSink：审计事件 POST 到 persona-server（reqwest 本就随
+# hibp/favicon 在 default 树，进 default 对下游零增量）
+events-server = ["dep:reqwest"]
