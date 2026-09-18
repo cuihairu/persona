@@ -2452,6 +2452,7 @@ pub(crate) mod tests {
     /// request line, replies with the configured verdict, and resolves with
     /// the received line so tests can pin the wire format. The `TempDir`
     /// keeps the socket file alive for the duration of the test.
+    #[cfg(unix)]
     async fn spawn_fake_desktop(
         approved: bool,
         reason: Option<&'static str>,
@@ -2486,6 +2487,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn desktop_approval_roundtrip_pins_wire_format() {
@@ -2521,6 +2523,7 @@ pub(crate) mod tests {
         set_gate_env(None, None);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn desktop_approval_denied_and_auto_fallback() {
@@ -2550,6 +2553,7 @@ pub(crate) mod tests {
         set_gate_env(None, None);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn desktop_approval_require_fails_closed_and_off_skips() {
@@ -2594,6 +2598,7 @@ pub(crate) mod tests {
     /// A running desktop that answers "denied" surfaces as the
     /// `passkey_desktop_denied` error codes from both passkey handlers
     /// (before anything is signed or stored).
+    #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn desktop_denial_reaches_the_passkey_handlers() {
@@ -2689,6 +2694,7 @@ pub(crate) mod tests {
     /// The Approved verdict flows through both passkey handlers end to end,
     /// and a desktop that accepts the connection but never answers fails
     /// closed in require mode.
+    #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn desktop_approval_allows_the_passkey_handlers_and_silent_fails_closed() {
