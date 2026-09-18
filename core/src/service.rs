@@ -10,6 +10,7 @@ use crate::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
         EncryptionService, KeyHierarchy, Sha256Hasher,
     },
+    events::Emitter,
     health::{HealthIssue, HealthIssueKind, HealthReport, HealthScanConfig},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
@@ -75,6 +76,8 @@ pub struct PersonaService {
     auto_lock_manager: AutoLockManager,
     /// Current session ID for this service instance
     current_session_id: Arc<RwLock<Option<String>>>,
+    /// 可选审计事件上报器（`events::Emitter`；`set_event_emitter` 注入）
+    event_emitter: Option<Emitter>,
 }
 
 impl PersonaService {
@@ -104,6 +107,7 @@ impl PersonaService {
             current_user: None,
             auto_lock_manager,
             current_session_id: Arc::new(RwLock::new(None)),
+            event_emitter: None,
         })
     }
 
@@ -199,6 +203,12 @@ impl PersonaService {
     /// Replace the biometric provider (desktop/mobile apps can inject real hooks).
     pub fn set_biometric_provider(&mut self, provider: Arc<dyn BiometricProvider>) {
         self.biometric_provider = provider;
+    }
+
+    /// 注入/移除审计事件上报器（`None` 关闭上报）。调用方负责 emitter 的
+    /// `start()`/`stop()` 生命周期；`log_audit` 只做同步入队，绝不阻塞。
+    pub fn set_event_emitter(&mut self, emitter: Option<Emitter>) {
+        self.event_emitter = emitter;
     }
 
     /// Begin the SRP-like remote authentication handshake for a username.
@@ -1813,6 +1823,10 @@ impl PersonaService {
             }
         }
         let _ = self.audit_repo.create(&log).await;
+        // 尽力而为的远端复制（见 events::Emitter）：本地审计库才是存证源
+        if let Some(emitter) = &self.event_emitter {
+            emitter.emit(&log);
+        }
     }
 }
 
@@ -2113,6 +2127,56 @@ mod tests {
         let mut service = PersonaService::new(db.clone()).await.unwrap();
         service.initialize_user("master-pin").await.unwrap();
         (db, service)
+    }
+
+    /// log_audit → emitter 挂钩：同步入队、None 解除后不再上报。
+    #[tokio::test]
+    async fn log_audit_feeds_event_emitter_until_detached() {
+        use crate::events::testing::{eventually, FakeSink};
+        use std::sync::Arc;
+
+        let (_db, mut service) = unlocked_service().await;
+        let sink = Arc::new(FakeSink::default());
+        // batch_size=1：单条事件即触发 notify flush（默认 100 要等 interval）
+        let emitter = crate::events::Emitter::with_config(
+            sink.clone(),
+            crate::events::EmitterConfig {
+                batch_size: 1,
+                ..Default::default()
+            },
+        );
+        emitter.start();
+        service.set_event_emitter(Some(emitter.clone()));
+
+        service
+            .log_audit(
+                AuditAction::Login,
+                ResourceType::User,
+                true,
+                None,
+                None,
+                None,
+            )
+            .await;
+        eventually(|| sink.call_count() >= 1).await;
+        assert_eq!(sink.batches()[0].len(), 1);
+        assert_eq!(sink.batches()[0][0].action, "login");
+        emitter.stop().await;
+
+        // None 解除挂钩：后续审计只落本地库，不再上报
+        service.set_event_emitter(None);
+        service
+            .log_audit(
+                AuditAction::Login,
+                ResourceType::User,
+                true,
+                None,
+                None,
+                None,
+            )
+            .await;
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(sink.call_count(), 1);
     }
 
     async fn seed_credential(
