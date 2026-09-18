@@ -129,6 +129,16 @@ impl ApiError {
         )
     }
 
+    /// 404：路由表外（fallback 兜底）。
+    pub(crate) fn not_found() -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no such route",
+            Vec::new(),
+        )
+    }
+
     /// 500：内部错误，细节只进日志不外泄。
     pub fn internal(error: impl std::fmt::Display) -> Self {
         tracing::error!(%error, "internal server error");
