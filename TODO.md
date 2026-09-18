@@ -183,8 +183,12 @@ Desktop (Tauri v2 + React)
   - [x] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
     变体——13d75f4c 基建 / 94ee3930 Settings 三档选择器 / a79b3cbb 全组件
     sweep，顺带修复 v4 死类 bg-opacity-* 导致的弹窗遮罩纯黑实底）
-  - [ ] 侧栏分类导航（类型/标签/收藏树，取代筛选 chip 行）；
+  - [x] 侧栏分类导航（类型/标签/收藏树，取代筛选 chip 行）；
     IdentitySwitcher 移至侧栏顶部（对应 1Password 账户切换器的位置）
+    ——e7e46df7 app shell（侧栏 + 视图导航 + footer Settings/Lock）/
+    3f7060ec 分类树（单选 SidebarFilter 入 store，取代 chip 行；换身份
+    自动复位）。已知限制：锁屏→再解锁树选中残留（与旧 chip 等价）；
+    筛选变化不自动清详情面板选中（follow-up）
   - [ ] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
     （隐私红线：不常驻外联，不默认抓取——1Password 同款做法）
   - [ ] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名等；优先级最低）
