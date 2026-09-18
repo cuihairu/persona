@@ -3,6 +3,12 @@ import CreateCredentialModal from './CreateCredentialModal';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import type { Identity } from '@/types';
 
+// jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
+if (typeof globalThis.TextEncoder === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  (globalThis as any).TextEncoder = require('util').TextEncoder;
+}
+
 const mockUsePersonaService = jest.fn();
 const createCredential = jest.fn();
 const generatePassword = jest.fn();
@@ -270,6 +276,188 @@ describe('components/CreateCredentialModal', () => {
             permissions: ['read', 'write'],
           }),
         }),
+      );
+    });
+  });
+
+  it('submits a CryptoWallet credential with network and optional seed material', async () => {
+    renderModal();
+    selectType('CryptoWallet');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Cold storage' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Bitcoin, Ethereum, etc.'), {
+      target: { value: 'Ethereum' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Wallet address'), {
+      target: { value: '0xabc' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('12-24 word recovery phrase'), {
+      target: { value: 'word1 word2' },
+    });
+    fireEvent.change(getSelect('mainnet'), { target: { value: 'testnet' } });
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), {
+      target: { value: 'https://eth.io' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Username or account identifier'), {
+      target: { value: 'vitalik' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Additional notes or information'), {
+      target: { value: 'hardware backup' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Cold storage',
+          credential_type: 'CryptoWallet',
+          url: 'https://eth.io',
+          username: 'vitalik',
+          notes: 'hardware backup',
+          credential_data: {
+            type: 'CryptoWallet',
+            wallet_type: 'Ethereum',
+            mnemonic_phrase: 'word1 word2',
+            private_key: undefined,
+            public_key: '',
+            address: '0xabc',
+            network: 'testnet',
+          },
+        }),
+      );
+    });
+  });
+
+  it('submits an SshKey credential with key type and passphrase', async () => {
+    renderModal();
+    selectType('SshKey');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Build server' },
+    });
+    fireEvent.change(getSelect('rsa'), { target: { value: 'ed25519' } });
+    fireEvent.change(screen.getByPlaceholderText(/ssh-rsa/), {
+      target: { value: 'ssh-ed25519 AAA' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/BEGIN OPENSSH PRIVATE KEY/), {
+      target: { value: '-----BEGIN-----' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Key passphrase/), {
+      target: { value: 'phrase' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_type: 'SshKey',
+          credential_data: {
+            type: 'SshKey',
+            private_key: '-----BEGIN-----',
+            public_key: 'ssh-ed25519 AAA',
+            key_type: 'ed25519',
+            passphrase: 'phrase',
+          },
+        }),
+      );
+    });
+  });
+
+  it('submits a TwoFactor credential with manually adjusted TOTP parameters', async () => {
+    renderModal();
+    selectType('TwoFactor');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: '2FA' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('JBSWY3DPEHPK3PXP'), {
+      target: { value: 'SECRET' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('GitHub'), {
+      target: { value: 'GitLab' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
+      target: { value: 'acct' },
+    });
+    fireEvent.change(getSelect('SHA1'), { target: { value: 'SHA256' } });
+    fireEvent.change(getSelect('6'), { target: { value: '8' } });
+    fireEvent.change(screen.getByDisplayValue(30), { target: { value: '45' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_type: 'TwoFactor',
+          credential_data: {
+            type: 'TwoFactor',
+            secret_key: 'SECRET',
+            issuer: 'GitLab',
+            account_name: 'acct',
+            algorithm: 'SHA256',
+            digits: 8,
+            period: 45,
+          },
+        }),
+      );
+    });
+  });
+
+  it('submits raw bytes for uncategorized types', async () => {
+    renderModal();
+    selectType('BankCard');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Misc' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Enter credential data'), {
+      target: { value: 'héllo' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_type: 'BankCard',
+          credential_data: {
+            type: 'Raw',
+            // TextEncoder 字节数组（'é' 为 UTF-8 双字节）
+            data: Array.from(new TextEncoder().encode('héllo')),
+          },
+        }),
+      );
+    });
+  });
+
+  it('keeps raw text when the value is not even parseable as a URL', () => {
+    renderModal();
+    selectType('TwoFactor');
+
+    fireEvent.change(screen.getByPlaceholderText(/otpauth:\/\//), {
+      target: { value: 'definitely not a url' },
+    });
+
+    // new URL 抛错走 catch：任何字段都不填充
+    expect((screen.getByPlaceholderText('JBSWY3DPEHPK3PXP') as HTMLInputElement).value).toBe('');
+    expect(screen.getByPlaceholderText(/otpauth:\/\//)).toHaveValue('definitely not a url');
+  });
+
+  it('submits the selected security level', async () => {
+    renderModal();
+
+    fireEvent.change(getSelect('High'), { target: { value: 'Critical' } });
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Root CA' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+      target: { value: 'pw' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({ security_level: 'Critical' }),
       );
     });
   });
