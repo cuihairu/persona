@@ -222,7 +222,27 @@ Desktop (Tauri v2 + React)
     浏览器保留键如 Ctrl+E/L 在 WebView 外不保证拦截。follow-up：密码/
     TOTP 全局复制（需把组件级 useReauth 提升到 App 级）、Escape 统一
     关 modal、快捷键速查面板
-- [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
+- [x] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
+  ——5f39538e 测试 fixture 对齐类型定义，清零 23 个 tsc 本底
+  （beforeBuildCommand=`pnpm build` 由此解锁，前端验证基线简化为
+  一条命令）/ 本条 `cd desktop && ./node_modules/.bin/tauri build
+  --bundles deb`（release 全量编译 10m16s）。产物：
+  bundle/deb/Persona_0.1.0_amd64.deb（12MB，包名 persona 0.1.0 amd64，
+  Depends: libayatana-appindicator3-1/libwebkit2gtk-4.1-0/libgtk-3-0，
+  内容 usr/bin/persona-desktop + hicolor 三档图标 + .desktop 入口）；
+  二进制 36MB ELF，ldd 零缺失（webkit2gtk-4.1/gtk-3/javascriptcore 健全）。
+  已知限制：`--bundles deb` 为本机 CLI 限定（bundle.targets 保持 "all"
+  不改——本机无 rpmbuild，AppImage 需联网拉 linuxdeploy）；deb 未签名；
+  control 描述为占位 "Persona Desktop Application (none)"（tauri.conf
+  未填 description）；本环境无 GUI，仅产物元数据验证、未真机安装。
+  follow-up：CI 打包矩阵（rpm/appimage/dmg/msi）、deb 签名、
+  更新器（updater）签名密钥、tauri.conf description 补全。
+  手工验收：① `sudo dpkg -i
+  desktop/src-tauri/target/release/bundle/deb/Persona_0.1.0_amd64.deb`
+  ② 应用列表启动 persona-desktop → 初始化 vault（主密码）→ 解锁
+  ③ 冒烟：身份/凭据 CRUD、⌘K/⌘L/⌘E/⌘, 四快捷键、设置四开关、
+  favicon 抓取、SSH agent 面板/托盘、自动锁定、暗色模式
+  ④ `sudo dpkg -r persona` 卸载 → 确认 vault 数据目录保留
 
 Server & Sync (optional)
 - [ ] Events API, audit ingestion, metrics
