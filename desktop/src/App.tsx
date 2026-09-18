@@ -6,6 +6,7 @@ import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
 import { useSshApprovals } from '@/hooks/useSshApprovals';
 import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
 import { personaAPI } from '@/utils/api';
+import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import UnlockScreen from '@/components/UnlockScreen';
 import { IdentitySwitcher, CreateIdentityModal } from '@/components/IdentitySwitcher';
 import CredentialList from '@/components/CredentialList';
@@ -18,6 +19,25 @@ import WalletPanel from '@/components/WalletPanel';
 import WatchtowerPanel from '@/components/WatchtowerPanel';
 import PasskeyPanel from '@/components/PasskeyPanel';
 import SettingsModal from '@/components/SettingsModal';
+import type { FeatureFlags } from '@/types';
+
+type ViewId = 'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'watchtower' | 'passkeys';
+
+interface NavItem {
+  id: ViewId;
+  label: string;
+  /** 对应 workspace 功能开关；不带的为主航道视图，恒可见 */
+  flag?: keyof FeatureFlags;
+}
+
+const NAV_ITEMS: NavItem[] = [
+  { id: 'credentials', label: 'Credentials' },
+  { id: 'statistics', label: 'Statistics' },
+  { id: 'sshAgent', label: 'SSH Agent', flag: 'ssh_agent' },
+  { id: 'wallets', label: 'Wallets', flag: 'wallet' },
+  { id: 'watchtower', label: 'Watchtower' },
+  { id: 'passkeys', label: 'Passkeys', flag: 'passkeys' },
+];
 
 const App: React.FC = () => {
   const {
@@ -30,10 +50,15 @@ const App: React.FC = () => {
     clearError,
   } = usePersonaService();
 
+  const featureFlags = useAppStore((s) => s.featureFlags);
+  const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
+
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateCredential, setShowCreateCredential] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [currentView, setCurrentView] = useState<'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'watchtower' | 'passkeys'>('credentials');
+  const [currentView, setCurrentView] = useState<ViewId>('credentials');
+
+  const visibleNav = NAV_ITEMS.filter((item) => !item.flag || featureFlags[item.flag]);
 
   // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
@@ -56,6 +81,33 @@ const App: React.FC = () => {
       personaAPI.stopAutoLockMonitoring().catch(() => {});
     }
   }, [isUnlocked]);
+
+  // 解锁后拉取 workspace 功能开关；锁定时回到默认（全关）。
+  // 读取失败静默保持默认：解锁流程不因设置读取中断。
+  useEffect(() => {
+    if (!isUnlocked) {
+      setFeatureFlags({ ...DEFAULT_FEATURE_FLAGS });
+      return;
+    }
+    (async () => {
+      try {
+        const resp = await personaAPI.getWorkspaceSettings();
+        if (resp.success && resp.data) {
+          setFeatureFlags(resp.data.features);
+        }
+      } catch {
+        // keep defaults
+      }
+    })();
+  }, [isUnlocked, setFeatureFlags]);
+
+  // 当前视图对应的功能被关闭时回退 credentials（导航按钮已消失，避免停在不可达视图）
+  useEffect(() => {
+    const current = NAV_ITEMS.find((item) => item.id === currentView);
+    if (current?.flag && !featureFlags[current.flag]) {
+      setCurrentView('credentials');
+    }
+  }, [currentView, featureFlags]);
 
   // Load credentials when identity changes
   useEffect(() => {
@@ -142,66 +194,19 @@ const App: React.FC = () => {
               <div className="flex items-center space-x-4">
                 {/* View Toggle */}
                 <div className="flex bg-gray-100 rounded-lg p-1">
-                  <button
-                    onClick={() => setCurrentView('credentials')}
-                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      currentView === 'credentials'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Credentials
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('statistics')}
-                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      currentView === 'statistics'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Statistics
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('sshAgent')}
-                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      currentView === 'sshAgent'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    SSH Agent
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('wallets')}
-                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      currentView === 'wallets'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Wallets
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('watchtower')}
-                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      currentView === 'watchtower'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Watchtower
-                  </button>
-                  <button
-                    onClick={() => setCurrentView('passkeys')}
-                    className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                      currentView === 'passkeys'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-700'
-                    }`}
-                  >
-                    Passkeys
-                  </button>
+                  {visibleNav.map((item) => (
+                    <button
+                      key={item.id}
+                      onClick={() => setCurrentView(item.id)}
+                      className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                        currentView === item.id
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
                 </div>
 
                 {/* Action Buttons */}

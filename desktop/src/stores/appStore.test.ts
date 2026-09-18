@@ -1,4 +1,4 @@
-import { useAppStore } from './appStore';
+import { useAppStore, DEFAULT_FEATURE_FLAGS } from './appStore';
 
 describe('stores/appStore', () => {
   beforeEach(() => {
@@ -10,6 +10,7 @@ describe('stores/appStore', () => {
       credentials: [],
       sshAgentStatus: null,
       sshKeys: [],
+      featureFlags: { ...DEFAULT_FEATURE_FLAGS },
       isLoading: false,
       error: null,
     });
@@ -21,6 +22,15 @@ describe('stores/appStore', () => {
     expect(state.identities).toEqual([]);
     expect(state.currentIdentity).toBeNull();
     expect(state.error).toBeNull();
+  });
+
+  it('starts with every advanced feature flag off', () => {
+    expect(DEFAULT_FEATURE_FLAGS).toEqual({
+      ssh_agent: false,
+      wallet: false,
+      passkeys: false,
+    });
+    expect(useAppStore.getState().featureFlags).toEqual(DEFAULT_FEATURE_FLAGS);
   });
 
   it('updates state via actions', () => {
@@ -39,5 +49,17 @@ describe('stores/appStore', () => {
     updated.clearError();
     expect(useAppStore.getState().error).toBeNull();
   });
-});
 
+  it('setFeatureFlags copies the incoming flags instead of aliasing them', () => {
+    const incoming = { ssh_agent: true, wallet: false, passkeys: true };
+    useAppStore.getState().setFeatureFlags(incoming);
+
+    const stored = useAppStore.getState().featureFlags;
+    expect(stored).toEqual(incoming);
+    expect(stored).not.toBe(incoming);
+
+    // 后续改动入参不影响 store（optimistic 更新回滚路径依赖这一点）
+    incoming.wallet = true;
+    expect(useAppStore.getState().featureFlags.wallet).toBe(false);
+  });
+});

@@ -157,14 +157,22 @@ Desktop (Tauri v2 + React)
   （六类型图标/配色、切换、CreateIdentityModal 表单流 + reset）、
   ErrorHandling 68→94.4%（边界 fallback + dev 详情 + production 上报臂、
   四样式类型矩阵）。
-- [ ] 功能开关（feature flags）：高级功能默认关闭，设置页可开启
+- [x] 功能开关（feature flags）：高级功能默认关闭，设置页可开启
   （对齐 1Password：SSH agent 在设置中显式开启；钱包/Passkey 多数用户用不到，
-  默认隐藏，需要时开启。主航道密码管理不受影响）
-  - 侧栏导航按开关显隐：SSH Agent / Wallets / Passkeys 默认关；
-    Credentials / Statistics / Watchtower 默认开
-  - 开关持久化到 workspace settings（schema v2 已有 settings 字段）
-  - backend 联动：SSH agent 审批服务端/托盘仅在开启时启动；
-    钱包/passkey 后端命令可保留（已有解锁 + re-auth 门禁），仅隐藏 UI 入口
+  默认隐藏，需要时开启。主航道密码管理不受影响。2026-09-18 最小闭环落地）
+  - [x] 导航按开关显隐：SSH Agent / Wallets / Passkeys 默认关；
+    Credentials / Statistics / Watchtower 恒开（App.tsx NAV_ITEMS + visibleNav）
+  - [x] 开关持久化到 workspace settings（`WorkspaceSettings.features: FeatureFlags`，
+    serde default 旧 JSON 缺键回退全关；`get_workspace_settings` 免解锁读 +
+    `set_feature_flags` 需解锁窄写、返回全量设置作服务端真相）
+  - [x] backend 联动：passkey 审批服务端移到 init_service 尾部按开关门禁
+    （`maybe_start_passkey_server`，AtomicBool 幂等；lock→unlock 即生效）。
+    钱包/SSH 后端命令可保留（已有解锁 + re-auth 门禁），仅隐藏 UI 入口
+  - [x] 设置页 SettingsModal tab 化：General（三开关 optimistic 写 + 失败
+    回滚 + toast）/ Identities（原身份管理）
+  - 已知限制：flag 关闭时已 spawn 的 passkey server 本会话不停（无 shutdown
+    路径）；已运行的 SSH agent 不随开关 stop（follow-up）；设置页开关与
+    active identity 对同一 workspace 行是 last-write-wins
 - [ ] UI 对齐 1Password 8 交互范式（分阶段；身份维度保留为 Persona 特色，
   信息架构不照搬——1Password 无身份/上下文概念，IdentitySwitcher 语义是
   "身份"而非"账户"）

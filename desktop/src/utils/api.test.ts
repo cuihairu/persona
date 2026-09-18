@@ -50,6 +50,20 @@ describe('utils/api PersonaAPI', () => {
     expect(mockInvoke).toHaveBeenCalledWith('clear_active_identity');
   });
 
+  it('workspace settings methods map flags to flat snake_case args', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.getWorkspaceSettings();
+    expect(mockInvoke).toHaveBeenCalledWith('get_workspace_settings');
+
+    await personaAPI.setFeatureFlags({ ssh_agent: true, wallet: false, passkeys: true });
+    expect(mockInvoke).toHaveBeenCalledWith('set_feature_flags', {
+      ssh_agent: true,
+      wallet: false,
+      passkeys: true,
+    });
+  });
+
   it('walletImport forwards wif import payloads unchanged', async () => {
     mockInvoke.mockResolvedValue({ success: true, data: { id: 'wallet-1' } });
 

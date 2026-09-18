@@ -9,6 +9,8 @@ import type {
   CreateCredentialRequest,
   Statistics,
   InitRequest,
+  FeatureFlags,
+  WorkspaceSettings,
   SshAgentStatus,
   SshAgentKey,
   WalletListResponse,
@@ -82,6 +84,19 @@ class PersonaAPI {
 
   async clearActiveIdentity(): Promise<ApiResponse<boolean>> {
     return invoke('clear_active_identity');
+  }
+
+  async getWorkspaceSettings(): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('get_workspace_settings');
+  }
+
+  /** 窄写 features 三个开关位，返回更新后的全量设置作为服务端真相 */
+  async setFeatureFlags(flags: FeatureFlags): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_feature_flags', {
+      ssh_agent: flags.ssh_agent,
+      wallet: flags.wallet,
+      passkeys: flags.passkeys,
+    });
   }
 
   async createCredential(request: CreateCredentialRequest): Promise<ApiResponse<Credential>> {

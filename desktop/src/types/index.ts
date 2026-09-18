@@ -58,6 +58,27 @@ export interface AutoLockStatus {
   inactivity_timeout_secs: number;
 }
 
+/** 高级功能开关（对应 Rust FeatureFlags；1Password 式默认全关、设置页 opt-in） */
+export interface FeatureFlags {
+  /** SSH agent（浏览器/终端经 socket 取钥签名） */
+  ssh_agent: boolean;
+  /** 钱包面板 */
+  wallet: boolean;
+  /** Passkey 管理与审批服务端 */
+  passkeys: boolean;
+}
+
+/** workspace 设置全量（对应 Rust WorkspaceSettings；由 settings 命令返回） */
+export interface WorkspaceSettings {
+  encryption_enabled: boolean;
+  auto_backup_hours: number;
+  backup_retention_count: number;
+  session_timeout_seconds: number;
+  require_confirmation: boolean;
+  default_identity_type: string;
+  features: FeatureFlags;
+}
+
 /** 审计日志条目（只读视图，不含敏感负载） */
 export interface AuditLogEntry {
   id: string;

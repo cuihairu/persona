@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import type { Identity, Credential, SshAgentStatus, SshAgentKey } from '@/types';
+import type { Identity, Credential, SshAgentStatus, SshAgentKey, FeatureFlags } from '@/types';
+
+/** 高级功能开关出厂值：1Password 式默认全关，解锁后从 workspace settings 拉取 */
+export const DEFAULT_FEATURE_FLAGS: FeatureFlags = {
+  ssh_agent: false,
+  wallet: false,
+  passkeys: false,
+};
 
 interface AppState {
   // Authentication state
@@ -12,6 +19,7 @@ interface AppState {
   credentials: Credential[];
   sshAgentStatus: SshAgentStatus | null;
   sshKeys: SshAgentKey[];
+  featureFlags: FeatureFlags;
 
   // UI state
   isLoading: boolean;
@@ -25,6 +33,7 @@ interface AppState {
   setCredentials: (credentials: Credential[]) => void;
   setSshAgentStatus: (status: SshAgentStatus | null) => void;
   setSshKeys: (keys: SshAgentKey[]) => void;
+  setFeatureFlags: (flags: FeatureFlags) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
@@ -39,6 +48,7 @@ export const useAppStore = create<AppState>((set) => ({
   credentials: [],
   sshAgentStatus: null,
   sshKeys: [],
+  featureFlags: { ...DEFAULT_FEATURE_FLAGS },
   isLoading: false,
   error: null,
 
@@ -50,6 +60,7 @@ export const useAppStore = create<AppState>((set) => ({
   setCredentials: (credentials) => set({ credentials }),
   setSshAgentStatus: (status) => set({ sshAgentStatus: status }),
   setSshKeys: (keys) => set({ sshKeys: keys }),
+  setFeatureFlags: (flags) => set({ featureFlags: { ...flags } }),
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),

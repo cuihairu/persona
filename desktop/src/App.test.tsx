@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import App from './App';
 import { personaAPI } from '@/utils/api';
+import { useAppStore } from '@/stores/appStore';
 
 // -- hooks：可变返回值，由 beforeEach 重置 -----------------------------------
 let serviceState: any;
@@ -110,6 +111,11 @@ jest.mock('@/utils/api', () => ({
     startAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
     stopAutoLockMonitoring: jest.fn().mockResolvedValue(undefined),
     getStatistics: jest.fn(),
+    // 默认返回全开：多数既有用例假设六个视图都可达；"默认全关"语义单独覆盖
+    getWorkspaceSettings: jest.fn().mockResolvedValue({
+      success: true,
+      data: { features: { ssh_agent: true, wallet: true, passkeys: true } },
+    }),
   },
 }));
 
@@ -124,6 +130,10 @@ describe('App', () => {
     pendingSeconds = null;
     sshPending = null;
     passkeyPending = null;
+    // 真实 zustand store 跨用例共享：复位为出厂全关，由各用例经拉取/ setState 驱动
+    useAppStore.setState({
+      featureFlags: { ssh_agent: false, wallet: false, passkeys: false },
+    });
     serviceState = {
       isUnlocked: false,
       currentIdentity: null,
@@ -152,13 +162,16 @@ describe('App', () => {
     expect(clearError).toHaveBeenCalledTimes(1);
   });
 
-  it('starts auto-lock monitoring when unlocked and stops on lock', () => {
+  it('starts auto-lock monitoring when unlocked and stops on lock', async () => {
     const { rerender } = render(<App />);
     expect(personaAPI.stopAutoLockMonitoring).toHaveBeenCalled();
 
     serviceState.isUnlocked = true;
     rerender(<App />);
     expect(personaAPI.startAutoLockMonitoring).toHaveBeenCalled();
+
+    // flush 解锁后触发的 flags 拉取，避免测试结束后 setState 警告
+    await act(async () => {});
   });
 
   it('renders the full workspace for an unlocked session', () => {
@@ -180,9 +193,12 @@ describe('App', () => {
     expect(screen.getByTestId('auto-lock-banner').textContent).toContain('25 秒');
   });
 
-  it('switches between all six views', () => {
+  it('switches between all six views', async () => {
     serviceState.isUnlocked = true;
     render(<App />);
+
+    // workspace settings 拉取生效后高级入口出现（默认 mock 全开）
+    await screen.findByRole('button', { name: 'SSH Agent' });
 
     const nav = (label: string) => fireEvent.click(screen.getByRole('button', { name: label }));
 
@@ -198,6 +214,64 @@ describe('App', () => {
     expect(screen.getByTestId('passkey-panel')).toBeInTheDocument();
     nav('Credentials');
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
+  });
+
+  it('hides advanced nav entries while their workspace flags are off', async () => {
+    // Once：消费后回退到顶层的全开实现，不泄漏到后续用例
+    (personaAPI.getWorkspaceSettings as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: { features: { ssh_agent: false, wallet: false, passkeys: false } },
+    });
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    await waitFor(() => {
+      expect(personaAPI.getWorkspaceSettings).toHaveBeenCalled();
+    });
+
+    // 主航道恒可见，高级功能默认隐藏
+    expect(screen.getByRole('button', { name: 'Credentials' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Statistics' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Watchtower' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'SSH Agent' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Passkeys' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the default flags when the settings read fails', async () => {
+    (personaAPI.getWorkspaceSettings as jest.Mock).mockRejectedValueOnce(new Error('no settings'));
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    await waitFor(() => {
+      expect(personaAPI.getWorkspaceSettings).toHaveBeenCalled();
+    });
+
+    // 读取失败静默保持默认（全关），主航道不受影响、不崩
+    expect(screen.getByRole('button', { name: 'Credentials' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
+    expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
+  });
+
+  it('falls back to credentials when the current view is disabled at runtime', async () => {
+    serviceState.isUnlocked = true;
+    render(<App />);
+
+    // 默认 mock 全开：切到 Wallets
+    await screen.findByRole('button', { name: 'Wallets' });
+    fireEvent.click(screen.getByRole('button', { name: 'Wallets' }));
+    expect(screen.getByTestId('wallet-panel')).toBeInTheDocument();
+
+    // 运行中关闭 wallet 开关：按钮消失、视图自动回退
+    act(() => {
+      useAppStore.setState({
+        featureFlags: { ssh_agent: true, wallet: false, passkeys: true },
+      });
+    });
+
+    expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('credential-list')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
   });
 
   it('locks the session and opens settings from the header actions', () => {
