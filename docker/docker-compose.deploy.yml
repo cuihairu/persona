@@ -8,9 +8,19 @@ services:
     environment:
       PERSONA_SERVER_HOST: "0.0.0.0"
       PERSONA_SERVER_PORT: "3000"
+      # 未设置时拒绝启动（fail-closed 的部署侧对应：服务器不会以 API 禁用
+      # 状态悄悄上线；token 本体只在运行环境注入，不落 compose 文件）
+      PERSONA_SERVER_TOKEN: "${PERSONA_SERVER_TOKEN:?PERSONA_SERVER_TOKEN is required}"
+      # 事件库落命名卷，容器重启后审计事件保留
+      PERSONA_SERVER_DB: /data/persona-server.db
+    volumes:
+      - persona-server-data:/data
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 5
       start_period: 5s
+
+volumes:
+  persona-server-data:

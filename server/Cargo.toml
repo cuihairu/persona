@@ -45,12 +45,8 @@ base64.workspace = true
 # Bearer 令牌常量时间比较
 subtle.workspace = true
 
-# 配置管理
-config.workspace = true
-
-# 环境变量
+# 环境变量（.env）
 dotenvy = "0.15"
 
 [dev-dependencies]
-mockall.workspace = true
 tempfile.workspace = true
