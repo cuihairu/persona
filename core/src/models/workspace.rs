@@ -44,6 +44,21 @@ pub struct FeatureFlags {
     pub fetch_favicons: bool,
 }
 
+/// 可选同步服务器（persona-server Events API）的客户端配置。
+///
+/// `server_token` 为上报用的共享 Bearer 令牌：desktop 宿主把它存在
+/// vault settings JSON 里（DB 文件有主密码 KDF 加密，字段级无独立
+/// 加密——keyring/加密存储是 follow-up，THREAT_MODEL 已登记）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// 是否把本地审计事件上报到 persona-server
+    pub enabled: bool,
+    /// 服务器 base_url（形如 `http://127.0.0.1:3000`，可带反代前缀）
+    pub server_url: String,
+    /// 共享 Bearer 令牌；宿主 UI 语义：提交空串 = 保留旧值
+    pub server_token: String,
+}
+
 /// Workspace configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
@@ -68,6 +83,10 @@ pub struct WorkspaceSettings {
     /// 高级功能开关（旧 JSON 缺键时回退全关）
     #[serde(default)]
     pub features: FeatureFlags,
+
+    /// 可选同步服务器配置（旧 JSON 缺键时为 None）
+    #[serde(default)]
+    pub sync: Option<SyncConfig>,
 }
 
 impl Default for WorkspaceSettings {
@@ -80,6 +99,7 @@ impl Default for WorkspaceSettings {
             require_confirmation: true,
             default_identity_type: "personal".to_string(),
             features: FeatureFlags::default(),
+            sync: None,
         }
     }
 }
@@ -219,6 +239,26 @@ mod tests {
         }"#;
         let settings: WorkspaceSettings = serde_json::from_str(legacy).unwrap();
         assert_eq!(settings.features, FeatureFlags::default());
+        assert!(settings.sync.is_none());
+    }
+
+    #[test]
+    fn test_sync_config_serde_round_trip() {
+        let settings = WorkspaceSettings {
+            sync: Some(SyncConfig {
+                enabled: true,
+                server_url: "http://127.0.0.1:3000".to_string(),
+                server_token: "s3cret".to_string(),
+            }),
+            ..WorkspaceSettings::default()
+        };
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: WorkspaceSettings = serde_json::from_str(&json).unwrap();
+        let sync = restored.sync.unwrap();
+        assert!(sync.enabled);
+        assert_eq!(sync.server_url, "http://127.0.0.1:3000");
+        assert_eq!(sync.server_token, "s3cret");
     }
 
     #[test]
