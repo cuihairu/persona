@@ -633,9 +633,7 @@ impl PersonaService {
             .as_deref()
             .map(str::trim)
             .filter(|u| !u.is_empty())
-            .ok_or_else(|| {
-                PersonaError::InvalidInput("credential has no url".to_string())
-            })?;
+            .ok_or_else(|| PersonaError::InvalidInput("credential has no url".to_string()))?;
 
         let host = extract_favicon_host(url)?;
 
@@ -649,11 +647,10 @@ impl PersonaService {
             .upsert(&host, &blob.mime_type, &blob.data)
             .await?;
 
-        let entry = self
-            .favicon_repo
-            .get(&host)
-            .await?
-            .ok_or_else(|| PersonaError::Database("favicon upsert did not persist".to_string()))?;
+        let entry =
+            self.favicon_repo.get(&host).await?.ok_or_else(|| {
+                PersonaError::Database("favicon upsert did not persist".to_string())
+            })?;
         tracing::info!(host = %host, "favicon fetched and cached");
         Ok(entry)
     }
@@ -3494,7 +3491,11 @@ mod tests {
             (format!("http://{addr}/"), hits)
         }
 
-        async fn credential_with_url(service: &PersonaService, name: &str, url: Option<&str>) -> Credential {
+        async fn credential_with_url(
+            service: &PersonaService,
+            name: &str,
+            url: Option<&str>,
+        ) -> Credential {
             let identity = service
                 .create_identity(format!("Identity for {name}"), IdentityType::Personal)
                 .await
@@ -3521,7 +3522,8 @@ mod tests {
         #[tokio::test]
         async fn fetch_caches_and_serves_second_call_without_network() {
             let service = unlocked_service().await;
-            let credential = credential_with_url(&service, "Site", Some("https://Example.COM/a")).await;
+            let credential =
+                credential_with_url(&service, "Site", Some("https://Example.COM/a")).await;
             let (base, hits) = spawn_fake().await;
             let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
 
@@ -3551,7 +3553,10 @@ mod tests {
             let (base, hits) = spawn_fake().await;
             let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
 
-            service.fetch_favicon_for_credential(&a.id, &fetcher).await.unwrap();
+            service
+                .fetch_favicon_for_credential(&a.id, &fetcher)
+                .await
+                .unwrap();
             let entry = service
                 .fetch_favicon_for_credential(&b.id, &fetcher)
                 .await
@@ -3597,7 +3602,8 @@ mod tests {
         #[tokio::test]
         async fn fetch_rejects_non_https_url() {
             let service = unlocked_service().await;
-            let credential = credential_with_url(&service, "Http", Some("http://example.com")).await;
+            let credential =
+                credential_with_url(&service, "Http", Some("http://example.com")).await;
             let (base, hits) = spawn_fake().await;
             let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
 

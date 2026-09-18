@@ -44,9 +44,7 @@ pub fn extract_favicon_host(raw: &str) -> Result<String> {
     let parsed = match Url::parse(raw) {
         Ok(url) => url,
         // 无 scheme 的裸域名（"example.com"）借道 https 再试一次
-        Err(url::ParseError::RelativeUrlWithoutBase) => {
-            Url::parse(&format!("https://{raw}"))?
-        }
+        Err(url::ParseError::RelativeUrlWithoutBase) => Url::parse(&format!("https://{raw}"))?,
         Err(e) => return Err(e.into()),
     };
 
@@ -69,14 +67,12 @@ pub fn extract_favicon_host(raw: &str) -> Result<String> {
             }
             Ok(trimmed.to_ascii_lowercase())
         }
-        Some(url::Host::Ipv4(ip)) => Err(PersonaError::InvalidInput(format!(
-            "ip literals are not fetched: {ip}"
-        ))
-        .into()),
-        Some(url::Host::Ipv6(ip)) => Err(PersonaError::InvalidInput(format!(
-            "ip literals are not fetched: {ip}"
-        ))
-        .into()),
+        Some(url::Host::Ipv4(ip)) => {
+            Err(PersonaError::InvalidInput(format!("ip literals are not fetched: {ip}")).into())
+        }
+        Some(url::Host::Ipv6(ip)) => {
+            Err(PersonaError::InvalidInput(format!("ip literals are not fetched: {ip}")).into())
+        }
         None => Err(PersonaError::InvalidInput("url has no host".to_string()).into()),
     }
 }
@@ -157,9 +153,7 @@ impl FaviconFetcher {
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| "image/x-icon".to_string());
         if mime_type.starts_with("text/") {
-            anyhow::bail!(
-                "favicon from {host} is a text response ({mime_type}), not an image"
-            );
+            anyhow::bail!("favicon from {host} is a text response ({mime_type}), not an image");
         }
 
         let mut data: Vec<u8> = Vec::new();
@@ -281,11 +275,9 @@ mod tests {
                     let request_line = raw.lines().next().unwrap_or("").to_string();
                     log.lock().unwrap().push(request_line);
 
-                    let declared =
-                        content_length_override.unwrap_or(body.len());
-                    let mut response = format!(
-                        "{status}\r\nContent-Length: {declared}\r\nConnection: close\r\n"
-                    );
+                    let declared = content_length_override.unwrap_or(body.len());
+                    let mut response =
+                        format!("{status}\r\nContent-Length: {declared}\r\nConnection: close\r\n");
                     for h in headers {
                         response.push_str(h);
                         response.push_str("\r\n");
@@ -371,8 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_rejects_non_success_status() {
-        let (base, _) =
-            spawn_fake_favicon("HTTP/1.1 404 Not Found", &[], b"nope", None).await;
+        let (base, _) = spawn_fake_favicon("HTTP/1.1 404 Not Found", &[], b"nope", None).await;
         let err = FaviconFetcher::new()
             .unwrap()
             .with_base_url(base)
@@ -384,13 +375,8 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_does_not_follow_redirects() {
-        let (base, _) = spawn_fake_favicon(
-            "HTTP/1.1 302 Found",
-            &["Location: /moved"],
-            b"",
-            None,
-        )
-        .await;
+        let (base, _) =
+            spawn_fake_favicon("HTTP/1.1 302 Found", &["Location: /moved"], b"", None).await;
         let err = FaviconFetcher::new()
             .unwrap()
             .with_base_url(base)
@@ -435,10 +421,7 @@ mod tests {
             .fetch("example.com")
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("too large"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("too large"), "got: {err}");
     }
 
     #[tokio::test]
@@ -451,21 +434,13 @@ mod tests {
             .fetch("example.com")
             .await
             .unwrap_err();
-        assert!(
-            err.to_string().contains("while streaming"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("while streaming"), "got: {err}");
     }
 
     #[tokio::test]
     async fn fetch_rejects_empty_body() {
-        let (base, _) = spawn_fake_favicon(
-            "HTTP/1.1 200 OK",
-            &["Content-Type: image/png"],
-            b"",
-            None,
-        )
-        .await;
+        let (base, _) =
+            spawn_fake_favicon("HTTP/1.1 200 OK", &["Content-Type: image/png"], b"", None).await;
         let err = FaviconFetcher::new()
             .unwrap()
             .with_base_url(base)

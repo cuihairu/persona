@@ -128,7 +128,9 @@ mod tests {
         let db = test_db().await;
         let repo = FaviconRepository::new(db);
 
-        repo.upsert("example.com", "image/x-icon", b"old").await.unwrap();
+        repo.upsert("example.com", "image/x-icon", b"old")
+            .await
+            .unwrap();
         let first = repo.get("example.com").await.unwrap().unwrap();
 
         // 时间戳列是秒级精度依赖 rfc3339；同瞬间内 created_at 必须保留
