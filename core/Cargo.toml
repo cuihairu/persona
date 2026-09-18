@@ -90,7 +90,9 @@ openssl = { version = "0.10", features = ["vendored"] }
 webauthn-rs.workspace = true
 
 [features]
-default = ["sqlite", "hibp"]
+default = ["sqlite", "hibp", "favicon"]
 sqlite = ["sqlx"]
 # HIBP k-anonymity HTTP 客户端；trait 与解析纯函数无需此 feature
 hibp = ["dep:reqwest"]
+# favicon 按需抓取 HTTP 客户端（独立于 hibp：关掉一个不影响另一个）
+favicon = ["dep:reqwest"]

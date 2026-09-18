@@ -13,14 +13,16 @@ use crate::{
     health::{HealthIssue, HealthIssueKind, HealthReport, HealthScanConfig},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
-        ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType, Identity,
-        IdentityType, PasskeyItem, ResourceType, SecurityLevel,
+        ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType,
+        FaviconCacheEntry, Identity, IdentityType, PasskeyItem, ResourceType, SecurityLevel,
+        MAX_HOSTS_PER_REQUEST,
     },
     password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
         AttachmentManager, AttachmentRepository, AuditLogRepository, AuditLogStatistics, BlobStore,
-        ChangeHistoryRepository, CredentialRepository, Database, IdentityRepository,
-        PasskeyRepository, Repository, UserAuthRepository, SECURITY_SENSITIVE_AUDIT_ACTIONS,
+        ChangeHistoryRepository, CredentialRepository, Database, FaviconRepository,
+        IdentityRepository, PasskeyRepository, Repository, UserAuthRepository,
+        SECURITY_SENSITIVE_AUDIT_ACTIONS,
     },
     PersonaError, Result,
 };
@@ -60,6 +62,8 @@ pub struct PersonaService {
     audit_repo: AuditLogRepository,
     change_history_repo: ChangeHistoryRepository,
     attachment_manager: Option<AttachmentManager>,
+    /// favicon 缓存仓储（非 feature 门控：只依赖 sqlx；抓取才要 `favicon`）
+    favicon_repo: FaviconRepository,
     /// AES-GCM service constructed from master key; used to wrap per-item keys
     master_encryption: Option<EncryptionService>,
     biometric_provider: Arc<dyn BiometricProvider>,
@@ -90,6 +94,7 @@ impl PersonaService {
             user_auth_repo: UserAuthRepository::new(db.clone()),
             audit_repo,
             change_history_repo: ChangeHistoryRepository::new(db.clone()),
+            favicon_repo: FaviconRepository::new(db.clone()),
             attachment_manager: None,
             master_encryption: None,
             biometric_provider: Arc::new(MockBiometricProvider::default()),
@@ -597,6 +602,87 @@ impl PersonaService {
         self.ensure_unlocked()?;
         self.touch_activity();
         self.credential_repo.find_by_id(id).await
+    }
+
+    /// 按需抓取凭据 URL 对应站点的 favicon 并入缓存（`favicon` feature）。
+    ///
+    /// 唯一的外联触发点：由用户在详情面板点击 "Fetch icon" 经命令层调用，
+    /// 绝不自动批量抓取。缓存按 host 命中即返，不重复外联。
+    /// 不做 audit log——favicon 是公开数据，日志只记 host。
+    #[cfg(feature = "favicon")]
+    pub async fn fetch_favicon_for_credential(
+        &self,
+        credential_id: &Uuid,
+        fetcher: &crate::favicon::FaviconFetcher,
+    ) -> Result<FaviconCacheEntry> {
+        use crate::favicon::extract_favicon_host;
+
+        self.ensure_unlocked()?;
+        self.touch_activity();
+
+        let credential = self
+            .credential_repo
+            .find_by_id(credential_id)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!("credential {credential_id} not found"))
+            })?;
+
+        let url = credential
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                PersonaError::InvalidInput("credential has no url".to_string())
+            })?;
+
+        let host = extract_favicon_host(url)?;
+
+        // 缓存命中即返：缓存 miss 是抓取的必要条件
+        if let Some(entry) = self.favicon_repo.get(&host).await? {
+            return Ok(entry);
+        }
+
+        let blob = fetcher.fetch(&host).await?;
+        self.favicon_repo
+            .upsert(&host, &blob.mime_type, &blob.data)
+            .await?;
+
+        let entry = self
+            .favicon_repo
+            .get(&host)
+            .await?
+            .ok_or_else(|| PersonaError::Database("favicon upsert did not persist".to_string()))?;
+        tracing::info!(host = %host, "favicon fetched and cached");
+        Ok(entry)
+    }
+
+    /// 批量读取已缓存的 favicon（纯本地读，绝不外联）。
+    ///
+    /// hosts 大小写不敏感去重后逐 host 点查；只返回命中项，调用方以
+    /// "缺席 = 无缓存"处理，本方法永远不会触发抓取。
+    pub async fn get_cached_favicons(&self, hosts: &[String]) -> Result<Vec<FaviconCacheEntry>> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+
+        if hosts.len() > MAX_HOSTS_PER_REQUEST {
+            return Err(PersonaError::InvalidInput(format!(
+                "too many hosts requested: {} > {MAX_HOSTS_PER_REQUEST}",
+                hosts.len()
+            ))
+            .into());
+        }
+
+        let unique: Vec<String> = hosts
+            .iter()
+            .map(|h| h.trim().to_ascii_lowercase())
+            .filter(|h| !h.is_empty())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        self.favicon_repo.get_many(&unique).await
     }
 
     /// Decrypt and get credential data
@@ -3357,5 +3443,241 @@ mod tests {
             .await
             .unwrap();
         assert!(after.is_empty());
+    }
+
+    // ---- favicon（feature = "favicon"）：编排与缓存语义 ----
+
+    #[cfg(all(test, feature = "favicon"))]
+    mod favicon_tests {
+        use super::*;
+        use crate::favicon::FaviconFetcher;
+        use std::sync::{Arc, Mutex};
+
+        const PNG: &[u8] = b"\x89PNG\r\n\x1a\nfake-icon";
+
+        async fn unlocked_service() -> PersonaService {
+            let db = Database::in_memory().await.unwrap();
+            db.migrate().await.unwrap();
+            let mut service = PersonaService::new(db).await.unwrap();
+            let salt = service.generate_salt();
+            service.unlock("test_password", &salt).unwrap();
+            service
+        }
+
+        /// 恒 200 + PNG 的 fake favicon 源；返回注入用 base 与请求计数。
+        async fn spawn_fake() -> (String, Arc<Mutex<usize>>) {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let hits = Arc::new(Mutex::new(0usize));
+            let counter = hits.clone();
+            tokio::spawn(async move {
+                loop {
+                    let Ok((mut socket, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let counter = counter.clone();
+                    tokio::spawn(async move {
+                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                        let mut buf = vec![0u8; 8192];
+                        let _ = socket.read(&mut buf).await;
+                        *counter.lock().unwrap() += 1;
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            PNG.len()
+                        );
+                        let mut out = response.into_bytes();
+                        out.extend_from_slice(PNG);
+                        let _ = socket.write_all(&out).await;
+                    });
+                }
+            });
+            (format!("http://{addr}/"), hits)
+        }
+
+        async fn credential_with_url(service: &PersonaService, name: &str, url: Option<&str>) -> Credential {
+            let identity = service
+                .create_identity(format!("Identity for {name}"), IdentityType::Personal)
+                .await
+                .unwrap();
+            let data = CredentialData::Password(PasswordCredentialData {
+                password: "pw".to_string(),
+                email: None,
+                security_questions: vec![],
+            });
+            let mut credential = service
+                .create_credential(
+                    identity.id,
+                    name.to_string(),
+                    CredentialType::Password,
+                    SecurityLevel::High,
+                    &data,
+                )
+                .await
+                .unwrap();
+            credential.url = url.map(str::to_string);
+            service.update_credential(&credential).await.unwrap()
+        }
+
+        #[tokio::test]
+        async fn fetch_caches_and_serves_second_call_without_network() {
+            let service = unlocked_service().await;
+            let credential = credential_with_url(&service, "Site", Some("https://Example.COM/a")).await;
+            let (base, hits) = spawn_fake().await;
+            let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
+
+            let first = service
+                .fetch_favicon_for_credential(&credential.id, &fetcher)
+                .await
+                .unwrap();
+            assert_eq!(first.host, "example.com");
+            assert_eq!(first.mime_type, "image/png");
+            assert_eq!(first.data, PNG);
+            assert_eq!(*hits.lock().unwrap(), 1);
+
+            // 二次请求走缓存：host 归一后命中，不再外联
+            let second = service
+                .fetch_favicon_for_credential(&credential.id, &fetcher)
+                .await
+                .unwrap();
+            assert_eq!(second.created_at, first.created_at);
+            assert_eq!(*hits.lock().unwrap(), 1);
+        }
+
+        #[tokio::test]
+        async fn fetch_shares_cache_across_credentials_of_same_host() {
+            let service = unlocked_service().await;
+            let a = credential_with_url(&service, "A", Some("https://a.com")).await;
+            let b = credential_with_url(&service, "B", Some("a.com")).await; // 裸域名同 host
+            let (base, hits) = spawn_fake().await;
+            let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
+
+            service.fetch_favicon_for_credential(&a.id, &fetcher).await.unwrap();
+            let entry = service
+                .fetch_favicon_for_credential(&b.id, &fetcher)
+                .await
+                .unwrap();
+
+            assert_eq!(entry.host, "a.com");
+            assert_eq!(*hits.lock().unwrap(), 1, "同 host 第二条凭据必须共享缓存");
+        }
+
+        #[tokio::test]
+        async fn fetch_rejects_credential_without_url() {
+            let service = unlocked_service().await;
+            let credential = credential_with_url(&service, "NoUrl", None).await;
+            let fetcher = FaviconFetcher::new().unwrap();
+
+            let err = service
+                .fetch_favicon_for_credential(&credential.id, &fetcher)
+                .await
+                .unwrap_err();
+            assert!(
+                err.downcast_ref::<PersonaError>()
+                    .is_some_and(|e| matches!(e, PersonaError::InvalidInput(_))),
+                "got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn fetch_rejects_unknown_credential() {
+            let service = unlocked_service().await;
+            let fetcher = FaviconFetcher::new().unwrap();
+
+            let err = service
+                .fetch_favicon_for_credential(&Uuid::new_v4(), &fetcher)
+                .await
+                .unwrap_err();
+            assert!(
+                err.downcast_ref::<PersonaError>()
+                    .is_some_and(|e| matches!(e, PersonaError::InvalidInput(_))),
+                "got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn fetch_rejects_non_https_url() {
+            let service = unlocked_service().await;
+            let credential = credential_with_url(&service, "Http", Some("http://example.com")).await;
+            let (base, hits) = spawn_fake().await;
+            let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
+
+            let err = service
+                .fetch_favicon_for_credential(&credential.id, &fetcher)
+                .await
+                .unwrap_err();
+            assert!(
+                err.downcast_ref::<PersonaError>()
+                    .is_some_and(|e| matches!(e, PersonaError::InvalidInput(_))),
+                "got: {err}"
+            );
+            assert_eq!(*hits.lock().unwrap(), 0, "SSRF 拒绝后绝不外联");
+        }
+
+        #[tokio::test]
+        async fn fetch_requires_unlock() {
+            let db = Database::in_memory().await.unwrap();
+            db.migrate().await.unwrap();
+            let service = PersonaService::new(db).await.unwrap();
+            let fetcher = FaviconFetcher::new().unwrap();
+
+            let err = service
+                .fetch_favicon_for_credential(&Uuid::new_v4(), &fetcher)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("Service is locked"), "got: {err}");
+        }
+
+        #[tokio::test]
+        async fn get_cached_favicons_dedupes_and_returns_hits_only() {
+            let service = unlocked_service().await;
+            let credential = credential_with_url(&service, "Cached", Some("https://a.com")).await;
+            let (base, hits) = spawn_fake().await;
+            let fetcher = FaviconFetcher::new().unwrap().with_base_url(base);
+            service
+                .fetch_favicon_for_credential(&credential.id, &fetcher)
+                .await
+                .unwrap();
+
+            // 大小写/空白归一去重；b.com 未缓存不出现
+            let entries = service
+                .get_cached_favicons(&[
+                    "A.COM".to_string(),
+                    " a.com ".to_string(),
+                    "b.com".to_string(),
+                ])
+                .await
+                .unwrap();
+
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].host, "a.com");
+            assert_eq!(*hits.lock().unwrap(), 1, "批量读绝不外联");
+        }
+
+        #[tokio::test]
+        async fn get_cached_favicons_enforces_limit() {
+            let service = unlocked_service().await;
+            let hosts: Vec<String> = (0..=MAX_HOSTS_PER_REQUEST)
+                .map(|i| format!("h{i}.com"))
+                .collect();
+            let err = service.get_cached_favicons(&hosts).await.unwrap_err();
+            assert!(
+                err.downcast_ref::<PersonaError>()
+                    .is_some_and(|e| matches!(e, PersonaError::InvalidInput(_))),
+                "got: {err}"
+            );
+        }
+
+        #[tokio::test]
+        async fn get_cached_favicons_requires_unlock() {
+            let db = Database::in_memory().await.unwrap();
+            db.migrate().await.unwrap();
+            let service = PersonaService::new(db).await.unwrap();
+
+            let err = service
+                .get_cached_favicons(&["a.com".to_string()])
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("Service is locked"), "got: {err}");
+        }
     }
 }

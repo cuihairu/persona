@@ -6,6 +6,8 @@
 pub mod auth;
 pub mod breach;
 pub mod crypto;
+#[cfg(feature = "favicon")]
+pub mod favicon;
 pub mod health;
 pub mod import_1pux;
 pub mod logging;
