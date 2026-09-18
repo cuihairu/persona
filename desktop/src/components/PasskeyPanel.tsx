@@ -81,14 +81,14 @@ const PasskeyPanel: React.FC = () => {
 
   return (
     <div className="space-y-6" data-testid="passkey-panel">
-      <section className="bg-white shadow rounded-xl border border-gray-100">
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+      <section className="bg-white dark:bg-gray-900 shadow rounded-xl border border-gray-100 dark:border-gray-800">
+        <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
           <div>
-            <p className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-              <FingerPrintIcon className="w-5 h-5 text-gray-400" />
+            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+              <FingerPrintIcon className="w-5 h-5 text-gray-400 dark:text-gray-500" />
               Passkeys
             </p>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               Passkeys stored in your vault, across all identities
             </p>
           </div>
@@ -103,48 +103,48 @@ const PasskeyPanel: React.FC = () => {
         </div>
 
         {error && (
-          <div className="m-6 rounded-md bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-800" data-testid="passkey-error">
+          <div className="m-6 rounded-md bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 px-4 py-3 text-sm text-red-800 dark:text-red-300" data-testid="passkey-error">
             {error}
           </div>
         )}
 
         {!error && rows.length === 0 && !isLoading && (
-          <div className="p-8 text-center text-sm text-gray-500" data-testid="passkey-empty">
+          <div className="p-8 text-center text-sm text-gray-500 dark:text-gray-400" data-testid="passkey-empty">
             No passkeys yet. Create one from a website's passkey flow.
           </div>
         )}
 
         {rows.length > 0 && (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+              <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Identity</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Relying party</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Account</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">UV</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Export</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last used</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Identity</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Relying party</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Account</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">UV</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Export</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Last used</th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
                 {rows.map((row) => (
                   <tr
                     key={row.passkey.id}
                     onClick={() => setSelected(row)}
-                    className="hover:bg-gray-50 cursor-pointer"
+                    className="hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
                     data-testid={`passkey-row-${row.passkey.id}`}
                   >
-                    <td className="px-6 py-3 text-sm text-gray-500">{row.identityName}</td>
-                    <td className="px-6 py-3 text-sm text-gray-900 font-medium">
+                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">{row.identityName}</td>
+                    <td className="px-6 py-3 text-sm text-gray-900 dark:text-gray-100 font-medium">
                       {row.passkey.rp_name ?? row.passkey.rp_id}
                     </td>
-                    <td className="px-6 py-3 text-sm text-gray-700">{row.passkey.user_name ?? '—'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-700">{row.passkey.uv_initialized ? '✓' : '✗'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-700">{row.passkey.export_allowed ? '✓' : '✗'}</td>
-                    <td className="px-6 py-3 text-sm text-gray-500">{formatDate(row.passkey.created_at)}</td>
-                    <td className="px-6 py-3 text-sm text-gray-500">{formatDate(row.passkey.last_used_at)}</td>
+                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.user_name ?? '—'}</td>
+                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.uv_initialized ? '✓' : '✗'}</td>
+                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{row.passkey.export_allowed ? '✓' : '✗'}</td>
+                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">{formatDate(row.passkey.created_at)}</td>
+                    <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">{formatDate(row.passkey.last_used_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -290,76 +290,76 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
       aria-label="Passkey details"
       data-testid="passkey-detail-modal"
     >
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
             {passkey.rp_name ?? passkey.rp_id}
           </h2>
-          <FingerPrintIcon className="w-5 h-5 text-gray-500" />
+          <FingerPrintIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
         </div>
 
         <div className="px-5 py-4 space-y-3">
           <dl className="text-sm space-y-2">
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Relying party</dt>
-              <dd className="font-mono text-gray-900 break-all" data-testid="passkey-detail-rp">
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Relying party</dt>
+              <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="passkey-detail-rp">
                 {passkey.rp_id}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Identity</dt>
-              <dd className="text-gray-900">{row.identityName}</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Identity</dt>
+              <dd className="text-gray-900 dark:text-gray-100">{row.identityName}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Account</dt>
-              <dd className="text-gray-900 break-all" data-testid="passkey-detail-user">
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Account</dt>
+              <dd className="text-gray-900 dark:text-gray-100 break-all" data-testid="passkey-detail-user">
                 {passkey.user_name ?? '—'}
               </dd>
             </div>
             {passkey.user_display_name && (
               <div className="flex gap-2">
-                <dt className="text-gray-500 w-28 shrink-0">Display name</dt>
-                <dd className="text-gray-900 break-all">{passkey.user_display_name}</dd>
+                <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Display name</dt>
+                <dd className="text-gray-900 dark:text-gray-100 break-all">{passkey.user_display_name}</dd>
               </div>
             )}
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Credential ID</dt>
-              <dd className="font-mono text-xs text-gray-700 break-all" data-testid="passkey-detail-credential-id">
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Credential ID</dt>
+              <dd className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all" data-testid="passkey-detail-credential-id">
                 {b64ToHex(passkey.credential_id_b64)}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">User handle</dt>
-              <dd className="font-mono text-xs text-gray-700 break-all">
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">User handle</dt>
+              <dd className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
                 {b64ToHex(passkey.user_handle_b64)}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Algorithm</dt>
-              <dd className="text-gray-900">ES256</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Algorithm</dt>
+              <dd className="text-gray-900 dark:text-gray-100">ES256</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Verified</dt>
-              <dd className="text-gray-900">{passkey.uv_initialized ? 'Yes' : 'No'}</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Verified</dt>
+              <dd className="text-gray-900 dark:text-gray-100">{passkey.uv_initialized ? 'Yes' : 'No'}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Export allowed</dt>
-              <dd className="text-gray-900">{passkey.export_allowed ? 'Yes' : 'No'}</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Export allowed</dt>
+              <dd className="text-gray-900 dark:text-gray-100">{passkey.export_allowed ? 'Yes' : 'No'}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Created</dt>
-              <dd className="text-gray-900">{new Date(passkey.created_at).toLocaleString()}</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Created</dt>
+              <dd className="text-gray-900 dark:text-gray-100">{new Date(passkey.created_at).toLocaleString()}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-28 shrink-0">Last used</dt>
-              <dd className="text-gray-900">
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Last used</dt>
+              <dd className="text-gray-900 dark:text-gray-100">
                 {passkey.last_used_at ? new Date(passkey.last_used_at).toLocaleString() : '—'}
               </dd>
             </div>
           </dl>
 
           {/* 自检：本地签名 + 验签往返（与 RP 相同的检查） */}
-          <div className="border-t border-gray-200 pt-3 space-y-2">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -372,12 +372,12 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 Run self-test
               </button>
               {testStatus === 'passed' && (
-                <span className="text-sm text-green-700" data-testid="passkey-selftest-result">
+                <span className="text-sm text-green-700 dark:text-green-300" data-testid="passkey-selftest-result">
                   Self-test passed
                 </span>
               )}
               {testStatus === 'failed' && testError && (
-                <span className="text-sm text-red-600" data-testid="passkey-selftest-result">
+                <span className="text-sm text-red-600 dark:text-red-400" data-testid="passkey-selftest-result">
                   {testError}
                 </span>
               )}
@@ -385,7 +385,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
           </div>
 
           {/* 导出私钥（hex）；export_allowed=false 时禁用 */}
-          <div className="border-t border-gray-200 pt-3 space-y-2">
+          <div className="border-t border-gray-200 dark:border-gray-700 pt-3 space-y-2">
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -398,7 +398,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 Export private key
               </button>
               {exportCountdown !== null && exportCountdown > 0 && (
-                <span className="text-xs text-gray-400 shrink-0" data-testid="passkey-export-countdown">
+                <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0" data-testid="passkey-export-countdown">
                   hides in {exportCountdown}s
                 </span>
               )}
@@ -406,18 +406,18 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 <button
                   type="button"
                   onClick={() => void copyWithAutoClear(exportHex)}
-                  className="p-1 hover:bg-gray-100 rounded"
+                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
                   aria-label="Copy private key"
                 >
-                  <DocumentDuplicateIcon className="w-4 h-4 text-gray-400" />
+                  <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
               )}
             </div>
             {!passkey.export_allowed && (
-              <p className="text-xs text-gray-400">Export is disabled for this passkey.</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">Export is disabled for this passkey.</p>
             )}
             {exportHex !== null && (
-              <div className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              <div className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded px-3 py-2">
                 <ShieldExclamationIcon className="w-4 h-4 shrink-0 mt-0.5" />
                 <span className="font-mono text-xs break-all" data-testid="passkey-export-value">
                   {exportHex}
@@ -425,19 +425,19 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
               </div>
             )}
             {exportError && (
-              <p className="text-xs text-red-600" data-testid="passkey-export-error">
+              <p className="text-xs text-red-600 dark:text-red-400" data-testid="passkey-export-error">
                 {exportError}
               </p>
             )}
           </div>
         </div>
 
-        <div className="px-5 py-4 border-t border-gray-200 flex justify-between">
+        <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-between">
           <button
             type="button"
             onClick={() => void handleDelete()}
             disabled={isDeleting}
-            className="btn-ghost inline-flex items-center text-red-600 hover:text-red-700"
+            className="btn-ghost inline-flex items-center text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
             data-testid="passkey-delete-button"
           >
             <TrashIcon className="w-4 h-4 mr-1" />

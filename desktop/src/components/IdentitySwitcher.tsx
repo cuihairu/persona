@@ -35,17 +35,17 @@ const getIdentityIcon = (type: string) => {
 const getIdentityColor = (type: string) => {
   switch (type) {
     case 'Personal':
-      return 'bg-blue-100 text-blue-800';
+      return 'bg-blue-100 dark:bg-blue-500/10 text-blue-800 dark:text-blue-300';
     case 'Work':
-      return 'bg-purple-100 text-purple-800';
+      return 'bg-purple-100 dark:bg-purple-500/10 text-purple-800 dark:text-purple-300';
     case 'Social':
-      return 'bg-green-100 text-green-800';
+      return 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300';
     case 'Financial':
-      return 'bg-red-100 text-red-800';
+      return 'bg-red-100 dark:bg-red-500/10 text-red-800 dark:text-red-300';
     case 'Gaming':
-      return 'bg-yellow-100 text-yellow-800';
+      return 'bg-yellow-100 dark:bg-yellow-500/10 text-yellow-800 dark:text-yellow-300';
     default:
-      return 'bg-gray-100 text-gray-800';
+      return 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200';
   }
 };
 
@@ -60,7 +60,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
     <div className="relative">
       <Listbox value={currentIdentity} onChange={switchIdentity}>
         <div className="relative">
-          <Listbox.Button className="relative w-full cursor-default rounded-lg bg-white py-2 pl-3 pr-10 text-left shadow-md focus:outline-none focus-visible:border-primary-500 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-opacity-75 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-300 sm:text-sm">
+          <Listbox.Button className="relative w-full cursor-default rounded-lg bg-white dark:bg-gray-900 py-2 pl-3 pr-10 text-left shadow-md focus:outline-none focus-visible:border-primary-500 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-white/75 dark:focus-visible:ring-gray-900 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-300 dark:focus-visible:ring-offset-gray-900 sm:text-sm">
             <div className="flex items-center">
               {currentIdentity ? (
                 <>
@@ -73,23 +73,23 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                     })}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                       {currentIdentity.name}
                     </p>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
                       {currentIdentity.identity_type}
                     </p>
                   </div>
                 </>
               ) : (
                 <div className="flex items-center">
-                  <UserCircleIcon className="w-8 h-8 text-gray-400 mr-3" />
-                  <span className="text-gray-500">Select an identity</span>
+                  <UserCircleIcon className="w-8 h-8 text-gray-400 dark:text-gray-500 mr-3" />
+                  <span className="text-gray-500 dark:text-gray-400">Select an identity</span>
                 </div>
               )}
             </div>
             <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
-              <ChevronDownIcon className="h-5 w-5 text-gray-400" aria-hidden="true" />
+              <ChevronDownIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" aria-hidden="true" />
             </span>
           </Listbox.Button>
 
@@ -101,14 +101,14 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
             leaveFrom="transform scale-100 opacity-100"
             leaveTo="transform scale-95 opacity-0"
           >
-            <Listbox.Options className="absolute z-10 mt-1 w-full bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto focus:outline-none sm:text-sm">
+            <Listbox.Options className="absolute z-10 mt-1 w-full bg-white dark:bg-gray-800 shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-black/5 overflow-auto focus:outline-none sm:text-sm">
               {identities.map((identity) => (
                 <Listbox.Option
                   key={identity.id}
                   className={({ active }) =>
                     clsx(
                       'relative cursor-default select-none py-2 pl-3 pr-9',
-                      active ? 'bg-primary-100 text-primary-900' : 'text-gray-900'
+                      active ? 'bg-primary-100 dark:bg-primary-500/20 text-primary-900 dark:text-primary-100' : 'text-gray-900 dark:text-gray-100'
                     )
                   }
                   value={identity}
@@ -130,7 +130,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                         )}>
                           {identity.name}
                         </p>
-                        <p className="text-xs text-gray-500">
+                        <p className="text-xs text-gray-500 dark:text-gray-400">
                           {identity.identity_type}
                         </p>
                       </div>
@@ -144,10 +144,10 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                 </Listbox.Option>
               ))}
 
-              <div className="border-t border-gray-200 mt-1 pt-1">
+              <div className="border-t border-gray-200 dark:border-gray-700 mt-1 pt-1">
                 <button
                   onClick={onCreateIdentity}
-                  className="w-full text-left px-3 py-2 text-sm text-primary-600 hover:bg-primary-50 flex items-center"
+                  className="w-full text-left px-3 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-500/10 flex items-center"
                 >
                   <PlusIcon className="w-4 h-4 mr-2" />
                   Create new identity
@@ -190,9 +190,9 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md">
-        <h2 className="text-lg font-medium text-gray-900 mb-4">Create New Identity</h2>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-md">
+        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Create New Identity</h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>

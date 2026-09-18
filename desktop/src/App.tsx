@@ -126,7 +126,7 @@ const App: React.FC = () => {
   // Show loading state during initialization
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
         <LoadingSpinner message="Initializing Persona..." />
       </div>
     );
@@ -136,7 +136,7 @@ const App: React.FC = () => {
   if (!isUnlocked) {
     return (
       <ErrorBoundary>
-        <div className="min-h-screen bg-gray-50">
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
           {error && (
             <div className="p-4">
               <ErrorDisplay
@@ -155,12 +155,12 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
         {/* Auto-lock 倒计时横幅 */}
         {pendingSeconds !== null && (
           <div
             data-testid="auto-lock-banner"
-            className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-center text-sm text-amber-800"
+            className="bg-amber-50 dark:bg-amber-500/10 border-b border-amber-200 dark:border-amber-500/20 px-4 py-2 text-center text-sm text-amber-800 dark:text-amber-300"
           >
             检测到长时间无操作，将在 {pendingSeconds} 秒后自动锁定（移动鼠标或按键可保持解锁）
           </div>
@@ -178,7 +178,7 @@ const App: React.FC = () => {
         )}
 
         {/* Header */}
-        <header className="bg-white border-b border-gray-200">
+        <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
               {/* Logo and Identity Switcher */}
@@ -187,10 +187,10 @@ const App: React.FC = () => {
                   <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center mr-3">
                     <span className="text-white font-bold text-sm">P</span>
                   </div>
-                  <h1 className="text-xl font-semibold text-gray-900">Persona</h1>
+                  <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Persona</h1>
                 </div>
 
-                <div className="w-px h-6 bg-gray-300"></div>
+                <div className="w-px h-6 bg-gray-300 dark:bg-gray-700"></div>
 
                 <div className="w-80">
                   <IdentitySwitcher onCreateIdentity={() => setShowCreateIdentity(true)} />
@@ -200,15 +200,15 @@ const App: React.FC = () => {
               {/* Navigation and Actions */}
               <div className="flex items-center space-x-4">
                 {/* View Toggle */}
-                <div className="flex bg-gray-100 rounded-lg p-1">
+                <div className="flex bg-gray-100 rounded-lg p-1 dark:bg-gray-800">
                   {visibleNav.map((item) => (
                     <button
                       key={item.id}
                       onClick={() => setCurrentView(item.id)}
                       className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                         currentView === item.id
-                          ? 'bg-white text-gray-900 shadow-sm'
-                          : 'text-gray-500 hover:text-gray-700'
+                          ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
+                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
                       }`}
                     >
                       {item.label}
@@ -223,7 +223,7 @@ const App: React.FC = () => {
 
                 <button
                   onClick={lockService}
-                  className="btn-ghost text-red-600 hover:text-red-700 hover:bg-red-50"
+                  className="btn-ghost text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
                 >
                   <LockClosedIcon className="w-4 h-4" />
                 </button>
@@ -313,55 +313,55 @@ const StatisticsView: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-medium text-gray-900 mb-4">Statistics</h2>
+        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Statistics</h2>
       </div>
 
       {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-blue-100 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-blue-600" />
+            <div className="p-2 bg-blue-100 dark:bg-blue-500/10 rounded-lg mr-4">
+              <ChartBarIcon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600">Total Identities</p>
-              <p className="text-2xl font-bold text-gray-900">{statistics.total_identities}</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Total Identities</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.total_identities}</p>
             </div>
           </div>
         </div>
 
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-green-100 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-green-600" />
+            <div className="p-2 bg-green-100 dark:bg-green-500/10 rounded-lg mr-4">
+              <ChartBarIcon className="w-6 h-6 text-green-600 dark:text-green-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600">Total Credentials</p>
-              <p className="text-2xl font-bold text-gray-900">{statistics.total_credentials}</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Total Credentials</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.total_credentials}</p>
             </div>
           </div>
         </div>
 
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-yellow-100 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-yellow-600" />
+            <div className="p-2 bg-yellow-100 dark:bg-yellow-500/10 rounded-lg mr-4">
+              <ChartBarIcon className="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600">Active Credentials</p>
-              <p className="text-2xl font-bold text-gray-900">{statistics.active_credentials}</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Active Credentials</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.active_credentials}</p>
             </div>
           </div>
         </div>
 
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-red-100 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-red-600" />
+            <div className="p-2 bg-red-100 dark:bg-red-500/10 rounded-lg mr-4">
+              <ChartBarIcon className="w-6 h-6 text-red-600 dark:text-red-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600">Favorites</p>
-              <p className="text-2xl font-bold text-gray-900">{statistics.favorite_credentials}</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Favorites</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.favorite_credentials}</p>
             </div>
           </div>
         </div>
@@ -370,24 +370,24 @@ const StatisticsView: React.FC = () => {
       {/* Credential Types Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card p-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Credential Types</h3>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Credential Types</h3>
           <div className="space-y-3">
             {Object.entries(statistics.credential_types).map(([type, count]) => (
               <div key={type} className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">{type}</span>
-                <span className="text-sm font-medium text-gray-900">{count as number}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-300">{type}</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{count as number}</span>
               </div>
             ))}
           </div>
         </div>
 
         <div className="card p-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Security Levels</h3>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Security Levels</h3>
           <div className="space-y-3">
             {Object.entries(statistics.security_levels).map(([level, count]) => (
               <div key={level} className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">{level}</span>
-                <span className="text-sm font-medium text-gray-900">{count as number}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-300">{level}</span>
+                <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{count as number}</span>
               </div>
             ))}
           </div>

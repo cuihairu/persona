@@ -220,9 +220,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
                     className="absolute inset-y-0 right-0 pr-3 flex items-center"
                   >
                     {showPassword ? (
-                      <EyeSlashIcon className="h-4 w-4 text-gray-400" />
+                      <EyeSlashIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                     ) : (
-                      <EyeIcon className="h-4 w-4 text-gray-400" />
+                      <EyeIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
                     )}
                   </button>
                 </div>
@@ -396,7 +396,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
                 className="input font-mono text-xs"
                 placeholder="otpauth://totp/Issuer:account?secret=BASE32&issuer=Issuer&digits=6&period=30"
               />
-              <p className="mt-1 text-xs text-gray-500">
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 Paste from QR export; fields auto-fill when valid.
               </p>
             </div>
@@ -490,9 +490,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
   if (!isOpen || !currentIdentity) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <h2 className="text-lg font-medium text-gray-900 mb-4">Add New Credential</h2>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+      <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Add New Credential</h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -585,7 +585,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
               className="input"
               placeholder="e.g. work, github, prod"
             />
-            <p className="mt-1 text-xs text-gray-500">Comma-separated</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Comma-separated</p>
           </div>
 
           <div className="flex gap-3 pt-4">

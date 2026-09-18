@@ -114,9 +114,9 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
 
   if (!currentIdentity) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500">
+      <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
         <div className="text-center">
-          <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+          <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
           <p>Select an identity to view credentials</p>
         </div>
       </div>
@@ -128,10 +128,10 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-medium text-gray-900">
+          <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">
             Credentials for {currentIdentity.name}
           </h2>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
             {filteredCredentials.length} credential{filteredCredentials.length !== 1 ? 's' : ''}
           </p>
         </div>
@@ -146,7 +146,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
 
       {/* Search */}
       <div className="relative">
-        <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+        <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
         <input
           type="text"
           value={searchQuery}
@@ -164,8 +164,8 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
             className={clsx(
               'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
               favoritesOnly
-                ? 'bg-red-50 text-red-700 border-red-300'
-                : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50',
+                ? 'bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 border-red-300 dark:border-red-500/40'
+                : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800',
             )}
             data-testid="filter-favorites"
           >
@@ -179,8 +179,8 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
               className={clsx(
                 'px-2.5 py-1 text-xs font-medium rounded-full border transition-colors',
                 selectedTypes.has(type)
-                  ? 'bg-primary-50 text-primary-700 border-primary-300'
-                  : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50',
+                  ? 'bg-primary-50 dark:bg-primary-500/10 text-primary-700 dark:text-primary-300 border-primary-300 dark:border-primary-500/40'
+                  : 'bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800',
               )}
               data-testid={`filter-type-${type}`}
             >
@@ -195,8 +195,8 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
               className={clsx(
                 'px-2.5 py-1 text-xs rounded-full border transition-colors',
                 selectedTags.has(tag)
-                  ? 'bg-blue-50 text-blue-700 border-blue-300'
-                  : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50',
+                  ? 'bg-blue-50 dark:bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-300 dark:border-blue-500/40'
+                  : 'bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800',
               )}
               data-testid={`filter-tag-${tag}`}
             >
@@ -207,7 +207,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
           {hasActiveFilters && (
             <button
               onClick={clearFilters}
-              className="px-2.5 py-1 text-xs text-gray-500 underline hover:text-gray-700"
+              className="px-2.5 py-1 text-xs text-gray-500 dark:text-gray-400 underline hover:text-gray-700 dark:hover:text-gray-200"
               data-testid="clear-filters"
             >
               Clear filters
@@ -219,9 +219,9 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       {/* 空态跨整宽；右栏不渲染（选中项保留在 state，清筛选后面板原样回来） */}
       {filteredCredentials.length === 0 ? (
         <div className="text-center py-12">
-          <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No credentials found</h3>
-          <p className="text-gray-500 mb-4">
+          <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No credentials found</h3>
+          <p className="text-gray-500 dark:text-gray-400 mb-4">
             {searchQuery ? 'Try adjusting your search terms' : 'Get started by adding your first credential'}
           </p>
           {!searchQuery && (
@@ -252,18 +252,18 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                   className={clsx(
                     'group flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors',
                     selectedCredential?.id === credential.id
-                      ? 'bg-primary-50 border-primary-300'
-                      : 'bg-white border-gray-200 hover:bg-gray-50',
+                      ? 'bg-primary-50 dark:bg-primary-500/10 border-primary-300 dark:border-primary-500/40'
+                      : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800',
                   )}
                 >
-                  <div className="p-2 bg-primary-50 rounded-lg shrink-0">
-                    <IconComponent className="w-5 h-5 text-primary-600" />
+                  <div className="p-2 bg-primary-50 dark:bg-primary-500/10 rounded-lg shrink-0">
+                    <IconComponent className="w-5 h-5 text-primary-600 dark:text-primary-400" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-gray-900 truncate">
+                    <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
                       {credential.name}
                     </h3>
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
                       {credential.credential_type}
                       {credential.url && ' · '}
                       {credential.url && <span>{getSafeHostname(credential.url)}</span>}
@@ -286,11 +286,11 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                         e.stopPropagation();
                         copyToClipboard(credential.username!, 'Username');
                       }}
-                      className="p-1.5 rounded hover:bg-gray-100 opacity-0 focus:opacity-100 group-hover:opacity-100 shrink-0"
+                      className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 opacity-0 focus:opacity-100 group-hover:opacity-100 shrink-0"
                       title="Copy username"
                       aria-label="Copy username"
                     >
-                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400" />
+                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                     </button>
                   )}
                 </div>
@@ -312,11 +312,11 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
               />
             ) : (
               <div
-                className="card p-6 flex items-center justify-center h-64 text-gray-400"
+                className="card p-6 flex items-center justify-center h-64 text-gray-400 dark:text-gray-500"
                 data-testid="detail-placeholder"
               >
                 <div className="text-center">
-                  <KeyIcon className="w-10 h-10 mx-auto mb-3 text-gray-300" />
+                  <KeyIcon className="w-10 h-10 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
                   <p>Select an item to see details</p>
                 </div>
               </div>

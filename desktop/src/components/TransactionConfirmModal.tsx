@@ -100,16 +100,16 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       data-testid="transaction-confirm-modal"
     >
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
             {step === 'result' ? 'Transaction Signed' : 'Send Transaction'}
           </h2>
-          <button onClick={handleClose} className="p-1 hover:bg-gray-100 rounded" aria-label="Close">
-            <XMarkIcon className="w-5 h-5 text-gray-500" />
+          <button onClick={handleClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label="Close">
+            <XMarkIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
           </button>
         </div>
 
@@ -118,16 +118,16 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
             <>
               {/* From */}
               <div>
-                <label className="label text-gray-600">From ({wallet.name})</label>
+                <label className="label text-gray-600 dark:text-gray-300">From ({wallet.name})</label>
                 <div className="flex items-center justify-between gap-2">
-                  <code className="text-xs font-mono break-all text-gray-700">{fromAddress}</code>
-                  <span className="text-xs text-gray-400 shrink-0">{wallet.network}</span>
+                  <code className="text-xs font-mono break-all text-gray-700 dark:text-gray-300">{fromAddress}</code>
+                  <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">{wallet.network}</span>
                 </div>
               </div>
 
               {/* To */}
               <div>
-                <label className="label text-gray-600">To Address</label>
+                <label className="label text-gray-600 dark:text-gray-300">To Address</label>
                 <input
                   type="text"
                   value={toAddress}
@@ -138,7 +138,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                 />
                 {poisonSource && (
                   <div
-                    className="mt-2 flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-300 rounded px-3 py-2"
+                    className="mt-2 flex items-start gap-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/40 rounded px-3 py-2"
                     data-testid="poisoning-warning"
                     role="alert"
                   >
@@ -156,7 +156,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
               {/* Amount + Fee */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label text-gray-600">Amount (min. unit)</label>
+                  <label className="label text-gray-600 dark:text-gray-300">Amount (min. unit)</label>
                   <input
                     type="text"
                     value={amount}
@@ -167,7 +167,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="label text-gray-600">Fee (min. unit)</label>
+                  <label className="label text-gray-600 dark:text-gray-300">Fee (min. unit)</label>
                   <input
                     type="text"
                     value={fee}
@@ -181,7 +181,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
               {/* Memo */}
               <div>
-                <label className="label text-gray-600">Memo (optional)</label>
+                <label className="label text-gray-600 dark:text-gray-300">Memo (optional)</label>
                 <input
                   type="text"
                   value={memo}
@@ -192,7 +192,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
               {/* Password */}
               <div>
-                <label className="label text-gray-600">Wallet Password</label>
+                <label className="label text-gray-600 dark:text-gray-300">Wallet Password</label>
                 <input
                   type="password"
                   value={password}
@@ -205,7 +205,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
               </div>
 
               {error && (
-                <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2" data-testid="tx-error">
+                <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded px-3 py-2" data-testid="tx-error">
                   {error}
                 </div>
               )}
@@ -213,26 +213,26 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
           )}
 
           {step === 'signing' && (
-            <div className="py-8 text-center text-sm text-gray-500">
+            <div className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
               Signing transaction…
             </div>
           )}
 
           {step === 'result' && signed && (
             <div className="space-y-3" data-testid="tx-result">
-              <div className="flex items-center gap-2 text-sm text-green-700">
+              <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
                 <CheckCircleIcon className="w-5 h-5" />
                 Signature verified and stored locally (not broadcast).
               </div>
               <div>
-                <label className="label text-gray-600">Transaction Hash</label>
+                <label className="label text-gray-600 dark:text-gray-300">Transaction Hash</label>
                 <div className="flex items-start gap-2">
                   <code className="text-xs font-mono break-all" data-testid="tx-hash">
                     {signed.transaction_hash}
                   </code>
                   <button
                     onClick={() => void copyWithAutoClear(signed.transaction_hash)}
-                    className="p-1 hover:bg-gray-100 rounded shrink-0"
+                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                     aria-label="Copy hash"
                   >
                     ⧉
@@ -241,8 +241,8 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
               </div>
               {signed.raw_signed_transaction.length > 0 && (
                 <div>
-                  <label className="label text-gray-600">Raw Transaction ({signed.raw_signed_transaction.length} bytes)</label>
-                  <code className="block text-xs font-mono break-all text-gray-500">
+                  <label className="label text-gray-600 dark:text-gray-300">Raw Transaction ({signed.raw_signed_transaction.length} bytes)</label>
+                  <code className="block text-xs font-mono break-all text-gray-500 dark:text-gray-400">
                     {Array.from(signed.raw_signed_transaction)
                       .map((b) => b.toString(16).padStart(2, '0'))
                       .join('')}
@@ -253,7 +253,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
           )}
         </div>
 
-        <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+        <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
           {step === 'form' && (
             <>
               <button onClick={handleClose} className="btn-ghost">

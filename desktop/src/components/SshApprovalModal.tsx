@@ -38,51 +38,51 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
       role="alertdialog"
       aria-label="SSH signature approval"
     >
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900">SSH signature request</h2>
-          <KeyIcon className="w-5 h-5 text-gray-500" />
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">SSH signature request</h2>
+          <KeyIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
         </div>
 
         <div className="px-5 py-4 space-y-3">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-600 dark:text-gray-300">
             An application is requesting an SSH signature using a key from your vault.
           </p>
 
           <dl className="text-sm space-y-2">
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-24 shrink-0">Target host</dt>
-              <dd className="font-mono text-gray-900 break-all" data-testid="approval-peer">
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Target host</dt>
+              <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-peer">
                 {request.peer ?? 'unknown'}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-24 shrink-0">Key</dt>
-              <dd className="font-mono text-gray-900 break-all" data-testid="approval-fingerprint">
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Key</dt>
+              <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-fingerprint">
                 {request.fingerprint}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 w-24 shrink-0">Operation</dt>
-              <dd className="font-mono text-gray-900" data-testid="approval-operation">
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Operation</dt>
+              <dd className="font-mono text-gray-900 dark:text-gray-100" data-testid="approval-operation">
                 {request.operation}
               </dd>
             </div>
           </dl>
 
-          <div className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+          <div className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded px-3 py-2">
             <ShieldExclamationIcon className="w-4 h-4 shrink-0 mt-0.5" />
             <span data-testid="approval-reason">{request.reason}</span>
           </div>
 
           {pendingCount > 1 && (
-            <p className="text-xs text-gray-500" data-testid="approval-queue-count">
+            <p className="text-xs text-gray-500 dark:text-gray-400" data-testid="approval-queue-count">
               {pendingCount - 1} more request{pendingCount - 1 > 1 ? 's' : ''} waiting
             </p>
           )}
         </div>
 
-        <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+        <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
           <button
             type="button"
             onClick={() => onRespond(request.request_id, false)}

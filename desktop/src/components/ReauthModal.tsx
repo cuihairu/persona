@@ -53,17 +53,17 @@ const ReauthModal: React.FC<ReauthModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="reauth-modal"
     >
-      <div className="bg-white rounded-lg shadow-xl w-full max-w-md mx-4">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
-          <h2 className="text-base font-semibold text-gray-900">Re-authentication required</h2>
-          <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded" aria-label="Close">
-            <XMarkIcon className="w-5 h-5 text-gray-500" />
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">Re-authentication required</h2>
+          <button onClick={onClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label="Close">
+            <XMarkIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
           </button>
         </div>
 
         <form onSubmit={handleSubmit}>
           <div className="px-5 py-4 space-y-3">
-            <p className="text-sm text-gray-600">
+            <p className="text-sm text-gray-600 dark:text-gray-300">
               This operation is security-sensitive. Confirm your master password to continue.
             </p>
             <input
@@ -77,7 +77,7 @@ const ReauthModal: React.FC<ReauthModalProps> = ({
             />
             {error && (
               <div
-                className="flex items-center gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded px-3 py-2"
+                className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded px-3 py-2"
                 data-testid="reauth-error"
               >
                 <ShieldExclamationIcon className="w-4 h-4 shrink-0" />
@@ -86,7 +86,7 @@ const ReauthModal: React.FC<ReauthModalProps> = ({
             )}
           </div>
 
-          <div className="px-5 py-4 border-t border-gray-200 flex justify-end gap-2">
+          <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
             <button type="button" onClick={onClose} className="btn-ghost">
               Cancel
             </button>

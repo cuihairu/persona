@@ -49,25 +49,25 @@ export class ErrorBoundary extends React.Component<
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-6">
+        <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white dark:bg-gray-900 rounded-lg shadow-lg p-6">
             <div className="flex items-center mb-4">
               <XCircleIcon className="w-8 h-8 text-red-500 mr-3" />
-              <h1 className="text-xl font-semibold text-gray-900">
+              <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
                 Something went wrong
               </h1>
             </div>
 
-            <p className="text-gray-600 mb-4">
+            <p className="text-gray-600 dark:text-gray-300 mb-4">
               An unexpected error occurred. This might be a temporary issue.
             </p>
 
             {process.env.NODE_ENV === 'development' && this.state.error && (
-              <div className="bg-red-50 border border-red-200 rounded-md p-3 mb-4">
-                <p className="text-sm font-medium text-red-800 mb-2">
+              <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-md p-3 mb-4">
+                <p className="text-sm font-medium text-red-800 dark:text-red-300 mb-2">
                   Error Details (Development):
                 </p>
-                <pre className="text-xs text-red-700 whitespace-pre-wrap">
+                <pre className="text-xs text-red-700 dark:text-red-300 whitespace-pre-wrap">
                   {this.state.error.message}
                 </pre>
               </div>
@@ -120,15 +120,15 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
   const getColorClasses = () => {
     switch (type) {
       case 'error':
-        return 'bg-red-50 border-red-200 text-red-800';
+        return 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-800 dark:text-red-300';
       case 'warning':
-        return 'bg-yellow-50 border-yellow-200 text-yellow-800';
+        return 'bg-yellow-50 dark:bg-yellow-500/10 border-yellow-200 dark:border-yellow-500/20 text-yellow-800 dark:text-yellow-300';
       case 'info':
-        return 'bg-blue-50 border-blue-200 text-blue-800';
+        return 'bg-blue-50 dark:bg-blue-500/10 border-blue-200 dark:border-blue-500/20 text-blue-800 dark:text-blue-300';
       case 'success':
-        return 'bg-green-50 border-green-200 text-green-800';
+        return 'bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20 text-green-800 dark:text-green-300';
       default:
-        return 'bg-red-50 border-red-200 text-red-800';
+        return 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-800 dark:text-red-300';
     }
   };
 
@@ -163,7 +163,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
           <div className="ml-auto pl-3">
             <button
               onClick={onDismiss}
-              className="inline-flex rounded-md p-1.5 hover:bg-black hover:bg-opacity-10 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent"
+              className="inline-flex rounded-md p-1.5 hover:bg-black/10 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent"
             >
               <span className="sr-only">Dismiss</span>
               <XCircleIcon className="w-4 h-4" />
@@ -225,7 +225,7 @@ export const handleApiError = (error: unknown): string => {
 export const LoadingSpinner: React.FC<{ message?: string }> = ({ message = 'Loading...' }) => (
   <div className="flex items-center justify-center p-4">
     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mr-3"></div>
-    <span className="text-gray-600">{message}</span>
+    <span className="text-gray-600 dark:text-gray-300">{message}</span>
   </div>
 );
 
@@ -239,11 +239,11 @@ export const EmptyState: React.FC<{
   };
 }> = ({ title, description, action }) => (
   <div className="text-center py-12">
-    <div className="mx-auto w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-4">
-      <InformationCircleIcon className="w-12 h-12 text-gray-400" />
+    <div className="mx-auto w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
+      <InformationCircleIcon className="w-12 h-12 text-gray-400 dark:text-gray-500" />
     </div>
-    <h3 className="text-lg font-medium text-gray-900 mb-2">{title}</h3>
-    <p className="text-gray-500 mb-6 max-w-sm mx-auto">{description}</p>
+    <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">{title}</h3>
+    <p className="text-gray-500 dark:text-gray-400 mb-6 max-w-sm mx-auto">{description}</p>
     {action && (
       <button onClick={action.onClick} className="btn-primary">
         {action.label}

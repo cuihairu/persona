@@ -25,22 +25,22 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-primary-900/40 dark:to-secondary-900 flex items-center justify-center p-4">
       <div className="max-w-md w-full">
         {/* Logo/Header */}
         <div className="text-center mb-8">
           <div className="mx-auto w-20 h-20 bg-primary-600 rounded-full flex items-center justify-center mb-4">
             <KeyIcon className="w-10 h-10 text-white" />
           </div>
-          <h1 className="text-3xl font-bold text-secondary-900 mb-2">Persona</h1>
-          <p className="text-secondary-600">Master your digital identity</p>
+          <h1 className="text-3xl font-bold text-secondary-900 dark:text-secondary-100 mb-2">Persona</h1>
+          <p className="text-secondary-600 dark:text-secondary-400">Master your digital identity</p>
         </div>
 
         {/* Unlock Form */}
         <div className="card p-6">
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label htmlFor="master-password" className="label text-secondary-700 mb-2 block">
+              <label htmlFor="master-password" className="label text-secondary-700 dark:text-secondary-300 mb-2 block">
                 Master Password
               </label>
               <div className="relative">
@@ -59,9 +59,9 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
                   className="absolute inset-y-0 right-0 pr-3 flex items-center"
                 >
                   {showPassword ? (
-                    <EyeSlashIcon className="h-5 w-5 text-gray-400" />
+                    <EyeSlashIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" />
                   ) : (
-                    <EyeIcon className="h-5 w-5 text-gray-400" />
+                    <EyeIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" />
                   )}
                 </button>
               </div>
@@ -74,15 +74,15 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
                   type="checkbox"
                   checked={useCustomPath}
                   onChange={(e) => setUseCustomPath(e.target.checked)}
-                  className="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  className="rounded border-gray-300 dark:border-gray-600 text-primary-600 dark:text-primary-400 focus:ring-primary-500"
                 />
-                <span className="ml-2 text-sm text-secondary-700">Use custom database path</span>
+                <span className="ml-2 text-sm text-secondary-700 dark:text-secondary-300">Use custom database path</span>
               </label>
             </div>
 
             {useCustomPath && (
               <div>
-                <label htmlFor="db-path" className="label text-secondary-700 mb-2 block">
+                <label htmlFor="db-path" className="label text-secondary-700 dark:text-secondary-300 mb-2 block">
                   Database Path
                 </label>
                 <input
@@ -97,8 +97,8 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
             )}
 
             {error && (
-              <div className="bg-red-50 border border-red-200 rounded-md p-3">
-                <p className="text-sm text-red-600">{error}</p>
+              <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-md p-3">
+                <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
               </div>
             )}
 
@@ -119,7 +119,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
           </form>
 
           <div className="mt-6 text-center">
-            <p className="text-xs text-secondary-500">
+            <p className="text-xs text-secondary-500 dark:text-secondary-400">
               Don't have a master password? It will be created on first use.
             </p>
           </div>

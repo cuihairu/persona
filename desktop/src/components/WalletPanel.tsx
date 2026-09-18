@@ -294,15 +294,15 @@ const WalletPanel: React.FC = () => {
     switch (network.toLowerCase()) {
       case 'bitcoin':
       case 'btc':
-        return 'text-orange-600 bg-orange-100';
+        return 'text-orange-600 dark:text-orange-400 bg-orange-100 dark:bg-orange-500/10';
       case 'ethereum':
       case 'eth':
-        return 'text-blue-600 bg-blue-100';
+        return 'text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-500/10';
       case 'solana':
       case 'sol':
-        return 'text-purple-600 bg-purple-100';
+        return 'text-purple-600 dark:text-purple-400 bg-purple-100 dark:bg-purple-500/10';
       default:
-        return 'text-gray-600 bg-gray-100';
+        return 'text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-800';
     }
   };
 
@@ -312,18 +312,18 @@ const WalletPanel: React.FC = () => {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
               <WalletIcon className="h-8 w-8 text-indigo-600" />
               Crypto Wallets
             </h2>
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               Manage your cryptocurrency wallets
             </p>
           </div>
           <div className="flex gap-2">
             <button
               onClick={() => setShowImportModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
               <ArrowDownTrayIcon className="h-5 w-5" />
               Import
@@ -350,10 +350,10 @@ const WalletPanel: React.FC = () => {
 
         {/* Wallet Grid */}
         {!isLoading && wallets.length === 0 && !error && (
-          <div className="text-center py-12 bg-white rounded-lg border border-gray-200">
-            <WalletIcon className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-semibold text-gray-900">No wallets</h3>
-            <p className="mt-1 text-sm text-gray-500">
+          <div className="text-center py-12 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+            <WalletIcon className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" />
+            <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100">No wallets</h3>
+            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
               Get started by creating a new wallet or importing an existing one.
             </p>
             <div className="mt-6 flex justify-center gap-2">
@@ -365,7 +365,7 @@ const WalletPanel: React.FC = () => {
               </button>
               <button
                 onClick={() => setShowImportModal(true)}
-                className="px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                className="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               >
                 Import Wallet
               </button>
@@ -378,10 +378,10 @@ const WalletPanel: React.FC = () => {
             {wallets.map((wallet) => (
               <div
                 key={wallet.id}
-                className={`bg-white rounded-lg border ${
+                className={`bg-white dark:bg-gray-900 rounded-lg border ${
                   selectedWallet?.id === wallet.id
-                    ? 'border-indigo-500 ring-2 ring-indigo-200'
-                    : 'border-gray-200'
+                    ? 'border-indigo-500 ring-2 ring-indigo-200 dark:ring-indigo-500/30'
+                    : 'border-gray-200 dark:border-gray-700'
                 } p-4 cursor-pointer hover:shadow-lg transition-all`}
                 onClick={() => setSelectedWallet(wallet)}
               >
@@ -390,7 +390,7 @@ const WalletPanel: React.FC = () => {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="text-2xl">{getNetworkIcon(wallet.network)}</span>
-                      <h3 className="font-semibold text-gray-900">{wallet.name}</h3>
+                      <h3 className="font-semibold text-gray-900 dark:text-gray-100">{wallet.name}</h3>
                     </div>
                     <span
                       className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium mt-1 ${getNetworkColor(
@@ -401,18 +401,18 @@ const WalletPanel: React.FC = () => {
                     </span>
                   </div>
                   {wallet.watch_only && (
-                    <EyeIcon className="h-5 w-5 text-gray-400" title="Watch-only" />
+                    <EyeIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" title="Watch-only" />
                   )}
                 </div>
 
                 {/* Balance */}
                 <div className="mb-3">
-                  <p className="text-sm text-gray-500">Balance</p>
-                  <p className="text-2xl font-bold text-gray-900">{wallet.balance}</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">Balance</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{wallet.balance}</p>
                 </div>
 
                 {/* Wallet Info */}
-                <div className="space-y-1 text-sm text-gray-600">
+                <div className="space-y-1 text-sm text-gray-600 dark:text-gray-300">
                   <div className="flex justify-between">
                     <span>Type:</span>
                     <span className="font-medium">{wallet.wallet_type}</span>
@@ -445,7 +445,7 @@ const WalletPanel: React.FC = () => {
                       e.stopPropagation();
                       exportWallet(wallet.id, wallet.name);
                     }}
-                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                   >
                     <ArrowUpTrayIcon className="h-4 w-4" />
                     Export
@@ -456,7 +456,7 @@ const WalletPanel: React.FC = () => {
                       // Refresh wallet balance
                       loadWallets();
                     }}
-                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition-colors"
+                    className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                     >
                       <ArrowTrendingUpIcon className="h-4 w-4" />
                       Refresh
@@ -466,7 +466,7 @@ const WalletPanel: React.FC = () => {
                       e.stopPropagation();
                       deleteWallet(wallet);
                     }}
-                    className="flex items-center justify-center gap-1 px-2 py-1 text-sm bg-red-50 text-red-700 rounded hover:bg-red-100 transition-colors"
+                    className="flex items-center justify-center gap-1 px-2 py-1 text-sm bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 rounded hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
                     aria-label={`Delete wallet ${wallet.name}`}
                   >
                     <TrashIcon className="h-4 w-4" />
@@ -480,9 +480,9 @@ const WalletPanel: React.FC = () => {
 
         {/* Selected Wallet Details */}
         {selectedWallet && (
-          <div className="bg-white rounded-lg border border-gray-200 p-6">
+          <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
                 Wallet Addresses - {selectedWallet.name}
               </h3>
               <button
@@ -497,61 +497,61 @@ const WalletPanel: React.FC = () => {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead>
                   <tr>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Index
                     </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Address
                     </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Type
                     </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Balance
                     </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Status
                     </th>
-                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">
+                    <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
                       Actions
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-200">
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
                   {addresses.map((address, index) => (
                     <tr key={index}>
-                      <td className="px-4 py-2 text-sm text-gray-900">
+                      <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
                         {address.index}
                       </td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-2">
-                          <code className="text-sm font-mono text-gray-900">
+                          <code className="text-sm font-mono text-gray-900 dark:text-gray-100">
                             {address.address}
                           </code>
                           <button
                             onClick={() => setShowAddressQr(address.address)}
-                            className="text-gray-400 hover:text-gray-600"
+                            className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
                             title="Show QR Code"
                           >
                             <QrCodeIcon className="h-4 w-4" />
                           </button>
                         </div>
                       </td>
-                      <td className="px-4 py-2 text-sm text-gray-900">
+                      <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
                         {address.address_type}
                       </td>
-                      <td className="px-4 py-2 text-sm text-gray-900">
+                      <td className="px-4 py-2 text-sm text-gray-900 dark:text-gray-100">
                         {address.balance}
                       </td>
                       <td className="px-4 py-2">
                         <span
                           className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                             address.used
-                              ? 'bg-gray-100 text-gray-800'
-                              : 'bg-green-100 text-green-800'
+                              ? 'bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
+                              : 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300'
                           }`}
                         >
                           {address.used ? 'Used' : 'Unused'}
@@ -573,7 +573,7 @@ const WalletPanel: React.FC = () => {
               </table>
 
               {addresses.length === 0 && (
-                <div className="text-center py-8 text-gray-500">
+                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                   No addresses generated yet
                 </div>
               )}
@@ -584,15 +584,15 @@ const WalletPanel: React.FC = () => {
         {/* QR Code Modal */}
         {showAddressQr && (
           <div
-            className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
             onClick={() => setShowAddressQr(null)}
           >
             <div
-              className="bg-white rounded-lg p-6 max-w-sm w-full mx-4"
+              className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-sm w-full mx-4"
               onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-semibold mb-4">Receive Address</h3>
-              <div className="bg-gray-100 p-4 rounded-lg mb-4 flex items-center justify-center">
+              <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg mb-4 flex items-center justify-center">
                 <QRCodeSVG
                   value={showAddressQr}
                   size={192}
@@ -600,7 +600,7 @@ const WalletPanel: React.FC = () => {
                   data-testid="address-qr"
                 />
               </div>
-              <code className="block text-sm text-center text-gray-600 mb-4 break-all">
+              <code className="block text-sm text-center text-gray-600 dark:text-gray-300 mb-4 break-all">
                 {showAddressQr}
               </code>
               <button
@@ -633,27 +633,27 @@ const WalletPanel: React.FC = () => {
 
         {/* Create Wallet Modal Placeholder */}
         {showCreateModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
               <h3 className="text-lg font-semibold mb-4">Create New Wallet</h3>
               {!createResult ? (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
                     <input
                       value={createForm.name}
                       onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                       placeholder="My Wallet"
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Network</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Network</label>
                       <select
                         value={createForm.network}
                         onChange={(e) => setCreateForm({ ...createForm, network: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                       >
                         <option>Ethereum</option>
                         <option>Bitcoin</option>
@@ -664,7 +664,7 @@ const WalletPanel: React.FC = () => {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">Addresses</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Addresses</label>
                       <input
                         type="number"
                         min={1}
@@ -676,17 +676,17 @@ const WalletPanel: React.FC = () => {
                             addressCount: Number(e.target.value || 5),
                           })
                         }
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Wallet Password</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Wallet Password</label>
                     <input
                       type="password"
                       value={createForm.password}
                       onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                       placeholder="At least 8 characters"
                     />
                   </div>
@@ -702,7 +702,7 @@ const WalletPanel: React.FC = () => {
                           addressCount: 5,
                         });
                       }}
-                      className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                      className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                     >
                       Cancel
                     </button>
@@ -717,15 +717,15 @@ const WalletPanel: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <p className="text-sm text-gray-700">
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
                     Save this recovery phrase now. It will not be shown again.
                   </p>
                   <textarea
                     readOnly
                     value={createResult.mnemonic}
-                    className="w-full h-28 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                    className="w-full h-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
                   />
-                  <div className="text-sm text-gray-600">
+                  <div className="text-sm text-gray-600 dark:text-gray-300">
                     First address: <code className="font-mono">{createResult.first_address}</code>
                   </div>
                   <button
@@ -751,26 +751,26 @@ const WalletPanel: React.FC = () => {
 
         {/* Import Wallet Modal */}
         {showImportModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
               <h3 className="text-lg font-semibold mb-4">Import Wallet</h3>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
                   <input
                     value={importForm.name}
                     onChange={(e) => setImportForm({ ...importForm, name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                     placeholder="Imported Wallet"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Network</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Network</label>
                     <select
                       value={importForm.network}
                       onChange={(e) => setImportForm({ ...importForm, network: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                       disabled={importForm.importType === 'wif'}
                     >
                       <option>Ethereum</option>
@@ -782,7 +782,7 @@ const WalletPanel: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
                     <select
                       value={importForm.importType}
                       onChange={(e) =>
@@ -792,7 +792,7 @@ const WalletPanel: React.FC = () => {
                           network: e.target.value === 'wif' ? 'Bitcoin' : importForm.network,
                         })
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                     >
                       <option value="mnemonic">Mnemonic</option>
                       <option value="private_key">Private Key</option>
@@ -802,7 +802,7 @@ const WalletPanel: React.FC = () => {
                 </div>
                 {importForm.importType === 'mnemonic' && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Addresses</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Addresses</label>
                     <input
                       type="number"
                       min={1}
@@ -814,12 +814,12 @@ const WalletPanel: React.FC = () => {
                           addressCount: Number(e.target.value || 5),
                         })
                       }
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                     />
                   </div>
                 )}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     {importForm.importType === 'mnemonic'
                       ? 'Mnemonic Phrase'
                       : importForm.importType === 'wif'
@@ -829,7 +829,7 @@ const WalletPanel: React.FC = () => {
                   <textarea
                     value={importForm.data}
                     onChange={(e) => setImportForm({ ...importForm, data: e.target.value })}
-                    className="w-full h-24 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                    className="w-full h-24 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
                     placeholder={
                       importForm.importType === 'mnemonic'
                         ? 'word1 word2 word3 ...'
@@ -840,12 +840,12 @@ const WalletPanel: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Wallet Password</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Wallet Password</label>
                   <input
                     type="password"
                     value={importForm.password}
                     onChange={(e) => setImportForm({ ...importForm, password: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                     placeholder="At least 8 characters"
                   />
                 </div>
@@ -862,7 +862,7 @@ const WalletPanel: React.FC = () => {
                         addressCount: 5,
                       });
                     }}
-                    className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                    className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                   >
                     Cancel
                   </button>
@@ -881,18 +881,18 @@ const WalletPanel: React.FC = () => {
 
         {/* Add Address Modal */}
         {showAddAddressModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
               <h3 className="text-lg font-semibold mb-4">Generate Address</h3>
               <div className="space-y-4">
-                <div className="text-sm text-gray-600">
+                <div className="text-sm text-gray-600 dark:text-gray-300">
                   Enter the wallet password for <span className="font-medium">{selectedWallet?.name}</span>.
                 </div>
                 <input
                   type="password"
                   value={addAddressPassword}
                   onChange={(e) => setAddAddressPassword(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                   placeholder="Wallet password"
                 />
                 <div className="flex gap-2">
@@ -901,7 +901,7 @@ const WalletPanel: React.FC = () => {
                       setShowAddAddressModal(false);
                       setAddAddressPassword('');
                     }}
-                    className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                    className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                   >
                     Cancel
                   </button>
@@ -920,10 +920,10 @@ const WalletPanel: React.FC = () => {
 
         {/* Export Modal */}
         {showExportModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
               <h3 className="text-lg font-semibold mb-4">Export Wallet</h3>
-              <div className="text-sm text-gray-600 mb-4">
+              <div className="text-sm text-gray-600 dark:text-gray-300 mb-4">
                 {exportWalletName ? (
                   <>
                     Wallet: <span className="font-medium">{exportWalletName}</span>
@@ -935,7 +935,7 @@ const WalletPanel: React.FC = () => {
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Format</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Format</label>
                   <select
                     value={exportFormat}
                     onChange={(e) => {
@@ -946,7 +946,7 @@ const WalletPanel: React.FC = () => {
                         setExportIncludePrivate(false);
                       }
                     }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                   >
                     {availableExportFormats.map((format) => (
                       <option key={format} value={format}>
@@ -957,13 +957,13 @@ const WalletPanel: React.FC = () => {
                 </div>
 
                 {exportRestrictionHint && (
-                  <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-300">
                     {exportRestrictionHint}
                   </div>
                 )}
 
                 {exportFormat === 'json' && (
-                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <input
                       type="checkbox"
                       checked={exportIncludePrivate}
@@ -978,12 +978,12 @@ const WalletPanel: React.FC = () => {
                   exportFormat === 'wif' ||
                   (exportFormat === 'json' && exportIncludePrivate)) && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Wallet Password</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Wallet Password</label>
                     <input
                       type="password"
                       value={exportPassword}
                       onChange={(e) => setExportPassword(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                       placeholder="Wallet password"
                     />
                   </div>
@@ -991,17 +991,17 @@ const WalletPanel: React.FC = () => {
 
                 {exportOutput && exportFormat !== 'json' && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Exported Data</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Exported Data</label>
                     <textarea
                       readOnly
                       value={exportOutput}
-                      className="w-full h-28 px-3 py-2 border border-gray-300 rounded-lg font-mono text-sm"
+                      className="w-full h-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
                     />
                     <button
                       onClick={() => {
                         navigator.clipboard.writeText(exportOutput).catch(() => {});
                       }}
-                      className="mt-2 w-full px-4 py-2 bg-gray-100 text-gray-800 rounded-lg hover:bg-gray-200 transition-colors"
+                      className="mt-2 w-full px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                     >
                       Copy
                     </button>
@@ -1011,7 +1011,7 @@ const WalletPanel: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     onClick={closeExportModal}
-                    className="flex-1 px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
+                    className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                   >
                     Close
                   </button>

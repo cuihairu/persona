@@ -99,19 +99,19 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
             {revealed}
           </span>
           {remaining !== null && remaining > 0 && (
-            <span className="text-xs text-gray-400 shrink-0" data-testid="reveal-countdown">
+            <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0" data-testid="reveal-countdown">
               hides in {remaining}s
             </span>
           )}
-          <button onClick={handleHide} className="p-1 hover:bg-gray-100 rounded" aria-label={`Hide ${label}`}>
-            <EyeSlashIcon className="w-4 h-4 text-gray-400" />
+          <button onClick={handleHide} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={`Hide ${label}`}>
+            <EyeSlashIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
           </button>
         </>
       ) : (
         <button
           onClick={doReveal}
           disabled={isLoading}
-          className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50"
+          className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 disabled:opacity-50"
           data-testid="reveal-trigger"
         >
           {isLoading ? (
@@ -124,13 +124,13 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
       )}
 
       {revealed !== null && (
-        <button onClick={handleCopy} className="p-1 hover:bg-gray-100 rounded" aria-label={`Copy ${label}`}>
-          <DocumentDuplicateIcon className="w-4 h-4 text-gray-400" />
+        <button onClick={handleCopy} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={`Copy ${label}`}>
+          <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
       )}
 
       {error && (
-        <span className="text-xs text-red-600" data-testid="reveal-error">
+        <span className="text-xs text-red-600 dark:text-red-400" data-testid="reveal-error">
           {error}
         </span>
       )}
