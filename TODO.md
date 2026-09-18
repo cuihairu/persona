@@ -180,8 +180,9 @@ Desktop (Tauri v2 + React)
     右侧常驻详情面板，取代凭据卡片网格 + 点击弹 modal
   - [ ] 全局快速搜索（⌘K / 顶栏搜索框，跨身份跨类型结果分组；范围天然
     受功能开关约束）
-  - [ ] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
-    变体，宜早不宜迟）
+  - [x] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
+    变体——13d75f4c 基建 / 94ee3930 Settings 三档选择器 / a79b3cbb 全组件
+    sweep，顺带修复 v4 死类 bg-opacity-* 导致的弹窗遮罩纯黑实底）
   - [ ] 侧栏分类导航（类型/标签/收藏树，取代筛选 chip 行）；
     IdentitySwitcher 移至侧栏顶部（对应 1Password 账户切换器的位置）
   - [ ] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
