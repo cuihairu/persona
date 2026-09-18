@@ -18,6 +18,8 @@ describe('stores/appStore', () => {
       theme: 'system',
       sidebarFilter: DEFAULT_SIDEBAR_FILTER,
       pendingCredentialSelection: null,
+      faviconCache: {},
+      faviconMisses: {},
     });
   });
 
@@ -34,6 +36,7 @@ describe('stores/appStore', () => {
       ssh_agent: false,
       wallet: false,
       passkeys: false,
+      fetch_favicons: false,
     });
     expect(useAppStore.getState().featureFlags).toEqual(DEFAULT_FEATURE_FLAGS);
   });
@@ -56,7 +59,7 @@ describe('stores/appStore', () => {
   });
 
   it('setFeatureFlags copies the incoming flags instead of aliasing them', () => {
-    const incoming = { ssh_agent: true, wallet: false, passkeys: true };
+    const incoming = { ssh_agent: true, wallet: false, passkeys: true, fetch_favicons: false };
     useAppStore.getState().setFeatureFlags(incoming);
 
     const stored = useAppStore.getState().featureFlags;
@@ -110,5 +113,44 @@ describe('stores/appStore', () => {
 
     useAppStore.getState().clearPendingCredentialSelection();
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+  });
+
+  it('setFaviconEntries merges into cache and clears hits from misses', () => {
+    // 预置一个陈旧 miss（曾被批量读判为未命中）
+    useAppStore.getState().setFaviconMisses(['a.com', 'b.com']);
+    expect(useAppStore.getState().faviconMisses).toEqual({ 'a.com': true, 'b.com': true });
+
+    useAppStore
+      .getState()
+      .setFaviconEntries([{ host: 'a.com', mime_type: 'image/png', data: 'AAA' }]);
+
+    const state = useAppStore.getState();
+    expect(state.faviconCache['a.com']).toEqual({ mime_type: 'image/png', data: 'AAA' });
+    expect(state.faviconMisses).toEqual({ 'b.com': true });
+  });
+
+  it('setFaviconMisses skips hosts that already have cached entries', () => {
+    useAppStore
+      .getState()
+      .setFaviconEntries([{ host: 'cached.com', mime_type: 'image/png', data: 'BBB' }]);
+
+    useAppStore.getState().setFaviconMisses(['cached.com', 'missing.com']);
+
+    const state = useAppStore.getState();
+    // 缓存赢过陈旧 miss：不落负缓存，避免已抓取图标被覆盖判定
+    expect(state.faviconMisses).toEqual({ 'missing.com': true });
+    expect(state.faviconCache['cached.com']).toBeDefined();
+  });
+
+  it('clearFaviconCache resets both cache and misses (lock screen path)', () => {
+    useAppStore
+      .getState()
+      .setFaviconEntries([{ host: 'a.com', mime_type: 'image/png', data: 'AAA' }]);
+    useAppStore.getState().setFaviconMisses(['b.com']);
+
+    useAppStore.getState().clearFaviconCache();
+
+    expect(useAppStore.getState().faviconCache).toEqual({});
+    expect(useAppStore.getState().faviconMisses).toEqual({});
   });
 });

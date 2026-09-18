@@ -762,3 +762,27 @@ pub struct SerializableIdentityExport {
     pub exported_at: String,
     pub data: serde_json::Value,
 }
+
+// ---------------------------------------------------------------------------
+// favicon 缓存
+// ---------------------------------------------------------------------------
+
+/// 前端 favicon DTO；图标字节 base64 编码，前端拼 `data:` URL 渲染。
+#[derive(Debug, Clone, Serialize)]
+pub struct SerializableFavicon {
+    pub host: String,
+    pub mime_type: String,
+    /// base64 编码的图像字节（≤ 512 KiB）
+    pub data: String,
+}
+
+impl From<persona_core::models::FaviconCacheEntry> for SerializableFavicon {
+    fn from(entry: persona_core::models::FaviconCacheEntry) -> Self {
+        use base64::Engine;
+        Self {
+            host: entry.host,
+            mime_type: entry.mime_type,
+            data: base64::engine::general_purpose::STANDARD.encode(entry.data),
+        }
+    }
+}

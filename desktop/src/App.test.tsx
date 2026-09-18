@@ -114,7 +114,7 @@ jest.mock('@/utils/api', () => ({
     // 默认返回全开：多数既有用例假设六个视图都可达；"默认全关"语义单独覆盖
     getWorkspaceSettings: jest.fn().mockResolvedValue({
       success: true,
-      data: { features: { ssh_agent: true, wallet: true, passkeys: true } },
+      data: { features: { ssh_agent: true, wallet: true, passkeys: true, fetch_favicons: true } },
     }),
   },
 }));
@@ -132,7 +132,7 @@ describe('App', () => {
     passkeyPending = null;
     // 真实 zustand store 跨用例共享：复位为出厂全关，由各用例经拉取/ setState 驱动
     useAppStore.setState({
-      featureFlags: { ssh_agent: false, wallet: false, passkeys: false },
+      featureFlags: { ssh_agent: false, wallet: false, passkeys: false, fetch_favicons: false },
       sidebarFilter: { kind: 'all' },
     });
     serviceState = {
@@ -226,7 +226,7 @@ describe('App', () => {
     // Once：消费后回退到顶层的全开实现，不泄漏到后续用例
     (personaAPI.getWorkspaceSettings as jest.Mock).mockResolvedValueOnce({
       success: true,
-      data: { features: { ssh_agent: false, wallet: false, passkeys: false } },
+      data: { features: { ssh_agent: false, wallet: false, passkeys: false, fetch_favicons: false } },
     });
     serviceState.isUnlocked = true;
     render(<App />);
@@ -271,7 +271,7 @@ describe('App', () => {
     // 运行中关闭 wallet 开关：按钮消失、视图自动回退
     act(() => {
       useAppStore.setState({
-        featureFlags: { ssh_agent: true, wallet: false, passkeys: true },
+        featureFlags: { ssh_agent: true, wallet: false, passkeys: true, fetch_favicons: true },
       });
     });
 

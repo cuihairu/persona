@@ -153,6 +153,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::generate_password,
             commands::get_statistics,
             commands::toggle_credential_favorite,
+            commands::fetch_credential_favicon,
+            commands::get_favicons,
             commands::delete_credential,
             commands::get_ssh_agent_status,
             commands::start_ssh_agent,

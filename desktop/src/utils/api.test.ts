@@ -56,11 +56,17 @@ describe('utils/api PersonaAPI', () => {
     await personaAPI.getWorkspaceSettings();
     expect(mockInvoke).toHaveBeenCalledWith('get_workspace_settings');
 
-    await personaAPI.setFeatureFlags({ ssh_agent: true, wallet: false, passkeys: true });
+    await personaAPI.setFeatureFlags({
+      ssh_agent: true,
+      wallet: false,
+      passkeys: true,
+      fetch_favicons: false,
+    });
     expect(mockInvoke).toHaveBeenCalledWith('set_feature_flags', {
       ssh_agent: true,
       wallet: false,
       passkeys: true,
+      fetch_favicons: false,
     });
   });
 
@@ -182,6 +188,12 @@ describe('utils/api command mapping coverage', () => {
 
     await personaAPI.toggleCredentialFavorite('c1');
     expect(mockInvoke).toHaveBeenCalledWith('toggle_credential_favorite', { credential_id: 'c1' });
+
+    await personaAPI.fetchCredentialFavicon('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('fetch_credential_favicon', { credential_id: 'c1' });
+
+    await personaAPI.getFavicons(['a.com', 'b.com']);
+    expect(mockInvoke).toHaveBeenCalledWith('get_favicons', { hosts: ['a.com', 'b.com'] });
 
     await personaAPI.deleteCredential('c1');
     expect(mockInvoke).toHaveBeenCalledWith('delete_credential', { credential_id: 'c1' });

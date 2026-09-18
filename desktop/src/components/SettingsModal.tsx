@@ -37,6 +37,12 @@ const FEATURE_ROWS: {
     hint: 'Manage passkeys and run the browser approval server',
     note: 'Takes effect the next time you unlock',
   },
+  {
+    key: 'fetch_favicons',
+    label: 'Website icons',
+    hint: 'Fetch site icons only when you click "Fetch icon" on an entry; cached locally and shared across entries',
+    note: 'Off by default — no network requests until you opt in',
+  },
 ];
 
 const GeneralPane: React.FC = () => {

@@ -39,6 +39,9 @@ pub struct FeatureFlags {
     pub wallet: bool,
     /// Passkey 管理与审批服务端
     pub passkeys: bool,
+    /// 站点 favicon 按需抓取与展示（隐私红线：唯一外联入口是详情面板
+    /// "Fetch icon" 按钮，开 = 显示按钮与缓存图标，关 = 无网络行为）
+    pub fetch_favicons: bool,
 }
 
 /// Workspace configuration settings
@@ -191,7 +194,16 @@ mod tests {
         assert!(!flags.ssh_agent);
         assert!(!flags.wallet);
         assert!(!flags.passkeys);
-        assert_eq!(flags, FeatureFlags { ssh_agent: false, wallet: false, passkeys: false });
+        assert!(!flags.fetch_favicons);
+        assert_eq!(
+            flags,
+            FeatureFlags {
+                ssh_agent: false,
+                wallet: false,
+                passkeys: false,
+                fetch_favicons: false
+            }
+        );
     }
 
     #[test]
@@ -212,12 +224,18 @@ mod tests {
     #[test]
     fn test_feature_flags_serde_round_trip() {
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
-        ws.settings.features = FeatureFlags { ssh_agent: true, wallet: false, passkeys: true };
+        ws.settings.features = FeatureFlags {
+            ssh_agent: true,
+            wallet: false,
+            passkeys: true,
+            fetch_favicons: true,
+        };
 
         let json = serde_json::to_string(&ws).unwrap();
         let restored: Workspace = serde_json::from_str(&json).unwrap();
         assert!(restored.settings.features.ssh_agent);
         assert!(!restored.settings.features.wallet);
         assert!(restored.settings.features.passkeys);
+        assert!(restored.settings.features.fetch_favicons);
     }
 }

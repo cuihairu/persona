@@ -10,6 +10,7 @@ import type {
   Statistics,
   InitRequest,
   FeatureFlags,
+  FaviconData,
   WorkspaceSettings,
   SshAgentStatus,
   SshAgentKey,
@@ -90,12 +91,13 @@ class PersonaAPI {
     return invoke('get_workspace_settings');
   }
 
-  /** 窄写 features 三个开关位，返回更新后的全量设置作为服务端真相 */
+  /** 窄写 features 四个开关位，返回更新后的全量设置作为服务端真相 */
   async setFeatureFlags(flags: FeatureFlags): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_feature_flags', {
       ssh_agent: flags.ssh_agent,
       wallet: flags.wallet,
       passkeys: flags.passkeys,
+      fetch_favicons: flags.fetch_favicons,
     });
   }
 
@@ -129,6 +131,16 @@ class PersonaAPI {
 
   async toggleCredentialFavorite(credentialId: string): Promise<ApiResponse<Credential>> {
     return invoke('toggle_credential_favorite', { credential_id: credentialId });
+  }
+
+  /** 按需抓取凭据站点的 favicon（唯一外联入口；flag 关时后端兜底拒绝） */
+  async fetchCredentialFavicon(credentialId: string): Promise<ApiResponse<FaviconData>> {
+    return invoke('fetch_credential_favicon', { credential_id: credentialId });
+  }
+
+  /** 批量读已缓存 favicon（纯本地读；flag 关时后端静默回空数组） */
+  async getFavicons(hosts: string[]): Promise<ApiResponse<FaviconData[]>> {
+    return invoke('get_favicons', { hosts });
   }
 
   async deleteCredential(credentialId: string): Promise<ApiResponse<boolean>> {

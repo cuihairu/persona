@@ -27,7 +27,7 @@ const makeCred = (over: Record<string, any> = {}) => ({
   ...over,
 });
 
-const ALL_FLAGS_ON = { ssh_agent: true, wallet: true, passkeys: true };
+const ALL_FLAGS_ON = { ssh_agent: true, wallet: true, passkeys: true, fetch_favicons: true };
 
 type SidebarProps = Parameters<typeof Sidebar>[0];
 

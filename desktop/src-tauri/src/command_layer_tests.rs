@@ -5181,11 +5181,12 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert!(!settings.features.ssh_agent);
     assert!(!settings.features.wallet);
     assert!(!settings.features.passkeys);
+    assert!(!settings.features.fetch_favicons);
     assert!(settings.encryption_enabled);
     assert_eq!(settings.session_timeout_seconds, 3600);
 
     // 窄写 features，返回更新后的全量 settings
-    let resp = set_feature_flags(true, true, true, app.state::<AppState>())
+    let resp = set_feature_flags(true, true, true, true, app.state::<AppState>())
         .await
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
@@ -5193,20 +5194,22 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert!(settings.features.ssh_agent);
     assert!(settings.features.wallet);
     assert!(settings.features.passkeys);
+    assert!(settings.features.fetch_favicons);
 
     // get 反映持久化结果
     let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
     let settings = resp.data.expect("settings present");
     assert!(settings.features.ssh_agent);
 
-    // 部分开启：只动 features 三个位
-    let resp = set_feature_flags(true, false, false, app.state::<AppState>())
+    // 部分开启：只动 features 四个位
+    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
         .await
         .unwrap();
     let settings = resp.data.expect("updated settings returned");
     assert!(settings.features.ssh_agent);
     assert!(!settings.features.wallet);
     assert!(!settings.features.passkeys);
+    assert!(!settings.features.fetch_favicons);
 }
 
 #[tokio::test]
@@ -5214,7 +5217,7 @@ async fn set_feature_flags_requires_unlocked_service() {
     let app = mock_app();
 
     // 未初始化：set 拒绝
-    let resp = set_feature_flags(true, false, false, app.state::<AppState>())
+    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.success);
@@ -5227,7 +5230,7 @@ async fn set_feature_flags_requires_unlocked_service() {
     let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
     assert!(resp.success, "get must work while locked: {:?}", resp.error);
 
-    let resp = set_feature_flags(true, false, false, app.state::<AppState>())
+    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.success);
@@ -5246,11 +5249,116 @@ async fn workspace_settings_commands_fail_without_db_path() {
     );
 
     // set 在解锁检查处先拒绝（Service not initialized）
-    let resp = set_feature_flags(true, true, true, app.state::<AppState>())
+    let resp = set_feature_flags(true, true, true, true, app.state::<AppState>())
         .await
         .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+}
+
+#[tokio::test]
+async fn favicon_commands_gate_on_service_state_and_flag() {
+    let app = mock_app();
+
+    // 未初始化：fetch 报错、get 静默空数组
+    let resp = fetch_credential_favicon(
+        "00000000-0000-0000-0000-000000000000".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = get_favicons(vec!["a.com".to_string()], app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_empty());
+
+    // 锁定：fetch 报锁、get 静默空数组
+    init_service_ok(&app, "master-pw-123").await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = fetch_credential_favicon(
+        "00000000-0000-0000-0000-000000000000".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    let resp = get_favicons(vec!["a.com".to_string()], app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_empty());
+
+    // 解锁但 flag 关（默认）：fetch 被后端兜底拒绝、get 静默空数组
+    init_service_ok(&app, "master-pw-123").await;
+    let resp = fetch_credential_favicon(
+        "00000000-0000-0000-0000-000000000000".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Favicon fetching is disabled in settings")
+    );
+    let resp = get_favicons(vec!["a.com".to_string()], app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enabled() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // flag 关时藏按钮不够——这里显式开后端才放行后续用例
+    let resp = set_feature_flags(false, false, false, true, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 坏 UUID → Invalid UUID format（flag 检查通过后才轮到参数校验）
+    let resp = fetch_credential_favicon("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    // flag 开 + 凭据无 url → 拒绝（绝不外联）
+    let mut req = password_credential_request(&identity_id);
+    req.url = None;
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let no_url_cred = resp.data.expect("credential created");
+    let resp = fetch_credential_favicon(no_url_cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("no url")),
+        "got: {:?}",
+        resp.error
+    );
+
+    // flag 开的批量读是纯本地：空 hosts / 未缓存 host 都回成功 + 空数组
+    let resp = get_favicons(Vec::new(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_empty());
+    let resp = get_favicons(
+        vec!["A.COM".to_string(), "  ".to_string()],
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -5282,7 +5390,7 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
     assert!(!socket.exists(), "gate closed: no approval socket");
 
     // 打开 passkeys 开关（当前已解锁，允许写）
-    let resp = set_feature_flags(false, false, true, app.state::<AppState>())
+    let resp = set_feature_flags(false, false, true, false, app.state::<AppState>())
         .await
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);

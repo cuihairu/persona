@@ -58,7 +58,7 @@ describe('components/SettingsModal', () => {
 
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
 
-    // 默认 tab：General 三开关（出厂全关），身份区块不可见
+    // 默认 tab：General 四开关（出厂全关），身份区块不可见
     expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('switch', { name: 'SSH Agent' })).toHaveAttribute(
       'aria-checked',
@@ -71,6 +71,13 @@ describe('components/SettingsModal', () => {
     );
     expect(screen.getByTestId('feature-toggle-passkeys').closest('div')).toHaveTextContent(
       'Takes effect the next time you unlock',
+    );
+    expect(screen.getByRole('switch', { name: 'Website icons' })).toHaveAttribute(
+      'aria-checked',
+      'false',
+    );
+    expect(screen.getByTestId('feature-toggle-fetch_favicons').closest('div')).toHaveTextContent(
+      'Off by default — no network requests until you opt in',
     );
     expect(screen.queryByText('No identities yet.')).not.toBeInTheDocument();
   });
@@ -132,7 +139,7 @@ describe('components/SettingsModal', () => {
         session_timeout_seconds: 3600,
         require_confirmation: true,
         default_identity_type: 'personal',
-        features: { ssh_agent: true, wallet: true, passkeys: true },
+        features: { ssh_agent: true, wallet: true, passkeys: true, fetch_favicons: true },
       },
     });
 
@@ -145,6 +152,7 @@ describe('components/SettingsModal', () => {
         ssh_agent: true,
         wallet: false,
         passkeys: false,
+        fetch_favicons: false,
       });
     });
     await waitFor(() => {
@@ -153,6 +161,7 @@ describe('components/SettingsModal', () => {
         ssh_agent: true,
         wallet: true,
         passkeys: true,
+        fetch_favicons: true,
       });
     });
     expect(screen.getByRole('switch', { name: 'SSH Agent' })).toHaveAttribute(
@@ -184,6 +193,7 @@ describe('components/SettingsModal', () => {
       ssh_agent: false,
       wallet: false,
       passkeys: false,
+      fetch_favicons: false,
     });
     expect(screen.getByRole('switch', { name: 'Wallets' })).toHaveAttribute(
       'aria-checked',

@@ -348,11 +348,18 @@ pub async fn clear_active_identity(
 pub async fn get_workspace_settings(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    // 与命令层错误模式一致：缺 db_path 走 Ok(ApiResponse::error)，不让
+    // Err(String) 逃出命令边界（前端统一按 success 字段分流）
     let db_path = {
         let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+        match guard.clone() {
+            Some(db_path) => db_path,
+            None => {
+                return Ok(ApiResponse::error(
+                    "Database path unavailable. Initialize the service first.".to_string(),
+                ))
+            }
+        }
     };
 
     let db = Database::from_file(&db_path)
@@ -367,13 +374,14 @@ pub async fn get_workspace_settings(
     Ok(ApiResponse::success(ws.settings))
 }
 
-/// 窄写高级功能开关：只动 `settings.features` 三个位，返回更新后的全量
+/// 窄写高级功能开关：只动 `settings.features` 四个位，返回更新后的全量
 /// settings 作为服务端真相（避免前端 clobber 其它设置字段）。
 #[command]
 pub async fn set_feature_flags(
     ssh_agent: bool,
     wallet: bool,
     passkeys: bool,
+    fetch_favicons: bool,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
     let service_unlocked = {
@@ -408,6 +416,7 @@ pub async fn set_feature_flags(
         ssh_agent,
         wallet,
         passkeys,
+        fetch_favicons,
     };
     ws.touch();
     let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
@@ -427,6 +436,25 @@ async fn passkeys_flag_enabled(db_path: &str) -> bool {
     let repo = WorkspaceRepository::new(db);
     match repo.find_by_path(&workspace_path).await {
         Ok(Some(ws)) => ws.settings.features.passkeys,
+        _ => false,
+    }
+}
+
+/// 只读 favicon 开关：vault 打不开/行不存在一律视为关。
+///
+/// 这是 favicon 外联的后端兜底门禁——不依赖前端藏按钮，开关关闭时
+/// `fetch_credential_favicon` 直接拒绝、`get_favicons` 静默回空。
+async fn favicon_flag_enabled(db_path: &str) -> bool {
+    let Ok(db) = Database::from_file(db_path).await else {
+        return false;
+    };
+    if db.migrate().await.is_err() {
+        return false;
+    }
+    let workspace_path = workspace_path_for_db_path(db_path);
+    let repo = WorkspaceRepository::new(db);
+    match repo.find_by_path(&workspace_path).await {
+        Ok(Some(ws)) => ws.settings.features.fetch_favicons,
         _ => false,
     }
 }
@@ -990,10 +1018,114 @@ pub async fn toggle_credential_favorite(
     }
 }
 
+/// 按需抓取凭据对应站点的 favicon 并入缓存（隐私红线：唯一外联入口，
+/// 由详情面板 "Fetch icon" 按钮触发；flag 关闭时后端兜底拒绝）。
+#[command]
+pub async fn fetch_credential_favicon(
+    credential_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableFavicon>, String> {
+    // 检查顺序照 set_feature_flags：service 状态在先（错误语义优先），
+    // flag 门禁随后（开新 DB 连接的 IO 不持 service 锁做）
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        match guard.clone() {
+            Some(db_path) => db_path,
+            None => {
+                return Ok(ApiResponse::error(
+                    "Database path unavailable. Initialize the service first.".to_string(),
+                ))
+            }
+        }
+    };
+    if !favicon_flag_enabled(&db_path).await {
+        return Ok(ApiResponse::error(
+            "Favicon fetching is disabled in settings".to_string(),
+        ));
+    }
+
+    let service_guard = state.service.lock().await;
+    let service = match service_guard.as_ref() {
+        Some(service) => service,
+        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+    };
+    if !service.is_unlocked() {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let uuid = match Uuid::from_str(&credential_id) {
+        Ok(uuid) => uuid,
+        Err(_) => return Ok(ApiResponse::error("Invalid UUID format".to_string())),
+    };
+
+    let fetcher = match persona_core::favicon::FaviconFetcher::new() {
+        Ok(fetcher) => fetcher,
+        Err(e) => return Ok(ApiResponse::error(format!("Failed to fetch favicon: {}", e))),
+    };
+
+    match service.fetch_favicon_for_credential(&uuid, &fetcher).await {
+        Ok(entry) => Ok(ApiResponse::success(entry.into())),
+        Err(e) => Ok(ApiResponse::error(format!("Failed to fetch favicon: {}", e))),
+    }
+}
+
+/// 批量读已缓存的 favicon（纯本地读，绝不外联）。
+///
+/// flag 关闭 / 未初始化 / 锁定一律静默回空数组——批量读是列表渲染的
+/// 后台优化路径，缺席项回退静态图标即可，报错无意义。
+#[command]
+pub async fn get_favicons(
+    hosts: Vec<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<SerializableFavicon>>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::success(Vec::new())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::success(Vec::new()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        match guard.clone() {
+            Some(db_path) => db_path,
+            None => return Ok(ApiResponse::success(Vec::new())),
+        }
+    };
+    if !favicon_flag_enabled(&db_path).await {
+        return Ok(ApiResponse::success(Vec::new()));
+    }
+
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match service.get_cached_favicons(&hosts).await {
+            Ok(entries) => Ok(ApiResponse::success(
+                entries.into_iter().map(Into::into).collect(),
+            )),
+            Err(e) => Ok(ApiResponse::error(format!("Failed to load favicons: {}", e))),
+        },
+        None => Ok(ApiResponse::success(Vec::new())),
+    }
+}
+
 /// Delete a credential
 #[command]
-pub async fn delete_credential(
-    credential_id: String,
+pub async fn delete_credential(    credential_id: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
     let service_guard = state.service.lock().await;

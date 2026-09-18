@@ -66,6 +66,8 @@ export interface FeatureFlags {
   wallet: boolean;
   /** Passkey 管理与审批服务端 */
   passkeys: boolean;
+  /** 站点 favicon 按需抓取与展示（唯一外联入口 = 详情面板 Fetch icon 按钮） */
+  fetch_favicons: boolean;
 }
 
 /** workspace 设置全量（对应 Rust WorkspaceSettings；由 settings 命令返回） */
@@ -77,6 +79,13 @@ export interface WorkspaceSettings {
   require_confirmation: boolean;
   default_identity_type: string;
   features: FeatureFlags;
+}
+
+/** 已缓存的站点图标（对应 Rust SerializableFavicon；data 为 base64 图像字节） */
+export interface FaviconData {
+  host: string;
+  mime_type: string;
+  data: string;
 }
 
 /** 审计日志条目（只读视图，不含敏感负载） */
