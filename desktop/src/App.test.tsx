@@ -180,6 +180,7 @@ describe('App', () => {
     render(<App />);
 
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
+    expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
     expect(screen.queryByTestId('auto-lock-banner')).not.toBeInTheDocument();
 
     // 身份变化时拉取凭据
@@ -203,7 +204,7 @@ describe('App', () => {
     const nav = (label: string) => fireEvent.click(screen.getByRole('button', { name: label }));
 
     nav('Statistics');
-    expect(screen.getByText('Statistics')).toBeInTheDocument();
+    expect(screen.getByTestId('view-title')).toHaveTextContent('Statistics');
     nav('SSH Agent');
     expect(screen.getByTestId('ssh-agent-panel')).toBeInTheDocument();
     nav('Wallets');
@@ -274,18 +275,15 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
   });
 
-  it('locks the session and opens settings from the header actions', () => {
+  it('locks the session and opens settings from the sidebar footer', () => {
     serviceState.isUnlocked = true;
     render(<App />);
 
-    // 两个 btn-ghost：设置（齿轮）与锁定。按 title/顺序取。
-    const ghostButtons = screen.getAllByRole('button').filter((b) => b.className.includes('btn-ghost'));
-    expect(ghostButtons).toHaveLength(2);
-
-    fireEvent.click(ghostButtons[0]); // 设置
+    // 侧栏底部操作区：按可访问名取（不再依赖按钮顺序）
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
     expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
 
-    fireEvent.click(ghostButtons[1]); // 锁定
+    fireEvent.click(screen.getByRole('button', { name: 'Lock session' }));
     expect(lockService).toHaveBeenCalledTimes(1);
   });
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
-import { LockClosedIcon, Cog6ToothIcon, ChartBarIcon } from '@heroicons/react/24/outline';
+import { ChartBarIcon } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
 import { useSshApprovals } from '@/hooks/useSshApprovals';
@@ -9,7 +9,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { personaAPI } from '@/utils/api';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import UnlockScreen from '@/components/UnlockScreen';
-import { IdentitySwitcher, CreateIdentityModal } from '@/components/IdentitySwitcher';
+import { CreateIdentityModal } from '@/components/IdentitySwitcher';
 import CredentialList from '@/components/CredentialList';
 import CreateCredentialModal from '@/components/CreateCredentialModal';
 import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorHandling';
@@ -20,25 +20,8 @@ import WalletPanel from '@/components/WalletPanel';
 import WatchtowerPanel from '@/components/WatchtowerPanel';
 import PasskeyPanel from '@/components/PasskeyPanel';
 import SettingsModal from '@/components/SettingsModal';
-import type { FeatureFlags } from '@/types';
-
-type ViewId = 'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'watchtower' | 'passkeys';
-
-interface NavItem {
-  id: ViewId;
-  label: string;
-  /** 对应 workspace 功能开关；不带的为主航道视图，恒可见 */
-  flag?: keyof FeatureFlags;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { id: 'credentials', label: 'Credentials' },
-  { id: 'statistics', label: 'Statistics' },
-  { id: 'sshAgent', label: 'SSH Agent', flag: 'ssh_agent' },
-  { id: 'wallets', label: 'Wallets', flag: 'wallet' },
-  { id: 'watchtower', label: 'Watchtower' },
-  { id: 'passkeys', label: 'Passkeys', flag: 'passkeys' },
-];
+import Sidebar, { NAV_ITEMS } from '@/components/Sidebar';
+import type { ViewId } from '@/components/Sidebar';
 
 /** 两个 Toaster（锁定态/主界面）共用的气泡样式；配色走 .persona-toast 的 CSS 变量随主题翻转 */
 const TOAST_OPTIONS = { className: 'persona-toast' };
@@ -64,8 +47,6 @@ const App: React.FC = () => {
   const [showCreateCredential, setShowCreateCredential] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [currentView, setCurrentView] = useState<ViewId>('credentials');
-
-  const visibleNav = NAV_ITEMS.filter((item) => !item.flag || featureFlags[item.flag]);
 
   // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
@@ -155,7 +136,8 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      {/* app shell：固定视口高度，滚动收进侧栏与主列各自的内部容器 */}
+      <div className="h-screen flex flex-col overflow-hidden bg-gray-50 dark:bg-gray-950">
         {/* Auto-lock 倒计时横幅 */}
         {pendingSeconds !== null && (
           <div
@@ -177,72 +159,40 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {/* Header */}
-        <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-16">
-              {/* Logo and Identity Switcher */}
-              <div className="flex items-center space-x-4">
-                <div className="flex items-center">
-                  <div className="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center mr-3">
-                    <span className="text-white font-bold text-sm">P</span>
-                  </div>
-                  <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Persona</h1>
-                </div>
+        <div className="flex flex-1 min-h-0">
+          <Sidebar
+            currentView={currentView}
+            onNavigate={setCurrentView}
+            onCreateIdentity={() => setShowCreateIdentity(true)}
+            onOpenSettings={() => setShowSettings(true)}
+            onLock={lockService}
+          />
 
-                <div className="w-px h-6 bg-gray-300 dark:bg-gray-700"></div>
-
-                <div className="w-80">
-                  <IdentitySwitcher onCreateIdentity={() => setShowCreateIdentity(true)} />
-                </div>
-              </div>
-
-              {/* Navigation and Actions */}
-              <div className="flex items-center space-x-4">
-                {/* View Toggle */}
-                <div className="flex bg-gray-100 rounded-lg p-1 dark:bg-gray-800">
-                  {visibleNav.map((item) => (
-                    <button
-                      key={item.id}
-                      onClick={() => setCurrentView(item.id)}
-                      className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                        currentView === item.id
-                          ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
-                          : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Action Buttons */}
-                <button className="btn-ghost" onClick={() => setShowSettings(true)}>
-                  <Cog6ToothIcon className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={lockService}
-                  className="btn-ghost text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
-                >
-                  <LockClosedIcon className="w-4 h-4" />
-                </button>
-              </div>
+          {/* 主列：窄工具栏 + 独立滚动的主区 */}
+          <div className="flex-1 min-w-0 flex flex-col">
+            <div className="h-12 shrink-0 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 sm:px-6 lg:px-8">
+              <h1
+                data-testid="view-title"
+                className="text-sm font-semibold text-gray-900 dark:text-gray-100"
+              >
+                {NAV_ITEMS.find((item) => item.id === currentView)?.label}
+              </h1>
             </div>
-          </div>
-        </header>
 
-        {/* Main Content */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {currentView === 'credentials' && (
-            <CredentialList onCreateCredential={() => setShowCreateCredential(true)} />
-          )}
-          {currentView === 'statistics' && <StatisticsView />}
-          {currentView === 'sshAgent' && <SshAgentPanel />}
-          {currentView === 'wallets' && <WalletPanel />}
-          {currentView === 'watchtower' && <WatchtowerPanel />}
-          {currentView === 'passkeys' && <PasskeyPanel />}
-        </main>
+            <main className="flex-1 overflow-y-auto">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+                {currentView === 'credentials' && (
+                  <CredentialList onCreateCredential={() => setShowCreateCredential(true)} />
+                )}
+                {currentView === 'statistics' && <StatisticsView />}
+                {currentView === 'sshAgent' && <SshAgentPanel />}
+                {currentView === 'wallets' && <WalletPanel />}
+                {currentView === 'watchtower' && <WatchtowerPanel />}
+                {currentView === 'passkeys' && <PasskeyPanel />}
+              </div>
+            </main>
+          </div>
+        </div>
 
         {/* Modals */}
         <CreateIdentityModal
