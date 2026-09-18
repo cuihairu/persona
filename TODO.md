@@ -157,6 +157,14 @@ Desktop (Tauri v2 + React)
   （六类型图标/配色、切换、CreateIdentityModal 表单流 + reset）、
   ErrorHandling 68→94.4%（边界 fallback + dev 详情 + production 上报臂、
   四样式类型矩阵）。
+- [ ] 功能开关（feature flags）：高级功能默认关闭，设置页可开启
+  （对齐 1Password：SSH agent 在设置中显式开启；钱包/Passkey 多数用户用不到，
+  默认隐藏，需要时开启。主航道密码管理不受影响）
+  - 侧栏导航按开关显隐：SSH Agent / Wallets / Passkeys 默认关；
+    Credentials / Statistics / Watchtower 默认开
+  - 开关持久化到 workspace settings（schema v2 已有 settings 字段）
+  - backend 联动：SSH agent 审批服务端/托盘仅在开启时启动；
+    钱包/passkey 后端命令可保留（已有解锁 + re-auth 门禁），仅隐藏 UI 入口
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)
