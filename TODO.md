@@ -147,8 +147,16 @@ Desktop (Tauri v2 + React)
   useReauth/ReauthModal promise 化重认证、RevealSecretButton REAUTH 重试编排
   （mock useReauth，绕开 jsdom act 外 modal 限制）、App.tsx 六视图切换 +
   auto-lock 横幅 + 审批弹窗 + statistics。
-  剩余低覆盖大组件（后续）：WalletPanel 46%、IdentitySwitcher 43%、
-  CredentialList 55%、ErrorHandling 68%
+- [x] 前端测试第四批（2026-09）：四大组件补全，202 → 257 测试，覆盖率
+  77.62% → 91.52% statements（branches 62.71→81.67、functions 72.7→88.59、
+  lines 77.91→92.17）。CredentialList 55→97.7%（筛选纯函数、五档安全色、
+  六类型详情分支、TOTP 倒计时 fake-timers + 归零自动刷新、删除确认流）、
+  WalletPanel 46→95.2%（导出格式矩阵 + WIF/xpub 提示、导出密码闸门 + json
+  blob 下载、create/import/addAddress 全流程含失败臂、地址表 + QR + 复制、
+  Send 投毒上下文、删除确认取消/失败/成功三臂）、IdentitySwitcher 43→100%
+  （六类型图标/配色、切换、CreateIdentityModal 表单流 + reset）、
+  ErrorHandling 68→94.4%（边界 fallback + dev 详情 + production 上报臂、
+  四样式类型矩阵）。
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)
