@@ -121,3 +121,11 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **明确不宣称**：该存储不是防篡改账本，不提供防抵赖保证——持有令牌的客户端可上报任意内容，`client_timestamp` 不可信；审计语义以各端本地审计日志为准，server 侧只作聚合观测。
 - **指标面**：`/metrics` 输出请求计数（方法 + 路由模板 + 状态码）与事件接入计数，标签基数有界，不含用户数据或路径参数。
 - **已知限制**：无保留策略（事件库无界增长）；无速率限制与配额；`ip_address`/`user_agent` 为客户端自报字段；permissive CORS（当前客户端非浏览器）；单令牌无 per-client 身份。
+
+客户端上报器（`core::events::Emitter` + `ServerEventSink`，把本地审计事件尽力复制到上述 Events API）：
+
+- **数据范围**：与 server 存储范围一致——本地审计摘要与受限元数据，不承载明文 secret 或密钥材料；wire 层逐条按 server 上限做字节级预校验，毒丸事件在客户端丢弃（server 是全有或全无校验，不让单条拖垮整批）。
+- **令牌**：Bearer token 由宿主注入（`ServerEventSink::new(base_url, token)`），core 不读环境变量、不落盘；上报仅发往显式配置的 base_url。
+- **非持久**：内存队列尽力而为复制——进程崩溃丢未 flush 批，无持久 outbox、不回补；本地 sqlite 审计库仍是唯一存证源（延续"不宣称防篡改/防抵赖"）。
+- **背压**：上报绝不阻塞审计写入——队满丢最旧并计数；发送失败整批按原序回队，1s→5min 指数退避；`stop()` 的最终 flush 尽力而为，abort 丢失窗口上限 = 一个 batch_size。
+- **已知缺口**：`AutoLockManager` 的 SessionLocked/Unlocked 事件直写审计库、绕过该挂钩，暂不上报（TODO 登记 follow-up）。

@@ -260,11 +260,29 @@ Server & Sync (optional)
   已知限制：无保留策略（DB 无界增长）、无速率限制、单共享 token 无
   per-client 身份、ip/user_agent 客户端自报、client_timestamp 取信
   客户端时钟、permissive CORS、405 不计入 metrics。
-  follow-up：core::events::Emitter 客户端上报器（批量+重试）、SRP
+  follow-up：SRP
   设备认证（替代单令牌）、保留策略/TTL、ConnectInfo 采真实来源 IP、
   gzip 压缩。手工验收：带 token 起服 → POST 事件（202）→ 重复
   client_event_id（duplicates 计数）→ GET 翻页 → /metrics 观察 →
   不设 token 重启（/api 503）→ compose 卷重启后事件仍在。
+- [x] core::events::Emitter 客户端上报器（批量+重试）
+  ——512b2495 wire 镜像 + 字节口径预校验（毒丸客户端逐条丢弃，防
+  server 全有或全无整批 422；action 走 Display 非 serde，externally
+  tagged Custom 会序列化成对象）+ Emitter（同步入队、队满丢最旧计数、
+  Notify 批满唤醒 + interval 兜底、失败整批原序回队 + 1s→5min 指数
+  退避、Weak 防泄漏、stop 尽力最终 flush）；e22a2395 ServerEventSink
+  （events-server feature 进 default，reqwest POST + Bearer + 10s
+  超时，token 宿主注入 core 不落盘）；75e3bb4e PersonaService.log_audit
+  挂钩（set_event_emitter 注入，写本地库后尽力 emit，None 解除）。
+  已知限制：内存队列非持久无 outbox（进程崩溃丢未 flush 批，本地
+  sqlite 审计库仍是存证源）、AutoLockManager 的 SessionLocked/Unlocked
+  直写审计库绕过挂钩不上报、stop 的 abort 丢失窗口上限 = 一个
+  batch_size。THREAT_MODEL 同批登记客户端条目。
+  follow-up：desktop/CLI/mobile 宿主接线（设置 UI + token 存储）、
+  AutoLockManager 接线、持久 outbox/回补、gzip。手工验收：真 server +
+  Emitter(ServerEventSink) 发 3 条（1 重复 id）→ GET accepted=2
+  duplicates=1 → /metrics 计数增长；停服期间 queued() 增长、重启后退避
+  自动送达；杀进程丢未 flush 批但 audit_logs 表完整。
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
