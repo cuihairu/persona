@@ -3,7 +3,7 @@ import CredentialList, { filterCredentials } from './CredentialList';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import toast from 'react-hot-toast';
-import type { SidebarFilter } from '@/types';
+import type { Credential, SidebarFilter } from '@/types';
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
@@ -39,17 +39,15 @@ jest.mock('@/components/RevealSecretButton', () => ({
   ),
 }));
 
-const makeCred = (over: Record<string, any> = {}) => ({
+// 返回类型注解让 tsc 守住 fixture 与 Credential 的形状一致；
+// 可选字段（url/username/notes/last_accessed）缺省即可，无需显式 null
+const makeCred = (over: Record<string, any> = {}): Credential => ({
   id: 'c1',
   identity_id: 'i1',
   name: 'Example',
   credential_type: 'Password',
   security_level: 'High',
-  url: null,
-  username: null,
-  notes: null,
   tags: [] as string[],
-  last_accessed: null,
   created_at: '2023-01-01T00:00:00Z',
   updated_at: '2023-01-01T00:00:00Z',
   is_active: true,

@@ -567,14 +567,23 @@ describe('hooks/usePersonaService', () => {
     expect(toastError).toHaveBeenCalledWith('locked');
   });
 
-  it('getTotpCode returns code or null on failure', async () => {
+  it('getTotpCode returns the response or null on failure', async () => {
     mockUnlockedOnMount();
     const totp = jest.spyOn(personaAPI, 'getTotpCode');
 
-    totp.mockResolvedValueOnce({ success: true, data: '123456', error: undefined });
+    const totpResponse = {
+      code: '123456',
+      remaining_seconds: 25,
+      period: 30,
+      digits: 6,
+      algorithm: 'SHA1',
+      issuer: 'Example',
+      account_name: 'alice',
+    };
+    totp.mockResolvedValueOnce({ success: true, data: totpResponse, error: undefined });
     const { result } = renderHook(() => usePersonaService());
     await act(async () => {
-      await expect(result.current.getTotpCode('c1')).resolves.toBe('123456');
+      await expect(result.current.getTotpCode('c1')).resolves.toEqual(totpResponse);
     });
 
     totp.mockResolvedValueOnce({ success: false, data: undefined, error: 'no totp' });
@@ -683,8 +692,9 @@ describe('hooks/usePersonaService', () => {
     });
     expect(useAppStore.getState().sshAgentStatus).toEqual({ running: true });
 
-    // data 为 null 时归一为 null
-    status.mockResolvedValueOnce({ success: true, data: null, error: undefined });
+    // data 为空时归一为 null（Rust 实际下发 null；类型收窄为 undefined，
+    // hook 侧 `?? null` 统一归一）
+    status.mockResolvedValueOnce({ success: true, data: undefined, error: undefined });
     await act(async () => {
       await result.current.refreshSshAgentStatus();
     });

@@ -4,8 +4,7 @@ import type { Identity } from '@/types';
 
 // jsdom 未注入 TextEncoder（浏览器环境原生可用），Raw 分支提交需要
 if (typeof globalThis.TextEncoder === 'undefined') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  (globalThis as any).TextEncoder = require('util').TextEncoder;
+  (globalThis as any).TextEncoder = jest.requireActual('util').TextEncoder;
 }
 
 const mockUsePersonaService = jest.fn();

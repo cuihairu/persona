@@ -175,7 +175,7 @@ describe('components/RevealSecretButton', () => {
 
     // 无自定义 handler → copyWithAutoClear（第一个组件已 reveal，无 trigger）
     render(
-      <RevealSecretButton credentialId="c2" field="private_key" label="Private Key" />,
+      <RevealSecretButton credentialId="c2" field="ssh_private_key" label="Private Key" />,
     );
     fireEvent.click(screen.getByTestId('reveal-trigger'));
     await waitFor(() => {

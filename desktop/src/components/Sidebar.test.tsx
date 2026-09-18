@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import Sidebar from './Sidebar';
 import { useAppStore, DEFAULT_FEATURE_FLAGS, DEFAULT_SIDEBAR_FILTER } from '@/stores/appStore';
+import type { Credential } from '@/types';
 
 jest.mock('@/components/IdentitySwitcher', () => ({
   __esModule: true,
@@ -9,17 +10,15 @@ jest.mock('@/components/IdentitySwitcher', () => ({
   ),
 }));
 
-const makeCred = (over: Record<string, any> = {}) => ({
+// 返回类型注解让 tsc 守住 fixture 与 Credential 的形状一致；
+// 可选字段（url/username/notes/last_accessed）缺省即可，无需显式 null
+const makeCred = (over: Record<string, any> = {}): Credential => ({
   id: 'c1',
   identity_id: 'i1',
   name: 'Example',
   credential_type: 'Password',
   security_level: 'High',
-  url: null,
-  username: null,
-  notes: null,
   tags: [] as string[],
-  last_accessed: null,
   created_at: '2023-01-01T00:00:00Z',
   updated_at: '2023-01-01T00:00:00Z',
   is_active: true,

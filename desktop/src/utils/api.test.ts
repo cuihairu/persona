@@ -139,15 +139,13 @@ describe('utils/api command mapping coverage', () => {
   });
 
   it('identity CRUD methods', async () => {
+    // 可选描述字段缺省即可（serde Option 缺键即 None）
     await personaAPI.createIdentity({
       name: 'n',
       identity_type: 'personal',
-      description: null,
-      email: null,
-      phone: null,
     });
     expect(mockInvoke).toHaveBeenCalledWith('create_identity', {
-      request: { name: 'n', identity_type: 'personal', description: null, email: null, phone: null },
+      request: { name: 'n', identity_type: 'personal' },
     });
 
     await personaAPI.updateIdentity({ id: 'i1', name: 'n2' } as any);
