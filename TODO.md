@@ -136,6 +136,12 @@ Desktop (Tauri v2 + React)
   拒绝臂），生产代码无任何置位路径（INSERT 恒 0）——密码过期/轮换策略
   未实现，init_service 的 "Password change required" 分支永不触发
   （2026-09 覆盖率分析发现，非链路断裂而是功能本体缺失）
+- [ ] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09 全局搜索批次发现；
+  此前误记 "tsc 0 错误"——`npx tsc` 拉到 npm 同名占位包返回假 0，须用
+  `./node_modules/.bin/tsc`）：全在测试 fixture（`url: null` vs
+  `url?: string`、缺 timestamp/SshAgentStatus 形状、`"private_key"` 非法
+  SecretField 等），源代码 0 错误；jest/ts-jest 不做全量类型检查所以
+  测试照跑。修法：fixture 工厂返回类型标注 `Credential`/`Identity` 等
 - [x] fix(desktop): init_service 持锁调用 register_auto_lock_bridge 的死锁
   （tokio Mutex 非重入；2026-09 命令级测试发现并修复）
 - [x] 前端测试第一批~三批（2026-09，jest 30 + testing-library）：115 → 202 测试，
@@ -179,7 +185,13 @@ Desktop (Tauri v2 + React)
   - [x] 双栏布局：中间条目列表（图标+标题+副标题，行内复制/详情按钮）+
     右侧常驻详情面板，取代凭据卡片网格 + 点击弹 modal
   - [ ] 全局快速搜索（⌘K / 顶栏搜索框，跨身份跨类型结果分组；范围天然
-    受功能开关约束）
+    受功能开关约束）——6be7cba7 跨身份选中桥（pendingCredentialSelection
+    入 store，CredentialList 凭据就绪后注入并清除）/ 74b58db5 QuickSearch
+    overlay（⌘K+工具栏按钮双入口、200ms debounce、按身份分组、↑↓Enter
+    键盘导航）。已知限制：搜索仅匹配 name（后端 search_credentials 现状）；
+    loadCredentials 失败时 pending 残留（下次进该身份会突然选中）；身份
+    切换 toast 在搜索跳转时照弹。follow-up：SQL 扩 username/url 字段、
+    搜索词高亮、跳转时静音切换 toast
   - [x] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
     变体——13d75f4c 基建 / 94ee3930 Settings 三档选择器 / a79b3cbb 全组件
     sweep，顺带修复 v4 死类 bg-opacity-* 导致的弹窗遮罩纯黑实底）
@@ -191,7 +203,8 @@ Desktop (Tauri v2 + React)
     筛选变化不自动清详情面板选中（follow-up）
   - [ ] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
     （隐私红线：不常驻外联，不默认抓取——1Password 同款做法）
-  - [ ] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名等；优先级最低）
+  - [ ] 快捷键体系（⌘K 搜索、⌘L 锁定、⌘E 复制用户名等；优先级最低；
+    ⌘K 已随全局快速搜索落地）
 - [ ] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
 
 Server & Sync (optional)
