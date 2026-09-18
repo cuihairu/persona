@@ -20,6 +20,7 @@ import WalletPanel from '@/components/WalletPanel';
 import WatchtowerPanel from '@/components/WatchtowerPanel';
 import PasskeyPanel from '@/components/PasskeyPanel';
 import SettingsModal from '@/components/SettingsModal';
+import QuickSearch from '@/components/QuickSearch';
 import Sidebar, { NAV_ITEMS } from '@/components/Sidebar';
 import type { ViewId } from '@/components/Sidebar';
 
@@ -180,6 +181,7 @@ const App: React.FC = () => {
               >
                 {NAV_ITEMS.find((item) => item.id === currentView)?.label}
               </h1>
+              <QuickSearch />
             </div>
 
             <main className="flex-1 overflow-y-auto">

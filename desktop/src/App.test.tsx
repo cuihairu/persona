@@ -143,6 +143,9 @@ describe('App', () => {
       lockService,
       loadCredentialsForIdentity,
       clearError,
+      // 工具栏 QuickSearch（closed 态不发请求，仅防御引用）
+      searchCredentials: jest.fn().mockResolvedValue([]),
+      switchIdentity: jest.fn(),
     };
   });
 
@@ -182,6 +185,7 @@ describe('App', () => {
 
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
     expect(screen.getByTestId('app-sidebar')).toBeInTheDocument();
+    expect(screen.getByTestId('quick-search-trigger')).toBeInTheDocument();
     expect(screen.queryByTestId('auto-lock-banner')).not.toBeInTheDocument();
 
     // 身份变化时拉取凭据
