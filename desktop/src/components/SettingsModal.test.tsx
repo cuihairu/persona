@@ -30,7 +30,8 @@ const openIdentitiesTab = () => {
 describe('components/SettingsModal', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    useAppStore.setState({ featureFlags: { ...DEFAULT_FEATURE_FLAGS } });
+    // theme 在 store 里跨用例存活，逐用例复位
+    useAppStore.setState({ theme: 'system', featureFlags: { ...DEFAULT_FEATURE_FLAGS } });
   });
 
   it('renders nothing when closed', () => {
@@ -72,6 +73,45 @@ describe('components/SettingsModal', () => {
       'Takes effect the next time you unlock',
     );
     expect(screen.queryByText('No identities yet.')).not.toBeInTheDocument();
+  });
+
+  it('renders the theme picker with the current preference checked', () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+    useAppStore.setState({ theme: 'dark' });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
+    expect(screen.getByTestId('theme-option-system')).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByTestId('theme-option-light')).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByTestId('theme-option-dark')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('writes the theme preference to the store without touching feature flags', () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    fireEvent.click(screen.getByTestId('theme-option-dark'));
+    expect(useAppStore.getState().theme).toBe('dark');
+
+    fireEvent.click(screen.getByTestId('theme-option-light'));
+    expect(useAppStore.getState().theme).toBe('light');
+
+    // Theme 与功能开关互不相干（组件只写 store，html class 由 App 层 useTheme 应用）
+    expect(mockSetFlags).not.toHaveBeenCalled();
   });
 
   it('toggles a flag optimistically and adopts the server truth', async () => {
