@@ -245,7 +245,26 @@ Desktop (Tauri v2 + React)
   ④ `sudo dpkg -r persona` 卸载 → 确认 vault 数据目录保留
 
 Server & Sync (optional)
-- [ ] Events API, audit ingestion, metrics
+- [x] Events API, audit ingestion, metrics
+  ——72aa483f `POST/GET /api/v1/events`（批量 ≤500/body ≤1MiB 全有或全
+  无校验、client_event_id 部分唯一索引去重、server 分配 UUID 与
+  received_at；base64url 游标分页 + action/success/since 过滤，limit
+  默认 100 上限 1000）+ 单 Bearer 令牌（subtle 常量时间比较，未配置
+  PERSONA_SERVER_TOKEN 即 503 fail-closed）+ 独立 SQLite 库
+  （server/migrations，WAL，与 core 身份库分离）+ 统一错误形状
+  {"error":{code,message,items}}；6ffaf393 `/metrics` 手写 Prometheus
+  0.0.4 文本（http_requests_total 按路由模板计数、事件三计数器、
+  start_time/uptime，免认证，fallback 404 计 "unmatched"）；1fb23003
+  compose 令牌强制注入（:? 缺失拒绝启动）+ 命名卷持久化。THREAT_MODEL
+  同 commit 登记（仅摘要/元数据、不宣称防篡改/防抵赖）。
+  已知限制：无保留策略（DB 无界增长）、无速率限制、单共享 token 无
+  per-client 身份、ip/user_agent 客户端自报、client_timestamp 取信
+  客户端时钟、permissive CORS、405 不计入 metrics。
+  follow-up：core::events::Emitter 客户端上报器（批量+重试）、SRP
+  设备认证（替代单令牌）、保留策略/TTL、ConnectInfo 采真实来源 IP、
+  gzip 压缩。手工验收：带 token 起服 → POST 事件（202）→ 重复
+  client_event_id（duplicates 计数）→ GET 翻页 → /metrics 观察 →
+  不设 token 重启（/api 503）→ compose 卷重启后事件仍在。
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
