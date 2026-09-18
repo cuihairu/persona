@@ -482,6 +482,9 @@ export type IdentityType = 'Personal' | 'Work' | 'Social' | 'Financial' | 'Gamin
 export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' | 'BankCard' | 'GameAccount' | 'ServerConfig' | 'Certificate' | 'TwoFactor';
 export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';
 
+/** 主题偏好三档；'system' 跟随 prefers-color-scheme */
+export type ThemePreference = 'system' | 'light' | 'dark';
+
 export interface InitRequest {
   master_password: string;
   db_path?: string;

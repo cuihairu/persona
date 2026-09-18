@@ -5,6 +5,7 @@ import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
 import { useSshApprovals } from '@/hooks/useSshApprovals';
 import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
+import { useTheme } from '@/hooks/useTheme';
 import { personaAPI } from '@/utils/api';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import UnlockScreen from '@/components/UnlockScreen';
@@ -39,7 +40,13 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'passkeys', label: 'Passkeys', flag: 'passkeys' },
 ];
 
+/** 两个 Toaster（锁定态/主界面）共用的气泡样式；配色走 .persona-toast 的 CSS 变量随主题翻转 */
+const TOAST_OPTIONS = { className: 'persona-toast' };
+
 const App: React.FC = () => {
+  // 主题联动：偏好 → <html>.dark + localStorage + 原生窗口主题（挂在早退 return 之前）
+  useTheme();
+
   const {
     isUnlocked,
     currentIdentity,
@@ -140,7 +147,7 @@ const App: React.FC = () => {
             </div>
           )}
           <UnlockScreen onUnlock={() => {}} />
-          <Toaster position="top-right" />
+          <Toaster position="top-right" toastOptions={TOAST_OPTIONS} />
         </div>
       </ErrorBoundary>
     );
@@ -268,7 +275,7 @@ const App: React.FC = () => {
         />
 
         {/* Toast Notifications */}
-        <Toaster position="top-right" />
+        <Toaster position="top-right" toastOptions={TOAST_OPTIONS} />
       </div>
     </ErrorBoundary>
   );

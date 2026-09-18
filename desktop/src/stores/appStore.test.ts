@@ -1,7 +1,9 @@
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from './appStore';
+import { THEME_STORAGE_KEY } from '@/utils/theme';
 
 describe('stores/appStore', () => {
   beforeEach(() => {
+    localStorage.removeItem(THEME_STORAGE_KEY); // jsdom localStorage 跨用例存活
     useAppStore.setState({
       isUnlocked: false,
       isInitialized: false,
@@ -13,6 +15,7 @@ describe('stores/appStore', () => {
       featureFlags: { ...DEFAULT_FEATURE_FLAGS },
       isLoading: false,
       error: null,
+      theme: 'system',
     });
   });
 
@@ -61,5 +64,25 @@ describe('stores/appStore', () => {
     // 后续改动入参不影响 store（optimistic 更新回滚路径依赖这一点）
     incoming.wallet = true;
     expect(useAppStore.getState().featureFlags.wallet).toBe(false);
+  });
+
+  it('initializes theme from localStorage when the store module loads', async () => {
+    localStorage.setItem(THEME_STORAGE_KEY, 'dark');
+    // store 是模块单例：isolateModules 重载后重新走 create() 的初始化分支
+    let isolated!: typeof import('./appStore');
+    await jest.isolateModulesAsync(async () => {
+      isolated = await import('./appStore');
+    });
+    expect(isolated.useAppStore.getState().theme).toBe('dark');
+  });
+
+  it('setTheme updates only the theme field', () => {
+    useAppStore.getState().setUnlocked(true);
+    useAppStore.getState().setTheme('dark');
+
+    const state = useAppStore.getState();
+    expect(state.theme).toBe('dark');
+    expect(state.isUnlocked).toBe(true);
+    expect(state.error).toBeNull();
   });
 });

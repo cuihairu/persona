@@ -5,6 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Persona - Digital Identity Manager</title>
+    <script>
+      // FOUC 防护：React 挂载前按持久化偏好/系统主题给 <html> 挂 .dark
+      // （算法与 src/utils/theme.ts 保持一致：无值/越界按 system 处理）
+      (function () {
+        var pref;
+        try {
+          pref = localStorage.getItem('persona-theme');
+        } catch (e) {}
+        var dark =
+          pref === 'dark' ||
+          ((pref == null || pref === 'system') &&
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (dark) document.documentElement.classList.add('dark');
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

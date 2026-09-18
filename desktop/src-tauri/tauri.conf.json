@@ -23,8 +23,7 @@
         "center": true,
         "decorations": true,
         "alwaysOnTop": false,
-        "skipTaskbar": false,
-        "theme": "Light"
+        "skipTaskbar": false
       }
     ],
     "security": {

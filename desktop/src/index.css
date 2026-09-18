@@ -2,6 +2,9 @@
 
 @import "tailwindcss";
 
+/* 暗色模式 class 策略：html 挂 .dark 时启用 dark: 变体（唯一应用点见 hooks/useTheme） */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-border: #e2e8f0;
   --color-background: #ffffff;
@@ -10,6 +13,10 @@
   --color-card-foreground: #0f172a;
   --color-ring: #3b82f6;
   --color-primary-50: #f0f9ff;
+  --color-primary-100: #dbeafe;
+  --color-primary-200: #bfdbfe;
+  --color-primary-300: #93c5fd;
+  --color-primary-400: #60a5fa;
   --color-primary-500: #3b82f6;
   --color-primary-600: #2563eb;
   --color-primary-700: #1d4ed8;
@@ -17,6 +24,8 @@
   --color-secondary-50: #f8fafc;
   --color-secondary-100: #f1f5f9;
   --color-secondary-200: #e2e8f0;
+  --color-secondary-300: #cbd5e1;
+  --color-secondary-400: #94a3b8;
   --color-secondary-500: #64748b;
   --color-secondary-600: #475569;
   --color-secondary-700: #334155;
@@ -47,6 +56,27 @@
   }
 }
 
+/*
+ * 语义 token 暗色翻转：theme 变量输出在 @layer theme 的 :root，
+ * 覆盖块必须是非 layer 普通规则（unlayered 优先于任何 layer）才能稳定获胜。
+ */
+.dark {
+  --color-background: #030712; /* gray-950 页面底 */
+  --color-foreground: #f9fafb; /* gray-50 */
+  --color-card: #111827; /* gray-900 卡片面 */
+  --color-card-foreground: #f9fafb;
+  --color-border: #1f2937; /* gray-800 描边 */
+}
+
+/* toast 暗色适配：react-hot-toast 默认白底来自运行时注入的 goober 类（晚于本表），!important 必须 */
+.persona-toast {
+  background: var(--color-card) !important;
+  color: var(--color-card-foreground) !important;
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.25),
+    inset 0 0 0 1px var(--color-border) !important;
+}
+
 @utility btn {
   @apply inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50 disabled:pointer-events-none ring-offset-background;
 }
@@ -57,19 +87,19 @@
   }
 
   .btn-secondary {
-    @apply btn bg-secondary-100 text-secondary-900 hover:bg-secondary-200 h-10 py-2 px-4;
+    @apply btn bg-secondary-100 text-secondary-900 hover:bg-secondary-200 dark:bg-secondary-800 dark:text-secondary-100 dark:hover:bg-secondary-700 h-10 py-2 px-4;
   }
 
   .btn-ghost {
-    @apply btn hover:bg-secondary-100 hover:text-secondary-900 h-10 py-2 px-4;
+    @apply btn hover:bg-secondary-100 hover:text-secondary-900 dark:hover:bg-secondary-800 dark:hover:text-secondary-100 h-10 py-2 px-4;
   }
 
   .card {
-    @apply rounded-lg border bg-white text-card-foreground shadow-sm;
+    @apply rounded-lg border bg-card text-card-foreground shadow-sm;
   }
 
   .input {
-    @apply flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-gray-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply flex h-10 w-full rounded-md border border-gray-300 bg-card px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-gray-500 dark:border-gray-600 dark:placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50;
   }
 
   .label {
