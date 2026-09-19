@@ -12,19 +12,14 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 persona-core = { path = "../../core" }
 
-# 序列化
-serde.workspace = true
-serde_json.workspace = true
-
-# 异步运行时
+# 异步运行时（FFI 边界 block_on 桥 + sqlx 池/Emitter 后台任务挂载）
 tokio.workspace = true
-
-# 错误处理
-anyhow.workspace = true
-thiserror.workspace = true
 
 # FFI
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [features]
 default = []

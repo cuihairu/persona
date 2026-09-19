@@ -3767,12 +3767,9 @@ dependencies = [
 name = "persona-mobile"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "libc",
  "persona-core",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
+ "tempfile",
  "tokio",
 ]
 
