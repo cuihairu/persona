@@ -1,4 +1,5 @@
 use super::{session::AutoLockConfig, Session};
+use crate::events::Emitter;
 use crate::models::{AuditAction, ResourceType};
 use crate::storage::{AuditLogRepository, Repository};
 use serde::{Deserialize, Serialize};
@@ -123,6 +124,10 @@ pub struct AutoLockManager {
     sessions: Arc<RwLock<HashMap<String, SessionInfo>>>,
     callbacks: Arc<RwLock<Vec<AutoLockCallback>>>,
     audit_repo: Option<AuditLogRepository>,
+    /// 审计事件上报器（None = 不上报）。由
+    /// [`crate::PersonaService::set_event_emitter`] 传播注入——service 是
+    /// 唯一注入口，宿主（desktop/CLI）只跟 service 打交道。
+    event_emitter: Option<Emitter>,
     background_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     current_user: Arc<RwLock<Option<Uuid>>>,
 }
@@ -143,6 +148,7 @@ impl AutoLockManager {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             callbacks: Arc::new(RwLock::new(Vec::new())),
             audit_repo: None,
+            event_emitter: None,
             background_task: Arc::new(Mutex::new(None)),
             current_user: Arc::new(RwLock::new(None)),
         }
@@ -170,6 +176,13 @@ impl AutoLockManager {
     pub fn with_audit_repo(mut self, audit_repo: AuditLogRepository) -> Self {
         self.audit_repo = Some(audit_repo);
         self
+    }
+
+    /// 注入/摘除审计事件上报器（`None` = 摘除）。调用方约定：
+    /// [`crate::PersonaService::set_event_emitter`] 会同步传播到这里，
+    /// 换上报器时先摘旧再挂新，防止双任务。
+    pub fn set_event_emitter(&mut self, emitter: Option<Emitter>) {
+        self.event_emitter = emitter;
     }
 
     /// Register a callback for auto-lock events
@@ -452,6 +465,8 @@ impl AutoLockManager {
         let sessions = self.sessions.clone();
         let callbacks = self.callbacks.clone();
         let audit_repo = self.audit_repo.clone();
+        let event_emitter = self.event_emitter.clone();
+        let current_user = self.current_user.clone();
 
         let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -519,15 +534,25 @@ impl AutoLockManager {
                                 });
                             }
 
-                            // Log audit event if repository available
+                            // Log audit event if repository available（带全
+                            // session 上下文，与 helper 三处一致；写库后尽力上报）
                             if let Some(ref repo) = audit_repo {
-                                let _ = repo
-                                    .create(&crate::models::AuditLog::new(
-                                        AuditAction::SessionLocked,
-                                        ResourceType::Session,
-                                        true,
-                                    ))
-                                    .await;
+                                let user = *current_user.read().await;
+                                let lock_details = match lock_reason {
+                                    LockReason::Inactivity => "Inactivity timeout",
+                                    LockReason::AbsoluteTimeout => "Absolute timeout",
+                                    _ => "Auto lock",
+                                };
+                                let log = session_audit_log(
+                                    &session_id,
+                                    user,
+                                    AuditAction::SessionLocked,
+                                    lock_details,
+                                );
+                                let _ = repo.create(&log).await;
+                                if let Some(ref emitter) = event_emitter {
+                                    emitter.emit(&log);
+                                }
                             }
                         }
                     }
@@ -612,18 +637,32 @@ impl AutoLockManager {
 
     async fn log_audit_event(&self, session_id: &str, action: AuditAction, reason: &str) {
         if let Some(ref repo) = self.audit_repo {
-            let current_user = self.current_user.read().await;
-            let mut log = crate::models::AuditLog::new(action, ResourceType::Session, true)
-                .with_session_id(Some(session_id.to_string()))
-                .with_details(Some(reason.to_string()));
-
-            if let Some(user_id) = *current_user {
-                log = log.with_user_id(Some(user_id.to_string()));
-            }
-
+            let current_user = *self.current_user.read().await;
+            let log = session_audit_log(session_id, current_user, action, reason);
             let _ = repo.create(&log).await;
+            // 先写本地库再尽力上报（与 PersonaService::log_audit 同序）
+            if let Some(ref emitter) = self.event_emitter {
+                emitter.emit(&log);
+            }
         }
     }
+}
+
+/// 构造带 session 上下文的审计行（helper 与后台监控任务共用——后者是
+/// 'static 闭包不能引用 self，只克隆本函数需要的数据进去）。
+fn session_audit_log(
+    session_id: &str,
+    current_user: Option<Uuid>,
+    action: AuditAction,
+    reason: &str,
+) -> crate::models::AuditLog {
+    let mut log = crate::models::AuditLog::new(action, ResourceType::Session, true)
+        .with_session_id(Some(session_id.to_string()))
+        .with_details(Some(reason.to_string()));
+    if let Some(user_id) = current_user {
+        log = log.with_user_id(Some(user_id.to_string()));
+    }
+    log
 }
 
 // Helper functions for background task
@@ -1014,6 +1053,145 @@ mod tests {
         assert!(unlocked
             .iter()
             .any(|l| l.session_id.as_deref() == Some(session_id.as_str())));
+    }
+
+    /// 审计写库后经 Emitter 上报（session_locked/session_unlocked wire 事件）；
+    /// `set_event_emitter(None)` 摘除后只落本地库、不再上报。
+    #[tokio::test]
+    async fn audit_events_feed_emitter_until_detached() {
+        use crate::events::testing::{eventually, FakeSink};
+        use std::sync::Arc;
+
+        let db = Database::in_memory().await.expect("in-memory db");
+        db.migrate().await.expect("migrate");
+
+        // audit_logs.user_id has a FK to user_auth, so the user must exist.
+        let user = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO user_auth (user_id, enabled_factors, failed_attempts, created_at, updated_at)
+             VALUES (?, '[]', 0, ?, ?)",
+        )
+        .bind(user.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let mut manager = AutoLockManager::with_basic_config(AutoLockConfig::default())
+            .with_audit_repo(AuditLogRepository::new(db.clone()));
+        manager.set_current_user(user).await;
+
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        let sink = Arc::new(FakeSink::default());
+        let emitter = crate::events::Emitter::with_config(
+            sink.clone(),
+            crate::events::EmitterConfig {
+                batch_size: 1,
+                ..Default::default()
+            },
+        );
+        emitter.start();
+        manager.set_event_emitter(Some(emitter.clone()));
+
+        manager.lock_session(&session_id).await.unwrap();
+        eventually(|| sink.call_count() >= 1).await;
+        assert_eq!(sink.batches()[0][0].action, "session_locked");
+        assert_eq!(
+            sink.batches()[0][0].session_id.as_deref(),
+            Some(session_id.as_str())
+        );
+        assert_eq!(
+            sink.batches()[0][0].user_id.as_deref(),
+            Some(user.to_string().as_str())
+        );
+
+        manager.unlock_session(&session_id).await.unwrap();
+        eventually(|| sink.call_count() >= 2).await;
+        assert_eq!(sink.batches()[1][0].action, "session_unlocked");
+
+        // 摘除上报器：审计仍写本地库，但不再上报
+        manager.set_event_emitter(None);
+        manager.lock_session(&session_id).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(sink.call_count(), 2);
+        emitter.stop().await;
+    }
+
+    /// 后台监控超时落锁的审计行同样上报，且带全 session 上下文
+    /// （session_id/user_id/details——修复原先裸 action 行的缺陷）。
+    #[tokio::test]
+    async fn background_timeout_lock_reports_session_context() {
+        use crate::events::testing::{eventually, FakeSink};
+        use std::sync::Arc;
+
+        let db = Database::in_memory().await.expect("in-memory db");
+        db.migrate().await.expect("migrate");
+
+        let user = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO user_auth (user_id, enabled_factors, failed_attempts, created_at, updated_at)
+             VALUES (?, '[]', 0, ?, ?)",
+        )
+        .bind(user.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                inactivity_timeout_secs: 2,
+                absolute_timeout_secs: 0,
+                ..Default::default()
+            },
+            background_check_interval_secs: 1,
+            ..Default::default()
+        };
+        let mut manager =
+            AutoLockManager::new(config).with_audit_repo(AuditLogRepository::new(db.clone()));
+        manager.set_current_user(user).await;
+
+        let sink = Arc::new(FakeSink::default());
+        let emitter = crate::events::Emitter::with_config(
+            sink.clone(),
+            crate::events::EmitterConfig {
+                batch_size: 1,
+                ..Default::default()
+            },
+        );
+        emitter.start();
+        manager.set_event_emitter(Some(emitter.clone()));
+
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+        manager.start_background_monitoring().await;
+
+        // ~2s 后后台任务按 inactivity 超时落锁并上报
+        tokio::time::sleep(Duration::from_millis(2600)).await;
+        manager.stop_background_monitoring().await;
+
+        eventually(|| {
+            sink.batches()
+                .iter()
+                .flatten()
+                .any(|e| e.action == "session_locked")
+        })
+        .await;
+        let batches = sink.batches();
+        let reported = batches
+            .iter()
+            .flatten()
+            .find(|e| e.action == "session_locked")
+            .expect("session_locked reported");
+        assert_eq!(reported.session_id.as_deref(), Some(session_id.as_str()));
+        assert_eq!(reported.user_id.as_deref(), Some(user.to_string().as_str()));
+        emitter.stop().await;
     }
 
     #[tokio::test]

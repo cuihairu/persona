@@ -207,8 +207,12 @@ impl PersonaService {
 
     /// 注入/移除审计事件上报器（`None` 关闭上报）。调用方负责 emitter 的
     /// `start()`/`stop()` 生命周期；`log_audit` 只做同步入队，绝不阻塞。
+    ///
+    /// 同步传播给 [`AutoLockManager`]——它的 SessionLocked/Unlocked 审计
+    /// 写库后走同一上报链；宿主只跟 service 打交道，无需单独接线。
     pub fn set_event_emitter(&mut self, emitter: Option<Emitter>) {
-        self.event_emitter = emitter;
+        self.event_emitter = emitter.clone();
+        self.auto_lock_manager.set_event_emitter(emitter);
     }
 
     /// Begin the SRP-like remote authentication handshake for a username.
@@ -2177,6 +2181,56 @@ mod tests {
             .await;
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         assert_eq!(sink.call_count(), 1);
+    }
+
+    /// `set_event_emitter` 传播到 auto_lock_manager：session 锁定审计
+    /// 走同一上报链，`None` 时两处（service + manager）一起摘除。
+    #[tokio::test]
+    async fn set_event_emitter_propagates_to_auto_lock_manager() {
+        use crate::events::testing::{eventually, FakeSink};
+        use std::sync::Arc;
+
+        let (_db, mut service) = unlocked_service().await;
+
+        // 注册真 session 让 force_lock_session 触达 manager 的审计路径。
+        let user_id = service.current_user.expect("initialized user");
+        let session = Session::new(user_id.to_string(), Duration::from_secs(600));
+        let session_id = session.id.clone();
+        service
+            .auto_lock_manager
+            .add_session(session)
+            .await
+            .unwrap();
+        *service.current_session_id.write().await = Some(session_id.clone());
+
+        let sink = Arc::new(FakeSink::default());
+        let emitter = crate::events::Emitter::with_config(
+            sink.clone(),
+            crate::events::EmitterConfig {
+                batch_size: 1,
+                ..Default::default()
+            },
+        );
+        emitter.start();
+        service.set_event_emitter(Some(emitter.clone()));
+
+        service.force_lock_session().await.unwrap();
+        eventually(|| sink.call_count() >= 1).await;
+        assert_eq!(sink.batches()[0][0].action, "session_locked");
+        assert_eq!(
+            sink.batches()[0][0].session_id.as_deref(),
+            Some(session_id.as_str())
+        );
+
+        // None 同步摘除 manager 侧：解锁/再锁只落本地库，不再上报
+        service.set_event_emitter(None);
+        service.unlock_session().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let count_after_detach = sink.call_count();
+        service.force_lock_session().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        assert_eq!(sink.call_count(), count_after_detach);
+        emitter.stop().await;
     }
 
     async fn seed_credential(
