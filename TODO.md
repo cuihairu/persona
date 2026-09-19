@@ -294,12 +294,18 @@ Server & Sync (optional)
   - [x] desktop：设置页 General 加同步服务器区块（ad00da2c；settings.sync
     存 vault JSON 列无字段级加密、get_workspace_settings 免解锁可读
     sync 段——THREAT_MODEL 登记；token 空串 = 保留旧值不回填前端；
-    保存即重挂停旧换新；RunEvent::Exit 尽力 flush）
+    保存即重挂停旧换新；RunEvent::Exit 尽力 flush；token 明文缺口
+    已由 keyring 批次闭合，见下条）
+  - [x] keyring/token 字段级加密（769f99c4；token 真值存 OS keyring
+    （keyring 4，service "persona-sync"、键为 vault db_path），
+    vault JSON 恒空串 + legacy 一次性迁移；attach fail-closed：enabled +
+    url + keyring 三者齐备才上报；keyring 不可用拒绝保存/禁用上报；
+    新增免解锁 sync_token_present 布尔查询驱动前端 placeholder；
+    测试全走 InMemoryTokenStore fake，真 keyring 走手工验收）
   - [x] AutoLockManager 接线（56dde4c1；set_event_emitter 传播到 manager，
     SessionLocked/Unlocked 写库后上报，后台超时锁审计行补齐
     session_id/user_id/details；LockPending/Activity 是 UI 事件不上报）
-  - [ ] follow-up：mobile 接线、keyring/token 字段级加密、持久
-    outbox/回补、gzip
+  - [ ] follow-up：mobile 接线、持久 outbox/回补、gzip
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
