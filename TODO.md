@@ -141,7 +141,6 @@ Desktop (Tauri v2 + React)
   安全区块（Never/90/180/365 + 手动改密后回锁屏）+ CLI `persona passwd`
   （新密码仅交互，不设 env）；wallets（独立钱包密码）不受影响
 - [ ] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09 全局搜索批次发现；
-- [ ] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09 全局搜索批次发现；
   此前误记 "tsc 0 错误"——`npx tsc` 拉到 npm 同名占位包返回假 0，须用
   `./node_modules/.bin/tsc`）：全在测试 fixture（`url: null` vs
   `url?: string`、缺 timestamp/SshAgentStatus 形状、`"private_key"` 非法
