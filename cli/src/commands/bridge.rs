@@ -783,7 +783,9 @@ async fn handle_request(
             )
             .await?
             {
+                #[cfg(unix)]
                 DesktopApproval::Approved => {}
+                #[cfg(unix)]
                 DesktopApproval::Denied(reason) => {
                     warn!(origin = %parsed.origin, %reason, "passkey_create denied by desktop");
                     return Err(anyhow!(
@@ -858,7 +860,9 @@ async fn handle_request(
             )
             .await?
             {
+                #[cfg(unix)]
                 DesktopApproval::Approved => {}
+                #[cfg(unix)]
                 DesktopApproval::Denied(reason) => {
                     warn!(origin = %parsed.origin, %reason, "passkey_assert denied by desktop");
                     return Err(anyhow!(
@@ -1012,6 +1016,9 @@ fn gesture_required() -> bool {
 
 /// Overall deadline for one approval round-trip. The desktop side denies on
 /// its own after 120s; this only guards against a hung server.
+/// Everything in the desktop-approval mechanism rides a Unix socket —
+/// definitions are cfg(unix) so Windows builds don't carry dead code.
+#[cfg(unix)]
 const DESKTOP_APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(150);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1036,6 +1043,7 @@ fn desktop_approval_mode() -> DesktopApprovalMode {
 
 /// Approval socket next to the SSH agent state dir (`~/.persona/` by
 /// default); `PERSONA_PASSKEY_APPROVAL_SOCKET` overrides (tests).
+#[cfg(unix)]
 fn desktop_approval_socket_path() -> PathBuf {
     std::env::var("PERSONA_PASSKEY_APPROVAL_SOCKET")
         .map(PathBuf::from)
@@ -1051,10 +1059,14 @@ fn desktop_approval_socket_path() -> PathBuf {
         })
 }
 
-/// What the desktop answered for one passkey request.
+/// What the desktop answered for one passkey request. `Approved`/`Denied`
+/// only exist where the socket mechanism does (unix); on other platforms the
+/// gate can only answer `Unavailable`.
 #[derive(Debug, PartialEq, Eq)]
 enum DesktopApproval {
+    #[cfg(unix)]
     Approved,
+    #[cfg(unix)]
     Denied(String),
     /// No desktop to ask (socket missing/unreachable, or a platform without
     /// Unix sockets): the caller falls back to the existing gesture gate.
@@ -1062,6 +1074,7 @@ enum DesktopApproval {
 }
 
 #[derive(Debug, Serialize)]
+#[cfg(unix)]
 struct DesktopApprovalRequest<'a> {
     v: u8,
     op: &'a str,
@@ -1072,6 +1085,7 @@ struct DesktopApprovalRequest<'a> {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg(unix)]
 struct DesktopApprovalResponse {
     #[serde(default)]
     approved: bool,
@@ -2478,6 +2492,8 @@ pub(crate) mod tests {
     }
 
     /// Points the gate at `path` (or nowhere) under the caller's env lock.
+    /// Only the unix-gated tests call it.
+    #[cfg(unix)]
     fn set_gate_env(socket: Option<&Path>, mode: Option<&str>) {
         match socket {
             Some(p) => std::env::set_var("PERSONA_PASSKEY_APPROVAL_SOCKET", p),
