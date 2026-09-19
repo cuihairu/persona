@@ -335,6 +335,8 @@ Browser & Autofill (future)
   - [x] Form detection + autofill heuristics (passwords, TOTP, address)
   - [x] Domain policies + phishing protections
 - [x] Safari WebExtension host shell (Swift bridge + manifest sync)
+  - 注意：`SafariWebExtensionHandler` 目前仅回显消息（echo stub），未接 persona bridge；
+    真实桥接（复用 bridge protocol v2）待 macOS 环境验证（同 P4 OS provider 约束）
 - [x] Chrome/Chromium extension "1Password-like" bridge (Native Messaging + local service)
   - [x] Define Persona Bridge Protocol v1 (hello/status/get_suggestions/request_fill/copy/totp)
   - [x] Pairing + message authentication (bind to extension instance; short-lived session)
@@ -343,6 +345,14 @@ Browser & Autofill (future)
   - [x] Minimal autofill MVP: username/password fill on matched domain
   - [x] Policy integration: domain trust/blocked + confirm-on-unknown
   - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
+  - [x] 扩展单测套件（jest + ts-jest + jsdom，60 用例）：domainPolicy 启发式/policy 覆盖、
+    formScanner 分类/评分/virtual form/observeForms、settings 与 autofillDefaults 的
+    normalize 边界（内存 chrome.storage mock）、nativeBridge 配对状态机 + HMAC 签名
+    （node:crypto createHmac 独立复算，验证 canonical JSON 键排序与 Rust bridge.rs 对齐）
+  - [x] 清理：删除 wasm-crypto 死代码（base64 0.21 API 不兼容不可编译、仓库零引用）；
+    删除 bridge.ts HTTP 探测死路径（`127.0.0.1:19945/status` 从未有服务端实现，
+    BridgeStatus 类型迁入 nativeBridge.ts，扩展只走 native messaging 单通道）
+  - [x] 补齐 public/icons/icon128.png（复用 desktop Tauri 128x128 图标；此前 manifest 引用落空）
 - [ ] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`
   - [x] P1: 软件验证器 core/CLI（ES256 生成/签名、p256+coset、passkeys 表与 KeyHierarchy 包裹、
     PersonaService create/list/show/delete/assertion/self-test/export、审计事件、

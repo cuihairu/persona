@@ -1,4 +1,4 @@
-import type { BridgeStatus } from './bridge';
+import type { BridgeStatus } from './nativeBridge';
 import type { DomainAssessment } from './domainPolicy';
 import { hello, requestPairingCode, finalizePairing, getPairingState } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';

@@ -39,6 +39,16 @@ export interface StatusPayload {
     active_identity_name?: string;
 }
 
+/** Popup/background 共用的桥状态快照（原 bridge.ts 的 HTTP 探测已删——
+ * 该端点从未有服务端实现，扩展只走 native messaging 单通道）。 */
+export interface BridgeStatus {
+    connected: boolean;
+    endpoint: string;
+    lastChecked: number;
+    message?: string;
+    payload?: StatusPayload;
+}
+
 // ============ Passkeys (bridge protocol v2) ============
 
 export interface PasskeyListItem {

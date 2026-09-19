@@ -1,4 +1,3 @@
-import { pingBridge, type BridgeStatus } from './bridge';
 import {
     sendNativeMessage,
     getSuggestions,
@@ -8,6 +7,7 @@ import {
     passkeyList,
     passkeyCreate,
     passkeyAssert,
+    type BridgeStatus,
     type SuggestionItem,
     type SuggestionsPayload,
     type FillPayload,
@@ -145,11 +145,13 @@ async function handleBridgePing(endpoint?: string): Promise<BridgeStatus> {
 }
 
 async function pingAnyBridge(endpoint?: string): Promise<BridgeStatus> {
+    // 只走 native messaging 单通道（HTTP 探测端点从未有服务端实现，已删）；
+    // endpoint 参数保留以兼容 popup 传值，非 native 值一律回落默认 host
     const normalized = endpoint?.trim();
-    if (!normalized || normalized === 'native' || normalized.startsWith('native:')) {
-        return pingNative(normalized);
+    if (normalized && normalized !== 'native' && !normalized.startsWith('native:')) {
+        return pingNative(undefined);
     }
-    return pingBridge(normalized);
+    return pingNative(normalized);
 }
 
 async function pingNative(endpoint?: string): Promise<BridgeStatus> {

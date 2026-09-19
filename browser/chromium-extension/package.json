@@ -6,10 +6,16 @@
   "scripts": {
     "build": "tsc --project tsconfig.json",
     "typecheck": "tsc --noEmit --project tsconfig.json",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "jest"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.248",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^26.6.2",
+    "jest": "^30.4.2",
+    "jest-environment-jsdom": "^30.4.1",
+    "ts-jest": "^29.4.5",
     "typescript": "^5.4.5"
   }
 }
