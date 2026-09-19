@@ -129,3 +129,9 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **非持久**：内存队列尽力而为复制——进程崩溃丢未 flush 批，无持久 outbox、不回补；本地 sqlite 审计库仍是唯一存证源（延续"不宣称防篡改/防抵赖"）。
 - **背压**：上报绝不阻塞审计写入——队满丢最旧并计数；发送失败整批按原序回队，1s→5min 指数退避；`stop()` 的最终 flush 尽力而为，abort 丢失窗口上限 = 一个 batch_size。
 - **已知缺口**：`AutoLockManager` 的 SessionLocked/Unlocked 事件直写审计库、绕过该挂钩，暂不上报（TODO 登记 follow-up）。
+
+宿主接线（desktop / CLI 构造 Emitter 并注入 `PersonaService` 的两个端点）：
+
+- **desktop（Tauri）**：`settings.sync` 段（enabled/server_url/server_token）存 vault 的 `workspaces.settings` JSON 列——**无字段级加密**，保护依赖 DB 文件本身的主密码 KDF 加密；OS keyring 存储是 follow-up。`get_workspace_settings` 免解锁（解锁屏裁剪 UI 需要），因此 **sync 段（含 token）在锁定状态下对前端可读**——token 以明文形式进 Tauri IPC；设置页对 token 不回填（空串提交 = 保留旧值），令牌不常驻前端内存。配置保存即重挂上报器（停旧换新）；进程退出经 `RunEvent::Exit` 尽力最终 flush。
+- **CLI**：env-only（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用，空白视同未设置），**不落盘**——配置文件通道故意不提供；`main` 尾部 `stop()` 尽力 flush，release `panic = "abort"` 的崩溃路径不经 flush（丢失窗口与上面内存队列限制一致）。
+- **上报面不变**：两宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。

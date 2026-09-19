@@ -278,11 +278,26 @@ Server & Sync (optional)
   sqlite 审计库仍是存证源）、AutoLockManager 的 SessionLocked/Unlocked
   直写审计库绕过挂钩不上报、stop 的 abort 丢失窗口上限 = 一个
   batch_size。THREAT_MODEL 同批登记客户端条目。
-  follow-up：desktop/CLI/mobile 宿主接线（设置 UI + token 存储）、
-  AutoLockManager 接线、持久 outbox/回补、gzip。手工验收：真 server +
+  follow-up：desktop/CLI/mobile 宿主接线（设置 UI + token 存储，见下条，
+  desktop/CLI 已完成）、AutoLockManager 接线、持久 outbox/回补、gzip。
+  手工验收：真 server +
   Emitter(ServerEventSink) 发 3 条（1 重复 id）→ GET accepted=2
   duplicates=1 → /metrics 计数增长；停服期间 queued() 增长、重启后退避
   自动送达；杀进程丢未 flush 批但 audit_logs 表完整。
+- [x] 宿主接线：desktop/CLI 构造 Emitter 并注入 PersonaService（CLI 集成
+  测试假服务器端到端断言 POST + Bearer + body；desktop 手工验收清单见
+  批次说明）
+  - [x] CLI：`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用
+    （94c113c5；env-only 不落盘；86 处 PersonaService::new 统一走
+    new_service 注入，switch/remove/migrate 3 处直写审计库的点补
+    emit_audit；main 尾部 stop() 尽力 flush——release panic=abort 崩溃
+    路径不 flush，已知限制）
+  - [x] desktop：设置页 General 加同步服务器区块（ad00da2c；settings.sync
+    存 vault JSON 列无字段级加密、get_workspace_settings 免解锁可读
+    sync 段——THREAT_MODEL 登记；token 空串 = 保留旧值不回填前端；
+    保存即重挂停旧换新；RunEvent::Exit 尽力 flush）
+  - [ ] follow-up：mobile 接线、AutoLockManager 接线、keyring/token
+    字段级加密、持久 outbox/回补、gzip
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
