@@ -278,8 +278,8 @@ Server & Sync (optional)
   sqlite 审计库仍是存证源）、stop 的 abort 丢失窗口上限 = 一个
   batch_size。THREAT_MODEL 同批登记客户端条目。
   follow-up：desktop/CLI/mobile 宿主接线（设置 UI + token 存储，见下条，
-  desktop/CLI 已完成）、AutoLockManager 接线（已完成，见下条）、持久
-  outbox/回补、gzip。手工验收：真 server +
+  desktop/CLI/mobile Rust FFI 已完成）、AutoLockManager 接线（已完成，
+  见下条）、持久 outbox/回补、gzip。手工验收：真 server +
   Emitter(ServerEventSink) 发 3 条（1 重复 id）→ GET accepted=2
   duplicates=1 → /metrics 计数增长；停服期间 queued() 增长、重启后退避
   自动送达；杀进程丢未 flush 批但 audit_logs 表完整。
@@ -305,7 +305,15 @@ Server & Sync (optional)
   - [x] AutoLockManager 接线（56dde4c1；set_event_emitter 传播到 manager，
     SessionLocked/Unlocked 写库后上报，后台超时锁审计行补齐
     session_id/user_id/details；LockPending/Activity 是 UI 事件不上报）
-  - [ ] follow-up：mobile 接线、持久 outbox/回补、gzip
+  - [x] mobile Rust FFI 宿主接线（fe244fce；persona-mobile 六个 FFI 函数
+    对齐 desktop/CLI 语义：service_init 建户/认证序列、unlock/lock/
+    is_unlocked、configure_sync fail-closed（url+token 都非空才启用、
+    空白即摘除、URL 不做格式预校验同 desktop）、shutdown 尽力 flush；
+    状态全留 Rust 侧全局槽位，token/url 由 Dart 层经 FFI 参数注入、
+    Rust 侧不落盘不读 env；本机无 Flutter SDK，手工验收清单见批次说明）
+  - [ ] follow-up：mobile Flutter 工程/Dart 绑定（需 Flutter SDK 与设备
+    验证；桥方向手写 FFI vs frb v2 待工程落地时定）、持久 outbox/回补、
+    gzip
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)

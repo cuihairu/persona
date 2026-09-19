@@ -130,8 +130,9 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **背压**：上报绝不阻塞审计写入——队满丢最旧并计数；发送失败整批按原序回队，1s→5min 指数退避；`stop()` 的最终 flush 尽力而为，abort 丢失窗口上限 = 一个 batch_size。
 - **AutoLock 事件**（缺口已闭合）：`PersonaService::set_event_emitter` 同步传播给 `AutoLockManager`，其 SessionLocked/Unlocked 审计写库后走同一上报链；后台监控超时落锁的审计行同批补齐 session_id/user_id/details。`LockPending`/`Activity` 是 UI 事件不是审计动作，不写审计也不上报（维持现状）。
 
-宿主接线（desktop / CLI 构造 Emitter 并注入 `PersonaService` 的两个端点）：
+宿主接线（desktop / CLI / mobile 构造 Emitter 并注入 `PersonaService` 的端点）：
 
 - **desktop（Tauri）**：`settings.sync` 段存 vault 的 `workspaces.settings` JSON 列，但 `server_token` **恒写空串占位**——token 真值存 OS keyring（keyring 4：Linux secret-service / macOS Keychain / Windows Credential Manager；service `"persona-sync"`、键为 vault db_path，字段级加密缺口已闭合）。keyring 批次之前的 legacy 明文在运行时一次性迁移进 keyring、DB 清空；迁移前 keyring 不可用时**保留明文不销毁数据**（上报禁用，下次 attach 重试）。`get_workspace_settings` 免解锁（解锁屏裁剪 UI 需要）返回的 sync 段因此不再含 token，锁定状态下 IPC 不暴露令牌；新增免解锁 `sync_token_present` 布尔查询（仅泄露"是否配置过"一位元数据），前端 placeholder 由它驱动、token 不回填。fail-closed 语义：提交非空 token 时 keyring 写失败拒绝保存；挂上报器要求 enabled + url 非空 + keyring 有 token 三者齐备；禁用即清 keyring（失败仅 warn，残留令牌在同一 OS 用户信任域内）；vault 文件拷到他机 → keyring 无对应条目 → 上报不启用，需重输入。配置保存即重挂上报器（停旧换新）；进程退出经 `RunEvent::Exit` 尽力最终 flush。
 - **CLI**：env-only（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用，空白视同未设置），**不落盘**——配置文件通道故意不提供；`main` 尾部 `stop()` 尽力 flush，release `panic = "abort"` 的崩溃路径不经 flush（丢失窗口与上面内存队列限制一致）。
-- **上报面不变**：两宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。
+- **mobile（persona-mobile，Rust FFI 层）**：手写 extern "C" 宿主接线——`persona_service_init`（建户/认证序列对齐 desktop）、`persona_service_unlock/lock/is_unlocked`、`persona_configure_sync`（url+token trim 后都非空才启用、任一空白即摘除，fail-closed 对齐 CLI；URL 不做格式预校验，与 desktop attach 一致，格式错误在发送期暴露并退避）、`persona_shutdown`（落锁清密钥 + 尽力最终 flush + 清槽位）。**Rust 侧不落盘、不读环境变量**：url/token 由宿主（Dart 层）经 FFI 参数注入，服务状态留 Rust 侧全局槽位、密钥材料不跨 FFI 边界。如实标注未完成面：Flutter 工程本身（android/ios 目录、gradle）、Dart FFI 绑定层与 flutter_secure_storage 的 token 存储接线均未落地（本机无 Flutter SDK），当前安全结论只覆盖 Rust FFI 层；杀进程丢未 flush 批为已知限制（与 CLI/desktop 同）。手工验收（cargo-ndk 交叉编译、真 server 上报）转交有设备环境时执行。
+- **上报面不变**：三宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。
