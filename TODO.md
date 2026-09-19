@@ -261,8 +261,9 @@ Server & Sync (optional)
   per-client 身份、ip/user_agent 客户端自报、client_timestamp 取信
   客户端时钟、permissive CORS、405 不计入 metrics。
   follow-up：SRP
-  设备认证（替代单令牌）、保留策略/TTL、ConnectInfo 采真实来源 IP、
-  gzip 压缩。手工验收：带 token 起服 → POST 事件（202）→ 重复
+  设备认证（替代单令牌）、保留策略/TTL、ConnectInfo 采真实来源 IP
+  （gzip 已由 0d48d953 落地，见上报 wire 层 gzip 条）。手工验收：带
+  token 起服 → POST 事件（202）→ 重复
   client_event_id（duplicates 计数）→ GET 翻页 → /metrics 观察 →
   不设 token 重启（/api 503）→ compose 卷重启后事件仍在。
 - [x] core::events::Emitter 客户端上报器（批量+重试）
@@ -279,7 +280,7 @@ Server & Sync (optional)
   batch_size。THREAT_MODEL 同批登记客户端条目。
   follow-up：desktop/CLI/mobile 宿主接线（设置 UI + token 存储，见下条，
   desktop/CLI/mobile Rust FFI 已完成）、AutoLockManager 接线（已完成，
-  见下条）、持久 outbox/回补、gzip。手工验收：真 server +
+  见下条）、持久 outbox/回补（gzip 已由 0d48d953 落地）。手工验收：真 server +
   Emitter(ServerEventSink) 发 3 条（1 重复 id）→ GET accepted=2
   duplicates=1 → /metrics 计数增长；停服期间 queued() 增长、重启后退避
   自动送达；杀进程丢未 flush 批但 audit_logs 表完整。
@@ -311,9 +312,14 @@ Server & Sync (optional)
     空白即摘除、URL 不做格式预校验同 desktop）、shutdown 尽力 flush；
     状态全留 Rust 侧全局槽位，token/url 由 Dart 层经 FFI 参数注入、
     Rust 侧不落盘不读 env；本机无 Flutter SDK，手工验收清单见批次说明）
+  - [x] 上报 wire 层 gzip（0d48d953；ServerEventSink 序列化后 1 KiB 阈值
+    二选一——大批 flate2 gzip + Content-Encoding: gzip、小批明文直发、
+    显式 Content-Type；server 加 RequestDecompressionLayer，tower-http
+    0.5→0.6；限制语义双层：payload_size_guard 线上字节 1 MiB +
+    DefaultBodyLimit 解压后明文 10 MiB 防解压炸弹；压缩在 sink 内部
+    宿主零改动；THREAT_MODEL 已登记）
   - [ ] follow-up：mobile Flutter 工程/Dart 绑定（需 Flutter SDK 与设备
-    验证；桥方向手写 FFI vs frb v2 待工程落地时定）、持久 outbox/回补、
-    gzip
+    验证；桥方向手写 FFI vs frb v2 待工程落地时定）、持久 outbox/回补
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)

@@ -116,7 +116,7 @@
 
 Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的第一批生产网络端点，按"变更门槛"在此登记：
 
-- **数据处理范围**：仅接收与存储审计事件摘要与元数据——action、resource_type、可选的 user/identity/credential/session ID、时间戳、成功标记、受限 metadata（≤32 条、键值长度有界）。协议上不承载明文 secret 或密钥材料；请求体限 1 MiB、单批 ≤500 条。
+- **数据处理范围**：仅接收与存储审计事件摘要与元数据——action、resource_type、可选的 user/identity/credential/session ID、时间戳、成功标记、受限 metadata（≤32 条、键值长度有界）。协议上不承载明文 secret 或密钥材料；请求体双层限长——`Content-Length` 预检线上字节 ≤1 MiB（含 gzip 压缩传输）、解压后明文 ≤10 MiB（防解压炸弹，兼兜底无 Content-Length 的 chunked）、单批 ≤500 条。
 - **认证**：单共享 Bearer 令牌（`PERSONA_SERVER_TOKEN`），常量时间比较；未配置即 503 整体禁用（fail-closed）。`/`、`/health`、`/metrics` 免认证。
 - **明确不宣称**：该存储不是防篡改账本，不提供防抵赖保证——持有令牌的客户端可上报任意内容，`client_timestamp` 不可信；审计语义以各端本地审计日志为准，server 侧只作聚合观测。
 - **指标面**：`/metrics` 输出请求计数（方法 + 路由模板 + 状态码）与事件接入计数，标签基数有界，不含用户数据或路径参数。
@@ -128,6 +128,7 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **令牌**：Bearer token 由宿主注入（`ServerEventSink::new(base_url, token)`），core 不读环境变量、不落盘；上报仅发往显式配置的 base_url。
 - **非持久**：内存队列尽力而为复制——进程崩溃丢未 flush 批，无持久 outbox、不回补；本地 sqlite 审计库仍是唯一存证源（延续"不宣称防篡改/防抵赖"）。
 - **背压**：上报绝不阻塞审计写入——队满丢最旧并计数；发送失败整批按原序回队，1s→5min 指数退避；`stop()` 的最终 flush 尽力而为，abort 丢失窗口上限 = 一个 batch_size。
+- **传输压缩**（缺口已闭合）：明文 body >1 KiB 的批以 gzip（flate2 默认等级）发送并声明 `Content-Encoding: gzip`，server 侧 `RequestDecompressionLayer` 解压（tower-http 0.6）；小批明文直发。纯传输层压缩，协议形状、认证、审计存证语义不变；压缩封装在 `ServerEventSink` 内部，宿主零改动。解压面已限长（线上 1 MiB / 明文 10 MiB），损坏 gzip 流返回 4xx。
 - **AutoLock 事件**（缺口已闭合）：`PersonaService::set_event_emitter` 同步传播给 `AutoLockManager`，其 SessionLocked/Unlocked 审计写库后走同一上报链；后台监控超时落锁的审计行同批补齐 session_id/user_id/details。`LockPending`/`Activity` 是 UI 事件不是审计动作，不写审计也不上报（维持现状）。
 
 宿主接线（desktop / CLI / mobile 构造 Emitter 并注入 `PersonaService` 的端点）：
