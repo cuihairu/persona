@@ -46,16 +46,18 @@ pub struct FeatureFlags {
 
 /// 可选同步服务器（persona-server Events API）的客户端配置。
 ///
-/// `server_token` 为上报用的共享 Bearer 令牌：desktop 宿主把它存在
-/// vault settings JSON 里（DB 文件有主密码 KDF 加密，字段级无独立
-/// 加密——keyring/加密存储是 follow-up，THREAT_MODEL 已登记）。
+/// `server_token` 为上报用的共享 Bearer 令牌。desktop 宿主把它存 OS
+/// keyring（键为 vault db_path），本结构在 vault settings JSON 里恒写
+/// 空串占位；读到非空值即 keyring 批次之前的 legacy 数据，宿主首次
+/// 运行时一次性迁移进 keyring（THREAT_MODEL 已登记）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncConfig {
     /// 是否把本地审计事件上报到 persona-server
     pub enabled: bool,
     /// 服务器 base_url（形如 `http://127.0.0.1:3000`，可带反代前缀）
     pub server_url: String,
-    /// 共享 Bearer 令牌；宿主 UI 语义：提交空串 = 保留旧值
+    /// 共享 Bearer 令牌；desktop 宿主恒写空串（真值在 OS keyring），
+    /// CLI 不落盘（env-only）；提交空串 = 保留旧值
     pub server_token: String,
 }
 

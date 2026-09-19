@@ -74,7 +74,10 @@ export interface FeatureFlags {
 export interface SyncConfig {
   enabled: boolean;
   server_url: string;
-  /** 空 = 后端保留旧 token（前端不回填既有令牌，避免常驻内存） */
+  /**
+   * 后端恒返回空串——token 真值存 OS keyring，不经 IPC 回读。
+   * 提交空串 = 保留 keyring 既有令牌（前端不回填，避免常驻内存）。
+   */
   server_token: string;
 }
 

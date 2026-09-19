@@ -16,6 +16,7 @@ use persona_desktop::commands::{self, PasskeyApprovalRespondRequest};
 use persona_desktop::passkey_bridge::{
     approval_socket_path, run_passkey_approval_server_with, TauriApprovalSink,
 };
+use persona_desktop::token_store::InMemoryTokenStore;
 use persona_desktop::types::{AppState, InitRequest};
 
 /// mock app + 空 AppState，与 lib 内 command_layer_tests 的 mock_app 一致。
@@ -30,6 +31,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         ssh_approvals: Arc::new(StdMutex::new(HashMap::new())),
         passkey_approvals: Arc::new(StdMutex::new(HashMap::new())),
         sync_emitter: Mutex::new(None),
+        token_store: Arc::new(InMemoryTokenStore::default()),
     });
     app
 }

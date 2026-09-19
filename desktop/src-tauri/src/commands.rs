@@ -427,44 +427,96 @@ pub async fn set_feature_flags(
 
 /// 读当前 vault 的同步服务器配置段（vault 打不开/行不存在一律 None——
 /// attach 是尽力而为的旁路，不能阻塞解锁主链路）。
-async fn read_sync_config(db_path: &str) -> Option<persona_core::SyncConfig> {
+///
+/// 顺带做 legacy 一次性迁移：keyring 批次前 DB 里存的是明文 token，
+/// 读到非空值时搬进 keyring、DB 窄写为空串。keyring 写失败则保留
+/// 明文不销毁数据（下次 attach 重试迁移），上报因读不到 keyring 自然
+/// fail-closed。
+async fn read_sync_config(
+    state: &State<'_, AppState>,
+    db_path: &str,
+) -> Option<persona_core::SyncConfig> {
     let db = Database::from_file(db_path).await.ok()?;
     db.migrate().await.ok()?;
     let workspace_path = workspace_path_for_db_path(db_path);
-    let ws = ensure_workspace_for_path(&db, &workspace_path).await.ok()?;
-    ws.settings.sync
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await.ok()?;
+    let mut sync = ws.settings.sync.clone()?;
+
+    if !sync.server_token.is_empty() {
+        match state.token_store.set(db_path, &sync.server_token) {
+            Ok(()) => {
+                sync.server_token = String::new();
+                ws.settings.sync = Some(sync.clone());
+                ws.touch();
+                let repo = WorkspaceRepository::new(db);
+                if let Err(e) = repo.update(&ws).await {
+                    tracing::warn!(error = %e, "failed to clear legacy sync token from vault settings; will retry next attach");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, "OS keyring unavailable; legacy sync token stays in vault settings and event reporting stays disabled");
+            }
+        }
+    }
+    Some(sync)
 }
 
 /// 按当前 vault settings 的 sync 段构造/替换 AppState 槽位中的上报器，
 /// 并把它注入（或从）当前 service 摘除。未启用/配置不完整时一律摘除
 /// （`set_event_emitter(None)`），与 CLI 宿主的 env 决策语义一致。
 ///
+/// token 真值从 OS keyring 读（vault JSON 恒空串）：读不到/为空/出错
+/// 一律不启用（fail-closed）——enabled、url 非空、keyring 有 token 三者
+/// 齐备才挂。
+///
 /// 锁顺序固定 sync_emitter → service；旧 emitter 在槽位替换后、锁外
 /// stop（flush 可能走网络，不持有锁等待）。
-async fn attach_sync_emitter(state: &State<'_, AppState>) {
+pub(crate) async fn attach_sync_emitter(state: &State<'_, AppState>) {
     let db_path = {
         let guard = state.db_path.lock().await;
         guard.clone()
     };
     let sync_config = match db_path.as_deref() {
-        Some(path) => read_sync_config(path).await,
+        Some(path) => read_sync_config(state, path).await,
         None => None,
     };
-    let new_emitter = match sync_config {
-        Some(config) if config.enabled && !config.server_url.trim().is_empty() => {
-            match persona_core::ServerEventSink::new(&config.server_url, config.server_token) {
-                Ok(sink) => {
-                    let emitter = persona_core::events::Emitter::new(std::sync::Arc::new(sink));
-                    emitter.start();
-                    Some(emitter)
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "invalid sync server_url; event reporting disabled");
-                    None
+    let new_emitter = match db_path.as_deref() {
+        Some(path) => match sync_config {
+            Some(config) if config.enabled && !config.server_url.trim().is_empty() => {
+                let token = match state.token_store.get(path) {
+                    Ok(Some(token)) if !token.is_empty() => Some(token),
+                    Ok(_) => {
+                        tracing::warn!(
+                            "sync token not found in OS keyring; event reporting disabled"
+                        );
+                        None
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "OS keyring read failed; event reporting disabled");
+                        None
+                    }
+                };
+                match token {
+                    Some(token) => {
+                        match persona_core::ServerEventSink::new(&config.server_url, token) {
+                            Ok(sink) => {
+                                let emitter =
+                                    persona_core::events::Emitter::new(std::sync::Arc::new(sink));
+                                emitter.start();
+                                Some(emitter)
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "invalid sync server_url; event reporting disabled");
+                                None
+                            }
+                        }
+                    }
+                    None => None,
                 }
             }
-        }
-        _ => None,
+            _ => None,
+        },
+        None => None,
     };
 
     let old = {
@@ -487,8 +539,12 @@ async fn attach_sync_emitter(state: &State<'_, AppState>) {
 /// 作为服务端真相。要求已解锁（照 `set_feature_flags` 门禁）；保存成功
 /// 后立即重挂上报器（停旧换新），无需重新解锁。
 ///
-/// `server_token` 传空串 = **保留旧 token**（避免把既有令牌常驻前端
-/// 内存；首次配置留空即存空串）。`enabled` 且 `server_url` 空白时报错。
+/// token 真值存 OS keyring（经 `AppState.token_store`），vault JSON 的
+/// `server_token` 恒写空串：`server_token` 传空串 = **保留 keyring 里的
+/// 既有令牌**（避免把令牌常驻前端内存）；非空 = 覆盖写入 keyring，
+/// keyring 不可用时拒绝保存（fail-closed，绝不落明文）。`enabled=false`
+/// 时尽力清除 keyring 令牌（失败仅 warn，不阻塞关闭）。`enabled` 且
+/// `server_url` 空白时报错。
 #[command]
 pub async fn set_sync_config(
     enabled: bool,
@@ -531,20 +587,38 @@ pub async fn set_sync_config(
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
     let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
-    // token 空串 = 保留旧值（首次配置旧值也是空串，语义自洽）
-    let server_token = if server_token.trim().is_empty() {
-        ws.settings
-            .sync
-            .as_ref()
-            .map(|c| c.server_token.clone())
-            .unwrap_or_default()
-    } else {
-        server_token
-    };
+
+    // token 编排先于 DB 写：keyring 失败直接拒绝保存，不留半套配置
+    let trimmed_token = server_token.trim();
+    if enabled {
+        if !trimmed_token.is_empty() {
+            if let Err(error) = state.token_store.set(&db_path, trimmed_token) {
+                return Ok(ApiResponse::error(format!(
+                    "Cannot store sync token in OS keyring: {}",
+                    error
+                )));
+            }
+        } else if let Some(old) = ws.settings.sync.as_ref() {
+            // 空串 = 保留旧值。legacy vault 的 DB 里可能还有 keyring 批次
+            // 之前的明文 token——先搬进 keyring 再清 DB，否则真值会丢
+            if !old.server_token.is_empty() {
+                if let Err(error) = state.token_store.set(&db_path, &old.server_token) {
+                    return Ok(ApiResponse::error(format!(
+                        "Cannot store sync token in OS keyring: {}",
+                        error
+                    )));
+                }
+            }
+        }
+    } else if let Err(error) = state.token_store.delete(&db_path) {
+        tracing::warn!(%error, "failed to remove sync token from OS keyring; it stays available for a later re-enable");
+    }
+
+    // vault JSON 恒存空串占位——真值只在 OS keyring
     ws.settings.sync = Some(persona_core::SyncConfig {
         enabled,
         server_url,
-        server_token,
+        server_token: String::new(),
     });
     ws.touch();
     let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
@@ -552,6 +626,33 @@ pub async fn set_sync_config(
 
     attach_sync_emitter(&state).await;
     Ok(ApiResponse::success(settings))
+}
+
+/// 只读：OS keyring 里是否存有 sync token（免解锁——设置页用它决定
+/// placeholder 提示）。只泄露"是否配置过"这一位元数据（与
+/// `get_workspace_settings` 暴露 `sync.enabled` 同级）；真值永不离开
+/// keyring、不经 IPC。
+#[command]
+pub async fn sync_token_present(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        match guard.clone() {
+            Some(db_path) => db_path,
+            None => {
+                return Ok(ApiResponse::error(
+                    "Database path unavailable. Initialize the service first.".to_string(),
+                ))
+            }
+        }
+    };
+    let present = match state.token_store.get(&db_path) {
+        Ok(Some(token)) => !token.is_empty(),
+        Ok(None) => false,
+        Err(error) => return Ok(ApiResponse::error(error)),
+    };
+    Ok(ApiResponse::success(present))
 }
 
 /// 只读 passkey 开关：vault 打不开/行不存在一律视为关（审批链路另有

@@ -14,6 +14,7 @@ jest.mock('@/utils/api', () => ({
     setFeatureFlags: jest.fn(),
     getWorkspaceSettings: jest.fn(),
     setSyncConfig: jest.fn(),
+    syncTokenPresent: jest.fn(),
   },
 }));
 
@@ -25,6 +26,7 @@ jest.mock('react-hot-toast', () => ({
 const mockSetFlags = personaAPI.setFeatureFlags as jest.Mock;
 const mockGetSettings = personaAPI.getWorkspaceSettings as jest.Mock;
 const mockSetSync = personaAPI.setSyncConfig as jest.Mock;
+const mockTokenPresent = personaAPI.syncTokenPresent as jest.Mock;
 
 /** 空设置响应（SyncServerPane 的初始加载） */
 const emptySettings = { success: true, data: null };
@@ -40,6 +42,8 @@ describe('components/SettingsModal', () => {
     // theme 在 store 里跨用例存活，逐用例复位
     useAppStore.setState({ theme: 'system', featureFlags: { ...DEFAULT_FEATURE_FLAGS } });
     mockGetSettings.mockResolvedValue(emptySettings);
+    // 默认 keyring 无 token（placeholder = 'API token'）
+    mockTokenPresent.mockResolvedValue({ success: true, data: false });
   });
 
   it('renders nothing when closed', () => {
@@ -329,13 +333,16 @@ describe('components/SettingsModal', () => {
 
   it('loads the saved sync config and keeps the stored token masked', async () => {
     mockIdentityHook();
+    // 后端 sync.server_token 恒回空串（真值在 OS keyring）；
+    // placeholder 由 sync_token_present 的存在性查询驱动
     mockGetSettings.mockResolvedValue({
       success: true,
       data: {
         features: { ...DEFAULT_FEATURE_FLAGS },
-        sync: { enabled: true, server_url: 'https://sync.example.com', server_token: 'stored' },
+        sync: { enabled: true, server_url: 'https://sync.example.com', server_token: '' },
       },
     });
+    mockTokenPresent.mockResolvedValue({ success: true, data: true });
 
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
 
@@ -347,16 +354,20 @@ describe('components/SettingsModal', () => {
     const tokenInput = screen.getByTestId('sync-token-input') as HTMLInputElement;
     expect(tokenInput.type).toBe('password');
     expect(tokenInput.value).toBe('');
-    expect(tokenInput.placeholder).toContain('leave blank to keep');
+    await waitFor(() => {
+      expect(tokenInput.placeholder).toContain('leave blank to keep');
+    });
   });
 
   it('saves sync config, adopts server truth and clears the token field', async () => {
     mockIdentityHook();
+    // 保存后 placeholder 重查 keyring 存在性（新 token 已入库）
+    mockTokenPresent.mockResolvedValue({ success: true, data: true });
     mockSetSync.mockResolvedValueOnce({
       success: true,
       data: {
         features: { ...DEFAULT_FEATURE_FLAGS },
-        sync: { enabled: true, server_url: 'https://s.example.com', server_token: 'kept' },
+        sync: { enabled: true, server_url: 'https://s.example.com', server_token: '' },
       },
     });
 
@@ -370,7 +381,10 @@ describe('components/SettingsModal', () => {
       target: { value: 'https://s.example.com' },
     });
     fireEvent.change(screen.getByTestId('sync-token-input'), { target: { value: 'fresh-tok' } });
-    fireEvent.click(screen.getByTestId('sync-save'));
+    // save() 异步链（IPC mock resolve → setState → placeholder 重查）整体在 act 内 flush
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-save'));
+    });
 
     await waitFor(() => {
       expect(mockSetSync).toHaveBeenCalledWith({
@@ -379,10 +393,12 @@ describe('components/SettingsModal', () => {
         server_token: 'fresh-tok',
       });
     });
-    // 服务端真相回填；token 输入框清空（空串 = 后端保留旧值）
+    // 服务端真相回填；token 输入框清空（空串 = 后端保留旧值）；
+    // placeholder 重查 keyring 存在性，全部微任务在 act 内 flush
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith('Sync settings saved');
     });
+    await act(async () => {});
     await waitFor(() => {
       expect((screen.getByTestId('sync-token-input') as HTMLInputElement).value).toBe('');
     });
@@ -409,14 +425,14 @@ describe('components/SettingsModal', () => {
       success: true,
       data: {
         features: { ...DEFAULT_FEATURE_FLAGS },
-        sync: { enabled: true, server_url: 'https://s.example.com', server_token: 'stored' },
+        sync: { enabled: true, server_url: 'https://s.example.com', server_token: '' },
       },
     });
     mockSetSync.mockResolvedValueOnce({
       success: true,
       data: {
         features: { ...DEFAULT_FEATURE_FLAGS },
-        sync: { enabled: false, server_url: 'https://s.example.com', server_token: 'stored' },
+        sync: { enabled: false, server_url: 'https://s.example.com', server_token: '' },
       },
     });
 
@@ -425,7 +441,10 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
     });
 
-    fireEvent.click(screen.getByTestId('sync-toggle'));
+    // toggle-off 立即保存：save() 异步链在 act 内 flush（同上一用例）
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-toggle'));
+    });
 
     await waitFor(() => {
       expect(mockSetSync).toHaveBeenCalledWith(

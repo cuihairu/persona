@@ -7,6 +7,7 @@
 //! mock-runtime/sqlx interaction this relies on.
 
 use crate::commands::*;
+use crate::token_store::{InMemoryTokenStore, TokenStore};
 use crate::types::*;
 use persona_core::models::credential::CredentialData;
 use std::collections::HashMap;
@@ -14,8 +15,10 @@ use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
 
-/// Mock app with a fresh, uninitialized `AppState`.
-fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
+/// Mock app with a fresh, uninitialized `AppState` and the given token store.
+fn mock_app_with_token_store(
+    token_store: Arc<dyn TokenStore>,
+) -> tauri::App<tauri::test::MockRuntime> {
     let app = tauri::test::mock_app();
     app.manage(AppState {
         service: Arc::new(Mutex::new(None)),
@@ -26,21 +29,30 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         sync_emitter: Mutex::new(None),
+        // CI/headless 没有 secret service——测试一律走内存 fake
+        token_store,
     });
     app
 }
 
-/// Initialize the service against a fresh temp database and return the guard.
-async fn init_service_ok(app: &tauri::App<tauri::test::MockRuntime>, password: &str) {
+/// Mock app with a fresh, uninitialized `AppState`.
+fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
+    mock_app_with_token_store(Arc::new(InMemoryTokenStore::default()))
+}
+
+/// Initialize the service against a fresh temp database and return the guard
+/// (plus the db_path, for token-store/DB assertions).
+async fn init_service_ok(app: &tauri::App<tauri::test::MockRuntime>, password: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("cmd.db");
     // Leak the TempDir: the service keeps the file open for the whole test.
     std::mem::forget(dir);
+    let db_path = db_path.to_string_lossy().to_string();
 
     let resp = init_service(
         InitRequest {
             master_password: password.to_string(),
-            db_path: Some(db_path.to_string_lossy().to_string()),
+            db_path: Some(db_path.clone()),
         },
         app.state::<AppState>(),
         app.handle().clone(),
@@ -48,6 +60,7 @@ async fn init_service_ok(app: &tauri::App<tauri::test::MockRuntime>, password: &
     .await
     .unwrap();
     assert!(resp.success, "init failed: {:?}", resp.error);
+    db_path
 }
 
 #[tokio::test]
@@ -5249,18 +5262,20 @@ async fn set_feature_flags_requires_unlocked_service() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn set_sync_config_persists_and_remembers_token_on_blank() {
+async fn set_sync_config_stores_token_in_keyring_and_remembers_on_blank() {
     let app = mock_app();
-    init_service_ok(&app, "master-pw-123").await;
+    let db_path = init_service_ok(&app, "master-pw-123").await;
 
-    // 全新 vault：sync 段为 None
+    // 全新 vault：sync 段为 None、keyring 无 token
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
     let settings = resp.data.expect("settings present");
     assert!(settings.sync.is_none(), "fresh vault has no sync config");
+    let resp = sync_token_present(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(false), "fresh vault has no stored token");
 
-    // 窄写 sync 段，返回全量 settings
+    // 窄写 sync 段：token 进 keyring，vault JSON 恒存空串
     let resp = set_sync_config(
         true,
         "http://127.0.0.1:1".to_string(),
@@ -5273,16 +5288,26 @@ async fn set_sync_config_persists_and_remembers_token_on_blank() {
     let sync = resp.data.expect("updated settings").sync.expect("sync set");
     assert!(sync.enabled);
     assert_eq!(sync.server_url, "http://127.0.0.1:1");
-    assert_eq!(sync.server_token, "tok-1");
+    assert_eq!(sync.server_token, "", "vault JSON never holds the token");
+    assert_eq!(
+        app.state::<AppState>()
+            .token_store
+            .get(&db_path)
+            .unwrap()
+            .as_deref(),
+        Some("tok-1")
+    );
 
-    // get 反映持久化结果
+    // get 反映持久化结果：sync 段可见，token 不经 IPC 回读
     let resp = get_workspace_settings(app.state::<AppState>())
         .await
         .unwrap();
     let sync = resp.data.expect("settings present").sync.expect("sync set");
-    assert_eq!(sync.server_token, "tok-1");
+    assert_eq!(sync.server_token, "");
+    let resp = sync_token_present(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(true));
 
-    // token 空串 = 保留旧值
+    // token 空串 = 保留 keyring 既有令牌
     let resp = set_sync_config(
         true,
         "http://127.0.0.1:2".to_string(),
@@ -5293,9 +5318,17 @@ async fn set_sync_config_persists_and_remembers_token_on_blank() {
     .unwrap();
     let sync = resp.data.expect("updated settings").sync.expect("sync set");
     assert_eq!(sync.server_url, "http://127.0.0.1:2");
-    assert_eq!(sync.server_token, "tok-1", "blank token keeps the old one");
+    assert_eq!(
+        app.state::<AppState>()
+            .token_store
+            .get(&db_path)
+            .unwrap()
+            .as_deref(),
+        Some("tok-1"),
+        "blank token keeps the stored one"
+    );
 
-    // 关闭 sync：enabled=false 持久化，token 依旧保留
+    // 关闭 sync：enabled=false 持久化，keyring 令牌一并清除
     let resp = set_sync_config(
         false,
         "http://127.0.0.1:2".to_string(),
@@ -5306,6 +5339,152 @@ async fn set_sync_config_persists_and_remembers_token_on_blank() {
     .unwrap();
     let sync = resp.data.expect("updated settings").sync.expect("sync set");
     assert!(!sync.enabled);
+    assert_eq!(
+        app.state::<AppState>().token_store.get(&db_path).unwrap(),
+        None,
+        "disabling sync clears the stored token"
+    );
+    let resp = sync_token_present(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(false));
+}
+
+/// keyring 不可用（headless/无 secret service）时提交非空 token：
+/// 拒绝保存，vault 不落任何明文配置。
+#[tokio::test]
+async fn set_sync_config_refuses_save_when_keyring_unavailable() {
+    struct FailingTokenStore;
+    impl TokenStore for FailingTokenStore {
+        fn set(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("no secret service".to_string())
+        }
+        fn get(&self, _: &str) -> Result<Option<String>, String> {
+            Err("no secret service".to_string())
+        }
+        fn delete(&self, _: &str) -> Result<(), String> {
+            Err("no secret service".to_string())
+        }
+    }
+
+    let app = mock_app_with_token_store(Arc::new(FailingTokenStore));
+    init_service_ok(&app, "master-pw-123").await;
+
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Cannot store sync token in OS keyring")),
+        "unexpected error: {:?}",
+        resp.error
+    );
+
+    // 保存被拒：vault 里不写任何 sync 配置（token 与 url 都不落）
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    let settings = resp.data.expect("settings present");
+    assert!(settings.sync.is_none(), "refused save must not persist");
+
+    // 关闭路径不写 keyring：禁用（尽力删除失败仅 warn）仍可保存
+    let resp = set_sync_config(false, String::new(), String::new(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
+/// keyring 里没有 token 时 attach fail-closed（不挂上报器）；
+/// token 就位后同一配置恢复挂载。
+#[tokio::test]
+async fn attach_sync_emitter_fails_closed_without_keyring_token() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+
+    // 配置 enabled + url，token 也在 keyring：正常挂载
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(app.state::<AppState>().sync_emitter.lock().await.is_some());
+
+    // 模拟 keyring 条目丢失（他机恢复 vault / 手工删除）：attach 摘除
+    app.state::<AppState>()
+        .token_store
+        .delete(&db_path)
+        .unwrap();
+    attach_sync_emitter(&app.state::<AppState>()).await;
+    assert!(
+        app.state::<AppState>().sync_emitter.lock().await.is_none(),
+        "missing keyring token must fail closed"
+    );
+
+    // token 恢复：同一配置重新挂载
+    app.state::<AppState>()
+        .token_store
+        .set(&db_path, "tok-restored")
+        .unwrap();
+    attach_sync_emitter(&app.state::<AppState>()).await;
+    assert!(app.state::<AppState>().sync_emitter.lock().await.is_some());
+}
+
+/// legacy vault（keyring 批次前 DB 里存明文 token）：attach 一次性迁移
+/// 进 keyring、DB 清为空串，上报正常挂载。
+#[tokio::test]
+async fn legacy_sync_token_migrates_to_keyring_on_attach() {
+    use persona_core::models::SyncConfig;
+    use persona_core::storage::{Database, Repository, WorkspaceRepository};
+
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+
+    // 直接往 DB 写 keyring 批次之前的 legacy 明文配置
+    let db = Database::from_file(&db_path).await.unwrap();
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path)
+        .await
+        .unwrap();
+    ws.settings.sync = Some(SyncConfig {
+        enabled: true,
+        server_url: "http://127.0.0.1:1".to_string(),
+        server_token: "legacy-plaintext".to_string(),
+    });
+    ws.touch();
+    repo.update(&ws).await.unwrap();
+
+    attach_sync_emitter(&app.state::<AppState>()).await;
+
+    // token 搬进 keyring，DB 清为空串，上报挂载
+    assert_eq!(
+        app.state::<AppState>()
+            .token_store
+            .get(&db_path)
+            .unwrap()
+            .as_deref(),
+        Some("legacy-plaintext")
+    );
+    let db = Database::from_file(&db_path).await.unwrap();
+    let repo = WorkspaceRepository::new(db);
+    let ws = repo
+        .find_by_path(&workspace_path)
+        .await
+        .unwrap()
+        .expect("workspace row");
+    let sync = ws.settings.sync.expect("sync set");
+    assert!(sync.enabled);
+    assert_eq!(sync.server_token, "", "legacy plaintext cleared from vault");
+    assert!(app.state::<AppState>().sync_emitter.lock().await.is_some());
 }
 
 #[tokio::test]
@@ -5416,6 +5595,14 @@ async fn workspace_settings_commands_fail_without_db_path() {
         .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    // token 存在性查询同样要 db_path
+    let resp = sync_token_present(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
+    );
 }
 
 #[tokio::test]

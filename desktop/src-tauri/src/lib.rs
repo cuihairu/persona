@@ -15,6 +15,7 @@ mod error;
 pub mod passkey_bridge;
 #[cfg(test)]
 mod test_support;
+pub mod token_store;
 pub mod types;
 
 use std::collections::HashMap;
@@ -111,6 +112,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_emitter: Mutex::new(None),
+            token_store: Arc::new(token_store::OsKeyringTokenStore),
         })
         .setup(|app| {
             // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。
@@ -145,6 +147,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::get_workspace_settings,
             commands::set_feature_flags,
             commands::set_sync_config,
+            commands::sync_token_present,
             commands::update_identity,
             commands::delete_identity,
             commands::create_credential,

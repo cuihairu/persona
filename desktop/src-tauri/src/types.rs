@@ -31,6 +31,10 @@ pub struct AppState {
     /// 槽位即真相源：重挂时先 stop 旧的再换新，防止双任务。注意这里
     /// 用全路径——`tauri::Emitter`（事件 emit trait）占用了 `Emitter` 名。
     pub sync_emitter: Mutex<Option<persona_core::events::Emitter>>,
+    /// sync token 的字段级加密存储（生产 = OS keyring，测试 = 内存
+    /// fake）。vault settings JSON 里的 `server_token` 恒为空串占位，
+    /// 真值只存在这里。
+    pub token_store: Arc<dyn crate::token_store::TokenStore>,
 }
 
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求

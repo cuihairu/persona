@@ -102,13 +102,18 @@ class PersonaAPI {
     });
   }
 
-  /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token */
+  /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token（真值存 OS keyring） */
   async setSyncConfig(config: SyncConfig): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_sync_config', {
       enabled: config.enabled,
       server_url: config.server_url,
       server_token: config.server_token,
     });
+  }
+
+  /** OS keyring 里是否存有 sync token（免解锁只读；真值不经 IPC） */
+  async syncTokenPresent(): Promise<ApiResponse<boolean>> {
+    return invoke('sync_token_present');
   }
 
   async createCredential(request: CreateCredentialRequest): Promise<ApiResponse<Credential>> {

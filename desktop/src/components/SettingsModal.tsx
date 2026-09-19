@@ -53,20 +53,30 @@ const SyncServerPane: React.FC = () => {
   const [tokenPlaceholder, setTokenPlaceholder] = useState('API token');
   const [saving, setSaving] = useState(false);
 
-  // 初始值来自服务端真相；token 不回填（避免既有令牌常驻前端内存，
-  // 空串提交 = 后端保留旧 token）
+  // token 真值存 OS keyring（后端 sync.server_token 恒回空串），placeholder
+  // 由 sync_token_present 驱动；token 不回填（避免既有令牌常驻前端内存，
+  // 空串提交 = 后端保留 keyring 旧 token）
+  const refreshTokenPlaceholder = async (): Promise<void> => {
+    try {
+      const resp = await personaAPI.syncTokenPresent();
+      setTokenPlaceholder(resp.success && resp.data ? 'Token saved — leave blank to keep' : 'API token');
+    } catch {
+      setTokenPlaceholder('API token');
+    }
+  };
+
+  // 初始值来自服务端真相
   useEffect(() => {
     let cancelled = false;
     personaAPI
       .getWorkspaceSettings()
       .then((resp) => {
         if (cancelled || !resp.success || !resp.data?.sync) return;
-        const sync = resp.data.sync;
-        setEnabled(sync.enabled);
-        setUrl(sync.server_url);
-        if (sync.server_token) setTokenPlaceholder('Token saved — leave blank to keep');
+        setEnabled(resp.data.sync.enabled);
+        setUrl(resp.data.sync.server_url);
       })
       .catch(() => {});
+    refreshTokenPlaceholder();
     return () => {
       cancelled = true;
     };
@@ -85,14 +95,15 @@ const SyncServerPane: React.FC = () => {
         server_token: token,
       });
       if (resp.success && resp.data) {
-        // 回填服务端真相；token 输入框清空（后端空串语义 = 保留旧值）
+        // 回填服务端真相；token 输入框清空（空串提交 = 后端保留 keyring 旧值，
+        // 关闭 = 后端清除令牌）。placeholder 重查 keyring 存在性。
         const sync = resp.data.sync;
         if (sync) {
           setEnabled(sync.enabled);
           setUrl(sync.server_url);
-          if (sync.server_token) setTokenPlaceholder('Token saved — leave blank to keep');
         }
         setToken('');
+        await refreshTokenPlaceholder();
         toast.success('Sync settings saved');
       } else {
         toast.error(resp.error || 'Failed to save sync settings');
