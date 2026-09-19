@@ -363,6 +363,57 @@ describe('components/CreateCredentialModal', () => {
     });
   });
 
+  it('renders game token fields and hints at vendor-bound providers', () => {
+    renderModal();
+    selectType('GameToken');
+
+    expect(screen.getByPlaceholderText(/tencent_security/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Required for steam_guard; optional otherwise')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Steam, Tencent, NetEase…')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('qq_123456')).toBeInTheDocument();
+  });
+
+  it('submits a GameToken credential with normalized provider and url', async () => {
+    renderModal();
+    selectType('GameToken');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Steam' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/tencent_security/), {
+      target: { value: 'STEAM_GUARD' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Required for steam_guard; optional otherwise'), {
+      target: { value: '  aGVsbG8=  ' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Steam, Tencent, NetEase…'), {
+      target: { value: 'Steam' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('qq_123456'), {
+      target: { value: 'alice_steam' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('https://example.com'), {
+      target: { value: 'https://store.steampowered.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_type: 'TwoFactor',
+          credential_data: {
+            type: 'GameToken',
+            provider: 'steam_guard',
+            secret_key: 'aGVsbG8=',
+            issuer: 'Steam',
+            account_name: 'alice_steam',
+            url: 'https://store.steampowered.com',
+          },
+        }),
+      );
+    });
+  });
+
   it('submits a TwoFactor credential with manually adjusted TOTP parameters', async () => {
     renderModal();
     selectType('TwoFactor');

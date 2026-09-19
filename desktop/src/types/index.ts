@@ -400,6 +400,7 @@ export type CredentialDataRequest =
   | { type: 'SshKey'; private_key: string; public_key: string; key_type: string; passphrase?: string }
   | { type: 'ApiKey'; api_key: string; api_secret?: string; token?: string; permissions: string[]; expires_at?: string }
   | { type: 'TwoFactor'; secret_key: string; issuer: string; account_name: string; algorithm: string; digits: number; period: number }
+  | { type: 'GameToken'; provider: string; secret_key: string; issuer: string; account_name: string; url?: string }
   | { type: 'Raw'; data: number[] };
 
 export interface SecurityQuestion {
@@ -507,7 +508,7 @@ export interface WalletExportRequest {
 }
 
 export type IdentityType = 'Personal' | 'Work' | 'Social' | 'Financial' | 'Gaming';
-export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' | 'BankCard' | 'GameAccount' | 'ServerConfig' | 'Certificate' | 'TwoFactor';
+export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' | 'BankCard' | 'GameAccount' | 'ServerConfig' | 'Certificate' | 'TwoFactor' | 'GameToken';
 export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';
 
 /** 主题偏好三档；'system' 跟随 prefers-color-scheme */

@@ -203,6 +203,13 @@ pub enum CredentialDataRequest {
         digits: u8,
         period: u32,
     },
+    GameToken {
+        provider: String,
+        secret_key: String,
+        issuer: String,
+        account_name: String,
+        url: Option<String>,
+    },
     Raw {
         data: Vec<u8>,
     },
@@ -547,6 +554,19 @@ impl CredentialDataRequest {
                 algorithm: algorithm.clone(),
                 digits: *digits,
                 period: *period,
+            }),
+            CredentialDataRequest::GameToken {
+                provider,
+                secret_key,
+                issuer,
+                account_name,
+                url,
+            } => CredentialData::GameToken(GameTokenData {
+                provider: provider.clone(),
+                secret_key: secret_key.clone(),
+                issuer: issuer.clone(),
+                account_name: account_name.clone(),
+                url: url.clone(),
             }),
             CredentialDataRequest::Raw { data } => CredentialData::Raw(data.clone()),
         }

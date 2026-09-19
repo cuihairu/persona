@@ -66,6 +66,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     'ServerConfig',
     'Certificate',
     'TwoFactor',
+    'GameToken',
   ];
 
   const securityLevels: SecurityLevel[] = ['Critical', 'High', 'Medium', 'Low'];
@@ -114,6 +115,17 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
         };
         break;
 
+      case 'GameToken':
+        credentialDataRequest = {
+          type: 'GameToken',
+          provider: (credentialData.provider || '').trim().toLowerCase(),
+          secret_key: (credentialData.secret_key || '').trim(),
+          issuer: (credentialData.issuer || '').trim(),
+          account_name: (credentialData.account_name || '').trim(),
+          url: formData.url.trim() || undefined,
+        };
+        break;
+
       case 'CryptoWallet':
         credentialDataRequest = {
           type: 'CryptoWallet',
@@ -158,7 +170,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     const result = await createCredential({
       identity_id: currentIdentity.id,
       name: formData.name,
-      credential_type: formData.credential_type,
+      // GameToken data rides on the TwoFactor credential type (no dedicated
+      // CredentialType variant — same convention as the CLI setup commands).
+      credential_type: formData.credential_type === 'GameToken' ? 'TwoFactor' : formData.credential_type,
       security_level: formData.security_level,
       url: formData.url || undefined,
       username: formData.username || undefined,
@@ -466,6 +480,61 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
                   value={credentialData.period || 30}
                   onChange={(e) => setCredentialData({ ...credentialData, period: Number(e.target.value) })}
                   className="input"
+                />
+              </div>
+            </div>
+          </div>
+        );
+
+      case 'GameToken':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="label mb-2 block">Provider *</label>
+              <input
+                type="text"
+                value={credentialData.provider || ''}
+                onChange={(e) => setCredentialData({ ...credentialData, provider: e.target.value })}
+                className="input font-mono"
+                placeholder="steam_guard, tencent_security, netease_dashen, mihoyo"
+                required
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                Lowercase slug. steam_guard supports offline codes from a base64 shared_secret;
+                vendor-bound providers (Tencent/NetEase/miHoYo…) are recorded only — generate
+                codes in the vendor&apos;s official app.
+              </p>
+            </div>
+            <div>
+              <label className="label mb-2 block">Shared Secret (Base64, optional)</label>
+              <input
+                type="text"
+                value={credentialData.secret_key || ''}
+                onChange={(e) => setCredentialData({ ...credentialData, secret_key: e.target.value })}
+                className="input font-mono"
+                placeholder="Required for steam_guard; optional otherwise"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block">Issuer</label>
+                <input
+                  type="text"
+                  value={credentialData.issuer || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, issuer: e.target.value })}
+                  className="input"
+                  placeholder="Steam, Tencent, NetEase…"
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block">Account *</label>
+                <input
+                  type="text"
+                  value={credentialData.account_name || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, account_name: e.target.value })}
+                  className="input"
+                  placeholder="qq_123456"
+                  required
                 />
               </div>
             </div>

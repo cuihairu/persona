@@ -2091,6 +2091,56 @@ async fn get_totp_code_supports_game_token_provider() {
     );
 }
 
+/// G1.5：创建表单路径——CredentialDataRequest::GameToken 经 create_credential
+/// 命令入库，读回 GameToken 变体并出码（steam_guard）。
+#[tokio::test]
+async fn create_credential_accepts_game_token_request() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let mut req = password_credential_request(&identity_id);
+    req.name = "Steam Guard (form)".to_string();
+    req.credential_type = "TwoFactor".to_string();
+    req.credential_data = CredentialDataRequest::GameToken {
+        provider: "steam_guard".to_string(),
+        secret_key: "MDEyMzQ1Njc4OWFiY2RlZmdoaWo=".to_string(),
+        issuer: "Steam".to_string(),
+        account_name: "player_one".to_string(),
+        url: Some("https://store.steampowered.com".to_string()),
+    };
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let cred = resp.data.expect("game token credential created");
+
+    // 读回：数据是 GameToken 变体（JSON 里不回传 secret_key）。
+    let resp = get_credential_data(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.expect("credential data returned");
+    let data = data.expect("data is present");
+    assert_eq!(data.credential_type, "GameToken");
+    assert_eq!(data.data["provider"], "steam_guard");
+    assert_eq!(data.data["issuer"], "Steam");
+    assert_eq!(data.data["account_name"], "player_one");
+    assert!(data.data.get("secret_key").is_none());
+
+    // steam_guard 出码经统一调度器。
+    let resp = get_totp_code(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let code = resp.data.expect("game token code returned");
+    assert_eq!(code.code.len(), 5);
+    assert_eq!(code.period, 30);
+
+    let resp = delete_credential(cred.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
 /// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
 #[tokio::test]
 async fn audit_query_filters_and_workspace_repath() {

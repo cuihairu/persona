@@ -403,8 +403,10 @@ Game Tokens (游戏令牌)
   - 注：Google Authenticator/GitHub 等标准 TOTP 此前已覆盖（core RFC 6238 引擎 +
     CLI QR/otpauth 录入），G1 补齐的是 Steam Guard 算法、统一调度器、GameToken
     存储变体与三端统一出码路径
-- [ ] G1.5: desktop 创建表单支持游戏令牌（CredentialDataRequest::GameToken 变体 +
-  TS 类型 + 创建/详情 UI + 测试；当前 desktop/手机可读码，创建仍需 CLI）
+- [x] G1.5 (2026-09): desktop 创建表单支持游戏令牌（CredentialDataRequest::GameToken
+  变体 + TS 类型 + GameToken 表单字段（provider slug 规范化、secret 可选、绑定型提示）
+  + 测试；credential_type 仍存 TwoFactor（与 CLI 一致），详情面板因凭据类型同为
+  TwoFactor 自动获得出码组件）
 - [x] G2 (2026-09): 国内游戏令牌调研 + 记录型落地（诚实区分「离线可算」与「厂商绑定
   型」，绑定型不伪造动态码，只做记录并提示出码走厂商 App）
   - [x] CLI `totp setup-game-token --provider <slug>`：厂商绑定型令牌记录入库（provider
