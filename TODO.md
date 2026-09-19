@@ -275,12 +275,11 @@ Server & Sync (optional)
   超时，token 宿主注入 core 不落盘）；75e3bb4e PersonaService.log_audit
   挂钩（set_event_emitter 注入，写本地库后尽力 emit，None 解除）。
   已知限制：内存队列非持久无 outbox（进程崩溃丢未 flush 批，本地
-  sqlite 审计库仍是存证源）、AutoLockManager 的 SessionLocked/Unlocked
-  直写审计库绕过挂钩不上报、stop 的 abort 丢失窗口上限 = 一个
+  sqlite 审计库仍是存证源）、stop 的 abort 丢失窗口上限 = 一个
   batch_size。THREAT_MODEL 同批登记客户端条目。
   follow-up：desktop/CLI/mobile 宿主接线（设置 UI + token 存储，见下条，
-  desktop/CLI 已完成）、AutoLockManager 接线、持久 outbox/回补、gzip。
-  手工验收：真 server +
+  desktop/CLI 已完成）、AutoLockManager 接线（已完成，见下条）、持久
+  outbox/回补、gzip。手工验收：真 server +
   Emitter(ServerEventSink) 发 3 条（1 重复 id）→ GET accepted=2
   duplicates=1 → /metrics 计数增长；停服期间 queued() 增长、重启后退避
   自动送达；杀进程丢未 flush 批但 audit_logs 表完整。
@@ -296,8 +295,11 @@ Server & Sync (optional)
     存 vault JSON 列无字段级加密、get_workspace_settings 免解锁可读
     sync 段——THREAT_MODEL 登记；token 空串 = 保留旧值不回填前端；
     保存即重挂停旧换新；RunEvent::Exit 尽力 flush）
-  - [ ] follow-up：mobile 接线、AutoLockManager 接线、keyring/token
-    字段级加密、持久 outbox/回补、gzip
+  - [x] AutoLockManager 接线（56dde4c1；set_event_emitter 传播到 manager，
+    SessionLocked/Unlocked 写库后上报，后台超时锁审计行补齐
+    session_id/user_id/details；LockPending/Activity 是 UI 事件不上报）
+  - [ ] follow-up：mobile 接线、keyring/token 字段级加密、持久
+    outbox/回补、gzip
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)

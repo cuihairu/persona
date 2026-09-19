@@ -128,7 +128,7 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **令牌**：Bearer token 由宿主注入（`ServerEventSink::new(base_url, token)`），core 不读环境变量、不落盘；上报仅发往显式配置的 base_url。
 - **非持久**：内存队列尽力而为复制——进程崩溃丢未 flush 批，无持久 outbox、不回补；本地 sqlite 审计库仍是唯一存证源（延续"不宣称防篡改/防抵赖"）。
 - **背压**：上报绝不阻塞审计写入——队满丢最旧并计数；发送失败整批按原序回队，1s→5min 指数退避；`stop()` 的最终 flush 尽力而为，abort 丢失窗口上限 = 一个 batch_size。
-- **已知缺口**：`AutoLockManager` 的 SessionLocked/Unlocked 事件直写审计库、绕过该挂钩，暂不上报（TODO 登记 follow-up）。
+- **AutoLock 事件**（缺口已闭合）：`PersonaService::set_event_emitter` 同步传播给 `AutoLockManager`，其 SessionLocked/Unlocked 审计写库后走同一上报链；后台监控超时落锁的审计行同批补齐 session_id/user_id/details。`LockPending`/`Activity` 是 UI 事件不是审计动作，不写审计也不上报（维持现状）。
 
 宿主接线（desktop / CLI 构造 Emitter 并注入 `PersonaService` 的两个端点）：
 
