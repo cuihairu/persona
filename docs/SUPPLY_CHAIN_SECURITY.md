@@ -160,10 +160,10 @@ ignore = [
 
 下列 Dependabot 告警上游**无补丁版本**或修复被宿主框架锁定，记录风险面与解除路径。每月复审时核对上游是否已发修复。
 
-| 告警                                             | 依赖             | 引入链                                                                                            | 风险面评估                                                                                    | 解除路径                                                                                        |
-| ------------------------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| GHSA-wrw7-89jp-8q8g (medium)                     | glib 0.18.5      | Tauri 1.x → gtk-rs（仅 Linux 桌面）                                                               | `VariantStrIter` 迭代器 soundness 缺陷；Persona 桌面端不直接以该迭代器遍历不可信 Variant 数据 | Tauri 2.x 升级批次（独立工程）                                                                  |
-| GHSA-848j-6mx2-7j84 (low)                        | elliptic 6.6.1   | website (umi) → webpack → node-libs-browser → crypto-browserify                                   | 构建链 polyfill 聚合；website 是展示站，产物不调用 node crypto polyfill；上游无补丁版本       | umi/webpack 构建链演进后依赖消失，或迁出 webpack 系构建                                         |
+| 告警                         | 依赖           | 引入链                                                          | 风险面评估                                                                                    | 解除路径                                                |
+| ---------------------------- | -------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| GHSA-wrw7-89jp-8q8g (medium) | glib 0.18.5    | Tauri 1.x → gtk-rs（仅 Linux 桌面）                             | `VariantStrIter` 迭代器 soundness 缺陷；Persona 桌面端不直接以该迭代器遍历不可信 Variant 数据 | Tauri 2.x 升级批次（独立工程）                          |
+| GHSA-848j-6mx2-7j84 (low)    | elliptic 6.6.1 | website (umi) → webpack → node-libs-browser → crypto-browserify | 构建链 polyfill 聚合；website 是展示站，产物不调用 node crypto polyfill；上游无补丁版本       | umi/webpack 构建链演进后依赖消失，或迁出 webpack 系构建 |
 
 已修复（同批复核）：workspace `lru` 0.12.5→0.18.4（ratatui 0.26→0.30 + rqrr 0.7→0.11）；`desktop/src-tauri` `rand` 0.8.5→0.8.7；docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12（npm overrides，vitepress 1.6.4 构建验证通过）；`image-size`（GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr，high）pnpm override `less@<4.9.1`→4.9.1 后整链消失——less 4.9.1 已移除 image-size 依赖，另留 `image-size@<2.0.4`→2.0.4 防御性 pin（OSV 确认 2.0.4 无已知漏洞；Dependabot 告警元数据滞后仍标"无补丁"）。
 
