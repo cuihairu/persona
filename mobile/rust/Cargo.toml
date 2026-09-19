@@ -15,6 +15,11 @@ persona-core = { path = "../../core" }
 # 异步运行时（FFI 边界 block_on 桥 + sqlx 池/Emitter 后台任务挂载）
 tokio.workspace = true
 
+# 业务 FFI 的 JSON 包络（入参/出参均为 JSON 字符串）
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
 # FFI
 libc = "0.2"
 

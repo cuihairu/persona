@@ -9,6 +9,7 @@
 //! `persona_free_string`/`persona_free_result` 归还；所有服务状态留在
 //! Rust 侧全局槽位（`state.rs`），指针参数仅限入参且本函数内借用。
 
+mod business;
 mod runtime;
 mod state;
 
@@ -329,32 +330,8 @@ pub extern "C" fn persona_shutdown() -> PersonaResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::{cstr, reset_state, temp_db_path, test_lock};
     use std::ffi::CStr;
-    use std::sync::Mutex as StdMutex;
-
-    /// 全局槽位跨测试共享（进程内单例），全部生命周期测试串行执行。
-    fn test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: StdMutex<()> = StdMutex::new(());
-        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    /// 每个生命周期测试开头复位全局槽位。
-    fn reset_state() {
-        assert!(persona_shutdown().success);
-    }
-
-    fn cstr(s: &str) -> CString {
-        CString::new(s).unwrap()
-    }
-
-    /// 就绪的临时 vault 路径（TempDir 泄漏到测试结束，进程退出回收）。
-    fn temp_db_path(tag: &str) -> String {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(format!("{}.db", tag));
-        // 泄漏目录：service 的 sqlx 池在 shutdown 后仍可能短暂触碰文件
-        std::mem::forget(dir);
-        path.to_string_lossy().to_string()
-    }
 
     /// 断言 result 成功。`PersonaResult::success()` 的 error_message
     /// 恒为 null，无需提取逻辑（失败路径统一走 assert_err 断言消息）。

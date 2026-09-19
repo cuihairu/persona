@@ -26,3 +26,35 @@ pub(crate) fn service_slot() -> &'static Mutex<Option<PersonaService>> {
 pub(crate) fn emitter_slot() -> &'static Mutex<Option<Emitter>> {
     EMITTER.get_or_init(|| Mutex::new(None))
 }
+
+// ---------------------------------------------------------------------------
+// 测试助手（lib.rs 与 business.rs 的测试模块共用：全局槽位是进程内单例，
+// 两处测试必须经同一把锁串行，否则互相踢掉对方的服务状态）
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// 每个生命周期/业务测试开头复位全局槽位。
+#[cfg(test)]
+pub(crate) fn reset_state() {
+    assert!(crate::persona_shutdown().success);
+}
+
+#[cfg(test)]
+pub(crate) fn cstr(s: &str) -> std::ffi::CString {
+    std::ffi::CString::new(s).unwrap()
+}
+
+/// 就绪的临时 vault 路径（TempDir 泄漏到测试结束，进程退出回收）。
+#[cfg(test)]
+pub(crate) fn temp_db_path(tag: &str) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(format!("{}.db", tag));
+    // 泄漏目录：service 的 sqlx 池在 shutdown 后仍可能短暂触碰文件
+    std::mem::forget(dir);
+    path.to_string_lossy().to_string()
+}

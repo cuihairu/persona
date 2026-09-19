@@ -310,12 +310,20 @@ Server & Sync (optional)
   - [x] AutoLockManager 接线（56dde4c1；set_event_emitter 传播到 manager，
     SessionLocked/Unlocked 写库后上报，后台超时锁审计行补齐
     session_id/user_id/details；LockPending/Activity 是 UI 事件不上报）
-  - [x] mobile Rust FFI 宿主接线（fe244fce；persona-mobile 六个 FFI 函数
+  - [x] mobile Rust FFI 宿主接线（fe244fce；persona-mobile 十个 FFI 函数
+    persona_init/version/free_string/free_result/service_init/service_unlock/
+    service_lock/service_is_unlocked/configure_sync/shutdown；
     对齐 desktop/CLI 语义：service_init 建户/认证序列、unlock/lock/
     is_unlocked、configure_sync fail-closed（url+token 都非空才启用、
     空白即摘除、URL 不做格式预校验同 desktop）、shutdown 尽力 flush；
     状态全留 Rust 侧全局槽位，token/url 由 Dart 层经 FFI 参数注入、
-    Rust 侧不落盘不读 env；本机无 Flutter SDK，手工验收清单见批次说明）
+    Rust 侧不落盘不读 env；生命周期/审计上报全链路测试 99% 行覆盖；
+    本机无 Flutter SDK，手工验收清单见批次说明）
+  - [x] mobile 业务 FFI（persona_identity_create/list/get/update/delete、
+    persona_credential_create/list/data/delete/search、persona_totp_code：
+    统一 JSON-in/JSON-out 包络 `{"ok":…,"data"|"error":…}`，复用
+    `persona_free_string` 归还；加密往返/锁定门禁/UUID 与 JSON 坏入参
+    防线测试；协议层与 UI 框架无关，Flutter/Dart 绑定落地时直接消费）
   - [x] 上报 wire 层 gzip（0d48d953；ServerEventSink 序列化后 1 KiB 阈值
     二选一——大批 flate2 gzip + Content-Encoding: gzip、小批明文直发、
     显式 Content-Type；server 加 RequestDecompressionLayer，tower-http
