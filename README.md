@@ -117,6 +117,10 @@ persona totp setup --identity alice --qr ~/Downloads/github.png
 persona totp code --id <UUID>
 persona totp code --id <UUID> --watch
 
+# Steam Guard (game token; shared_secret is the base64 from the Steam authenticator export)
+persona totp setup-steam --identity alice --account alice_steam --secret <base64-shared-secret>
+persona totp code --id <UUID>   # game token credentials share the same code command
+
 # Password generator with custom sets
 persona password generate --length 32 --set lowercase --set uppercase --set digits --set symbols
 persona password generate --pronounceable --length 18 --set lowercase --set uppercase

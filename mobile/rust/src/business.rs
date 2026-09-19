@@ -432,6 +432,22 @@ pub unsafe extern "C" fn persona_totp_code(credential_id: *const c_char) -> *mut
                     Err(e) => err_envelope(&format!("Failed to generate TOTP code: {}", e)),
                 }
             }
+            // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
+            // provider 在此报错而不是生成错误码）
+            Some(CredentialData::GameToken(gt)) => {
+                match persona_core::crypto::game_token::generate_game_token_code_now(&gt) {
+                    Ok(generated) => ok_envelope(&TotpCodeResponse {
+                        code: generated.code,
+                        remaining_seconds: generated.remaining_seconds,
+                        period: generated.period,
+                        digits: persona_core::crypto::STEAM_GUARD_DIGITS as u8,
+                        algorithm: gt.provider.to_ascii_uppercase(),
+                        issuer: gt.issuer,
+                        account_name: gt.account_name,
+                    }),
+                    Err(e) => err_envelope(&format!("Failed to generate game token code: {}", e)),
+                }
+            }
             Some(_) => err_envelope("Credential is not a TwoFactor entry"),
             None => err_envelope("Credential not found"),
         }
@@ -689,6 +705,70 @@ mod tests {
         assert_eq!(code["period"], json!(30));
         assert_eq!(code["issuer"], json!("Persona"));
         assert_eq!(code["account_name"], json!("ops@persona.dev"));
+
+        assert_ok_shutdown();
+    }
+
+    #[test]
+    fn totp_code_supports_game_token_provider() {
+        let _guard = test_lock();
+        reset_state();
+        init_unlocked("biz-gametoken");
+
+        let identity = expect_ok(unsafe {
+            persona_identity_create(
+                cstr(r#"{"name":"Player","identity_type":"Personal"}"#).as_ptr(),
+            )
+        });
+        let identity_id = identity["data"]["id"].as_str().unwrap().to_string();
+
+        // Steam Guard 令牌：base64 shared_secret，provider=steam_guard
+        let payload = format!(
+            r#"{{"identity_id":"{}","name":"Steam Guard","credential_type":"TwoFactor",
+                "security_level":"High",
+                "credential_data":{{"GameToken":{{"provider":"steam_guard",
+                "secret_key":"MDEyMzQ1Njc4OWFiY2RlZmdoaWo=",
+                "issuer":"Steam","account_name":"player_one","url":null}}}}}}"#,
+            identity_id
+        );
+        let created = expect_ok(unsafe { persona_credential_create(cstr(&payload).as_ptr()) });
+        let credential_id = created["data"]["id"].as_str().unwrap().to_string();
+
+        let code =
+            expect_ok(unsafe { persona_totp_code(cstr(&credential_id).as_ptr()) })["data"].clone();
+        let generated = code["code"].as_str().unwrap();
+        assert_eq!(generated.len(), 5, "steam guard code is five chars");
+        assert!(
+            generated
+                .bytes()
+                .all(|b| b"23456789BCDFGHJKMNPQRTVWXY".contains(&b)),
+            "code {generated} outside the Steam alphabet"
+        );
+        let remaining = code["remaining_seconds"].as_u64().unwrap();
+        assert!((1..=30).contains(&remaining));
+        assert_eq!(code["period"], json!(30));
+        assert_eq!(code["digits"], json!(5));
+        assert_eq!(code["algorithm"], json!("STEAM_GUARD"));
+        assert_eq!(code["issuer"], json!("Steam"));
+        assert_eq!(code["account_name"], json!("player_one"));
+
+        // 未知 provider（绑定型，如未来的腾讯安全中心）→ 报错而不是伪造码
+        let bound_payload = format!(
+            r#"{{"identity_id":"{}","name":"Bound token","credential_type":"TwoFactor",
+                "security_level":"High",
+                "credential_data":{{"GameToken":{{"provider":"tencent_security",
+                "secret_key":"MDEyMzQ1Njc4OWFiY2RlZmdoaWo=",
+                "issuer":"Tencent","account_name":"player_one","url":null}}}}}}"#,
+            identity_id
+        );
+        let bound = expect_ok(unsafe { persona_credential_create(cstr(&bound_payload).as_ptr()) });
+        let bound_id = bound["data"]["id"].as_str().unwrap().to_string();
+        let err = expect_err(unsafe { persona_totp_code(cstr(&bound_id).as_ptr()) });
+        assert!(
+            err.contains("Unsupported game token provider"),
+            "unexpected error: {}",
+            err
+        );
 
         assert_ok_shutdown();
     }

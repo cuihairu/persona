@@ -371,6 +371,14 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
             "type": "Raw",
             "message": "Binary data"
         }),
+        // secret_key 不回传前端（与 TwoFactor 不回传 secret_key 同理）
+        CredentialData::GameToken(gt_data) => serde_json::json!({
+            "type": "GameToken",
+            "provider": gt_data.provider,
+            "issuer": gt_data.issuer,
+            "account_name": gt_data.account_name,
+            "url": gt_data.url
+        }),
     }
 }
 

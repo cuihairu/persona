@@ -584,12 +584,16 @@ async fn handle_request(
                 .await?
                 .ok_or_else(|| anyhow!("not_found"))?;
 
-            let tf = match data {
-                CredentialData::TwoFactor(tf) => tf,
+            let (code, remaining_seconds, period) = match data {
+                CredentialData::TwoFactor(tf) => generate_totp_code_from_data(&tf)?,
+                // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
+                // provider 在此报 unsupported 而不是生成错误码）
+                CredentialData::GameToken(gt) => {
+                    let c = persona_core::crypto::game_token::generate_game_token_code_now(&gt)?;
+                    (c.code, c.remaining_seconds, c.period)
+                }
                 _ => return Err(anyhow!("unsupported_credential_type")),
             };
-
-            let (code, remaining_seconds, period) = generate_totp_code_from_data(&tf)?;
 
             info!(
                 event = "bridge_totp_success",
@@ -689,12 +693,14 @@ async fn handle_request(
                         .get_credential_data(&item_id)
                         .await?
                         .ok_or_else(|| anyhow!("not_found"))?;
-                    let tf = match data {
-                        CredentialData::TwoFactor(tf) => tf,
+                    match data {
+                        CredentialData::TwoFactor(tf) => generate_totp_code_from_data(&tf)?.0,
+                        CredentialData::GameToken(gt) => {
+                            persona_core::crypto::game_token::generate_game_token_code_now(&gt)?
+                                .code
+                        }
                         _ => return Err(anyhow!("unsupported_credential_type")),
-                    };
-                    let (code, _remaining, _period) = generate_totp_code_from_data(&tf)?;
-                    code
+                    }
                 }
                 other => return Err(anyhow!("invalid_payload: unknown field '{other}'")),
             };
@@ -3208,6 +3214,44 @@ pub(crate) mod tests {
         cred.id
     }
 
+    /// Seed a game token credential (Steam Guard or an arbitrary provider id).
+    async fn seed_game_token_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        url: Option<&str>,
+        provider: &str,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::{GameTokenData, SecurityLevel};
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::TwoFactor,
+                SecurityLevel::High,
+                &CredentialData::GameToken(GameTokenData {
+                    provider: provider.to_string(),
+                    secret_key: data_encoding::BASE64.encode(b"0123456789abcdefghij"),
+                    issuer: "Steam".to_string(),
+                    account_name: "alice_steam".to_string(),
+                    url: url.map(|s| s.to_string()),
+                }),
+            )
+            .await
+            .unwrap();
+        cred.url = url.map(|s| s.to_string());
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
     /// Seed a credential whose row type is Password but whose sealed payload
     /// is arbitrary `data` — the type gate passes while the fill match takes
     /// the defensive arms.
@@ -4385,6 +4429,106 @@ pub(crate) mod tests {
             .await
             .unwrap();
         drop(db);
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// GameToken 凭据走 get_totp/copy 的调度器臂：Steam Guard 出 5 位码，
+    /// 绑定型 provider（如未来的腾讯安全中心）必须报错而不是伪造码。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_get_totp_supports_game_token_provider() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let steam_id = seed_game_token_credential(
+            &db_path,
+            identity_id,
+            "Steam Guard",
+            Some("https://store.steampowered.com"),
+            "steam_guard",
+        )
+        .await;
+        let bound_id = seed_game_token_credential(
+            &db_path,
+            identity_id,
+            "Vendor bound token",
+            Some("https://example.com/bound"),
+            "tencent_security",
+        )
+        .await;
+
+        // Happy path: a five character code from the Steam alphabet, 30s period.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://store.steampowered.com",
+                    "item_id": steam_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "steam guard must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "totp_response");
+        let payload = resp.payload.unwrap();
+        let code = payload["code"].as_str().unwrap();
+        assert_eq!(code.len(), 5, "steam guard code is five chars");
+        assert!(
+            code.bytes()
+                .all(|c| b"23456789BCDFGHJKMNPQRTVWXY".contains(&c)),
+            "code {code} outside the Steam alphabet"
+        );
+        assert_eq!(payload["period"], 30);
+        let remaining = payload["remaining_seconds"].as_u64().unwrap();
+        assert!((1..=30).contains(&remaining));
+
+        // copy field "totp" resolves GameToken data through the same arm.
+        let clip_ok = clipboard_available();
+        let result = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://store.steampowered.com",
+                    "item_id": steam_id.to_string(),
+                    "field": "totp",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await;
+        assert_copy_outcome(result, clip_ok);
+
+        // A binding-based provider must error out, never fabricate a code.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": bound_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("binding-based provider must not generate offline codes");
+        assert!(
+            err.to_string().contains("Unsupported game token provider"),
+            "got: {err}"
+        );
 
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");

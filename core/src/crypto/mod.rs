@@ -1,10 +1,12 @@
 pub mod address_generator;
 pub mod bech32;
 pub mod encryption;
+pub mod game_token;
 pub mod hashing;
 pub mod key_hierarchy;
 pub mod keys;
 pub mod passkey;
+pub mod steam;
 pub mod totp;
 pub mod transaction_signing;
 pub mod wallet_crypto;
@@ -13,10 +15,12 @@ pub mod wallet_import_export;
 
 pub use address_generator::*;
 pub use encryption::*;
+pub use game_token::*;
 pub use hashing::*;
 pub use key_hierarchy::*;
 pub use keys::*;
 pub use passkey::*;
+pub use steam::*;
 pub use totp::*;
 pub use transaction_signing::*;
 pub use wallet_crypto::*;

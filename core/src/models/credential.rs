@@ -274,7 +274,24 @@ pub struct TwoFactorData {
     pub period: u32,
 }
 
+/// Game token data for vendor algorithms outside RFC 4226/6238
+/// (e.g. Steam Guard; providers are dispatched in `core::crypto::game_token`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameTokenData {
+    /// Vendor identifier (`core::crypto::game_token::PROVIDER_*`, e.g. "steam_guard")
+    pub provider: String,
+    /// Vendor token secret (Steam: base64 `shared_secret`)
+    pub secret_key: String,
+    pub issuer: String,
+    pub account_name: String,
+    /// Associated service origin (optional)
+    pub url: Option<String>,
+}
+
 /// Helper enum for strongly-typed credential data
+///
+/// bincode 外部标签枚举：新变体只能追加在末尾，既有变体索引不可变，
+/// 否则旧密文将无法反序列化。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CredentialData {
     Password(PasswordCredentialData),
@@ -285,6 +302,7 @@ pub enum CredentialData {
     ServerConfig(ServerConfigData),
     TwoFactor(TwoFactorData),
     Raw(Vec<u8>),
+    GameToken(GameTokenData),
 }
 
 impl CredentialData {
@@ -480,6 +498,13 @@ mod tests {
                 period: 30,
             }),
             CredentialData::Raw(vec![1, 2, 3]),
+            CredentialData::GameToken(GameTokenData {
+                provider: "steam_guard".to_string(),
+                secret_key: "abcdefghijklmnopqrst".to_string(),
+                issuer: "Steam".to_string(),
+                account_name: "alice".to_string(),
+                url: Some("https://steamcommunity.com".to_string()),
+            }),
         ];
 
         for data in variants {
@@ -495,6 +520,30 @@ mod tests {
     #[test]
     fn credential_data_from_bytes_rejects_garbage() {
         assert!(CredentialData::from_bytes(b"not bincode").is_err());
+    }
+
+    /// 既有变体的 bincode 编码必须逐字节稳定（变体索引 = 枚举序号），
+    /// 新变体只能追加在末尾——否则旧密文全部变砖。
+    #[test]
+    fn credential_data_bincode_variant_indices_are_stable() {
+        // Raw 是追加 GameToken 之前的最后一个变体（索引 7；Vec 带 u64 长度前缀）
+        assert_eq!(
+            CredentialData::Raw(vec![1, 2, 3]).to_bytes().unwrap(),
+            vec![7, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3]
+        );
+        // GameToken 追加在末尾，索引 8
+        let game = CredentialData::GameToken(GameTokenData {
+            provider: "steam_guard".to_string(),
+            secret_key: "s".to_string(),
+            issuer: "i".to_string(),
+            account_name: "a".to_string(),
+            url: None,
+        })
+        .to_bytes()
+        .unwrap();
+        assert_eq!(&game[..4], &[8, 0, 0, 0]);
+        let decoded = CredentialData::from_bytes(&game).unwrap();
+        assert!(matches!(decoded, CredentialData::GameToken(_)));
     }
 
     #[test]

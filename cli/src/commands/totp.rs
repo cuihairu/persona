@@ -4,8 +4,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
+    crypto::game_token::{generate_code_now, generate_game_token_code_now, PROVIDER_STEAM_GUARD},
+    crypto::steam::decode_steam_secret,
     crypto::totp::totp_now,
-    models::{CredentialData, CredentialType, SecurityLevel, TwoFactorData},
+    models::{CredentialData, CredentialType, GameTokenData, SecurityLevel, TwoFactorData},
     PersonaService,
 };
 use rqrr::PreparedImage;
@@ -61,6 +63,24 @@ pub enum TotpCommand {
         #[arg(long)]
         algorithm: Option<String>,
     },
+    /// Set up a Steam Guard token from a base64 shared_secret
+    SetupSteam {
+        /// Identity name to store credential under
+        #[arg(short, long)]
+        identity: String,
+        /// Credential display name (defaults to "Steam (account)")
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Steam shared_secret (standard base64, from the Steam authenticator export)
+        #[arg(long)]
+        secret: String,
+        /// Steam account name the token belongs to
+        #[arg(short, long)]
+        account: String,
+        /// Associate this token with a website origin (e.g. https://store.steampowered.com)
+        #[arg(long)]
+        url: Option<String>,
+    },
     /// Generate a TOTP code for a stored credential
     Code {
         /// Credential UUID (must be TwoFactor)
@@ -101,6 +121,13 @@ pub(crate) async fn execute_with(
             )
             .await?
         }
+        TotpCommand::SetupSteam {
+            identity,
+            name,
+            secret,
+            account,
+            url,
+        } => setup_steam_token(config, ui, identity, name, secret, account, url).await?,
         TotpCommand::Code { id, watch } => generate_codes(config, ui, id, watch).await?,
     }
     Ok(())
@@ -226,6 +253,79 @@ async fn setup_totp(
     Ok(())
 }
 
+/// 录入 Steam Guard 令牌：secret 为 base64 shared_secret，固定 5 位码/30 秒
+async fn setup_steam_token(
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+    identity_name: String,
+    display_name: Option<String>,
+    secret: String,
+    account: String,
+    url: Option<String>,
+) -> Result<()> {
+    println!("{}", "🔐 Setting up Steam Guard token...".cyan());
+    // 入库前先验证密钥可解码，坏密钥不该等到取码时才失败
+    let secret = secret.trim().to_string();
+    if decode_steam_secret(&secret).is_err() {
+        bail!("Invalid Steam shared_secret (must be standard base64)");
+    }
+    let origin_url = url.map(|s| normalize_origin_url(&s)).transpose()?;
+
+    let mut service = init_service(config, ui).await?;
+    let identity = resolve_identity(&mut service, &identity_name).await?;
+
+    let game_data = GameTokenData {
+        provider: PROVIDER_STEAM_GUARD.to_string(),
+        secret_key: secret.clone(),
+        issuer: "Steam".to_string(),
+        account_name: account.clone(),
+        url: origin_url.clone(),
+    };
+
+    let credential_name = display_name.unwrap_or_else(|| format!("Steam ({})", account));
+    let mut credential = service
+        .create_credential(
+            identity.id,
+            credential_name.clone(),
+            CredentialType::TwoFactor,
+            SecurityLevel::High,
+            &CredentialData::GameToken(game_data.clone()),
+        )
+        .await
+        .into_anyhow()
+        .context("Failed to create Steam Guard credential")?;
+
+    credential.username = Some(account.clone());
+    if let Some(url) = origin_url {
+        credential.url = Some(url);
+    }
+    credential
+        .metadata
+        .insert("provider".into(), PROVIDER_STEAM_GUARD.into());
+    credential.metadata.insert("issuer".into(), "Steam".into());
+    service
+        .update_credential(&credential)
+        .await
+        .into_anyhow()
+        .context("Failed to update Steam Guard metadata")?;
+
+    println!(
+        "{} Saved Steam Guard token '{}' for identity '{}'",
+        "✓".green(),
+        credential_name.bright_green(),
+        identity.name.bright_cyan()
+    );
+
+    let code = generate_game_token_code_now(&game_data)?;
+    println!(
+        "Current code: {} (valid for {}s)",
+        code.code.bold().bright_blue(),
+        code.remaining_seconds
+    );
+
+    Ok(())
+}
+
 fn normalize_origin_url(raw: &str) -> Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -264,28 +364,29 @@ async fn generate_codes(
         .into_anyhow()?
         .ok_or_else(|| anyhow!("Unable to decrypt credential {}", id))?
     {
-        CredentialData::TwoFactor(data) => data,
+        // RFC TOTP 与游戏令牌（如 Steam Guard）都经 core 调度器取码
+        d @ (CredentialData::TwoFactor(_) | CredentialData::GameToken(_)) => d,
         _ => bail!("Credential {} does not contain TOTP data", id),
     };
 
     if watch {
         loop {
-            let (code, remaining) = generate_totp_code_from_data(&data)?;
+            let generated = generate_code_now(&data)?;
             println!(
                 "{} → {} ({}s remaining)",
                 chrono::Utc::now().format("%H:%M:%S"),
-                code.bold().bright_blue(),
-                remaining
+                generated.code.bold().bright_blue(),
+                generated.remaining_seconds
             );
             std::thread::sleep(Duration::from_secs(1));
         }
     } else {
-        let (code, remaining) = generate_totp_code_from_data(&data)?;
+        let generated = generate_code_now(&data)?;
         println!(
             "TOTP code for {}: {} ({}s remaining)",
             credential.name.bright_cyan(),
-            code.bold().bright_blue(),
-            remaining
+            generated.code.bold().bright_blue(),
+            generated.remaining_seconds
         );
     }
     // unreachable if watch loop
@@ -1226,6 +1327,128 @@ mod tests {
             "account fallback used as name: {:?}",
             names
         );
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// Steam Guard 录入端到端：坏密钥快速失败；正常录入后数据/元数据/
+    /// URL 绑定齐全，且 Code 子命令可对 GameToken 凭据出码。
+    #[tokio::test]
+    async fn setup_steam_token_stores_game_token_and_code_subcommand_reads_it() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // Invalid shared_secret fails fast, before any DB write.
+        let err = execute_with(
+            TotpArgs {
+                command: TotpCommand::SetupSteam {
+                    identity: "alice".to_string(),
+                    name: None,
+                    secret: "!!!not base64!!!".to_string(),
+                    account: "alice_steam".to_string(),
+                    url: None,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect_err("invalid shared_secret must fail");
+        assert!(err.to_string().contains("Invalid Steam shared_secret"));
+
+        // Happy path through the public dispatch wrapper.
+        let secret = data_encoding::BASE64.encode(b"0123456789abcdefghij");
+        execute_with(
+            TotpArgs {
+                command: TotpCommand::SetupSteam {
+                    identity: "alice".to_string(),
+                    name: None,
+                    secret,
+                    account: "alice_steam".to_string(),
+                    url: Some("store.steampowered.com".to_string()),
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("steam setup succeeds");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let alice = IdentityRepository::new(service_db(&config).await)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(creds[0].name, "Steam (alice_steam)");
+        assert_eq!(creds[0].username.as_deref(), Some("alice_steam"));
+        assert_eq!(
+            creds[0].url.as_deref(),
+            Some("https://store.steampowered.com")
+        );
+        assert_eq!(
+            creds[0].metadata.get("provider").map(String::as_str),
+            Some("steam_guard")
+        );
+
+        let data = service
+            .get_credential_data(&creds[0].id)
+            .await
+            .into_anyhow()
+            .unwrap()
+            .expect("game token data present");
+        match data {
+            CredentialData::GameToken(gt) => {
+                assert_eq!(gt.provider, "steam_guard");
+                assert_eq!(gt.issuer, "Steam");
+                assert_eq!(gt.account_name, "alice_steam");
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+        let steam_id = creds[0].id;
+        drop(service);
+
+        // The Code subcommand reads GameToken credentials through the core
+        // dispatcher exactly like RFC TOTP ones.
+        execute_with(
+            TotpArgs {
+                command: TotpCommand::Code {
+                    id: steam_id,
+                    watch: false,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("steam token code generated");
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

@@ -1183,6 +1183,7 @@ pub async fn get_credential_data(
                             CredentialData::ServerConfig(_) => "ServerConfig".to_string(),
                             CredentialData::TwoFactor(_) => "TwoFactor".to_string(),
                             CredentialData::Raw(_) => "Raw".to_string(),
+                            CredentialData::GameToken(_) => "GameToken".to_string(),
                         },
                         data: credential_data_to_json(&data),
                     });
@@ -1237,6 +1238,22 @@ pub async fn get_totp_code(
                 algorithm: tf.algorithm,
                 issuer: tf.issuer,
                 account_name: tf.account_name,
+            }))
+        }
+        // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
+        // provider 在此报错而不是生成错误码）
+        CredentialData::GameToken(gt) => {
+            let generated = persona_core::crypto::game_token::generate_game_token_code_now(&gt)
+                .map_err(|e| format!("Failed to generate game token code: {}", e))?;
+
+            Ok(ApiResponse::success(TotpCodeResponse {
+                code: generated.code,
+                remaining_seconds: generated.remaining_seconds,
+                period: generated.period,
+                digits: persona_core::crypto::STEAM_GUARD_DIGITS as u8,
+                algorithm: gt.provider.to_ascii_uppercase(),
+                issuer: gt.issuer,
+                account_name: gt.account_name,
             }))
         }
         _ => Ok(ApiResponse::error(

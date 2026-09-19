@@ -381,6 +381,44 @@ Browser & Autofill (future)
   - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation
 - [x] Phishing protections; identity-based context switching
 
+Game Tokens (游戏令牌)
+- [x] G1 (2026-09): Steam Guard + Google Authenticator (RFC TOTP) 统一令牌层
+  - [x] core/src/crypto/steam.rs：Steam Guard 算法（标准 base64 shared_secret、30s 周期、
+    HMAC-SHA1 动态截断 + 26 字符字母表连续取模 5 位码；与 steamguard-cli/SteamAuth 等
+    开源实现一致；Valve 无官方测试向量 → 回归依赖独立手工 ipad/opad HMAC 参照实现
+    交叉验证 + 结构断言 + 周期窗口边界）
+  - [x] core/src/crypto/game_token.rs：统一调度器（generate_code/_now 按 provider 路由；
+    未知 provider 报 "Unsupported game token provider"——未来绑定型 provider 存入后
+    读取路径正确报错而不是静默生成错误码；TwoFactor 凭据亦可经统一入口出码，
+    三端消费只需一个 match 臂）
+  - [x] CredentialData::GameToken 变体（追加在 Raw 之后，bincode 变体索引逐字节
+    稳定回归测试；GameTokenData{provider, secret_key, issuer, account_name, url}）
+  - [x] CLI：`persona totp setup-steam`（--secret base64 shared_secret 入库前解码校验、
+    --account 必填、--url origin 绑定、metadata 记 provider）+ Code 子命令同时支持
+    RFC TOTP 与 GameToken 凭据
+  - [x] CLI bridge：get_totp 与 copy(field=totp) 加 GameToken 臂（user gesture/
+    origin binding/active identity 门禁全部沿用）
+  - [x] desktop get_totp_code 与 mobile persona_totp_code 加 GameToken 臂（可读码：
+    digits=5、algorithm=provider 大写、period=30）
+  - 注：Google Authenticator/GitHub 等标准 TOTP 此前已覆盖（core RFC 6238 引擎 +
+    CLI QR/otpauth 录入），G1 补齐的是 Steam Guard 算法、统一调度器、GameToken
+    存储变体与三端统一出码路径
+- [ ] G1.5: desktop 创建表单支持游戏令牌（CredentialDataRequest::GameToken 变体 +
+  TS 类型 + 创建/详情 UI + 测试；当前 desktop/手机可读码，创建仍需 CLI）
+- [ ] G2: 国内游戏令牌（逐家调研后落地；诚实区分「离线可算」与「厂商绑定/记录型」，
+  绑定型不伪造动态码，只做记录 + 提示跳转）
+  - [ ] 网易大神/网易BUFF：若提供标准 TOTP 验证器（otpauth URI/secret）→ 现有
+        TOTP 导入路径即可覆盖；专有协议则按绑定型登记
+  - [ ] 腾讯游戏安全中心令牌：厂商 App 专有服务端绑定，无法离线生成 → 记录/绑定型
+  - [ ] 米哈游/原神安全令：HoYoLab App 推送/扫码确认 → 绑定型
+  - [ ] 完美世界令牌：待调研（预期记录型）
+  - [ ] 暴雪战网验证器：早期为标准 TOTP（可离线录入出码），现 App 推送为绑定型 → 待调研
+  - [ ] 4399 / 7K7K 令牌：待调研（预期记录型）
+- [ ] G3: 国际扩展与标准增强
+  - [ ] GitHub 二次登录验证：TOTP 已覆盖；安全密钥/通行密钥走 Passkeys 轨道
+  - [ ] HOTP（RFC 4226 计数器型）录入与出码（core hotp() 已有，CLI otpauth 目前仅收 totp）
+  - [ ] Steam Desktop Authenticator 导出格式（maFiles .maFile）导入待调研
+
 Quality & Security
 - [x] Threat model & periodic security review
 - [x] Fuzz tests for parsers (mnemonic/keystore/QR)

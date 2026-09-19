@@ -2003,6 +2003,94 @@ async fn totp_and_credential_data_rejections() {
     assert_eq!(hits[0].name, "GitHub TOTP");
 }
 
+/// get_totp_code 对 GameToken 凭据（Steam Guard）走 core 调度器臂：
+/// 5 位码 / 30 秒周期 / algorithm=provider 大写；绑定型 provider 报错
+/// 而不是伪造码。凭据经 service 直建（命令层请求枚举的 GameToken
+/// 变体在 G1.5 登记）。
+#[tokio::test]
+async fn get_totp_code_supports_game_token_provider() {
+    use persona_core::models::credential::GameTokenData;
+
+    let (app, identity_id) = app_with_identity().await;
+    let identity_uuid = uuid::Uuid::parse_str(&identity_id).unwrap();
+
+    let steam_cred_id = {
+        let state = app.state::<AppState>();
+        let guard = state.service.lock().await;
+        let service = guard.as_ref().expect("service initialized");
+        let cred = service
+            .create_credential(
+                identity_uuid,
+                "Steam Guard".to_string(),
+                persona_core::models::credential::CredentialType::TwoFactor,
+                persona_core::models::credential::SecurityLevel::High,
+                &persona_core::models::credential::CredentialData::GameToken(GameTokenData {
+                    provider: "steam_guard".to_string(),
+                    secret_key: "MDEyMzQ1Njc4OWFiY2RlZmdoaWo=".to_string(),
+                    issuer: "Steam".to_string(),
+                    account_name: "player_one".to_string(),
+                    url: Some("https://store.steampowered.com".to_string()),
+                }),
+            )
+            .await
+            .unwrap();
+        cred.id
+    };
+
+    let resp = get_totp_code(steam_cred_id.to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let code = resp.data.expect("game token code returned");
+    assert_eq!(code.code.len(), 5, "steam guard code is five chars");
+    assert!(
+        code.code
+            .bytes()
+            .all(|c| b"23456789BCDFGHJKMNPQRTVWXY".contains(&c)),
+        "code {} outside the Steam alphabet",
+        code.code
+    );
+    assert_eq!(code.period, 30);
+    assert_eq!(code.digits, 5);
+    assert_eq!(code.algorithm, "STEAM_GUARD");
+    assert_eq!(code.issuer, "Steam");
+    assert_eq!(code.account_name, "player_one");
+
+    // 绑定型 provider：命令层报错信息，绝不返回码。
+    let bound_cred_id = {
+        let state = app.state::<AppState>();
+        let guard = state.service.lock().await;
+        let service = guard.as_ref().expect("service initialized");
+        let cred = service
+            .create_credential(
+                identity_uuid,
+                "Vendor bound token".to_string(),
+                persona_core::models::credential::CredentialType::TwoFactor,
+                persona_core::models::credential::SecurityLevel::High,
+                &persona_core::models::credential::CredentialData::GameToken(GameTokenData {
+                    provider: "tencent_security".to_string(),
+                    secret_key: "MDEyMzQ1Njc4OWFiY2RlZmdoaWo=".to_string(),
+                    issuer: "Tencent".to_string(),
+                    account_name: "player_one".to_string(),
+                    url: None,
+                }),
+            )
+            .await
+            .unwrap();
+        cred.id
+    };
+
+    // 绑定型 provider：命令层 Err 传播（与 TOTP 生成错误同路径），绝不返回码。
+    let err = get_totp_code(bound_cred_id.to_string(), app.state::<AppState>())
+        .await
+        .unwrap_err();
+    assert!(
+        err.contains("Unsupported game token provider"),
+        "unexpected error: {}",
+        err
+    );
+}
+
 /// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
 #[tokio::test]
 async fn audit_query_filters_and_workspace_repath() {
