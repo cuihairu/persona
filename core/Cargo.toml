@@ -46,6 +46,10 @@ base64.workspace = true
 # json feature：ServerEventSink 的 .json() 请求体需要（workspace 默认未开）
 reqwest = { workspace = true, optional = true, features = ["json"] }
 
+# 上报 wire 层 gzip（请求体压缩；reqwest 的 gzip feature 是响应解压，
+# 不适用于 POST body）
+flate2 = { workspace = true, optional = true }
+
 # 数据库
 sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }
 
@@ -99,4 +103,4 @@ hibp = ["dep:reqwest"]
 favicon = ["dep:reqwest"]
 # ServerEventSink：审计事件 POST 到 persona-server（reqwest 本就随
 # hibp/favicon 在 default 树，进 default 对下游零增量）
-events-server = ["dep:reqwest"]
+events-server = ["dep:reqwest", "dep:flate2"]

@@ -634,6 +634,78 @@ mod endpoint_tests {
         assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    /// gzip 批请求构造（测试侧压缩，线上由 core 的 ServerEventSink 压）。
+    /// gzip 是二进制，`Body::from(Vec<u8>)` 承接；Content-Length 由长度
+    /// 自动得出——与线上 payload_size_guard 同口径。
+    fn gzipped_request(body: Vec<u8>) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::builder()
+            .method("POST")
+            .uri("/api/v1/events")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .header("content-type", "application/json")
+            .header("content-encoding", "gzip")
+            .body(axum::body::Body::from(body))
+            .unwrap()
+    }
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        use flate2::write::GzEncoder;
+        use std::io::Write as _;
+        let mut encoder = GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[tokio::test]
+    async fn gzip_batch_is_decompressed_and_ingested() {
+        let (router, _) = setup(Some(TOKEN)).await;
+        let payload = format!(
+            r#"{{"events":[{},{}]}}"#,
+            event_json("g1", "login"),
+            event_json("g2", "unlock")
+        );
+        let request = gzipped_request(gzip(payload.as_bytes()));
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::ACCEPTED);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["accepted"], 2);
+    }
+
+    #[tokio::test]
+    async fn corrupt_gzip_body_is_4xx() {
+        let (router, _) = setup(Some(TOKEN)).await;
+        // 头声明 gzip，内容不是 gzip 流——解压层在中途失败，JSON extractor
+        // 读 body 出错形成 rejection
+        let request = gzipped_request(b"this is not a gzip stream".to_vec());
+        let response = router.oneshot(request).await.unwrap();
+        assert!(
+            response.status() == axum::http::StatusCode::BAD_REQUEST
+                || response.status() == axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+            "expected 4xx, got {}",
+            response.status()
+        );
+    }
+
+    #[tokio::test]
+    async fn decompressed_body_over_10mib_is_413() {
+        let (router, _) = setup(Some(TOKEN)).await;
+        // 解压炸弹形态：压缩后线上字节远小于 1 MiB（payload_size_guard
+        // 放行），解压后明文超 10 MiB（内层 DefaultBodyLimit 拦截 413）
+        let huge = format!(
+            r#"{{"events":[{{"id":"boom","action":"{}","resource_type":"user","success":true,"timestamp":"2026-01-01T00:00:00Z"}}]}}"#,
+            "x".repeat(11 * 1024 * 1024) // 明文 11 MiB > 10 MiB 上限
+        );
+        assert!(huge.len() > 10 * 1024 * 1024);
+        let compressed = gzip(huge.as_bytes());
+        assert!(compressed.len() < 1024 * 1024);
+        let request = gzipped_request(compressed);
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
     #[tokio::test]
     async fn ingest_unknown_action_stored_verbatim() {
         // 未知 action 串按 core FromStr 语义由消费方落 Custom；server 原样存取

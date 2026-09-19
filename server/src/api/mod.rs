@@ -10,9 +10,17 @@ use serde::Serialize;
 
 pub use events::{ingest, query};
 
-/// 请求体上限。`DefaultBodyLimit` 兜底 chunked 请求；带 Content-Length
-/// 的请求由 `payload_size_guard` 预检直接给出确定性 413。
+/// 请求体上限（线上字节）。带 Content-Length 的请求由
+/// `payload_size_guard` 预检直接给出确定性 413——这是压缩传输的真实
+/// 上限；`DefaultBodyLimit` 对 /events 作用于解压后明文（见
+/// [`MAX_DECOMPRESSED_BODY_BYTES`]）。
 pub const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// 解压后明文上限（防解压炸弹）。理论最大合法批：500 条 × 逐字段上限
+/// ≈ 9.5 MiB，10 MiB 留余量。位于 `RequestDecompressionLayer` 内层的
+/// `DefaultBodyLimit` 作用于解压后的 body，同时也兜底 chunked 请求
+///（该路径无 Content-Length，线上预检跳过）。
+pub const MAX_DECOMPRESSED_BODY_BYTES: usize = 10 * 1024 * 1024;
 
 /// Content-Length 预检：超限直接 413，不读 body、不进认证。
 pub async fn payload_size_guard(req: Request, next: Next) -> Response {

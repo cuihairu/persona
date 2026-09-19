@@ -24,12 +24,16 @@ pub use state::AppState;
 
 /// Build the application router.
 pub fn build_router(state: AppState) -> Router {
-    // /api 子路由：请求顺序 payload_size_guard → require_bearer → 处理器
-    // （后 .layer 的在外层）。body 上限两层：Content-Length 预检出确定性
-    // 413，DefaultBodyLimit 兜底 chunked。
+    // /api 子路由：请求顺序 payload_size_guard → require_bearer →
+    // RequestDecompressionLayer → 处理器（后 .layer 的在外层）。
+    // body 上限：payload_size_guard 按 Content-Length 预检线上字节
+    //（gzip 传输的真实上限）；DefaultBodyLimit 经 extensions 作用于
+    // extractor 读到的 body——放在解压层内层即"解压后明文"上限
+    //（防解压炸弹，兼兜底无 Content-Length 的 chunked 请求）。
     let api = Router::new()
         .route("/events", post(api::ingest).get(api::query))
-        .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
+        .layer(DefaultBodyLimit::max(api::MAX_DECOMPRESSED_BODY_BYTES))
+        .layer(tower_http::decompression::RequestDecompressionLayer::new())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,

@@ -4,7 +4,14 @@
 use crate::events::emitter::{EventSink, SendReport};
 use crate::events::wire::WireEvent;
 use crate::Result;
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::Write;
 use std::time::Duration;
+
+/// 明文 body 超过该阈值才 gzip：审计事件是重复结构的 JSON，百条批次
+/// 体积可观；小批次（单事件约 200 B）压缩比常为负，头开销 + CPU 白花。
+const GZIP_THRESHOLD_BYTES: usize = 1024;
 
 /// persona-server 事件上报端。token 由调用方注入（宿主负责安全存储），
 /// core 不读环境变量、不落盘。
@@ -20,6 +27,18 @@ pub struct ServerEventSink {
 pub struct IngestResponse {
     pub accepted: u64,
     pub duplicates: u64,
+}
+
+/// gzip 压缩（默认等级）。内存 `Vec` writer 的 `io::Error` 实际不可达。
+fn gzip_payload(payload: Vec<u8>) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(
+        Vec::with_capacity(payload.len() / 2),
+        Compression::default(),
+    );
+    encoder
+        .write_all(&payload)
+        .and_then(|()| encoder.finish())
+        .expect("in-memory gzip cannot fail")
 }
 
 impl ServerEventSink {
@@ -41,13 +60,26 @@ impl ServerEventSink {
 #[async_trait::async_trait]
 impl EventSink for ServerEventSink {
     async fn send(&self, events: Vec<WireEvent>) -> Result<SendReport> {
-        let response = self
+        // 序列化后按阈值二选一：大批发 gzip（server 侧
+        // RequestDecompressionLayer 解压），小批明文直发。
+        let payload = serde_json::to_vec(&serde_json::json!({ "events": events }))?;
+        let gzipped = payload.len() > GZIP_THRESHOLD_BYTES;
+        let body = if gzipped {
+            gzip_payload(payload)
+        } else {
+            payload
+        };
+
+        let mut request = self
             .http
             .post(&self.endpoint)
             .bearer_auth(&self.token)
-            .json(&serde_json::json!({ "events": events }))
-            .send()
-            .await?;
+            // .body(bytes) 不再自动设 Content-Type，必须显式
+            .header(reqwest::header::CONTENT_TYPE, "application/json");
+        if gzipped {
+            request = request.header(reqwest::header::CONTENT_ENCODING, "gzip");
+        }
+        let response = request.body(body).send().await?;
 
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
@@ -82,19 +114,23 @@ mod tests {
     use super::*;
     use crate::events::wire::to_wire;
     use crate::models::{AuditAction, AuditLog, ResourceType};
+    use std::io::Read as _;
     use std::sync::{Arc, Mutex};
 
     struct Captured {
         request_line: String,
         authorization: String,
         content_type: String,
+        content_encoding: String,
         user_agent: String,
         body: String,
     }
 
     /// 与 breach.rs `spawn_fake_hibp` 同型：收一个请求、捕获、回固定响应。
     /// 读循环按 Content-Length 收满整个请求体（JSON body 比 GET 大，不能
-    /// 假设单次 read 收全）。
+    /// 假设单次 read 收全）。body 若声明 gzip 则解压回明文再存——测试
+    /// 断言的是解密后的 JSON 形状，与 server 端 RequestDecompressionLayer
+    /// 的行为对齐。
     async fn spawn_fake_server(
         status: &'static str,
         response_body: &'static str,
@@ -123,8 +159,8 @@ mod tests {
             let raw = String::from_utf8_lossy(&buf).to_string();
             let mut lines = raw.split("\r\n");
             let request_line = lines.next().unwrap_or("").to_string();
-            let (mut authorization, mut content_type, mut user_agent) =
-                (String::new(), String::new(), String::new());
+            let (mut authorization, mut content_type, mut content_encoding, mut user_agent) =
+                (String::new(), String::new(), String::new(), String::new());
             for line in lines {
                 let Some((k, v)) = line.split_once(':') else {
                     continue;
@@ -133,16 +169,28 @@ mod tests {
                     authorization = v.trim().to_string();
                 } else if k.eq_ignore_ascii_case("content-type") {
                     content_type = v.trim().to_string();
+                } else if k.eq_ignore_ascii_case("content-encoding") {
+                    content_encoding = v.trim().to_string();
                 } else if k.eq_ignore_ascii_case("user-agent") {
                     user_agent = v.trim().to_string();
                 }
             }
+            // body 是字节安全切片（gzip 是二进制），头部才走 lossy 文本
             let body_start = raw.find("\r\n\r\n").map_or(raw.len(), |i| i + 4);
-            let body = raw[body_start.min(raw.len())..].to_string();
+            let body_bytes = buf[body_start.min(buf.len())..].to_vec();
+            let body = if content_encoding.eq_ignore_ascii_case("gzip") {
+                let mut decoder = flate2::read::GzDecoder::new(&body_bytes[..]);
+                let mut plain = Vec::new();
+                decoder.read_to_end(&mut plain).unwrap();
+                String::from_utf8(plain).unwrap()
+            } else {
+                String::from_utf8_lossy(&body_bytes).to_string()
+            };
             *log.lock().unwrap() = Some(Captured {
                 request_line,
                 authorization,
                 content_type,
+                content_encoding,
                 user_agent,
                 body,
             });
@@ -203,12 +251,32 @@ mod tests {
         assert_eq!(captured.authorization, "Bearer s3cret");
         assert!(captured.content_type.starts_with("application/json"));
         assert!(captured.user_agent.starts_with("persona-emitter/"));
+        // 小批（2 条 ≈ 200 B < 1 KiB 阈值）直发明文，无压缩头
+        assert!(captured.content_encoding.is_empty());
         // body 形状对齐 server 契约：{"events": [IngestEvent, ...]}
         let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
         let events = body["events"].as_array().unwrap();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0]["action"], "login");
         assert!(events[0]["id"].is_string());
+    }
+
+    #[tokio::test]
+    async fn large_batch_is_sent_gzipped() {
+        let (base_url, captured) =
+            spawn_fake_server("HTTP/1.1 202 Accepted", r#"{"accepted":50,"duplicates":0}"#).await;
+        let sink = ServerEventSink::new(&base_url, "s3cret").unwrap();
+
+        let events = wire_events(50); // ≈ 5.5 KiB 明文，远超 1 KiB 阈值
+        let report = sink.send(events).await.unwrap();
+        assert_eq!(report.accepted, 50);
+
+        let captured = captured.lock().unwrap().take().unwrap();
+        assert_eq!(captured.content_encoding, "gzip");
+        assert!(captured.content_type.starts_with("application/json"));
+        // 假服务器已按 gzip 解压：JSON 与发送内容一致
+        let body: serde_json::Value = serde_json::from_str(&captured.body).unwrap();
+        assert_eq!(body["events"].as_array().unwrap().len(), 50);
     }
 
     #[tokio::test]

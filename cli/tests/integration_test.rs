@@ -605,10 +605,11 @@ fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
 
 use std::sync::{Arc, Mutex};
 
-/// 单请求上报捕获：请求行 + authorization 头 + body 是否含 "events"。
+/// 单请求上报捕获：请求行 + authorization/content-encoding 头 + body。
 struct CapturedRequest {
     request_line: String,
     authorization: String,
+    content_encoding: String,
     body: String,
 }
 
@@ -653,12 +654,15 @@ fn serve_one(mut stream: std::net::TcpStream, log: Arc<Mutex<Vec<CapturedRequest
     let mut lines = raw.split("\r\n");
     let request_line = lines.next().unwrap_or("").to_string();
     let mut authorization = String::new();
+    let mut content_encoding = String::new();
     for line in lines {
         let Some((k, v)) = line.split_once(':') else {
             continue;
         };
         if k.eq_ignore_ascii_case("authorization") {
             authorization = v.trim().to_string();
+        } else if k.eq_ignore_ascii_case("content-encoding") {
+            content_encoding = v.trim().to_string();
         }
     }
     let body_start = raw.find("\r\n\r\n").map_or(raw.len(), |i| i + 4);
@@ -673,6 +677,7 @@ fn serve_one(mut stream: std::net::TcpStream, log: Arc<Mutex<Vec<CapturedRequest
     log.lock().unwrap().push(CapturedRequest {
         request_line,
         authorization,
+        content_encoding,
         body,
     });
 }
@@ -724,6 +729,12 @@ fn audit_events_reported_when_server_env_configured() -> Result<()> {
         requests[0].request_line
     );
     assert_eq!(requests[0].authorization, "Bearer dev");
+    // init 批远小于 1 KiB 阈值 → 明文直发（压缩路径由 core 测试覆盖）
+    assert!(
+        requests[0].content_encoding.is_empty(),
+        "small batch must go plaintext, got content-encoding: {}",
+        requests[0].content_encoding
+    );
     assert!(
         requests[0].body.contains("\"events\""),
         "body should wrap events: {}",
