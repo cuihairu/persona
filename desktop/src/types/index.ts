@@ -70,6 +70,14 @@ export interface FeatureFlags {
   fetch_favicons: boolean;
 }
 
+/** 同步服务器（persona-server Events API）客户端配置（对应 Rust SyncConfig） */
+export interface SyncConfig {
+  enabled: boolean;
+  server_url: string;
+  /** 空 = 后端保留旧 token（前端不回填既有令牌，避免常驻内存） */
+  server_token: string;
+}
+
 /** workspace 设置全量（对应 Rust WorkspaceSettings；由 settings 命令返回） */
 export interface WorkspaceSettings {
   encryption_enabled: boolean;
@@ -79,6 +87,8 @@ export interface WorkspaceSettings {
   require_confirmation: boolean;
   default_identity_type: string;
   features: FeatureFlags;
+  /** 可选同步服务器配置（旧 JSON 缺键时为 null） */
+  sync: SyncConfig | null;
 }
 
 /** 已缓存的站点图标（对应 Rust SerializableFavicon；data 为 base64 图像字节） */

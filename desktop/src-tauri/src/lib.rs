@@ -110,6 +110,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             passkey_server_started: std::sync::atomic::AtomicBool::new(false),
             ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            sync_emitter: Mutex::new(None),
         })
         .setup(|app| {
             // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。
@@ -143,6 +144,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::clear_active_identity,
             commands::get_workspace_settings,
             commands::set_feature_flags,
+            commands::set_sync_config,
             commands::update_identity,
             commands::delete_identity,
             commands::create_credential,
@@ -199,7 +201,24 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
 /// 组装并运行应用（进程入口调用；事件循环不退出直至 Quit）。
 pub fn run() {
     let app = build::<tauri::Wry>(tauri::generate_context!());
-    app.run(|_app_handle, _event| {});
+    app.run(|app_handle, event| {
+        // RunEvent::Exit 是进程退出前的最后回调（托盘 Quit → app.exit(0)
+        // 唯一退出路径在 ExitRequested 之后到达这里）；主线程仍存活，
+        // block_on 尽力 flush 同步上报器队列（与 CLI 尾部 stop 同语义）。
+        if let tauri::RunEvent::Exit = event {
+            tauri::async_runtime::block_on(async {
+                let emitter = app_handle
+                    .state::<AppState>()
+                    .sync_emitter
+                    .lock()
+                    .await
+                    .take();
+                if let Some(emitter) = emitter {
+                    emitter.stop().await;
+                }
+            });
+        }
+    });
 }
 
 #[cfg(test)]

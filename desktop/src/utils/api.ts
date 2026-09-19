@@ -10,6 +10,7 @@ import type {
   Statistics,
   InitRequest,
   FeatureFlags,
+  SyncConfig,
   FaviconData,
   WorkspaceSettings,
   SshAgentStatus,
@@ -98,6 +99,15 @@ class PersonaAPI {
       wallet: flags.wallet,
       passkeys: flags.passkeys,
       fetch_favicons: flags.fetch_favicons,
+    });
+  }
+
+  /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token */
+  async setSyncConfig(config: SyncConfig): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_sync_config', {
+      enabled: config.enabled,
+      server_url: config.server_url,
+      server_token: config.server_token,
     });
   }
 

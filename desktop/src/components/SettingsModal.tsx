@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
@@ -44,6 +44,146 @@ const FEATURE_ROWS: {
     note: 'Off by default — no network requests until you opt in',
   },
 ];
+
+/** 同步服务器区块：审计事件上报到 persona-server（enabled + url + token）。 */
+const SyncServerPane: React.FC = () => {
+  const [enabled, setEnabled] = useState(false);
+  const [url, setUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [tokenPlaceholder, setTokenPlaceholder] = useState('API token');
+  const [saving, setSaving] = useState(false);
+
+  // 初始值来自服务端真相；token 不回填（避免既有令牌常驻前端内存，
+  // 空串提交 = 后端保留旧 token）
+  useEffect(() => {
+    let cancelled = false;
+    personaAPI
+      .getWorkspaceSettings()
+      .then((resp) => {
+        if (cancelled || !resp.success || !resp.data?.sync) return;
+        const sync = resp.data.sync;
+        setEnabled(sync.enabled);
+        setUrl(sync.server_url);
+        if (sync.server_token) setTokenPlaceholder('Token saved — leave blank to keep');
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const save = async (nextEnabled: boolean) => {
+    if (nextEnabled && !url.trim()) {
+      toast.error('Server URL is required when sync is enabled');
+      return;
+    }
+    setSaving(true);
+    try {
+      const resp = await personaAPI.setSyncConfig({
+        enabled: nextEnabled,
+        server_url: url.trim(),
+        server_token: token,
+      });
+      if (resp.success && resp.data) {
+        // 回填服务端真相；token 输入框清空（后端空串语义 = 保留旧值）
+        const sync = resp.data.sync;
+        if (sync) {
+          setEnabled(sync.enabled);
+          setUrl(sync.server_url);
+          if (sync.server_token) setTokenPlaceholder('Token saved — leave blank to keep');
+        }
+        setToken('');
+        toast.success('Sync settings saved');
+      } else {
+        toast.error(resp.error || 'Failed to save sync settings');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save sync settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4 mb-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">Sync server</h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Report audit events to a persona-server. Credentials never leave this device.
+          </p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={enabled}
+          aria-label="Enable sync server"
+          data-testid="sync-toggle"
+          onClick={() => {
+            const next = !enabled;
+            setEnabled(next);
+            if (!next) save(false);
+          }}
+          className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+            enabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'
+          }`}
+        >
+          <span
+            className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+              enabled ? 'translate-x-6' : 'translate-x-1'
+            }`}
+          />
+        </button>
+      </div>
+
+      {enabled && (
+        <div className="space-y-3 border border-gray-200 rounded-lg p-4 dark:border-gray-700">
+          <div>
+            <label className="label mb-1 block" htmlFor="sync-server-url">
+              Server URL
+            </label>
+            <input
+              id="sync-server-url"
+              className="input"
+              data-testid="sync-url-input"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://sync.example.com"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div>
+            <label className="label mb-1 block" htmlFor="sync-server-token">
+              API token
+            </label>
+            <input
+              id="sync-server-token"
+              className="input"
+              data-testid="sync-token-input"
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder={tokenPlaceholder}
+              autoComplete="new-password"
+            />
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              data-testid="sync-save"
+              onClick={() => save(true)}
+              disabled={saving}
+              className="btn-primary"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 const GeneralPane: React.FC = () => {
   const featureFlags = useAppStore((s) => s.featureFlags);
@@ -98,6 +238,10 @@ const GeneralPane: React.FC = () => {
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="mb-5">
+        <SyncServerPane />
       </section>
 
       <section>

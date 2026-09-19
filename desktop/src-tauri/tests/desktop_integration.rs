@@ -29,6 +29,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         passkey_server_started: std::sync::atomic::AtomicBool::new(false),
         ssh_approvals: Arc::new(StdMutex::new(HashMap::new())),
         passkey_approvals: Arc::new(StdMutex::new(HashMap::new())),
+        sync_emitter: Mutex::new(None),
     });
     app
 }

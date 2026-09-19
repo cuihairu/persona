@@ -156,6 +156,7 @@ pub async fn init_service<R: tauri::Runtime>(
                                 *state.service.lock().await = Some(service);
                                 register_auto_lock_bridge(&state, &app).await;
                                 maybe_start_passkey_server(&db_path, &state, &app).await;
+                                attach_sync_emitter(&state).await;
                                 Ok(ApiResponse::success(true))
                             }
                             Err(e) => Ok(ApiResponse::error(format!(
@@ -172,6 +173,7 @@ pub async fn init_service<R: tauri::Runtime>(
                                     *state.service.lock().await = Some(service);
                                     register_auto_lock_bridge(&state, &app).await;
                                     maybe_start_passkey_server(&db_path, &state, &app).await;
+                                    attach_sync_emitter(&state).await;
                                     Ok(ApiResponse::success(true))
                                 }
                                 persona_core::AuthResult::InvalidCredentials => {
@@ -421,6 +423,135 @@ pub async fn set_feature_flags(
     ws.touch();
     let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
     Ok(ApiResponse::success(updated.settings))
+}
+
+/// 读当前 vault 的同步服务器配置段（vault 打不开/行不存在一律 None——
+/// attach 是尽力而为的旁路，不能阻塞解锁主链路）。
+async fn read_sync_config(db_path: &str) -> Option<persona_core::SyncConfig> {
+    let db = Database::from_file(db_path).await.ok()?;
+    db.migrate().await.ok()?;
+    let workspace_path = workspace_path_for_db_path(db_path);
+    let ws = ensure_workspace_for_path(&db, &workspace_path).await.ok()?;
+    ws.settings.sync
+}
+
+/// 按当前 vault settings 的 sync 段构造/替换 AppState 槽位中的上报器，
+/// 并把它注入（或从）当前 service 摘除。未启用/配置不完整时一律摘除
+/// （`set_event_emitter(None)`），与 CLI 宿主的 env 决策语义一致。
+///
+/// 锁顺序固定 sync_emitter → service；旧 emitter 在槽位替换后、锁外
+/// stop（flush 可能走网络，不持有锁等待）。
+async fn attach_sync_emitter(state: &State<'_, AppState>) {
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard.clone()
+    };
+    let sync_config = match db_path.as_deref() {
+        Some(path) => read_sync_config(path).await,
+        None => None,
+    };
+    let new_emitter = match sync_config {
+        Some(config) if config.enabled && !config.server_url.trim().is_empty() => {
+            match persona_core::ServerEventSink::new(&config.server_url, config.server_token) {
+                Ok(sink) => {
+                    let emitter = persona_core::events::Emitter::new(std::sync::Arc::new(sink));
+                    emitter.start();
+                    Some(emitter)
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "invalid sync server_url; event reporting disabled");
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    let old = {
+        let mut slot = state.sync_emitter.lock().await;
+        let old = slot.take();
+        *slot = new_emitter.clone();
+        old
+    };
+    if let Some(old) = old {
+        old.stop().await;
+    }
+
+    let mut guard = state.service.lock().await;
+    if let Some(service) = guard.as_mut() {
+        service.set_event_emitter(new_emitter);
+    }
+}
+
+/// 窄写同步服务器配置（`settings.sync` 段），返回更新后的全量 settings
+/// 作为服务端真相。要求已解锁（照 `set_feature_flags` 门禁）；保存成功
+/// 后立即重挂上报器（停旧换新），无需重新解锁。
+///
+/// `server_token` 传空串 = **保留旧 token**（避免把既有令牌常驻前端
+/// 内存；首次配置留空即存空串）。`enabled` 且 `server_url` 空白时报错。
+#[command]
+pub async fn set_sync_config(
+    enabled: bool,
+    server_url: String,
+    server_token: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let server_url = server_url.trim().to_string();
+    if enabled && server_url.is_empty() {
+        return Ok(ApiResponse::error(
+            "Server URL is required when sync is enabled".to_string(),
+        ));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    // token 空串 = 保留旧值（首次配置旧值也是空串，语义自洽）
+    let server_token = if server_token.trim().is_empty() {
+        ws.settings
+            .sync
+            .as_ref()
+            .map(|c| c.server_token.clone())
+            .unwrap_or_default()
+    } else {
+        server_token
+    };
+    ws.settings.sync = Some(persona_core::SyncConfig {
+        enabled,
+        server_url,
+        server_token,
+    });
+    ws.touch();
+    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    let settings = updated.settings;
+
+    attach_sync_emitter(&state).await;
+    Ok(ApiResponse::success(settings))
 }
 
 /// 只读 passkey 开关：vault 打不开/行不存在一律视为关（审批链路另有
@@ -1071,12 +1202,20 @@ pub async fn fetch_credential_favicon(
 
     let fetcher = match persona_core::favicon::FaviconFetcher::new() {
         Ok(fetcher) => fetcher,
-        Err(e) => return Ok(ApiResponse::error(format!("Failed to fetch favicon: {}", e))),
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Failed to fetch favicon: {}",
+                e
+            )))
+        }
     };
 
     match service.fetch_favicon_for_credential(&uuid, &fetcher).await {
         Ok(entry) => Ok(ApiResponse::success(entry.into())),
-        Err(e) => Ok(ApiResponse::error(format!("Failed to fetch favicon: {}", e))),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Failed to fetch favicon: {}",
+            e
+        ))),
     }
 }
 
@@ -1117,7 +1256,10 @@ pub async fn get_favicons(
             Ok(entries) => Ok(ApiResponse::success(
                 entries.into_iter().map(Into::into).collect(),
             )),
-            Err(e) => Ok(ApiResponse::error(format!("Failed to load favicons: {}", e))),
+            Err(e) => Ok(ApiResponse::error(format!(
+                "Failed to load favicons: {}",
+                e
+            ))),
         },
         None => Ok(ApiResponse::success(Vec::new())),
     }
@@ -1125,7 +1267,8 @@ pub async fn get_favicons(
 
 /// Delete a credential
 #[command]
-pub async fn delete_credential(    credential_id: String,
+pub async fn delete_credential(
+    credential_id: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
     let service_guard = state.service.lock().await;

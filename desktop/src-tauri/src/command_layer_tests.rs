@@ -25,6 +25,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         passkey_server_started: std::sync::atomic::AtomicBool::new(false),
         ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        sync_emitter: Mutex::new(None),
     });
     app
 }
@@ -5175,7 +5176,9 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     init_service_ok(&app, "master-pw-123").await;
 
     // 全新 vault：flags 默认全关，其余字段保持 core 默认
-    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let settings = resp.data.expect("settings present");
     assert!(!settings.features.ssh_agent);
@@ -5197,7 +5200,9 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert!(settings.features.fetch_favicons);
 
     // get 反映持久化结果
-    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
     let settings = resp.data.expect("settings present");
     assert!(settings.features.ssh_agent);
 
@@ -5227,7 +5232,9 @@ async fn set_feature_flags_requires_unlocked_service() {
 
     // get 免解锁约束（解锁屏也要按 flags 裁剪 UI），set 需要解锁
     lock_service(app.state::<AppState>()).await.unwrap();
-    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
     assert!(resp.success, "get must work while locked: {:?}", resp.error);
 
     let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
@@ -5237,11 +5244,166 @@ async fn set_feature_flags_requires_unlocked_service() {
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
 }
 
+// ---------------------------------------------------------------------------
+// 同步服务器配置（settings.sync）与审计事件上报器接线
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn set_sync_config_persists_and_remembers_token_on_blank() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    // 全新 vault：sync 段为 None
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    let settings = resp.data.expect("settings present");
+    assert!(settings.sync.is_none(), "fresh vault has no sync config");
+
+    // 窄写 sync 段，返回全量 settings
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let sync = resp.data.expect("updated settings").sync.expect("sync set");
+    assert!(sync.enabled);
+    assert_eq!(sync.server_url, "http://127.0.0.1:1");
+    assert_eq!(sync.server_token, "tok-1");
+
+    // get 反映持久化结果
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    let sync = resp.data.expect("settings present").sync.expect("sync set");
+    assert_eq!(sync.server_token, "tok-1");
+
+    // token 空串 = 保留旧值
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:2".to_string(),
+        String::new(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let sync = resp.data.expect("updated settings").sync.expect("sync set");
+    assert_eq!(sync.server_url, "http://127.0.0.1:2");
+    assert_eq!(sync.server_token, "tok-1", "blank token keeps the old one");
+
+    // 关闭 sync：enabled=false 持久化，token 依旧保留
+    let resp = set_sync_config(
+        false,
+        "http://127.0.0.1:2".to_string(),
+        String::new(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let sync = resp.data.expect("updated settings").sync.expect("sync set");
+    assert!(!sync.enabled);
+}
+
+#[tokio::test]
+async fn set_sync_config_requires_unlocked_service() {
+    let app = mock_app();
+
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "t".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    init_service_ok(&app, "master-pw-123").await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "t".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+}
+
+#[tokio::test]
+async fn set_sync_config_rejects_blank_url_when_enabled() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    let resp = set_sync_config(
+        true,
+        "   ".to_string(),
+        "t".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Server URL is required when sync is enabled")
+    );
+
+    // disabled + 空 url 合法（关闭上报但清掉 url）
+    let resp = set_sync_config(false, String::new(), String::new(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn attach_sync_emitter_follows_saved_config() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    // 未配置 sync：init 后槽位为 None，service 正常工作
+    assert!(app.state::<AppState>().sync_emitter.lock().await.is_none());
+
+    // 保存 enabled 配置后立即重挂：槽位持有 emitter
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok".to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(app.state::<AppState>().sync_emitter.lock().await.is_some());
+
+    // 关闭配置：槽位摘除（旧 emitter 已 stop，不构成双任务）
+    let resp = set_sync_config(
+        false,
+        "http://127.0.0.1:1".to_string(),
+        String::new(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(app.state::<AppState>().sync_emitter.lock().await.is_none());
+}
+
 #[tokio::test]
 async fn workspace_settings_commands_fail_without_db_path() {
     let app = mock_app();
 
-    let resp = get_workspace_settings(app.state::<AppState>()).await.unwrap();
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
     assert!(!resp.success);
     assert_eq!(
         resp.error.as_deref(),
@@ -5338,9 +5500,7 @@ async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enable
         .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error
-            .as_deref()
-            .is_some_and(|e| e.contains("no url")),
+        resp.error.as_deref().is_some_and(|e| e.contains("no url")),
         "got: {:?}",
         resp.error
     );
@@ -5385,7 +5545,9 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
     .await
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
-    let socket = state_dir.path().join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
+    let socket = state_dir
+        .path()
+        .join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(!socket.exists(), "gate closed: no approval socket");
 
@@ -5436,7 +5598,9 @@ async fn passkey_gate_stays_off_for_missing_vault_and_default_flags() {
     let state_dir = tempfile::tempdir().unwrap();
     let _guard = StateDirGuard::sandbox(&state_dir);
     let app = mock_app();
-    let socket = state_dir.path().join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
+    let socket = state_dir
+        .path()
+        .join(crate::passkey_bridge::APPROVAL_SOCKET_NAME);
 
     // vault 打不开：只读探测失败 → 视为关，不 spawn、不置标记
     crate::commands::maybe_start_passkey_server(

@@ -27,6 +27,10 @@ pub struct AppState {
     /// passkey_bridge 服务端写入、passkey_approval_respond 命令取出
     pub passkey_approvals:
         Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
+    /// 审计事件同步上报器（settings.sync 配置驱动；None = 未启用）。
+    /// 槽位即真相源：重挂时先 stop 旧的再换新，防止双任务。注意这里
+    /// 用全路径——`tauri::Emitter`（事件 emit trait）占用了 `Emitter` 名。
+    pub sync_emitter: Mutex<Option<persona_core::events::Emitter>>,
 }
 
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求
