@@ -134,7 +134,8 @@ async fn main() -> Result<()> {
     };
 
     // Execute command
-    match cli.command {
+    commands::service::init_event_emitter_from_env();
+    let result = match cli.command {
         Commands::Init(args) => commands::init::execute(args, &config).await,
         Commands::Bridge(args) => commands::bridge::execute(args).await,
         Commands::Add(args) => commands::add::execute(args, &config).await,
@@ -156,7 +157,10 @@ async fn main() -> Result<()> {
         Commands::Wallet(args) => commands::wallet::handle_wallet(args, &config).await,
         Commands::Passkey(args) => commands::passkey::handle_passkey(args, &config).await,
         Commands::Watchtower(args) => commands::watchtower::execute(args, &config).await,
-    }
+    };
+    // 尽力 flush 队列剩余审计事件（未启用时为无操作）
+    commands::service::shutdown_event_emitter().await;
+    result
 }
 
 fn maybe_inject_bridge_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {

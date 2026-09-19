@@ -1189,7 +1189,7 @@ async fn open_unlocked_service(db_path: &Path) -> Result<(PersonaService, Option
 
     let db = open_db(db_path).await?;
     let active_identity_id = get_active_identity_id(&db).await;
-    let mut service = PersonaService::new(db)
+    let mut service = crate::commands::service::new_service(db)
         .await
         .map_err(|e| anyhow!("failed to create service: {e}"))?;
     let auth = service.authenticate_user(&master_password).await?;
@@ -1530,7 +1530,7 @@ fn finalize_pairing(state_dir: &Path, payload: PairingFinalizePayload) -> Result
 
 async fn compute_status(db_path: &Path) -> Result<(bool, Option<String>)> {
     let db = open_db(db_path).await?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("failed to create service: {e}"))?;
 
@@ -1923,7 +1923,9 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&state_dir).unwrap();
 
         let db = open_db(&db_path).await.unwrap();
-        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        let mut service = crate::commands::service::new_service(db.clone())
+            .await
+            .unwrap();
         service.initialize_user(PASSWORD).await.unwrap();
         let identity = service
             .create_identity("Bridge Identity".to_string(), IdentityType::Personal)
@@ -2993,7 +2995,7 @@ pub(crate) mod tests {
         let cred_id: uuid::Uuid;
         {
             let db = open_db(&db_path).await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             assert_eq!(
                 service.authenticate_user(PASSWORD).await.unwrap(),
                 persona_core::auth::authentication::AuthResult::Success
@@ -3126,7 +3128,7 @@ pub(crate) mod tests {
         use persona_core::models::credential::{PasswordCredentialData, SecurityLevel};
 
         let db = open_db(db_path).await.unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert_eq!(
             service.authenticate_user(PASSWORD).await.unwrap(),
             persona_core::auth::authentication::AuthResult::Success
@@ -3162,7 +3164,7 @@ pub(crate) mod tests {
         use persona_core::models::credential::SecurityLevel;
 
         let db = open_db(db_path).await.unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert_eq!(
             service.authenticate_user(PASSWORD).await.unwrap(),
             persona_core::auth::authentication::AuthResult::Success
@@ -3203,7 +3205,7 @@ pub(crate) mod tests {
         use persona_core::models::credential::SecurityLevel;
 
         let db = open_db(db_path).await.unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert_eq!(
             service.authenticate_user(PASSWORD).await.unwrap(),
             persona_core::auth::authentication::AuthResult::Success
@@ -3234,7 +3236,7 @@ pub(crate) mod tests {
         use persona_core::models::credential::{ApiKeyData, SecurityLevel};
 
         let db = open_db(db_path).await.unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert_eq!(
             service.authenticate_user(PASSWORD).await.unwrap(),
             persona_core::auth::authentication::AuthResult::Success

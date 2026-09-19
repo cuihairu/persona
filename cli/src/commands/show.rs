@@ -6,9 +6,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 use crate::config::CliConfig;
-use persona_core::{
-    storage::IdentityRepository, Database, Identity as CoreIdentity, PersonaService,
-};
+use persona_core::{storage::IdentityRepository, Database, Identity as CoreIdentity};
 
 #[derive(Args)]
 pub struct ShowArgs {
@@ -84,7 +82,7 @@ async fn fetch_identity_details(
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
 
     // Service
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let maybe: Option<CoreIdentity> = if service
@@ -338,7 +336,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 

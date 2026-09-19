@@ -287,7 +287,7 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         service.initialize_user(master).await.unwrap();
         let identity = service
             .create_identity("Watch".to_string(), persona_core::IdentityType::Personal)
@@ -348,7 +348,7 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         service.initialize_user(master).await.unwrap();
         let identity = service
             .create_identity("Watch".to_string(), persona_core::IdentityType::Personal)
@@ -418,7 +418,7 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         service.initialize_user(master).await.unwrap();
         drop(service);
 

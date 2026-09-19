@@ -54,7 +54,7 @@ async fn init_data_provider(config: &CliConfig, ui: &dyn PromptUi) -> Result<Dat
         .context("Failed to run database migrations")?;
 
     let repo_db = db.clone();
-    let mut service = PersonaService::new(db)
+    let mut service = crate::commands::service::new_service(db)
         .await
         .context("Failed to construct Persona service")?;
 
@@ -511,7 +511,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -864,7 +864,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
             let alice = service
                 .create_identity_full(CoreIdentity::new(

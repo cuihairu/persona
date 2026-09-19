@@ -151,7 +151,7 @@ pub(crate) async fn ensure_service(
         .into_anyhow()
         .context("Failed to open database")?;
     db.migrate().await.context("Failed to run migrations")?;
-    let mut service = PersonaService::new(db)
+    let mut service = crate::commands::service::new_service(db)
         .await
         .context("Failed to create PersonaService")?;
     if service.has_users().await? {
@@ -882,7 +882,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -914,7 +914,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
         let id = uuid::Uuid::new_v4();
@@ -1147,7 +1147,7 @@ mod tests {
                 .await
                 .unwrap();
         }
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         service.initialize_user(master).await.unwrap();
         config
     }
@@ -1167,7 +1167,7 @@ mod tests {
         let db = Database::from_file(config.get_database_path())
             .await
             .unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert!(matches!(
             service.authenticate_user(master).await.unwrap(),
             AuthResult::Success
@@ -1495,7 +1495,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             assert!(matches!(
                 service.authenticate_user("master-pin").await.unwrap(),
                 AuthResult::Success

@@ -9,7 +9,7 @@ use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::{
     models::{Identity as CoreIdentity, IdentityType},
     storage::IdentityRepository,
-    Database, PersonaService,
+    Database,
 };
 use uuid::Uuid;
 
@@ -128,7 +128,7 @@ async fn identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> R
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create service: {}", e))?;
     if service
@@ -166,7 +166,7 @@ async fn load_identity(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Res
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create service: {}", e))?;
     let core: CoreIdentity = if service
@@ -564,7 +564,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig, ui: &dyn PromptU
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create service: {}", e))?;
     let has_users = service
@@ -1087,7 +1087,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("edit-master").await.unwrap();
         }
 
@@ -1175,7 +1175,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("edit-master").await.unwrap();
         }
 
@@ -1355,7 +1355,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -1391,7 +1391,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
             service
                 .create_identity_full(CoreIdentity::new(

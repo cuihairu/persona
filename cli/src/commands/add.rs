@@ -7,7 +7,7 @@ use tracing::info;
 
 use crate::config::CliConfig;
 use crate::utils::prompt::{PromptUi, TerminalUi};
-use persona_core::{Database, Identity, IdentityType, PersonaService};
+use persona_core::{Database, Identity, IdentityType};
 
 #[derive(Args, Clone)]
 pub struct AddArgs {
@@ -309,7 +309,7 @@ async fn save_identity(identity: &Identity, config: &CliConfig, ui: &dyn PromptU
         .map_err(|e| anyhow::anyhow!("Failed to run database migrations: {}", e))?;
 
     // Create service
-    let mut service = PersonaService::new(db)
+    let mut service = crate::commands::service::new_service(db)
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
 

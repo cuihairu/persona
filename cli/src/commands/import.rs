@@ -9,7 +9,7 @@ use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
     models::IdentityType,
     storage::{IdentityRepository, Repository},
-    Database, PersonaService,
+    Database,
 };
 
 #[derive(Args, Clone)]
@@ -414,7 +414,9 @@ async fn check_import_conflicts(
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
+    let mut service = crate::commands::service::new_service(db.clone())
+        .await
+        .into_anyhow()?;
     let names = if service.has_users().await.into_anyhow()? {
         let password = super::service::prompt_master_password(ui)?;
         match service.authenticate_user(&password).await.into_anyhow()? {
@@ -567,7 +569,9 @@ async fn perform_import(
     db.migrate()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to run migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone()).await.into_anyhow()?;
+    let mut service = crate::commands::service::new_service(db.clone())
+        .await
+        .into_anyhow()?;
     let has_users = service.has_users().await.into_anyhow()?;
     if has_users {
         let password = super::service::prompt_master_password(ui)?;
@@ -937,7 +941,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -1205,7 +1209,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -1223,7 +1227,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let service = PersonaService::new(db).await.unwrap();
+            let service = crate::commands::service::new_service(db).await.unwrap();
             // Both identities landed in the encrypted workspace.
             let mut service = service;
             let password =
@@ -1422,7 +1426,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 

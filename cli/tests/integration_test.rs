@@ -598,3 +598,169 @@ fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// 审计事件上报（PERSONA_SERVER_URL + PERSONA_SERVER_TOKEN）端到端
+// ---------------------------------------------------------------------------
+
+use std::sync::{Arc, Mutex};
+
+/// 单请求上报捕获：请求行 + authorization 头 + body 是否含 "events"。
+struct CapturedRequest {
+    request_line: String,
+    authorization: String,
+    body: String,
+}
+
+/// 头部完整且 body 读满 Content-Length 即收全（上报 JSON body 可能分片）。
+fn request_complete(buf: &[u8]) -> bool {
+    let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&buf[..pos]);
+    let content_length = head.lines().find_map(|line| {
+        let (k, v) = line.split_once(':')?;
+        if !k.trim().eq_ignore_ascii_case("content-length") {
+            return None;
+        }
+        v.trim().parse::<usize>().ok()
+    });
+    match content_length {
+        Some(len) => buf.len() >= pos + 4 + len,
+        None => true,
+    }
+}
+
+/// 读取并解析一个请求，回 202，把捕获写进共享 log（std 线程版假服务器，
+/// 与 core/src/events/server_sink.rs 的 tokio 版同型）。
+fn serve_one(mut stream: std::net::TcpStream, log: Arc<Mutex<Vec<CapturedRequest>>>) {
+    use std::io::{Read, Write};
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if request_complete(&buf) {
+                    break;
+                }
+            }
+        }
+    }
+    let raw = String::from_utf8_lossy(&buf).to_string();
+    let mut lines = raw.split("\r\n");
+    let request_line = lines.next().unwrap_or("").to_string();
+    let mut authorization = String::new();
+    for line in lines {
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        if k.eq_ignore_ascii_case("authorization") {
+            authorization = v.trim().to_string();
+        }
+    }
+    let body_start = raw.find("\r\n\r\n").map_or(raw.len(), |i| i + 4);
+    let body = raw[body_start.min(raw.len())..].to_string();
+    let response_body = r#"{"accepted":1,"duplicates":0}"#;
+    let response = format!(
+        "HTTP/1.1 202 Accepted\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response_body.len(),
+        response_body
+    );
+    let _ = stream.write_all(response.as_bytes());
+    log.lock().unwrap().push(CapturedRequest {
+        request_line,
+        authorization,
+        body,
+    });
+}
+
+#[test]
+fn audit_events_reported_when_server_env_configured() -> Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    let log = Arc::new(Mutex::new(Vec::<CapturedRequest>::new()));
+    let thread_log = log.clone();
+    std::thread::spawn(move || {
+        // 测试进程生命周期内逐个 accept；足够收完 init 的上报
+        for stream in listener.incoming().flatten() {
+            serve_one(stream, thread_log.clone());
+        }
+    });
+
+    let temp_dir = tempdir()?;
+    // init 必须实际建户（-e + --master-password → initialize_user 内部
+    // log_audit）才有审计事件可报；--yes 无 -e 时不构造 service、零事件。
+    // 经 main 尾部 stop() 最终 flush 上报。
+    Command::cargo_bin("persona")?
+        .arg("init")
+        .arg("--path")
+        .arg(temp_dir.path())
+        .arg("--yes")
+        .arg("-e")
+        .arg("--master-password")
+        .arg("smoke-master-pin")
+        .env("PERSONA_SERVER_URL", format!("http://{addr}"))
+        .env("PERSONA_SERVER_TOKEN", "dev")
+        .assert()
+        .success();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while log.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let requests = log.lock().unwrap();
+    assert!(
+        !requests.is_empty(),
+        "init should report its audit events to the stub server"
+    );
+    assert!(
+        requests[0]
+            .request_line
+            .starts_with("POST /api/v1/events HTTP/1.1"),
+        "unexpected request line: {}",
+        requests[0].request_line
+    );
+    assert_eq!(requests[0].authorization, "Bearer dev");
+    assert!(
+        requests[0].body.contains("\"events\""),
+        "body should wrap events: {}",
+        requests[0].body
+    );
+
+    Ok(())
+}
+
+#[test]
+fn event_reporting_disabled_when_token_missing() -> Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+
+    let temp_dir = tempdir()?;
+    // 只设 URL 缺 token → warn 并禁用，命令照常成功但没有任何上报
+    Command::cargo_bin("persona")?
+        .arg("init")
+        .arg("--path")
+        .arg(temp_dir.path())
+        .arg("--yes")
+        .env("PERSONA_SERVER_URL", format!("http://{addr}"))
+        .env("PERSONA_SERVER_TOKEN", "")
+        .assert()
+        .success();
+
+    listener.set_nonblocking(true)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while std::time::Instant::now() < deadline {
+        match listener.accept() {
+            Ok((_stream, _)) => panic!("no report should be sent without a token"),
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+
+    Ok(())
+}

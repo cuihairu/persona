@@ -7,7 +7,7 @@ use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::models::{AuditAction, AuditLog, ResourceType};
 use persona_core::{
     storage::{IdentityRepository, WorkspaceRepository},
-    Database, PersonaService, Repository,
+    Database, Repository,
 };
 
 #[derive(Args)]
@@ -120,7 +120,7 @@ async fn identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> R
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     if service
@@ -186,7 +186,7 @@ async fn show_removal_summary(name: &str, config: &CliConfig, ui: &dyn PromptUi)
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let identity = if service
@@ -263,7 +263,7 @@ async fn create_backup(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Res
         std::fs::create_dir_all(parent).context("Failed to create backup directory")?;
     }
 
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let backup_data = if service
@@ -337,6 +337,8 @@ async fn create_backup(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Res
         .create(&log)
         .await
         .map_err(|e| anyhow!("Failed to write audit log: {}", e))?;
+    // 该事件直写审计库绕过 service 挂钩，上报链路在这里补发
+    crate::commands::service::emit_audit(&log);
 
     Ok(())
 }
@@ -356,7 +358,7 @@ async fn perform_removal(
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let has_users = service
@@ -454,7 +456,7 @@ async fn get_remaining_identities_count(config: &CliConfig, ui: &dyn PromptUi) -
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     if service
@@ -627,7 +629,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -765,7 +767,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
@@ -837,7 +839,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("real-master").await.unwrap();
         }
         let ui = ScriptedUi::new();

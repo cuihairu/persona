@@ -9,7 +9,89 @@ use anyhow::{bail, Context, Result};
 use crate::config::CliConfig;
 use crate::utils::core_ext::CoreResultExt;
 use crate::utils::prompt::PromptUi;
-use persona_core::{Database, PersonaService};
+use persona_core::{AuditLog, Database, Emitter, PersonaService, ServerEventSink};
+use std::sync::{Arc, OnceLock};
+
+/// 进程级审计事件上报器。
+///
+/// `PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` **都**非空时启用
+/// （敏感值走 env，与 PERSONA_MASTER_PASSWORD 同一惯例；CLI 不提供
+/// 配置文件通道，避免令牌落盘）。core 不读环境变量——读取与构造
+/// 都在宿主侧完成。
+static EVENT_EMITTER: OnceLock<Emitter> = OnceLock::new();
+
+/// main 在 dispatch 前调用：按环境变量构造全局上报器并启动后台 flush。
+pub(crate) fn init_event_emitter_from_env() {
+    let url = non_blank_env("PERSONA_SERVER_URL");
+    let token = non_blank_env("PERSONA_SERVER_TOKEN");
+    let Some((url, token)) = resolve_server_env(url, token) else {
+        return;
+    };
+    match ServerEventSink::new(&url, token) {
+        Ok(sink) => {
+            let emitter = Emitter::new(Arc::new(sink));
+            emitter.start();
+            let _ = EVENT_EMITTER.set(emitter);
+            tracing::info!("audit event reporting enabled");
+        }
+        Err(error) => {
+            tracing::warn!(%error, "invalid PERSONA_SERVER_URL; event reporting disabled")
+        }
+    }
+}
+
+/// 空白值视同未设置（与 PERSONA_MASTER_PASSWORD 的"blank 回退"惯例一致）。
+fn non_blank_env(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// URL 与 token **都**非空才启用；缺一只报 warn（提为纯函数便于单测——
+/// OnceLock 全局一旦 set 无法在测试中清除，副作用路径由集成测试覆盖）。
+fn resolve_server_env(url: Option<String>, token: Option<String>) -> Option<(String, String)> {
+    match (url, token) {
+        (Some(url), Some(token)) => Some((url, token)),
+        (Some(_), None) | (None, Some(_)) => {
+            tracing::warn!(
+                "PERSONA_SERVER_URL and PERSONA_SERVER_TOKEN must both be set; event reporting disabled"
+            );
+            None
+        }
+        (None, None) => None,
+    }
+}
+
+/// 命令 dispatch 结束后调用：尽力 flush 队列剩余事件（幂等）。
+/// `panic = "abort"` 的崩溃路径不会经过这里（已知限制，THREAT_MODEL 登记）。
+pub(crate) async fn shutdown_event_emitter() {
+    if let Some(emitter) = EVENT_EMITTER.get() {
+        emitter.stop().await;
+    }
+}
+
+fn event_emitter() -> Option<Emitter> {
+    EVENT_EMITTER.get().cloned()
+}
+
+/// [`PersonaService::new`] 的宿主包装：构造后注入全局上报器（未启用时
+/// 为无操作）。返回 core Result，保持各调用点 `.into_anyhow()`/`.unwrap()`
+/// 链不变。
+pub(crate) async fn new_service(db: Database) -> persona_core::Result<PersonaService> {
+    let mut service = PersonaService::new(db).await?;
+    if let Some(emitter) = event_emitter() {
+        service.set_event_emitter(Some(emitter));
+    }
+    Ok(service)
+}
+
+/// 绕过 `PersonaService` 直写审计库的路径（switch/migrate/remove 备份）
+/// 用它补发同一事件，保证上报覆盖面。
+pub(crate) fn emit_audit(log: &AuditLog) {
+    if let Some(emitter) = event_emitter() {
+        emitter.emit(log);
+    }
+}
 
 /// Open the workspace database, run migrations and unlock the service.
 ///
@@ -78,7 +160,7 @@ pub(crate) async fn init_service(config: &CliConfig, ui: &dyn PromptUi) -> Resul
         .await
         .into_anyhow()
         .context("Failed to run database migrations")?;
-    let mut service = PersonaService::new(db)
+    let mut service = crate::commands::service::new_service(db)
         .await
         .into_anyhow()
         .context("Failed to create PersonaService")?;
@@ -126,6 +208,35 @@ mod tests {
         )
     }
 
+    #[test]
+    fn server_env_requires_both_url_and_token() {
+        // 决策纯函数：两者都设才启用，缺一只发 warn 并禁用
+        assert_eq!(
+            resolve_server_env(Some("http://x".into()), Some("t".into())),
+            Some(("http://x".to_string(), "t".to_string()))
+        );
+        assert_eq!(resolve_server_env(Some("http://x".into()), None), None);
+        assert_eq!(resolve_server_env(None, Some("t".into())), None);
+        assert_eq!(resolve_server_env(None, None), None);
+    }
+
+    #[test]
+    fn server_env_treats_blank_as_unset() {
+        let _guard = lock_process_env();
+
+        std::env::set_var("PERSONA_SERVER_URL", "   ");
+        assert_eq!(non_blank_env("PERSONA_SERVER_URL"), None);
+
+        std::env::set_var("PERSONA_SERVER_URL", "http://x");
+        assert_eq!(
+            non_blank_env("PERSONA_SERVER_URL"),
+            Some("http://x".to_string())
+        );
+
+        std::env::remove_var("PERSONA_SERVER_URL");
+        assert_eq!(non_blank_env("PERSONA_SERVER_URL"), None);
+    }
+
     fn config_for(dir: &TempDir) -> CliConfig {
         let mut config = CliConfig::default();
         config.workspace.path = dir.path().to_path_buf();
@@ -156,7 +267,7 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         service
             .initialize_user(master)
             .await

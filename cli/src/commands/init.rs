@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::config::CliConfig;
 use crate::utils::prompt::{PromptUi, TerminalUi};
 use crate::utils::{create_directory, validate_workspace_path};
-use persona_core::{Database, PersonaService, Repository};
+use persona_core::{Database, Repository};
 
 #[derive(Args)]
 pub struct InitArgs {
@@ -250,7 +250,7 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
 
     // If master password is provided, initialize the service
     if let Some(password) = master_password {
-        let mut service = PersonaService::new(db)
+        let mut service = crate::commands::service::new_service(db)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create PersonaService: {}", e))?;
 
@@ -343,7 +343,7 @@ mod tests {
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
-        let service = PersonaService::new(db).await.unwrap();
+        let service = crate::commands::service::new_service(db).await.unwrap();
         assert!(
             service.has_users().await.unwrap(),
             "yes mode seeds a master user"
@@ -367,7 +367,7 @@ mod tests {
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert!(service.has_users().await.unwrap());
         let authed = service.authenticate_user("master-pin").await.unwrap();
         assert!(matches!(authed, persona_core::auth::AuthResult::Success));
@@ -389,7 +389,7 @@ mod tests {
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
-        let service = PersonaService::new(db).await.unwrap();
+        let service = crate::commands::service::new_service(db).await.unwrap();
         assert!(!service.has_users().await.unwrap());
     }
 
@@ -411,7 +411,7 @@ mod tests {
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert!(matches!(
             service.authenticate_user("from-cli").await.unwrap(),
             persona_core::auth::AuthResult::Success
@@ -454,7 +454,7 @@ mod tests {
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
-        let service = PersonaService::new(db).await.unwrap();
+        let service = crate::commands::service::new_service(db).await.unwrap();
         assert!(
             !service.has_users().await.unwrap(),
             "no user is created without encryption"
@@ -486,7 +486,7 @@ mod tests {
         let db = Database::from_file(path.join("identities.db"))
             .await
             .unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         assert!(matches!(
             service.authenticate_user("first-pin").await.unwrap(),
             persona_core::auth::AuthResult::Success

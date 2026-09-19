@@ -72,6 +72,8 @@ pub async fn execute(_args: MigrateArgs, config: &crate::config::CliConfig) -> R
     let log = AuditLog::new(AuditAction::DatabaseMigration, ResourceType::Database, true)
         .with_resource_id(Some(db_path.display().to_string()));
     let _ = audit_repo.create(&log).await.into_anyhow()?;
+    // 该事件直写审计库绕过 service 挂钩，上报链路在这里补发
+    crate::commands::service::emit_audit(&log);
 
     // Summary
     println!();

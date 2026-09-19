@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use tabled::{Table, Tabled};
 
 use crate::config::CliConfig;
-use persona_core::{Database, Identity as CoreIdentity, PersonaService, Repository};
+use persona_core::{Database, Identity as CoreIdentity, Repository};
 
 #[derive(Args)]
 pub struct ListArgs {
@@ -158,7 +158,7 @@ async fn fetch_identities(
     let db_clone = db.clone();
 
     // Service
-    let mut service = PersonaService::new(db)
+    let mut service = crate::commands::service::new_service(db)
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let items: Vec<CoreIdentity> = if service
@@ -544,7 +544,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 

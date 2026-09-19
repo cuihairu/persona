@@ -278,7 +278,7 @@ struct PasskeyTable {
 mod tests {
     use super::*;
     use crate::config::CliConfig;
-    use persona_core::{Database, PersonaService};
+    use persona_core::Database;
     use std::sync::Mutex;
     use tempfile::TempDir;
 
@@ -312,7 +312,7 @@ mod tests {
                 .await
                 .unwrap();
             db.migrate().await.unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");

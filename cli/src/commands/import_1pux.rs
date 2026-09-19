@@ -208,7 +208,7 @@ mod tests {
     use super::*;
     use crate::utils::prompt::scripted::ScriptedUi;
     use persona_core::models::credential::{CredentialData, CredentialType};
-    use persona_core::{Database, IdentityRepository, PersonaService, Repository};
+    use persona_core::{Database, IdentityRepository, Repository};
     use std::io::Write;
     use std::path::Path;
     use std::sync::Mutex;
@@ -305,7 +305,7 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
         service.initialize_user("master-pin").await.unwrap();
     }
 
@@ -389,7 +389,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            PersonaService::new(db).await.unwrap()
+            crate::commands::service::new_service(db).await.unwrap()
         };
         service.authenticate_user("master-pin").await.unwrap();
 
@@ -472,7 +472,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.authenticate_user("master-pin").await.unwrap();
             service
                 .create_identity(
@@ -495,7 +495,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            PersonaService::new(db).await.unwrap()
+            crate::commands::service::new_service(db).await.unwrap()
         };
         service.authenticate_user("master-pin").await.unwrap();
         let identities = service.get_identities().await.unwrap();

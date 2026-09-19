@@ -9,7 +9,7 @@ use crate::utils::prompt::{PromptUi, TerminalUi};
 use persona_core::models::{AuditAction, AuditLog, ResourceType};
 use persona_core::{
     storage::{IdentityRepository, WorkspaceRepository},
-    Database, PersonaService, Repository,
+    Database, Repository,
 };
 
 #[derive(Args)]
@@ -121,7 +121,7 @@ async fn get_current_identity(config: &CliConfig) -> Result<Option<String>> {
         if let Some(id) = ws.active_identity_id {
             // Try to fetch identity name
             // Prefer unlocked service; otherwise direct repo read
-            let service = PersonaService::new(db.clone())
+            let service = crate::commands::service::new_service(db.clone())
                 .await
                 .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
             if service
@@ -184,7 +184,7 @@ async fn verify_identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptU
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let service = PersonaService::new(db.clone())
+    let service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let mut service = service;
@@ -238,7 +238,7 @@ async fn perform_switch(
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let identity = if service
@@ -291,6 +291,8 @@ async fn perform_switch(
         .create(&log)
         .await
         .map_err(|e| anyhow!("Failed to write audit log: {}", e))?;
+    // 该事件直写审计库绕过 service 挂钩，上报链路在这里补发
+    crate::commands::service::emit_audit(&log);
 
     // TODO:
     // 4. Update environment variables/session for downstream tools
@@ -348,7 +350,7 @@ async fn fetch_available_identities(
     db.migrate()
         .await
         .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
-    let mut service = PersonaService::new(db.clone())
+    let mut service = crate::commands::service::new_service(db.clone())
         .await
         .map_err(|e| anyhow!("Failed to create PersonaService: {}", e))?;
     let items = if service
@@ -577,7 +579,7 @@ mod tests {
             let db = Database::from_file(config.get_database_path())
                 .await
                 .unwrap();
-            let mut service = PersonaService::new(db).await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
             service.initialize_user("master-pin").await.unwrap();
         }
 
@@ -768,7 +770,7 @@ mod tests {
         let db = seeded_db(&dir, &["alice", "bob"]).await;
         ensure_workspace_row(&db, &config).await;
         {
-            let mut service = PersonaService::new(service_db(&config).await)
+            let mut service = crate::commands::service::new_service(service_db(&config).await)
                 .await
                 .unwrap();
             service.initialize_user("master-pin").await.unwrap();
