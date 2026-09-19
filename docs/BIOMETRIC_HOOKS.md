@@ -11,15 +11,15 @@ pub trait BiometricProvider {
 }
 ```
 
-* `BiometricPlatform` enumerates Touch ID, Face ID, Windows Hello, Linux Secret Service, or `Unknown`.
-* `BiometricPrompt` includes the `user_id`, a human-readable `reason`, and optional platform hint.
-* `BiometricAuthResult` carries the verification flag and resolved platform.
+- `BiometricPlatform` enumerates Touch ID, Face ID, Windows Hello, Linux Secret Service, or `Unknown`.
+- `BiometricPrompt` includes the `user_id`, a human-readable `reason`, and optional platform hint.
+- `BiometricAuthResult` carries the verification flag and resolved platform.
 
 The default `MockBiometricProvider` is used by the CLI/core for offline development; desktop/mobile targets should supply real implementations through `PersonaService::set_biometric_provider`.
 
 ## Usage in PersonaService
 
-* `biometric_available()` checks hardware/OS support.
-* `authenticate_biometric(prompt)` triggers the provider and returns `true` when verified.
+- `biometric_available()` checks hardware/OS support.
+- `authenticate_biometric(prompt)` triggers the provider and returns `true` when verified.
 
 This separation keeps the cryptographic unlock path in Rust while letting UI layers show native dialogs and map their callbacks to the shared prompt/result types.

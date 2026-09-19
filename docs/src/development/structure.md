@@ -59,6 +59,7 @@ persona/
 ## 🏗️ 架构设计
 
 ### 分层架构
+
 ```
 ┌─────────────────────────────────────┐
 │           用户界面层                 │
@@ -82,21 +83,25 @@ persona/
 ### 技术栈组合
 
 #### 🦀 Core Library (Rust)
+
 - **职责**: 核心加密、存储、认证逻辑
 - **优势**: 内存安全、高性能、跨平台
 - **依赖**: ring, argon2, aes-gcm, rusqlite
 
 #### 🖥️ Desktop App (Tauri + React)
+
 - **职责**: 桌面端用户界面
 - **优势**: 轻量级、安全、现代UI
 - **依赖**: React, TypeScript, Tailwind CSS
 
 #### 📱 Mobile App (Flutter)
+
 - **职责**: 移动端用户界面
 - **优势**: 跨平台、原生性能、丰富UI
 - **依赖**: Flutter, Dart, flutter_rust_bridge
 
 #### 🌐 Sync Server (Rust + Axum)
+
 - **职责**: 可选的端到端加密同步
 - **优势**: 零知识架构、高性能
 - **依赖**: axum, sqlx, tokio
@@ -104,16 +109,19 @@ persona/
 ## 🔄 数据流设计
 
 ### 本地数据流
+
 ```
 用户输入 → UI层 → Core库 → 加密存储 → 本地数据库
 ```
 
 ### 跨设备同步流
+
 ```
 设备A → 端到端加密 → 同步服务器 → 端到端解密 → 设备B
 ```
 
 ### 安全边界
+
 - **UI层**: 用户交互，不处理敏感数据
 - **Core层**: 所有加密操作，敏感数据处理
 - **存储层**: 加密数据持久化
@@ -122,6 +130,7 @@ persona/
 ## 🛠️ 开发工作流
 
 ### 构建命令
+
 ```bash
 # 构建核心库
 cargo build -p persona-core
@@ -140,11 +149,13 @@ cargo test --workspace
 ```
 
 ### 依赖管理
+
 - **Rust**: Cargo workspace 统一管理
 - **Node.js**: pnpm workspace（根 package.json + pnpm-workspace.yaml）
 - **Flutter**: mobile/pubspec.yaml
 
 ### 代码共享策略
+
 - **核心逻辑**: Rust core 库
 - **数据模型**: shared/schemas
 - **UI组件**: 各平台独立实现
@@ -153,16 +164,19 @@ cargo test --workspace
 ## 🔒 安全考虑
 
 ### 代码隔离
+
 - **敏感操作**: 仅在 core 库中实现
 - **UI层**: 不直接处理密钥和敏感数据
 - **网络层**: 仅传输加密数据
 
 ### 构建安全
+
 - **依赖锁定**: Cargo.lock, pnpm-lock.yaml
 - **安全审计**: cargo audit, pnpm audit
 - **代码签名**: 发布版本数字签名
 
 ### 运行时安全
+
 - **内存保护**: zeroize 清理敏感数据
 - **进程隔离**: 各组件独立进程
 - **权限最小化**: 仅申请必要权限
@@ -170,16 +184,19 @@ cargo test --workspace
 ## 📦 部署策略
 
 ### 桌面应用
+
 - **打包**: Tauri bundle
 - **分发**: GitHub Releases + 应用商店
 - **更新**: 内置自动更新
 
 ### 移动应用
+
 - **打包**: Flutter build
 - **分发**: App Store + Google Play
 - **更新**: 应用商店机制
 
 ### 服务器
+
 - **容器化**: Docker 部署
 - **云平台**: 支持主流云服务
 - **监控**: 日志和性能监控
@@ -187,27 +204,32 @@ cargo test --workspace
 ## 🚀 开发路线图
 
 ### Phase 1: MVP (核心功能)
+
 - ✅ 项目结构搭建
 - 🔄 Core 库基础实现
 - 🔄 桌面端基础UI
 - 🔄 本地加密存储
 
 ### Phase 2: 完整桌面版
+
 - 📋 完整功能实现
 - 📋 用户体验优化
 - 📋 安全测试
 
 ### Phase 3: 移动端
+
 - 📋 Flutter 应用开发
 - 📋 生物识别集成
 - 📋 跨平台同步
 
 ### Phase 4: 企业功能
+
 - 📋 团队共享功能
 - 📋 企业策略管理
 - 📋 审计日志系统
 
 这种 Monorepo 结构的优势：
+
 1. **统一管理**: 所有代码在一个仓库中
 2. **代码共享**: Core 库被多个客户端复用
 3. **版本同步**: 避免版本不一致问题

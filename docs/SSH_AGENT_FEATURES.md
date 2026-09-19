@@ -49,6 +49,7 @@ Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安
 #### 4.1 基于 TOML 的配置
 
 配置文件位置:
+
 - 默认: `~/.persona/agent-policy.toml`
 - 自定义: 通过 `PERSONA_AGENT_POLICY_FILE` 环境变量指定
 
@@ -90,6 +91,7 @@ allowed_time_range = "09:00-18:00"  # 仅在工作时间允许
 ```
 
 特性:
+
 - **主机限制**: 允许/拒绝特定主机(支持 glob 模式)
 - **时间范围**: 限制密钥使用的时间窗口
 - **使用限制**: 每日最大使用次数
@@ -107,6 +109,7 @@ max_connections_per_hour = 20
 ```
 
 特性:
+
 - **密钥白名单**: 限制特定主机只能使用指定的密钥
 - **连接限制**: 每小时最大连接次数
 - **Glob 模式**: 支持通配符匹配主机名
@@ -208,6 +211,7 @@ max_connections_per_hour = 20
 #### 9.1 单元测试 (7个)
 
 **Policy 测试** (`agents/ssh-agent/src/policy.rs`):
+
 - `test_default_policy_allows`: 默认策略允许所有操作
 - `test_deny_all_lockdown`: 紧急锁定模式测试
 - `test_rate_limiting`: 速率限制功能测试
@@ -215,12 +219,14 @@ max_connections_per_hour = 20
 - `test_glob_patterns`: Glob 模式匹配测试
 
 **Transport 测试** (`agents/ssh-agent/src/transport.rs`):
+
 - `test_default_path`: 默认套接字路径测试
 - `test_env_var_name`: 环境变量名称测试
 
 #### 9.2 E2E 测试 (6个)
 
 **协议测试** (`agents/ssh-agent/tests/e2e_test.rs`):
+
 - `test_ssh_protocol_format`: SSH 协议编码/解码
 - `test_ed25519_public_key_encoding`: ed25519 公钥编码
 - `test_ssh_agent_message_types`: SSH Agent 消息类型常量
@@ -473,6 +479,7 @@ cargo check -p persona-ssh-agent
 ### 2025-11-21 - v0.1.0 初始实现
 
 ✅ **完成功能**:
+
 - SSH Agent 协议子集(request_identities, sign_request)
 - ed25519 密钥支持
 - 跨平台传输层(Unix sockets + Windows named pipes)
@@ -482,6 +489,7 @@ cargo check -p persona-ssh-agent
 - 13个单元测试和E2E测试
 
 🔧 **技术栈**:
+
 - Rust 2021
 - Tokio (异步运行时)
 - ed25519-dalek (加密)
@@ -489,6 +497,7 @@ cargo check -p persona-ssh-agent
 - SQLx (数据库)
 
 📦 **依赖**:
+
 - `persona-core`: 核心库
 - `tokio`: 异步运行时
 - `ed25519-dalek`: ed25519 签名

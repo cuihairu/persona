@@ -15,11 +15,11 @@ Persona encrypts each stored item with its own random key and wraps that item ke
 
 Persona currently has three distinct password-based KDF paths. They serve different purposes and must not be conflated:
 
-| Path | Algorithm | Parameters | Used by |
-| --- | --- | --- | --- |
-| Master key / auth derivation | PBKDF2-HMAC-SHA256 | 100,000 iterations | `core/src/auth/authentication.rs` (item-key wrapping, remote-auth abstraction) |
-| Export/backup encryption | Argon2id | crate defaults | `core/src/crypto/encryption.rs` |
-| Password hash verification | Argon2 (PHC string) | crate defaults | `core/src/crypto/hashing.rs` |
+| Path                         | Algorithm           | Parameters         | Used by                                                                        |
+| ---------------------------- | ------------------- | ------------------ | ------------------------------------------------------------------------------ |
+| Master key / auth derivation | PBKDF2-HMAC-SHA256  | 100,000 iterations | `core/src/auth/authentication.rs` (item-key wrapping, remote-auth abstraction) |
+| Export/backup encryption     | Argon2id            | crate defaults     | `core/src/crypto/encryption.rs`                                                |
+| Password hash verification   | Argon2 (PHC string) | crate defaults     | `core/src/crypto/hashing.rs`                                                   |
 
 The PBKDF2 iteration count and the Argon2 parameters must be re-reviewed quarterly (see `THREAT_MODEL.md`). When raising parameters, apply the change with a re-wrap/re-encrypt migration rather than in place, so existing rows stay readable and legacy rows get upgraded on next write.
 

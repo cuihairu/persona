@@ -28,7 +28,7 @@
 
 # 安全运营
 
-- [威胁模型与安全审查](../THREAT_MODEL.md)
+- [威胁模型与安全审查](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)
 
 # 开发指南
 

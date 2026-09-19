@@ -13,6 +13,7 @@ We enforce Conventional Commit titles on every pull request. Format:
 Valid types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `build`, `ci`, `perf`, `style`, `revert`. Keep subjects under ~72 characters and written in the imperative mood.
 
 Examples:
+
 - `feat(cli): add credential list command`
 - `fix(core): clamp TOTP skew to 30s`
 - `chore: update CI cache keys`

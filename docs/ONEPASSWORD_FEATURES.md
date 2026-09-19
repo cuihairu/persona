@@ -42,5 +42,5 @@ This list captures the major features of 1Password grouped by domain, to guide P
   - Local item history; attachments; file secure storage
 
 Notes
-- 1Password does not act as a crypto wallet, but can store seed phrases/private keys as secrets. Persona will extend here with first-class wallet support (BIP32/44/SLIP10 derivations, signing).
 
+- 1Password does not act as a crypto wallet, but can store seed phrases/private keys as secrets. Persona will extend here with first-class wallet support (BIP32/44/SLIP10 derivations, signing).

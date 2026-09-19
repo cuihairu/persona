@@ -9,6 +9,7 @@ Passkey 是 WebAuthn/FIDO2 的可发现凭据（discoverable credential）：每
 Persona 的目标：把 passkey 作为一种身份材料（identity material），与密码、TOTP、SSH key 同等对待——身份域隔离、per-item key 加密、可审计、浏览器无感填充。
 
 v1 覆盖：
+
 - 存储模型 + CLI 全生命周期（create/list/show/remove、自检 sign/verify）
 - 浏览器扩展拦截 WebAuthn 注册/认证流程，经桥接协议在 core 完成签名
 - 与 webauthn.io 等真实站点互通
@@ -26,18 +27,19 @@ v1 覆盖：
 
 一个 passkey 由这些字节组成，全部有规范定义、全部可测：
 
-| 成分 | 说明 |
-| --- | --- |
-| 密钥对 | ES256（ECDSA P-256 + SHA-256），WebAuthn 强制算法；签名 DER 编码 |
-| `credential_id` | 全局唯一字节串，软件验证器用随机 32 字节即可 |
-| `user_handle` | RP 侧用户标识（RP 生成，注册时透传存储） |
-| COSE_Key | 公钥的 COSE/CBOR 编码（EC2 + P-256 + ES256 → alg -7） |
+| 成分               | 说明                                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------------------- |
+| 密钥对             | ES256（ECDSA P-256 + SHA-256），WebAuthn 强制算法；签名 DER 编码                                    |
+| `credential_id`    | 全局唯一字节串，软件验证器用随机 32 字节即可                                                        |
+| `user_handle`      | RP 侧用户标识（RP 生成，注册时透传存储）                                                            |
+| COSE_Key           | 公钥的 COSE/CBOR 编码（EC2 + P-256 + ES256 → alg -7）                                               |
 | authenticator data | `rpIdHash(32) ‖ flags(1) ‖ signCount(4) [+ attestedCredentialData + extensions]`；flags 含 UP/UV/AT |
-| client data | `{"type":"webauthn.create"/"webauthn.get","challenge":…,"origin":…}` 的 JSON 字节 |
-| 注册产物 | attestation object（fmt `none`：`{fmt, attStmt:{}, authData}`）+ clientDataJSON |
-| 断言产物 | `credentialId + authenticatorData + signature(authenticatorData ‖ SHA256(clientDataJSON))` |
+| client data        | `{"type":"webauthn.create"/"webauthn.get","challenge":…,"origin":…}` 的 JSON 字节                   |
+| 注册产物           | attestation object（fmt `none`：`{fmt, attStmt:{}, authData}`）+ clientDataJSON                     |
+| 断言产物           | `credentialId + authenticatorData + signature(authenticatorData ‖ SHA256(clientDataJSON))`          |
 
 RP 侧校验与我们相关的规则：
+
 - `rpIdHash` 必须等于 SHA-256(rp_id)
 - origin 的 effective domain 必须与 rp_id 一致（或 rp_id 是其 registrable suffix）——**这是防钓鱼的核心校验，core 必须执行**
 - signCount：软件验证器普遍恒 0（1Password/Bitwarden 同样如此），意味着无克隆检测——见威胁模型
@@ -95,11 +97,11 @@ pub struct PasskeyItem {
 
 遵循「优先审计过的库」：
 
-| 需求 | 选型 | 说明 |
-| --- | --- | --- |
-| P-256 密钥生成/ECDSA/DER | `p256`（RustCrypto, ecdsa feature） | 与 k256 同族同维护方 |
-| COSE/CBOR 编解码 | `coset`（Google 维护，Fuchsia 在用，基于 ciborium） | COSE_Key、COSE_Algorithm 常量齐全；不用手写 CBOR |
-| SHA-256 | 复用 `sha2` | rpIdHash、client data hash |
+| 需求                     | 选型                                                | 说明                                             |
+| ------------------------ | --------------------------------------------------- | ------------------------------------------------ |
+| P-256 密钥生成/ECDSA/DER | `p256`（RustCrypto, ecdsa feature）                 | 与 k256 同族同维护方                             |
+| COSE/CBOR 编解码         | `coset`（Google 维护，Fuchsia 在用，基于 ciborium） | COSE_Key、COSE_Algorithm 常量齐全；不用手写 CBOR |
+| SHA-256                  | 复用 `sha2`                                         | rpIdHash、client data hash                       |
 
 自研部分只剩「authenticator data / attestation object 的拼装」这一小段规范固定的字节组装（~百行），并用 RP 侧库做回归验证（见 §12）——与钱包迁移同一策略：协议编解码用库，标准向量兜底。
 
@@ -112,23 +114,34 @@ pub struct PasskeyItem {
 ### 7.1 passkey_list — 列出某 RP 的 passkey（选择 UI 数据源）
 
 ```json
-{ "type": "passkey_list", "origin": "https://github.com",
-  "payload": { "rp_id": "github.com" } }
+{
+  "type": "passkey_list",
+  "origin": "https://github.com",
+  "payload": { "rp_id": "github.com" }
+}
 ```
+
 core 校验 rp_id 与 origin 匹配后，返回非敏感摘要：`[{id, rp_id, user_name, user_display_name, created_at}]`。**不返回 credential_id 之外的字节**。
 
 ### 7.2 passkey_create — 注册（attestation）
 
 ```json
-{ "type": "passkey_create", "origin": "https://github.com", "user_gesture": true,
+{
+  "type": "passkey_create",
+  "origin": "https://github.com",
+  "user_gesture": true,
   "payload": {
-    "request_json": { /* PublicKeyCredentialCreationOptions 的 JSON 形态 */ },
-    "client_data_json_b64": "…",   // 浏览器产出的原始字节，core 只做哈希，不重组
+    "request_json": {
+      /* PublicKeyCredentialCreationOptions 的 JSON 形态 */
+    },
+    "client_data_json_b64": "…", // 浏览器产出的原始字节，core 只做哈希，不重组
     "require_resident_key": true
-  } }
+  }
+}
 ```
 
 core 侧流程：
+
 1. 解析 options：取 `rp.id`（缺省用 origin 的 effective domain）、`user.id`（user_handle）、`user.name`、`pubKeyCredParams`（只接受 ES256；不含则拒绝）
 2. **origin 校验**：`client_data_json` 内的 `origin` 必须与请求 `origin` 一致，且 effective domain 与 rp_id 满足 registrable-suffix 关系
 3. **challenge 不解释**：原样保留在 client_data_json 里，只对完整字节取 SHA-256
@@ -138,11 +151,15 @@ core 侧流程：
 ### 7.3 passkey_assert — 认证（assertion）
 
 ```json
-{ "type": "passkey_assert", "origin": "https://github.com", "user_gesture": true,
+{
+  "type": "passkey_assert",
+  "origin": "https://github.com",
+  "user_gesture": true,
   "payload": {
-    "item_id": "uuid",             // 用户在 UI 选中后传入；缺省时 core 拒绝（不允许静默选钥）
+    "item_id": "uuid", // 用户在 UI 选中后传入；缺省时 core 拒绝（不允许静默选钥）
     "client_data_json_b64": "…"
-  } }
+  }
+}
 ```
 
 core 侧流程：同 7.3 的 origin↔rp_id 校验 → 组装 `authenticator_data`（UP|UV，signCount=0，无 AT）→ `signature = ES256_sign(priv, auth_data ‖ SHA256(client_data_json))`（DER；签名对象顺序遵循 WebAuthn 标准 §6.5.6：authenticatorData 在前，clientDataHash 在后）→ 返回 `{credential_id_b64, authenticator_data_b64, signature_der_b64}` → 审计 `passkey_asserted{rp_id, origin, item_id, result}`。
@@ -182,14 +199,14 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 
 ## 10. 威胁模型增补（并入 THREAT_MODEL.md）
 
-| 威胁 | 控制 |
-| --- | --- |
-| 钓鱼站用合法 rp_id 发起断言（同域恶意页） | 选择 UI 显示完整 origin + 用户显式点击；审计留痕；与密码填充同源策略一致 |
-| 扩展被攻破，替任意域请求签名 | core 侧 origin↔rp_id 校验 + HMAC 配对绑定扩展实例 + user gesture + 桌面确认策略（`confirm_on_fill` 同级） |
-| 页面以 hidden iframe 触发 WebAuthn | 拦截层拒绝 cross-origin iframe 上下文（WebAuthn 规范本身禁止，拦截层双保险） |
-| 解锁态自动化脚本借用桥接静默签名 | 与 SSH agent 同思路：passkey assert 走敏感操作再认证/生物识别闸门，可策略强制 |
-| 导出备份泄露 passkey 私钥 | 与库同级加密（Argon2id 备份加密）；`export_allowed=false` 跳过；导出事件审计 |
-| signCount=0 无克隆检测 | 接受的限制（业界软件 passkey 现状），条目详情明示用户 |
+| 威胁                                      | 控制                                                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 钓鱼站用合法 rp_id 发起断言（同域恶意页） | 选择 UI 显示完整 origin + 用户显式点击；审计留痕；与密码填充同源策略一致                                   |
+| 扩展被攻破，替任意域请求签名              | core 侧 origin↔rp_id 校验 + HMAC 配对绑定扩展实例 + user gesture + 桌面确认策略（`confirm_on_fill` 同级） |
+| 页面以 hidden iframe 触发 WebAuthn        | 拦截层拒绝 cross-origin iframe 上下文（WebAuthn 规范本身禁止，拦截层双保险）                               |
+| 解锁态自动化脚本借用桥接静默签名          | 与 SSH agent 同思路：passkey assert 走敏感操作再认证/生物识别闸门，可策略强制                              |
+| 导出备份泄露 passkey 私钥                 | 与库同级加密（Argon2id 备份加密）；`export_allowed=false` 跳过；导出事件审计                               |
+| signCount=0 无克隆检测                    | 接受的限制（业界软件 passkey 现状），条目详情明示用户                                                      |
 
 ## 11. 导入导出
 
@@ -208,12 +225,12 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 
 ## 13. 分阶段落地
 
-| 阶段 | 内容 | 验收 |
-| --- | --- | --- |
-| P1 core | 模型/存储/迁移、`p256`+`coset` 接入、CLI（`persona passkey create/list/show/remove`、`--self-test` 本地注册+断言自检）、导出导入、审计 | workspace 测试 + webauthn-rs RP 校验全绿 |
-| P2 浏览器 | 桥接 v2 三消息、扩展 main-world 拦截、选择/确认 UI、回退原生 | webauthn.io + GitHub 真站互通 |
-| P3 桌面与策略 | 桌面 passkey 列表/详情、再认证与生物识别闸门接线、域策略联动 | 桌面端全流程 |
-| P4 远期 | OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入、CXF | 各平台原生 UI 出 Persona 条目 |
+| 阶段          | 内容                                                                                                                                   | 验收                                     |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| P1 core       | 模型/存储/迁移、`p256`+`coset` 接入、CLI（`persona passkey create/list/show/remove`、`--self-test` 本地注册+断言自检）、导出导入、审计 | workspace 测试 + webauthn-rs RP 校验全绿 |
+| P2 浏览器     | 桥接 v2 三消息、扩展 main-world 拦截、选择/确认 UI、回退原生                                                                           | webauthn.io + GitHub 真站互通            |
+| P3 桌面与策略 | 桌面 passkey 列表/详情、再认证与生物识别闸门接线、域策略联动                                                                           | 桌面端全流程                             |
+| P4 远期       | OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入、CXF                                                            | 各平台原生 UI 出 Persona 条目            |
 
 ## 14. 开放问题
 

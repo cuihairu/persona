@@ -11,18 +11,21 @@
 ## ✨ 核心特性
 
 ### 🔐 安全至上
+
 - **零知识架构**：所有敏感数据本地加密，服务器无法访问用户隐私
 - **分层加密**：采用多层加密策略，确保数据安全
 - **硬件安全**：支持 TPM、Secure Enclave 等硬件安全模块
 - **生物识别**：指纹、面部识别等多因素认证
 
 ### 🚀 极致体验
+
 - **一键切换**：快速在不同数字身份间切换
 - **智能同步**：跨设备无缝同步身份数据
 - **离线优先**：核心功能支持离线使用
 - **现代界面**：简洁直观的用户界面设计
 
 ### 🌐 跨平台支持
+
 - **桌面应用**：基于 Tauri 的原生桌面应用
 - **移动应用**：Flutter 开发的 iOS/Android 应用
 - **Web 扩展**：浏览器扩展支持
@@ -41,18 +44,21 @@ Persona 采用现代化的技术栈，确保性能、安全性和可维护性：
 ## 📚 文档导航
 
 ### 🔍 了解项目
+
 - [项目简介](./overview/introduction.md) - 深入了解 Persona 的设计理念
 - [核心功能](./overview/features.md) - 详细功能特性介绍
 - [技术架构](./overview/architecture.md) - 系统架构设计
 - [安全特性](./overview/security.md) - 安全机制详解
 
 ### 📋 需求分析
+
 - [场景分析](./analysis/scenarios.md) - 用户使用场景分析
 - [安全需求](./analysis/security-requirements.md) - 安全需求规范
 - [用户需求](./analysis/user-requirements.md) - 用户需求分析
 - [技术需求](./analysis/technical-requirements.md) - 技术需求规范
 
 ### 🎨 系统设计
+
 - [整体架构](./design/architecture.md) - 系统架构设计
 - [数据模型](./design/data-model.md) - 数据结构设计
 - [API 设计](./design/api.md) - 接口设计规范
@@ -60,6 +66,7 @@ Persona 采用现代化的技术栈，确保性能、安全性和可维护性：
 - [UI/UX 设计](./design/ui-ux.md) - 用户界面设计
 
 ### 👨‍💻 开发指南
+
 - [环境搭建](./development/setup.md) - 开发环境配置
 - [项目结构](./development/structure.md) - 代码结构说明
 - [编码规范](./development/coding-standards.md) - 代码规范指南
@@ -67,6 +74,7 @@ Persona 采用现代化的技术栈，确保性能、安全性和可维护性：
 - [部署指南](./development/deployment.md) - 部署和发布流程
 
 ### 📖 用户手册
+
 - [快速开始](./user/quick-start.md) - 快速上手指南
 - [桌面应用](./user/desktop.md) - 桌面版使用说明
 - [移动应用](./user/mobile.md) - 移动版使用说明

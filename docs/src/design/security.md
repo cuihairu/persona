@@ -1,16 +1,16 @@
 # 安全设计
 
-本文描述 Persona 当前实现应遵循的安全设计约束。更完整的资产、信任边界和 STRIDE 分析见 [威胁模型与周期性安全审查](../../THREAT_MODEL.md)。
+本文描述 Persona 当前实现应遵循的安全设计约束。更完整的资产、信任边界和 STRIDE 分析见 [威胁模型与周期性安全审查](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
 
 ## 分层安全边界
 
-| 层 | 责任 | 关键控制 |
-| --- | --- | --- |
-| 客户端入口 | CLI、桌面端、浏览器扩展、SSH Agent 只负责交互和请求路由 | 不直接绕过 core 读写敏感明文 |
-| 核心服务 | 身份、凭据、解锁、审计和策略统一入口 | 自动锁、敏感操作再认证、审计日志 |
-| 加密层 | 主密钥派生、item key 包裹、AES-GCM 加解密 | 每项凭据独立 key，认证加密防篡改 |
-| 存储层 | SQLite、附件、迁移和配置 | schema 迁移、`wrapped_item_key` 兼容、最小明文元数据 |
-| 外部接口 | Native Messaging、SSH Agent socket/pipe、可选 server | 配对/HMAC、origin binding、known_hosts、只传密文或摘要 |
+| 层         | 责任                                                    | 关键控制                                               |
+| ---------- | ------------------------------------------------------- | ------------------------------------------------------ |
+| 客户端入口 | CLI、桌面端、浏览器扩展、SSH Agent 只负责交互和请求路由 | 不直接绕过 core 读写敏感明文                           |
+| 核心服务   | 身份、凭据、解锁、审计和策略统一入口                    | 自动锁、敏感操作再认证、审计日志                       |
+| 加密层     | 主密钥派生、item key 包裹、AES-GCM 加解密               | 每项凭据独立 key，认证加密防篡改                       |
+| 存储层     | SQLite、附件、迁移和配置                                | schema 迁移、`wrapped_item_key` 兼容、最小明文元数据   |
+| 外部接口   | Native Messaging、SSH Agent socket/pipe、可选 server    | 配对/HMAC、origin binding、known_hosts、只传密文或摘要 |
 
 ## 敏感操作授权
 

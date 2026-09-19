@@ -93,6 +93,7 @@ graph TB
 ### 第1层：传输层 (Transport Layer)
 
 #### Unix Domain Sockets (主要)
+
 - **路径**: `~/.persona/persona.sock`
 - **权限**: `0600` (仅所有者可访问)
 - **特点**:
@@ -101,6 +102,7 @@ graph TB
   - 自动清理（进程终止时）
 
 #### Named Pipes (Windows)
+
 - **路径**: `\\.\pipe\persona-{user-id}`
 - **权限**: 用户专有访问
 - **特点**:
@@ -109,6 +111,7 @@ graph TB
   - 支持异步操作
 
 #### HTTP/WebSocket (备用)
+
 - **端口**: `127.0.0.1:8080` (默认)
 - **协议**: HTTP/1.1 + WebSocket
 - **特点**:
@@ -119,6 +122,7 @@ graph TB
 ### 第2层：序列化层 (Serialization Layer)
 
 #### 消息格式
+
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct IpcMessage {
@@ -139,6 +143,7 @@ pub struct IpcResponse {
 ```
 
 #### 序列化协议
+
 - **主要格式**: MessagePack (二进制，紧凑)
 - **备用格式**: JSON (文本，调试友好)
 - **压缩**: 可选的LZ4压缩
@@ -146,6 +151,7 @@ pub struct IpcResponse {
 ### 第3层：RPC层 (RPC Layer)
 
 #### 方法调用模式
+
 ```rust
 // 同步调用
 let identity = client.call("identity.get", params).await?;
@@ -158,6 +164,7 @@ let stream = client.subscribe("events.audit_log").await?;
 ```
 
 #### 标准方法命名
+
 - **身份管理**: `identity.{create|read|update|delete|list|switch}`
 - **凭证管理**: `credential.{create|read|update|delete|list|search}`
 - **认证操作**: `auth.{login|logout|verify|refresh}`
@@ -170,11 +177,13 @@ let stream = client.subscribe("events.audit_log").await?;
 ### CLI 客户端
 
 #### 特点
+
 - **同步接口**: 阻塞调用，适合脚本使用
 - **批量模式**: 支持批量操作
 - **输出格式**: 多种输出格式 (JSON, YAML, Table)
 
 #### 实现示例
+
 ```rust
 pub struct CliClient {
     transport: UnixTransport,
@@ -201,11 +210,13 @@ impl CliClient {
 ### 桌面应用 (Tauri)
 
 #### 特点
+
 - **事件驱动**: 基于事件的响应式界面
 - **实时更新**: WebSocket订阅实时数据
 - **富界面**: 完整的图形用户界面
 
 #### 实现示例
+
 ```rust
 // Tauri 命令
 #[tauri::command]
@@ -225,11 +236,13 @@ const identities = await invoke('get_identities');
 ### 浏览器扩展
 
 #### 特点
+
 - **跨域通信**: 通过Native Messaging与本地服务通信
 - **安全隔离**: 扩展沙箱环境
 - **自动填充**: DOM操作和表单填充
 
 #### 通信流程
+
 ```
 浏览器扩展 -> Native Host -> Unix Socket -> Core Service
      |              |              |            |
@@ -238,26 +251,33 @@ const identities = await invoke('get_identities');
 ```
 
 #### 实现示例
+
 ```javascript
 // 扩展侧
-chrome.runtime.sendNativeMessage('com.persona.native', {
-    method: 'credential.search',
-    params: { domain: 'github.com' }
-}, response => {
+chrome.runtime.sendNativeMessage(
+  "com.persona.native",
+  {
+    method: "credential.search",
+    params: { domain: "github.com" },
+  },
+  (response) => {
     if (response.result) {
-        fillCredentials(response.result);
+      fillCredentials(response.result);
     }
-});
+  },
+);
 ```
 
 ### SSH Agent
 
 #### 特点
+
 - **标准协议**: 实现OpenSSH Agent协议
 - **双向通信**: SSH Agent Protocol + Persona IPC
 - **策略控制**: 基于策略的签名控制
 
 #### 通信模式
+
 ```
 SSH Client -> SSH Agent -> Core Service
      |           |             |
@@ -270,6 +290,7 @@ SSH Client -> SSH Agent -> Core Service
 ### Core Service
 
 #### 主要组件
+
 ```rust
 pub struct PersonaService {
     pub auth: AuthService,
@@ -281,6 +302,7 @@ pub struct PersonaService {
 ```
 
 #### 启动流程
+
 ```rust
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -308,6 +330,7 @@ async fn main() -> Result<()> {
 ### 会话管理
 
 #### 会话生命周期
+
 ```rust
 pub struct Session {
     pub id: SessionId,
@@ -335,6 +358,7 @@ impl Session {
 ### 统一错误格式
 
 #### 错误类型
+
 ```rust
 #[derive(Serialize, Deserialize, Debug)]
 pub struct IpcError {
@@ -368,19 +392,20 @@ pub enum ErrorCode {
 ```
 
 #### 错误响应示例
+
 ```json
 {
-    "id": "req-123",
-    "error": {
-        "code": "AuthenticationRequired",
-        "message": "Valid session required for this operation",
-        "details": {
-            "operation": "credential.create",
-            "required_permission": "credential:write"
-        },
-        "trace_id": "trace-456"
+  "id": "req-123",
+  "error": {
+    "code": "AuthenticationRequired",
+    "message": "Valid session required for this operation",
+    "details": {
+      "operation": "credential.create",
+      "required_permission": "credential:write"
     },
-    "timestamp": 1640995200
+    "trace_id": "trace-456"
+  },
+  "timestamp": 1640995200
 }
 ```
 
@@ -389,6 +414,7 @@ pub enum ErrorCode {
 ### 1. 连接管理
 
 #### 连接池
+
 ```rust
 pub struct ConnectionPool {
     pool: Arc<Mutex<Vec<Connection>>>,
@@ -410,6 +436,7 @@ impl ConnectionPool {
 ### 2. 批量操作
 
 #### 批量请求格式
+
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct BatchRequest {
@@ -428,6 +455,7 @@ pub struct BatchResponse {
 ### 3. 缓存策略
 
 #### 多级缓存
+
 ```rust
 pub struct CacheLayer {
     // L1: 内存缓存 (最快)
@@ -446,6 +474,7 @@ pub struct CacheLayer {
 ### 1. 传输安全
 
 #### Unix Socket权限
+
 ```bash
 # socket文件权限
 chmod 600 ~/.persona/persona.sock
@@ -455,6 +484,7 @@ chmod 700 ~/.persona
 ```
 
 #### Named Pipe安全 (Windows)
+
 ```rust
 use windows::Win32::Storage::FileSystem::*;
 
@@ -473,6 +503,7 @@ let pipe = CreateNamedPipeW(
 ### 2. 认证和授权
 
 #### JWT会话令牌
+
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct SessionToken {
@@ -492,6 +523,7 @@ impl SessionToken {
 ### 3. 审计日志
 
 #### 通信审计
+
 ```rust
 pub struct CommunicationAudit {
     pub session_id: SessionId,
@@ -508,6 +540,7 @@ pub struct CommunicationAudit {
 ### 1. 协议测试
 
 #### 单元测试
+
 ```rust
 #[tokio::test]
 async fn test_identity_create() {
@@ -523,6 +556,7 @@ async fn test_identity_create() {
 ```
 
 #### 集成测试
+
 ```rust
 #[tokio::test]
 async fn test_end_to_end_flow() {
@@ -545,6 +579,7 @@ async fn test_end_to_end_flow() {
 ### 2. 调试工具
 
 #### IPC监控器
+
 ```bash
 # 监控所有IPC通信
 persona-debug monitor --socket ~/.persona/persona.sock
@@ -555,6 +590,7 @@ persona-debug monitor --socket ~/.persona/persona.sock
 ```
 
 #### 协议分析器
+
 ```bash
 # 分析协议消息
 persona-debug analyze --file ipc-trace.log
@@ -571,6 +607,7 @@ persona-debug analyze --file ipc-trace.log
 ### 1. 系统服务配置
 
 #### systemd (Linux)
+
 ```ini
 [Unit]
 Description=Persona Core Service
@@ -589,6 +626,7 @@ WantedBy=multi-user.target
 ```
 
 #### launchd (macOS)
+
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -612,6 +650,7 @@ WantedBy=multi-user.target
 ### 2. 配置文件
 
 #### 服务配置 (`service.toml`)
+
 ```toml
 [server]
 # Unix socket路径
@@ -651,6 +690,7 @@ file_path = "~/.persona/logs/service.log"
 ### 1. 插件系统
 
 #### 插件接口
+
 ```rust
 pub trait PersonaPlugin: Send + Sync {
     fn name(&self) -> &str;
@@ -668,6 +708,7 @@ pub trait PersonaPlugin: Send + Sync {
 ```
 
 #### 动态加载
+
 ```rust
 pub struct PluginManager {
     plugins: Vec<Box<dyn PersonaPlugin>>,
@@ -694,6 +735,7 @@ impl PluginManager {
 ### 2. 第三方集成
 
 #### 外部服务连接器
+
 ```rust
 pub trait ExternalConnector: Send + Sync {
     async fn authenticate(&self, credentials: &Credentials) -> Result<Session>;
@@ -719,6 +761,7 @@ impl ExternalConnector for OnePasswordConnector {
 ### 1. 性能指标
 
 #### 关键指标
+
 - **连接数**: 当前活跃连接数
 - **请求延迟**: 95th/99th百分位延迟
 - **吞吐量**: 每秒请求数 (RPS)
@@ -727,6 +770,7 @@ impl ExternalConnector for OnePasswordConnector {
 - **数据库性能**: 查询执行时间
 
 #### 指标采集
+
 ```rust
 use prometheus::{Histogram, Counter, Gauge};
 
@@ -748,6 +792,7 @@ lazy_static! {
 ### 2. 健康检查
 
 #### 健康检查端点
+
 ```rust
 pub struct HealthChecker {
     database: Arc<Database>,

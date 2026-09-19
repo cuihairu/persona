@@ -11,11 +11,13 @@
 [cargo-deny](https://github.com/EmbarkStudios/cargo-deny) 是一个全面的 Cargo 依赖检查工具。
 
 **安装:**
+
 ```bash
 cargo install cargo-deny
 ```
 
 **功能:**
+
 - ✅ 安全漏洞检查 (基于 RustSec Advisory Database)
 - ✅ 许可证合规性验证
 - ✅ 依赖来源验证
@@ -25,6 +27,7 @@ cargo install cargo-deny
 **配置文件:** `deny.toml`
 
 **运行检查:**
+
 ```bash
 # 完整检查
 cargo deny check
@@ -41,11 +44,13 @@ cargo deny check sources     # 仅来源检查
 [cargo-audit](https://github.com/RustSec/rustsec/tree/main/cargo-audit) 专注于已知漏洞扫描。
 
 **安装:**
+
 ```bash
 cargo install cargo-audit
 ```
 
 **运行检查:**
+
 ```bash
 cargo audit
 ```
@@ -57,6 +62,7 @@ cargo audit
 Node.js 内置的安全审计工具。
 
 **运行检查:**
+
 ```bash
 cd desktop
 npm audit
@@ -181,16 +187,19 @@ make security-audit
 安全检查已集成到 CI 流水线:
 
 **触发条件:**
+
 - 每次 `push` 到 `main` 分支
 - 每个 `pull_request`
 
 **检查项目:**
+
 1. Rust 依赖安全
 2. JavaScript/TypeScript 依赖安全
 3. 许可证合规性
 4. 依赖来源验证
 
 **失败策略:**
+
 - ❌ 高危/严重漏洞 → CI 失败
 - ⚠️ 中危/低危漏洞 → 警告 (不阻塞)
 - ❌ 许可证违规 → CI 失败
@@ -275,11 +284,13 @@ serde = "1.0.197"  # 好
 **解决步骤:**
 
 1. 查看详细输出:
+
    ```bash
    cargo deny check -vv
    ```
 
 2. 针对性修复:
+
    ```bash
    # 漏洞问题
    cargo update -p <vulnerable-crate>
@@ -308,11 +319,13 @@ serde = "1.0.197"  # 好
 **解决步骤:**
 
 1. 检查是否为开发依赖:
+
    ```bash
    npm audit --production
    ```
 
 2. 尝试自动修复:
+
    ```bash
    npm audit fix
    ```

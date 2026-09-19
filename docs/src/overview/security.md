@@ -1,6 +1,6 @@
 # 安全特性
 
-Persona 的安全模型以本地优先和零知识为核心：敏感身份材料在本地加密存储，CLI、桌面端、浏览器扩展和 SSH Agent 都通过同一套核心服务执行解锁、审计和策略检查。完整威胁模型见 [威胁模型与周期性安全审查](../../THREAT_MODEL.md)。
+Persona 的安全模型以本地优先和零知识为核心：敏感身份材料在本地加密存储，CLI、桌面端、浏览器扩展和 SSH Agent 都通过同一套核心服务执行解锁、审计和策略检查。完整威胁模型见 [威胁模型与周期性安全审查](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
 
 ## 核心保护
 

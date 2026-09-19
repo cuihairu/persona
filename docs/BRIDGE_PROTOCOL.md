@@ -40,12 +40,12 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `request_id` | string | 否 | 用于关联请求/响应的唯一 ID |
-| `type` | string | 是 | 消息类型 |
-| `payload` | object | 否 | 类型相关的负载数据 |
-| `auth` | object | 否 | 消息认证（配对后，敏感操作必需） |
+| 字段         | 类型   | 必需 | 描述                             |
+| ------------ | ------ | ---- | -------------------------------- |
+| `request_id` | string | 否   | 用于关联请求/响应的唯一 ID       |
+| `type`       | string | 是   | 消息类型                         |
+| `payload`    | object | 否   | 类型相关的负载数据               |
+| `auth`       | object | 否   | 消息认证（配对后，敏感操作必需） |
 
 #### auth 字段（HMAC）
 
@@ -58,12 +58,12 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `session_id` | string | 是 | 由 `hello_response` 下发的短期会话 ID |
-| `ts_ms` | number | 是 | 客户端时间戳（毫秒），服务端用于限制重放窗口 |
-| `nonce` | string | 是 | 单次请求随机值 |
-| `signature` | string | 是 | `HMAC-SHA256` 签名（base64url 无 padding） |
+| 字段         | 类型   | 必需 | 描述                                         |
+| ------------ | ------ | ---- | -------------------------------------------- |
+| `session_id` | string | 是   | 由 `hello_response` 下发的短期会话 ID        |
+| `ts_ms`      | number | 是   | 客户端时间戳（毫秒），服务端用于限制重放窗口 |
+| `nonce`      | string | 是   | 单次请求随机值                               |
+| `signature`  | string | 是   | `HMAC-SHA256` 签名（base64url 无 padding）   |
 
 ### 响应格式
 
@@ -77,13 +77,13 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `request_id` | string | 否 | 对应请求的 ID |
-| `type` | string | 是 | 响应类型 |
-| `ok` | boolean | 是 | 操作是否成功 |
-| `error` | string | 否 | 错误描述（仅当 ok=false） |
-| `payload` | object | 否 | 响应数据 |
+| 字段         | 类型    | 必需 | 描述                      |
+| ------------ | ------- | ---- | ------------------------- |
+| `request_id` | string  | 否   | 对应请求的 ID             |
+| `type`       | string  | 是   | 响应类型                  |
+| `ok`         | boolean | 是   | 操作是否成功              |
+| `error`      | string  | 否   | 错误描述（仅当 ok=false） |
+| `payload`    | object  | 否   | 响应数据                  |
 
 ## 消息类型
 
@@ -92,6 +92,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 用于初始化会话并获取服务器能力。
 
 **请求：**
+
 ```json
 {
   "type": "hello",
@@ -105,13 +106,25 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "hello_response",
   "ok": true,
   "payload": {
     "server_version": "0.1.0",
-    "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert"],
+    "capabilities": [
+      "status",
+      "pairing_request",
+      "pairing_finalize",
+      "get_suggestions",
+      "request_fill",
+      "get_totp",
+      "copy",
+      "passkey_list",
+      "passkey_create",
+      "passkey_assert"
+    ],
     "pairing_required": true,
     "paired": false,
     "session_id": null,
@@ -127,6 +140,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 扩展向本地桥申请一次性配对码（需用户在终端批准）。
 
 **请求：**
+
 ```json
 {
   "type": "pairing_request",
@@ -138,6 +152,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "pairing_response",
@@ -155,6 +170,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 用户执行 `approval_command` 后，扩展提交配对码完成绑定并获取配对密钥与会话信息。
 
 **请求：**
+
 ```json
 {
   "type": "pairing_finalize",
@@ -167,6 +183,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "pairing_finalize_response",
@@ -185,6 +202,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 获取当前解锁状态和活动身份。
 
 **请求：**
+
 ```json
 {
   "type": "status",
@@ -193,6 +211,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "status_response",
@@ -212,6 +231,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 > 备注：建议默认基于当前 workspace 的 `active_identity_id` 过滤（可通过 `persona switch` 切换）。
 
 **请求：**
+
 ```json
 {
   "type": "get_suggestions",
@@ -223,6 +243,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "suggestions_response",
@@ -242,18 +263,19 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| match_strength | 含义 |
-|----------------|------|
-| 100 | 精确域名匹配 |
-| 90 | 子域名匹配 |
-| 80 | 域名包含匹配 |
-| 60 | 顶级域名匹配 |
+| match_strength | 含义         |
+| -------------- | ------------ |
+| 100            | 精确域名匹配 |
+| 90             | 子域名匹配   |
+| 80             | 域名包含匹配 |
+| 60             | 顶级域名匹配 |
 
 ### 6. request_fill - 请求填充
 
 请求特定凭证的实际值用于填充。
 
 **请求：**
+
 ```json
 {
   "type": "request_fill",
@@ -266,6 +288,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "fill_response",
@@ -278,6 +301,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **错误码：**
+
 - `locked` - 保险库已锁定
 - `not_found` - 凭证不存在
 - `origin_mismatch` - 请求 origin 与凭证 URL 不匹配
@@ -291,6 +315,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 > 注意：为了进行 Origin 绑定，TOTP 条目必须设置 URL（否则返回 `origin_binding_required`）。
 
 **请求：**
+
 ```json
 {
   "type": "get_totp",
@@ -303,6 +328,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "totp_response",
@@ -320,6 +346,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 请求将特定字段复制到剪贴板（由 CLI/Desktop 执行）。
 
 **请求：**
+
 ```json
 {
   "type": "copy",
@@ -333,6 +360,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 **响应：**
+
 ```json
 {
   "type": "copy_response",
@@ -349,6 +377,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 列出某个 RP（relying party）下的 passkey 摘要（**不含任何密钥材料**，仅非敏感字段）。
 
 **请求：**
+
 ```json
 {
   "type": "passkey_list",
@@ -363,6 +392,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 > `rp_id` 缺省时按 origin 的 effective domain 推导；显式给出且与 origin 不符时返回 `passkey_rp_mismatch`。
 
 **响应：**
+
 ```json
 {
   "type": "passkey_list_response",
@@ -387,6 +417,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 为当前 active identity 在指定 RP 下创建软件 passkey，返回注册产物（attestationObject）。
 
 **请求：**
+
 ```json
 {
   "type": "passkey_create",
@@ -417,6 +448,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 - 未设置 active identity 时返回 `no_active_identity`
 
 **响应：**
+
 ```json
 {
   "type": "passkey_create_response",
@@ -436,6 +468,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 用指定的 passkey 对 ceremony 签名（不允许静默选钥：`item_id` 必填）。
 
 **请求：**
+
 ```json
 {
   "type": "passkey_assert",
@@ -457,6 +490,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 - origin 与 rp_id 不符返回 `passkey_rp_mismatch`
 
 **响应：**
+
 ```json
 {
   "type": "passkey_assert_response",
@@ -503,7 +537,14 @@ user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PA
 请求（bridge → 桌面）：
 
 ```json
-{"v":1,"op":"passkey_assert","rp_id":"github.com","origin":"https://github.com","user_name":"alice","item_id":"<uuid>"}
+{
+  "v": 1,
+  "op": "passkey_assert",
+  "rp_id": "github.com",
+  "origin": "https://github.com",
+  "user_name": "alice",
+  "item_id": "<uuid>"
+}
 ```
 
 - `op` 仅接受 `passkey_create` / `passkey_assert`；`passkey_list` 非敏感不走审批
@@ -521,11 +562,11 @@ user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PA
 
 **开关** `PERSONA_BRIDGE_DESKTOP_APPROVAL`（默认 `auto`）：
 
-| 值 | 行为 |
-| --- | --- |
-| `auto` | socket 存在 → 必须桌面批准；桌面未运行/连接失败 → 现有行为（gesture 闸门照旧） |
-| `require` | 策略强制：socket 不在也拒绝该 passkey 请求（fail closed） |
-| `off` | 永不询问 |
+| 值        | 行为                                                                           |
+| --------- | ------------------------------------------------------------------------------ |
+| `auto`    | socket 存在 → 必须桌面批准；桌面未运行/连接失败 → 现有行为（gesture 闸门照旧） |
+| `require` | 策略强制：socket 不在也拒绝该 passkey 请求（fail closed）                      |
+| `off`     | 永不询问                                                                       |
 
 拒绝时 bridge 对该请求返回错误 `passkey request denied by desktop approval (<reason>)`。
 
@@ -590,38 +631,38 @@ user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PA
 
 ### 错误码列表
 
-| 错误码 | 描述 |
-|--------|------|
-| `invalid_json` | JSON 解析失败 |
-| `unknown_type` | 未知的消息类型 |
-| `locked` | 保险库已锁定，需要解锁 |
-| `not_found` | 请求的资源不存在 |
-| `origin_mismatch` | Origin 不匹配 |
-| `origin_binding_required` | 条目未设置 URL，无法进行 Origin 绑定 |
-| `authentication_failed` | 认证失败 |
-| `wrong_identity` | 当前 active identity 不匹配 |
-| `user_confirmation_required` | 需要用户确认 |
-| `session_expired` | 会话已过期 |
-| `rate_limited` | 请求过于频繁 |
-| `user_gesture_required` | 缺少用户手势（v2） |
-| `no_active_identity` | 未设置 active identity（v2） |
-| `passkey_rp_mismatch` | origin 与 passkey 的 rp_id 不符（v2） |
-| `passkey_alg_unsupported` | pubKeyCredParams 不含 ES256（v2） |
-| `passkey_item_not_found` | 指定的 passkey 不存在（v2） |
-| `passkey_origin_mismatch` | passkey origin 校验失败（预留）（v2） |
+| 错误码                       | 描述                                  |
+| ---------------------------- | ------------------------------------- |
+| `invalid_json`               | JSON 解析失败                         |
+| `unknown_type`               | 未知的消息类型                        |
+| `locked`                     | 保险库已锁定，需要解锁                |
+| `not_found`                  | 请求的资源不存在                      |
+| `origin_mismatch`            | Origin 不匹配                         |
+| `origin_binding_required`    | 条目未设置 URL，无法进行 Origin 绑定  |
+| `authentication_failed`      | 认证失败                              |
+| `wrong_identity`             | 当前 active identity 不匹配           |
+| `user_confirmation_required` | 需要用户确认                          |
+| `session_expired`            | 会话已过期                            |
+| `rate_limited`               | 请求过于频繁                          |
+| `user_gesture_required`      | 缺少用户手势（v2）                    |
+| `no_active_identity`         | 未设置 active identity（v2）          |
+| `passkey_rp_mismatch`        | origin 与 passkey 的 rp_id 不符（v2） |
+| `passkey_alg_unsupported`    | pubKeyCredParams 不含 ES256（v2）     |
+| `passkey_item_not_found`     | 指定的 passkey 不存在（v2）           |
+| `passkey_origin_mismatch`    | passkey origin 校验失败（预留）（v2） |
 
 ## 配置
 
 ### 环境变量
 
-| 变量 | 描述 | 默认值 |
-|------|------|--------|
-| `PERSONA_MASTER_PASSWORD` | 主密码（自动化场景） | - |
-| `PERSONA_DB_PATH` | 数据库路径 | `~/.persona/identities.db` |
-| `PERSONA_BRIDGE_STATE_DIR` | Bridge 状态目录（pairing/session） | `~/.persona/bridge` |
-| `PERSONA_BRIDGE_REQUIRE_PAIRING` | 是否强制 pairing + HMAC | `true` |
-| `PERSONA_BRIDGE_REQUIRE_GESTURE` | 是否强制 user_gesture（fill/totp/copy） | `true` |
-| `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | HMAC 时间戳最大偏移（防重放） | `300000` |
+| 变量                              | 描述                                    | 默认值                     |
+| --------------------------------- | --------------------------------------- | -------------------------- |
+| `PERSONA_MASTER_PASSWORD`         | 主密码（自动化场景）                    | -                          |
+| `PERSONA_DB_PATH`                 | 数据库路径                              | `~/.persona/identities.db` |
+| `PERSONA_BRIDGE_STATE_DIR`        | Bridge 状态目录（pairing/session）      | `~/.persona/bridge`        |
+| `PERSONA_BRIDGE_REQUIRE_PAIRING`  | 是否强制 pairing + HMAC                 | `true`                     |
+| `PERSONA_BRIDGE_REQUIRE_GESTURE`  | 是否强制 user_gesture（fill/totp/copy） | `true`                     |
+| `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | HMAC 时间戳最大偏移（防重放）           | `300000`                   |
 
 ### CLI 参数
 
@@ -651,9 +692,7 @@ OPTIONS:
   "description": "Persona Password Manager Bridge",
   "path": "/path/to/persona-bridge-wrapper",
   "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://YOUR_EXTENSION_ID/"
-  ]
+  "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 }
 ```
 
@@ -686,19 +725,17 @@ manifest 文件内容示例：
   "description": "Persona Password Manager Bridge",
   "path": "C:\\Program Files\\Persona\\persona.exe",
   "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://YOUR_EXTENSION_ID/"
-  ]
+  "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 }
 ```
 
 ## 版本兼容性
 
-| Protocol Version | CLI Version | 功能 |
-|------------------|-------------|------|
-| 1 | 0.1.0+ | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
-| 2 | 0.1.0+ | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道） |
-| 3 (计划) | - | biometric confirmation + richer policy prompts |
+| Protocol Version | CLI Version | 功能                                                                                                   |
+| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------ |
+| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
+| 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                              |
+| 3 (计划)         | -           | biometric confirmation + richer policy prompts                                                         |
 
 > v2 未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；v1 扩展对 v2 桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

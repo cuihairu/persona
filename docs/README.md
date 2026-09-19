@@ -37,4 +37,4 @@
 
 ---
 
-*早期场景分析文档（scenarios-analysis / security-requirements）已不再单独维护，其内容并入 [BOUNDARY](../BOUNDARY.md) 与 [THREAT_MODEL](./THREAT_MODEL.md)。*
+_早期场景分析文档（scenarios-analysis / security-requirements）已不再单独维护，其内容并入 [BOUNDARY](../BOUNDARY.md) 与 [THREAT_MODEL](./THREAT_MODEL.md)。_

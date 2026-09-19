@@ -6,27 +6,27 @@ Persona CLI supports a non-interactive (headless) mode for use in CI/CD pipeline
 
 ### Core Configuration
 
-| Variable | Description | Example | Default |
-|----------|-------------|---------|---------|
-| `PERSONA_NON_INTERACTIVE` | Disable all interactive prompts | `1` or `true` | `false` |
-| `PERSONA_WORKSPACE_PATH` | Workspace directory path | `/path/to/workspace` | `~/.persona` |
-| `PERSONA_MASTER_PASSWORD` | Master password for authentication | `your-password` | - |
-| `PERSONA_DB_PATH` | Database file path (alternative) | `/path/to/db.sqlite` | `$WORKSPACE/identities.db` |
+| Variable                  | Description                        | Example              | Default                    |
+| ------------------------- | ---------------------------------- | -------------------- | -------------------------- |
+| `PERSONA_NON_INTERACTIVE` | Disable all interactive prompts    | `1` or `true`        | `false`                    |
+| `PERSONA_WORKSPACE_PATH`  | Workspace directory path           | `/path/to/workspace` | `~/.persona`               |
+| `PERSONA_MASTER_PASSWORD` | Master password for authentication | `your-password`      | -                          |
+| `PERSONA_DB_PATH`         | Database file path (alternative)   | `/path/to/db.sqlite` | `$WORKSPACE/identities.db` |
 
 ### Output Configuration
 
-| Variable | Description | Example | Default |
-|----------|-------------|---------|---------|
-| `PERSONA_OUTPUT_FORMAT` | Output format | `json`, `yaml`, `csv`, `table` | `table` |
-| `PERSONA_NO_COLOR` | Disable colored output | `1` or `true` | `false` |
-| `PERSONA_LOG_LEVEL` | Logging level | `trace`, `debug`, `info`, `warn`, `error` | `info` |
+| Variable                | Description            | Example                                   | Default |
+| ----------------------- | ---------------------- | ----------------------------------------- | ------- |
+| `PERSONA_OUTPUT_FORMAT` | Output format          | `json`, `yaml`, `csv`, `table`            | `table` |
+| `PERSONA_NO_COLOR`      | Disable colored output | `1` or `true`                             | `false` |
+| `PERSONA_LOG_LEVEL`     | Logging level          | `trace`, `debug`, `info`, `warn`, `error` | `info`  |
 
 ### Security Configuration
 
-| Variable | Description | Example | Default |
-|----------|-------------|---------|---------|
-| `PERSONA_ENCRYPTION_ENABLED` | Enable/disable encryption | `true` or `false` | `true` |
-| `PERSONA_AUTO_LOCK_TIMEOUT` | Auto-lock timeout in seconds | `300` | `300` |
+| Variable                     | Description                  | Example           | Default |
+| ---------------------------- | ---------------------------- | ----------------- | ------- |
+| `PERSONA_ENCRYPTION_ENABLED` | Enable/disable encryption    | `true` or `false` | `true`  |
+| `PERSONA_AUTO_LOCK_TIMEOUT`  | Auto-lock timeout in seconds | `300`             | `300`   |
 
 ## CI/CD Integration
 
@@ -37,7 +37,7 @@ name: Persona Backup
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Daily at midnight
+    - cron: "0 0 * * *" # Daily at midnight
 
 jobs:
   backup:
@@ -248,7 +248,7 @@ ENTRYPOINT ["persona"]
 ### Docker Compose
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   persona-export:
@@ -338,14 +338,14 @@ In non-interactive mode, the CLI will:
 
 ### Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error |
-| 2 | Invalid command or arguments |
-| 3 | Authentication failed |
-| 4 | Workspace not initialized |
-| 5 | Required input missing (in non-interactive mode) |
+| Code | Meaning                                          |
+| ---- | ------------------------------------------------ |
+| 0    | Success                                          |
+| 1    | General error                                    |
+| 2    | Invalid command or arguments                     |
+| 3    | Authentication failed                            |
+| 4    | Workspace not initialized                        |
+| 5    | Required input missing (in non-interactive mode) |
 
 ### JSON Error Format
 
@@ -364,6 +364,7 @@ In non-interactive mode, the CLI will:
 ### Master Password Handling
 
 ⚠️ **Security Warning:** Setting `PERSONA_MASTER_PASSWORD` in environment variables can expose your password in:
+
 - Process listings (`ps aux`)
 - Shell history
 - CI/CD logs
@@ -377,11 +378,13 @@ In non-interactive mode, the CLI will:
    - Jenkins: `credentials('persona-master-password')`
 
 2. **Clear environment variable after use:**
+
    ```bash
    unset PERSONA_MASTER_PASSWORD
    ```
 
 3. **Use temporary files with restricted permissions:**
+
    ```bash
    echo "$MASTER_PASSWORD" > /tmp/pw
    chmod 600 /tmp/pw

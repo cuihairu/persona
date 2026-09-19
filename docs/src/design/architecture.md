@@ -2,13 +2,13 @@
 
 ## 分层设计
 
-| 层 | 子模块 | 说明 |
-| --- | --- | --- |
-| 表现层 | CLI、Desktop、SSH Agent、未来移动端 | 负责交互体验、命令路由、通知等；不直接触达明文数据，只通过核心服务调用 |
-| 核心领域层 | `core::services::{identity, credential, agent, wallet}` | 承载领域模型、验证、策略（如 SSH 签名确认、密码生成规则） |
-| 安全与加密层 | `core::crypto` (Argon2id、AES‑GCM、ed25519) | 统一密钥派生、密文封装、密钥封存策略，确保 server/客户端一致 |
-| 数据与存储层 | `core::storage` (`sqlx` + SQLite) | Workspace v2 schema、迁移、附件存储、审计日志 |
-| 可选服务层 | `server` (Axum) | 审计事件、自动化 API、未来的同步冲突解决 |
+| 层           | 子模块                                                  | 说明                                                                   |
+| ------------ | ------------------------------------------------------- | ---------------------------------------------------------------------- |
+| 表现层       | CLI、Desktop、SSH Agent、未来移动端                     | 负责交互体验、命令路由、通知等；不直接触达明文数据，只通过核心服务调用 |
+| 核心领域层   | `core::services::{identity, credential, agent, wallet}` | 承载领域模型、验证、策略（如 SSH 签名确认、密码生成规则）              |
+| 安全与加密层 | `core::crypto` (Argon2id、AES‑GCM、ed25519)             | 统一密钥派生、密文封装、密钥封存策略，确保 server/客户端一致           |
+| 数据与存储层 | `core::storage` (`sqlx` + SQLite)                       | Workspace v2 schema、迁移、附件存储、审计日志                          |
+| 可选服务层   | `server` (Axum)                                         | 审计事件、自动化 API、未来的同步冲突解决                               |
 
 ## 模块交互
 

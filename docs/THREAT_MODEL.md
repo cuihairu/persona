@@ -20,16 +20,16 @@
 
 ## 资产
 
-| 资产 | 示例 | 主要风险 |
-| --- | --- | --- |
-| 主密码与派生主密钥 | `PERSONA_MASTER_PASSWORD`、内存中的解锁密钥 | 泄露后可解密本地工作区 |
-| 单项凭据密钥 | `wrapped_item_key` 解封后的 item key | 单项明文泄露或横向扩大 |
-| 凭据明文 | 密码、API Key、TOTP secret、SSH 私钥 seed | 数据外泄、未授权填充、未授权签名 |
-| 工作区数据库 | SQLite、迁移、用户认证记录、元数据 | 离线暴力破解、篡改、回滚 |
-| 浏览器桥接会话 | 配对密钥、短期 session、Native Messaging 消息 | 恶意扩展请求填充或复制 |
-| SSH Agent socket/pipe | `SSH_AUTH_SOCK`、Windows Named Pipe | 未授权签名、agent 转发滥用 |
-| 审计日志 | 登录、解锁、凭据解密、SSH 签名摘要 | 篡改、删除、敏感字段误写入 |
-| 备份/导入导出文件 | JSON/YAML/CSV、加密备份 | 备份泄露、格式注入、弱 passphrase |
+| 资产                  | 示例                                          | 主要风险                          |
+| --------------------- | --------------------------------------------- | --------------------------------- |
+| 主密码与派生主密钥    | `PERSONA_MASTER_PASSWORD`、内存中的解锁密钥   | 泄露后可解密本地工作区            |
+| 单项凭据密钥          | `wrapped_item_key` 解封后的 item key          | 单项明文泄露或横向扩大            |
+| 凭据明文              | 密码、API Key、TOTP secret、SSH 私钥 seed     | 数据外泄、未授权填充、未授权签名  |
+| 工作区数据库          | SQLite、迁移、用户认证记录、元数据            | 离线暴力破解、篡改、回滚          |
+| 浏览器桥接会话        | 配对密钥、短期 session、Native Messaging 消息 | 恶意扩展请求填充或复制            |
+| SSH Agent socket/pipe | `SSH_AUTH_SOCK`、Windows Named Pipe           | 未授权签名、agent 转发滥用        |
+| 审计日志              | 登录、解锁、凭据解密、SSH 签名摘要            | 篡改、删除、敏感字段误写入        |
+| 备份/导入导出文件     | JSON/YAML/CSV、加密备份                       | 备份泄露、格式注入、弱 passphrase |
 
 ## 信任边界
 
@@ -43,19 +43,19 @@
 
 ## 主要威胁与控制
 
-| STRIDE | 威胁 | 已有控制 | 仍需关注 |
-| --- | --- | --- | --- |
-| Spoofing | 恶意浏览器扩展伪装成已配对客户端 | 配对码、`client_instance_id`、短期 session、HMAC-SHA256 请求认证 | 配对状态文件权限和撤销 UX 需要持续检查 |
-| Spoofing | SSH 连接目标主机被冒充 | known_hosts 强制模式、未知主机确认、每主机策略 | known_hosts 解析仍需随 OpenSSH 格式演进复测 |
-| Tampering | 本地 SQLite 或配置被离线篡改 | AES-GCM 认证加密保护凭据密文，迁移测试覆盖 schema | 明文元数据和审计日志仍可能被本地攻击者修改 |
-| Tampering | 导入文件或 Native Messaging 消息被构造为恶意输入 | JSON 解析、长度前缀协议、格式解析测试与 fuzz 路径 | 需把新增解析器纳入 fuzz 清单 |
-| Repudiation | 用户否认敏感操作 | 审计记录身份 CRUD、凭据解密、导出、SSH 签名摘要 | 审计日志当前不是防篡改账本 |
-| Repudiation | 客户端向 server 伪造/重放上报审计事件 | server 明确不宣称防抵赖；events API 仅作聚合观测（单 Bearer 令牌门禁、`client_event_id` 幂等去重） | per-client 设备身份与防抵赖（SRP/事件签名）留待同步轨道 |
-| Information Disclosure | 工作区文件被复制并离线攻击 | Argon2id/PBKDF2 派生、AES-256-GCM、单项 item key 包裹 | 主密码强度仍是核心风险；KDF 参数需周期性复审 |
-| Information Disclosure | 浏览器后台页面悄悄读取密码/TOTP | user gesture、origin binding、活动身份过滤、只返回匹配凭据 | 没有 URL 的凭据无法绑定来源，应在 UI/CLI 中提示风险 |
-| Information Disclosure | 日志泄露 secret、token、验证码 | 日志脱敏策略和单元测试覆盖常见 secret/key/value 形式 | 新增日志字段必须先确认不含明文 |
-| Denial of Service | Agent 被频繁请求签名或耗尽资源 | 全局最小间隔、每小时/每日限制、每密钥/每主机策略 | 长期运行 agent 需要实机压力测试 |
-| Elevation of Privilege | 被低信任自动化脚本借用解锁态执行敏感操作 | 自动锁、敏感操作再认证、非交互模式显式环境开关 | 解锁态是高风险窗口，桌面端接线时要避免隐式授权 |
+| STRIDE                 | 威胁                                             | 已有控制                                                                                           | 仍需关注                                                |
+| ---------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Spoofing               | 恶意浏览器扩展伪装成已配对客户端                 | 配对码、`client_instance_id`、短期 session、HMAC-SHA256 请求认证                                   | 配对状态文件权限和撤销 UX 需要持续检查                  |
+| Spoofing               | SSH 连接目标主机被冒充                           | known_hosts 强制模式、未知主机确认、每主机策略                                                     | known_hosts 解析仍需随 OpenSSH 格式演进复测             |
+| Tampering              | 本地 SQLite 或配置被离线篡改                     | AES-GCM 认证加密保护凭据密文，迁移测试覆盖 schema                                                  | 明文元数据和审计日志仍可能被本地攻击者修改              |
+| Tampering              | 导入文件或 Native Messaging 消息被构造为恶意输入 | JSON 解析、长度前缀协议、格式解析测试与 fuzz 路径                                                  | 需把新增解析器纳入 fuzz 清单                            |
+| Repudiation            | 用户否认敏感操作                                 | 审计记录身份 CRUD、凭据解密、导出、SSH 签名摘要                                                    | 审计日志当前不是防篡改账本                              |
+| Repudiation            | 客户端向 server 伪造/重放上报审计事件            | server 明确不宣称防抵赖；events API 仅作聚合观测（单 Bearer 令牌门禁、`client_event_id` 幂等去重） | per-client 设备身份与防抵赖（SRP/事件签名）留待同步轨道 |
+| Information Disclosure | 工作区文件被复制并离线攻击                       | Argon2id/PBKDF2 派生、AES-256-GCM、单项 item key 包裹                                              | 主密码强度仍是核心风险；KDF 参数需周期性复审            |
+| Information Disclosure | 浏览器后台页面悄悄读取密码/TOTP                  | user gesture、origin binding、活动身份过滤、只返回匹配凭据                                         | 没有 URL 的凭据无法绑定来源，应在 UI/CLI 中提示风险     |
+| Information Disclosure | 日志泄露 secret、token、验证码                   | 日志脱敏策略和单元测试覆盖常见 secret/key/value 形式                                               | 新增日志字段必须先确认不含明文                          |
+| Denial of Service      | Agent 被频繁请求签名或耗尽资源                   | 全局最小间隔、每小时/每日限制、每密钥/每主机策略                                                   | 长期运行 agent 需要实机压力测试                         |
+| Elevation of Privilege | 被低信任自动化脚本借用解锁态执行敏感操作         | 自动锁、敏感操作再认证、非交互模式显式环境开关                                                     | 解锁态是高风险窗口，桌面端接线时要避免隐式授权          |
 
 ## 已落地安全控制
 
