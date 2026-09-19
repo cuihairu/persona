@@ -3769,6 +3769,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "persona-core",
+ "sqlx",
  "tempfile",
  "tokio",
 ]

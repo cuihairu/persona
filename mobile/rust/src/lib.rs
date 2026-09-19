@@ -30,11 +30,11 @@ pub extern "C" fn persona_init() -> i32 {
 /// Get version string
 #[no_mangle]
 pub extern "C" fn persona_version() -> *mut c_char {
-    let version = env!("CARGO_PKG_VERSION");
-    match CString::new(version) {
-        Ok(c_string) => c_string.into_raw(),
-        Err(_) => std::ptr::null_mut(),
-    }
+    // CARGO_PKG_VERSION 是编译期字面量、不含内部 NUL——unwrap 的不变量
+    // 编译期成立（版本语义化字符串）
+    CString::new(env!("CARGO_PKG_VERSION"))
+        .expect("CARGO_PKG_VERSION contains no NUL")
+        .into_raw()
 }
 
 /// Free a string allocated by this library
@@ -102,6 +102,22 @@ fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {
         .map_err(|_| "invalid UTF-8 in argument".to_string())
 }
 
+/// AuthResult → 错误消息统一映射（init/unlock 两处共用，文案对齐
+/// desktop `init_service`）。Success 之外全部视为失败；FactorRequired
+/// 在当前认证路径不产生（mobile 无因子流程），与 desktop 一样落入
+/// "Authentication failed" 兜底。
+fn auth_failure_message(result: AuthResult) -> Result<(), String> {
+    match result {
+        AuthResult::Success => Ok(()),
+        AuthResult::InvalidCredentials => Err("Invalid master password".to_string()),
+        AuthResult::AccountLocked => {
+            Err("Account is locked due to too many failed attempts".to_string())
+        }
+        AuthResult::PasswordChangeRequired => Err("Password change required".to_string()),
+        _ => Err("Authentication failed".to_string()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PersonaService 生命周期宿主接线
 // ---------------------------------------------------------------------------
@@ -156,21 +172,11 @@ async fn init_service_inner(db_path: &str, master_password: &str) -> Result<(), 
             .await
             .map_err(|e| format!("Failed to initialize user: {}", e))?;
     } else {
-        match service
+        let auth_result = service
             .authenticate_user(master_password)
             .await
-            .map_err(|e| format!("Authentication error: {}", e))?
-        {
-            AuthResult::Success => {}
-            AuthResult::InvalidCredentials => return Err("Invalid master password".to_string()),
-            AuthResult::AccountLocked => {
-                return Err("Account is locked due to too many failed attempts".to_string())
-            }
-            AuthResult::PasswordChangeRequired => {
-                return Err("Password change required".to_string())
-            }
-            _ => return Err("Authentication failed".to_string()),
-        }
+            .map_err(|e| format!("Authentication error: {}", e))?;
+        auth_failure_message(auth_result)?;
     }
 
     // 先 configure 后 init 的顺序：把 emitter 槽位既有值注入 service
@@ -195,23 +201,13 @@ pub unsafe extern "C" fn persona_service_unlock(master_password: *const c_char) 
         let mut guard = state::service_slot().lock().await;
         match guard.as_mut() {
             Some(service) => {
-                match service
+                let auth_result = service
                     .authenticate_user(&master_password)
                     .await
-                    .map_err(|e| format!("Authentication error: {}", e))
-                {
-                    Ok(AuthResult::Success) => PersonaResult::success(),
-                    Ok(AuthResult::InvalidCredentials) => {
-                        PersonaResult::error("Invalid master password")
-                    }
-                    Ok(AuthResult::AccountLocked) => {
-                        PersonaResult::error("Account is locked due to too many failed attempts")
-                    }
-                    Ok(AuthResult::PasswordChangeRequired) => {
-                        PersonaResult::error("Password change required")
-                    }
-                    Ok(_) => PersonaResult::error("Authentication failed"),
-                    Err(e) => PersonaResult::error(&e),
+                    .map_err(|e| format!("Authentication error: {}", e));
+                match auth_result.and_then(auth_failure_message) {
+                    Ok(()) => PersonaResult::success(),
+                    Err(msg) => PersonaResult::error(&msg),
                 }
             }
             None => PersonaResult::error("Service not initialized"),
@@ -360,20 +356,10 @@ mod tests {
         path.to_string_lossy().to_string()
     }
 
-    /// 断言 result 成功；失败时带出错误消息。
+    /// 断言 result 成功。`PersonaResult::success()` 的 error_message
+    /// 恒为 null，无需提取逻辑（失败路径统一走 assert_err 断言消息）。
     fn assert_ok(result: PersonaResult, context: &str) {
-        assert!(
-            result.success,
-            "{} failed: {:?}",
-            context,
-            (unsafe {
-                if result.error_message.is_null() {
-                    None
-                } else {
-                    Some(CStr::from_ptr(result.error_message).to_str().unwrap())
-                }
-            })
-        );
+        assert!(result.success, "{} failed", context);
         unsafe { persona_free_result(result) };
     }
 
@@ -424,6 +410,12 @@ mod tests {
             assert_eq!(msg, "boom");
             persona_free_result(err);
         }
+
+        // 含内部 NUL 的消息：CString::new 失败 → error_message 退化为
+        // null（调用方只见到失败标志，不泄露半截消息）
+        let nul = PersonaResult::error("interior\0NUL");
+        assert!(!nul.success);
+        assert!(nul.error_message.is_null());
     }
 
     /// 宿主接线全链路：未初始化门禁 → init 建户 → 锁/解锁 →
@@ -604,5 +596,215 @@ mod tests {
             "slot replaced with the new (malformed-url) emitter"
         );
         assert_ok(persona_shutdown(), "cleanup shutdown");
+    }
+
+    /// 外部连接直接改 user_auth 表的 password_change_required 位
+    ///（service 池 idle，无未决事务，写锁可用）。
+    fn set_password_change_required(db_path: &str, value: bool) {
+        runtime::block_on(async {
+            let db = persona_core::storage::Database::from_file(db_path)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE user_auth SET password_change_required = ?")
+                .bind(value)
+                .execute(db.pool())
+                .await
+                .unwrap();
+        });
+    }
+
+    /// 认证错误路径全集：非 UTF-8 参数、PasswordChangeRequired（unlock
+    /// 与 init 双入口）、AccountLocked（5 次失败触发，双入口）、
+    /// authenticate 内部 Err（外部连接删表）。顺序敏感——lockout 持久化
+    /// 300s，锁死后的 DB 不再复用。
+    #[test]
+    fn auth_error_paths_unlock_and_init() {
+        let _guard = test_lock();
+        reset_state();
+
+        // 非 UTF-8 参数 → ptr_to_str 的 UTF-8 分支（unlock 入口）
+        let bad = c"\xff\xfe";
+        assert_eq!(
+            assert_err(unsafe { persona_service_unlock(bad.as_ptr()) }),
+            "invalid UTF-8 in argument"
+        );
+
+        // 建户（解锁态）
+        let db_path = temp_db_path("auth-errors");
+        let db = cstr(&db_path);
+        let pw = cstr("master-pin");
+        assert_ok(
+            unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) },
+            "init",
+        );
+
+        // PasswordChangeRequired：DB 置位后 authenticate_password 在校验
+        // 密码之前短路——unlock 入口
+        set_password_change_required(&db_path, true);
+        assert_eq!(
+            assert_err(unsafe { persona_service_unlock(pw.as_ptr()) }),
+            "Password change required"
+        );
+        // 重复 init 走 authenticate 分支——init 入口同一映射
+        assert_ok(persona_shutdown(), "shutdown");
+        assert_eq!(
+            assert_err(unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) }),
+            "Password change required"
+        );
+        set_password_change_required(&db_path, false);
+
+        // 上一步 init 短路失败不入槽位——重新 init 恢复会话
+        assert_ok(
+            unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) },
+            "re-init after PCR cleared",
+        );
+
+        // AccountLocked：5 次失败触发锁定（unlock 入口）
+        let wrong = cstr("wrong-pin");
+        for attempt in 0..5 {
+            assert_eq!(
+                assert_err(unsafe { persona_service_unlock(wrong.as_ptr()) }),
+                "Invalid master password",
+                "attempt {} should still be plain invalid-credentials",
+                attempt
+            );
+        }
+        assert_eq!(
+            assert_err(unsafe { persona_service_unlock(wrong.as_ptr()) }),
+            "Account is locked due to too many failed attempts"
+        );
+        // 锁定持久化在 user_auth 行——init 入口同样拒绝
+        assert_ok(persona_shutdown(), "shutdown");
+        assert_eq!(
+            assert_err(unsafe { persona_service_init(db.as_ptr(), pw.as_ptr()) }),
+            "Account is locked due to too many failed attempts"
+        );
+        assert_ok(persona_shutdown(), "abandon locked db");
+
+        // authenticate 内部 Err（unlock 的 Err 分支）：外部连接删表，
+        // get_first 查询报错 → "Authentication error: …"
+        let db2_path = temp_db_path("auth-err-drop");
+        let db2 = cstr(&db2_path);
+        assert_ok(
+            unsafe { persona_service_init(db2.as_ptr(), pw.as_ptr()) },
+            "init db2",
+        );
+        exec_external(&db2_path, "DROP TABLE user_auth");
+        let msg = assert_err(unsafe { persona_service_unlock(pw.as_ptr()) });
+        assert!(
+            msg.starts_with("Authentication error: "),
+            "unexpected error: {}",
+            msg
+        );
+        assert_ok(persona_shutdown(), "cleanup db2");
+    }
+
+    /// 外部连接执行破坏性 SQL（PRAGMA foreign_keys 是 per-connection 的：
+    /// 子表引用 user_auth，关外键与语句必须同一连接）。
+    fn exec_external(db_path: &str, sql: &str) {
+        runtime::block_on(async {
+            let db = persona_core::storage::Database::from_file(db_path)
+                .await
+                .unwrap();
+            let mut conn = db.pool().acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            sqlx::query(sql).execute(&mut *conn).await.unwrap();
+        });
+    }
+
+    /// init 的内部错误分支：坏路径（connection）、迁移记录破坏（migration）、
+    /// user_auth 表破坏的三种形态（query users / initialize user /
+    /// authentication error——has_any 只查表存在，get_first/INSERT 逐列）。
+    #[test]
+    fn init_error_paths() {
+        let _guard = test_lock();
+        reset_state();
+        let pw = cstr("master-pin");
+
+        // connection failed：父目录不存在，mode=rwc 也建不出文件
+        let missing_dir = cstr("/nonexistent-persona-test-dir/nope.db");
+        let msg = assert_err(unsafe { persona_service_init(missing_dir.as_ptr(), pw.as_ptr()) });
+        assert!(
+            msg.starts_with("Database connection failed"),
+            "unexpected: {}",
+            msg
+        );
+
+        // migration failed：清空 _sqlx_migrations → 已应用迁移重放撞
+        // 已存在表
+        let mig_path = temp_db_path("mig");
+        let mig = cstr(&mig_path);
+        assert_ok(
+            unsafe { persona_service_init(mig.as_ptr(), pw.as_ptr()) },
+            "seed",
+        );
+        assert_ok(persona_shutdown(), "shutdown");
+        exec_external(&mig_path, "DELETE FROM _sqlx_migrations");
+        let msg = assert_err(unsafe { persona_service_init(mig.as_ptr(), pw.as_ptr()) });
+        assert!(
+            msg.starts_with("Database migration failed"),
+            "unexpected: {}",
+            msg
+        );
+
+        // query users 失败：user_auth 表整体消失 → has_any 报错
+        let no_table_path = temp_db_path("no-table");
+        let no_table = cstr(&no_table_path);
+        assert_ok(
+            unsafe { persona_service_init(no_table.as_ptr(), pw.as_ptr()) },
+            "seed",
+        );
+        assert_ok(persona_shutdown(), "shutdown");
+        exec_external(&no_table_path, "DROP TABLE user_auth");
+        let msg = assert_err(unsafe { persona_service_init(no_table.as_ptr(), pw.as_ptr()) });
+        assert!(
+            msg.starts_with("Failed to query users"),
+            "unexpected: {}",
+            msg
+        );
+
+        // initialize user 失败：表存在但缺列——空表使 has_any=0（走
+        // initialize_user），INSERT 指定列名 → no such column
+        let thin_path = temp_db_path("thin-table");
+        let thin = cstr(&thin_path);
+        assert_ok(
+            unsafe { persona_service_init(thin.as_ptr(), pw.as_ptr()) },
+            "seed",
+        );
+        assert_ok(persona_shutdown(), "shutdown");
+        exec_external(&thin_path, "DROP TABLE user_auth");
+        exec_external(&thin_path, "CREATE TABLE user_auth (id INTEGER)");
+        let msg = assert_err(unsafe { persona_service_init(thin.as_ptr(), pw.as_ptr()) });
+        assert!(
+            msg.starts_with("Failed to initialize user"),
+            "unexpected: {}",
+            msg
+        );
+
+        // authentication error：表有行但缺列——has_any=1（走 authenticate），
+        // get_first 逐列取值 → 缺失列错误
+        let garbled_path = temp_db_path("garbled-table");
+        let garbled = cstr(&garbled_path);
+        assert_ok(
+            unsafe { persona_service_init(garbled.as_ptr(), pw.as_ptr()) },
+            "seed",
+        );
+        assert_ok(persona_shutdown(), "shutdown");
+        exec_external(&garbled_path, "DROP TABLE user_auth");
+        exec_external(&garbled_path, "CREATE TABLE user_auth (user_id TEXT)");
+        exec_external(
+            &garbled_path,
+            "INSERT INTO user_auth (user_id) VALUES ('x')",
+        );
+        let msg = assert_err(unsafe { persona_service_init(garbled.as_ptr(), pw.as_ptr()) });
+        assert!(
+            msg.starts_with("Authentication error: "),
+            "unexpected: {}",
+            msg
+        );
+        assert_ok(persona_shutdown(), "cleanup");
     }
 }
