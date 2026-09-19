@@ -350,7 +350,7 @@ pub(crate) fn render_ui(f: &mut ratatui::Frame, app: &AppState) {
             ]
             .as_ref(),
         )
-        .split(f.size());
+        .split(f.area());
 
     let header = Paragraph::new(vec![
         Line::from(Span::styled(
