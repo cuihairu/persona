@@ -22,7 +22,7 @@ use crate::{
     storage::{
         AttachmentManager, AttachmentRepository, AuditLogRepository, AuditLogStatistics, BlobStore,
         ChangeHistoryRepository, CredentialRepository, Database, FaviconRepository,
-        IdentityRepository, PasskeyRepository, Repository, UserAuthRepository,
+        IdentityRepository, PasskeyRepository, Repository, UserAuthRepository, WorkspaceRepository,
         SECURITY_SENSITIVE_AUDIT_ACTIONS,
     },
     PersonaError, Result,
@@ -31,10 +31,13 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 use tokio::sync::RwLock;
 use uuid::Uuid;
+use zeroize::Zeroize;
+
+use sqlx::Row;
 
 /// 审计日志查询条件。
 ///
@@ -65,6 +68,10 @@ pub struct PersonaService {
     attachment_manager: Option<AttachmentManager>,
     /// favicon 缓存仓储（非 feature 门控：只依赖 sqlx；抓取才要 `favicon`）
     favicon_repo: FaviconRepository,
+    /// workspace 设置仓储（读取密码过期策略等全局配置）
+    workspace_repo: WorkspaceRepository,
+    /// 数据库句柄（改主密码等跨表事务需要直接开事务）
+    db: Database,
     /// AES-GCM service constructed from master key; used to wrap per-item keys
     master_encryption: Option<EncryptionService>,
     biometric_provider: Arc<dyn BiometricProvider>,
@@ -78,6 +85,15 @@ pub struct PersonaService {
     current_session_id: Arc<RwLock<Option<String>>>,
     /// 可选审计事件上报器（`events::Emitter`；`set_event_emitter` 注入）
     event_emitter: Option<Emitter>,
+}
+
+/// RFC3339 serialization for user_auth timestamps written via raw SQL
+/// (mirrors the private helper in `storage::user_auth`).
+fn system_time_to_rfc3339_opt(time: Option<SystemTime>) -> Option<String> {
+    time.map(|t| {
+        let datetime: chrono::DateTime<chrono::Utc> = t.into();
+        datetime.to_rfc3339()
+    })
 }
 
 impl PersonaService {
@@ -98,6 +114,8 @@ impl PersonaService {
             audit_repo,
             change_history_repo: ChangeHistoryRepository::new(db.clone()),
             favicon_repo: FaviconRepository::new(db.clone()),
+            workspace_repo: WorkspaceRepository::new(db.clone()),
+            db,
             attachment_manager: None,
             master_encryption: None,
             biometric_provider: Arc::new(MockBiometricProvider::default()),
@@ -1505,6 +1523,48 @@ impl PersonaService {
         self.user_auth_repo.has_any().await
     }
 
+    /// Opt-in master-password expiry policy（`WorkspaceSettings
+    /// .password_expiry_days`），lazy 求值：解锁时对比
+    /// `password_updated_at`，超期则置位 `password_change_required`，
+    /// 随后 `authenticate_password` 按既有语义返回 `PasswordChangeRequired`。
+    ///
+    /// fail-open：设置读取失败只 warn 跳过，绝不因策略读取出错锁死解锁；
+    /// 时间戳缺失同样跳过（迁移已回填，防御性兜底）。
+    async fn enforce_password_expiry(&self, user_auth: &mut UserAuth) -> Result<()> {
+        let Some(days) = self.load_password_expiry_days().await? else {
+            return Ok(());
+        };
+        let Some(updated_at) = user_auth.password_updated_at else {
+            return Ok(());
+        };
+
+        let age = SystemTime::now()
+            .duration_since(updated_at)
+            .unwrap_or_default();
+        let expiry = Duration::from_secs(u64::from(days) * 86_400);
+        if age >= expiry && !user_auth.password_change_required {
+            user_auth.password_change_required = true;
+            user_auth.updated_at = SystemTime::now();
+            self.user_auth_repo.update(user_auth).await?;
+        }
+        Ok(())
+    }
+
+    /// 读取主密码过期天数；读不到或读取失败一律返回 None（fail-open）。
+    async fn load_password_expiry_days(&self) -> Result<Option<u32>> {
+        match Repository::find_all(&self.workspace_repo).await {
+            Ok(workspaces) => Ok(workspaces
+                .first()
+                .and_then(|ws| ws.settings.password_expiry_days)),
+            Err(e) => {
+                tracing::warn!(
+                    "password expiry policy skipped: workspace settings unreadable: {e}"
+                );
+                Ok(None)
+            }
+        }
+    }
+
     /// Authenticate existing user
     pub async fn authenticate_user(&mut self, master_password: &str) -> Result<AuthResult> {
         // Load first user (single-user MVP)
@@ -1515,6 +1575,9 @@ impl PersonaService {
                 return Ok(AuthResult::InvalidCredentials);
             }
         };
+
+        // Opt-in expiry policy may flag rotation before the password check
+        self.enforce_password_expiry(&mut user_auth).await?;
 
         // Verify password
         let auth_result = self
@@ -1571,6 +1634,209 @@ impl PersonaService {
         }
 
         Ok(auth_result)
+    }
+
+    /// Change the workspace master password (rotation).
+    ///
+    /// Verifies `old_password` directly against the stored argon2 hash —
+    /// deliberately NOT via [`Self::authenticate_user`], whose
+    /// `password_change_required` short-circuit would reject the very
+    /// password the forced-rotation flow just collected.
+    ///
+    /// All key-derivation CPU work (argon2 verify + PBKDF2 old/new master
+    /// keys + argon2 hash of the new password) happens before the
+    /// transaction; the transaction only re-wraps item keys, re-encrypts
+    /// legacy rows and updates `user_auth`, so a crash mid-rotation rolls
+    /// back to the old password entirely.
+    pub async fn change_master_password(
+        &mut self,
+        old_password: &str,
+        new_password: &str,
+    ) -> Result<()> {
+        if new_password.is_empty() {
+            return Err(PersonaError::AuthenticationFailed(
+                "New master password must not be empty".to_string(),
+            )
+            .into());
+        }
+        if old_password == new_password {
+            return Err(PersonaError::AuthenticationFailed(
+                "New master password must differ from the current one".to_string(),
+            )
+            .into());
+        }
+
+        let mut user_auth = self.user_auth_repo.get_first().await?.ok_or_else(|| {
+            PersonaError::AuthenticationFailed(
+                "Workspace not initialized. Run `persona init` first.".to_string(),
+            )
+        })?;
+
+        // Respect lockout: rotation must not become a lockout bypass oracle.
+        if user_auth.is_locked() {
+            return Err(PersonaError::AuthenticationFailed(
+                "Account is locked due to too many failed attempts".to_string(),
+            )
+            .into());
+        }
+
+        // Verify the old password (argon2), bypassing the change-required
+        // short-circuit on purpose.
+        if !user_auth.verify_master_password(old_password)? {
+            user_auth.add_failed_attempt();
+            self.user_auth_repo.update(&user_auth).await?;
+            return Err(PersonaError::AuthenticationFailed(
+                "Invalid current master password".to_string(),
+            )
+            .into());
+        }
+
+        // Salt is stable across password changes by design.
+        let salt = user_auth.get_master_key_salt()?;
+        let old_enc = self
+            .master_key_service
+            .create_encryption_service(old_password, &salt);
+        let new_enc = self
+            .master_key_service
+            .create_encryption_service(new_password, &salt);
+        // Re-hashes, stamps password_updated_at, clears password_change_required.
+        user_auth.set_master_password(new_password)?;
+        user_auth.failed_attempts = 0;
+
+        self.rewrap_all_item_keys(&old_enc, &new_enc, &user_auth)
+            .await?;
+
+        // Swap the in-memory master key only on the unlocked "change from
+        // settings" path; on the locked/unlock-screen path master_encryption
+        // is None and the host re-runs `authenticate_user` with the new
+        // password, which unlocks + audits login properly.
+        if self.master_encryption.is_some() {
+            self.master_encryption = Some(new_enc);
+        }
+
+        self.log_audit(
+            AuditAction::PasswordChange,
+            ResourceType::User,
+            true,
+            None,
+            None,
+            None,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// Re-wrap every stored item key (and re-encrypt legacy rows) under the
+    /// new master key inside ONE transaction — any failure rolls the whole
+    /// rotation back to the old password.
+    ///
+    /// Scope: `credentials` (wrapped + legacy rows) and `passkeys` (always
+    /// wrapped). Crypto wallets use a dedicated wallet password; attachments
+    /// use caller-supplied keys; change history stores plaintext JSON — none
+    /// are sealed under the master key.
+    async fn rewrap_all_item_keys(
+        &self,
+        old_enc: &EncryptionService,
+        new_enc: &EncryptionService,
+        user_auth: &UserAuth,
+    ) -> Result<()> {
+        let mut tx = self.db.pool().begin().await?;
+
+        let rows = sqlx::query("SELECT id, encrypted_data, wrapped_item_key FROM credentials")
+            .fetch_all(tx.as_mut())
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        for row in rows {
+            let id: String = row.get("id");
+            let encrypted_data: Vec<u8> = row.get("encrypted_data");
+            let wrapped: Option<Vec<u8>> = row.get("wrapped_item_key");
+            match wrapped {
+                Some(wrapped_key) => {
+                    // Item key unchanged, ciphertext untouched — only the
+                    // wrapping under the master key is replaced.
+                    let rewrapped =
+                        KeyHierarchy::rewrap_wrapped_key(&wrapped_key, old_enc, new_enc)?;
+                    sqlx::query("UPDATE credentials SET wrapped_item_key = ? WHERE id = ?")
+                        .bind(&rewrapped)
+                        .bind(&id)
+                        .execute(tx.as_mut())
+                        .await
+                        .map_err(|e| PersonaError::Database(e.to_string()))?;
+                }
+                None => {
+                    // Legacy row: encrypted_data is sealed directly under the
+                    // master key and must be re-encrypted.
+                    let mut plaintext = old_enc.decrypt(&encrypted_data).map_err(|e| {
+                        PersonaError::CryptographicError(format!(
+                            "Failed to decrypt legacy credential during rotation: {e}"
+                        ))
+                    })?;
+                    let reencrypted = new_enc.encrypt(&plaintext).map_err(|e| {
+                        PersonaError::CryptographicError(format!(
+                            "Failed to re-encrypt legacy credential during rotation: {e}"
+                        ))
+                    })?;
+                    plaintext.zeroize();
+                    sqlx::query("UPDATE credentials SET encrypted_data = ? WHERE id = ?")
+                        .bind(&reencrypted)
+                        .bind(&id)
+                        .execute(tx.as_mut())
+                        .await
+                        .map_err(|e| PersonaError::Database(e.to_string()))?;
+                }
+            }
+        }
+
+        let rows = sqlx::query("SELECT id, wrapped_item_key FROM passkeys")
+            .fetch_all(tx.as_mut())
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        for row in rows {
+            let id: String = row.get("id");
+            let wrapped_key: Vec<u8> = row.get("wrapped_item_key");
+            let rewrapped = KeyHierarchy::rewrap_wrapped_key(&wrapped_key, old_enc, new_enc)?;
+            sqlx::query("UPDATE passkeys SET wrapped_item_key = ? WHERE id = ?")
+                .bind(&rewrapped)
+                .bind(&id)
+                .execute(tx.as_mut())
+                .await
+                .map_err(|e| PersonaError::Database(e.to_string()))?;
+        }
+
+        // Persist the rotated auth record inside the same transaction.
+        let enabled_factors = serde_json::to_string(&user_auth.enabled_factors)
+            .map_err(|e| PersonaError::Database(format!("Failed to serialize factors: {e}")))?;
+        sqlx::query(
+            r#"
+            UPDATE user_auth SET
+                master_password_hash = ?,
+                enabled_factors = ?,
+                failed_attempts = ?,
+                locked_until = ?,
+                last_auth = ?,
+                password_change_required = ?,
+                password_updated_at = ?,
+                updated_at = ?
+            WHERE user_id = ?
+            "#,
+        )
+        .bind(&user_auth.master_password_hash)
+        .bind(&enabled_factors)
+        .bind(user_auth.failed_attempts as i64)
+        .bind(system_time_to_rfc3339_opt(user_auth.locked_until))
+        .bind(system_time_to_rfc3339_opt(user_auth.last_auth))
+        .bind(user_auth.password_change_required)
+        .bind(system_time_to_rfc3339_opt(user_auth.password_updated_at))
+        .bind(system_time_to_rfc3339_opt(Some(user_auth.updated_at)))
+        .bind(user_auth.user_id.to_string())
+        .execute(tx.as_mut())
+        .await
+        .map_err(|e| PersonaError::Database(e.to_string()))?;
+
+        tx.commit().await.map_err(|e| {
+            PersonaError::Database(format!("Failed to commit master password rotation: {e}"))
+        })?;
+        Ok(())
     }
 
     // ===== Attachment Management =====
@@ -3561,6 +3827,374 @@ mod tests {
     }
 
     // ---- favicon（feature = "favicon"）：编排与缓存语义 ----
+
+    // ------------------------------------------------------------------
+    // Password expiry policy + master password rotation
+    // ------------------------------------------------------------------
+
+    use crate::models::Workspace;
+    use crate::storage::UserAuthRepository;
+
+    /// Seed (or update) the workspace row's password expiry policy.
+    async fn set_password_expiry(db: &Database, days: Option<u32>) {
+        let repo = crate::storage::WorkspaceRepository::new(db.clone());
+        let created;
+        let mut ws = match Repository::find_all(&repo)
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+        {
+            Some(ws) => {
+                created = false;
+                ws
+            }
+            None => {
+                created = true;
+                Workspace::new("/tmp/persona-test", "test".to_string())
+            }
+        };
+        ws.settings.password_expiry_days = days;
+        ws.touch();
+        if created {
+            Repository::create(&repo, &ws).await.unwrap();
+        } else {
+            Repository::update(&repo, &ws).await.unwrap();
+        }
+    }
+
+    /// Backdate `password_updated_at` so the password looks N days old.
+    async fn backdate_password_updated_at(db: &Database, days_ago: u64) {
+        let old = (chrono::Utc::now() - chrono::Duration::days(days_ago as i64)).to_rfc3339();
+        sqlx::query("UPDATE user_auth SET password_updated_at = ?")
+            .bind(old)
+            .execute(db.pool())
+            .await
+            .unwrap();
+    }
+
+    /// Seal `data` directly under the master key (legacy row shape) and
+    /// clear the wrapped key, converting the row to the legacy layout.
+    async fn convert_credential_to_legacy(
+        db: &Database,
+        service: &PersonaService,
+        credential_id: &Uuid,
+    ) {
+        let data = service
+            .get_credential_data(credential_id)
+            .await
+            .unwrap()
+            .expect("seeded credential exists");
+        let master = service.get_master_encryption_service().unwrap();
+        let ciphertext = master.encrypt(&data.to_bytes().unwrap()).unwrap();
+        sqlx::query(
+            "UPDATE credentials SET encrypted_data = ?, wrapped_item_key = NULL WHERE id = ?",
+        )
+        .bind(&ciphertext)
+        .bind(credential_id.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+    }
+
+    /// Opt-in policy flags rotation at unlock; flag persists for the UI.
+    #[tokio::test]
+    async fn password_expiry_policy_flags_rotation_on_unlock() {
+        let (db, mut service) = unlocked_service().await;
+        set_password_expiry(&db, Some(90)).await;
+        backdate_password_updated_at(&db, 91).await;
+
+        let result = service.authenticate_user("master-pin").await.unwrap();
+        assert_eq!(result, AuthResult::PasswordChangeRequired);
+
+        let ua = UserAuthRepository::new(db.clone())
+            .get_first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(ua.password_change_required);
+    }
+
+    /// Fresh password inside the window still unlocks; no policy unlocks too.
+    #[tokio::test]
+    async fn password_expiry_policy_untouched_when_inside_window_or_absent() {
+        let (db, mut service) = unlocked_service().await;
+        set_password_expiry(&db, Some(90)).await;
+        // password_updated_at == now (initialize_user stamped it)
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+
+        // No policy at all (regression: default None never flags).
+        let (db2, mut service2) = unlocked_service().await;
+        assert_eq!(
+            service2.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+        let ua = UserAuthRepository::new(db2.clone())
+            .get_first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!ua.password_change_required);
+    }
+
+    /// Fail-open: unreadable workspace settings must never block unlock.
+    #[tokio::test]
+    async fn password_expiry_policy_fails_open_on_settings_error() {
+        let (db, mut service) = unlocked_service().await;
+        set_password_expiry(&db, Some(90)).await;
+        backdate_password_updated_at(&db, 91).await;
+        sqlx::query("DROP TABLE workspaces")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+    }
+
+    /// Full rotation: flags wrapped + legacy + passkey rows, swaps the hash,
+    /// keeps the salt, keeps data readable, writes the audit entry.
+    #[tokio::test]
+    async fn change_master_password_rotates_wrapped_legacy_and_passkey_rows() {
+        let (db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("main".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let wrapped_cred =
+            seed_credential(&service, identity.id, "wrapped", CredentialType::Password).await;
+        let legacy_cred =
+            seed_credential(&service, identity.id, "legacy", CredentialType::Password).await;
+        convert_credential_to_legacy(&db, &service, &legacy_cred.id).await;
+
+        // A passkey row sealed under the current master key.
+        let master = service.get_master_encryption_service().unwrap();
+        let hierarchy = KeyHierarchy::new(master);
+        let envelope = hierarchy.encrypt_with_new_item_key(&[7u8; 32]).unwrap();
+        sqlx::query(
+            "INSERT INTO passkeys (id, identity_id, rp_id, user_handle, credential_id, \
+             encrypted_private_key, wrapped_item_key, public_key_cose, created_at) \
+             VALUES (?, ?, 'example.com', x'0102', x'0304', ?, ?, x'0506', ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(identity.id.to_string())
+        .bind(&envelope.ciphertext)
+        .bind(&envelope.wrapped_key)
+        .bind(chrono::Utc::now().timestamp())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let salt_before = UserAuthRepository::new(db.clone())
+            .get_first()
+            .await
+            .unwrap()
+            .unwrap()
+            .master_key_salt
+            .clone();
+
+        // Forced-rotation flow: policy flags → rotate from locked state →
+        // old password rejected, new one unlocks, all rows readable.
+        set_password_expiry(&db, Some(90)).await;
+        backdate_password_updated_at(&db, 91).await;
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::PasswordChangeRequired
+        );
+        service
+            .change_master_password("master-pin", "new-master-pin")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::InvalidCredentials
+        );
+        assert_eq!(
+            service.authenticate_user("new-master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+
+        // Wrapped + legacy credentials both decrypt under the new master.
+        match service
+            .get_credential_data(&wrapped_cred.id)
+            .await
+            .unwrap()
+            .expect("row exists")
+        {
+            CredentialData::Password(p) => assert_eq!(p.password, "pw"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+        match service
+            .get_credential_data(&legacy_cred.id)
+            .await
+            .unwrap()
+            .expect("row exists")
+        {
+            CredentialData::Password(p) => assert_eq!(p.password, "pw"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+
+        // Passkey item key unwraps under the new master with unchanged payload.
+        let (stored_wrapped, stored_ct): (Vec<u8>, Vec<u8>) =
+            sqlx::query_as("SELECT wrapped_item_key, encrypted_private_key FROM passkeys")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let hierarchy = KeyHierarchy::new(service.get_master_encryption_service().unwrap());
+        assert_eq!(
+            hierarchy
+                .decrypt_with_wrapped_key(&stored_wrapped, &stored_ct)
+                .unwrap(),
+            vec![7u8; 32]
+        );
+
+        // Salt stable, flag cleared, timestamp advanced, audit written.
+        let ua = UserAuthRepository::new(db.clone())
+            .get_first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ua.master_key_salt, salt_before);
+        assert!(!ua.password_change_required);
+        assert!(ua.password_updated_at.is_some());
+        let audit_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM audit_logs WHERE action = 'password_change'")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(audit_count, 1);
+    }
+
+    /// Wrong old password: error, attempt recorded, zero bytes touched.
+    #[tokio::test]
+    async fn change_master_password_rejects_wrong_old_password() {
+        let (db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("main".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "c", CredentialType::Password).await;
+        let before: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT wrapped_item_key FROM credentials WHERE id = ?")
+                .bind(cred.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let hash_before: String = sqlx::query_scalar("SELECT master_password_hash FROM user_auth")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+
+        let err = service
+            .change_master_password("wrong-pin", "new-master-pin")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid current master password"));
+
+        let after: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT wrapped_item_key FROM credentials WHERE id = ?")
+                .bind(cred.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let hash_after: String = sqlx::query_scalar("SELECT master_password_hash FROM user_auth")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(hash_before, hash_after);
+        let ua = UserAuthRepository::new(db.clone())
+            .get_first()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(ua.failed_attempts, 1);
+        assert!(!ua.password_change_required);
+        let _ = cred;
+    }
+
+    /// A row that fails to unwrap under the old key aborts the whole
+    /// rotation; the transaction rolls back leaving every byte untouched.
+    #[tokio::test]
+    async fn change_master_password_rolls_back_on_rewrap_failure() {
+        let (db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("main".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let _cred = seed_credential(&service, identity.id, "c", CredentialType::Password).await;
+
+        // Passkey whose wrapped key cannot be unwrapped under the old master.
+        let master = service.get_master_encryption_service().unwrap();
+        let envelope = KeyHierarchy::new(master)
+            .encrypt_with_new_item_key(&[7u8; 32])
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO passkeys (id, identity_id, rp_id, user_handle, credential_id, \
+             encrypted_private_key, wrapped_item_key, public_key_cose, created_at) \
+             VALUES (?, ?, 'example.com', x'0102', x'0304', ?, ?, x'0506', ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(identity.id.to_string())
+        .bind(&envelope.ciphertext)
+        .bind(vec![0xABu8; 40])
+        .bind(chrono::Utc::now().timestamp())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let before: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT wrapped_item_key FROM credentials WHERE id = ?")
+                .bind(_cred.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let hash_before: String = sqlx::query_scalar("SELECT master_password_hash FROM user_auth")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+
+        let err = service
+            .change_master_password("master-pin", "new-master-pin")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to unwrap item key"));
+
+        let after: Option<Vec<u8>> =
+            sqlx::query_scalar("SELECT wrapped_item_key FROM credentials WHERE id = ?")
+                .bind(_cred.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let hash_after: String = sqlx::query_scalar("SELECT master_password_hash FROM user_auth")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(before, after, "rollback must restore every byte");
+        assert_eq!(hash_before, hash_after, "rollback must keep the old hash");
+    }
+
+    /// Validation: empty and unchanged new passwords are rejected up front.
+    #[tokio::test]
+    async fn change_master_password_validates_new_password() {
+        let (_db, mut service) = unlocked_service().await;
+        let err = service
+            .change_master_password("master-pin", "")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+        let err = service
+            .change_master_password("master-pin", "master-pin")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("must differ"));
+    }
 
     #[cfg(all(test, feature = "favicon"))]
     mod favicon_tests {

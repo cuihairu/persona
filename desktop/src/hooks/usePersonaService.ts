@@ -13,6 +13,7 @@ export const usePersonaService = () => {
     credentials,
     isLoading,
     error,
+    passwordChangeRequired,
     sshAgentStatus,
     sshKeys,
     setUnlocked,
@@ -29,6 +30,7 @@ export const usePersonaService = () => {
     clearFaviconCache,
     clearPendingCredentialSelection,
     setSelectedCredentialId,
+    setPasswordChangeRequired,
   } = useAppStore();
 
   // Check if service is unlocked on mount
@@ -65,9 +67,16 @@ export const usePersonaService = () => {
       if (response.success) {
         setUnlocked(true);
         setInitialized(true);
+        // 解锁成功即清除遗留的强制改密标志（新会话无需再轮换）
+        setPasswordChangeRequired(false);
         await loadIdentities();
         toast.success('Service initialized successfully');
         return true;
+      } else if (response.error_code === 'PASSWORD_CHANGE_REQUIRED') {
+        // 主密码按策略需要轮换：解锁屏渲染强制改密弹窗，
+        // 不走通用错误框/toast（密码本身没错）
+        setPasswordChangeRequired(true);
+        return false;
       } else {
         setError(response.error || 'Failed to initialize service');
         toast.error(response.error || 'Failed to initialize service');
@@ -88,6 +97,8 @@ export const usePersonaService = () => {
       const response = await personaAPI.lockService();
       if (response.success) {
         setUnlocked(false);
+        // 锁屏清强制改密标志（下次解锁由后端策略重新判定）
+        setPasswordChangeRequired(false);
         setIdentities([]);
         setCurrentIdentity(null);
         setCredentials([]);
@@ -451,6 +462,7 @@ export const usePersonaService = () => {
     credentials,
     isLoading,
     error,
+    passwordChangeRequired,
     sshAgentStatus,
     sshKeys,
 

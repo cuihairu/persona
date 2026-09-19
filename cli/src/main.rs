@@ -95,6 +95,9 @@ enum Commands {
 
     /// Vault health scan (weak / reused / expired / stale credentials)
     Watchtower(commands::watchtower::WatchtowerArgs),
+
+    /// Rotate the workspace master password
+    Passwd(commands::passwd::PasswdArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -157,6 +160,7 @@ async fn main() -> Result<()> {
         Commands::Wallet(args) => commands::wallet::handle_wallet(args, &config).await,
         Commands::Passkey(args) => commands::passkey::handle_passkey(args, &config).await,
         Commands::Watchtower(args) => commands::watchtower::execute(args, &config).await,
+        Commands::Passwd(args) => commands::passwd::execute(args, &config).await,
     };
     // 尽力 flush 队列剩余审计事件（未启用时为无操作）
     commands::service::shutdown_event_emitter().await;

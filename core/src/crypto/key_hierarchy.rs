@@ -46,6 +46,17 @@ impl<'a> KeyHierarchy<'a> {
         wrapped_key: &[u8],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
+        let item_key = self.unwrap_item_key(wrapped_key)?;
+        let item_cipher = EncryptionService::new(&item_key);
+
+        item_cipher.decrypt(ciphertext).map_err(|e| {
+            PersonaError::CryptographicError(format!("Failed to decrypt payload: {}", e)).into()
+        })
+    }
+
+    /// Unwrap a per-item key without touching its payload (master-password
+    /// rotation: re-wrap the same item key under the new master key).
+    fn unwrap_item_key(&self, wrapped_key: &[u8]) -> Result<[u8; 32]> {
         let item_key_bytes = self.master_encryption.decrypt(wrapped_key).map_err(|e| {
             PersonaError::CryptographicError(format!("Failed to unwrap item key: {}", e))
         })?;
@@ -59,12 +70,31 @@ impl<'a> KeyHierarchy<'a> {
 
         let mut item_key = [0u8; 32];
         item_key.copy_from_slice(&item_key_bytes);
-        let item_cipher = EncryptionService::new(&item_key);
-        item_key.zeroize();
+        Ok(item_key)
+    }
 
-        item_cipher.decrypt(ciphertext).map_err(|e| {
-            PersonaError::CryptographicError(format!("Failed to decrypt payload: {}", e)).into()
-        })
+    /// Re-wrap a per-item key under a new master key. The item key itself is
+    /// unchanged, so the payload ciphertext needs no re-encryption. Used by
+    /// master-password rotation (`PersonaService::change_master_password`).
+    pub fn rewrap_wrapped_key(
+        wrapped_key: &[u8],
+        old_master: &EncryptionService,
+        new_master: &EncryptionService,
+    ) -> Result<Vec<u8>> {
+        let old_hierarchy = KeyHierarchy::new(old_master);
+        let item_key = old_hierarchy.unwrap_item_key(wrapped_key)?;
+
+        let new_hierarchy = KeyHierarchy::new(new_master);
+        let rewrapped = new_hierarchy
+            .master_encryption
+            .encrypt(&item_key)
+            .map_err(|e| {
+                PersonaError::CryptographicError(format!("Failed to wrap item key: {}", e))
+            })?;
+
+        let mut item_key = item_key;
+        item_key.zeroize();
+        Ok(rewrapped)
     }
 }
 

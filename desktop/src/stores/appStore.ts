@@ -45,6 +45,8 @@ interface AppState {
   // UI state
   isLoading: boolean;
   error: string | null;
+  /** init 返回 PASSWORD_CHANGE_REQUIRED 时置位：解锁屏渲染强制改密弹窗 */
+  passwordChangeRequired: boolean;
   /** 主题偏好（'system' 跟随系统；<html>.dark 的唯一应用点是 useTheme） */
   theme: ThemePreference;
   /** 侧栏分类树选中项（单选；Sidebar 写、CredentialList 读，换身份时 reset） */
@@ -82,6 +84,7 @@ interface AppState {
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   clearError: () => void;
+  setPasswordChangeRequired: (required: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -96,6 +99,7 @@ export const useAppStore = create<AppState>((set) => ({
   featureFlags: { ...DEFAULT_FEATURE_FLAGS },
   isLoading: false,
   error: null,
+  passwordChangeRequired: false,
   theme: readStoredTheme(),
   sidebarFilter: DEFAULT_SIDEBAR_FILTER,
   pendingCredentialSelection: null,
@@ -143,4 +147,5 @@ export const useAppStore = create<AppState>((set) => ({
   setLoading: (loading) => set({ isLoading: loading }),
   setError: (error) => set({ error }),
   clearError: () => set({ error: null }),
+  setPasswordChangeRequired: (required) => set({ passwordChangeRequired: required }),
 }));

@@ -146,6 +146,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::clear_active_identity,
             commands::get_workspace_settings,
             commands::set_feature_flags,
+            commands::set_password_expiry,
+            commands::change_master_password,
             commands::set_sync_config,
             commands::sync_token_present,
             commands::update_identity,

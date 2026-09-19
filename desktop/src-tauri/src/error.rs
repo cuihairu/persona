@@ -6,6 +6,8 @@ use persona_core::PersonaError;
 pub const CODE_REAUTH_REQUIRED: &str = "REAUTH_REQUIRED";
 /// 错误码：服务已锁定（前端应回到解锁屏）
 pub const CODE_SERVICE_LOCKED: &str = "SERVICE_LOCKED";
+/// 错误码：主密码按策略需要轮换（前端应引导改密流程）
+pub const CODE_PASSWORD_CHANGE_REQUIRED: &str = "PASSWORD_CHANGE_REQUIRED";
 
 /// 将任意 service 错误映射为 `(error_code, message)`。
 ///

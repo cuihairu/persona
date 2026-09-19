@@ -89,6 +89,12 @@ pub struct WorkspaceSettings {
     /// 可选同步服务器配置（旧 JSON 缺键时为 None）
     #[serde(default)]
     pub sync: Option<SyncConfig>,
+
+    /// 主密码有效期（天）；None = 不过期（默认，NIST 取向：仅在用户
+    /// 显式选择后强制轮换）。Some(days) 且超期时，解锁返回
+    /// `AuthResult::PasswordChangeRequired` 引导改密（旧 JSON 缺键时为 None）
+    #[serde(default)]
+    pub password_expiry_days: Option<u32>,
 }
 
 impl Default for WorkspaceSettings {
@@ -102,6 +108,7 @@ impl Default for WorkspaceSettings {
             default_identity_type: "personal".to_string(),
             features: FeatureFlags::default(),
             sync: None,
+            password_expiry_days: None,
         }
     }
 }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 
 interface UnlockScreenProps {
   onUnlock: () => void;
@@ -11,21 +12,47 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [dbPath, setDbPath] = useState('');
   const [useCustomPath, setUseCustomPath] = useState(false);
+  // 强制改密弹窗需要旧密码预填（提交过的那次输入）；轮换提交后收起弹窗
+  const [submittedPassword, setSubmittedPassword] = useState('');
+  const [rotationSubmitted, setRotationSubmitted] = useState(false);
 
-  const { initializeService, isLoading, error } = usePersonaService();
+  const { initializeService, isLoading, error, passwordChangeRequired } = usePersonaService();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!masterPassword.trim()) return;
 
-    const ok = await initializeService(masterPassword, useCustomPath ? dbPath : undefined);
+    const password = masterPassword;
+    setSubmittedPassword(password);
+    const ok = await initializeService(password, useCustomPath ? dbPath : undefined);
     if (ok) {
       onUnlock();
     }
   };
 
+  // 轮换完成：用新密码重新 init 建会话（成功后 App 切走，本屏卸载）
+  const handleRotationDone = async (newPassword: string) => {
+    setRotationSubmitted(true);
+    const ok = await initializeService(newPassword, useCustomPath ? dbPath : undefined);
+    if (ok) {
+      onUnlock();
+    }
+  };
+
+  const effectiveDbPath = useCustomPath ? dbPath : undefined;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-primary-50 to-secondary-50 dark:from-primary-900/40 dark:to-secondary-900 flex items-center justify-center p-4">
+      {passwordChangeRequired && !rotationSubmitted && (
+        <ChangeMasterPasswordModal
+          isOpen
+          forced
+          initialOldPassword={submittedPassword}
+          dbPath={effectiveDbPath}
+          onDone={handleRotationDone}
+          onCancel={() => {}}
+        />
+      )}
       <div className="max-w-md w-full">
         {/* Logo/Header */}
         <div className="text-center mb-8">

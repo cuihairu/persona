@@ -116,6 +116,15 @@ pub struct InitRequest {
     pub db_path: Option<String>,
 }
 
+/// Change-master-password request（改密命令参数；旧密码仅存在于本请求，
+/// 不落盘不进日志）
+#[derive(Debug, Deserialize)]
+pub struct ChangeMasterPasswordRequest {
+    pub old_password: String,
+    pub new_password: String,
+    pub db_path: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct StartAgentRequest {
     pub master_password: Option<String>,

@@ -5,6 +5,7 @@ import { personaAPI } from '@/utils/api';
 import { useAppStore } from '@/stores/appStore';
 import type { FeatureFlags, Identity, IdentityType, ThemePreference } from '@/types';
 import { PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
+import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -196,6 +197,125 @@ const SyncServerPane: React.FC = () => {
   );
 };
 
+/** General 面板的密码安全区块：过期策略（NIST 取向默认不过期）+ 手动改密。 */
+const SECURITY_EXPIRY_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Never' },
+  { value: '90', label: '90 days' },
+  { value: '180', label: '180 days' },
+  { value: '365', label: '365 days' },
+];
+
+const SecurityPane: React.FC = () => {
+  const { lockService } = usePersonaService();
+  const [expiryDays, setExpiryDays] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+
+  // 初始值来自服务端真相（旧 JSON 缺键 → null = 不过期）
+  useEffect(() => {
+    let cancelled = false;
+    personaAPI
+      .getWorkspaceSettings()
+      .then((resp) => {
+        if (cancelled || !resp.success || !resp.data) return;
+        setExpiryDays(resp.data.password_expiry_days ?? null);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const changeExpiry = async (raw: string) => {
+    const days = raw === '' ? null : Number(raw);
+    setSaving(true);
+    try {
+      const resp = await personaAPI.setPasswordExpiry(days);
+      if (resp.success && resp.data) {
+        setExpiryDays(resp.data.password_expiry_days ?? null);
+        toast.success('Password policy saved');
+      } else {
+        toast.error(resp.error || 'Failed to save password policy');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save password policy');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // 已解锁态改密成功后回锁屏：state.service 里的旧会话密钥已作废，
+  // 锁屏重新解锁以新密码建会话（最简安全语义）
+  const handleRotationDone = async () => {
+    setChangingPassword(false);
+    toast.success('Master password changed — please sign in again');
+    await lockService();
+  };
+
+  return (
+    <div>
+      <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
+        Master password
+      </h3>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+        Require periodic rotation. When a password expires, the next unlock asks for a new one.
+      </p>
+      <div className="border border-gray-200 rounded-lg p-4 space-y-4 dark:border-gray-700">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Expires after</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Off by default — rotation is opt-in per your security needs
+            </p>
+          </div>
+          <select
+            data-testid="password-expiry-select"
+            aria-label="Password expiry"
+            value={expiryDays === null ? '' : String(expiryDays)}
+            onChange={(e) => changeExpiry(e.target.value)}
+            disabled={saving}
+            className="input max-w-[10rem]"
+          >
+            {SECURITY_EXPIRY_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              Change password
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Re-encrypts every entry under the new password
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="change-password-button"
+            onClick={() => setChangingPassword(true)}
+            className="btn-secondary flex-shrink-0"
+          >
+            Change…
+          </button>
+        </div>
+      </div>
+
+      {changingPassword && (
+        <ChangeMasterPasswordModal
+          isOpen
+          onDone={() => {
+            void handleRotationDone();
+          }}
+          onCancel={() => setChangingPassword(false)}
+        />
+      )}
+    </div>
+  );
+};
+
 const GeneralPane: React.FC = () => {
   const featureFlags = useAppStore((s) => s.featureFlags);
   const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
@@ -253,6 +373,10 @@ const GeneralPane: React.FC = () => {
 
       <section className="mb-5">
         <SyncServerPane />
+      </section>
+
+      <section className="mb-5">
+        <SecurityPane />
       </section>
 
       <section>

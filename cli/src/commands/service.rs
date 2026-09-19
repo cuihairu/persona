@@ -183,6 +183,9 @@ pub(crate) async fn init_service(config: &CliConfig, ui: &dyn PromptUi) -> Resul
         .context("Failed to authenticate user")?
     {
         persona_core::auth::authentication::AuthResult::Success => Ok(service),
+        persona_core::auth::authentication::AuthResult::PasswordChangeRequired => bail!(
+            "Master password change required by your security policy. Run `persona passwd` to rotate it."
+        ),
         other => bail!("Authentication failed: {:?}", other),
     }
 }

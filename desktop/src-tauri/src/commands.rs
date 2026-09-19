@@ -183,7 +183,11 @@ pub async fn init_service<R: tauri::Runtime>(
                                     "Account is locked due to too many failed attempts".to_string(),
                                 )),
                                 persona_core::AuthResult::PasswordChangeRequired => {
-                                    Ok(ApiResponse::error("Password change required".to_string()))
+                                    // 机器可读错误码：前端凭此引导强制改密流程
+                                    Ok(ApiResponse::error_with_code(
+                                        crate::error::CODE_PASSWORD_CHANGE_REQUIRED.to_string(),
+                                        "Master password change required".to_string(),
+                                    ))
                                 }
                                 _ => Ok(ApiResponse::error("Authentication failed".to_string())),
                             },
@@ -376,6 +380,52 @@ pub async fn get_workspace_settings(
     Ok(ApiResponse::success(ws.settings))
 }
 
+/// Change the workspace master password（解锁屏强引导与 Settings 手动改密
+/// 共用；不触碰 `state.service`——前端随后用新密码重新 init 建会话）
+#[command]
+pub async fn change_master_password(
+    request: crate::types::ChangeMasterPasswordRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let db_path = match request.db_path {
+        Some(p) => p,
+        None => {
+            let guard = state.db_path.lock().await;
+            guard.clone().ok_or_else(|| {
+                "Database path unavailable. Initialize the service first.".to_string()
+            })?
+        }
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let mut service = PersonaService::new(db)
+        .await
+        .map_err(|e| format!("Failed to create service: {}", e))?;
+    if !service.has_users().await.map_err(|e| e.to_string())? {
+        return Ok(ApiResponse::error("Workspace not initialized".to_string()));
+    }
+
+    match service
+        .change_master_password(&request.old_password, &request.new_password)
+        .await
+    {
+        Ok(()) => Ok(ApiResponse::success(true)),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            match code {
+                Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                None => Ok(ApiResponse::error(msg)),
+            }
+        }
+    }
+}
+
 /// 窄写高级功能开关：只动 `settings.features` 四个位，返回更新后的全量
 /// settings 作为服务端真相（避免前端 clobber 其它设置字段）。
 #[command]
@@ -420,6 +470,53 @@ pub async fn set_feature_flags(
         passkeys,
         fetch_favicons,
     };
+    ws.touch();
+    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    Ok(ApiResponse::success(updated.settings))
+}
+
+/// 窄写主密码过期策略（天）；None = 不过期。`Some(0)` 无意义，拒绝。
+/// 与 `set_feature_flags` 同范式：解锁门禁 + 窄写单字段 + 返回全量 settings。
+#[command]
+pub async fn set_password_expiry(
+    days: Option<u32>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    if let Some(0) = days {
+        return Ok(ApiResponse::error(
+            "Password expiry must be at least 1 day".to_string(),
+        ));
+    }
+
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    ws.settings.password_expiry_days = days;
     ws.touch();
     let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
     Ok(ApiResponse::success(updated.settings))
@@ -3210,6 +3307,15 @@ pub async fn reauth_verify(
                 service.touch_activity();
                 Ok(ApiResponse::success(true))
             }
+            Ok(persona_core::AuthResult::PasswordChangeRequired) => {
+                Ok(ApiResponse::error_with_code(
+                    crate::error::CODE_PASSWORD_CHANGE_REQUIRED.to_string(),
+                    "Master password change required".to_string(),
+                ))
+            }
+            Ok(persona_core::AuthResult::AccountLocked) => Ok(ApiResponse::error(
+                "Account is locked due to too many failed attempts".to_string(),
+            )),
             Ok(_) => Ok(ApiResponse::error("Invalid master password".to_string())),
             Err(e) => {
                 let (code, msg) = map_persona_error(&e);

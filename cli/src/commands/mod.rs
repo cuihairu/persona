@@ -10,6 +10,7 @@ pub mod init;
 pub mod list;
 pub mod migrate;
 pub mod passkey;
+pub mod passwd;
 pub mod password;
 pub mod remove;
 pub mod service;

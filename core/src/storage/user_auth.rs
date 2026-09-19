@@ -31,7 +31,7 @@ impl UserAuthRepository {
             r#"
             SELECT user_id, master_password_hash, master_key_salt, enabled_factors,
                    failed_attempts, locked_until, last_auth, password_change_required,
-                   created_at, updated_at
+                   password_updated_at, created_at, updated_at
             FROM user_auth LIMIT 1
             "#,
         )
@@ -51,7 +51,7 @@ impl UserAuthRepository {
             r#"
             SELECT user_id, master_password_hash, master_key_salt, enabled_factors,
                    failed_attempts, locked_until, last_auth, password_change_required,
-                   created_at, updated_at
+                   password_updated_at, created_at, updated_at
             FROM user_auth WHERE user_id = ?
             "#,
         )
@@ -76,8 +76,8 @@ impl UserAuthRepository {
             INSERT INTO user_auth (
                 user_id, master_password_hash, master_key_salt, enabled_factors,
                 failed_attempts, locked_until, last_auth, password_change_required,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                password_updated_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(auth.user_id.to_string())
@@ -88,6 +88,7 @@ impl UserAuthRepository {
         .bind(system_time_to_rfc3339(auth.locked_until))
         .bind(system_time_to_rfc3339(auth.last_auth))
         .bind(auth.password_change_required)
+        .bind(system_time_to_rfc3339(auth.password_updated_at))
         .bind(system_time_to_rfc3339(Some(auth.created_at)).unwrap())
         .bind(system_time_to_rfc3339(Some(auth.updated_at)).unwrap())
         .execute(self.db.pool())
@@ -112,6 +113,7 @@ impl UserAuthRepository {
                 locked_until = ?,
                 last_auth = ?,
                 password_change_required = ?,
+                password_updated_at = ?,
                 updated_at = ?
             WHERE user_id = ?
             "#,
@@ -123,6 +125,7 @@ impl UserAuthRepository {
         .bind(system_time_to_rfc3339(auth.locked_until))
         .bind(system_time_to_rfc3339(auth.last_auth))
         .bind(auth.password_change_required)
+        .bind(system_time_to_rfc3339(auth.password_updated_at))
         .bind(system_time_to_rfc3339(Some(auth.updated_at)).unwrap())
         .bind(auth.user_id.to_string())
         .execute(self.db.pool())
@@ -152,6 +155,7 @@ impl UserAuthRepository {
         user.locked_until = rfc3339_to_system_time(row.get("locked_until"));
         user.last_auth = rfc3339_to_system_time(row.get("last_auth"));
         user.password_change_required = row.get("password_change_required");
+        user.password_updated_at = rfc3339_to_system_time(row.get("password_updated_at"));
         // created_at/updated_at are informational; keep defaults
         Ok(user)
     }
@@ -195,6 +199,7 @@ mod tests {
         auth.password_change_required = true;
         auth.locked_until = Some(SystemTime::now());
         auth.last_auth = Some(SystemTime::now());
+        auth.password_updated_at = Some(SystemTime::now());
 
         repo.create(&auth).await.unwrap();
 
@@ -207,6 +212,7 @@ mod tests {
         assert!(fetched_first.password_change_required);
         assert!(fetched_first.locked_until.is_some());
         assert!(fetched_first.last_auth.is_some());
+        assert!(fetched_first.password_updated_at.is_some());
         assert!(fetched_first
             .enabled_factors
             .contains(&AuthFactor::MasterPassword));
@@ -229,6 +235,13 @@ mod tests {
             fetched_after_update.enabled_factors[0],
             AuthFactor::MasterPassword
         );
+
+        // Clearing the timestamp persists too.
+        let mut cleared = updated;
+        cleared.password_updated_at = None;
+        repo.update(&cleared).await.unwrap();
+        let fetched_cleared = repo.get_by_id(&user_id).await.unwrap().unwrap();
+        assert!(fetched_cleared.password_updated_at.is_none());
     }
 
     #[tokio::test]
@@ -257,6 +270,7 @@ mod tests {
         assert_eq!(fetched.user_id, user_id);
         assert!(fetched.locked_until.is_none());
         assert!(fetched.last_auth.is_none());
+        assert!(fetched.password_updated_at.is_none());
         assert_eq!(fetched.failed_attempts, 0);
         assert!(!fetched.password_change_required);
 

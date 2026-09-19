@@ -131,11 +131,16 @@ Desktop (Tauri v2 + React)
   降级为无托盘运行（审批链路不依赖托盘存活），有显示环境行为不变；
   另 `default_window_icon` 缺失时回退 `include_image!` 内嵌图标（原
   fail-fast panic 改为回退，dev/测试环境更稳）
-- [ ] 产品缺口：`password_change_required` 强制改密机制仅存 schema
-  （user_auth 表列 + `AuthResult::PasswordChangeRequired` + init_service
-  拒绝臂），生产代码无任何置位路径（INSERT 恒 0）——密码过期/轮换策略
-  未实现，init_service 的 "Password change required" 分支永不触发
-  （2026-09 覆盖率分析发现，非链路断裂而是功能本体缺失）
+- [x] 产品缺口：`password_change_required` 强制改密闭环（2026-09 落地）：
+  `WorkspaceSettings.password_expiry_days`（None=不过期，opt-in，NIST 取向）
+  + `user_auth.password_updated_at`（迁移 012 回填）；解锁时 core 策略引擎
+  lazy 置位（读设置失败 fail-open）；`PersonaService::change_master_password`
+  单事务轮换（credentials wrapped key 重包 + legacy 行重加密 + passkeys
+  重包 + user_auth 复位，argon2/PBKDF2 全在事务外，回滚测试覆盖）；desktop
+  强引导弹窗（解锁屏 forced 模式 PASSWORD_CHANGE_REQUIRED 码分流）+ Settings
+  安全区块（Never/90/180/365 + 手动改密后回锁屏）+ CLI `persona passwd`
+  （新密码仅交互，不设 env）；wallets（独立钱包密码）不受影响
+- [ ] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09 全局搜索批次发现；
 - [ ] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09 全局搜索批次发现；
   此前误记 "tsc 0 错误"——`npx tsc` 拉到 npm 同名占位包返回假 0，须用
   `./node_modules/.bin/tsc`）：全在测试 fixture（`url: null` vs

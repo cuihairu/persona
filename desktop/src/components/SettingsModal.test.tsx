@@ -15,6 +15,8 @@ jest.mock('@/utils/api', () => ({
     getWorkspaceSettings: jest.fn(),
     setSyncConfig: jest.fn(),
     syncTokenPresent: jest.fn(),
+    setPasswordExpiry: jest.fn(),
+    changeMasterPassword: jest.fn(),
   },
 }));
 
@@ -27,6 +29,8 @@ const mockSetFlags = personaAPI.setFeatureFlags as jest.Mock;
 const mockGetSettings = personaAPI.getWorkspaceSettings as jest.Mock;
 const mockSetSync = personaAPI.setSyncConfig as jest.Mock;
 const mockTokenPresent = personaAPI.syncTokenPresent as jest.Mock;
+const mockSetExpiry = personaAPI.setPasswordExpiry as jest.Mock;
+const mockChangePw = personaAPI.changeMasterPassword as jest.Mock;
 
 /** 空设置响应（SyncServerPane 的初始加载） */
 const emptySettings = { success: true, data: null };
@@ -454,5 +458,165 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // 密码安全区块（过期策略 + 手动改密）
+  // -------------------------------------------------------------------------
+
+  it('renders the expiry selector with the persisted policy value', async () => {
+    mockIdentityHook();
+    mockGetSettings.mockResolvedValue({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        password_expiry_days: 90,
+        sync: null,
+      },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('password-expiry-select')).toHaveValue('90');
+    });
+    expect(screen.getByTestId('change-password-button')).toBeEnabled();
+  });
+
+  it('defaults the expiry selector to Never and writes a numeric policy', async () => {
+    mockIdentityHook();
+    mockSetExpiry.mockResolvedValueOnce({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        password_expiry_days: 180,
+        sync: null,
+      },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 服务端真相未回填前默认 Never（旧 JSON 缺键同型）
+    await waitFor(() => {
+      expect(screen.getByTestId('password-expiry-select')).toHaveValue('');
+    });
+
+    fireEvent.change(screen.getByTestId('password-expiry-select'), {
+      target: { value: '180' },
+    });
+
+    await waitFor(() => {
+      expect(mockSetExpiry).toHaveBeenCalledWith(180);
+    });
+    // 以服务端返回为准回填
+    await waitFor(() => {
+      expect(screen.getByTestId('password-expiry-select')).toHaveValue('180');
+    });
+    expect(toast.success).toHaveBeenCalledWith('Password policy saved');
+  });
+
+  it('writes null when the policy is switched back to Never', async () => {
+    mockIdentityHook();
+    mockGetSettings.mockResolvedValue({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        password_expiry_days: 365,
+        sync: null,
+      },
+    });
+    mockSetExpiry.mockResolvedValueOnce({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        password_expiry_days: null,
+        sync: null,
+      },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('password-expiry-select')).toHaveValue('365');
+    });
+
+    fireEvent.change(screen.getByTestId('password-expiry-select'), { target: { value: '' } });
+
+    await waitFor(() => {
+      expect(mockSetExpiry).toHaveBeenCalledWith(null);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('password-expiry-select')).toHaveValue('');
+    });
+  });
+
+  it('toasts the backend error and keeps the selector value when the save fails', async () => {
+    mockIdentityHook();
+    mockGetSettings.mockResolvedValue({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        password_expiry_days: 90,
+        sync: null,
+      },
+    });
+    mockSetExpiry.mockResolvedValueOnce({ success: false, error: 'Service is locked' });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('password-expiry-select')).toHaveValue('90');
+    });
+
+    fireEvent.change(screen.getByTestId('password-expiry-select'), {
+      target: { value: '365' },
+    });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Service is locked');
+    });
+    expect(mockSetExpiry).toHaveBeenCalledWith(365);
+  });
+
+  it('opens the change-password dialog and locks the service after rotation', async () => {
+    const lockService = jest.fn().mockResolvedValue(undefined);
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+      lockService,
+    });
+    mockSetExpiry.mockResolvedValue({
+      success: true,
+      data: { features: { ...DEFAULT_FEATURE_FLAGS }, password_expiry_days: null, sync: null },
+    });
+    mockChangePw.mockResolvedValue({ success: true, data: true });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    // 手动改密走非 forced 弹窗：可取消，旧密码不预填
+    fireEvent.click(screen.getByTestId('change-password-button'));
+    expect(screen.getByTestId('change-password-modal')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Current password'), {
+      target: { value: 'old-pw' },
+    });
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-pw' } });
+    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      target: { value: 'new-pw' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+    });
+
+    await waitFor(() => {
+      expect(mockChangePw).toHaveBeenCalledWith('old-pw', 'new-pw', undefined);
+    });
+    // 改密成功 → 回锁屏（state.service 旧会话密钥已作废）
+    await waitFor(() => {
+      expect(lockService).toHaveBeenCalledTimes(1);
+    });
+    expect(toast.success).toHaveBeenCalledWith('Master password changed — please sign in again');
+    expect(screen.queryByTestId('change-password-modal')).not.toBeInTheDocument();
   });
 });

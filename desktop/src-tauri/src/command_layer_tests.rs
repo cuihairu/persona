@@ -5812,3 +5812,192 @@ async fn passkey_gate_stays_off_for_missing_vault_and_default_flags() {
         .passkey_server_started
         .load(std::sync::atomic::Ordering::SeqCst));
 }
+
+// ---------------------------------------------------------------------------
+// Forced master-password rotation（PASSWORD_CHANGE_REQUIRED 码 / 改密命令 /
+// password_expiry_days 窄写）
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn init_service_surfaces_password_change_required_code() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+
+    // 锁掉会话，模拟“下次解锁”场景；flag 短路发生在密码验证之前
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 经仓储置位（生产置位路径在 core 策略引擎里，此处直驱存储），
+    // 只验证命令层把 AuthResult::PasswordChangeRequired 翻译成机器可读码
+    let db = persona_core::storage::Database::from_file(&db_path)
+        .await
+        .unwrap();
+    let repo = persona_core::storage::UserAuthRepository::new(db);
+    let mut auth = repo
+        .get_first()
+        .await
+        .unwrap()
+        .expect("seeded auth row exists");
+    auth.password_change_required = true;
+    repo.update(&auth).await.unwrap();
+
+    let resp = init_service(
+        InitRequest {
+            master_password: "master-pw-123".to_string(),
+            db_path: Some(db_path),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some(crate::error::CODE_PASSWORD_CHANGE_REQUIRED),
+        "flag set must short-circuit init with the typed error code"
+    );
+}
+
+#[tokio::test]
+async fn change_master_password_command_rotates_and_allows_reinit() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "old-master-pw").await;
+
+    // 锁定态轮换：命令自建全新 service（state.service 保持 None/旧实例不碰），
+    // 前端随后用新密码重新 init
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = change_master_password(
+        ChangeMasterPasswordRequest {
+            old_password: "old-master-pw".to_string(),
+            new_password: "new-master-pw".to_string(),
+            db_path: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(true));
+
+    // 旧密码从此被拒
+    let resp = init_service(
+        InitRequest {
+            master_password: "old-master-pw".to_string(),
+            db_path: Some(db_path.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid master password"));
+
+    // 新密码 init 成功且服务解锁（会话照常建立）
+    let resp = init_service(
+        InitRequest {
+            master_password: "new-master-pw".to_string(),
+            db_path: Some(db_path),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(true), "post-rotation init must unlock");
+}
+
+#[tokio::test]
+async fn change_master_password_command_rejects_wrong_old_password() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "real-master-pw").await;
+
+    let resp = change_master_password(
+        ChangeMasterPasswordRequest {
+            old_password: "wrong-master-pw".to_string(),
+            new_password: "new-master-pw".to_string(),
+            db_path: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let msg = resp.error.as_deref().expect("error message present");
+    assert!(
+        msg.contains("Invalid current master password"),
+        "unexpected error: {msg}"
+    );
+
+    // 失败尝试不得损坏 vault：真密码依旧能建会话
+    let resp = init_service(
+        InitRequest {
+            master_password: "real-master-pw".to_string(),
+            db_path: Some(db_path),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
+#[tokio::test]
+async fn set_password_expiry_narrow_write_round_trip() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    // 全新 vault：默认不过期
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("settings present");
+    assert_eq!(settings.password_expiry_days, None);
+
+    // 窄写 90 天；返回的全量 settings 里其它字段不被 clobber
+    let resp = set_password_expiry(Some(90), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("updated settings returned");
+    assert_eq!(settings.password_expiry_days, Some(90));
+    assert!(settings.encryption_enabled);
+    assert_eq!(settings.session_timeout_seconds, 3600);
+
+    // 与 features 位互不干扰（两条窄写路径共用一行 settings）
+    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("updated settings returned");
+    assert!(settings.features.ssh_agent);
+    assert_eq!(settings.password_expiry_days, Some(90));
+
+    let resp = set_password_expiry(None, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("updated settings returned");
+    assert_eq!(settings.password_expiry_days, None);
+    assert!(
+        settings.features.ssh_agent,
+        "expiry write must not clobber features"
+    );
+
+    // Some(0) 无意义，显式拒绝
+    let resp = set_password_expiry(Some(0), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Password expiry must be at least 1 day")
+    );
+}

@@ -102,6 +102,26 @@ class PersonaAPI {
     });
   }
 
+  /** 窄写主密码过期策略（天）；null = 不过期。返回更新后的全量设置 */
+  async setPasswordExpiry(days: number | null): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_password_expiry', { days });
+  }
+
+  /** 修改主密码（旧密码仅存在于本次请求，不落盘不进日志）；成功后前端需重新 init */
+  async changeMasterPassword(
+    oldPassword: string,
+    newPassword: string,
+    dbPath?: string,
+  ): Promise<ApiResponse<boolean>> {
+    return invoke('change_master_password', {
+      request: {
+        old_password: oldPassword,
+        new_password: newPassword,
+        db_path: dbPath ?? null,
+      },
+    });
+  }
+
   /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token（真值存 OS keyring） */
   async setSyncConfig(config: SyncConfig): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_sync_config', {

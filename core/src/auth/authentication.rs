@@ -55,6 +55,9 @@ pub struct UserAuth {
     /// Password change required
     pub password_change_required: bool,
 
+    /// When the master password was last set (changed); drives opt-in expiry policy
+    pub password_updated_at: Option<SystemTime>,
+
     /// Creation timestamp
     pub created_at: SystemTime,
 
@@ -75,6 +78,7 @@ impl UserAuth {
             locked_until: None,
             last_auth: None,
             password_change_required: false,
+            password_updated_at: None,
             created_at: now,
             updated_at: now,
         }
@@ -93,8 +97,14 @@ impl UserAuth {
             self.master_key_salt = Some(hex::encode(salt));
         }
 
-        self.enabled_factors.push(AuthFactor::MasterPassword);
+        // Dedup: rotation re-sets the password on an auth row that already
+        // carries the MasterPassword factor (initialize_user pushes into a
+        // fresh vec).
+        if !self.enabled_factors.contains(&AuthFactor::MasterPassword) {
+            self.enabled_factors.push(AuthFactor::MasterPassword);
+        }
         self.password_change_required = false;
+        self.password_updated_at = Some(SystemTime::now());
         self.updated_at = SystemTime::now();
         Ok(())
     }

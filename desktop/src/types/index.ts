@@ -2,8 +2,12 @@
  * 后端错误码（与 desktop/src-tauri/src/error.rs 的 map_persona_error 对应）。
  * REAUTH_REQUIRED：敏感操作需要重新认证 → 前端弹 ReauthModal。
  * SERVICE_LOCKED：服务已锁定 → 前端回到解锁屏。
+ * PASSWORD_CHANGE_REQUIRED：主密码按策略需轮换 → 前端弹强制改密弹窗。
  */
-export type ApiErrorCode = 'REAUTH_REQUIRED' | 'SERVICE_LOCKED';
+export type ApiErrorCode =
+  | 'REAUTH_REQUIRED'
+  | 'SERVICE_LOCKED'
+  | 'PASSWORD_CHANGE_REQUIRED';
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -90,6 +94,8 @@ export interface WorkspaceSettings {
   require_confirmation: boolean;
   default_identity_type: string;
   features: FeatureFlags;
+  /** 主密码有效期（天）；null = 不过期（默认，旧 JSON 缺键时为 null） */
+  password_expiry_days: number | null;
   /** 可选同步服务器配置（旧 JSON 缺键时为 null） */
   sync: SyncConfig | null;
 }
