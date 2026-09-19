@@ -4,7 +4,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
-    crypto::game_token::{generate_code_now, generate_game_token_code_now, PROVIDER_STEAM_GUARD},
+    crypto::game_token::{
+        generate_code_now, generate_game_token_code_now, is_supported_provider,
+        PROVIDER_STEAM_GUARD,
+    },
     crypto::steam::decode_steam_secret,
     crypto::totp::totp_now,
     models::{CredentialData, CredentialType, GameTokenData, SecurityLevel, TwoFactorData},
@@ -81,6 +84,37 @@ pub enum TotpCommand {
         #[arg(long)]
         url: Option<String>,
     },
+    /// Record a game token entry (vendor-bound tokens are recorded, not generated)
+    ///
+    /// Vendor-bound providers (Tencent Game Security Center, NetEase Da Shen,
+    /// miHoYo security token, ...) keep their seed server-side inside the
+    /// vendor's app, so dynamic codes cannot be generated offline. This command
+    /// stores a vault record; codes still come from the vendor's official app.
+    SetupGameToken {
+        /// Identity name to store credential under
+        #[arg(short, long)]
+        identity: String,
+        /// Vendor provider slug, lowercase letters/digits/underscore
+        /// (e.g. tencent_security, netease_dashen, mihoyo)
+        #[arg(long)]
+        provider: String,
+        /// Credential display name (defaults to "issuer (account)")
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Shared secret if one is ever exported (base64; optional for
+        /// vendor-bound providers, kept for future offline support)
+        #[arg(long)]
+        secret: Option<String>,
+        /// Account the token protects
+        #[arg(short, long)]
+        account: String,
+        /// Issuer override (defaults to the provider slug)
+        #[arg(long)]
+        issuer: Option<String>,
+        /// Associate this token with a website origin (e.g. https://gamesafe.qq.com)
+        #[arg(long)]
+        url: Option<String>,
+    },
     /// Generate a TOTP code for a stored credential
     Code {
         /// Credential UUID (must be TwoFactor)
@@ -128,6 +162,20 @@ pub(crate) async fn execute_with(
             account,
             url,
         } => setup_steam_token(config, ui, identity, name, secret, account, url).await?,
+        TotpCommand::SetupGameToken {
+            identity,
+            provider,
+            name,
+            secret,
+            account,
+            issuer,
+            url,
+        } => {
+            setup_game_token(
+                config, ui, identity, provider, name, secret, account, issuer, url,
+            )
+            .await?
+        }
         TotpCommand::Code { id, watch } => generate_codes(config, ui, id, watch).await?,
     }
     Ok(())
@@ -321,6 +369,93 @@ async fn setup_steam_token(
         "Current code: {} (valid for {}s)",
         code.code.bold().bright_blue(),
         code.remaining_seconds
+    );
+
+    Ok(())
+}
+
+/// 录入游戏令牌记录：离线可算的 provider（当前仅 Steam）各有专用 setup
+/// 命令；厂商绑定型（腾讯安全中心/网易大神/米哈游安全令等，密钥在厂商
+/// 服务端配发进官方 App，无法离线出码）只做记录——不伪造动态码，出码
+/// 仍走厂商 App（TODO.md G2 调研结论）。
+#[allow(clippy::too_many_arguments)]
+async fn setup_game_token(
+    config: &CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+    identity_name: String,
+    provider_raw: String,
+    display_name: Option<String>,
+    secret: Option<String>,
+    account: String,
+    issuer_override: Option<String>,
+    url: Option<String>,
+) -> Result<()> {
+    println!("{}", "🔐 Recording game token entry...".cyan());
+    let provider = provider_raw.trim().to_lowercase();
+    if provider.is_empty()
+        || !provider
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        bail!("Provider must be a non-empty slug of [a-z0-9_] (e.g. tencent_security)");
+    }
+    if is_supported_provider(&provider) {
+        bail!(
+            "Provider '{}' supports offline generation; use its dedicated setup command instead (e.g. `persona totp setup-steam`)",
+            provider
+        );
+    }
+    let secret = secret
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let origin_url = url.map(|s| normalize_origin_url(&s)).transpose()?;
+
+    let mut service = init_service(config, ui).await?;
+    let identity = resolve_identity(&mut service, &identity_name).await?;
+
+    let issuer = issuer_override.unwrap_or_else(|| provider.clone());
+    let game_data = GameTokenData {
+        provider: provider.clone(),
+        secret_key: secret.unwrap_or_default(),
+        issuer: issuer.clone(),
+        account_name: account.clone(),
+        url: origin_url.clone(),
+    };
+
+    let credential_name = display_name.unwrap_or_else(|| format!("{} ({})", issuer, account));
+    let mut credential = service
+        .create_credential(
+            identity.id,
+            credential_name.clone(),
+            CredentialType::TwoFactor,
+            SecurityLevel::High,
+            &CredentialData::GameToken(game_data.clone()),
+        )
+        .await
+        .into_anyhow()
+        .context("Failed to create game token record")?;
+
+    credential.username = Some(account.clone());
+    if let Some(url) = origin_url {
+        credential.url = Some(url);
+    }
+    credential.metadata.insert("provider".into(), provider);
+    credential.metadata.insert("issuer".into(), issuer);
+    service
+        .update_credential(&credential)
+        .await
+        .into_anyhow()
+        .context("Failed to update game token metadata")?;
+
+    println!(
+        "{} Saved game token record '{}' for identity '{}'",
+        "✓".green(),
+        credential_name.bright_green(),
+        identity.name.bright_cyan()
+    );
+    println!(
+        "{} Vendor-bound provider: dynamic codes must be generated in the vendor's official app — this entry is a vault record, not an offline generator",
+        "ℹ".yellow()
     );
 
     Ok(())
@@ -1449,6 +1584,177 @@ mod tests {
         )
         .await
         .expect("steam token code generated");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn setup_game_token_records_vendor_bound_entry() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // Provider slug validation.
+        let err = execute_with(
+            TotpArgs {
+                command: TotpCommand::SetupGameToken {
+                    identity: "alice".to_string(),
+                    provider: "Tencent-Security".to_string(),
+                    name: None,
+                    secret: None,
+                    account: "qq_123456".to_string(),
+                    issuer: None,
+                    url: None,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect_err("non-slug provider must fail");
+        assert!(err.to_string().contains("non-empty slug"));
+
+        // Offline-computable providers are redirected to their dedicated command.
+        let err = execute_with(
+            TotpArgs {
+                command: TotpCommand::SetupGameToken {
+                    identity: "alice".to_string(),
+                    provider: "steam_guard".to_string(),
+                    name: None,
+                    secret: None,
+                    account: "alice_steam".to_string(),
+                    issuer: None,
+                    url: None,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect_err("supported provider must be redirected");
+        assert!(err.to_string().contains("setup-steam"));
+
+        // Happy path: vendor-bound record without a secret, through the
+        // public dispatch wrapper.
+        execute_with(
+            TotpArgs {
+                command: TotpCommand::SetupGameToken {
+                    identity: "alice".to_string(),
+                    provider: "Tencent_Security".to_string(),
+                    name: None,
+                    secret: None,
+                    account: "qq_123456".to_string(),
+                    issuer: None,
+                    url: Some("gamesafe.qq.com".to_string()),
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("vendor-bound record succeeds");
+
+        // A second entry keeps an exported secret (trimmed) for future
+        // offline support.
+        execute_with(
+            TotpArgs {
+                command: TotpCommand::SetupGameToken {
+                    identity: "alice".to_string(),
+                    provider: "netease_dashen".to_string(),
+                    name: Some("NetEase Da Shen (custom)".to_string()),
+                    secret: Some("  aGVsbG8=  ".to_string()),
+                    account: "wy_987654".to_string(),
+                    issuer: None,
+                    url: None,
+                },
+            },
+            &config,
+            &crate::utils::prompt::TerminalUi,
+        )
+        .await
+        .expect("record with secret succeeds");
+
+        let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+            .await
+            .unwrap();
+        let alice = IdentityRepository::new(service_db(&config).await)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let mut creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .into_anyhow()
+            .unwrap();
+        creds.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(creds.len(), 2);
+
+        // Record without secret: provider slug normalized to lowercase,
+        // issuer defaults to the slug, secret_key stays empty.
+        let tencent = creds
+            .iter()
+            .find(|c| c.name == "tencent_security (qq_123456)")
+            .expect("tencent record present");
+        assert_eq!(tencent.username.as_deref(), Some("qq_123456"));
+        assert_eq!(tencent.url.as_deref(), Some("https://gamesafe.qq.com"));
+        assert_eq!(
+            tencent.metadata.get("provider").map(String::as_str),
+            Some("tencent_security")
+        );
+        let data = service
+            .get_credential_data(&tencent.id)
+            .await
+            .into_anyhow()
+            .unwrap()
+            .expect("game token data present");
+        match data {
+            CredentialData::GameToken(gt) => {
+                assert_eq!(gt.provider, "tencent_security");
+                assert_eq!(gt.issuer, "tencent_security");
+                assert_eq!(gt.account_name, "qq_123456");
+                assert_eq!(gt.secret_key, "");
+                assert_eq!(gt.url.as_deref(), Some("https://gamesafe.qq.com"));
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+
+        // Record with secret: display name override wins, secret is trimmed.
+        let netease = creds
+            .iter()
+            .find(|c| c.name == "NetEase Da Shen (custom)")
+            .expect("netease record present");
+        let data = service
+            .get_credential_data(&netease.id)
+            .await
+            .into_anyhow()
+            .unwrap()
+            .expect("game token data present");
+        match data {
+            CredentialData::GameToken(gt) => {
+                assert_eq!(gt.provider, "netease_dashen");
+                assert_eq!(gt.secret_key, "aGVsbG8=");
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

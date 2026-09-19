@@ -405,15 +405,22 @@ Game Tokens (游戏令牌)
     存储变体与三端统一出码路径
 - [ ] G1.5: desktop 创建表单支持游戏令牌（CredentialDataRequest::GameToken 变体 +
   TS 类型 + 创建/详情 UI + 测试；当前 desktop/手机可读码，创建仍需 CLI）
-- [ ] G2: 国内游戏令牌（逐家调研后落地；诚实区分「离线可算」与「厂商绑定/记录型」，
-  绑定型不伪造动态码，只做记录 + 提示跳转）
-  - [ ] 网易大神/网易BUFF：若提供标准 TOTP 验证器（otpauth URI/secret）→ 现有
-        TOTP 导入路径即可覆盖；专有协议则按绑定型登记
-  - [ ] 腾讯游戏安全中心令牌：厂商 App 专有服务端绑定，无法离线生成 → 记录/绑定型
-  - [ ] 米哈游/原神安全令：HoYoLab App 推送/扫码确认 → 绑定型
-  - [ ] 完美世界令牌：待调研（预期记录型）
-  - [ ] 暴雪战网验证器：早期为标准 TOTP（可离线录入出码），现 App 推送为绑定型 → 待调研
-  - [ ] 4399 / 7K7K 令牌：待调研（预期记录型）
+- [x] G2 (2026-09): 国内游戏令牌调研 + 记录型落地（诚实区分「离线可算」与「厂商绑定
+  型」，绑定型不伪造动态码，只做记录并提示出码走厂商 App）
+  - [x] CLI `totp setup-game-token --provider <slug>`：厂商绑定型令牌记录入库（provider
+    规范化为 [a-z0-9_] slug、secret 可选存备未来离线支持、metadata 记 provider/issuer、
+    origin url 绑定；离线可算 provider 自动重定向到专用命令；读取路径统一报
+    「Unsupported game token provider + 需厂商 App 出码」）
+  - [x] 腾讯游戏安全中心/QQ令牌：算法为 TOTP 类（30s 6 位）但密钥由服务端配发进
+    QQ安全中心 App，无导出渠道 → 绑定型，记录落地
+  - [x] 网易大神将军令（含网易BUFF）：App 绑定、60s 周期动态密码、序列号解绑制 →
+    绑定型，记录落地
+  - [x] 米哈游/原神安全令：通行证 2FA 为自家 App 动态码 + WebAuthn，无第三方 TOTP →
+    绑定型，记录落地；WebAuthn 归 Passkeys 轨道
+  - [x] 4399 安全令牌：自家 App 动态密码（需联网刷新）→ 绑定型，记录落地
+  - [x] 暴雪战网验证器：专有算法但有成熟社区导出（serial + restore code → 标准 TOTP
+    secret，bnet-auth-export 先例）→ 导出后走现有 `totp setup --digits 8` 离线出码
+  - [ ] 完美世界 / 7K7K：无公开令牌产品文档，继续待调研（`setup-game-token` 已可记录）
 - [ ] G3: 国际扩展与标准增强
   - [ ] GitHub 二次登录验证：TOTP 已覆盖；安全密钥/通行密钥走 Passkeys 轨道
   - [ ] HOTP（RFC 4226 计数器型）录入与出码（core hotp() 已有，CLI otpauth 目前仅收 totp）

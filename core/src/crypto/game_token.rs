@@ -31,7 +31,7 @@ pub struct GameTokenCode {
 
 fn unsupported(provider: &str) -> anyhow::Error {
     anyhow::anyhow!(
-        "Unsupported game token provider '{}': offline code generation is not available (provider must be one of {:?}; binding-based providers are on the roadmap)",
+        "Unsupported game token provider '{}': offline code generation is not available (supported: {:?}; vendor-bound tokens generate codes in the vendor's official app — this entry is a vault record)",
         provider,
         SUPPORTED_PROVIDERS
     )

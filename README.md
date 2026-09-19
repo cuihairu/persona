@@ -121,6 +121,15 @@ persona totp code --id <UUID> --watch
 persona totp setup-steam --identity alice --account alice_steam --secret <base64-shared-secret>
 persona totp code --id <UUID>   # game token credentials share the same code command
 
+# Battle.net authenticator: export via a community tool (serial + restore code ->
+# standard TOTP secret), then import like any TOTP with 8 digits
+persona totp setup --identity alice --secret <base32-secret> --issuer Battle.net --digits 8
+
+# Vendor-bound game tokens (Tencent Game Security Center, NetEase Da Shen,
+# miHoYo security token, ...): recorded as vault entries only — their seeds live
+# inside the vendor's app, so codes must be generated there
+persona totp setup-game-token --identity alice --provider tencent_security --account qq_123456 --url https://gamesafe.qq.com
+
 # Password generator with custom sets
 persona password generate --length 32 --set lowercase --set uppercase --set digits --set symbols
 persona password generate --pronounceable --length 18 --set lowercase --set uppercase
