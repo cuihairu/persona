@@ -1,0 +1,59 @@
+name: docs
+
+# docs/ 目录（VitePress 站点 + 根级工程 markdown）变更时：
+# prettier 自动格式化 → VitePress 构建（内建死链校验，失败即红）→
+# 有 diff 则自动提交修复。fork PR 无推送权限，只做校验不自动提交。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      # PR 时签出 head 分支（默认的 merge ref 无法回推），同仓库 PR 可直接提交
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      # docs/ 是独立 npm 安装（非 pnpm workspace 成员），锁文件见 docs/package-lock.json
+      - name: Install dependencies
+        working-directory: docs
+        run: npm ci
+
+      - name: Prettier format
+        working-directory: docs
+        # 版本与 .prettierrc.json / .prettierignore 一起演进；ignore 排除
+        # node_modules、构建产物与 lockfile
+        run: npx --yes prettier@3.6.2 --write .
+
+      - name: VitePress build (dead link check)
+        working-directory: docs
+        run: npm run build
+
+      # push(main) 与同仓库 PR 自动提交修复；fork PR 只校验。
+      # [skip ci] 防递归（GITHUB_TOKEN 推送本就不触发，双保险）。
+      - name: Commit formatted docs
+        if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'docs: 自动修复 markdown 格式 [skip ci]'
+          file_pattern: 'docs/**'
