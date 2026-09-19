@@ -3325,22 +3325,28 @@ pub(crate) mod tests {
         }
     }
 
-    /// The clipboard probe mirrors the real preconditions: without a display
-    /// variable it short-circuits false; with one it consults the clipboard
-    /// binaries. Either way it must terminate without panicking.
+    /// The clipboard probe mirrors the real preconditions: on Linux, without
+    /// a display variable it short-circuits false; with one it consults the
+    /// clipboard binaries. Windows `clip` and macOS `pbcopy` don't read
+    /// display variables at all, so the headless assertion only applies to
+    /// Linux. Either way it must terminate without panicking.
     #[test]
     fn clipboard_probe_handles_display_and_headless_environments() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
-        std::env::remove_var("WAYLAND_DISPLAY");
-        std::env::remove_var("DISPLAY");
-        assert!(
-            !clipboard_available(),
-            "headless machines report no clipboard"
-        );
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            std::env::remove_var("WAYLAND_DISPLAY");
+            std::env::remove_var("DISPLAY");
+            assert!(
+                !clipboard_available(),
+                "headless machines report no clipboard"
+            );
+        }
 
         std::env::set_var("DISPLAY", ":99");
         // The binary probe decides the verdict; both outcomes are valid.
+        // (Windows/macOS ignore the variable entirely — still must not panic.)
         let _ = clipboard_available();
 
         std::env::remove_var("DISPLAY");
