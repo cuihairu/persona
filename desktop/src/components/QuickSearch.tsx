@@ -6,6 +6,7 @@ import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import { credentialTypeLabel, getCredentialIcon } from './credentialDisplay';
 import FaviconImg from './FaviconImg';
+import Highlight from './Highlight';
 import { useFavicons } from '@/hooks/useFavicons';
 import type { Credential, Identity } from '@/types';
 
@@ -203,14 +204,14 @@ const QuickSearch = () => {
                               className="text-gray-400 dark:text-gray-500"
                             />
                             <span className="text-sm text-gray-900 dark:text-gray-100 truncate">
-                              {credential.name}
+                              <Highlight text={credential.name} query={query} />
                             </span>
                             <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">
                               {credentialTypeLabel(t, credential.credential_type)}
                             </span>
                             {credential.username && (
                               <span className="ml-auto text-xs text-gray-400 dark:text-gray-500 truncate max-w-[40%]">
-                                {credential.username}
+                                <Highlight text={credential.username} query={query} />
                               </span>
                             )}
                           </button>

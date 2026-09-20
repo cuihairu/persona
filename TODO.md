@@ -208,7 +208,11 @@ Desktop (Tauri v2 + React)
     只会盖住跳转）；pending 注入同时清列表搜索词 + 复位侧栏分类（目标
     被本地筛选挡住时注入会被"筛选不可见清选中"立即清掉）、目标凭据
     已删除时 pending 作废（列表归属校验排除换身份中间态误清）
-  - [ ] 快速搜索结果搜索词高亮（QuickSearch 结果行内命中片段标记）
+  - [x] 快速搜索结果搜索词高亮（2026-09-20 落地）：独立 Highlight 组件
+    （不区分大小写整串匹配、多片段全标记、纯文本拆分渲染无注入面，
+    行为对齐 SQLite LIKE 的 ASCII 大小写不敏感），QuickSearch 标题与
+    用户名两处接入，命中渲染 <mark> 黄底。CredentialList 本地搜索词
+    如需同款高亮可直接复用该组件
   - [x] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
     变体——13d75f4c 基建 / 94ee3930 Settings 三档选择器 / a79b3cbb 全组件
     sweep，顺带修复 v4 死类 bg-opacity-* 导致的弹窗遮罩纯黑实底）

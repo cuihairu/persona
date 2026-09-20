@@ -141,12 +141,14 @@ describe('components/QuickSearch', () => {
     // 身份组头，按 store 中的身份顺序
     expect(screen.getByText('Personal')).toBeInTheDocument();
     expect(screen.getByText('Work')).toBeInTheDocument();
-    // 组内条目：名称 + 类型徽章 + 用户名
-    expect(screen.getByText('GitHub')).toBeInTheDocument();
-    expect(screen.getByText('GitHub PAT')).toBeInTheDocument();
-    expect(screen.getByText('Gitea')).toBeInTheDocument();
+    // 组内条目：名称 + 类型徽章 + 用户名（标题含查询词时被 <mark> 拆分，
+    // getByText 的单元素精确匹配拿不到，按行级 textContent 断言）
+    const items = screen.getAllByTestId('quick-search-item');
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent('GitHub');
+    expect(items[1]).toHaveTextContent('GitHub PAT');
+    expect(items[2]).toHaveTextContent('Gitea');
     expect(screen.getByText('alice')).toBeInTheDocument();
-    expect(screen.getAllByTestId('quick-search-item')).toHaveLength(3);
   });
 
   it('shows the no-results hint when nothing matches', async () => {
@@ -275,5 +277,31 @@ describe('components/QuickSearch', () => {
 
     const img = screen.getByTestId('favicon-img');
     expect(img).toHaveAttribute('src', 'data:image/png;base64,AAA');
+  });
+
+  it('marks query hits in title and username, case-insensitively', async () => {
+    const { searchCredentials } = setup();
+    fireEvent.click(screen.getByTestId('quick-search-trigger'));
+    await searchFor(searchCredentials, [
+      makeCred({ name: 'GitHub Login', username: 'git-alice' }),
+    ]);
+
+    // 大小写不敏感（对齐 SQLite LIKE 的 ASCII 行为）：Git / git 片段各自命中
+    const hits = screen.getAllByTestId('highlight-hit').map((el) => el.textContent);
+    expect(hits).toEqual(['Git', 'git']);
+  });
+
+  it('renders plain text when fields do not contain the query', async () => {
+    const { searchCredentials } = setup();
+    fireEvent.click(screen.getByTestId('quick-search-trigger'));
+    await searchFor(
+      searchCredentials,
+      // 命中来自后端其他字段（如 url），标题/用户名不含查询词
+      [makeCred({ name: 'GitHub', username: null, url: 'https://gitlab.com' })],
+      'gitlab',
+    );
+
+    expect(screen.getByTestId('quick-search-item')).toHaveTextContent('GitHub');
+    expect(screen.queryByTestId('highlight-hit')).not.toBeInTheDocument();
   });
 });
