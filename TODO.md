@@ -192,10 +192,15 @@ Desktop (Tauri v2 + React)
     受功能开关约束）——6be7cba7 跨身份选中桥（pendingCredentialSelection
     入 store，CredentialList 凭据就绪后注入并清除）/ 74b58db5 QuickSearch
     overlay（⌘K+工具栏按钮双入口、200ms debounce、按身份分组、↑↓Enter
-    键盘导航）。已知限制：搜索仅匹配 name（后端 search_credentials 现状）；
-    loadCredentials 失败时 pending 残留（下次进该身份会突然选中）；身份
-    切换 toast 在搜索跳转时照弹。follow-up：SQL 扩 username/url 字段、
-    搜索词高亮、跳转时静音切换 toast
+    键盘导航）。已知限制清理（2026-09-20）：搜索 SQL 扩 username/url 字段
+    （repository `search_by_fields` 三字段 OR，同参数 bind 三次，NULL 列
+    天然不参与）；loadCredentialsForIdentity 失败路径清 pending（凭据没
+    加载出来 pending 永不会被注入，残留会让下次进该身份突然选中）；跨
+    身份跳转 switchIdentity 传 silent（切换是手段不是用户动作，toast
+    只会盖住跳转）；pending 注入同时清列表搜索词 + 复位侧栏分类（目标
+    被本地筛选挡住时注入会被"筛选不可见清选中"立即清掉）、目标凭据
+    已删除时 pending 作废（列表归属校验排除换身份中间态误清）。
+    follow-up：搜索词高亮
   - [x] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
     变体——13d75f4c 基建 / 94ee3930 Settings 三档选择器 / a79b3cbb 全组件
     sweep，顺带修复 v4 死类 bg-opacity-* 导致的弹窗遮罩纯黑实底）
@@ -203,8 +208,12 @@ Desktop (Tauri v2 + React)
     IdentitySwitcher 移至侧栏顶部（对应 1Password 账户切换器的位置）
     ——e7e46df7 app shell（侧栏 + 视图导航 + footer Settings/Lock）/
     3f7060ec 分类树（单选 SidebarFilter 入 store，取代 chip 行；换身份
-    自动复位）。已知限制：锁屏→再解锁树选中残留（与旧 chip 等价）；
-    筛选变化不自动清详情面板选中（follow-up）
+    自动复位）。已知限制清理（2026-09-20）：锁屏（手动 + 自动锁双路径）
+    复位侧栏选中 + 清列表搜索词；筛选（搜索词/侧栏分类）变化后选中项
+    不可见时自动清详情面板（1Password 语义——筛选是导航动作）；列表
+    搜索词迁入 store（credentialSearchQuery）——pending 注入需要与选中/
+    侧栏筛选同批更新，React state 慢一帧会产生"选中已置、搜索词未清"
+    的中间帧误触清选中（jsdom 渲染探针定位）
   - [x] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
     （隐私红线：不常驻外联，不默认抓取——1Password 同款做法）
     ——7fe5b07b core（favicon_cache 表 + FaviconFetcher：SSRF 六规则校验、
@@ -224,8 +233,14 @@ Desktop (Tauri v2 + React)
     （CredentialList 派生消费）+ copyToClipboardWithToast 收口 + ⌘E/⌘,
     + 按钮 title 提示。已知限制：纯前端层（非系统级全局键）；部分
     浏览器保留键如 Ctrl+E/L 在 WebView 外不保证拦截。follow-up：密码/
-    TOTP 全局复制（需把组件级 useReauth 提升到 App 级）、Escape 统一
-    关 modal、快捷键速查面板
+    TOTP 全局复制（需把组件级 useReauth 提升到 App 级）、快捷键速查
+    面板。Escape 统一关 modal 已落地（2026-09-20）：共享 hook
+    useEscapeToClose（window keydown，焦点无需在 modal 内；latest-ref
+    换 onClose 不重建监听），接入 CreateCredentialModal / SettingsModal /
+    CreateIdentityModal（IdentitySwitcher 内）/ ReauthModal /
+    ChangeMasterPasswordModal（后两者原内联实现收编，forced 模式保持
+    不可逃逸）；叠开收口：下层在 ReauthModal/改密弹窗开时让位
+    （isOpen && !上层开启），提交中不响应——一次 Esc 只关最上层
   - [x] 编辑凭据闭环（2026-09-20 桌面稳定化头条，此前全端无编辑能力）
     ——core `update_credential_data`：新 payload 复用**原 item key** 重封
     （wrapped_item_key 字节不动，附件不变量有专测守护——重生成 key 会让

@@ -10,6 +10,7 @@ import {
   CreditCardIcon,
   PuzzlePieceIcon
 } from '@heroicons/react/24/outline';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { Listbox, Transition } from '@headlessui/react';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import type { IdentityType } from '@/types';
@@ -171,6 +172,8 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
   const [identityType, setIdentityType] = useState<IdentityType>('Personal');
   const [description, setDescription] = useState('');
   const { createIdentity, isLoading } = usePersonaService();
+  // Esc 关闭；提交中不逃逸
+  useEscapeToClose(isOpen && !isLoading, onClose);
 
   const identityTypes: IdentityType[] = ['Personal', 'Work', 'Social', 'Financial', 'Gaming'];
 

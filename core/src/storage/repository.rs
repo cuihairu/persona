@@ -276,17 +276,22 @@ impl CredentialRepository {
         Ok(credentials)
     }
 
-    /// Search credentials by name
-    pub async fn search_by_name(&self, query: &str) -> Result<Vec<Credential>> {
+    /// Search credentials by name / username / url (substring, case-insensitive
+    /// per SQLite LIKE). NULL columns simply never match.
+    pub async fn search_by_fields(&self, query: &str) -> Result<Vec<Credential>> {
         let search_query = format!("%{}%", query);
         let rows = sqlx::query(
             r#"
             SELECT id, identity_id, name, credential_type, security_level, url, username,
                    encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
                    last_accessed, is_active, is_favorite
-            FROM credentials WHERE name LIKE ? AND is_active = 1 ORDER BY created_at DESC
+            FROM credentials
+            WHERE (name LIKE ? OR username LIKE ? OR url LIKE ?) AND is_active = 1
+            ORDER BY created_at DESC
             "#,
         )
+        .bind(&search_query)
+        .bind(&search_query)
         .bind(&search_query)
         .fetch_all(self.db.pool())
         .await
@@ -1381,6 +1386,8 @@ mod tests {
 
         let mut renamed = fetched.clone();
         renamed.name = "Renamed credential".to_string();
+        renamed.username = Some("alice-search".to_string());
+        renamed.url = Some("https://search-hit.example.com".to_string());
         renamed.is_favorite = true;
         repo.update(&renamed).await.unwrap();
 
@@ -1399,10 +1406,22 @@ mod tests {
         );
         assert_eq!(repo.find_favorites().await.unwrap().len(), 1);
 
-        let hits = repo.search_by_name("Renamed").await.unwrap();
+        let hits = repo.search_by_fields("Renamed").await.unwrap();
         assert_eq!(hits.len(), 1);
+        // username / url 子串同样命中（NULL 列不参与匹配）
+        assert_eq!(
+            repo.search_by_fields("alice-search").await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            repo.search_by_fields("search-hit.example.com")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(repo
-            .search_by_name("no-match-xyz")
+            .search_by_fields("no-match-xyz")
             .await
             .unwrap()
             .is_empty());

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { XMarkIcon, ShieldExclamationIcon } from '@heroicons/react/24/outline';
 import { personaAPI } from '@/utils/api';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export interface ChangeMasterPasswordModalProps {
   isOpen: boolean;
@@ -49,14 +50,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
   }, [isOpen, initialOldPassword]);
 
   // 非 forced 才可 Esc 离开；forced 模式轮换完成前不能逃逸
-  useEffect(() => {
-    if (!isOpen || forced) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, forced, onCancel]);
+  useEscapeToClose(isOpen && !forced, onCancel);
 
   if (!isOpen) return null;
 

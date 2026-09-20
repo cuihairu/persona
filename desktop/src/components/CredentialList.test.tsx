@@ -259,6 +259,95 @@ describe('components/CredentialList', () => {
     });
   });
 
+  it('injecting the pending selection clears search and sidebar filter so the target is visible', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    // c1 是 Password；侧栏选中 ApiKey 分类 + 本地搜索词都会把它挡住
+    setupList(
+      [
+        makeCred({ id: 'c1', name: 'JumpTarget' }),
+        makeCred({ id: 'c2', name: 'Other', credential_type: 'ApiKey' }),
+      ],
+      { getCredentialData },
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+      target: { value: 'Other' },
+    });
+    act(() => {
+      useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'ApiKey' } });
+    });
+    expect(screen.queryByTestId('credential-row-c1')).not.toBeInTheDocument();
+
+    act(() => {
+      useAppStore.setState({
+        pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
+      });
+    });
+
+    // 注入同时清筛选：目标行可见、搜索框已清空、侧栏分类复位
+    await screen.findByTestId('credential-row-c1');
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
+    expect(screen.getByPlaceholderText('Search credentials...')).toHaveValue('');
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
+  });
+
+  it('clears the pending selection when the list belongs to the identity but the target is gone', () => {
+    setupList([makeCred({ id: 'c1', name: 'Present' })]);
+
+    act(() => {
+      useAppStore.setState({
+        pendingCredentialSelection: { identityId: 'i1', credentialId: 'c99' },
+      });
+    });
+
+    // 目标已删除：pending 作废防残留
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+  });
+
+  it('keeps the pending selection while the credential list still belongs to the previous identity', () => {
+    // 换身份后旧列表尚未替换的中间态（首元素身份不匹配）：不能误清 pending
+    setupList([makeCred({ id: 'c1', name: 'Stale', identity_id: 'i0' })]);
+
+    act(() => {
+      useAppStore.setState({
+        pendingCredentialSelection: { identityId: 'i1', credentialId: 'c99' },
+      });
+    });
+
+    expect(useAppStore.getState().pendingCredentialSelection).toEqual({
+      identityId: 'i1',
+      credentialId: 'c99',
+    });
+  });
+
+  it('clears the detail pane when a filter change hides the selected credential', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: {},
+    });
+    setupList(
+      [
+        makeCred({ id: 'c1', name: 'Picked' }),
+        makeCred({ id: 'c2', name: 'Keyed', credential_type: 'ApiKey' }),
+      ],
+      { getCredentialData },
+    );
+
+    fireEvent.click(screen.getByTestId('credential-row-c1'));
+    await screen.findByTestId('detail-pane');
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
+
+    // 侧栏切到 ApiKey 分类：c1 不在结果集里 → 详情面板让位占位
+    act(() => {
+      useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'ApiKey' } });
+    });
+
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+  });
+
   it('renders row variants: security colors, hostnames and favorites', () => {
     setupList([
       makeCred({ id: 'c1', name: 'N-Critical', credential_type: 'Password', security_level: 'Critical' }),

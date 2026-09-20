@@ -56,9 +56,12 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   const { credentials, currentIdentity, getCredentialData } = usePersonaService();
   // flag 开时批量预取列表页 favicon（纯缓存读；miss 不触发抓取）
   useFavicons(credentials.map((c) => c.url));
-  const [searchQuery, setSearchQuery] = useState('');
   const [credentialData, setCredentialData] = useState<any>(null);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
+  const resetSidebarFilter = useAppStore((s) => s.resetSidebarFilter);
+  // 搜索词在 store（见 appStore 注释）：与选中/侧栏筛选同批更新，避免注入中间帧
+  const searchQuery = useAppStore((s) => s.credentialSearchQuery);
+  const setCredentialSearchQuery = useAppStore((s) => s.setCredentialSearchQuery);
   const pendingSelection = useAppStore((s) => s.pendingCredentialSelection);
   const clearPendingCredentialSelection = useAppStore((s) => s.clearPendingCredentialSelection);
   const selectedCredentialId = useAppStore((s) => s.selectedCredentialId);
@@ -89,6 +92,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     ...treeFilter,
   });
 
+
   const handleCredentialClick = async (credential: Credential) => {
     // 先清空旧数据再选中：同一批 setState，面板首帧即新条目 + loading，不闪现上一条
     setCredentialData(null);
@@ -97,21 +101,45 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     setCredentialData(data);
   };
 
-  // 切身份后旧选中项悬空：清空右栏选中
+  // 切身份后旧选中项悬空：清空右栏选中与搜索词
   useEffect(() => {
     setSelectedCredentialId(null);
     setCredentialData(null);
-  }, [currentIdentity?.id]);
+    setCredentialSearchQuery('');
+  }, [currentIdentity?.id, setSelectedCredentialId, setCredentialSearchQuery]);
+
+  // 筛选（本地搜索词 / 侧栏分类）变化后选中项不再可见时清详情面板：
+  // 1Password 语义——筛选是导航动作，不保留与结果集脱节的详情
+  const isSelectionVisible =
+    !selectedCredentialId ||
+    filteredCredentials.some((c) => c.id === selectedCredentialId);
+  useEffect(() => {
+    if (!isSelectionVisible) {
+      setSelectedCredentialId(null);
+      setCredentialData(null);
+    }
+  }, [isSelectionVisible, setSelectedCredentialId]);
 
   // 全局搜索跨身份跳转：目标身份的凭据就绪后注入选中并清除 pending
   // （声明在清选中 effect 之后；凭据异步加载完成会再次触发本 effect）
   useEffect(() => {
     if (!pendingSelection || pendingSelection.identityId !== currentIdentity?.id) return;
     const target = credentials.find((c) => c.id === pendingSelection.credentialId);
-    if (!target) return;
+    if (!target) {
+      // 列表已归属目标身份（首元素校验，排除换身份后旧列表尚未替换的中间态）
+      // 而目标不在其中（已删除）：pending 作废防残留
+      if (credentials.length > 0 && credentials[0].identity_id === pendingSelection.identityId) {
+        clearPendingCredentialSelection();
+      }
+      return;
+    }
+    // 清本地搜索词与侧栏分类：保证跳转目标可见（否则注入的选中
+    // 会被上面的"筛选不可见清选中"effect 立即清掉）
+    setCredentialSearchQuery('');
+    resetSidebarFilter();
     handleCredentialClick(target);
     clearPendingCredentialSelection();
-  }, [pendingSelection, credentials, currentIdentity, handleCredentialClick, clearPendingCredentialSelection]);
+  }, [pendingSelection, credentials, currentIdentity, handleCredentialClick, clearPendingCredentialSelection, resetSidebarFilter, setCredentialSearchQuery]);
 
   if (!currentIdentity) {
     return (
@@ -151,13 +179,13 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
         <input
           type="text"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(e) => setCredentialSearchQuery(e.target.value)}
           className="input pl-10"
           placeholder="Search credentials..."
         />
       </div>
 
-      {/* 空态跨整宽；右栏不渲染（选中项保留在 state，清筛选后面板原样回来） */}
+      {/* 空态跨整宽；右栏不渲染（选中项被筛选挡住时已由 effect 清空） */}
       {filteredCredentials.length === 0 ? (
         <div className="text-center py-12">
           <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />

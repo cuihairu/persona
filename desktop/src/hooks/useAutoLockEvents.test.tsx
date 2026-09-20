@@ -41,6 +41,7 @@ describe('hooks/useAutoLockEvents', () => {
       pendingCredentialSelection: { identityId: 'id-1', credentialId: 'c1' },
       faviconCache: { 'a.com': { mime_type: 'image/png', data: 'AAA' } },
       faviconMisses: { 'b.com': true },
+      sidebarFilter: { kind: 'favorites' },
       error: null,
     });
   });
@@ -99,6 +100,8 @@ describe('hooks/useAutoLockEvents', () => {
     expect(state.faviconMisses).toEqual({});
     expect(state.selectedCredentialId).toBeNull();
     expect(state.pendingCredentialSelection).toBeNull();
+    // 侧栏分类选中同随锁复位
+    expect(state.sidebarFilter).toEqual({ kind: 'all' });
   });
 
   it('unsubscribes on unmount and cancels a pending subscription', async () => {

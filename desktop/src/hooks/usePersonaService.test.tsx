@@ -29,6 +29,7 @@ describe('hooks/usePersonaService', () => {
       sshKeys: [],
       isLoading: false,
       error: null,
+      sidebarFilter: { kind: 'all' },
     });
   });
 
@@ -162,6 +163,7 @@ describe('hooks/usePersonaService', () => {
       isUnlocked: true,
       selectedCredentialId: 'c1',
       pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
+      sidebarFilter: { kind: 'type', value: 'Password' },
     });
     jest.spyOn(personaAPI, 'lockService').mockResolvedValue({
       success: true,
@@ -181,7 +183,71 @@ describe('hooks/usePersonaService', () => {
     // 选中与待注入跳转随锁作废
     expect(useAppStore.getState().selectedCredentialId).toBeNull();
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+    // 侧栏分类选中随锁复位（解锁后不残留上一会话的树选中）
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
     expect(toastSuccess).toHaveBeenCalledWith('Service locked');
+  });
+
+  it('loadCredentialsForIdentity clears pending selection when loading fails', async () => {
+    mockUnlockedOnMount();
+    useAppStore.setState({
+      pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
+    });
+
+    // success: false 路径
+    jest.spyOn(personaAPI, 'getCredentialsForIdentity').mockResolvedValueOnce({
+      success: false,
+      data: undefined,
+      error: 'db busy',
+    });
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.loadCredentialsForIdentity('i1');
+    });
+    // 凭据没加载出来 pending 永远不会被注入；清掉防下次进该身份突然选中
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+    expect(useAppStore.getState().error).toBe('db busy');
+
+    // throw 路径同样清理
+    useAppStore.setState({
+      pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
+    });
+    jest.spyOn(personaAPI, 'getCredentialsForIdentity').mockRejectedValueOnce(
+      new Error('ipc gone'),
+    );
+    await act(async () => {
+      await result.current.loadCredentialsForIdentity('i1');
+    });
+    expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
+  });
+
+  it('switchIdentity skips the toast when called with silent', async () => {
+    mockUnlockedOnMount();
+    const identity = makeIdentity('i-silent');
+    jest.spyOn(personaAPI, 'setActiveIdentity').mockResolvedValue({
+      success: true,
+      data: true,
+      error: undefined,
+    } as any);
+    jest.spyOn(personaAPI, 'getCredentialsForIdentity').mockResolvedValue({
+      success: true,
+      data: [],
+      error: undefined,
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.switchIdentity(identity, { silent: true });
+    });
+    // 搜索跳转是手段不是用户动作，切换 toast 属噪声
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(useAppStore.getState().currentIdentity?.id).toBe('i-silent');
+
+    // 不传 silent 保持原行为
+    await act(async () => {
+      await result.current.switchIdentity(identity);
+    });
+    expect(toastSuccess).toHaveBeenCalledWith(`Switched to ${identity.name}`);
   });
 
   it('lockService toasts error on failure and on thrown exception', async () => {

@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores/appStore';
 import type { FeatureFlags, Identity, IdentityType, ThemePreference } from '@/types';
 import { PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
 import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -205,11 +206,13 @@ const SECURITY_EXPIRY_OPTIONS: { value: string; label: string }[] = [
   { value: '365', label: '365 days' },
 ];
 
-const SecurityPane: React.FC = () => {
+const SecurityPane: React.FC<{
+  changingPassword: boolean;
+  setChangingPassword: (open: boolean) => void;
+}> = ({ changingPassword, setChangingPassword }) => {
   const { lockService } = usePersonaService();
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
-  const [changingPassword, setChangingPassword] = useState(false);
 
   // 初始值来自服务端真相（旧 JSON 缺键 → null = 不过期）
   useEffect(() => {
@@ -316,7 +319,10 @@ const SecurityPane: React.FC = () => {
   );
 };
 
-const GeneralPane: React.FC = () => {
+const GeneralPane: React.FC<{
+  changingPassword: boolean;
+  setChangingPassword: (open: boolean) => void;
+}> = ({ changingPassword, setChangingPassword }) => {
   const featureFlags = useAppStore((s) => s.featureFlags);
   const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
   const theme = useAppStore((s) => s.theme);
@@ -376,7 +382,10 @@ const GeneralPane: React.FC = () => {
       </section>
 
       <section className="mb-5">
-        <SecurityPane />
+        <SecurityPane
+          changingPassword={changingPassword}
+          setChangingPassword={setChangingPassword}
+        />
       </section>
 
       <section>
@@ -429,6 +438,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Identity>>({});
   const [draftTags, setDraftTags] = useState<string>('');
+  // 改密弹窗开关提升到本层：SettingsModal 的 Esc 在其叠开时让位上层
+  const [changingPassword, setChangingPassword] = useState(false);
+  useEscapeToClose(isOpen && !changingPassword, onClose);
 
   const editingIdentity = useMemo(
     () => identities.find((id) => id.id === editingId) ?? null,
@@ -530,7 +542,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
         <div className="p-6">
           {tab === 'general' ? (
-            <GeneralPane />
+            <GeneralPane
+              changingPassword={changingPassword}
+              setChangingPassword={setChangingPassword}
+            />
           ) : (
             <div className="space-y-3">
               {identities.length === 0 ? (

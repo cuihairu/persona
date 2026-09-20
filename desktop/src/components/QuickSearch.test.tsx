@@ -187,7 +187,7 @@ describe('components/QuickSearch', () => {
       identityId: 'i2',
       credentialId: 'c9',
     });
-    expect(switchIdentity).toHaveBeenCalledWith(IDENTITIES[1]);
+    expect(switchIdentity).toHaveBeenCalledWith(IDENTITIES[1], { silent: true });
     expect(screen.queryByTestId('quick-search-overlay')).not.toBeInTheDocument();
   });
 

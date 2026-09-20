@@ -1398,11 +1398,11 @@ impl PersonaService {
         Ok(key)
     }
 
-    /// Search credentials by name
+    /// Search credentials by name / username / url
     pub async fn search_credentials(&self, query: &str) -> Result<Vec<Credential>> {
         self.ensure_unlocked()?;
         self.touch_activity();
-        self.credential_repo.search_by_name(query).await
+        self.credential_repo.search_by_fields(query).await
     }
 
     /// Get favorite credentials
@@ -3578,11 +3578,17 @@ mod tests {
         .await;
         let mut fav = cred.clone();
         fav.is_favorite = true;
+        fav.username = Some("octocat".to_string());
         service.update_credential(&fav).await.unwrap();
         seed_credential(&service, identity.id, "API key", CredentialType::ApiKey).await;
 
         assert_eq!(service.search_credentials("").await.unwrap().len(), 2);
         assert_eq!(service.search_credentials("GitHub").await.unwrap().len(), 1);
+        // username / url 同样参与搜索（repository search_by_fields 链路）
+        assert_eq!(
+            service.search_credentials("octocat").await.unwrap().len(),
+            1
+        );
         assert_eq!(service.get_favorite_credentials().await.unwrap().len(), 1);
         assert_eq!(
             service

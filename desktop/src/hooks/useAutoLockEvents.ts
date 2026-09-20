@@ -30,6 +30,8 @@ export const useAutoLockEvents = (enabled: boolean) => {
   const clearPendingCredentialSelection = useAppStore((s) => s.clearPendingCredentialSelection);
   const setSelectedCredentialId = useAppStore((s) => s.setSelectedCredentialId);
   const setEditingCredential = useAppStore((s) => s.setEditingCredential);
+  const resetSidebarFilter = useAppStore((s) => s.resetSidebarFilter);
+  const setCredentialSearchQuery = useAppStore((s) => s.setCredentialSearchQuery);
 
   useEffect(() => {
     if (!enabled) {
@@ -59,6 +61,9 @@ export const useAutoLockEvents = (enabled: boolean) => {
           setSelectedCredentialId(null);
           // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
           setEditingCredential(null);
+          // 侧栏分类选中同随锁复位（与手动 lockService 对齐）
+          resetSidebarFilter();
+          setCredentialSearchQuery('');
           break;
         case 'unlocked':
           setPendingSeconds(null);
@@ -85,6 +90,8 @@ export const useAutoLockEvents = (enabled: boolean) => {
     clearPendingCredentialSelection,
     setSelectedCredentialId,
     setEditingCredential,
+    resetSidebarFilter,
+    setCredentialSearchQuery,
   ]);
 
   useEffect(() => {

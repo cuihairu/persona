@@ -11,6 +11,7 @@ import type {
 } from '@/types';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
 import ReauthModal from './ReauthModal';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface CreateCredentialModalProps {
   isOpen: boolean;
@@ -64,6 +65,8 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
   } = usePersonaService();
   const reauth = useReauth();
   const isEditMode = !!editCredential;
+  // Esc 关闭：REAUTH 弹窗叠开时让位上层；提交中不逃逸（半提交态关闭观感割裂）
+  useEscapeToClose(isOpen && !reauth.isOpen && !isLoading, onClose);
   // payload 保存命中 REAUTH_REQUIRED 后只自动重试一次（防循环）
   const retryRef = useRef(false);
   const [formData, setFormData] = useState({

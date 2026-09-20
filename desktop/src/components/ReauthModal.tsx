@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { XMarkIcon, ShieldExclamationIcon } from '@heroicons/react/24/outline';
+import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 export interface ReauthModalProps {
   isOpen: boolean;
@@ -31,15 +32,8 @@ const ReauthModal: React.FC<ReauthModalProps> = ({
     }
   }, [isOpen]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen, onClose]);
-
+  // Esc 即关（useEscapeToClose 共享实现；叠开时上层弹窗收口下层监听）
+  useEscapeToClose(isOpen, onClose);
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {

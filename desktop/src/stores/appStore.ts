@@ -52,6 +52,10 @@ interface AppState {
   theme: ThemePreference;
   /** 侧栏分类树选中项（单选；Sidebar 写、CredentialList 读，换身份时 reset） */
   sidebarFilter: SidebarFilter;
+  /** 凭据列表本地搜索词（CredentialList 读写；换身份/锁屏清空）。
+   *  放 store 而非组件 state：pending 注入需与选中/侧栏筛选同一批更新，
+   *  React state 慢一帧会产生"选中已置、搜索词未清"的中间帧误触清选中 */
+  credentialSearchQuery: string;
   /** 待注入的凭据选中项（QuickSearch 写、CredentialList 消费后清除） */
   pendingCredentialSelection: PendingCredentialSelection | null;
   /** 当前选中凭据 id（CredentialList 派生详情对象；锁屏清空） */
@@ -76,6 +80,7 @@ interface AppState {
   setTheme: (theme: ThemePreference) => void;
   setSidebarFilter: (filter: SidebarFilter) => void;
   resetSidebarFilter: () => void;
+  setCredentialSearchQuery: (query: string) => void;
   setPendingCredentialSelection: (selection: PendingCredentialSelection) => void;
   clearPendingCredentialSelection: () => void;
   setSelectedCredentialId: (id: string | null) => void;
@@ -107,6 +112,7 @@ export const useAppStore = create<AppState>((set) => ({
   passwordChangeRequired: false,
   theme: readStoredTheme(),
   sidebarFilter: DEFAULT_SIDEBAR_FILTER,
+  credentialSearchQuery: '',
   pendingCredentialSelection: null,
   selectedCredentialId: null,
   editingCredential: null,
@@ -125,6 +131,7 @@ export const useAppStore = create<AppState>((set) => ({
   setTheme: (theme) => set({ theme }),
   setSidebarFilter: (filter) => set({ sidebarFilter: filter }),
   resetSidebarFilter: () => set({ sidebarFilter: DEFAULT_SIDEBAR_FILTER }),
+  setCredentialSearchQuery: (query) => set({ credentialSearchQuery: query }),
   setPendingCredentialSelection: (selection) => set({ pendingCredentialSelection: selection }),
   clearPendingCredentialSelection: () => set({ pendingCredentialSelection: null }),
   setSelectedCredentialId: (id) => set({ selectedCredentialId: id }),

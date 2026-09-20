@@ -93,7 +93,8 @@ const QuickSearch = () => {
       identityId: credential.identity_id,
       credentialId: credential.id,
     });
-    switchIdentity(target);
+    // silent：跳转目标是用户点击的条目，"Switched to ..." toast 只会盖住跳转本身
+    switchIdentity(target, { silent: true });
   };
 
   const handleContainerKeyDown = (event: React.KeyboardEvent) => {

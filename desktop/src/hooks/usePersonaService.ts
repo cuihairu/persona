@@ -38,6 +38,8 @@ export const usePersonaService = () => {
     setSelectedCredentialId,
     setEditingCredential,
     setPasswordChangeRequired,
+    resetSidebarFilter,
+    setCredentialSearchQuery,
   } = useAppStore();
 
   // Check if service is unlocked on mount
@@ -115,6 +117,10 @@ export const usePersonaService = () => {
         // 选中与待注入的跨身份跳转都随锁作废（否则解锁后可能自动选中陈旧条目）
         clearPendingCredentialSelection();
         setSelectedCredentialId(null);
+        // 侧栏分类选中同随锁复位（否则解锁后树选中残留上一会话状态）
+        resetSidebarFilter();
+        // 列表搜索词同随锁清空
+        setCredentialSearchQuery('');
         // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
         setEditingCredential(null);
         toast.success('Service locked');
@@ -249,7 +255,7 @@ export const usePersonaService = () => {
     }
   };
 
-  const switchIdentity = async (identity: Identity) => {
+  const switchIdentity = async (identity: Identity, options?: { silent?: boolean }) => {
     setCurrentIdentity(identity);
     try {
       await personaAPI.setActiveIdentity(identity.id);
@@ -257,7 +263,10 @@ export const usePersonaService = () => {
       // ignore
     }
     await loadCredentialsForIdentity(identity.id);
-    toast.success(`Switched to ${identity.name}`);
+    // 搜索跳转等场景传 silent：切换是手段不是用户动作，toast 属噪声
+    if (!options?.silent) {
+      toast.success(`Switched to ${identity.name}`);
+    }
   };
 
   const loadCredentialsForIdentity = async (identityId: string) => {
@@ -267,9 +276,12 @@ export const usePersonaService = () => {
         setCredentials(response.data);
       } else {
         setError(response.error || 'Failed to load credentials');
+        // 凭据没加载出来，pending 跳转永远不会被注入；清掉防下次进该身份突然选中
+        clearPendingCredentialSelection();
       }
     } catch {
       setError('Failed to load credentials');
+      clearPendingCredentialSelection();
     }
   };
 
