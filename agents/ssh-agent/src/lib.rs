@@ -19,7 +19,7 @@ pub use approval::{
     fingerprint_for_blob, ApprovalHandler, ApprovalRequest, DenyAllApprovalHandler,
     TtyApprovalHandler,
 };
-pub use daemon::{run_agent, run_agent_with_approval};
+pub use daemon::{run_agent, run_agent_with_approval, run_agent_with_hooks};
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
@@ -95,9 +95,17 @@ impl Default for Agent {
 impl Agent {
     pub fn new() -> Self {
         let enforcer = PolicyEnforcer::from_env();
-        // Use mock provider by default; desktop/mobile apps can inject real implementation
+        // Fail-closed by default: the mock is unavailable and fails, so a
+        // `require_biometric` policy denies signatures until the host injects
+        // a real provider (`with_biometric_provider`). The previous default
+        // (available + always verified) silently waved biometric-gated
+        // signatures through.
         let biometric_provider: Arc<dyn BiometricProvider> =
-            Arc::new(persona_core::MockBiometricProvider::default());
+            Arc::new(persona_core::MockBiometricProvider {
+                available: false,
+                force_fail: true,
+                platform: persona_core::BiometricPlatform::Unknown,
+            });
 
         Self {
             keys: Vec::new(),
@@ -110,6 +118,13 @@ impl Agent {
     /// Replace the approval handler (desktop/mobile apps inject their own UI).
     pub fn with_approval_handler(mut self, handler: Arc<dyn ApprovalHandler>) -> Self {
         self.approval_handler = handler;
+        self
+    }
+
+    /// Replace the biometric provider (hosts inject the OS-backed provider;
+    /// without this the default provider denies every biometric gate).
+    pub fn with_biometric_provider(mut self, provider: Arc<dyn BiometricProvider>) -> Self {
+        self.biometric_provider = provider;
         self
     }
 
@@ -874,6 +889,39 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
             &with_key.biometric_provider,
             &clone.biometric_provider
         ));
+    }
+
+    #[test]
+    fn default_agent_biometric_is_deny() {
+        // The default provider must be unavailable and fail, so a
+        // `require_biometric` policy denies instead of silently passing.
+        let agent = Agent::default();
+        assert!(!agent.biometric_provider.is_available(detect_platform()));
+        let prompt = BiometricPrompt {
+            user_id: uuid::Uuid::new_v4(),
+            reason: "default-deny probe".to_string(),
+            platform: detect_platform(),
+        };
+        assert!(agent.biometric_provider.authenticate(&prompt).is_err());
+    }
+
+    #[test]
+    fn with_biometric_provider_overrides_default() {
+        let provider = stub_biometric(true, StubOutcome::Succeed(true));
+        let agent = Agent::default().with_biometric_provider(provider);
+        assert!(agent.biometric_provider.is_available(detect_platform()));
+        let prompt = BiometricPrompt {
+            user_id: uuid::Uuid::new_v4(),
+            reason: "override probe".to_string(),
+            platform: detect_platform(),
+        };
+        assert!(
+            agent
+                .biometric_provider
+                .authenticate(&prompt)
+                .unwrap()
+                .verified
+        );
     }
 
     fn clear_test_key_env() {

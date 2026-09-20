@@ -20,11 +20,12 @@ use tracing::{info, warn, Level};
 use crate::approval::ApprovalHandler;
 use crate::transport::{default_agent_path, AgentListener};
 use crate::{handle_connection, resolve_persona_db_path, Agent};
+use persona_core::BiometricProvider;
 
 /// Run the SSH agent daemon: bind the agent socket, load keys from the
 /// Persona vault, and serve agent requests until the process is killed.
 pub async fn run_agent() -> Result<()> {
-    run_agent_with_approval(None).await
+    run_agent_with_hooks(None, None).await
 }
 
 /// Run the SSH agent daemon with a custom approval handler.
@@ -33,6 +34,19 @@ pub async fn run_agent() -> Result<()> {
 /// (e.g. the desktop app) inject their own [`ApprovalHandler`] so signature
 /// confirmations surface as UI instead of stdin.
 pub async fn run_agent_with_approval(approval: Option<Arc<dyn ApprovalHandler>>) -> Result<()> {
+    run_agent_with_hooks(approval, None).await
+}
+
+/// Run the SSH agent daemon with both host-injected hooks.
+///
+/// `biometric` overrides the fail-closed default provider so
+/// `require_biometric` policies can pass via the OS-backed ceremony; `None`
+/// keeps the default (deny). `approval` as in
+/// [`run_agent_with_approval`].
+pub async fn run_agent_with_hooks(
+    approval: Option<Arc<dyn ApprovalHandler>>,
+    biometric: Option<Arc<dyn BiometricProvider>>,
+) -> Result<()> {
     RedactedLoggerBuilder::new(Level::INFO)
         .include_target(false)
         .init()?;
@@ -70,6 +84,9 @@ pub async fn run_agent_with_approval(approval: Option<Arc<dyn ApprovalHandler>>)
     let mut agent = Agent::new();
     if let Some(handler) = approval {
         agent = agent.with_approval_handler(handler);
+    }
+    if let Some(provider) = biometric {
+        agent = agent.with_biometric_provider(provider);
     }
     agent
         .load_keys_from_persona(&db_path)
