@@ -39,6 +39,8 @@ export default {
     passkeys: 'Passkeys',
   },
   sidebar: {
+    a11yLabel: 'Sidebar',
+    a11yNav: 'Views',
     allItems: 'All Items',
     favorites: 'Favorites',
     types: 'Types',

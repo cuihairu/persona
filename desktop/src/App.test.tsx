@@ -162,7 +162,7 @@ describe('App', () => {
   it('shows the spinner while initializing', () => {
     serviceState.isLoading = true;
     render(<App />);
-    expect(screen.getByTestId('loading-spinner')).toHaveTextContent('Initializing Persona...');
+    expect(screen.getByTestId('loading-spinner')).toHaveTextContent('正在初始化 Persona…');
   });
 
   it('shows the unlock screen with a dismissible error when locked', () => {
@@ -218,17 +218,17 @@ describe('App', () => {
 
     const nav = (label: string) => fireEvent.click(screen.getByRole('button', { name: label }));
 
-    nav('Statistics');
-    expect(screen.getByTestId('view-title')).toHaveTextContent('Statistics');
+    nav('统计');
+    expect(screen.getByTestId('view-title')).toHaveTextContent('统计');
     nav('SSH Agent');
     expect(screen.getByTestId('ssh-agent-panel')).toBeInTheDocument();
-    nav('Wallets');
+    nav('钱包');
     expect(screen.getByTestId('wallet-panel')).toBeInTheDocument();
-    nav('Watchtower');
+    nav('安全瞭望');
     expect(screen.getByTestId('watchtower-panel')).toBeInTheDocument();
-    nav('Passkeys');
+    nav('通行密钥');
     expect(screen.getByTestId('passkey-panel')).toBeInTheDocument();
-    nav('Credentials');
+    nav('凭据');
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
   });
 
@@ -246,12 +246,12 @@ describe('App', () => {
     });
 
     // 主航道恒可见，高级功能默认隐藏
-    expect(screen.getByRole('button', { name: 'Credentials' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Statistics' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Watchtower' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'SSH Agent' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Passkeys' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '通行密钥' })).not.toBeInTheDocument();
   });
 
   it('keeps the default flags when the settings read fails', async () => {
@@ -264,8 +264,8 @@ describe('App', () => {
     });
 
     // 读取失败静默保持默认（全关），主航道不受影响、不崩
-    expect(screen.getByRole('button', { name: 'Credentials' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
   });
 
@@ -274,8 +274,8 @@ describe('App', () => {
     render(<App />);
 
     // 默认 mock 全开：切到 Wallets
-    await screen.findByRole('button', { name: 'Wallets' });
-    fireEvent.click(screen.getByRole('button', { name: 'Wallets' }));
+    await screen.findByRole('button', { name: '钱包' });
+    fireEvent.click(screen.getByRole('button', { name: '钱包' }));
     expect(screen.getByTestId('wallet-panel')).toBeInTheDocument();
 
     // 运行中关闭 wallet 开关：按钮消失、视图自动回退
@@ -287,7 +287,7 @@ describe('App', () => {
 
     expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
   });
 
   it('resets the sidebar filter when the identity changes', () => {
@@ -308,10 +308,10 @@ describe('App', () => {
     render(<App />);
 
     // 侧栏底部操作区：按可访问名取（不再依赖按钮顺序）
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
     expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Lock session' }));
+    fireEvent.click(screen.getByRole('button', { name: '锁定会话' }));
     expect(lockService).toHaveBeenCalledTimes(1);
   });
 
@@ -320,7 +320,7 @@ describe('App', () => {
     const { rerender } = render(<App />);
 
     // 先开设置：⌘L 后 modal 复位，解锁后不会自动重开
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
     expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'l', metaKey: true });
@@ -344,7 +344,7 @@ describe('App', () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: 'e', metaKey: true });
-    expect(copyToClipboardWithToast).toHaveBeenCalledWith('alice', 'Username');
+    expect(copyToClipboardWithToast).toHaveBeenCalledWith('alice', '用户名');
   });
 
   it('prompts to select an entry on cmd+E without a selection', () => {
@@ -352,7 +352,7 @@ describe('App', () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: 'e', ctrlKey: true });
-    expect(toast.error).toHaveBeenCalledWith('Select an entry first');
+    expect(toast.error).toHaveBeenCalledWith('请先选中一个条目');
     expect(copyToClipboardWithToast).not.toHaveBeenCalled();
   });
 
@@ -366,7 +366,7 @@ describe('App', () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: 'e', metaKey: true });
-    expect(toast.error).toHaveBeenCalledWith('This entry has no username');
+    expect(toast.error).toHaveBeenCalledWith('该条目没有用户名');
     expect(copyToClipboardWithToast).not.toHaveBeenCalled();
   });
 
@@ -380,7 +380,7 @@ describe('App', () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: 'e', metaKey: true });
-    expect(toast.error).toHaveBeenCalledWith('Select an entry first');
+    expect(toast.error).toHaveBeenCalledWith('请先选中一个条目');
     expect(copyToClipboardWithToast).not.toHaveBeenCalled();
   });
 
@@ -431,20 +431,20 @@ describe('App', () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Statistics' }));
+    fireEvent.click(screen.getByRole('button', { name: '统计' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Total Identities')).toBeInTheDocument();
+      expect(screen.getByText('身份总数')).toBeInTheDocument();
     });
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText('Login')).toBeInTheDocument();
-    expect(screen.getByText('High')).toBeInTheDocument();
+    expect(screen.getByText('高')).toBeInTheDocument();
 
     // 失败分支：静默 console.error，保持加载态
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
     (personaAPI.getStatistics as jest.Mock).mockRejectedValueOnce(new Error('x'));
-    fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Statistics' }));
+    fireEvent.click(screen.getByRole('button', { name: '凭据' }));
+    fireEvent.click(screen.getByRole('button', { name: '统计' }));
     await act(async () => {});
     consoleError.mockRestore();
   });

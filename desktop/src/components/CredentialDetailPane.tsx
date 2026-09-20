@@ -509,7 +509,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                     </span>
                     <button
                       onClick={() => onCopy(value!, label)}
-                      aria-label={`Copy ${label}`}
+                      aria-label={t('detail.copyLabel', { name: label })}
                       className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                     >
                       <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
@@ -548,7 +548,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                     </span>
                     <button
                       onClick={() => onCopy(value!, label)}
-                      aria-label={`Copy ${label}`}
+                      aria-label={t('detail.copyLabel', { name: label })}
                       className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
                     >
                       <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />

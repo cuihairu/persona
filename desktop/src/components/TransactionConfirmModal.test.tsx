@@ -132,7 +132,7 @@ describe('components/TransactionConfirmModal', () => {
     expect(onSuccess).toHaveBeenCalledWith(signedTx);
 
     // 复制按钮走 copyWithAutoClear
-    fireEvent.click(screen.getByLabelText('Copy hash'));
+    fireEvent.click(screen.getByLabelText('复制哈希'));
     expect(copyWithAutoClear).toHaveBeenCalledWith('0xdeadbeef');
   });
 
@@ -185,7 +185,7 @@ describe('components/TransactionConfirmModal', () => {
     fillForm();
     fireEvent.click(screen.getByTestId('confirm-sign-button'));
 
-    expect(screen.getByText('Signing transaction…')).toBeInTheDocument();
+    expect(screen.getByText('正在签名交易…')).toBeInTheDocument();
 
     resolveSign({ success: true, data: signedTx });
     await waitFor(() => {
@@ -196,7 +196,7 @@ describe('components/TransactionConfirmModal', () => {
   it('resets the form after closing and remembers nothing on reopen', async () => {
     const { rerender } = renderModal();
     fillForm();
-    fireEvent.click(screen.getByLabelText('Close'));
+    fireEvent.click(screen.getByLabelText('关闭'));
 
     expect(onClose).toHaveBeenCalledTimes(1);
 

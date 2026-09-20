@@ -37,7 +37,7 @@ const emptySettings = { success: true, data: null };
 
 /** General 默认可见；身份管理用例需先切到 Identities tab */
 const openIdentitiesTab = () => {
-  fireEvent.click(screen.getByRole('tab', { name: 'Identities' }));
+  fireEvent.click(screen.getByRole('tab', { name: '身份' }));
 };
 
 describe('components/SettingsModal', () => {
@@ -75,27 +75,27 @@ describe('components/SettingsModal', () => {
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
 
     // 默认 tab：General 四开关（出厂全关），身份区块不可见
-    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: '通用' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('switch', { name: 'SSH Agent' })).toHaveAttribute(
       'aria-checked',
       'false',
     );
-    expect(screen.getByRole('switch', { name: 'Wallets' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.getByRole('switch', { name: 'Passkeys' })).toHaveAttribute(
+    expect(screen.getByRole('switch', { name: '钱包' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('switch', { name: '通行密钥' })).toHaveAttribute(
       'aria-checked',
       'false',
     );
     expect(screen.getByTestId('feature-toggle-passkeys').closest('div')).toHaveTextContent(
-      'Takes effect the next time you unlock',
+      '下次解锁时生效',
     );
-    expect(screen.getByRole('switch', { name: 'Website icons' })).toHaveAttribute(
+    expect(screen.getByRole('switch', { name: '站点图标' })).toHaveAttribute(
       'aria-checked',
       'false',
     );
     expect(screen.getByTestId('feature-toggle-fetch_favicons').closest('div')).toHaveTextContent(
-      'Off by default — no network requests until you opt in',
+      '默认关闭——未开启前不会有任何网络请求',
     );
-    expect(screen.queryByText('No identities yet.')).not.toBeInTheDocument();
+    expect(screen.queryByText('还没有身份。')).not.toBeInTheDocument();
   });
 
   it('renders the theme picker with the current preference checked', () => {
@@ -110,7 +110,7 @@ describe('components/SettingsModal', () => {
 
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
 
-    expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: '外观' })).toBeInTheDocument();
     expect(screen.getByTestId('theme-option-system')).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByTestId('theme-option-light')).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByTestId('theme-option-dark')).toHaveAttribute('aria-checked', 'true');
@@ -211,7 +211,7 @@ describe('components/SettingsModal', () => {
       passkeys: false,
       fetch_favicons: false,
     });
-    expect(screen.getByRole('switch', { name: 'Wallets' })).toHaveAttribute(
+    expect(screen.getByRole('switch', { name: '钱包' })).toHaveAttribute(
       'aria-checked',
       'false',
     );
@@ -248,7 +248,7 @@ describe('components/SettingsModal', () => {
 
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
     openIdentitiesTab();
-    expect(screen.getByText('No identities yet.')).toBeInTheDocument();
+    expect(screen.getByText('还没有身份。')).toBeInTheDocument();
   });
 
   it('edits and saves identity', async () => {
@@ -277,14 +277,14 @@ describe('components/SettingsModal', () => {
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
     openIdentitiesTab();
 
-    fireEvent.click(screen.getByTitle('Edit'));
+    fireEvent.click(screen.getByTitle('编辑'));
 
     const inputs = () => document.querySelectorAll('input.input');
     // order: name, email, phone, tags
     fireEvent.change(inputs()[0], { target: { value: ' New Name ' } });
     fireEvent.change(inputs()[3], { target: { value: 'a, b, c, c' } });
 
-    fireEvent.click(screen.getByText('Save'));
+    fireEvent.click(screen.getByText('保存'));
 
     await act(async () => {});
 
@@ -313,7 +313,7 @@ describe('components/SettingsModal', () => {
 
     render(<SettingsModal isOpen={true} onClose={() => {}} />);
     openIdentitiesTab();
-    fireEvent.click(screen.getByTitle('Delete'));
+    fireEvent.click(screen.getByTitle('删除'));
 
     await act(async () => {});
 
@@ -359,7 +359,7 @@ describe('components/SettingsModal', () => {
     expect(tokenInput.type).toBe('password');
     expect(tokenInput.value).toBe('');
     await waitFor(() => {
-      expect(tokenInput.placeholder).toContain('leave blank to keep');
+      expect(tokenInput.placeholder).toContain('留空表示保持不变');
     });
   });
 
@@ -400,7 +400,7 @@ describe('components/SettingsModal', () => {
     // 服务端真相回填；token 输入框清空（空串 = 后端保留旧值）；
     // placeholder 重查 keyring 存在性，全部微任务在 act 内 flush
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Sync settings saved');
+      expect(toast.success).toHaveBeenCalledWith('同步设置已保存');
     });
     await act(async () => {});
     await waitFor(() => {
@@ -418,7 +418,7 @@ describe('components/SettingsModal', () => {
     fireEvent.click(screen.getByTestId('sync-save'));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith('Server URL is required when sync is enabled');
+      expect(toast.error).toHaveBeenCalledWith('启用同步时必须填写服务器 URL');
     });
     expect(mockSetSync).not.toHaveBeenCalled();
   });
@@ -511,7 +511,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('180');
     });
-    expect(toast.success).toHaveBeenCalledWith('Password policy saved');
+    expect(toast.success).toHaveBeenCalledWith('密码策略已保存');
   });
 
   it('writes null when the policy is switched back to Never', async () => {
@@ -596,17 +596,17 @@ describe('components/SettingsModal', () => {
     // 手动改密走非 forced 弹窗：可取消，旧密码不预填
     fireEvent.click(screen.getByTestId('change-password-button'));
     expect(screen.getByTestId('change-password-modal')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Current password'), {
+    fireEvent.change(screen.getByLabelText('当前密码'), {
       target: { value: 'old-pw' },
     });
-    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'new-pw' } });
-    fireEvent.change(screen.getByLabelText('Confirm new password'), {
+    fireEvent.change(screen.getByLabelText('新密码'), { target: { value: 'new-pw' } });
+    fireEvent.change(screen.getByLabelText('确认新密码'), {
       target: { value: 'new-pw' },
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Change password' }));
+      fireEvent.click(screen.getByRole('button', { name: '修改密码' }));
     });
 
     await waitFor(() => {
@@ -616,7 +616,7 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(lockService).toHaveBeenCalledTimes(1);
     });
-    expect(toast.success).toHaveBeenCalledWith('Master password changed — please sign in again');
+    expect(toast.success).toHaveBeenCalledWith('主密码已修改——请重新登录');
     expect(screen.queryByTestId('change-password-modal')).not.toBeInTheDocument();
   });
 });

@@ -40,8 +40,8 @@ describe('components/SshAgentPanel', () => {
     });
 
     const { getByPlaceholderText, getByText } = render(<SshAgentPanel />);
-    fireEvent.change(getByPlaceholderText('Master password (optional)'), { target: { value: 'pw' } });
-    fireEvent.click(getByText('Start'));
+    fireEvent.change(getByPlaceholderText('主密码（可选）'), { target: { value: 'pw' } });
+    fireEvent.click(getByText('启动'));
 
     await Promise.resolve();
     await Promise.resolve();

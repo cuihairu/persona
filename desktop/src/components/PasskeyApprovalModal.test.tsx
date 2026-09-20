@@ -33,7 +33,7 @@ describe('components/PasskeyApprovalModal', () => {
   it('shows creation title with origin, rp_id and account', () => {
     render(<PasskeyApprovalModal request={createRequest} onRespond={jest.fn()} />);
 
-    expect(screen.getByText('Create a passkey?')).toBeInTheDocument();
+    expect(screen.getByText('创建通行密钥？')).toBeInTheDocument();
     expect(screen.getByTestId('approval-origin')).toHaveTextContent('https://github.com');
     expect(screen.getByTestId('approval-rp-id')).toHaveTextContent('github.com');
     expect(screen.getByTestId('approval-user')).toHaveTextContent('alice');
@@ -43,7 +43,7 @@ describe('components/PasskeyApprovalModal', () => {
   it('hides rp_id/account rows for assert requests', () => {
     render(<PasskeyApprovalModal request={assertRequest} onRespond={jest.fn()} />);
 
-    expect(screen.getByText('Passkey sign-in request')).toBeInTheDocument();
+    expect(screen.getByText('通行密钥登录请求')).toBeInTheDocument();
     expect(screen.queryByTestId('approval-rp-id')).toBeNull();
     expect(screen.queryByTestId('approval-user')).toBeNull();
   });
@@ -56,7 +56,7 @@ describe('components/PasskeyApprovalModal', () => {
     render(<PasskeyApprovalModal request={crossDomain} onRespond={jest.fn()} />);
 
     expect(screen.getByTestId('approval-warning')).toHaveTextContent(
-      'a passkey for evil.example, a different domain',
+      '为另一个域 evil.example 请求通行密钥',
     );
   });
 
@@ -94,6 +94,6 @@ describe('components/PasskeyApprovalModal', () => {
       <PasskeyApprovalModal request={assertRequest} pendingCount={3} onRespond={jest.fn()} />,
     );
 
-    expect(screen.getByTestId('approval-queue-count')).toHaveTextContent('2 more requests');
+    expect(screen.getByTestId('approval-queue-count')).toHaveTextContent('还有 2 个请求等待中');
   });
 });

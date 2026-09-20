@@ -18,8 +18,8 @@ describe('components/ErrorHandling', () => {
     expect(handleApiError({ error: 'boom' })).toBe('boom');
     expect(handleApiError(new Error('nope'))).toBe('nope');
     expect(handleApiError('plain')).toBe('plain');
-    expect(handleApiError({})).toBe('An unexpected error occurred');
-    expect(handleApiError(null)).toBe('An unexpected error occurred');
+    expect(handleApiError({})).toBe('发生意外错误');
+    expect(handleApiError(null)).toBe('发生意外错误');
   });
 
   it('useErrorHandler sets and clears error state', () => {
@@ -54,7 +54,7 @@ describe('components/ErrorHandling', () => {
     act(() => {
       result.current.handleError(42);
     });
-    expect(result.current.error).toBe('An unexpected error occurred');
+    expect(result.current.error).toBe('发生意外错误');
 
     consoleSpy.mockRestore();
   });
@@ -68,7 +68,7 @@ describe('components/ErrorHandling', () => {
     expect(getByText('Oops')).toBeInTheDocument();
     expect(getByText('Details')).toBeInTheDocument();
 
-    getByRole('button', { name: 'Dismiss' }).click();
+    getByRole('button', { name: '忽略' }).click();
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
@@ -87,7 +87,7 @@ describe('components/ErrorHandling', () => {
   it('ErrorDisplay omits the dismiss button and details when not provided', () => {
     render(<ErrorDisplay error="bare" />);
     expect(screen.getByText('bare')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '忽略' })).not.toBeInTheDocument();
   });
 
   it('ErrorBoundary shows the fallback, dev details and recovers via Try Again', () => {
@@ -101,12 +101,12 @@ describe('components/ErrorHandling', () => {
       </ErrorBoundary>,
     );
 
-    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    expect(screen.getByText('出错了')).toBeInTheDocument();
     expect(screen.getByText('kaboom')).toBeInTheDocument(); // dev 模式错误详情
 
     // Try Again 清除错误态：恢复渲染同一棵子树（不再抛错的实现）
-    fireEvent.click(screen.getByRole('button', { name: 'Try Again' }));
-    expect(screen.getByText('Something went wrong')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(screen.getByText('出错了')).toBeInTheDocument();
 
     process.env.NODE_ENV = prevEnv;
     consoleSpy.mockRestore();
@@ -122,8 +122,8 @@ describe('components/ErrorHandling', () => {
     );
     // jsdom 的 window.location 不可 stub（LegacyUnforgeable），
     // 这里只验证恢复动作入口存在；reload 本身是单行调用。
-    expect(screen.getByRole('button', { name: 'Reload Application' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Try Again' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新加载应用' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument();
 
     consoleSpy.mockRestore();
   });

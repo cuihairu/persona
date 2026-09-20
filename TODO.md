@@ -547,6 +547,15 @@ Game Tokens (游戏令牌)
     三端落地：CLI kind_label / desktop 前端类型 + KIND_LABELS + 描述
     文案 + 渲染测试。已知限制：目录硬编码会过时（follow-up：随发布
     刷新）；不做 HTML link 解析式 favicon 的 2FA 联动
+  - [x] 桌面界面国际化（2026-09-20 落地）：react-i18next + zh-CN/en 双语
+    （zh-CN 基准、fallbackLng zh-CN）。覆盖全部 20 个组件 + hooks/
+    utils（usePersonaService/useReauth/useSshApprovals/usePasskeyApprovals/
+    clipboard/ErrorBoundary）；通知文案走 `import i18n` 单例 t()。
+    WorkspaceSettings 增 locale 字段（core 迁移 + Rust payload 不动），
+    Settings 语言选择器持久化，启动恢复：锁屏阶段读 settings 即生效，
+    已解锁路径与 flags 读取共用一次调用（避免重复 IPC）。CLI 保持英文。
+    jest 侧为 i18next CJS default import 开 esModuleInterop（仅 jest
+    tsconfig override，不影响 vite 构建）；434 用例断言中文化全绿
   - biometric unlock 原生接线（底层已备，缺系统指纹对话框）
   - Travel Mode（vault 级可见性开关）
   - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）

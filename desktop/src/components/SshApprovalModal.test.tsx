@@ -60,6 +60,6 @@ describe('components/SshApprovalModal', () => {
       <SshApprovalModal request={request} pendingCount={3} onRespond={jest.fn()} />,
     );
 
-    expect(screen.getByTestId('approval-queue-count')).toHaveTextContent('2 more requests');
+    expect(screen.getByTestId('approval-queue-count')).toHaveTextContent('还有 2 个请求等待中');
   });
 });

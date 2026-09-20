@@ -148,8 +148,8 @@ describe('hooks/usePasskeyApprovals', () => {
 
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalled());
     expect(sendNotificationMock).toHaveBeenCalledWith({
-      title: 'Passkey creation request',
-      body: 'https://github.com — open Persona to approve or deny',
+      title: '通行密钥创建请求',
+      body: 'https://github.com —— 打开 Persona 批准或拒绝',
     });
   });
 
@@ -166,8 +166,8 @@ describe('hooks/usePasskeyApprovals', () => {
 
     await waitFor(() => expect(sendNotificationMock).toHaveBeenCalled());
     expect(sendNotificationMock).toHaveBeenCalledWith({
-      title: 'Passkey sign-in request',
-      body: 'https://github.com — open Persona to approve or deny',
+      title: '通行密钥登录请求',
+      body: 'https://github.com —— 打开 Persona 批准或拒绝',
     });
   });
 });

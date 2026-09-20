@@ -123,7 +123,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
             </p>
             <div>
               <label htmlFor="change-pw-old" className="label mb-1 block">
-                Current password
+                {t('changePassword.current')}
               </label>
               <input
                 ref={inputRef}
@@ -175,7 +175,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
           <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
             {!forced && (
               <button type="button" onClick={onCancel} className="btn-ghost">
-                Cancel
+                {t('common.cancel')}
               </button>
             )}
             <button

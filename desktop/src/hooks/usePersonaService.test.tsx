@@ -185,7 +185,7 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
     // 侧栏分类选中随锁复位（解锁后不残留上一会话的树选中）
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
-    expect(toastSuccess).toHaveBeenCalledWith('Service locked');
+    expect(toastSuccess).toHaveBeenCalledWith('服务已锁定');
   });
 
   it('loadCredentialsForIdentity clears pending selection when loading fails', async () => {
@@ -247,7 +247,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.switchIdentity(identity);
     });
-    expect(toastSuccess).toHaveBeenCalledWith(`Switched to ${identity.name}`);
+    expect(toastSuccess).toHaveBeenCalledWith(`已切换到 ${identity.name}`);
   });
 
   it('lockService toasts error on failure and on thrown exception', async () => {
@@ -268,7 +268,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.lockService();
     });
-    expect(toastError).toHaveBeenLastCalledWith('Failed to lock service');
+    expect(toastError).toHaveBeenLastCalledWith('锁定服务失败');
   });
 
   it('loadIdentities prefers workspace active identity match without rewriting it', async () => {
@@ -345,7 +345,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.loadIdentities();
     });
-    expect(useAppStore.getState().error).toBe('Failed to load identities');
+    expect(useAppStore.getState().error).toBe('加载身份失败');
   });
 
   it('createIdentity reloads, selects and activates the new identity', async () => {
@@ -374,7 +374,7 @@ describe('hooks/usePersonaService', () => {
 
     expect(useAppStore.getState().currentIdentity?.id).toBe('id-new');
     expect(setActive).toHaveBeenCalledWith('id-new');
-    expect(toastSuccess).toHaveBeenCalledWith('Identity created successfully');
+    expect(toastSuccess).toHaveBeenCalledWith('身份创建成功');
   });
 
   it('createIdentity keeps working when active write fails, but surfaces API failure', async () => {
@@ -397,7 +397,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.createIdentity('New', 'Personal');
     });
-    expect(toastSuccess).toHaveBeenCalledWith('Identity created successfully');
+    expect(toastSuccess).toHaveBeenCalledWith('身份创建成功');
 
     // 失败臂
     jest.spyOn(personaAPI, 'createIdentity').mockResolvedValueOnce({
@@ -434,7 +434,7 @@ describe('hooks/usePersonaService', () => {
 
     expect(out?.id).toBe('id-a');
     expect(useAppStore.getState().currentIdentity?.name).toBe('Renamed');
-    expect(toastSuccess).toHaveBeenCalledWith('Identity updated');
+    expect(toastSuccess).toHaveBeenCalledWith('身份已更新');
 
     // 失败臂返回 null
     jest.spyOn(personaAPI, 'updateIdentity').mockResolvedValueOnce({
@@ -473,7 +473,7 @@ describe('hooks/usePersonaService', () => {
     expect(ok).toBe(true);
     expect(useAppStore.getState().currentIdentity).toBeNull();
     expect(useAppStore.getState().credentials).toEqual([]);
-    expect(toastSuccess).toHaveBeenCalledWith('Identity deleted');
+    expect(toastSuccess).toHaveBeenCalledWith('身份已删除');
   });
 
   it('deleteIdentity keeps session for non-current identity and reports failures', async () => {
@@ -510,7 +510,7 @@ describe('hooks/usePersonaService', () => {
       ok = await result.current.deleteIdentity('id-gone');
     });
     expect(ok).toBe(false);
-    expect(toastError).toHaveBeenLastCalledWith('Failed to delete identity');
+    expect(toastError).toHaveBeenLastCalledWith('删除身份失败');
   });
 
   it('switchIdentity selects identity, loads its credentials and toasts', async () => {
@@ -534,7 +534,7 @@ describe('hooks/usePersonaService', () => {
 
     expect(useAppStore.getState().currentIdentity?.id).toBe('id-b');
     expect(useAppStore.getState().credentials).toHaveLength(1);
-    expect(toastSuccess).toHaveBeenCalledWith('Switched to B');
+    expect(toastSuccess).toHaveBeenCalledWith('已切换到 B');
   });
 
   it('createCredential reloads current identity credentials on success', async () => {
@@ -559,7 +559,7 @@ describe('hooks/usePersonaService', () => {
 
     expect(out?.id).toBe('c-new');
     expect(useAppStore.getState().credentials).toHaveLength(1);
-    expect(toastSuccess).toHaveBeenCalledWith('Credential created successfully');
+    expect(toastSuccess).toHaveBeenCalledWith('凭据创建成功');
 
     // 失败臂
     jest.spyOn(personaAPI, 'createCredential').mockResolvedValueOnce({
@@ -673,7 +673,7 @@ describe('hooks/usePersonaService', () => {
       await result.current.toggleCredentialFavorite('c1');
     });
     expect(useAppStore.getState().credentials[0].is_favorite).toBe(true);
-    expect(toastSuccess).toHaveBeenCalledWith('Added to favorites');
+    expect(toastSuccess).toHaveBeenCalledWith('已加入收藏');
 
     // 取消收藏臂
     const toggledOff = { ...c1, is_favorite: false };
@@ -681,7 +681,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.toggleCredentialFavorite('c1');
     });
-    expect(toastSuccess).toHaveBeenLastCalledWith('Removed from favorites');
+    expect(toastSuccess).toHaveBeenLastCalledWith('已移出收藏');
 
     // 失败臂
     fav.mockResolvedValueOnce({ success: false, data: undefined, error: 'busy' });
@@ -710,7 +710,7 @@ describe('hooks/usePersonaService', () => {
       mime_type: 'image/png',
       data: 'AAA',
     });
-    expect(toastSuccess).toHaveBeenCalledWith('Icon fetched');
+    expect(toastSuccess).toHaveBeenCalledWith('图标已获取');
 
     // 失败臂：不写缓存
     fav.mockResolvedValueOnce({ success: false, data: undefined, error: '404' });
@@ -725,7 +725,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       expect(await result.current.fetchFavicon('c1')).toBeNull();
     });
-    expect(toastError).toHaveBeenCalledWith('Failed to fetch icon');
+    expect(toastError).toHaveBeenCalledWith('获取图标失败');
   });
 
   it('deleteCredential filters it out of the list and reports failures', async () => {
@@ -774,7 +774,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.startSshAgent('pw');
     });
-    expect(toastSuccess).toHaveBeenCalledWith('SSH agent started');
+    expect(toastSuccess).toHaveBeenCalledWith('SSH Agent 已启动');
 
     jest.spyOn(personaAPI, 'stopSshAgent').mockResolvedValueOnce({
       success: true,
@@ -785,7 +785,7 @@ describe('hooks/usePersonaService', () => {
       await result.current.stopSshAgent();
     });
     expect(useAppStore.getState().sshAgentStatus).toBeNull();
-    expect(toastSuccess).toHaveBeenCalledWith('SSH agent stopped');
+    expect(toastSuccess).toHaveBeenCalledWith('SSH Agent 已停止');
 
     jest.spyOn(personaAPI, 'getSshKeys').mockResolvedValueOnce({
       success: true,
@@ -815,7 +815,7 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.startSshAgent();
     });
-    expect(toastError).toHaveBeenLastCalledWith('Failed to start SSH agent');
+    expect(toastError).toHaveBeenLastCalledWith('启动 SSH Agent 失败');
 
     jest.spyOn(personaAPI, 'stopSshAgent').mockResolvedValueOnce({
       success: false,
@@ -860,7 +860,7 @@ describe('hooks/usePersonaService', () => {
     // 第一次 mount：探针抛异常 → setError
     renderHook(() => usePersonaService());
     await waitFor(() => {
-      expect(useAppStore.getState().error).toBe('Failed to check service status');
+      expect(useAppStore.getState().error).toBe('检查服务状态失败');
     });
 
     // 第二次 mount：已解锁 → 拉身份列表

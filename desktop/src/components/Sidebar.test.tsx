@@ -55,12 +55,12 @@ describe('components/Sidebar', () => {
   it('renders always-on nav entries and hides flag-gated ones while flags are off', () => {
     renderSidebar();
 
-    expect(screen.getByRole('button', { name: 'Credentials' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Statistics' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Watchtower' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'SSH Agent' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Wallets' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Passkeys' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '通行密钥' })).not.toBeInTheDocument();
   });
 
   it('shows gated nav entries once their flags are on', () => {
@@ -81,7 +81,7 @@ describe('components/Sidebar', () => {
     expect(screen.getByTestId('nav-credentials')).toHaveAttribute('aria-current', 'page');
     expect(screen.getByTestId('nav-statistics')).not.toHaveAttribute('aria-current');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Statistics' }));
+    fireEvent.click(screen.getByRole('button', { name: '统计' }));
     expect(onNavigate).toHaveBeenCalledWith('statistics');
   });
 
@@ -95,16 +95,16 @@ describe('components/Sidebar', () => {
   it('calls settings and lock from the footer', () => {
     const { onOpenSettings, onLock } = renderSidebar();
 
-    const settings = screen.getByRole('button', { name: 'Settings' });
+    const settings = screen.getByRole('button', { name: '设置' });
     fireEvent.click(settings);
-    const lock = screen.getByRole('button', { name: 'Lock session' });
+    const lock = screen.getByRole('button', { name: '锁定会话' });
     fireEvent.click(lock);
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onLock).toHaveBeenCalledTimes(1);
 
     // 快捷键提示（title 不影响可访问名）
-    expect(settings).toHaveAttribute('title', 'Settings (⌘,)');
-    expect(lock).toHaveAttribute('title', 'Lock (⌘L)');
+    expect(settings).toHaveAttribute('title', '设置 (⌘,)');
+    expect(lock).toHaveAttribute('title', '锁定 (⌘L)');
   });
 
   it('renders all/favorites nodes always and type/tag groups only when present', () => {

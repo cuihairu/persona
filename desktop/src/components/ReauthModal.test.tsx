@@ -21,10 +21,10 @@ describe('components/ReauthModal', () => {
   it('submits the typed master password', () => {
     renderModal();
 
-    fireEvent.change(screen.getByPlaceholderText('Master password'), {
+    fireEvent.change(screen.getByPlaceholderText('主密码'), {
       target: { value: 'master-pw' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认' }));
 
     expect(onSubmit).toHaveBeenCalledWith('master-pw');
   });
@@ -38,15 +38,15 @@ describe('components/ReauthModal', () => {
 
     // verifying 中按钮禁用
     const second = renderModal({ isVerifying: true });
-    expect(screen.getByRole('button', { name: 'Verifying…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '验证中…' })).toBeDisabled();
     second.unmount();
 
     // 输入密码后回车提交
     renderModal();
-    fireEvent.change(screen.getByPlaceholderText('Master password'), {
+    fireEvent.change(screen.getByPlaceholderText('主密码'), {
       target: { value: 'pw' },
     });
-    fireEvent.submit(screen.getByRole('button', { name: 'Confirm' }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: '确认' }).closest('form')!);
     expect(onSubmit).toHaveBeenCalledWith('pw');
   });
 
@@ -58,10 +58,10 @@ describe('components/ReauthModal', () => {
   it('closes via cancel, close button and Escape', () => {
     const { rerender } = renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(onClose).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     expect(onClose).toHaveBeenCalledTimes(2);
 
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -75,7 +75,7 @@ describe('components/ReauthModal', () => {
 
   it('clears the password each time it reopens', () => {
     const { rerender } = renderModal();
-    const input = () => screen.getByPlaceholderText('Master password') as HTMLInputElement;
+    const input = () => screen.getByPlaceholderText('主密码') as HTMLInputElement;
 
     fireEvent.change(input(), { target: { value: 'stale' } });
     expect(input().value).toBe('stale');

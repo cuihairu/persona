@@ -99,7 +99,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       data-testid="app-sidebar"
-      aria-label="Sidebar"
+      aria-label={t('sidebar.a11yLabel')}
       className="w-64 shrink-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col overflow-y-auto"
     >
       {/* 顶部：身份切换器（对应 1Password 账户切换器的位置） */}
@@ -108,7 +108,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* 视图导航 */}
-      <nav data-testid="sidebar-nav" aria-label="Views" className="p-3 space-y-1">
+      <nav data-testid="sidebar-nav" aria-label={t('sidebar.a11yNav')} className="p-3 space-y-1">
         {visibleNav.map((item) => (
           <button
             key={item.id}

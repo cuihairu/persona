@@ -144,7 +144,7 @@ describe('components/PasskeyPanel', () => {
     fireEvent.click(screen.getByTestId('passkey-selftest-button'));
 
     await waitFor(() =>
-      expect(screen.getByTestId('passkey-selftest-result')).toHaveTextContent('Self-test passed'),
+      expect(screen.getByTestId('passkey-selftest-result')).toHaveTextContent('自检通过'),
     );
     expect(mockSelfTest).toHaveBeenCalledWith('pk-1');
   });
@@ -164,7 +164,7 @@ describe('components/PasskeyPanel', () => {
     fireEvent.click(screen.getByTestId('passkey-selftest-button'));
 
     await waitFor(() =>
-      expect(screen.getByTestId('passkey-selftest-result')).toHaveTextContent('Self-test passed'),
+      expect(screen.getByTestId('passkey-selftest-result')).toHaveTextContent('自检通过'),
     );
     expect(mockSelfTest).toHaveBeenCalledTimes(2);
     expect(mockRequestReauth).toHaveBeenCalledTimes(1);
@@ -188,7 +188,7 @@ describe('components/PasskeyPanel', () => {
 
     await waitFor(() =>
       expect(screen.getByTestId('passkey-selftest-result')).toHaveTextContent(
-        'Re-authentication required',
+        '需要重新认证',
       ),
     );
     expect(mockSelfTest).toHaveBeenCalledTimes(1);
@@ -203,7 +203,7 @@ describe('components/PasskeyPanel', () => {
     await openDetail();
 
     expect(screen.getByTestId('passkey-export-button')).toBeDisabled();
-    expect(screen.getByText('Export is disabled for this passkey.')).toBeInTheDocument();
+    expect(screen.getByText('该通行密钥已禁用导出。')).toBeInTheDocument();
   });
 
   it('exports the private key as hex (matching CLI export format)', async () => {
@@ -291,7 +291,7 @@ describe('components/PasskeyPanel', () => {
     render(<PasskeyPanel />);
     await openDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: '关闭' }));
     await waitFor(() =>
       expect(screen.queryByTestId('passkey-detail-modal')).toBeNull(),
     );
@@ -329,7 +329,7 @@ describe('components/PasskeyPanel', () => {
     fireEvent.click(btn());
     await waitFor(() =>
       expect(screen.getByTestId('passkey-selftest-result')).toHaveTextContent(
-        'Service is locked. Unlock and try again.',
+        '服务已锁定，解锁后重试。',
       ),
     );
 
@@ -364,14 +364,14 @@ describe('components/PasskeyPanel', () => {
     fireEvent.click(btn());
     await waitFor(() =>
       expect(screen.getByTestId('passkey-export-error')).toHaveTextContent(
-        'Re-authentication required',
+        '需要重新认证',
       ),
     );
 
     fireEvent.click(btn());
     await waitFor(() =>
       expect(screen.getByTestId('passkey-export-error')).toHaveTextContent(
-        'Service is locked. Unlock and try again.',
+        '服务已锁定，解锁后重试。',
       ),
     );
 
@@ -397,10 +397,10 @@ describe('components/PasskeyPanel', () => {
       await act(async () => {}); // flush 导出 promise
 
       expect(screen.getByTestId('passkey-export-value')).toHaveTextContent('00000001');
-      expect(screen.getByTestId('passkey-export-countdown')).toHaveTextContent('hides in 30s');
+      expect(screen.getByTestId('passkey-export-countdown')).toHaveTextContent('30 秒后隐藏');
 
       // 显示期间可复制
-      fireEvent.click(screen.getByRole('button', { name: 'Copy private key' }));
+      fireEvent.click(screen.getByRole('button', { name: '复制私钥' }));
       expect(copyWithAutoClear).toHaveBeenCalledWith('00000001');
 
       // 逐秒推进：每次 act 让 React 提交后 effect 才重设下一秒的 timer
@@ -409,7 +409,7 @@ describe('components/PasskeyPanel', () => {
           jest.advanceTimersByTime(1_000);
         });
       }
-      expect(screen.getByTestId('passkey-export-countdown')).toHaveTextContent('hides in 1s');
+      expect(screen.getByTestId('passkey-export-countdown')).toHaveTextContent('1 秒后隐藏');
 
       // 归零：导出值清除，倒计时消失
       act(() => {

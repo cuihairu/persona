@@ -94,12 +94,12 @@ describe('components/CreateCredentialModal', () => {
     generatePassword.mockResolvedValue('s3cret-generated');
     renderModal();
 
-    const input = screen.getByPlaceholderText('Enter password') as HTMLInputElement;
+    const input = screen.getByPlaceholderText('输入密码') as HTMLInputElement;
     expect(input.type).toBe('password');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+    fireEvent.click(screen.getByRole('button', { name: '生成' }));
     await waitFor(() => {
-      expect((screen.getByPlaceholderText('Enter password') as HTMLInputElement).value).toBe(
+      expect((screen.getByPlaceholderText('输入密码') as HTMLInputElement).value).toBe(
         's3cret-generated',
       );
     });
@@ -107,28 +107,28 @@ describe('components/CreateCredentialModal', () => {
     // 密码框旁的眼睛按钮切换明文
     const eyeButton = input.parentElement!.querySelector('button')!;
     fireEvent.click(eyeButton);
-    expect((screen.getByPlaceholderText('Enter password') as HTMLInputElement).type).toBe('text');
+    expect((screen.getByPlaceholderText('输入密码') as HTMLInputElement).type).toBe('text');
   });
 
   it('renders type-specific fields for every credential type', () => {
     renderModal();
 
     selectType('CryptoWallet');
-    expect(screen.getByPlaceholderText('Bitcoin, Ethereum, etc.')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Wallet address')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('12-24 word recovery phrase')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Bitcoin、Ethereum 等')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('钱包地址')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('12-24 个词的恢复短语')).toBeInTheDocument();
     expect(getSelect('mainnet')).toBeDefined();
 
     selectType('SshKey');
     expect(getSelect('rsa')).toBeDefined();
     expect(screen.getByPlaceholderText(/ssh-rsa/)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/BEGIN OPENSSH PRIVATE KEY/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/Key passphrase/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/密钥口令/)).toBeInTheDocument();
 
     selectType('ApiKey');
-    expect(screen.getByPlaceholderText('API key or token')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('API secret (if any)')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('read, write, admin (comma-separated)')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('API 密钥或令牌')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('API 机密（如有）')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('read、write、admin（逗号分隔）')).toBeInTheDocument();
 
     selectType('TwoFactor');
     expect(screen.getByPlaceholderText(/otpauth:\/\//)).toBeInTheDocument();
@@ -136,18 +136,18 @@ describe('components/CreateCredentialModal', () => {
 
     // 其余类型（BankCard/ServerConfig/Certificate）走 Raw 分支
     selectType('BankCard');
-    expect(screen.getByPlaceholderText('Enter credential data')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('输入凭据数据')).toBeInTheDocument();
   });
 
   it('switching type resets previously entered credential data', () => {
     renderModal();
 
-    fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+    fireEvent.change(screen.getByPlaceholderText('输入密码'), {
       target: { value: 'stale' },
     });
     selectType('CryptoWallet');
     selectType('Password');
-    expect((screen.getByPlaceholderText('Enter password') as HTMLInputElement).value).toBe('');
+    expect((screen.getByPlaceholderText('输入密码') as HTMLInputElement).value).toBe('');
   });
 
   it('parses a valid otpauth URI into the TwoFactor fields', () => {
@@ -198,20 +198,20 @@ describe('components/CreateCredentialModal', () => {
   it('submits a Password credential with deduplicated tags and closes', async () => {
     renderModal();
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Gmail' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+    fireEvent.change(screen.getByPlaceholderText('输入密码'), {
       target: { value: 'pw-123' },
     });
     fireEvent.change(screen.getByPlaceholderText('user@example.com'), {
       target: { value: 'me@example.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/e.g. work, github, prod/), {
+    fireEvent.change(screen.getByPlaceholderText(/work, github, prod/), {
       target: { value: 'work, personal , work, ' },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledTimes(1);
@@ -239,13 +239,13 @@ describe('components/CreateCredentialModal', () => {
     createCredential.mockResolvedValue(null);
     renderModal();
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Gmail' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+    fireEvent.change(screen.getByPlaceholderText('输入密码'), {
       target: { value: 'pw' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalled();
@@ -255,7 +255,7 @@ describe('components/CreateCredentialModal', () => {
 
   it('disables submit without a name and while loading', () => {
     renderModal();
-    expect(screen.getByRole('button', { name: 'Create Credential' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建凭据' })).toBeDisabled();
 
     mockUsePersonaService.mockReturnValue({
       currentIdentity: identity,
@@ -264,23 +264,23 @@ describe('components/CreateCredentialModal', () => {
       isLoading: true,
     });
     render(<CreateCredentialModal isOpen onClose={onClose} />);
-    expect(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建中…' })).toBeDisabled();
   });
 
   it('submits an ApiKey credential with parsed permissions', async () => {
     renderModal();
     selectType('ApiKey');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'CI token' },
     });
-    fireEvent.change(screen.getByPlaceholderText('API key or token'), {
+    fireEvent.change(screen.getByPlaceholderText('API 密钥或令牌'), {
       target: { value: 'key-xyz' },
     });
-    fireEvent.change(screen.getByPlaceholderText('read, write, admin (comma-separated)'), {
+    fireEvent.change(screen.getByPlaceholderText('read、write、admin（逗号分隔）'), {
       target: { value: 'read, write' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -300,29 +300,29 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('CryptoWallet');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Cold storage' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Bitcoin, Ethereum, etc.'), {
+    fireEvent.change(screen.getByPlaceholderText('Bitcoin、Ethereum 等'), {
       target: { value: 'Ethereum' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Wallet address'), {
+    fireEvent.change(screen.getByPlaceholderText('钱包地址'), {
       target: { value: '0xabc' },
     });
-    fireEvent.change(screen.getByPlaceholderText('12-24 word recovery phrase'), {
+    fireEvent.change(screen.getByPlaceholderText('12-24 个词的恢复短语'), {
       target: { value: 'word1 word2' },
     });
     fireEvent.change(getSelect('mainnet'), { target: { value: 'testnet' } });
     fireEvent.change(screen.getByPlaceholderText('https://example.com'), {
       target: { value: 'https://eth.io' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Username or account identifier'), {
+    fireEvent.change(screen.getByPlaceholderText('用户名或账户标识'), {
       target: { value: 'vitalik' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Additional notes or information'), {
+    fireEvent.change(screen.getByPlaceholderText('补充备注或信息'), {
       target: { value: 'hardware backup' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -350,7 +350,7 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('SshKey');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Build server' },
     });
     fireEvent.change(getSelect('rsa'), { target: { value: 'ed25519' } });
@@ -360,10 +360,10 @@ describe('components/CreateCredentialModal', () => {
     fireEvent.change(screen.getByPlaceholderText(/BEGIN OPENSSH PRIVATE KEY/), {
       target: { value: '-----BEGIN-----' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/Key passphrase/), {
+    fireEvent.change(screen.getByPlaceholderText(/密钥口令/), {
       target: { value: 'phrase' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -386,7 +386,7 @@ describe('components/CreateCredentialModal', () => {
     selectType('GameToken');
 
     expect(screen.getByPlaceholderText(/tencent_security/)).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Required for steam_guard; optional otherwise')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('steam_guard 必填；其他提供商可选')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Steam, Tencent, NetEase…')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('qq_123456')).toBeInTheDocument();
   });
@@ -395,13 +395,13 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('GameToken');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Steam' },
     });
     fireEvent.change(screen.getByPlaceholderText(/tencent_security/), {
       target: { value: 'STEAM_GUARD' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Required for steam_guard; optional otherwise'), {
+    fireEvent.change(screen.getByPlaceholderText('steam_guard 必填；其他提供商可选'), {
       target: { value: '  aGVsbG8=  ' },
     });
     fireEvent.change(screen.getByPlaceholderText('Steam, Tencent, NetEase…'), {
@@ -413,7 +413,7 @@ describe('components/CreateCredentialModal', () => {
     fireEvent.change(screen.getByPlaceholderText('https://example.com'), {
       target: { value: 'https://store.steampowered.com' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -437,7 +437,7 @@ describe('components/CreateCredentialModal', () => {
     selectType('SecureNote');
 
     expect(
-      screen.getByPlaceholderText(/Encrypted note content/),
+      screen.getByPlaceholderText(/加密笔记内容/),
     ).toBeInTheDocument();
     // 与其他类型 notes 字段（明文列）的差别必须在表单里说清楚
     expect(screen.getByText(/per-item key/)).toBeInTheDocument();
@@ -447,13 +447,13 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('SecureNote');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Recovery codes' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/Encrypted note content/), {
+    fireEvent.change(screen.getByPlaceholderText(/加密笔记内容/), {
       target: { value: '1111-2222\n3333-4444' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -473,22 +473,22 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('Identity');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Passport (main)' },
     });
-    fireEvent.change(screen.getByLabelText(/First name/), {
+    fireEvent.change(screen.getByLabelText(/名 */), {
       target: { value: 'Alice' },
     });
-    fireEvent.change(screen.getByLabelText(/Last name/), {
+    fireEvent.change(screen.getByLabelText(/姓 */), {
       target: { value: 'Zhang' },
     });
-    fireEvent.change(screen.getByLabelText('Email'), {
+    fireEvent.change(screen.getByLabelText('邮箱'), {
       target: { value: 'alice@example.com' },
     });
-    fireEvent.change(screen.getByLabelText(/ID number/), {
+    fireEvent.change(screen.getByLabelText(/证件号码/), {
       target: { value: '110101199001310011' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -512,19 +512,19 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('SoftwareLicense');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'JetBrains All Products' },
     });
     fireEvent.change(screen.getByPlaceholderText('AAAA-BBBB-CCCC-DDDD'), {
       target: { value: 'AAAA-BBBB-CCCC-DDDD' },
     });
-    fireEvent.change(screen.getByLabelText('Version'), {
+    fireEvent.change(screen.getByLabelText('版本'), {
       target: { value: '2024.2' },
     });
-    fireEvent.change(screen.getByLabelText('Seats'), {
+    fireEvent.change(screen.getByLabelText('席位'), {
       target: { value: '3' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -545,7 +545,7 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('TwoFactor');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: '2FA' },
     });
     fireEvent.change(screen.getByPlaceholderText('JBSWY3DPEHPK3PXP'), {
@@ -560,7 +560,7 @@ describe('components/CreateCredentialModal', () => {
     fireEvent.change(getSelect('SHA1'), { target: { value: 'SHA256' } });
     fireEvent.change(getSelect('6'), { target: { value: '8' } });
     fireEvent.change(screen.getByDisplayValue(30), { target: { value: '45' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -584,13 +584,13 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
     selectType('BankCard');
 
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Misc' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Enter credential data'), {
+    fireEvent.change(screen.getByPlaceholderText('输入凭据数据'), {
       target: { value: 'héllo' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -623,13 +623,13 @@ describe('components/CreateCredentialModal', () => {
     renderModal();
 
     fireEvent.change(getSelect('High'), { target: { value: 'Critical' } });
-    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
       target: { value: 'Root CA' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+    fireEvent.change(screen.getByPlaceholderText('输入密码'), {
       target: { value: 'pw' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
 
     await waitFor(() => {
       expect(createCredential).toHaveBeenCalledWith(
@@ -679,25 +679,25 @@ describe('components/CreateCredentialModal', () => {
     it('prefills metadata and payload, locks the type selector, titles as Edit', () => {
       renderEditModal();
 
-      expect(screen.getByTestId('credential-modal-title')).toHaveTextContent('Edit Item');
-      expect(screen.getByPlaceholderText(/Gmail Account/)).toHaveValue('Old Name');
-      expect((screen.getByPlaceholderText('Enter password') as HTMLInputElement).value).toBe('old-pw');
+      expect(screen.getByTestId('credential-modal-title')).toHaveTextContent('编辑条目');
+      expect(screen.getByPlaceholderText(/Gmail 账户/)).toHaveValue('Old Name');
+      expect((screen.getByPlaceholderText('输入密码') as HTMLInputElement).value).toBe('old-pw');
       expect(screen.getByDisplayValue('olduser')).toBeInTheDocument();
       // 类型不可变（1Password 语义）
       expect(screen.getByTestId('credential-type-select')).toBeDisabled();
-      expect(screen.getByText("Item type can't be changed")).toBeInTheDocument();
+      expect(screen.getByText("条目类型不可更改")).toBeInTheDocument();
     });
 
     it('saves metadata then payload and closes (create never invoked)', async () => {
       renderEditModal();
 
-      fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
         target: { value: 'New Name' },
       });
-      fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+      fireEvent.change(screen.getByPlaceholderText('输入密码'), {
         target: { value: 'new-pw' },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
       await waitFor(() => expect(onClose).toHaveBeenCalled());
 
@@ -741,10 +741,10 @@ describe('components/CreateCredentialModal', () => {
         />,
       );
 
-      fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
         target: { value: 'Renamed Card' },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
       await waitFor(() => expect(onClose).toHaveBeenCalled());
       expect(updateCredential).toHaveBeenCalledWith(
@@ -762,7 +762,7 @@ describe('components/CreateCredentialModal', () => {
       });
       renderEditModal();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
       await waitFor(() => expect(mockReauth.requestReauth).toHaveBeenCalled());
       // 拒绝重认证：不重试、不关弹窗（元数据已存，密文可重试）

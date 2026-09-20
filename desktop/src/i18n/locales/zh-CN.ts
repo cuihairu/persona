@@ -39,6 +39,8 @@ export default {
     passkeys: '通行密钥',
   },
   sidebar: {
+    a11yLabel: '侧边栏',
+    a11yNav: '视图导航',
     allItems: '全部条目',
     favorites: '收藏',
     types: '类型',

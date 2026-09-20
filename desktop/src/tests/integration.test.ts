@@ -451,7 +451,7 @@ describe('Desktop Application Integration Tests', () => {
       mockInvoke.mockResolvedValue(mockResponse);
 
       await personaAPI.walletGenerate('123e4567-e89b-12d3-a456-426614174000', {
-        name: 'My Wallet',
+        name: '我的钱包',
         network: 'Ethereum',
         wallet_type: 'hd',
         password: 'password123',
@@ -461,7 +461,7 @@ describe('Desktop Application Integration Tests', () => {
       expect(mockInvoke).toHaveBeenCalledWith('wallet_generate', {
         identity_id: '123e4567-e89b-12d3-a456-426614174000',
         request: {
-          name: 'My Wallet',
+          name: '我的钱包',
           network: 'Ethereum',
           wallet_type: 'hd',
           password: 'password123',
@@ -491,7 +491,7 @@ describe('Desktop Application Integration Tests', () => {
       mockInvoke.mockResolvedValue(mockResponse);
 
       await personaAPI.walletImport('123e4567-e89b-12d3-a456-426614174000', {
-        name: 'Imported Wallet',
+        name: '导入的钱包',
         network: 'Ethereum',
         import_type: 'private_key',
         data: '0xdeadbeef',
@@ -501,7 +501,7 @@ describe('Desktop Application Integration Tests', () => {
       expect(mockInvoke).toHaveBeenCalledWith('wallet_import', {
         identity_id: '123e4567-e89b-12d3-a456-426614174000',
         request: {
-          name: 'Imported Wallet',
+          name: '导入的钱包',
           network: 'Ethereum',
           import_type: 'private_key',
           data: '0xdeadbeef',

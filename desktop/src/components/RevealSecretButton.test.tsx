@@ -54,13 +54,13 @@ describe('components/RevealSecretButton', () => {
     await act(async () => {});
     expect(reveal).toHaveBeenCalledWith('c1', 'password');
     expect(screen.getByTestId('revealed-value').textContent).toBe('s3cret');
-    expect(screen.getByTestId('reveal-countdown').textContent).toBe('hides in 2s');
+    expect(screen.getByTestId('reveal-countdown').textContent).toBe('2 秒后隐藏');
 
     // 每秒递减，归零自动隐藏并复位重试标记
     await act(async () => {
       jest.advanceTimersByTime(1000);
     });
-    expect(screen.getByTestId('reveal-countdown').textContent).toBe('hides in 1s');
+    expect(screen.getByTestId('reveal-countdown').textContent).toBe('1 秒后隐藏');
     await act(async () => {
       jest.advanceTimersByTime(1000);
     });
@@ -121,7 +121,7 @@ describe('components/RevealSecretButton', () => {
     expect(requestReauth).toHaveBeenCalledTimes(3);
 
     // 手动 Hide 复位重试标记 → 下一轮 REAUTH_REQUIRED 才会再弹
-    fireEvent.click(screen.getByLabelText('Hide Password'));
+    fireEvent.click(screen.getByLabelText('隐藏Password'));
     queue.push(REAUTH, resolveOk('again'));
     fireEvent.click(trigger());
     await waitFor(() => {
@@ -140,7 +140,7 @@ describe('components/RevealSecretButton', () => {
     fireEvent.click(screen.getByTestId('reveal-trigger'));
     await waitFor(() => {
       expect(screen.getByTestId('reveal-error')).toHaveTextContent(
-        'Service is locked. Unlock and try again.',
+        '服务已锁定，解锁后重试。',
       );
     });
 
@@ -169,7 +169,7 @@ describe('components/RevealSecretButton', () => {
     await waitFor(() => {
       expect(screen.getByTestId('revealed-value')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByLabelText('Copy Password'));
+    fireEvent.click(screen.getByLabelText('复制Password'));
     expect(onCopy).toHaveBeenCalledWith('copy-me');
     expect(copyWithAutoClear).not.toHaveBeenCalled();
 
@@ -181,7 +181,7 @@ describe('components/RevealSecretButton', () => {
     await waitFor(() => {
       expect(screen.getAllByTestId('revealed-value')).toHaveLength(2);
     });
-    fireEvent.click(screen.getByLabelText('Copy Private Key'));
+    fireEvent.click(screen.getByLabelText('复制Private Key'));
     expect(copyWithAutoClear).toHaveBeenCalledWith('copy-me');
   });
 });

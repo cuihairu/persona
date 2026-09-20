@@ -25,7 +25,7 @@ describe('components/IdentitySwitcher', () => {
     });
 
     const { getByText } = render(<IdentitySwitcher onCreateIdentity={() => {}} />);
-    expect(getByText('Select an identity')).toBeInTheDocument();
+    expect(getByText('选择身份')).toBeInTheDocument();
   });
 
   it('opens options and calls onCreateIdentity', () => {
@@ -44,7 +44,7 @@ describe('components/IdentitySwitcher', () => {
     );
 
     fireEvent.click(getByRole('button'));
-    fireEvent.click(getByText('Create new identity'));
+    fireEvent.click(getByText('新建身份'));
     expect(onCreateIdentity).toHaveBeenCalledTimes(1);
   });
 
@@ -57,7 +57,7 @@ describe('components/IdentitySwitcher', () => {
 
     render(<IdentitySwitcher onCreateIdentity={() => {}} />);
     expect(screen.getByText('Corp')).toBeInTheDocument();
-    expect(screen.getByText('Work')).toBeInTheDocument();
+    expect(screen.getByText('工作')).toBeInTheDocument();
   });
 
   it('lists every identity type with its own icon/color and marks the selected one', () => {
@@ -122,14 +122,14 @@ describe('components/CreateIdentityModal', () => {
     const onClose = jest.fn();
     const { rerender } = renderModal({ onClose });
 
-    fireEvent.change(screen.getByLabelText('Identity Name'), {
+    fireEvent.change(screen.getByLabelText('身份名称'), {
       target: { value: 'Work Profile' },
     });
-    fireEvent.change(screen.getByLabelText('Type'), { target: { value: 'Financial' } });
-    fireEvent.change(screen.getByLabelText('Description (Optional)'), {
+    fireEvent.change(screen.getByLabelText('类型'), { target: { value: 'Financial' } });
+    fireEvent.change(screen.getByLabelText('描述（可选）'), {
       target: { value: 'bank stuff' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Identity' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建身份' }));
 
     await Promise.resolve();
     expect(createIdentity).toHaveBeenCalledWith('Work Profile', 'Financial', 'bank stuff');
@@ -139,9 +139,9 @@ describe('components/CreateIdentityModal', () => {
     // 同一实例关闭再打开：字段已重置
     rerender(<CreateIdentityModal isOpen={false} onClose={onClose} />);
     rerender(<CreateIdentityModal isOpen onClose={onClose} />);
-    expect((screen.getByLabelText('Identity Name') as HTMLInputElement).value).toBe('');
-    expect((screen.getByLabelText('Description (Optional)') as HTMLTextAreaElement).value).toBe('');
-    expect((screen.getByLabelText('Type') as HTMLSelectElement).value).toBe('Personal');
+    expect((screen.getByLabelText('身份名称') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('描述（可选）') as HTMLTextAreaElement).value).toBe('');
+    expect((screen.getByLabelText('类型') as HTMLSelectElement).value).toBe('Personal');
   });
 
   it('blocks submit without a name and passes undefined description when empty', async () => {
@@ -149,16 +149,16 @@ describe('components/CreateIdentityModal', () => {
     renderModal({ onClose });
 
     // 空名：按钮禁用
-    expect(screen.getByRole('button', { name: 'Create Identity' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建身份' })).toBeDisabled();
 
     // 表单 submit（绕过 disabled 断言）也应被 guard 拦下
-    fireEvent.submit(screen.getByRole('button', { name: 'Create Identity' }).closest('form')!);
+    fireEvent.submit(screen.getByRole('button', { name: '创建身份' }).closest('form')!);
     expect(createIdentity).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByLabelText('Identity Name'), {
+    fireEvent.change(screen.getByLabelText('身份名称'), {
       target: { value: 'Only Name' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Identity' }));
+    fireEvent.click(screen.getByRole('button', { name: '创建身份' }));
     await Promise.resolve();
     expect(createIdentity).toHaveBeenCalledWith('Only Name', 'Personal', undefined);
   });
@@ -168,8 +168,8 @@ describe('components/CreateIdentityModal', () => {
     const onClose = jest.fn();
     renderModal({ onClose });
 
-    fireEvent.change(screen.getByLabelText('Identity Name'), { target: { value: 'X' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Create Identity' }));
+    fireEvent.change(screen.getByLabelText('身份名称'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建身份' }));
     await Promise.resolve();
     await Promise.resolve();
 
@@ -185,13 +185,13 @@ describe('components/CreateIdentityModal', () => {
       isLoading: true,
     });
     render(<CreateIdentityModal isOpen onClose={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Creating...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '创建中…' })).toBeDisabled();
   });
 
   it('closes via cancel', () => {
     const onClose = jest.fn();
     renderModal({ onClose });
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

@@ -86,7 +86,7 @@ const setupPane = (
 const clickCopyNextTo = (text: string) => {
   const btn = screen
     .getByText(text)
-    .parentElement!.querySelector('button[aria-label^="Copy"]');
+    .parentElement!.querySelector('button[aria-label^="复制"]');
   fireEvent.click(btn!);
 };
 
@@ -112,13 +112,13 @@ describe('components/CredentialDetailPane', () => {
     // credentialData 存在但无 data：不显示 loading，也不渲染任何字段
     expect(screen.queryByTestId('detail-loading')).not.toBeInTheDocument();
     expect(screen.queryByTestId('reveal-password')).not.toBeInTheDocument();
-    expect(screen.getByText('High')).toBeInTheDocument(); // 头部/元数据不受影响
+    expect(screen.getByText('高')).toBeInTheDocument(); // 头部/元数据不受影响
   });
 
   it('shows last used and created dates in the metadata footer', () => {
     setupPane({ name: 'Meta', last_accessed: '2024-05-06T00:00:00Z' }, null);
-    expect(screen.getByText(/Last used:/).textContent).toMatch(/2024/);
-    expect(screen.getByText(/Created:/).textContent).toMatch(/2023/);
+    expect(screen.getByText(/最近使用/).textContent).toMatch(/2024/);
+    expect(screen.getByText(/创建于/).textContent).toMatch(/2023/);
   });
 
   it('toggles favorite and keeps state when the service returns null', async () => {
@@ -128,24 +128,24 @@ describe('components/CredentialDetailPane', () => {
       .mockResolvedValueOnce(null);
     setupPane({}, null, { toggleCredentialFavorite });
 
-    fireEvent.click(screen.getByTitle('Favorite'));
+    fireEvent.click(screen.getByTitle('收藏'));
     await act(async () => {});
     expect(toggleCredentialFavorite).toHaveBeenCalledWith('c1');
-    expect(screen.getByTitle('Unfavorite')).toBeInTheDocument();
+    expect(screen.getByTitle('取消收藏')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTitle('Unfavorite'));
+    fireEvent.click(screen.getByTitle('取消收藏'));
     await act(async () => {});
-    expect(screen.getByTitle('Favorite')).toBeInTheDocument();
+    expect(screen.getByTitle('收藏')).toBeInTheDocument();
 
     // favorite 返回空（如失败）：状态不翻转、不崩
-    fireEvent.click(screen.getByTitle('Favorite'));
+    fireEvent.click(screen.getByTitle('收藏'));
     await act(async () => {});
-    expect(screen.getByTitle('Favorite')).toBeInTheDocument();
+    expect(screen.getByTitle('收藏')).toBeInTheDocument();
   });
 
   it('Password pane: renders fields, copies url/username/email and closes', () => {
     const { onCopy, onClose } = setupPane(
-      { name: 'Site', url: 'https://site.com', username: 'bob', notes: 'my note', tags: ['zebra'] },
+      { name: '站点', url: 'https://site.com', username: 'bob', notes: 'my note', tags: ['zebra'] },
       { credential_type: 'Password', data: { email: 'a@b.com', password: 'x' } },
     );
 
@@ -158,12 +158,12 @@ describe('components/CredentialDetailPane', () => {
     expect(onCopy).toHaveBeenCalledWith('https://site.com', 'URL');
 
     clickCopyNextTo('bob');
-    expect(onCopy).toHaveBeenCalledWith('bob', 'Username');
+    expect(onCopy).toHaveBeenCalledWith('bob', '用户名');
 
     clickCopyNextTo('a@b.com');
-    expect(onCopy).toHaveBeenCalledWith('a@b.com', 'Email');
+    expect(onCopy).toHaveBeenCalledWith('a@b.com', '邮箱');
 
-    fireEvent.click(screen.getByTitle('Close'));
+    fireEvent.click(screen.getByTitle('关闭'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -181,7 +181,7 @@ describe('components/CredentialDetailPane', () => {
     expect(screen.getByText('Ethereum')).toBeInTheDocument();
 
     clickCopyNextTo('0xabc123');
-    expect(onCopy).toHaveBeenCalledWith('0xabc123', 'Address');
+    expect(onCopy).toHaveBeenCalledWith('0xabc123', '地址');
   });
 
   it('SshKey pane: renders key material with three reveal seams', () => {
@@ -199,7 +199,7 @@ describe('components/CredentialDetailPane', () => {
     expect(screen.getByTestId('reveal-ssh_passphrase')).toBeInTheDocument();
 
     clickCopyNextTo('ssh-ed25519 AAA');
-    expect(onCopy).toHaveBeenCalledWith('ssh-ed25519 AAA', 'Public key');
+    expect(onCopy).toHaveBeenCalledWith('ssh-ed25519 AAA', '公钥');
   });
 
   it('ApiKey pane: renders three reveal seams, permissions and expiry', () => {
@@ -242,7 +242,7 @@ describe('components/CredentialDetailPane', () => {
       { name: 'Mystery', credential_type: 'Custom' },
       { credential_type: 'Custom', data: { body: 'whatever' } },
     );
-    expect(screen.getByText('Credential data is encrypted and secure.')).toBeInTheDocument();
+    expect(screen.getByText('凭据数据已加密保存。')).toBeInTheDocument();
   });
 
   it('SecureNote pane renders the multi-line body verbatim and copies it', () => {
@@ -259,8 +259,8 @@ describe('components/CredentialDetailPane', () => {
     );
     expect(pre.tagName).toBe('PRE');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy Note' }));
-    expect(onCopy).toHaveBeenCalledWith('1111-2222\n3333-4444', 'Note');
+    fireEvent.click(screen.getByRole('button', { name: '复制笔记内容' }));
+    expect(onCopy).toHaveBeenCalledWith('1111-2222\n3333-4444', '笔记内容');
   });
 
   it('Identity pane renders present fields, hides empty ones, and copies document numbers', () => {
@@ -296,12 +296,12 @@ describe('components/CredentialDetailPane', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Example Inc')).toBeInTheDocument();
     // 未提供的字段整行不渲染（birthday / passport / job title 缺席）
-    expect(screen.queryByText('Birthday')).not.toBeInTheDocument();
-    expect(screen.queryByText('Passport no.')).not.toBeInTheDocument();
-    expect(screen.queryByText('Job title')).not.toBeInTheDocument();
+    expect(screen.queryByText('生日')).not.toBeInTheDocument();
+    expect(screen.queryByText('护照号')).not.toBeInTheDocument();
+    expect(screen.queryByText('职位')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy ID number' }));
-    expect(onCopy).toHaveBeenCalledWith('110101199001310011', 'ID number');
+    fireEvent.click(screen.getByRole('button', { name: '复制证件号码' }));
+    expect(onCopy).toHaveBeenCalledWith('110101199001310011', '证件号码');
   });
 
   it('SoftwareLicense pane renders the key with metadata and copies it', () => {
@@ -325,8 +325,8 @@ describe('components/CredentialDetailPane', () => {
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(screen.getByText('2027-05-01')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy License key' }));
-    expect(onCopy).toHaveBeenCalledWith('AAAA-BBBB-CCCC-DDDD', 'License key');
+    fireEvent.click(screen.getByRole('button', { name: '复制许可密钥' }));
+    expect(onCopy).toHaveBeenCalledWith('AAAA-BBBB-CCCC-DDDD', '许可密钥');
   });
 
   it('item history: lazy-loads the timeline on expand and renders field diffs', async () => {
@@ -367,7 +367,7 @@ describe('components/CredentialDetailPane', () => {
     expect(await screen.findByText('v2 · updated')).toBeInTheDocument();
     expect(getCredentialHistory).toHaveBeenCalledWith('c1');
     // 字段 diff：old 为空展示 (empty)，密文变化只出现占位
-    expect(screen.getByText(/\(empty\)/)).toBeInTheDocument();
+    expect(screen.getByText(/（空）/)).toBeInTheDocument();
     expect(
       screen.getAllByText(/<encrypted>/).length,
     ).toBeGreaterThanOrEqual(2);
@@ -385,7 +385,7 @@ describe('components/CredentialDetailPane', () => {
       fireEvent.click(screen.getByTestId('history-toggle'));
     });
 
-    expect(await screen.findByText('No recorded changes.')).toBeInTheDocument();
+    expect(await screen.findByText('暂无变更记录。')).toBeInTheDocument();
   });
 
   it('attachments: loads on mount and renders filename, size and encrypted marker', async () => {
@@ -411,7 +411,7 @@ describe('components/CredentialDetailPane', () => {
     expect(listAttachments).toHaveBeenCalledWith('c1');
     // 大小（2 KB）与加密标记
     expect(screen.getByText(/2\.0 KB/)).toBeInTheDocument();
-    expect(screen.getByText(/encrypted/)).toBeInTheDocument();
+    expect(screen.getByText(/已加密/)).toBeInTheDocument();
     expect(screen.getByTestId('attachment-save-a1')).toBeInTheDocument();
     expect(screen.getByTestId('attachment-delete-a1')).toBeInTheDocument();
   });
@@ -423,7 +423,7 @@ describe('components/CredentialDetailPane', () => {
     );
 
     expect(
-      await screen.findByText(/No attachments\. Files are encrypted with this item's key\./),
+      await screen.findByText(/文件均用该条目的密钥加密/),
     ).toBeInTheDocument();
   });
 
@@ -531,7 +531,7 @@ describe('components/CredentialDetailPane', () => {
     });
 
     expect(deleteAttachment).toHaveBeenCalledWith('a1');
-    expect(await screen.findByText(/No attachments\./)).toBeInTheDocument();
+    expect(await screen.findByText(/暂无附件/)).toBeInTheDocument();
   });
 
   it('TwoFactor pane: shows the live code, copies it and refreshes on demand', async () => {
@@ -546,17 +546,17 @@ describe('components/CredentialDetailPane', () => {
     );
 
     expect(await screen.findByText('AAA111')).toBeInTheDocument();
-    expect(screen.getByText('Expires in 30s')).toBeInTheDocument();
+    expect(screen.getByText('30 秒后过期')).toBeInTheDocument();
     expect(screen.getByText('GitHub')).toBeInTheDocument();
     expect(screen.getByText('me@example.com')).toBeInTheDocument();
 
     clickCopyNextTo('AAA111');
-    expect(onCopy).toHaveBeenCalledWith('AAA111', 'TOTP');
+    expect(onCopy).toHaveBeenCalledWith('AAA111', 'TOTP 验证码');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }));
     await screen.findByText('BBB222');
     expect(getTotpCode).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('Expires in 60s')).toBeInTheDocument();
+    expect(screen.getByText('60 秒后过期')).toBeInTheDocument();
   });
 
   it('TwoFactor pane counts down each second and auto-refreshes at zero', async () => {
@@ -574,22 +574,22 @@ describe('components/CredentialDetailPane', () => {
       // flush：面板挂载 + 首次 refreshTotp
       await act(async () => {});
       expect(screen.getByText('AAA111')).toBeInTheDocument();
-      expect(screen.getByText('Expires in 2s')).toBeInTheDocument();
+      expect(screen.getByText('2 秒后过期')).toBeInTheDocument();
 
       act(() => {
         jest.advanceTimersByTime(1000);
       });
-      expect(screen.getByText('Expires in 1s')).toBeInTheDocument();
+      expect(screen.getByText('1 秒后过期')).toBeInTheDocument();
 
       // 归零后自动重新拉取
       act(() => {
         jest.advanceTimersByTime(1000);
       });
-      expect(screen.getByText('Expires in 0s')).toBeInTheDocument();
+      expect(screen.getByText('0 秒后过期')).toBeInTheDocument();
 
       await act(async () => {});
       expect(screen.getByText('BBB222')).toBeInTheDocument();
-      expect(screen.getByText('Expires in 30s')).toBeInTheDocument();
+      expect(screen.getByText('30 秒后过期')).toBeInTheDocument();
       expect(getTotpCode).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
@@ -603,9 +603,9 @@ describe('components/CredentialDetailPane', () => {
     const { onClose } = setupPane({ name: 'Victim' }, null, { deleteCredential });
 
     // 取消确认：不删除，面板保留
-    fireEvent.click(screen.getByTitle('Delete'));
+    fireEvent.click(screen.getByTitle('删除'));
     expect(confirmSpy).toHaveBeenCalledWith(
-      'Delete "Victim"? This cannot be undone.',
+      '删除「Victim」？此操作不可撤销。',
     );
     expect(deleteCredential).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
@@ -613,14 +613,14 @@ describe('components/CredentialDetailPane', () => {
     // 确认但后端返回 false：面板同样保留
     confirmSpy.mockReturnValue(true);
     (deleteCredential as jest.Mock).mockResolvedValue(false);
-    fireEvent.click(screen.getByTitle('Delete'));
+    fireEvent.click(screen.getByTitle('删除'));
     await act(async () => {});
     expect(deleteCredential).toHaveBeenCalledWith('c1');
     expect(onClose).not.toHaveBeenCalled();
 
     // 确认且成功：onClose 被调（由父组件清空选中）
     (deleteCredential as jest.Mock).mockResolvedValue(true);
-    fireEvent.click(screen.getByTitle('Delete'));
+    fireEvent.click(screen.getByTitle('删除'));
     await act(async () => {});
     expect(onClose).toHaveBeenCalledTimes(1);
     confirmSpy.mockRestore();

@@ -87,7 +87,7 @@ describe('components/QuickSearch', () => {
 
     expect(screen.getByTestId('quick-search-overlay')).toBeInTheDocument();
     expect(screen.getByTestId('quick-search-input')).toHaveFocus();
-    expect(screen.getByText('Type to search across all identities')).toBeInTheDocument();
+    expect(screen.getByText('输入以跨所有身份搜索')).toBeInTheDocument();
   });
 
   it('closes on Escape and resets the query', async () => {
@@ -101,7 +101,7 @@ describe('components/QuickSearch', () => {
     // 重新打开应是干净的空态（查询与结果都复位）
     fireEvent.click(screen.getByTestId('quick-search-trigger'));
     expect(screen.getByTestId('quick-search-input')).toHaveValue('');
-    expect(screen.getByText('Type to search across all identities')).toBeInTheDocument();
+    expect(screen.getByText('输入以跨所有身份搜索')).toBeInTheDocument();
   });
 
   it('opens via ctrl+K and cmd+K global shortcuts', () => {
@@ -155,7 +155,7 @@ describe('components/QuickSearch', () => {
 
     await searchFor(searchCredentials, []);
 
-    expect(screen.getByText('No results for "git"')).toBeInTheDocument();
+    expect(screen.getByText('没有找到「git」的结果')).toBeInTheDocument();
     expect(screen.queryByTestId('quick-search-item')).not.toBeInTheDocument();
   });
 
@@ -257,7 +257,7 @@ describe('components/QuickSearch', () => {
     ]);
 
     // 未知身份的结果不渲染任何行（分组阶段即被过滤）
-    expect(screen.getByText('No results for "git"')).toBeInTheDocument();
+    expect(screen.getByText('没有找到「git」的结果')).toBeInTheDocument();
     expect(screen.queryByTestId('quick-search-item')).not.toBeInTheDocument();
     expect(switchIdentity).not.toHaveBeenCalled();
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();

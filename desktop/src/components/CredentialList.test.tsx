@@ -131,7 +131,7 @@ describe('components/CredentialList', () => {
     });
 
     render(<CredentialList onCreateCredential={() => {}} />);
-    expect(screen.getByText('Select an identity to view credentials')).toBeInTheDocument();
+    expect(screen.getByText('选择一个身份以查看凭据')).toBeInTheDocument();
   });
 
   it('shows empty state and calls onCreateCredential', () => {
@@ -143,7 +143,7 @@ describe('components/CredentialList', () => {
     });
 
     render(<CredentialList onCreateCredential={onCreateCredential} />);
-    fireEvent.click(screen.getByText('Add Your First Credential'));
+    fireEvent.click(screen.getByText('添加第一个凭据'));
     expect(onCreateCredential).toHaveBeenCalledTimes(1);
   });
 
@@ -154,20 +154,20 @@ describe('components/CredentialList', () => {
     ]);
 
     // 命中类型名（大小写不敏感）
-    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
       target: { value: 'api' },
     });
-    expect(screen.getByText('1 credential')).toBeInTheDocument();
+    expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Keytwo')).toBeInTheDocument();
     expect(screen.queryByText('Bank one')).not.toBeInTheDocument();
 
     // 无结果：提示调整搜索词，且不渲染首建按钮
-    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
       target: { value: 'zzz' },
     });
-    expect(screen.getByText('No credentials found')).toBeInTheDocument();
-    expect(screen.getByText('Try adjusting your search terms')).toBeInTheDocument();
-    expect(screen.queryByText('Add Your First Credential')).not.toBeInTheDocument();
+    expect(screen.getByText('未找到凭据')).toBeInTheDocument();
+    expect(screen.getByText('试试调整搜索词')).toBeInTheDocument();
+    expect(screen.queryByText('添加第一个凭据')).not.toBeInTheDocument();
   });
 
   it('applies the sidebar tree filter to the list (single-select)', () => {
@@ -183,12 +183,12 @@ describe('components/CredentialList', () => {
 
     // 仅收藏
     setFilter({ kind: 'favorites' });
-    expect(screen.getByText('1 credential')).toBeInTheDocument();
+    expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Fav-one')).toBeInTheDocument();
 
     // 单选：切类型即替换收藏筛选
     setFilter({ kind: 'type', value: 'ApiKey' });
-    expect(screen.getByText('1 credential')).toBeInTheDocument();
+    expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
     expect(screen.queryByText('Fav-one')).not.toBeInTheDocument();
 
@@ -197,17 +197,17 @@ describe('components/CredentialList', () => {
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
 
     // 搜索词与树筛选 AND
-    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
       target: { value: 'zzz' },
     });
-    expect(screen.getByText('No credentials found')).toBeInTheDocument();
+    expect(screen.getByText('未找到凭据')).toBeInTheDocument();
 
     // 回全部条目并清搜索
     setFilter({ kind: 'all' });
-    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
       target: { value: '' },
     });
-    expect(screen.getByText('2 credentials')).toBeInTheDocument();
+    expect(screen.getByText('2 条凭据')).toBeInTheDocument();
   });
 
   it('shows the generic empty hint when a tree filter matches nothing', () => {
@@ -217,9 +217,9 @@ describe('components/CredentialList', () => {
       useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'Nope' } });
     });
 
-    expect(screen.getByText('No credentials found')).toBeInTheDocument();
-    expect(screen.getByText('Try a different category in the sidebar')).toBeInTheDocument();
-    expect(screen.queryByText('Add Your First Credential')).not.toBeInTheDocument();
+    expect(screen.getByText('未找到凭据')).toBeInTheDocument();
+    expect(screen.getByText('试试侧栏的其他分类')).toBeInTheDocument();
+    expect(screen.queryByText('添加第一个凭据')).not.toBeInTheDocument();
   });
 
   it('injects the pending selection once the target credential is present', async () => {
@@ -272,7 +272,7 @@ describe('components/CredentialList', () => {
       ],
       { getCredentialData },
     );
-    fireEvent.change(screen.getByPlaceholderText('Search credentials...'), {
+    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
       target: { value: 'Other' },
     });
     act(() => {
@@ -289,7 +289,7 @@ describe('components/CredentialList', () => {
     // 注入同时清筛选：目标行可见、搜索框已清空、侧栏分类复位
     await screen.findByTestId('credential-row-c1');
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
-    expect(screen.getByPlaceholderText('Search credentials...')).toHaveValue('');
+    expect(screen.getByPlaceholderText('搜索凭据…')).toHaveValue('');
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
   });
 
@@ -375,7 +375,7 @@ describe('components/CredentialList', () => {
   it('shows the placeholder panel when nothing is selected', () => {
     setupList([makeCred()]);
     expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
-    expect(screen.getByText('Select an item to see details')).toBeInTheDocument();
+    expect(screen.getByText('选择一个条目查看详情')).toBeInTheDocument();
     expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
   });
 
@@ -408,7 +408,7 @@ describe('components/CredentialList', () => {
     );
 
     fireEvent.click(screen.getByText('One'));
-    await screen.findByTitle('Close');
+    await screen.findByTitle('关闭');
     expect(getCredentialData).toHaveBeenCalledWith('c1');
     expect(screen.getByTestId('detail-pane')).toBeInTheDocument();
     expect(screen.getByTestId('credential-row-c1').className).toContain('bg-primary-50');
@@ -424,12 +424,12 @@ describe('components/CredentialList', () => {
 
     // 行上按 Enter：选中
     fireEvent.keyDown(screen.getByTestId('credential-row-c1'), { key: 'Enter' });
-    await screen.findByTitle('Close');
+    await screen.findByTitle('关闭');
     expect(getCredentialData).toHaveBeenCalledWith('c1');
 
     // 焦点在行内复制按钮上时，Enter 不触发选中（先清掉再验证）
-    fireEvent.click(screen.getByTitle('Close'));
-    fireEvent.keyDown(screen.getAllByTitle('Copy username')[0], { key: 'Enter' });
+    fireEvent.click(screen.getByTitle('关闭'));
+    fireEvent.keyDown(screen.getAllByTitle('复制用户名')[0], { key: 'Enter' });
     expect(getCredentialData).toHaveBeenCalledTimes(1);
   });
 
@@ -439,11 +439,11 @@ describe('components/CredentialList', () => {
       makeCred({ id: 'c2', name: 'Two', username: 'bob' }),
     ]);
 
-    fireEvent.click(screen.getAllByTitle('Copy username')[1]);
+    fireEvent.click(screen.getAllByTitle('复制用户名')[1]);
     await act(async () => {});
-    expect(toast.success).toHaveBeenCalledWith('Username copied (clears in 30s)');
+    expect(toast.success).toHaveBeenCalledWith('用户名 已复制（30 秒后自动清除）');
     // stopPropagation 生效：未触发选中
-    expect(screen.queryByTitle('Close')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('关闭')).not.toBeInTheDocument();
     expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
   });
 
@@ -458,7 +458,7 @@ describe('components/CredentialList', () => {
     );
 
     fireEvent.click(screen.getByText('One'));
-    await screen.findByTitle('Close');
+    await screen.findByTitle('关闭');
     fireEvent.click(screen.getByText('Two'));
     await screen.findByText('Two', { selector: 'h2' });
     expect(getCredentialData).toHaveBeenCalledTimes(2);
@@ -474,8 +474,8 @@ describe('components/CredentialList', () => {
     setupList([makeCred()], { getCredentialData });
 
     fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('Close');
-    fireEvent.click(screen.getByTitle('Close'));
+    await screen.findByTitle('关闭');
+    fireEvent.click(screen.getByTitle('关闭'));
     expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
     expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
   });
@@ -488,7 +488,7 @@ describe('components/CredentialList', () => {
     setupList([makeCred({ username: 'bob' })], { getCredentialData });
 
     fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('Close');
+    await screen.findByTitle('关闭');
 
     // 真实写入链失败：tauri 插件拒绝 → navigator.clipboard 不可用 →
     // execCommand 返回 false
@@ -496,7 +496,7 @@ describe('components/CredentialList', () => {
     document.execCommand = jest.fn().mockReturnValue(false) as any;
     clickCopyNextTo('bob');
     await act(async () => {});
-    expect(toast.error).toHaveBeenCalledWith('Failed to copy to clipboard');
+    expect(toast.error).toHaveBeenCalledWith('复制到剪贴板失败');
   });
 
   it('shows a loading state while credential data is in flight', async () => {
@@ -527,8 +527,8 @@ describe('components/CredentialList', () => {
     setupList([makeCred()], { getCredentialData, deleteCredential });
 
     fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('Close');
-    fireEvent.click(screen.getByTitle('Delete'));
+    await screen.findByTitle('关闭');
+    fireEvent.click(screen.getByTitle('删除'));
     await act(async () => {});
     expect(deleteCredential).toHaveBeenCalledWith('c1');
     // 列表数组是静态 mock：只断言面板回占位，不断言行消失

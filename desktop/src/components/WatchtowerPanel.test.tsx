@@ -24,7 +24,7 @@ beforeEach(() => {
 describe('components/WatchtowerPanel', () => {
   it('does not scan on mount and shows the guidance state', () => {
     const { getByText } = render(<WatchtowerPanel />);
-    expect(getByText('Run a scan to check your vault.')).toBeInTheDocument();
+    expect(getByText('运行一次扫描来检查你的密码库。')).toBeInTheDocument();
     expect(mockHealthScan).not.toHaveBeenCalled();
   });
 
@@ -58,18 +58,18 @@ describe('components/WatchtowerPanel', () => {
     });
 
     const { getByText, getByRole } = render(<WatchtowerPanel />);
-    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+    fireEvent.click(getByRole('button', { name: '开始扫描' }));
 
     await waitFor(() => {
       expect(mockHealthScan).toHaveBeenCalledWith({ check_breaches: false });
       expect(getByText('Github')).toBeInTheDocument();
     });
     expect(
-      getByText('This password appears 65764 time(s) in known breach corpora. Rotate it now.'),
+      getByText('该密码在已知泄露库中出现 65764 次，请立即轮换。'),
     ).toBeInTheDocument();
-    expect(getByText('breached password')).toBeInTheDocument();
+    expect(getByText('已泄露')).toBeInTheDocument();
     expect(getByText('Jenkins')).toBeInTheDocument();
-    expect(getByText('stale')).toBeInTheDocument();
+    expect(getByText('长期未更新')).toBeInTheDocument();
   });
 
   it('renders the 2FA-available hint with its site label', async () => {
@@ -94,21 +94,21 @@ describe('components/WatchtowerPanel', () => {
     });
 
     const { getByText, getByRole } = render(<WatchtowerPanel />);
-    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+    fireEvent.click(getByRole('button', { name: '开始扫描' }));
 
     await waitFor(() => {
       expect(getByText('GitHub')).toBeInTheDocument();
     });
-    expect(getByText('2FA available')).toBeInTheDocument();
-    expect(getByText(/github\.com offers two-factor authentication/)).toBeInTheDocument();
+    expect(getByText('可开两步验证')).toBeInTheDocument();
+    expect(getByText(/github\.com 提供两步验证/)).toBeInTheDocument();
   });
 
   it('passes check_breaches: true when the checkbox is ticked', async () => {
     mockHealthScan.mockResolvedValue({ success: true, data: mkReport() });
 
     const { getByLabelText, getByRole } = render(<WatchtowerPanel />);
-    fireEvent.click(getByLabelText(/Check breach corpora \(HIBP\)/));
-    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+    fireEvent.click(getByLabelText(/检查泄露库（HIBP）/));
+    fireEvent.click(getByRole('button', { name: '开始扫描' }));
 
     await waitFor(() => {
       expect(mockHealthScan).toHaveBeenCalledWith({ check_breaches: true });
@@ -122,7 +122,7 @@ describe('components/WatchtowerPanel', () => {
     });
 
     const { getByText, getByRole } = render(<WatchtowerPanel />);
-    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+    fireEvent.click(getByRole('button', { name: '开始扫描' }));
 
     await waitFor(() => {
       expect(getByText('Health scan failed: boom')).toBeInTheDocument();
@@ -136,10 +136,10 @@ describe('components/WatchtowerPanel', () => {
     });
 
     const { getByText, getByRole } = render(<WatchtowerPanel />);
-    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+    fireEvent.click(getByRole('button', { name: '开始扫描' }));
 
     await waitFor(() => {
-      expect(getByText('✓ No issues found across 7 credential(s).')).toBeInTheDocument();
+      expect(getByText('✓ 未发现问题，共扫描 7 条凭据。')).toBeInTheDocument();
     });
   });
 
@@ -163,12 +163,12 @@ describe('components/WatchtowerPanel', () => {
     });
 
     const { getByText, getByRole } = render(<WatchtowerPanel />);
-    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+    fireEvent.click(getByRole('button', { name: '开始扫描' }));
 
     await waitFor(() => {
-      expect(getByText('2 high')).toBeInTheDocument();
+      expect(getByText('2 高')).toBeInTheDocument();
     });
-    expect(getByText('1 medium')).toBeInTheDocument();
-    expect(getByText('3 low')).toBeInTheDocument();
+    expect(getByText('1 中')).toBeInTheDocument();
+    expect(getByText('3 低')).toBeInTheDocument();
   });
 });

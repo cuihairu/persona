@@ -24,7 +24,7 @@ describe('components/UnlockScreen', () => {
     });
 
     const { getByRole } = render(<UnlockScreen onUnlock={() => {}} />);
-    expect(getByRole('button', { name: 'Unlock Persona' })).toBeDisabled();
+    expect(getByRole('button', { name: '解锁 Persona' })).toBeDisabled();
   });
 
   it('submits master password and calls onUnlock on success', async () => {
@@ -37,8 +37,8 @@ describe('components/UnlockScreen', () => {
     });
 
     const { getByLabelText, getByRole } = render(<UnlockScreen onUnlock={onUnlock} />);
-    fireEvent.change(getByLabelText('Master Password'), { target: { value: 'pw' } });
-    fireEvent.click(getByRole('button', { name: 'Unlock Persona' }));
+    fireEvent.change(getByLabelText('主密码'), { target: { value: 'pw' } });
+    fireEvent.click(getByRole('button', { name: '解锁 Persona' }));
 
     // Let the submit promise resolve
     await Promise.resolve();
@@ -58,11 +58,11 @@ describe('components/UnlockScreen', () => {
     });
 
     const { getByLabelText, getByRole } = render(<UnlockScreen onUnlock={onUnlock} />);
-    fireEvent.change(getByLabelText('Master Password'), { target: { value: 'pw' } });
-    fireEvent.click(getByLabelText('Use custom database path'));
-    fireEvent.change(getByLabelText('Database Path'), { target: { value: '/tmp/persona.db' } });
+    fireEvent.change(getByLabelText('主密码'), { target: { value: 'pw' } });
+    fireEvent.click(getByLabelText('使用自定义数据库路径'));
+    fireEvent.change(getByLabelText('数据库路径'), { target: { value: '/tmp/persona.db' } });
 
-    fireEvent.click(getByRole('button', { name: 'Unlock Persona' }));
+    fireEvent.click(getByRole('button', { name: '解锁 Persona' }));
 
     await Promise.resolve();
     await Promise.resolve();
@@ -79,7 +79,7 @@ describe('components/UnlockScreen', () => {
     });
 
     const { container, getByLabelText } = render(<UnlockScreen onUnlock={() => {}} />);
-    const input = getByLabelText('Master Password') as HTMLInputElement;
+    const input = getByLabelText('主密码') as HTMLInputElement;
     expect(input.type).toBe('password');
 
     const toggle = container.querySelector('button[type="button"]') as HTMLButtonElement;
@@ -112,9 +112,9 @@ describe('components/UnlockScreen', () => {
       render(<UnlockScreen onUnlock={() => {}} />);
 
       expect(screen.getByTestId('change-password-modal')).toBeInTheDocument();
-      expect(screen.queryByRole('button', { name: 'Cancel' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument();
       expect(
-        screen.getByRole('button', { name: 'Change and unlock' }),
+        screen.getByRole('button', { name: '修改并解锁' }),
       ).toBeDisabled();
     });
 
@@ -123,7 +123,7 @@ describe('components/UnlockScreen', () => {
       mockForced(jest.fn());
 
       render(<UnlockScreen onUnlock={() => {}} />);
-      expect(screen.getByLabelText('Master Password')).toBeInTheDocument();
+      expect(screen.getByLabelText('主密码')).toBeInTheDocument();
     });
 
     it('rotates through the modal and re-initializes with the new password', async () => {
@@ -135,16 +135,16 @@ describe('components/UnlockScreen', () => {
 
       render(<UnlockScreen onUnlock={onUnlock} />);
 
-      fireEvent.change(screen.getByLabelText('Current password'), {
+      fireEvent.change(screen.getByLabelText('当前密码'), {
         target: { value: 'old-pw' },
       });
-      fireEvent.change(screen.getByLabelText('New password'), {
+      fireEvent.change(screen.getByLabelText('新密码'), {
         target: { value: 'new-pw' },
       });
-      fireEvent.change(screen.getByLabelText('Confirm new password'), {
+      fireEvent.change(screen.getByLabelText('确认新密码'), {
         target: { value: 'new-pw' },
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Change and unlock' }));
+      fireEvent.click(screen.getByRole('button', { name: '修改并解锁' }));
 
       await waitFor(() => {
         expect(mockChange).toHaveBeenCalledWith('old-pw', 'new-pw', undefined);
@@ -164,13 +164,13 @@ describe('components/UnlockScreen', () => {
       const { getByLabelText } = render(<UnlockScreen onUnlock={() => {}} />);
 
       // 模拟真实时序：先输旧密解锁失败（flag 置位），弹窗预填该密码
-      fireEvent.change(getByLabelText('Master Password'), { target: { value: 'tried-pw' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Unlock Persona' }));
+      fireEvent.change(getByLabelText('主密码'), { target: { value: 'tried-pw' } });
+      fireEvent.click(screen.getByRole('button', { name: '解锁 Persona' }));
       await Promise.resolve();
       await Promise.resolve();
 
       await waitFor(() => {
-        expect(screen.getByLabelText('Current password') as HTMLInputElement).toHaveValue(
+        expect(screen.getByLabelText('当前密码') as HTMLInputElement).toHaveValue(
           'tried-pw',
         );
       });

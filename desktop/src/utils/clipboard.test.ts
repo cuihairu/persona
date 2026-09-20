@@ -160,7 +160,7 @@ describe('utils/clipboard', () => {
     await copyToClipboardWithToast('alice', 'Username');
 
     expect(mockTauriWriteText).toHaveBeenCalledWith('alice');
-    expect(mockToastSuccess).toHaveBeenCalledWith('Username copied (clears in 30s)');
+    expect(mockToastSuccess).toHaveBeenCalledWith('Username 已复制（30 秒后自动清除）');
     expect(mockToastError).not.toHaveBeenCalled();
   });
 
@@ -173,7 +173,7 @@ describe('utils/clipboard', () => {
     await copyToClipboardWithToast('alice', 'Username');
 
     expect(mockToastSuccess).not.toHaveBeenCalled();
-    expect(mockToastError).toHaveBeenCalledWith('Failed to copy to clipboard');
+    expect(mockToastError).toHaveBeenCalledWith('复制到剪贴板失败');
   });
 });
 

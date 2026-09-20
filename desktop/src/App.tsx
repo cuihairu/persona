@@ -37,9 +37,23 @@ const App: React.FC = () => {
   useTheme();
   const { t } = useTranslation();
 
+  const {
+    isUnlocked,
+    currentIdentity,
+    error,
+    isLoading,
+    lockService,
+    loadCredentialsForIdentity,
+    clearError,
+  } = usePersonaService();
+
   // 语言偏好恢复：get_workspace_settings 免解锁可读，锁屏阶段即生效；
-  // 读取失败静默保持默认 zh-CN（不阻塞解锁主链路）
+  // mount 时已解锁则跳过（解锁路径的 settings 读取见下方 flags effect，会一并应用
+  // locale），避免同帧重复调用 workspace 设置。读取失败静默保持默认 zh-CN。
   useEffect(() => {
+    if (isUnlocked) {
+      return;
+    }
     (async () => {
       try {
         const resp = await personaAPI.getWorkspaceSettings();
@@ -50,17 +64,8 @@ const App: React.FC = () => {
         // keep default
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 mount 时判断初始锁定态
   }, []);
-
-  const {
-    isUnlocked,
-    currentIdentity,
-    error,
-    isLoading,
-    lockService,
-    loadCredentialsForIdentity,
-    clearError,
-  } = usePersonaService();
 
   const featureFlags = useAppStore((s) => s.featureFlags);
   const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
@@ -140,6 +145,8 @@ const App: React.FC = () => {
         const resp = await personaAPI.getWorkspaceSettings();
         if (resp.success && resp.data) {
           setFeatureFlags(resp.data.features);
+          // 同一次读取顺带刷新语言偏好（解锁前后设置可能变化，幂等）
+          void i18n.changeLanguage(normalizeLocale(resp.data.locale));
         }
       } catch {
         // keep defaults
