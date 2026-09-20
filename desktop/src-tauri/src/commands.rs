@@ -512,7 +512,10 @@ pub async fn set_locale(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
     if locale != "zh-CN" && locale != "en" {
-        return Ok(ApiResponse::error(format!("Unsupported locale: {}", locale)));
+        return Ok(ApiResponse::error(format!(
+            "Unsupported locale: {}",
+            locale
+        )));
     }
 
     let service_unlocked = {
