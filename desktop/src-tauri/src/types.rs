@@ -20,6 +20,9 @@ pub struct AppState {
     pub auto_lock_registered: std::sync::atomic::AtomicBool,
     /// passkey 审批服务端本会话已启动（workspace 开关门禁的幂等标记）
     pub passkey_server_started: std::sync::atomic::AtomicBool,
+    /// passkey 审批服务端的关停通道（maybe_start 填充、关 flag 时消费发送；
+    /// None = 本会话未启动或已关停）
+    pub passkey_server_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     /// 待应答的 SSH 签名审批（request_id → oneshot），由
     /// DesktopApprovalHandler 写入、ssh_approval_respond 命令取出
     pub ssh_approvals: Arc<std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,

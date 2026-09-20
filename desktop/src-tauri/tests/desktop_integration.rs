@@ -28,6 +28,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         agent_handle: Mutex::new(None),
         auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
         passkey_server_started: std::sync::atomic::AtomicBool::new(false),
+        passkey_server_shutdown: Mutex::new(None),
         ssh_approvals: Arc::new(StdMutex::new(HashMap::new())),
         passkey_approvals: Arc::new(StdMutex::new(HashMap::new())),
         sync_emitter: Mutex::new(None),
@@ -146,10 +147,13 @@ async fn tauri_sink_emits_and_resolves_over_real_socket() {
     let state = app.state::<AppState>();
     let pending = state.passkey_approvals.clone();
     let service = state.service.clone();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let _keep = shutdown_tx;
     let server = tokio::spawn(run_passkey_approval_server_with(
         TauriApprovalSink::new(handle.clone()),
         pending,
         service,
+        shutdown_rx,
     ));
     let socket_path = wait_for_socket(Duration::from_secs(5)).await;
 
@@ -211,10 +215,13 @@ async fn tauri_sink_locked_session_answers_directly_without_emit() {
     events.listen(&handle);
 
     let state = app.state::<AppState>();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let _keep = shutdown_tx;
     let server = tokio::spawn(run_passkey_approval_server_with(
         TauriApprovalSink::new(handle.clone()),
         state.passkey_approvals.clone(),
         state.service.clone(),
+        shutdown_rx,
     ));
     let socket_path = wait_for_socket(Duration::from_secs(5)).await;
 

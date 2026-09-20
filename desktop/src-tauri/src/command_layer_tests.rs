@@ -26,6 +26,7 @@ fn mock_app_with_token_store(
         agent_handle: Mutex::new(None),
         auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
         passkey_server_started: std::sync::atomic::AtomicBool::new(false),
+        passkey_server_shutdown: Mutex::new(None),
         ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
         sync_emitter: Mutex::new(None),
@@ -5669,9 +5670,16 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert_eq!(settings.session_timeout_seconds, 3600);
 
     // 窄写 features，返回更新后的全量 settings
-    let resp = set_feature_flags(true, true, true, true, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        true,
+        true,
+        true,
+        true,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let settings = resp.data.expect("updated settings returned");
     assert!(settings.features.ssh_agent);
@@ -5687,9 +5695,16 @@ async fn workspace_settings_round_trip_through_get_and_set_feature_flags() {
     assert!(settings.features.ssh_agent);
 
     // 部分开启：只动 features 四个位
-    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        true,
+        false,
+        false,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     let settings = resp.data.expect("updated settings returned");
     assert!(settings.features.ssh_agent);
     assert!(!settings.features.wallet);
@@ -5702,9 +5717,16 @@ async fn set_feature_flags_requires_unlocked_service() {
     let app = mock_app();
 
     // 未初始化：set 拒绝
-    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        true,
+        false,
+        false,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
@@ -5717,11 +5739,110 @@ async fn set_feature_flags_requires_unlocked_service() {
         .unwrap();
     assert!(resp.success, "get must work while locked: {:?}", resp.error);
 
-    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        true,
+        false,
+        false,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+}
+
+/// set_feature_flags 的开关联动：开 passkeys → 审批服务端本会话即时拉起
+/// （不再等 lock→unlock）；关 passkeys → 发送关停信号、复位幂等标记、
+/// 丢弃残留审批；关 ssh_agent → 运行中的 agent 被停止。
+#[tokio::test]
+async fn set_feature_flags_toggles_passkey_server_and_ssh_agent_lifecycle() {
+    use std::sync::atomic::Ordering;
+
+    // 联动启动会真 spawn 服务端 bind 真 socket：重定向 agent state dir
+    let state_dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&state_dir);
+
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 开 passkeys + ssh_agent：即时拉起（fresh vault 默认全关，prev 全 false）
+    let resp = set_feature_flags(
+        true,
+        false,
+        true,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(
+        state.passkey_server_started.load(Ordering::SeqCst),
+        "enabling passkeys must start the approval server in-session"
+    );
+    assert!(
+        state.passkey_server_shutdown.lock().await.is_some(),
+        "shutdown sender must be stored for the started server"
+    );
+
+    // 造残留状态：一条未应答审批 + 一个运行中的 agent handle + confirm env
+    let (stale_tx, _stale_rx) = tokio::sync::oneshot::channel();
+    state
+        .passkey_approvals
+        .lock()
+        .unwrap()
+        .insert("passkey-stale".to_string(), stale_tx);
+    let (ssh_tx, _ssh_rx) = tokio::sync::oneshot::channel();
+    state
+        .ssh_approvals
+        .lock()
+        .unwrap()
+        .insert("ssh-stale".to_string(), ssh_tx);
+    let agent_task = tauri::async_runtime::spawn(std::future::pending::<()>());
+    *state.agent_handle.lock().await = Some(agent_task);
+    std::env::set_var("PERSONA_AGENT_REQUIRE_CONFIRM", "1");
+
+    // 关 passkeys + ssh_agent：联动停止
+    let resp = set_feature_flags(
+        false,
+        false,
+        false,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(
+        !state.passkey_server_started.load(Ordering::SeqCst),
+        "disabling passkeys must reset the started marker (re-enable works)"
+    );
+    assert!(
+        state.passkey_server_shutdown.lock().await.is_none(),
+        "shutdown sender must be consumed exactly once"
+    );
+    assert!(
+        state.passkey_approvals.lock().unwrap().is_empty(),
+        "stale passkey approvals must be dropped with the server"
+    );
+    assert!(
+        state.ssh_approvals.lock().unwrap().is_empty(),
+        "stale SSH approvals must be dropped with the agent"
+    );
+    assert!(
+        state.agent_handle.lock().await.is_none(),
+        "disabling ssh_agent must abort the running agent"
+    );
+    assert_eq!(
+        std::env::var("PERSONA_AGENT_REQUIRE_CONFIRM").ok(),
+        None::<String>,
+        "confirm env must be cleared with the agent"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -6057,9 +6178,16 @@ async fn workspace_settings_commands_fail_without_db_path() {
     );
 
     // set 在解锁检查处先拒绝（Service not initialized）
-    let resp = set_feature_flags(true, true, true, true, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        true,
+        true,
+        true,
+        true,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(!resp.success);
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
@@ -6130,9 +6258,16 @@ async fn favicon_commands_validate_input_and_read_cache_locally_when_flag_enable
     let (app, identity_id) = app_with_identity().await;
 
     // flag 关时藏按钮不够——这里显式开后端才放行后续用例
-    let resp = set_feature_flags(false, false, false, true, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        false,
+        false,
+        false,
+        true,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
     // 坏 UUID → Invalid UUID format（flag 检查通过后才轮到参数校验）
@@ -6206,9 +6341,16 @@ async fn passkey_gate_spawns_approval_server_only_after_flag_enabled_and_reunloc
     assert!(!socket.exists(), "gate closed: no approval socket");
 
     // 打开 passkeys 开关（当前已解锁，允许写）
-    let resp = set_feature_flags(false, false, true, false, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        false,
+        false,
+        true,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(resp.success, "{:?}", resp.error);
 
     // lock→unlock（重新 init）：门禁读到开关后 spawn
@@ -6439,9 +6581,16 @@ async fn set_password_expiry_narrow_write_round_trip() {
     assert_eq!(settings.session_timeout_seconds, 3600);
 
     // 与 features 位互不干扰（两条窄写路径共用一行 settings）
-    let resp = set_feature_flags(true, false, false, false, app.state::<AppState>())
-        .await
-        .unwrap();
+    let resp = set_feature_flags(
+        true,
+        false,
+        false,
+        false,
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let settings = resp.data.expect("updated settings returned");
     assert!(settings.features.ssh_agent);

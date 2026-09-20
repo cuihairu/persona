@@ -180,9 +180,15 @@ Desktop (Tauri v2 + React)
     钱包/SSH 后端命令可保留（已有解锁 + re-auth 门禁），仅隐藏 UI 入口
   - [x] 设置页 SettingsModal tab 化：General（三开关 optimistic 写 + 失败
     回滚 + toast）/ Identities（原身份管理）
-  - 已知限制：flag 关闭时已 spawn 的 passkey server 本会话不停（无 shutdown
-    路径）；已运行的 SSH agent 不随开关 stop（follow-up）；设置页开关与
-    active identity 对同一 workspace 行是 last-write-wins
+  - [x] 开关即生效（2026-09-20 桌面稳定化第 3 项）：`set_feature_flags`
+    持久化成功后按开关变化方向联动——关 passkeys → oneshot 关停信号 →
+    accept loop 退出 + socket 文件移除 + 未应答审批丢弃 + 幂等标记复位；
+    开 passkeys → 本会话即时拉起（不再等 lock→unlock）；关 ssh_agent →
+    复用 `stop_ssh_agent_internal`（abort handle + 清审批 + env + state
+    文件）；开 ssh_agent 不自动启动（入口显隐归 UI，agent 由用户在面板
+    start，对齐 1Password 语义）
+  - 已知限制：设置页开关与 active identity 对同一 workspace 行是
+    last-write-wins
 - [ ] UI 对齐 1Password 8 交互范式（分阶段；身份维度保留为 Persona 特色，
   信息架构不照搬——1Password 无身份/上下文概念，IdentitySwitcher 语义是
   "身份"而非"账户"）

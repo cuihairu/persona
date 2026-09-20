@@ -110,6 +110,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             agent_handle: Mutex::new(None),
             auto_lock_registered: std::sync::atomic::AtomicBool::new(false),
             passkey_server_started: std::sync::atomic::AtomicBool::new(false),
+            passkey_server_shutdown: Mutex::new(None),
             ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_emitter: Mutex::new(None),

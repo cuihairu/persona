@@ -122,17 +122,20 @@ pub fn approval_socket_path() -> PathBuf {
     crate::commands::agent_state_dir().join(APPROVAL_SOCKET_NAME)
 }
 
-/// Bind the approval socket and serve bridge connections forever.
+/// Bind the approval socket and serve bridge connections until shut down.
 ///
 /// Spawned from `main` setup: it runs whether or not the vault is unlocked,
 /// because locked sessions answer `locked` instead of bubbling to the GUI.
+/// 关停通路：`shutdown` 收到信号（或 sender 被 drop）即退出 accept loop、
+/// 清掉 socket 文件并丢弃未应答审批——工作区关掉 passkeys 开关立即生效。
 pub async fn run_passkey_approval_server<R: Runtime>(
     app: tauri::AppHandle<R>,
     pending: PendingApprovals,
     service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let sink = TauriApprovalSink::new(app);
-    run_passkey_approval_server_with(sink, pending, service).await
+    run_passkey_approval_server_with(sink, pending, service, shutdown).await
 }
 
 /// [`run_passkey_approval_server`] with an injected sink (tests use a fake).
@@ -140,6 +143,7 @@ pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
     sink: S,
     pending: PendingApprovals,
     service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>>,
+    shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let path = approval_socket_path();
     if let Some(dir) = path.parent() {
@@ -155,25 +159,49 @@ pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     tracing::info!("passkey approval socket listening at {}", path.display());
-    serve_on(listener, Arc::new(sink), pending, service, APPROVAL_TIMEOUT).await
+    serve_on(
+        listener,
+        Arc::new(sink),
+        pending.clone(),
+        service,
+        APPROVAL_TIMEOUT,
+        shutdown,
+    )
+    .await?;
+    // 正常退出（收到关停信号）：socket 文件随之移除，bridge 侧 connect
+    // 立即失败而不是挂在一个无人应答的端点上。
+    let _ = std::fs::remove_file(&path);
+    // 丢弃未应答审批：sender drop 后 bridge 侧 oneshot 收到断连 → 拒绝
+    if let Ok(mut map) = pending.lock() {
+        map.clear();
+    }
+    Ok(())
 }
 
 /// Accept loop, split out from [`run_passkey_approval_server`] so tests can
-/// bind their own listener (temp dir, short timeout).
+/// bind their own listener (temp dir, short timeout). Returns when the
+/// shutdown signal fires (sender dropped counts as fired).
 async fn serve_on<S: PasskeyApprovalSink>(
     listener: UnixListener,
     sink: Arc<S>,
     pending: PendingApprovals,
     service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>>,
     timeout: Duration,
+    mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let next_id = Arc::new(AtomicU64::new(1));
     loop {
-        let (stream, _addr) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(e) => {
-                tracing::warn!("passkey approval accept failed: {e}");
-                continue;
+        let (stream, _addr) = tokio::select! {
+            _ = &mut shutdown => {
+                tracing::info!("passkey approval server shutting down");
+                return Ok(());
+            }
+            accepted = listener.accept() => match accepted {
+                Ok(accepted) => accepted,
+                Err(e) => {
+                    tracing::warn!("passkey approval accept failed: {e}");
+                    continue;
+                }
             }
         };
         let sink = sink.clone();
@@ -467,12 +495,14 @@ mod tests {
         let sink = FakeSink {
             payloads: Arc::new(StdMutex::new(Vec::new())),
         };
-        tokio::spawn(serve_on(
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(serve_on(
             listener,
             Arc::new(sink),
             pending,
             service,
             Duration::from_secs(5),
+            shutdown_rx,
         ));
 
         // A silent client: connect, send nothing, hang up.
@@ -512,6 +542,14 @@ mod tests {
             r#"{"approved":false,"reason":"locked"}"#,
             "locked vault denies over the real socket"
         );
+
+        // shutdown 信号 → accept loop 优雅退出（join 完成）
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("serve_on exits after the shutdown signal")
+            .unwrap()
+            .unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -722,7 +760,13 @@ mod tests {
         let sink = FakeSink {
             payloads: Arc::new(StdMutex::new(Vec::new())),
         };
-        let server = tokio::spawn(run_passkey_approval_server_with(sink, pending, service));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(run_passkey_approval_server_with(
+            sink,
+            pending,
+            service,
+            shutdown_rx,
+        ));
 
         // 等待 socket 就绪并完成一次 locked 应答。
         let answer = {
@@ -758,8 +802,6 @@ mod tests {
             String::from_utf8(buf).unwrap()
         };
 
-        server.abort();
-
         assert_eq!(
             answer.trim(),
             r#"{"approved":false,"reason":"locked"}"#,
@@ -774,5 +816,18 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600, "socket must be owner-only");
         }
+
+        // 优雅关停：信号 → server 退出 + socket 文件移除（bridge 侧 connect
+        // 立即失败而不是挂在无人应答的端点上）
+        shutdown_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .expect("server exits after the shutdown signal")
+            .unwrap()
+            .unwrap();
+        assert!(
+            !dir.path().join(APPROVAL_SOCKET_NAME).exists(),
+            "socket file must be removed on shutdown"
+        );
     }
 }

@@ -439,13 +439,20 @@ pub async fn change_master_password(
 
 /// 窄写高级功能开关：只动 `settings.features` 四个位，返回更新后的全量
 /// settings 作为服务端真相（避免前端 clobber 其它设置字段）。
+///
+/// 后端开关联动（开关即生效，无需 lock→unlock）：
+/// - passkeys 关：关停已 spawn 的审批服务端；开：本会话即时拉起
+///   （此前要等下次 init_service）
+/// - ssh_agent 关：停止已运行的 SSH agent（开：不自动启动——入口显隐
+///   归 UI，agent 由用户在面板里 start，对齐 1Password 语义）
 #[command]
-pub async fn set_feature_flags(
+pub async fn set_feature_flags<R: tauri::Runtime>(
     ssh_agent: bool,
     wallet: bool,
     passkeys: bool,
     fetch_favicons: bool,
     state: State<'_, AppState>,
+    app: tauri::AppHandle<R>,
 ) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
     let service_unlocked = {
         let guard = state.service.lock().await;
@@ -475,6 +482,7 @@ pub async fn set_feature_flags(
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
     let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let prev = ws.settings.features;
     ws.settings.features = FeatureFlags {
         ssh_agent,
         wallet,
@@ -483,6 +491,16 @@ pub async fn set_feature_flags(
     };
     ws.touch();
     let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+
+    if prev.passkeys && !passkeys {
+        stop_passkey_server(&state).await;
+    } else if !prev.passkeys && passkeys {
+        maybe_start_passkey_server(&db_path, &state, &app).await;
+    }
+    if prev.ssh_agent && !ssh_agent {
+        stop_ssh_agent_internal(&state).await;
+    }
+
     Ok(ApiResponse::success(updated.settings))
 }
 
@@ -804,7 +822,8 @@ async fn favicon_flag_enabled(db_path: &str) -> bool {
 /// 不放 setup：setup 时 db_path 尚未写入，猜默认路径会读错 vault。只读
 /// `find_by_path` 不开 workspace 行；开关关闭/读取失败 → 不 spawn。设置页
 /// 打开开关后，下一次 lock→unlock（重新 init_service）即生效，无需重启。
-/// `passkey_server_started` 保证多次 init_service 只 spawn 一次。
+/// `passkey_server_started` 保证多次 init_service 只 spawn 一次；关停通道
+/// 存入 AppState 供 [`stop_passkey_server`] 使用。
 pub(crate) async fn maybe_start_passkey_server<R: tauri::Runtime>(
     db_path: &str,
     state: &State<'_, AppState>,
@@ -820,15 +839,39 @@ pub(crate) async fn maybe_start_passkey_server<R: tauri::Runtime>(
     }
 
     let (pending, service) = (state.passkey_approvals.clone(), state.service.clone());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    *state.passkey_server_shutdown.lock().await = Some(shutdown_tx);
     let handle = app.clone();
     state.passkey_server_started.store(true, Ordering::SeqCst);
     tauri::async_runtime::spawn(async move {
-        if let Err(err) =
-            crate::passkey_bridge::run_passkey_approval_server(handle, pending, service).await
+        if let Err(err) = crate::passkey_bridge::run_passkey_approval_server(
+            handle,
+            pending,
+            service,
+            shutdown_rx,
+        )
+        .await
         {
             eprintln!("passkey approval server exited: {err}");
         }
     });
+}
+
+/// 关停 passkey 审批服务端（工作区关掉 passkeys 开关时调用）。
+///
+/// 发送信号后服务端自行退出并清 socket 文件与未应答审批；本函数同步做
+/// 的是复位 `passkey_server_started`（下次开开关可重启）并兜底丢弃残留
+/// 审批（服务端退出前的窗口期内新进的请求）。
+pub(crate) async fn stop_passkey_server(state: &State<'_, AppState>) {
+    use std::sync::atomic::Ordering;
+
+    if let Some(tx) = state.passkey_server_shutdown.lock().await.take() {
+        let _ = tx.send(());
+    }
+    state.passkey_server_started.store(false, Ordering::SeqCst);
+    if let Ok(mut map) = state.passkey_approvals.lock() {
+        map.clear();
+    }
 }
 
 /// Create a new identity
@@ -1897,6 +1940,13 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
 pub async fn stop_ssh_agent(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
+    stop_ssh_agent_internal(&state).await;
+    Ok(ApiResponse::success(true))
+}
+
+/// 停止 SSH agent 的实际逻辑（`stop_ssh_agent` 命令与
+/// `set_feature_flags` 关开关联动共用）。
+async fn stop_ssh_agent_internal(state: &State<'_, AppState>) {
     if let Some(handle) = state.agent_handle.lock().await.take() {
         handle.abort();
     }
@@ -1906,7 +1956,6 @@ pub async fn stop_ssh_agent(
     }
     std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
     cleanup_agent_state_files();
-    Ok(ApiResponse::success(true))
 }
 
 /// Answer a pending SSH signature approval (from the approval modal).
