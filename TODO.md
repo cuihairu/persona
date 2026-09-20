@@ -104,8 +104,8 @@ Desktop (Tauri v2 + React)
   tauri 依赖）→ DesktopApprovalHandler（emit `persona://ssh-approval` + oneshot，
   120s 超时自动拒绝）→ SshApprovalModal；CLI 走 TTY 提示零改动；失焦系统通知
 - [x] Wallet UI (addresses, QR, signing confirmations + 地址投毒启发式告警)
-- [ ] Desktop 集成测试矩阵扩展（当前 107 个 Rust 测试（102 lib 单测 +
-  5 集成），总体行覆盖 ~91.1%（lib 化前 89%）；commands.rs ~90.6%、
+- [x] Desktop 集成测试矩阵扩展（2026-09-20 验收勾选：134 个 Rust 测试
+  （129 lib 单测 + 5 集成）全绿；总体行覆盖 ~91.1%（lib 化前 89%）；commands.rs ~90.6%、
   types.rs 100%、passkey_bridge ~97.4%、approval ~96.5%；命令级集成测试
   基建已建：`command_layer_tests.rs` 经 `tauri::test::mock_app` 直驱 50+
   命令处理器，含 wallet 交易 create/sign 多链路径、SSH agent start/stop
@@ -140,12 +140,14 @@ Desktop (Tauri v2 + React)
   强引导弹窗（解锁屏 forced 模式 PASSWORD_CHANGE_REQUIRED 码分流）+ Settings
   安全区块（Never/90/180/365 + 手动改密后回锁屏）+ CLI `persona passwd`
   （新密码仅交互，不设 env）；wallets（独立钱包密码）不受影响
-- [ ] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09 全局搜索批次发现；
-  此前误记 "tsc 0 错误"——`npx tsc` 拉到 npm 同名占位包返回假 0，须用
-  `./node_modules/.bin/tsc`）：全在测试 fixture（`url: null` vs
+- [x] Desktop 前端 23 个测试文件 tsc 类型本底（2026-09-20 验收勾选：
+  tsconfig include src 无 exclude，`./node_modules/.bin/tsc --noEmit
+  -p tsconfig.json` 全量 exit 0——i18n 断言批次起每轮改动均复跑；
+  当年发现的 fixture 类型问题（`url: null` vs
   `url?: string`、缺 timestamp/SshAgentStatus 形状、`"private_key"` 非法
-  SecretField 等），源代码 0 错误；jest/ts-jest 不做全量类型检查所以
-  测试照跑。修法：fixture 工厂返回类型标注 `Credential`/`Identity` 等
+  SecretField 等）已在后续 fixture 工厂类型标注中消化。注意
+  `npx tsc` 会拉到 npm 同名占位包返回假 0，永远用
+  `./node_modules/.bin/tsc`）
 - [x] fix(desktop): init_service 持锁调用 register_auto_lock_bridge 的死锁
   （tokio Mutex 非重入；2026-09 命令级测试发现并修复）
 - [x] 前端测试第一批~三批（2026-09，jest 30 + testing-library）：115 → 202 测试，
@@ -194,7 +196,7 @@ Desktop (Tauri v2 + React)
   "身份"而非"账户"）
   - [x] 双栏布局：中间条目列表（图标+标题+副标题，行内复制/详情按钮）+
     右侧常驻详情面板，取代凭据卡片网格 + 点击弹 modal
-  - [ ] 全局快速搜索（⌘K / 顶栏搜索框，跨身份跨类型结果分组；范围天然
+  - [x] 全局快速搜索（⌘K / 顶栏搜索框，跨身份跨类型结果分组；范围天然
     受功能开关约束）——6be7cba7 跨身份选中桥（pendingCredentialSelection
     入 store，CredentialList 凭据就绪后注入并清除）/ 74b58db5 QuickSearch
     overlay（⌘K+工具栏按钮双入口、200ms debounce、按身份分组、↑↓Enter
@@ -205,8 +207,8 @@ Desktop (Tauri v2 + React)
     身份跳转 switchIdentity 传 silent（切换是手段不是用户动作，toast
     只会盖住跳转）；pending 注入同时清列表搜索词 + 复位侧栏分类（目标
     被本地筛选挡住时注入会被"筛选不可见清选中"立即清掉）、目标凭据
-    已删除时 pending 作废（列表归属校验排除换身份中间态误清）。
-    follow-up：搜索词高亮
+    已删除时 pending 作废（列表归属校验排除换身份中间态误清）
+  - [ ] 快速搜索结果搜索词高亮（QuickSearch 结果行内命中片段标记）
   - [x] 暗色模式（Tailwind darkMode: class；现有浅色 token 全部成对补 dark
     变体——13d75f4c 基建 / 94ee3930 Settings 三档选择器 / a79b3cbb 全组件
     sweep，顺带修复 v4 死类 bg-opacity-* 导致的弹窗遮罩纯黑实底）
