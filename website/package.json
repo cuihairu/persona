@@ -11,11 +11,11 @@
     "lint": "eslint --ext .js,.jsx,.ts,.tsx ./src"
   },
   "dependencies": {
-    "antd": "^5.22.0",
     "@ant-design/icons": "^5.5.0",
+    "antd": "^5.22.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "umi": "^4.7.17"
+    "umi": "^4.7.19"
   },
   "devDependencies": {
     "@types/react": "^18.3.0",
