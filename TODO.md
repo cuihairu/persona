@@ -451,6 +451,9 @@ Quality & Security
 - [x] Threat model & periodic security review
 - [x] Fuzz tests for parsers (mnemonic/keystore/QR)
 - [x] Supply chain checks (cargo-deny, npm audit)
+- [ ] Dependabot 开放警报（2026-09）：glib 0.18.5 medium（gtk-rs 绑定链，升级需跟
+  libadwaita/gtk 整体升版）；elliptic 6.6.1 low（crypto-browserify 传递依赖，
+  构建工具链，暂无上游修复版）——均不在运行时敏感边界内，观察上游
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
