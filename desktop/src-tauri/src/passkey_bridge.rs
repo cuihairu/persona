@@ -23,11 +23,16 @@
 use crate::approval::PendingApprovals;
 use crate::types::PasskeyApprovalRequest;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::{Emitter, Runtime};
+#[cfg(unix)]
+use tauri::Emitter;
+use tauri::Runtime;
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::net::UnixListener;
 
 /// Socket filename under the agent state dir, matching the bridge's default.
@@ -38,6 +43,7 @@ pub const APPROVAL_SOCKET_NAME: &str = "passkey-approval.sock";
 pub const APPROVAL_TIMEOUT: Duration = crate::approval::APPROVAL_TIMEOUT;
 
 /// One line sent by the bridge (mirrors `bridge.rs` DesktopApprovalRequest).
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq, serde::Deserialize)]
 pub struct BridgeApprovalQuery {
     pub v: u8,
@@ -52,6 +58,7 @@ pub struct BridgeApprovalQuery {
 }
 
 /// One line answered by the desktop (mirrors `bridge.rs` DesktopApprovalResponse).
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq, serde::Serialize)]
 pub struct ApprovalDecision {
     pub approved: bool,
@@ -59,6 +66,7 @@ pub struct ApprovalDecision {
     pub reason: Option<String>,
 }
 
+#[cfg(unix)]
 impl ApprovalDecision {
     pub fn approve() -> Self {
         Self {
@@ -79,21 +87,25 @@ impl ApprovalDecision {
 ///
 /// Abstracted so tests can capture payloads without spinning up a Tauri
 /// app (whose mock runtime poisons the test's tokio reactor).
+#[cfg(unix)]
 pub trait PasskeyApprovalSink: Send + Sync + 'static {
     fn emit_request(&self, payload: &PasskeyApprovalRequest) -> anyhow::Result<()>;
 }
 
 /// Production sink: emits `persona://passkey-approval` to the frontend.
+#[cfg(unix)]
 pub struct TauriApprovalSink<R: Runtime> {
     app: tauri::AppHandle<R>,
 }
 
+#[cfg(unix)]
 impl<R: Runtime> TauriApprovalSink<R> {
     pub fn new(app: tauri::AppHandle<R>) -> Self {
         Self { app }
     }
 }
 
+#[cfg(unix)]
 impl<R: Runtime> PasskeyApprovalSink for TauriApprovalSink<R> {
     fn emit_request(&self, payload: &PasskeyApprovalRequest) -> anyhow::Result<()> {
         self.app
@@ -103,6 +115,7 @@ impl<R: Runtime> PasskeyApprovalSink for TauriApprovalSink<R> {
 }
 
 /// Validate one bridge request line; `Err` is the decision to send back.
+#[cfg(unix)]
 fn parse_query(line: &str) -> Result<BridgeApprovalQuery, ApprovalDecision> {
     let query: BridgeApprovalQuery =
         serde_json::from_str(line).map_err(|_| ApprovalDecision::deny("unsupported"))?;
@@ -128,6 +141,7 @@ pub fn approval_socket_path() -> PathBuf {
 /// because locked sessions answer `locked` instead of bubbling to the GUI.
 /// 关停通路：`shutdown` 收到信号（或 sender 被 drop）即退出 accept loop、
 /// 清掉 socket 文件并丢弃未应答审批——工作区关掉 passkeys 开关立即生效。
+#[cfg(unix)]
 pub async fn run_passkey_approval_server<R: Runtime>(
     app: tauri::AppHandle<R>,
     pending: PendingApprovals,
@@ -139,6 +153,7 @@ pub async fn run_passkey_approval_server<R: Runtime>(
 }
 
 /// [`run_passkey_approval_server`] with an injected sink (tests use a fake).
+#[cfg(unix)]
 pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
     sink: S,
     pending: PendingApprovals,
@@ -181,6 +196,7 @@ pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
 /// Accept loop, split out from [`run_passkey_approval_server`] so tests can
 /// bind their own listener (temp dir, short timeout). Returns when the
 /// shutdown signal fires (sender dropped counts as fired).
+#[cfg(unix)]
 async fn serve_on<S: PasskeyApprovalSink>(
     listener: UnixListener,
     sink: Arc<S>,
@@ -222,6 +238,7 @@ async fn serve_on<S: PasskeyApprovalSink>(
 ///
 /// Generic over the IO type so tests can drive it over an in-memory duplex
 /// instead of a real Unix socket.
+#[cfg(unix)]
 async fn handle_connection<
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
     K: PasskeyApprovalSink,
@@ -264,6 +281,7 @@ async fn handle_connection<
 
 /// Register a oneshot, emit the GUI event, and wait out the answer or
 /// timeout (mirrors `approval.rs` DesktopApprovalHandler::confirm).
+#[cfg(unix)]
 async fn ask_frontend<K: PasskeyApprovalSink>(
     sink: &K,
     pending: &PendingApprovals,
@@ -311,7 +329,7 @@ async fn ask_frontend<K: PasskeyApprovalSink>(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::approval::resolve_from_map;
@@ -830,4 +848,22 @@ mod tests {
             "socket file must be removed on shutdown"
         );
     }
+}
+
+/// Windows stub: the approval server speaks Unix domain sockets, which do
+/// not exist here. Failing the spawn is the safe direction — the browser
+/// bridge cannot connect, so every approval fails closed (`require` mode)
+/// or falls back to its own gesture gate (`auto`). The maybe_start caller
+/// logs this error and leaves `passkey_server_started` unset.
+#[cfg(not(unix))]
+pub async fn run_passkey_approval_server<R: Runtime>(
+    _app: tauri::AppHandle<R>,
+    _pending: PendingApprovals,
+    _service: Arc<tokio::sync::Mutex<Option<persona_core::PersonaService>>>,
+    _shutdown: tokio::sync::oneshot::Receiver<()>,
+) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "passkey approval server requires a Unix domain socket transport; \
+         not available on Windows yet (passkeys feature will fail closed)"
+    )
 }
