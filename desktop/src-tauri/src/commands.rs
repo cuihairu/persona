@@ -1077,6 +1077,9 @@ pub async fn create_credential(
                     "ServerConfig" => CredentialType::ServerConfig,
                     "Certificate" => CredentialType::Certificate,
                     "TwoFactor" => CredentialType::TwoFactor,
+                    "SecureNote" => CredentialType::SecureNote,
+                    "Identity" => CredentialType::Identity,
+                    "SoftwareLicense" => CredentialType::SoftwareLicense,
                     custom => CredentialType::Custom(custom.to_string()),
                 };
 
@@ -1142,6 +1145,130 @@ pub async fn create_credential(
             Err(_) => Ok(ApiResponse::error(
                 "Invalid identity UUID format".to_string(),
             )),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+/// Edit credential metadata（name/username/url/notes/tags/security_level；
+/// 条目类型不可变，payload 编辑走 update_credential_data）
+#[command]
+pub async fn update_credential(
+    request: UpdateCredentialRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableCredential>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&request.id) {
+            Ok(uuid) => match service.get_credential(&uuid).await {
+                Ok(Some(mut credential)) => {
+                    credential.name = request.name;
+                    if let Some(level) = request.security_level {
+                        credential.security_level = match level.as_str() {
+                            "Critical" => SecurityLevel::Critical,
+                            "High" => SecurityLevel::High,
+                            "Medium" => SecurityLevel::Medium,
+                            "Low" => SecurityLevel::Low,
+                            _ => credential.security_level.clone(),
+                        };
+                    }
+                    if let Some(url) = request.url {
+                        let trimmed = url.trim().to_string();
+                        credential.url = if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed)
+                        };
+                    }
+                    if let Some(username) = request.username {
+                        let trimmed = username.trim().to_string();
+                        credential.username = if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed)
+                        };
+                    }
+                    if let Some(notes) = request.notes {
+                        let trimmed = notes.trim().to_string();
+                        credential.notes = if trimmed.is_empty() {
+                            None
+                        } else {
+                            Some(trimmed)
+                        };
+                    }
+                    if let Some(tags) = request.tags {
+                        credential.tags = tags
+                            .into_iter()
+                            .map(|t| t.trim().to_string())
+                            .filter(|t| !t.is_empty())
+                            .collect();
+                    }
+
+                    match service.update_credential(&credential).await {
+                        Ok(updated) => Ok(ApiResponse::success(updated.into())),
+                        Err(e) => {
+                            let (code, msg) = map_persona_error(&e);
+                            match code {
+                                Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                                None => Ok(ApiResponse::error(format!(
+                                    "Failed to update credential: {}",
+                                    msg
+                                ))),
+                            }
+                        }
+                    }
+                }
+                Ok(None) => Ok(ApiResponse::error(format!(
+                    "Credential {} not found",
+                    request.id
+                ))),
+                Err(e) => {
+                    let (code, msg) = map_persona_error(&e);
+                    match code {
+                        Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                        None => Ok(ApiResponse::error(format!(
+                            "Failed to update credential: {}",
+                            msg
+                        ))),
+                    }
+                }
+            },
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+/// Edit a credential's encrypted payload（敏感：复用原 item key 重封，
+/// 附件不受影响；走敏感门禁，reauth 超时返回 REAUTH_REQUIRED）
+#[command]
+pub async fn update_credential_data(
+    request: UpdateCredentialDataRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableCredential>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&request.credential_id) {
+            Ok(uuid) => {
+                let credential_data = request.credential_data.to_credential_data();
+                match service
+                    .update_credential_data(&uuid, &credential_data)
+                    .await
+                {
+                    Ok(updated) => Ok(ApiResponse::success(updated.into())),
+                    Err(e) => {
+                        let (code, msg) = map_persona_error(&e);
+                        match code {
+                            Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                            None => Ok(ApiResponse::error(format!(
+                                "Failed to update credential data: {}",
+                                msg
+                            ))),
+                        }
+                    }
+                }
+            }
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
         },
         None => Ok(ApiResponse::error("Service not initialized".to_string())),
     }

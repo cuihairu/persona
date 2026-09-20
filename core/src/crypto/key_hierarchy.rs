@@ -40,6 +40,21 @@ impl<'a> KeyHierarchy<'a> {
         })
     }
 
+    /// Encrypt plaintext with an already-unwrapped item key, leaving the
+    /// stored wrapped key untouched.
+    ///
+    /// Used by credential-data edits (`PersonaService::update_credential_data`):
+    /// re-sealing the payload under a *fresh* item key would orphan every
+    /// attachment sealed with the current one, so the edit must reuse the
+    /// existing key. The wrapped form never round-trips here — callers keep
+    /// the row's `wrapped_item_key` bytes as they are.
+    pub fn encrypt_with_item_key(&self, item_key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>> {
+        let item_cipher = EncryptionService::new(item_key);
+        item_cipher.encrypt(plaintext).map_err(|e| {
+            PersonaError::CryptographicError(format!("Failed to encrypt payload: {}", e)).into()
+        })
+    }
+
     /// Decrypt payload that was encrypted with a wrapped item key.
     pub fn decrypt_with_wrapped_key(
         &self,
@@ -122,6 +137,26 @@ mod tests {
             .decrypt_with_wrapped_key(&envelope.wrapped_key, &envelope.ciphertext)
             .unwrap();
         assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn encrypt_with_item_key_reuses_the_same_key() {
+        let master_key = EncryptionService::generate_key();
+        let master = EncryptionService::new(&master_key);
+        let hierarchy = KeyHierarchy::new(&master);
+
+        let envelope = hierarchy.encrypt_with_new_item_key(b"old payload").unwrap();
+        let item_key = hierarchy.unwrap_item_key(&envelope.wrapped_key).unwrap();
+
+        // Re-seal a new payload with the same key: the stored wrapped key
+        // stays valid and decrypts the new ciphertext.
+        let new_ciphertext = hierarchy
+            .encrypt_with_item_key(&item_key, b"edited payload")
+            .unwrap();
+        let decrypted = hierarchy
+            .decrypt_with_wrapped_key(&envelope.wrapped_key, &new_ciphertext)
+            .unwrap();
+        assert_eq!(decrypted, b"edited payload");
     }
 
     #[test]

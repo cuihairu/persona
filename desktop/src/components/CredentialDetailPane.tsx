@@ -8,6 +8,7 @@ import {
   DocumentDuplicateIcon,
   HeartIcon,
   PaperClipIcon,
+  PencilIcon,
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
@@ -59,6 +60,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     deleteAttachment,
   } = usePersonaService();
   const faviconsEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
+  const setEditingCredential = useAppStore((s) => s.setEditingCredential);
   // 头部图标预取（列表页通常已拉好，这里幂等兜底）
   useFavicons([credential.url]);
   const [isFetchingIcon, setIsFetchingIcon] = useState(false);
@@ -580,6 +582,15 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => setEditingCredential({ credential, data: credentialData })}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
+            title="Edit"
+            aria-label="Edit item"
+            data-testid="edit-credential-button"
+          >
+            <PencilIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
+          </button>
           <button
             onClick={handleToggleFavorite}
             disabled={isTogglingFavorite}

@@ -423,6 +423,23 @@ export interface CreateCredentialRequest {
   credential_data: CredentialDataRequest;
 }
 
+/** 元数据编辑请求（条目类型不可变；payload 编辑走 UpdateCredentialDataRequest） */
+export interface UpdateCredentialRequest {
+  id: string;
+  name: string;
+  security_level?: string;
+  url?: string;
+  username?: string;
+  notes?: string;
+  tags?: string[];
+}
+
+/** 密文 payload 编辑请求（敏感：复用原 item key 重封 + 敏感门禁） */
+export interface UpdateCredentialDataRequest {
+  credential_id: string;
+  credential_data: CredentialDataRequest;
+}
+
 export type CredentialDataRequest =
   | { type: 'Password'; password: string; email?: string; security_questions: SecurityQuestion[] }
   | { type: 'CryptoWallet'; wallet_type: string; mnemonic_phrase?: string; private_key?: string; public_key: string; address: string; network: string }

@@ -46,6 +46,9 @@ const App: React.FC = () => {
   const featureFlags = useAppStore((s) => s.featureFlags);
   const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
   const resetSidebarFilter = useAppStore((s) => s.resetSidebarFilter);
+  // 编辑中的凭据（DetailPane Edit 按钮写入；modal 消费，null = 创建模式）
+  const editingCredential = useAppStore((s) => s.editingCredential);
+  const setEditingCredential = useAppStore((s) => s.setEditingCredential);
 
   const [showCreateIdentity, setShowCreateIdentity] = useState(false);
   const [showCreateCredential, setShowCreateCredential] = useState(false);
@@ -59,6 +62,7 @@ const App: React.FC = () => {
     setShowCreateIdentity(false);
     setShowCreateCredential(false);
     setShowSettings(false);
+    setEditingCredential(null);
     void lockService();
   };
   useGlobalShortcut('l', handleLock, isUnlocked);
@@ -239,8 +243,12 @@ const App: React.FC = () => {
         />
 
         <CreateCredentialModal
-          isOpen={showCreateCredential}
-          onClose={() => setShowCreateCredential(false)}
+          isOpen={showCreateCredential || editingCredential !== null}
+          editCredential={editingCredential}
+          onClose={() => {
+            setShowCreateCredential(false);
+            setEditingCredential(null);
+          }}
         />
 
         <SettingsModal

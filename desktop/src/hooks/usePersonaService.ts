@@ -1,7 +1,13 @@
 import { useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
-import type { AttachmentEntry, CredentialHistoryEntry, Identity } from '@/types';
+import type {
+  AttachmentEntry,
+  CredentialHistoryEntry,
+  Identity,
+  UpdateCredentialRequest,
+  UpdateCredentialDataRequest,
+} from '@/types';
 import toast from 'react-hot-toast';
 
 export const usePersonaService = () => {
@@ -30,6 +36,7 @@ export const usePersonaService = () => {
     clearFaviconCache,
     clearPendingCredentialSelection,
     setSelectedCredentialId,
+    setEditingCredential,
     setPasswordChangeRequired,
   } = useAppStore();
 
@@ -108,6 +115,8 @@ export const usePersonaService = () => {
         // 选中与待注入的跨身份跳转都随锁作废（否则解锁后可能自动选中陈旧条目）
         clearPendingCredentialSelection();
         setSelectedCredentialId(null);
+        // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
+        setEditingCredential(null);
         toast.success('Service locked');
       } else {
         toast.error(response.error || 'Failed to lock service');
@@ -287,6 +296,40 @@ export const usePersonaService = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  /** 元数据编辑：成功后刷新列表并返回更新行；REAUTH 等错误码走 toast */
+  const updateCredential = async (request: UpdateCredentialRequest) => {
+    setLoading(true);
+    clearError();
+    try {
+      const response = await personaAPI.updateCredential(request);
+      if (response.success && response.data) {
+        if (currentIdentity) {
+          await loadCredentialsForIdentity(currentIdentity.id);
+        }
+        toast.success('Item saved');
+        return response.data;
+      }
+      setError(response.error || 'Failed to update credential');
+      toast.error(response.error || 'Failed to update credential');
+      return null;
+    } catch {
+      setError('Failed to update credential');
+      toast.error('Failed to update credential');
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
+   * 密文 payload 编辑（敏感：后端复用原 item key 重封 + 敏感门禁）。
+   * 返回原始 ApiResponse 交调用方编排（modal 需识别 REAUTH_REQUIRED
+   * 弹 ReauthModal 重试，不做吞码 toast）。
+   */
+  const updateCredentialData = async (request: UpdateCredentialDataRequest) => {
+    return personaAPI.updateCredentialData(request);
   };
 
   const searchCredentials = async (query: string) => {
@@ -547,6 +590,8 @@ export const usePersonaService = () => {
     switchIdentity,
     loadCredentialsForIdentity,
     createCredential,
+    updateCredential,
+    updateCredentialData,
     searchCredentials,
     generatePassword,
     getCredentialData,

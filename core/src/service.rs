@@ -1003,6 +1003,73 @@ impl PersonaService {
         Ok(updated)
     }
 
+    /// Replace a credential's encrypted payload (edit secret data).
+    ///
+    /// Re-seals the new payload under the credential's **existing** item key —
+    /// never a fresh one: attachments are sealed with that same key, so a new
+    /// key would render them permanently undecryptable. The row's
+    /// `wrapped_item_key` bytes are left untouched. Legacy rows (no wrapped
+    /// key) are upgraded to a per-item key on edit, mirroring the attachment
+    /// path. Gated like [`Self::get_credential_data`] (editing secret data is
+    /// at least as sensitive as reading it) and recorded as an item-history
+    /// `Updated` row plus an audit entry.
+    pub async fn update_credential_data(
+        &self,
+        credential_id: &Uuid,
+        credential_data: &CredentialData,
+    ) -> Result<Credential> {
+        self.ensure_sensitive_operation_allowed().await?;
+        self.touch_activity();
+
+        let mut credential = self
+            .credential_repo
+            .find_by_id(credential_id)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!("credential {credential_id} not found"))
+            })?;
+        let existing = credential.clone();
+
+        let plaintext = credential_data.to_bytes().map_err(|e| {
+            PersonaError::CryptographicError(format!("Failed to serialize credential data: {}", e))
+        })?;
+        let master_encryption = self.get_master_encryption_service()?;
+        let hierarchy = KeyHierarchy::new(master_encryption);
+
+        match credential.wrapped_item_key.as_ref() {
+            Some(wrapped) => {
+                // 复用原 item key 重封；wrapped key 字节不动（附件不变量）。
+                let item_key = hierarchy.unwrap_item_key(wrapped)?;
+                credential.encrypted_data =
+                    hierarchy.encrypt_with_item_key(&item_key, &plaintext)?;
+            }
+            None => {
+                // legacy 行（payload 直接用主密钥封存）：编辑时升级为 per-item
+                // key，与附件封存路径同一模式，改密轮换后不再依赖 legacy 解密。
+                let envelope = hierarchy.encrypt_with_new_item_key(&plaintext)?;
+                credential.encrypted_data = envelope.ciphertext;
+                credential.wrapped_item_key = Some(envelope.wrapped_key);
+                tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key on edit");
+            }
+        }
+        credential.touch();
+
+        let updated = self.credential_repo.update(&credential).await?;
+        self.record_credential_history(ChangeType::Updated, Some(&existing), Some(&updated))
+            .await;
+        self.log_audit(
+            AuditAction::CredentialUpdated,
+            ResourceType::Credential,
+            true,
+            Some(updated.id),
+            Some(updated.identity_id),
+            None,
+        )
+        .await;
+        self.update_sensitive_auto_lock_activity().await?;
+        Ok(updated)
+    }
+
     /// Delete a credential
     pub async fn delete_credential(&self, id: &Uuid) -> Result<bool> {
         self.ensure_unlocked()?;
@@ -3918,6 +3985,162 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(plain, b"legacy-attachment-bytes".to_vec());
+    }
+
+    // ------------------------------------------------------------------
+    // update_credential_data：编辑密文 payload（复用原 item key）
+    // ------------------------------------------------------------------
+
+    /// 编辑 payload 的核心不变量：wrapped_item_key 字节不动，新 payload 走
+    /// 同一 item key 重封，已挂附件仍可解密，item history 落 Updated 行。
+    #[tokio::test]
+    async fn update_credential_data_reuses_item_key_and_keeps_attachments() {
+        let (db, mut service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Edit Owner".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential = seed_credential(
+            &service,
+            identity.id,
+            "edit target",
+            CredentialType::Password,
+        )
+        .await;
+        let wrapped_before = credential.wrapped_item_key.clone().unwrap();
+
+        // 先挂一个加密附件（用当前 item key 封存）
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db.clone())
+            .await
+            .unwrap();
+        let file_path = dir.path().join("edit-attach.bin");
+        std::fs::write(&file_path, b"attachment-before-edit").unwrap();
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, true)
+            .await
+            .unwrap();
+
+        // 编辑 payload
+        let edited = CredentialData::Password(PasswordCredentialData {
+            password: "rotated-secret".to_string(),
+            email: Some("edited@example.com".to_string()),
+            security_questions: vec![],
+        });
+        let updated = service
+            .update_credential_data(&credential.id, &edited)
+            .await
+            .unwrap();
+
+        // wrapped key 字节不变（附件不变量的硬保障）
+        assert_eq!(
+            updated.wrapped_item_key.as_deref(),
+            Some(&wrapped_before[..])
+        );
+
+        // 新 payload 读回逐字保留
+        let data = service
+            .get_credential_data(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+        match data {
+            CredentialData::Password(p) => {
+                assert_eq!(p.password, "rotated-secret");
+                assert_eq!(p.email.as_deref(), Some("edited@example.com"));
+            }
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+
+        // 附件仍可解密（同一 item key）
+        let plain = service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .unwrap();
+        assert_eq!(plain, b"attachment-before-edit".to_vec());
+
+        // item history 落 Updated 行（created + updated 至少两行）
+        let history = service
+            .get_entity_history(EntityType::Credential, &credential.id)
+            .await
+            .unwrap();
+        assert!(history.iter().any(|e| e.change_type == ChangeType::Updated));
+    }
+
+    /// legacy 行（wrapped_item_key NULL）编辑 payload 时升级为 per-item key：
+    /// 升级后新密文走 item key 解密、行获得 wrapped key。
+    #[tokio::test]
+    async fn update_credential_data_upgrades_legacy_row_to_item_key() {
+        let (db, service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Legacy Edit Owner".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // 手工构造 legacy 行（同 attach 升级测试的模式）
+        let master = service.get_master_encryption_service().unwrap();
+        let plaintext = CredentialData::Password(PasswordCredentialData {
+            password: "legacy-pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        })
+        .to_bytes()
+        .unwrap();
+        let sealed = master.encrypt(&plaintext).unwrap();
+        let credential = Credential::new(
+            identity.id,
+            "legacy edit row".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Medium,
+            sealed,
+            None,
+        );
+        let credentials = crate::storage::CredentialRepository::new(db.clone());
+        credentials.create(&credential).await.unwrap();
+
+        let edited = CredentialData::Password(PasswordCredentialData {
+            password: "edited-pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        });
+        let updated = service
+            .update_credential_data(&credential.id, &edited)
+            .await
+            .unwrap();
+        assert!(updated.wrapped_item_key.is_some());
+
+        // 新密文走 item key 路径解密（legacy 分支不再命中）
+        let data = service
+            .get_credential_data(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+        match data {
+            CredentialData::Password(p) => assert_eq!(p.password, "edited-pw"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+    }
+
+    /// 编辑不存在的凭据报 InvalidInput（而非静默成功）。
+    #[tokio::test]
+    async fn update_credential_data_rejects_unknown_id() {
+        let (_db, service) = unlocked_service().await;
+        let err = service
+            .update_credential_data(
+                &Uuid::new_v4(),
+                &CredentialData::Password(PasswordCredentialData {
+                    password: "x".to_string(),
+                    email: None,
+                    security_questions: vec![],
+                }),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "unexpected error: {err}");
     }
 
     /// 凭据删除级联清附件：blob 元数据随行消失，不留不可解密的孤儿。

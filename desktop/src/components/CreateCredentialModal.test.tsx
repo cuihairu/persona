@@ -10,9 +10,25 @@ if (typeof globalThis.TextEncoder === 'undefined') {
 const mockUsePersonaService = jest.fn();
 const createCredential = jest.fn();
 const generatePassword = jest.fn();
+const updateCredential = jest.fn();
+const updateCredentialData = jest.fn();
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: (...args: any[]) => mockUsePersonaService(...(args as [])),
+}));
+
+// modal 接 useReauth 处理 payload 保存的 REAUTH_REQUIRED；
+// 默认"取消"语义（resolve false → 不自动重试），REAUTH 用例断言编排
+const mockReauth = {
+  isOpen: false,
+  error: null as string | null,
+  isVerifying: false,
+  requestReauth: jest.fn().mockResolvedValue(false),
+  submit: jest.fn(),
+  cancel: jest.fn(),
+};
+jest.mock('@/hooks/useReauth', () => ({
+  useReauth: () => mockReauth,
 }));
 
 const identity = {
@@ -47,6 +63,8 @@ describe('components/CreateCredentialModal', () => {
     jest.clearAllMocks();
     createCredential.mockResolvedValue({ id: 'c-1' });
     generatePassword.mockResolvedValue('');
+    updateCredential.mockResolvedValue({ id: 'c-9' });
+    updateCredentialData.mockResolvedValue({ success: true, data: { id: 'c-9' } });
     mockUsePersonaService.mockReturnValue({
       currentIdentity: identity,
       createCredential,
@@ -617,6 +635,139 @@ describe('components/CreateCredentialModal', () => {
       expect(createCredential).toHaveBeenCalledWith(
         expect.objectContaining({ security_level: 'Critical' }),
       );
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // 编辑模式（editCredential prop）：预填 + 元数据/payload 双保存
+  // ------------------------------------------------------------------
+  describe('edit mode', () => {
+    const editCred = {
+      id: 'c-9',
+      identity_id: 'id-1',
+      name: 'Old Name',
+      credential_type: 'Password',
+      security_level: 'Medium',
+      url: 'https://old.example.com',
+      username: 'olduser',
+      notes: 'old note',
+      tags: ['work', 'prod'],
+      created_at: '2023-01-01T00:00:00Z',
+      updated_at: '2023-01-01T00:00:00Z',
+      is_active: true,
+      is_favorite: false,
+    } as any;
+
+    const renderEditModal = (payload: any = { credential_type: 'Password', data: { password: 'old-pw' } }) => {
+      mockUsePersonaService.mockReturnValue({
+        currentIdentity: identity,
+        createCredential,
+        generatePassword,
+        updateCredential,
+        updateCredentialData,
+        isLoading: false,
+      });
+      return render(
+        <CreateCredentialModal
+          isOpen
+          onClose={onClose}
+          editCredential={{ credential: editCred, data: payload }}
+        />,
+      );
+    };
+
+    it('prefills metadata and payload, locks the type selector, titles as Edit', () => {
+      renderEditModal();
+
+      expect(screen.getByTestId('credential-modal-title')).toHaveTextContent('Edit Item');
+      expect(screen.getByPlaceholderText(/Gmail Account/)).toHaveValue('Old Name');
+      expect((screen.getByPlaceholderText('Enter password') as HTMLInputElement).value).toBe('old-pw');
+      expect(screen.getByDisplayValue('olduser')).toBeInTheDocument();
+      // 类型不可变（1Password 语义）
+      expect(screen.getByTestId('credential-type-select')).toBeDisabled();
+      expect(screen.getByText("Item type can't be changed")).toBeInTheDocument();
+    });
+
+    it('saves metadata then payload and closes (create never invoked)', async () => {
+      renderEditModal();
+
+      fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+        target: { value: 'New Name' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('Enter password'), {
+        target: { value: 'new-pw' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+
+      // 元数据：全字段提交（空串交给后端 trim 清空）
+      expect(updateCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'c-9',
+          name: 'New Name',
+          security_level: 'Medium',
+          url: 'https://old.example.com',
+          username: 'olduser',
+          notes: 'old note',
+        }),
+      );
+      // payload：复用原 item key 重封（REAUTH 由后端门禁控制）
+      expect(updateCredentialData).toHaveBeenCalledWith({
+        credential_id: 'c-9',
+        credential_data: expect.objectContaining({
+          type: 'Password',
+          password: 'new-pw',
+        }),
+      });
+      expect(createCredential).not.toHaveBeenCalled();
+    });
+
+    it('edits metadata only for types without dedicated payload fields', async () => {
+      const bankCard = { ...editCred, credential_type: 'BankCard' };
+      mockUsePersonaService.mockReturnValue({
+        currentIdentity: identity,
+        createCredential,
+        generatePassword,
+        updateCredential,
+        updateCredentialData,
+        isLoading: false,
+      });
+      render(
+        <CreateCredentialModal
+          isOpen
+          onClose={onClose}
+          editCredential={{ credential: bankCard, data: null }}
+        />,
+      );
+
+      fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+        target: { value: 'Renamed Card' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(updateCredential).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'c-9', name: 'Renamed Card' }),
+      );
+      // 无专属字段类型绝不提交空 payload（会盲目覆盖既有密文）
+      expect(updateCredentialData).not.toHaveBeenCalled();
+    });
+
+    it('stays open when payload save hits REAUTH_REQUIRED and reauth is declined', async () => {
+      updateCredentialData.mockResolvedValueOnce({
+        success: false,
+        error_code: 'REAUTH_REQUIRED',
+        error: 're-auth required',
+      });
+      renderEditModal();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+      await waitFor(() => expect(mockReauth.requestReauth).toHaveBeenCalled());
+      // 拒绝重认证：不重试、不关弹窗（元数据已存，密文可重试）
+      expect(updateCredentialData).toHaveBeenCalledTimes(1);
+      expect(onClose).not.toHaveBeenCalled();
     });
   });
 });

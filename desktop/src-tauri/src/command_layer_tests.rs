@@ -2286,6 +2286,133 @@ async fn create_credential_accepts_identity_and_license_requests() {
     assert!(resp.success, "{:?}", resp.error);
 }
 
+/// 桌面稳定化：编辑凭据闭环——update_credential 改元数据、
+/// update_credential_data 换密文 payload（复用原 item key，wrapped key 不变），
+/// 两路读回逐字校验；不存在的 id 报错。
+#[tokio::test]
+async fn update_credential_metadata_and_payload_round_trip() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let req = password_credential_request(&identity_id);
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let created = resp.data.expect("credential created");
+    assert_eq!(created.username.as_deref(), Some("alice"));
+
+    // 元数据编辑：改名 + username/notes/tags 更新（url 传空串 = 清空）。
+    let resp = update_credential(
+        UpdateCredentialRequest {
+            id: created.id.clone(),
+            name: "Renamed login".to_string(),
+            security_level: Some("Critical".to_string()),
+            url: Some("  ".to_string()),
+            username: Some("newuser".to_string()),
+            notes: Some("edited note".to_string()),
+            tags: Some(vec!["work".to_string(), " ".to_string()]),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let meta = resp.data.expect("metadata updated");
+    assert_eq!(meta.name, "Renamed login");
+    assert_eq!(meta.security_level, "Critical");
+    assert_eq!(meta.url, None, "blank url must clear");
+    assert_eq!(meta.username.as_deref(), Some("newuser"));
+    assert_eq!(meta.notes.as_deref(), Some("edited note"));
+    assert_eq!(meta.tags, vec!["work".to_string()]);
+
+    // payload 编辑：换密码（复用原 item key 重封）。
+    let resp = update_credential_data(
+        UpdateCredentialDataRequest {
+            credential_id: created.id.clone(),
+            credential_data: CredentialDataRequest::Password {
+                password: "rotated-secret".to_string(),
+                email: Some("edited@example.com".to_string()),
+                security_questions: vec![],
+            },
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let payload = resp.data.expect("payload updated");
+    assert_eq!(
+        payload.name, "Renamed login",
+        "metadata survives payload edit"
+    );
+    // item key 复用不变量（wrapped key 字节不动）在 core 层专测断言；
+    // SerializableCredential 不回传密钥材料，命令层不重复覆盖。
+
+    // 读回：新密码逐字保留、元数据编辑结果都在。
+    let resp = get_credential_data(created.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp
+        .data
+        .expect("credential data returned")
+        .expect("present");
+    assert_eq!(data.data["password"], "rotated-secret");
+    assert_eq!(data.data["email"], "edited@example.com");
+
+    let resp = get_credentials_for_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let creds = resp.data.expect("credentials returned");
+    let stored = creds
+        .iter()
+        .find(|c| c.id == created.id)
+        .expect("credential listed");
+    assert_eq!(stored.name, "Renamed login");
+    assert_eq!(stored.username.as_deref(), Some("newuser"));
+    assert_eq!(stored.notes.as_deref(), Some("edited note"));
+
+    // 不存在的 id：两命令都显式报错。
+    let ghost = uuid::Uuid::new_v4().to_string();
+    let resp = update_credential(
+        UpdateCredentialRequest {
+            id: ghost.clone(),
+            name: "x".to_string(),
+            security_level: None,
+            url: None,
+            username: None,
+            notes: None,
+            tags: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not found"));
+
+    let resp = update_credential_data(
+        UpdateCredentialDataRequest {
+            credential_id: ghost,
+            credential_data: CredentialDataRequest::Password {
+                password: "x".to_string(),
+                email: None,
+                security_questions: vec![],
+            },
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+
+    let resp = delete_credential(created.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
 /// 1Password 对齐 B 批：item history——创建与 favorite 切换自动落历史行，
 /// get_credential_history 返回时间线（新版本在前）与字段级 diff。
 #[tokio::test]

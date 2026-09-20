@@ -166,6 +166,26 @@ pub struct CreateCredentialRequest {
     pub credential_data: CredentialDataRequest,
 }
 
+/// Credential metadata edit request（1Password 对齐：编辑不改条目类型，
+/// payload 单独走 update_credential_data）
+#[derive(Debug, Deserialize)]
+pub struct UpdateCredentialRequest {
+    pub id: String,
+    pub name: String,
+    pub security_level: Option<String>,
+    pub url: Option<String>,
+    pub username: Option<String>,
+    pub notes: Option<String>,
+    pub tags: Option<Vec<String>>,
+}
+
+/// Credential payload edit request（敏感：复用原 item key 重封 + 敏感门禁）
+#[derive(Debug, Deserialize)]
+pub struct UpdateCredentialDataRequest {
+    pub credential_id: String,
+    pub credential_data: CredentialDataRequest,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum CredentialDataRequest {

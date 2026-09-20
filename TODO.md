@@ -226,6 +226,23 @@ Desktop (Tauri v2 + React)
     浏览器保留键如 Ctrl+E/L 在 WebView 外不保证拦截。follow-up：密码/
     TOTP 全局复制（需把组件级 useReauth 提升到 App 级）、Escape 统一
     关 modal、快捷键速查面板
+  - [x] 编辑凭据闭环（2026-09-20 桌面稳定化头条，此前全端无编辑能力）
+    ——core `update_credential_data`：新 payload 复用**原 item key** 重封
+    （wrapped_item_key 字节不动，附件不变量有专测守护——重生成 key 会让
+    该 key 封存的附件全部变砖）；legacy 行（无 wrapped key）编辑时升级
+    per-item key（与附件批次同模式）；走敏感操作门禁（同 get_credential_data），
+    item history 自动落 Updated 行 + 审计。KeyHierarchy 新增
+    `encrypt_with_item_key`（既有 key 重封，不动 wrapped 形态）。
+    desktop 两命令：`update_credential`（元数据：name/security_level/url/
+    username/notes/tags，空串 trim 清空，类型不可变——1Password 语义）+
+    `update_credential_data`（payload，REAUTH_REQUIRED 走既有 error_code 通路）。
+    前端：CreateCredentialModal create/edit 双模式（打开时预填元数据 +
+    已解密 payload、类型选择器锁定、Edit Item 标题；REAUTH 弹 ReauthModal
+    自动重试一次）、DetailPane Edit 按钮经 store editingCredential 桥接
+    （锁屏/自动锁随锁作废）；无专属表单字段的类型（BankCard/ServerConfig/
+    Certificate/GameAccount）只编辑元数据——不盲目用空 payload 覆盖既有
+    密文。顺带修 create_credential 类型 match 缺 SecureNote/Identity/
+    SoftwareLicense 三臂（此前经 Custom(name) 字符串往返侥幸等价）
 - [x] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
   ——5f39538e 测试 fixture 对齐类型定义，清零 23 个 tsc 本底
   （beforeBuildCommand=`pnpm build` 由此解锁，前端验证基线简化为

@@ -1,11 +1,23 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import toast from 'react-hot-toast';
 import { usePersonaService } from '@/hooks/usePersonaService';
-import type { CredentialType, SecurityLevel, CredentialDataRequest } from '@/types';
+import { useReauth } from '@/hooks/useReauth';
+import type {
+  Credential,
+  CredentialData,
+  CredentialType,
+  SecurityLevel,
+  CredentialDataRequest,
+} from '@/types';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
+import ReauthModal from './ReauthModal';
 
 interface CreateCredentialModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** 编辑模式：待编辑凭据 + 打开时面板已解密的 payload（null = 未取到）。
+   *  缺省/ null = 创建模式。 */
+  editCredential?: { credential: Credential; data: CredentialData | null } | null;
 }
 
 const parseOtpauthUri = (uri: string) => {
@@ -37,8 +49,23 @@ const parseOtpauthUri = (uri: string) => {
   }
 };
 
-const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, onClose }) => {
-  const { currentIdentity, createCredential, generatePassword, isLoading } = usePersonaService();
+const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
+  isOpen,
+  onClose,
+  editCredential = null,
+}) => {
+  const {
+    currentIdentity,
+    createCredential,
+    updateCredential,
+    updateCredentialData,
+    generatePassword,
+    isLoading,
+  } = usePersonaService();
+  const reauth = useReauth();
+  const isEditMode = !!editCredential;
+  // payload 保存命中 REAUTH_REQUIRED 后只自动重试一次（防循环）
+  const retryRef = useRef(false);
   const [formData, setFormData] = useState({
     name: '',
     credential_type: 'Password' as CredentialType,
@@ -54,6 +81,46 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     email: '',
     security_questions: [],
   });
+
+  // 打开时初始化表单：编辑模式预填（payload 缺失字段留空），创建模式清残留
+  useEffect(() => {
+    if (!isOpen) return;
+    retryRef.current = false;
+    if (editCredential) {
+      const c = editCredential.credential;
+      const payload = editCredential.data;
+      // GameToken 挂在 TwoFactor 类型上（创建约定），按 payload 变体还原表单类型
+      let formType = c.credential_type as CredentialType;
+      if (formType === 'TwoFactor' && payload?.credential_type === 'GameToken') {
+        formType = 'GameToken';
+      }
+      setFormData({
+        name: c.name,
+        credential_type: formType,
+        security_level: c.security_level as SecurityLevel,
+        url: c.url ?? '',
+        username: c.username ?? '',
+        notes: c.notes ?? '',
+        tags: c.tags.join(', '),
+      });
+      setCredentialData(payload?.data ? { ...payload.data } : {});
+    } else {
+      setFormData({
+        name: '',
+        credential_type: 'Password',
+        security_level: 'High',
+        url: '',
+        username: '',
+        notes: '',
+        tags: '',
+      });
+      setCredentialData({
+        password: '',
+        email: '',
+        security_questions: [],
+      });
+    }
+  }, [isOpen, editCredential]);
 
   const [showPassword, setShowPassword] = useState(false);
 
@@ -211,6 +278,67 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
         break;
     }
 
+    if (isEditMode && editCredential) {
+      // ---- 编辑：先存元数据（updateCredential 内部刷新列表 + toast）----
+      const credentialId = editCredential.credential.id;
+      const meta = await updateCredential({
+        id: credentialId,
+        name: formData.name,
+        security_level: formData.security_level,
+        // 空串交给后端 trim 清空（允许编辑时清掉 url/username/notes）
+        url: formData.url,
+        username: formData.username,
+        notes: formData.notes,
+        tags,
+      });
+      if (!meta) return; // 元数据失败：保持弹窗打开，错误已 toast
+
+      // ---- payload 编辑：仅限表单有专属字段的类型 ----
+      // 无专属字段（BankCard/ServerConfig/Certificate/GameAccount 等）提交
+      // 会编码出空 Raw——盲目覆盖既有密文，所以这些类型只编辑元数据。
+      const typesWithPayloadFields: CredentialType[] = [
+        'Password',
+        'TwoFactor',
+        'GameToken',
+        'SecureNote',
+        'Identity',
+        'SoftwareLicense',
+        'CryptoWallet',
+        'SshKey',
+        'ApiKey',
+      ];
+      if (!typesWithPayloadFields.includes(formData.credential_type)) {
+        onClose();
+        return;
+      }
+
+      const doSavePayload = async (): Promise<boolean> => {
+        const res = await updateCredentialData({
+          credential_id: credentialId,
+          credential_data: credentialDataRequest,
+        });
+        if (res.success) return true;
+        if (res.error_code === 'REAUTH_REQUIRED') {
+          // 弹重新认证；成功且未重试过则自动重放一次
+          if (!retryRef.current && (await reauth.requestReauth())) {
+            retryRef.current = true;
+            return doSavePayload();
+          }
+          return false;
+        }
+        if (res.error_code === 'SERVICE_LOCKED') {
+          toast.error('Service is locked. Lock screen shown; unlock and retry.');
+        } else {
+          toast.error(res.error || 'Failed to save secret data');
+        }
+        return false;
+      };
+      // payload 保存失败保持弹窗打开（元数据已存，用户可重试密文部分）
+      if (await doSavePayload()) onClose();
+      return;
+    }
+
+    // ---- 创建 ----
     const result = await createCredential({
       identity_id: currentIdentity.id,
       name: formData.name,
@@ -226,21 +354,6 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     });
 
     if (result) {
-      // Reset form
-      setFormData({
-        name: '',
-        credential_type: 'Password',
-        security_level: 'High',
-        url: '',
-        username: '',
-        notes: '',
-        tags: '',
-      });
-      setCredentialData({
-        password: '',
-        email: '',
-        security_questions: [],
-      });
       onClose();
     }
   };
@@ -774,7 +887,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Add New Credential</h2>
+        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4" data-testid="credential-modal-title">
+          {isEditMode ? 'Edit Item' : 'Add New Credential'}
+        </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -799,6 +914,8 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
                   setCredentialData({}); // Reset credential data when type changes
                 }}
                 className="input"
+                disabled={isEditMode}
+                data-testid="credential-type-select"
               >
                 {credentialTypes.map((type) => (
                   <option key={type} value={type}>
@@ -806,6 +923,11 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
                   </option>
                 ))}
               </select>
+              {isEditMode && (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Item type can't be changed
+                </p>
+              )}
             </div>
 
             <div>
@@ -883,10 +1005,25 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
               disabled={isLoading || !formData.name.trim()}
               className="btn-primary flex-1"
             >
-              {isLoading ? 'Creating...' : 'Create Credential'}
+              {isLoading
+                ? isEditMode
+                  ? 'Saving...'
+                  : 'Creating...'
+                : isEditMode
+                  ? 'Save'
+                  : 'Create Credential'}
             </button>
           </div>
         </form>
+
+        {/* payload 保存命中 REAUTH_REQUIRED 时弹出，验证通过自动重试一次 */}
+        <ReauthModal
+          isOpen={reauth.isOpen}
+          error={reauth.error}
+          isVerifying={reauth.isVerifying}
+          onSubmit={reauth.submit}
+          onClose={reauth.cancel}
+        />
       </div>
     </div>
   );

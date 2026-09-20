@@ -154,6 +154,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::update_identity,
             commands::delete_identity,
             commands::create_credential,
+            commands::update_credential,
+            commands::update_credential_data,
             commands::get_credentials_for_identity,
             commands::get_credential_data,
             commands::get_credential_history,

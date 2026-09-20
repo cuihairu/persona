@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   Identity,
   Credential,
+  CredentialData,
   SshAgentStatus,
   SshAgentKey,
   FeatureFlags,
@@ -55,6 +56,9 @@ interface AppState {
   pendingCredentialSelection: PendingCredentialSelection | null;
   /** 当前选中凭据 id（CredentialList 派生详情对象；锁屏清空） */
   selectedCredentialId: string | null;
+  /** 编辑中的凭据（null = 无编辑；DetailPane 写、App 层 CreateCredentialModal 消费，
+   *  data 是打开编辑时面板已解密的 payload，null = 未取到（字段留空重填）） */
+  editingCredential: { credential: Credential; data: CredentialData | null } | null;
   /** favicon 缓存（host → 条目；命中渲染，锁屏清空、身份切换不清——跨身份共享） */
   faviconCache: Record<string, FaviconEntry>;
   /** favicon 负缓存：批量读未命中的 host，避免重复 IPC（Fetch 成功后移除） */
@@ -75,6 +79,7 @@ interface AppState {
   setPendingCredentialSelection: (selection: PendingCredentialSelection) => void;
   clearPendingCredentialSelection: () => void;
   setSelectedCredentialId: (id: string | null) => void;
+  setEditingCredential: (editing: { credential: Credential; data: CredentialData | null } | null) => void;
   /** 批量合并 favicon 缓存，并把命中的 host 从负缓存移除 */
   setFaviconEntries: (entries: FaviconData[]) => void;
   /** 标记批量读未命中的 host（已缓存的忽略） */
@@ -104,6 +109,7 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarFilter: DEFAULT_SIDEBAR_FILTER,
   pendingCredentialSelection: null,
   selectedCredentialId: null,
+  editingCredential: null,
   faviconCache: {},
   faviconMisses: {},
 
@@ -122,6 +128,7 @@ export const useAppStore = create<AppState>((set) => ({
   setPendingCredentialSelection: (selection) => set({ pendingCredentialSelection: selection }),
   clearPendingCredentialSelection: () => set({ pendingCredentialSelection: null }),
   setSelectedCredentialId: (id) => set({ selectedCredentialId: id }),
+  setEditingCredential: (editing) => set({ editingCredential: editing }),
   setFaviconEntries: (entries) =>
     set((state) => {
       const faviconCache = { ...state.faviconCache };

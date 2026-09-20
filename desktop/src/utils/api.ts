@@ -9,6 +9,8 @@ import type {
   CreateIdentityRequest,
   UpdateIdentityRequest,
   CreateCredentialRequest,
+  UpdateCredentialRequest,
+  UpdateCredentialDataRequest,
   Statistics,
   InitRequest,
   FeatureFlags,
@@ -140,6 +142,16 @@ class PersonaAPI {
 
   async createCredential(request: CreateCredentialRequest): Promise<ApiResponse<Credential>> {
     return invoke('create_credential', { request });
+  }
+
+  async updateCredential(request: UpdateCredentialRequest): Promise<ApiResponse<Credential>> {
+    return invoke('update_credential', { request });
+  }
+
+  async updateCredentialData(
+    request: UpdateCredentialDataRequest
+  ): Promise<ApiResponse<Credential>> {
+    return invoke('update_credential_data', { request });
   }
 
   async getCredentialsForIdentity(identityId: string): Promise<ApiResponse<Credential[]>> {

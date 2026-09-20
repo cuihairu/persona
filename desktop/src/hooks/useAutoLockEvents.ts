@@ -29,6 +29,7 @@ export const useAutoLockEvents = (enabled: boolean) => {
   const clearFaviconCache = useAppStore((s) => s.clearFaviconCache);
   const clearPendingCredentialSelection = useAppStore((s) => s.clearPendingCredentialSelection);
   const setSelectedCredentialId = useAppStore((s) => s.setSelectedCredentialId);
+  const setEditingCredential = useAppStore((s) => s.setEditingCredential);
 
   useEffect(() => {
     if (!enabled) {
@@ -56,6 +57,8 @@ export const useAutoLockEvents = (enabled: boolean) => {
           clearFaviconCache();
           clearPendingCredentialSelection();
           setSelectedCredentialId(null);
+          // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
+          setEditingCredential(null);
           break;
         case 'unlocked':
           setPendingSeconds(null);
@@ -81,6 +84,7 @@ export const useAutoLockEvents = (enabled: boolean) => {
     clearFaviconCache,
     clearPendingCredentialSelection,
     setSelectedCredentialId,
+    setEditingCredential,
   ]);
 
   useEffect(() => {

@@ -97,6 +97,7 @@ describe('components/CredentialDetailPane', () => {
       featureFlags: { ...DEFAULT_FEATURE_FLAGS },
       faviconCache: {},
       faviconMisses: {},
+      editingCredential: null,
     });
   });
 
@@ -660,5 +661,31 @@ describe('components/CredentialDetailPane', () => {
     // 破图回退：onError 后回到静态 heroicon
     fireEvent.error(img);
     expect(screen.queryByTestId('favicon-img')).not.toBeInTheDocument();
+  });
+
+  // ------------------------------------------------------------------
+  // 编辑入口：Edit 按钮把凭据 + 面板已解密 payload 写进 store
+  // ------------------------------------------------------------------
+  it('writes credential and decrypted payload to the store on Edit', () => {
+    const payload = { credential_type: 'Password', data: { password: 'secret' } };
+    setupPane({ name: 'Edit me' }, payload);
+
+    fireEvent.click(screen.getByTestId('edit-credential-button'));
+
+    const editing = useAppStore.getState().editingCredential;
+    expect(editing).not.toBeNull();
+    expect(editing!.credential.name).toBe('Edit me');
+    expect(editing!.credential.id).toBe('c1');
+    expect(editing!.data).toEqual(payload);
+  });
+
+  it('keeps Edit usable when the payload has not been decrypted yet', () => {
+    setupPane({ name: 'No payload' }, null);
+
+    // payload null 也能进编辑（modal 退化为元数据编辑 + 空白 payload 字段）
+    fireEvent.click(screen.getByTestId('edit-credential-button'));
+    const editing = useAppStore.getState().editingCredential;
+    expect(editing).not.toBeNull();
+    expect(editing!.data).toBeNull();
   });
 });
