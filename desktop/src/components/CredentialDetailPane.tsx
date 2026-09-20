@@ -344,6 +344,25 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
           </div>
         );
 
+      case 'SecureNote':
+        return (
+          <div>
+            <label className="label text-gray-600 dark:text-gray-300">Note</label>
+            <div className="flex items-start gap-2">
+              <pre className="flex-1 text-sm font-mono whitespace-pre-wrap break-words bg-gray-50 dark:bg-gray-800 rounded p-2">
+                {data.note}
+              </pre>
+              <button
+                onClick={() => onCopy(data.note, 'Note')}
+                aria-label="Copy Note"
+                className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+              >
+                <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+              </button>
+            </div>
+          </div>
+        );
+
       default:
         return (
           <div className="text-sm text-gray-500 dark:text-gray-400">

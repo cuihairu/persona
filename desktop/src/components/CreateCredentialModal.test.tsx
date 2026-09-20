@@ -414,6 +414,43 @@ describe('components/CreateCredentialModal', () => {
     });
   });
 
+  it('renders the secure note textarea with the encryption hint', () => {
+    renderModal();
+    selectType('SecureNote');
+
+    expect(
+      screen.getByPlaceholderText(/Encrypted note content/),
+    ).toBeInTheDocument();
+    // 与其他类型 notes 字段（明文列）的差别必须在表单里说清楚
+    expect(screen.getByText(/per-item key/)).toBeInTheDocument();
+  });
+
+  it('submits a SecureNote credential with the note passed through verbatim', async () => {
+    renderModal();
+    selectType('SecureNote');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Recovery codes' },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/Encrypted note content/), {
+      target: { value: '1111-2222\n3333-4444' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // SecureNote 是真实 credential_type 变体，不走 GameToken 的 TwoFactor 映射
+          credential_type: 'SecureNote',
+          credential_data: {
+            type: 'SecureNote',
+            note: '1111-2222\n3333-4444',
+          },
+        }),
+      );
+    });
+  });
+
   it('submits a TwoFactor credential with manually adjusted TOTP parameters', async () => {
     renderModal();
     selectType('TwoFactor');

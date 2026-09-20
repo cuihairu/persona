@@ -112,6 +112,11 @@ persona credential list --identity alice --format table
 persona credential show --id <UUID> --reveal
 persona credential remove --id <UUID>
 
+# Secure Note (1Password-style): the body is stored fully encrypted under the
+# per-item key — unlike the plain notes column on other item types
+persona credential add --identity alice --name "Recovery codes" --credential-type note --note "1111-2222
+3333-4444"
+
 # TOTP (two-factor authentication) workflows
 persona totp setup --identity alice --qr ~/Downloads/github.png
 persona totp code --id <UUID>

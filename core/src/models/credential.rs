@@ -24,6 +24,8 @@ pub enum CredentialType {
     Certificate,
     /// Two-factor authentication codes
     TwoFactor,
+    /// Encrypted secure note (1Password parity; body in `CredentialData::SecureNote`)
+    SecureNote,
     /// Custom credential type
     Custom(String),
 }
@@ -40,6 +42,7 @@ impl std::fmt::Display for CredentialType {
             CredentialType::ServerConfig => write!(f, "ServerConfig"),
             CredentialType::Certificate => write!(f, "Certificate"),
             CredentialType::TwoFactor => write!(f, "TwoFactor"),
+            CredentialType::SecureNote => write!(f, "SecureNote"),
             CredentialType::Custom(name) => write!(f, "{}", name),
         }
     }
@@ -288,6 +291,16 @@ pub struct GameTokenData {
     pub url: Option<String>,
 }
 
+/// 1Password「Secure Note」对齐：全文加密的笔记条目。
+///
+/// 与 `Credential.notes` 字段（credentials 表**明文列**，001 迁移）不同，
+/// 本类型的内容随 `encrypted_data` 走 per-item key 加密，静态存储不可读。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecureNoteData {
+    /// 笔记正文（纯文本，MVP 不做富文本分节）
+    pub note: String,
+}
+
 /// Helper enum for strongly-typed credential data
 ///
 /// bincode 外部标签枚举：新变体只能追加在末尾，既有变体索引不可变，
@@ -303,6 +316,7 @@ pub enum CredentialData {
     TwoFactor(TwoFactorData),
     Raw(Vec<u8>),
     GameToken(GameTokenData),
+    SecureNote(SecureNoteData),
 }
 
 impl CredentialData {
@@ -505,6 +519,9 @@ mod tests {
                 account_name: "alice".to_string(),
                 url: Some("https://steamcommunity.com".to_string()),
             }),
+            CredentialData::SecureNote(SecureNoteData {
+                note: "recovery codes:\n1111-2222\n3333-4444".to_string(),
+            }),
         ];
 
         for data in variants {
@@ -544,6 +561,15 @@ mod tests {
         assert_eq!(&game[..4], &[8, 0, 0, 0]);
         let decoded = CredentialData::from_bytes(&game).unwrap();
         assert!(matches!(decoded, CredentialData::GameToken(_)));
+        // SecureNote 追加在末尾，索引 9（String 带 u64 长度前缀）
+        let note = CredentialData::SecureNote(SecureNoteData {
+            note: "abc".to_string(),
+        })
+        .to_bytes()
+        .unwrap();
+        assert_eq!(&note[..4], &[9, 0, 0, 0]);
+        let decoded = CredentialData::from_bytes(&note).unwrap();
+        assert!(matches!(decoded, CredentialData::SecureNote(_)));
     }
 
     #[test]

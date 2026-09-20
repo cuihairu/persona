@@ -223,10 +223,28 @@ describe('components/CredentialDetailPane', () => {
 
   it('unknown credential types fall back to the encrypted notice', () => {
     setupPane(
-      { name: 'Note', credential_type: 'SecureNote' },
-      { credential_type: 'SecureNote', data: { body: 'whatever' } },
+      { name: 'Mystery', credential_type: 'Custom' },
+      { credential_type: 'Custom', data: { body: 'whatever' } },
     );
     expect(screen.getByText('Credential data is encrypted and secure.')).toBeInTheDocument();
+  });
+
+  it('SecureNote pane renders the multi-line body verbatim and copies it', () => {
+    const { onCopy } = setupPane(
+      { name: 'Recovery codes', credential_type: 'SecureNote' },
+      { credential_type: 'SecureNote', data: { note: '1111-2222\n3333-4444' } },
+    );
+
+    // pre 块按原样保留换行（getByText 默认空白归一化会吃掉 \n，
+    // 这里对 textContent 做精确断言）
+    const pre = screen.getByText(
+      (_, element) =>
+        element?.tagName === 'PRE' && element.textContent === '1111-2222\n3333-4444',
+    );
+    expect(pre.tagName).toBe('PRE');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy Note' }));
+    expect(onCopy).toHaveBeenCalledWith('1111-2222\n3333-4444', 'Note');
   });
 
   it('TwoFactor pane: shows the live code, copies it and refreshes on demand', async () => {

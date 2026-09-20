@@ -425,8 +425,27 @@ Game Tokens (游戏令牌)
   - [ ] 完美世界 / 7K7K：无公开令牌产品文档，继续待调研（`setup-game-token` 已可记录）
 - [ ] G3: 国际扩展与标准增强
   - [ ] GitHub 二次登录验证：TOTP 已覆盖；安全密钥/通行密钥走 Passkeys 轨道
-  - [ ] HOTP（RFC 4226 计数器型）录入与出码（core hotp() 已有，CLI otpauth 目前仅收 totp）
-  - [ ] Steam Desktop Authenticator 导出格式（maFiles .maFile）导入待调研
+  - [ ] HOTP（RFC 4226 计数器型）录入与出码 —— **暂缓（2026-09）**：非 1Password
+    对齐项（1Password 仅支持 TOTP）；core `hotp()` 原语已存在（crypto/totp.rs），
+    若将来实现需解决「desktop/mobile 自动轮询会推进计数器」的持久化问题
+  - [ ] Steam Desktop Authenticator 导出格式（maFiles .maFile）—— **不做导入
+    （2026-09 定案）**：私有格式仅文档记录；steam_guard 共享密钥已可经
+    `totp setup-game-token` 手工录入离线出码
+
+1Password Parity（2026-09 起，逐批推进；对照 docs/ONEPASSWORD_FEATURES.md）
+- [x] A 批：Secure Note 全文加密条目（2026-09 落地）——`CredentialData::SecureNote`
+  （bincode 索引 9）+ `CredentialType::SecureNote`；CLI `credential add
+  --credential-type note --note`（互斥校验 --secret/--prompt-secret）；desktop
+  创建表单 + 详情面板（正文走 per-item key 加密，区别于 credentials.notes 明文列）；
+  存储层 credential_type 字符串往返补 SecureNote 臂（此前读回退化为 Custom）
+- [ ] B 批候选（按用户价值排序）：
+  - item history / change-history UI（core change_history 存储已备，桌面只读视图缺）
+  - attachments 桌面 UI（core attachment/blob 存储已备）
+  - Identity / Software License 条目类型（1Password 标准类别）
+  - Watchtower expiring items / 2FA-available 提示
+  - biometric unlock 原生接线（底层已备，缺系统指纹对话框）
+  - Travel Mode（vault 级可见性开关）
+  - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）
 
 Quality & Security
 - [x] Threat model & periodic security review

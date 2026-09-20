@@ -2141,6 +2141,51 @@ async fn create_credential_accepts_game_token_request() {
     assert!(resp.success, "{:?}", resp.error);
 }
 
+/// 1Password 对齐 A 批：Secure Note 创建表单路径——
+/// CredentialDataRequest::SecureNote 经 create_credential 入库，credential_type
+/// 为真实 SecureNote 变体，读回正文逐字保留（per-item key 加密往返）。
+#[tokio::test]
+async fn create_credential_accepts_secure_note_request() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let mut req = password_credential_request(&identity_id);
+    req.name = "Recovery codes (form)".to_string();
+    req.credential_type = "SecureNote".to_string();
+    req.credential_data = CredentialDataRequest::SecureNote {
+        note: "1111-2222\n3333-4444".to_string(),
+    };
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let cred = resp.data.expect("secure note created");
+
+    // 读回：类型标签与正文都保留（多行内容不被折叠）。
+    let resp = get_credential_data(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.expect("credential data returned");
+    let data = data.expect("data is present");
+    assert_eq!(data.credential_type, "SecureNote");
+    assert_eq!(data.data["note"], "1111-2222\n3333-4444");
+
+    // 列表读回：credential_type 落库往返不退化为 Custom。
+    let resp = get_credentials_for_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let creds = resp.data.expect("credentials returned");
+    assert!(creds
+        .iter()
+        .any(|c| c.credential_type == "SecureNote" && c.name == "Recovery codes (form)"));
+
+    let resp = delete_credential(cred.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
 /// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
 #[tokio::test]
 async fn audit_query_filters_and_workspace_repath() {

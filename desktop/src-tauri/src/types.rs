@@ -210,6 +210,9 @@ pub enum CredentialDataRequest {
         account_name: String,
         url: Option<String>,
     },
+    SecureNote {
+        note: String,
+    },
     Raw {
         data: Vec<u8>,
     },
@@ -385,6 +388,12 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
             "issuer": gt_data.issuer,
             "account_name": gt_data.account_name,
             "url": gt_data.url
+        }),
+        // 笔记正文回传（详情面板展示需要；get_credential_data 走敏感操作
+        // 门禁，与 Password 回传 password 同理）
+        CredentialData::SecureNote(note_data) => serde_json::json!({
+            "type": "SecureNote",
+            "note": note_data.note
         }),
     }
 }
@@ -568,6 +577,11 @@ impl CredentialDataRequest {
                 account_name: account_name.clone(),
                 url: url.clone(),
             }),
+            CredentialDataRequest::SecureNote { note } => {
+                CredentialData::SecureNote(SecureNoteData {
+                    note: note.clone(),
+                })
+            }
             CredentialDataRequest::Raw { data } => CredentialData::Raw(data.clone()),
         }
     }

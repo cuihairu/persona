@@ -340,6 +340,7 @@ impl CredentialRepository {
             "ServerConfig" => CredentialType::ServerConfig,
             "Certificate" => CredentialType::Certificate,
             "TwoFactor" => CredentialType::TwoFactor,
+            "SecureNote" => CredentialType::SecureNote,
             custom => CredentialType::Custom(custom.to_string()),
         };
 
@@ -1348,6 +1349,7 @@ mod tests {
             ("ServerConfig", CredentialType::ServerConfig),
             ("Certificate", CredentialType::Certificate),
             ("TwoFactor", CredentialType::TwoFactor),
+            ("SecureNote", CredentialType::SecureNote),
             (
                 "SomethingCustom",
                 CredentialType::Custom("SomethingCustom".to_string()),
@@ -1378,9 +1380,9 @@ mod tests {
         renamed.is_favorite = true;
         repo.update(&renamed).await.unwrap();
 
-        // 7 from the earlier section plus the 2 security-level variants.
-        assert_eq!(repo.find_all().await.unwrap().len(), 9);
-        assert_eq!(repo.find_by_identity(&identity_id).await.unwrap().len(), 9);
+        // 8 from the earlier section plus the 2 security-level variants.
+        assert_eq!(repo.find_all().await.unwrap().len(), 10);
+        assert_eq!(repo.find_by_identity(&identity_id).await.unwrap().len(), 10);
         // The security-level variants reuse the Password sample shape, so
         // Password count is 3 (original + Medium + Low).
         assert_eq!(

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
 use tabled::{Table, Tabled};
@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
-    models::{Credential, CredentialData, CredentialType, PasswordCredentialData, SecurityLevel},
+    models::{
+        Credential, CredentialData, CredentialType, PasswordCredentialData, SecureNoteData,
+        SecurityLevel,
+    },
     Identity, PersonaService,
 };
 
@@ -48,6 +51,9 @@ pub enum CredentialCommand {
         /// Raw secret value (use only in CI)
         #[arg(long, conflicts_with = "prompt_secret")]
         secret: Option<String>,
+        /// Note content for --credential-type note (prompts when omitted)
+        #[arg(long)]
+        note: Option<String>,
         /// Mark as favorite
         #[arg(long)]
         favorite: bool,
@@ -98,6 +104,7 @@ pub enum CredentialTypeOption {
     ServerConfig,
     Certificate,
     TwoFactor,
+    Note,
     Custom,
 }
 
@@ -113,6 +120,7 @@ impl From<CredentialTypeOption> for CredentialType {
             CredentialTypeOption::ServerConfig => CredentialType::ServerConfig,
             CredentialTypeOption::Certificate => CredentialType::Certificate,
             CredentialTypeOption::TwoFactor => CredentialType::TwoFactor,
+            CredentialTypeOption::Note => CredentialType::SecureNote,
             CredentialTypeOption::Custom => CredentialType::Custom("custom".into()),
         }
     }
@@ -172,6 +180,7 @@ pub(crate) async fn execute_with(
             url,
             prompt_secret,
             secret,
+            note,
             favorite,
         } => {
             add_credential(
@@ -185,6 +194,7 @@ pub(crate) async fn execute_with(
                 url,
                 prompt_secret,
                 secret,
+                note,
                 favorite,
             )
             .await?
@@ -213,25 +223,40 @@ async fn add_credential(
     url: Option<String>,
     prompt_secret: bool,
     secret: Option<String>,
+    note: Option<String>,
     favorite: bool,
 ) -> Result<()> {
     println!("{}", "➕ Adding credential...".cyan());
     let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
-    let secret_value = if prompt_secret {
-        super::service::prompt_credential_secret(ui)?
-    } else if let Some(raw) = secret {
-        raw
+    // Secure Note：正文走 --note（或可见提示输入），密码路径不适用。
+    let credential_data = if matches!(credential_type, CredentialTypeOption::Note) {
+        if secret.is_some() || prompt_secret {
+            bail!("Note content is provided via --note; --secret/--prompt-secret do not apply");
+        }
+        let note_text = match note {
+            Some(text) if !text.trim().is_empty() => text,
+            _ => ui.input("Note content", None, false)?,
+        };
+        CredentialData::SecureNote(SecureNoteData {
+            note: note_text.clone(),
+        })
     } else {
-        ui.input("Secret / password (leave blank to skip)", None, true)?
-    };
+        let secret_value = if prompt_secret {
+            super::service::prompt_credential_secret(ui)?
+        } else if let Some(raw) = secret {
+            raw
+        } else {
+            ui.input("Secret / password (leave blank to skip)", None, true)?
+        };
 
-    let credential_data = CredentialData::Password(PasswordCredentialData {
-        password: secret_value.clone(),
-        email: None,
-        security_questions: Vec::new(),
-    });
+        CredentialData::Password(PasswordCredentialData {
+            password: secret_value.clone(),
+            email: None,
+            security_questions: Vec::new(),
+        })
+    };
 
     let mut created = service
         .create_credential(
@@ -378,6 +403,11 @@ async fn show_credential(
                     CredentialData::SshKey(ssh) => {
                         println!("  Private Key: {}", ssh.private_key);
                     }
+                    CredentialData::SecureNote(note) => {
+                        println!("  --- note ---");
+                        println!("{}", note.note.blue());
+                        println!("  ------------");
+                    }
                     other => {
                         println!("  Data: {:?}", other);
                     }
@@ -485,6 +515,7 @@ mod tests {
                 url: Some("https://example.com".to_string()),
                 prompt_secret: false,
                 secret: secret.map(String::from),
+                note: None,
                 favorite,
             },
         }
@@ -1025,6 +1056,7 @@ mod tests {
                     url: None,
                     prompt_secret: false,
                     secret: Some("pw".to_string()),
+                    note: None,
                     favorite: false,
                 },
             };
@@ -1061,6 +1093,95 @@ mod tests {
         )
         .await
         .expect("favorite-only empty list works");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn credential_add_note_stores_encrypted_secure_note() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "alice").await;
+
+        let note_args = |name: &str, secret: Option<&str>, note: Option<&str>| CredentialArgs {
+            command: CredentialCommand::Add {
+                identity: "alice".to_string(),
+                name: name.to_string(),
+                credential_type: CredentialTypeOption::Note,
+                security_level: SecurityLevelOption::High,
+                username: None,
+                url: None,
+                prompt_secret: false,
+                secret: secret.map(String::from),
+                note: note.map(String::from),
+                favorite: false,
+            },
+        };
+
+        // note 类型不适用密码路径。
+        let err = execute_with(note_args("bad", Some("pw"), None), &config, &TerminalUi)
+            .await
+            .expect_err("note with --secret must fail");
+        assert!(err.to_string().contains("--note"));
+
+        // --note 显式提供正文。
+        execute_with(
+            note_args("Recovery codes", None, Some("1111-2222\n3333-4444")),
+            &config,
+            &TerminalUi,
+        )
+        .await
+        .expect("explicit note works");
+
+        // --note 缺省：走可见 input 提示（ScriptedUi 预置答案）。
+        let scripted = ScriptedUi::new().input("interactive note body");
+        execute_with(note_args("Scratch", None, None), &config, &scripted)
+            .await
+            .expect("interactive note works");
+        assert!(scripted.exhausted());
+
+        // 读回：类型与数据变体正确，正文逐字保留（per-item key 加密往返）。
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let alice = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let creds = service
+            .get_credentials_for_identity(&alice.id)
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 2);
+        assert!(creds
+            .iter()
+            .all(|c| matches!(c.credential_type, CredentialType::SecureNote)));
+
+        let recovery = creds.iter().find(|c| c.name == "Recovery codes").unwrap();
+        let data = service
+            .get_credential_data(&recovery.id)
+            .await
+            .unwrap()
+            .expect("note data present");
+        match data {
+            CredentialData::SecureNote(note) => {
+                assert_eq!(note.note, "1111-2222\n3333-4444");
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

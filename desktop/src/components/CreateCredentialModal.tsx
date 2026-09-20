@@ -67,6 +67,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     'Certificate',
     'TwoFactor',
     'GameToken',
+    'SecureNote',
   ];
 
   const securityLevels: SecurityLevel[] = ['Critical', 'High', 'Medium', 'Low'];
@@ -123,6 +124,13 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
           issuer: (credentialData.issuer || '').trim(),
           account_name: (credentialData.account_name || '').trim(),
           url: formData.url.trim() || undefined,
+        };
+        break;
+
+      case 'SecureNote':
+        credentialDataRequest = {
+          type: 'SecureNote',
+          note: credentialData.note || '',
         };
         break;
 
@@ -538,6 +546,23 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
                 />
               </div>
             </div>
+          </div>
+        );
+
+      case 'SecureNote':
+        return (
+          <div>
+            <label className="label mb-2 block">Note *</label>
+            <textarea
+              value={credentialData.note || ''}
+              onChange={(e) => setCredentialData({ ...credentialData, note: e.target.value })}
+              className="input h-40 resize-y font-mono text-sm"
+              placeholder="Encrypted note content (recovery codes, secrets, …)"
+              required
+            />
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Stored fully encrypted (per-item key) — unlike the notes field on other item types.
+            </p>
           </div>
         );
 
