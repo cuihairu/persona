@@ -213,6 +213,32 @@ pub enum CredentialDataRequest {
     SecureNote {
         note: String,
     },
+    Identity {
+        first_name: String,
+        last_name: String,
+        username: Option<String>,
+        email: Option<String>,
+        phone: Option<String>,
+        birthday: Option<String>,
+        address: Option<String>,
+        id_number: Option<String>,
+        passport_number: Option<String>,
+        driver_license: Option<String>,
+        tax_id: Option<String>,
+        organization: Option<String>,
+        job_title: Option<String>,
+    },
+    SoftwareLicense {
+        license_key: String,
+        version: Option<String>,
+        publisher: Option<String>,
+        purchase_date: Option<String>,
+        order_number: Option<String>,
+        support_email: Option<String>,
+        download_url: Option<String>,
+        seats: Option<u32>,
+        valid_until: Option<String>,
+    },
     Raw {
         data: Vec<u8>,
     },
@@ -394,6 +420,36 @@ pub fn credential_data_to_json(data: &CredentialData) -> serde_json::Value {
         CredentialData::SecureNote(note_data) => serde_json::json!({
             "type": "SecureNote",
             "note": note_data.note
+        }),
+        // 证件号 / license_key 等敏感字段同上：详情面板展示需要，
+        // 读取走敏感操作门禁（与 Password/SecureNote 一致）
+        CredentialData::Identity(id_data) => serde_json::json!({
+            "type": "Identity",
+            "first_name": id_data.first_name,
+            "last_name": id_data.last_name,
+            "username": id_data.username,
+            "email": id_data.email,
+            "phone": id_data.phone,
+            "birthday": id_data.birthday,
+            "address": id_data.address,
+            "id_number": id_data.id_number,
+            "passport_number": id_data.passport_number,
+            "driver_license": id_data.driver_license,
+            "tax_id": id_data.tax_id,
+            "organization": id_data.organization,
+            "job_title": id_data.job_title
+        }),
+        CredentialData::SoftwareLicense(lic_data) => serde_json::json!({
+            "type": "SoftwareLicense",
+            "license_key": lic_data.license_key,
+            "version": lic_data.version,
+            "publisher": lic_data.publisher,
+            "purchase_date": lic_data.purchase_date,
+            "order_number": lic_data.order_number,
+            "support_email": lic_data.support_email,
+            "download_url": lic_data.download_url,
+            "seats": lic_data.seats,
+            "valid_until": lic_data.valid_until
         }),
     }
 }
@@ -580,6 +636,56 @@ impl CredentialDataRequest {
             CredentialDataRequest::SecureNote { note } => {
                 CredentialData::SecureNote(SecureNoteData { note: note.clone() })
             }
+            CredentialDataRequest::Identity {
+                first_name,
+                last_name,
+                username,
+                email,
+                phone,
+                birthday,
+                address,
+                id_number,
+                passport_number,
+                driver_license,
+                tax_id,
+                organization,
+                job_title,
+            } => CredentialData::Identity(IdentityData {
+                first_name: first_name.clone(),
+                last_name: last_name.clone(),
+                username: username.clone(),
+                email: email.clone(),
+                phone: phone.clone(),
+                birthday: birthday.clone(),
+                address: address.clone(),
+                id_number: id_number.clone(),
+                passport_number: passport_number.clone(),
+                driver_license: driver_license.clone(),
+                tax_id: tax_id.clone(),
+                organization: organization.clone(),
+                job_title: job_title.clone(),
+            }),
+            CredentialDataRequest::SoftwareLicense {
+                license_key,
+                version,
+                publisher,
+                purchase_date,
+                order_number,
+                support_email,
+                download_url,
+                seats,
+                valid_until,
+            } => CredentialData::SoftwareLicense(SoftwareLicenseData {
+                license_key: license_key.clone(),
+                version: version.clone(),
+                publisher: publisher.clone(),
+                purchase_date: purchase_date.clone(),
+                order_number: order_number.clone(),
+                support_email: support_email.clone(),
+                download_url: download_url.clone(),
+                seats: *seats,
+                valid_until: valid_until.clone(),
+            }),
             CredentialDataRequest::Raw { data } => CredentialData::Raw(data.clone()),
         }
     }

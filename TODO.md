@@ -460,7 +460,19 @@ Game Tokens (游戏令牌)
     一致）。已知限制：附件大小受单文件读入内存约束（BlobStore 整文件
     加密后 >100MB 才分块，但读取路径全内存，超大文件会撑内存——
     实际用户附件场景通常 <10MB，暂不优化）
-  - Identity / Software License 条目类型（1Password 标准类别）
+  - [x] Identity / Software License 条目类型（2026-09 落地）：1Password 标准类别
+    ——`CredentialData::Identity`（bincode 索引 10：姓名/联系方式/地址/生日 +
+    证件号 id_number/passport/driver_license/tax_id/组织/职位）与
+    `CredentialData::SoftwareLicense`（索引 11：license_key/版本/发布商/购买
+    日期/订单号/支持邮箱/下载链接/席位数/有效期）；`CredentialType` 加
+    Identity/SoftwareLicense 变体 + 存储字符串往返臂（此前读回退化 Custom）；
+    敏感字段（证件号/license_key）随 per-item key 加密，读取走敏感操作门禁。
+    三端落地：desktop 创建表单两分支（Identity 表单含核心字段，全字段可经
+    CLI flag 补齐）+ 详情面板字段渲染（空字段整行不渲染，逐字段复制）；
+    CLI `credential add --credential-type identity/software-license`（21 个
+    flag 全覆盖，first/last name 与 license key 缺省交互提示，--secret 互斥
+    校验）+ show --reveal 展示臂。日期字段沿用自由格式文本（与 1Password
+    文本字段一致，不做解析）
   - Watchtower expiring items / 2FA-available 提示
   - biometric unlock 原生接线（底层已备，缺系统指纹对话框）
   - Travel Mode（vault 级可见性开关）

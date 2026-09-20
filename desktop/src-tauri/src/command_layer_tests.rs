@@ -2186,6 +2186,106 @@ async fn create_credential_accepts_secure_note_request() {
     assert!(resp.success, "{:?}", resp.error);
 }
 
+/// 1Password 对齐 B 批：Identity / Software License 创建表单路径——
+/// 两类 CredentialDataRequest 经 create_credential 入库，credential_type
+/// 为真实变体，读回字段逐字保留（per-item key 加密往返），不退化为 Custom。
+#[tokio::test]
+async fn create_credential_accepts_identity_and_license_requests() {
+    let (app, identity_id) = app_with_identity().await;
+
+    // Identity：证件号等敏感字段全量读回（get_credential_data 走敏感门禁）。
+    let mut req = password_credential_request(&identity_id);
+    req.name = "Passport (main)".to_string();
+    req.credential_type = "Identity".to_string();
+    req.credential_data = CredentialDataRequest::Identity {
+        first_name: "Alice".to_string(),
+        last_name: "Zhang".to_string(),
+        username: None,
+        email: Some("alice@example.com".to_string()),
+        phone: Some("+86 13800000000".to_string()),
+        birthday: Some("1990-01-31".to_string()),
+        address: Some("1 Main St\nBeijing".to_string()),
+        id_number: Some("110101199001310011".to_string()),
+        passport_number: Some("E12345678".to_string()),
+        driver_license: None,
+        tax_id: None,
+        organization: Some("Example Inc".to_string()),
+        job_title: Some("Engineer".to_string()),
+    };
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let identity_cred = resp.data.expect("identity credential created");
+
+    let resp = get_credential_data(identity_cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.expect("credential data returned");
+    let data = data.expect("data is present");
+    assert_eq!(data.credential_type, "Identity");
+    assert_eq!(data.data["first_name"], "Alice");
+    assert_eq!(data.data["id_number"], "110101199001310011");
+    assert_eq!(data.data["passport_number"], "E12345678");
+    assert_eq!(data.data["address"], "1 Main St\nBeijing");
+    assert_eq!(data.data["seats"], serde_json::Value::Null);
+
+    // SoftwareLicense：license_key 读回、seats 数值往返。
+    let mut req = password_credential_request(&identity_id);
+    req.name = "JetBrains All Products".to_string();
+    req.credential_type = "SoftwareLicense".to_string();
+    req.credential_data = CredentialDataRequest::SoftwareLicense {
+        license_key: "AAAA-BBBB-CCCC-DDDD".to_string(),
+        version: Some("2024.2".to_string()),
+        publisher: Some("JetBrains".to_string()),
+        purchase_date: Some("2024-05-01".to_string()),
+        order_number: None,
+        support_email: None,
+        download_url: Some("https://example.com/dl".to_string()),
+        seats: Some(3),
+        valid_until: Some("2027-05-01".to_string()),
+    };
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let license_cred = resp.data.expect("license credential created");
+
+    let resp = get_credential_data(license_cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.expect("credential data returned");
+    let data = data.expect("data is present");
+    assert_eq!(data.credential_type, "SoftwareLicense");
+    assert_eq!(data.data["license_key"], "AAAA-BBBB-CCCC-DDDD");
+    assert_eq!(data.data["seats"], serde_json::json!(3));
+    assert_eq!(data.data["order_number"], serde_json::Value::Null);
+
+    // 列表读回：两个 credential_type 落库往返不退化为 Custom。
+    let resp = get_credentials_for_identity(identity_id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let creds = resp.data.expect("credentials returned");
+    assert!(creds
+        .iter()
+        .any(|c| c.credential_type == "Identity" && c.name == "Passport (main)"));
+    assert!(creds
+        .iter()
+        .any(|c| c.credential_type == "SoftwareLicense" && c.name == "JetBrains All Products"));
+
+    let resp = delete_credential(identity_cred.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = delete_credential(license_cred.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
 /// 1Password 对齐 B 批：item history——创建与 favorite 切换自动落历史行，
 /// get_credential_history 返回时间线（新版本在前）与字段级 diff。
 #[tokio::test]

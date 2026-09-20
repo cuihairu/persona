@@ -1877,10 +1877,7 @@ impl PersonaService {
     /// an attachment with the master key would break it on rotation. After
     /// the upgrade the payload sits under a fresh item key and both the
     /// credential and its attachments are rotation-safe.
-    async fn credential_item_key_for_attachment(
-        &self,
-        credential_id: &Uuid,
-    ) -> Result<[u8; 32]> {
+    async fn credential_item_key_for_attachment(&self, credential_id: &Uuid) -> Result<[u8; 32]> {
         let mut credential = self
             .credential_repo
             .find_by_id(credential_id)
@@ -1898,8 +1895,8 @@ impl PersonaService {
                         "Failed to decrypt legacy credential for item-key upgrade: {e}"
                     ))
                 })?;
-            let envelope = KeyHierarchy::new(master_encryption)
-                .encrypt_with_new_item_key(&plaintext)?;
+            let envelope =
+                KeyHierarchy::new(master_encryption).encrypt_with_new_item_key(&plaintext)?;
             plaintext.zeroize();
             credential.encrypted_data = envelope.ciphertext;
             credential.wrapped_item_key = Some(envelope.wrapped_key);
@@ -1907,14 +1904,11 @@ impl PersonaService {
             tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key for attachment sealing");
         }
 
-        let wrapped = credential
-            .wrapped_item_key
-            .as_ref()
-            .ok_or_else(|| {
-                PersonaError::CryptographicError(
-                    "credential has no per-item key after upgrade".to_string(),
-                )
-            })?;
+        let wrapped = credential.wrapped_item_key.as_ref().ok_or_else(|| {
+            PersonaError::CryptographicError(
+                "credential has no per-item key after upgrade".to_string(),
+            )
+        })?;
         let master_encryption = self.get_master_encryption_service()?;
         let key = KeyHierarchy::new(master_encryption)
             .unwrap_item_key(wrapped)
@@ -1948,7 +1942,10 @@ impl PersonaService {
         // `credential_item_key_for_attachment`. Plaintext attachments skip
         // the key entirely and never trigger the upgrade.
         let mut item_key = if encrypt {
-            Some(self.credential_item_key_for_attachment(&credential_id).await?)
+            Some(
+                self.credential_item_key_for_attachment(&credential_id)
+                    .await?,
+            )
         } else {
             None
         };
@@ -3899,7 +3896,11 @@ mod tests {
             .unwrap();
 
         // 升级后：行有 wrapped key、凭据数据可解回原值、附件往返成功
-        let upgraded = service.get_credential(&credential.id).await.unwrap().unwrap();
+        let upgraded = service
+            .get_credential(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert!(upgraded.wrapped_item_key.is_some());
 
         let data = service
@@ -3948,12 +3949,22 @@ mod tests {
             .attach_file(credential.id, &file_path, true)
             .await
             .unwrap();
-        assert_eq!(service.get_attachments(&credential.id).await.unwrap().len(), 1);
+        assert_eq!(
+            service.get_attachments(&credential.id).await.unwrap().len(),
+            1
+        );
 
         assert!(service.delete_credential(&credential.id).await.unwrap());
 
-        assert!(service.get_attachments(&credential.id).await.unwrap().is_empty());
-        assert!(service.retrieve_attachment(&attachment_id, true).await.is_err());
+        assert!(service
+            .get_attachments(&credential.id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

@@ -470,6 +470,87 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
           </div>
         );
 
+      case 'Identity': {
+        // 证件号等敏感字段随 per-item key 加密，读回走敏感操作门禁
+        const fields: Array<[string, string | undefined, boolean]> = [
+          ['Full name', [data.first_name, data.last_name].filter(Boolean).join(' '), false],
+          ['Email', data.email, false],
+          ['Phone', data.phone, false],
+          ['Birthday', data.birthday, false],
+          ['Address', data.address, false],
+          ['ID number', data.id_number, true],
+          ['Passport no.', data.passport_number, true],
+          ['Driver license', data.driver_license, true],
+          ['Tax ID', data.tax_id, true],
+          ['Organization', data.organization, false],
+          ['Job title', data.job_title, false],
+        ];
+        return (
+          <div className="space-y-3">
+            {fields
+              .filter(([, value]) => value)
+              .map(([label, value, mono]) => (
+                <div key={label}>
+                  <label className="label text-gray-600 dark:text-gray-300">{label}</label>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-sm break-words whitespace-pre-wrap ${mono ? 'font-mono' : ''}`}
+                    >
+                      {value}
+                    </span>
+                    <button
+                      onClick={() => onCopy(value!, label)}
+                      aria-label={`Copy ${label}`}
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
+                    >
+                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+          </div>
+        );
+      }
+
+      case 'SoftwareLicense': {
+        const fields: Array<[string, string | undefined, boolean]> = [
+          ['License key', data.license_key, true],
+          ['Version', data.version, false],
+          ['Publisher', data.publisher, false],
+          ['Purchase date', data.purchase_date, false],
+          ['Order number', data.order_number, true],
+          ['Support email', data.support_email, false],
+          ['Download URL', data.download_url, false],
+          ['Seats', data.seats != null ? String(data.seats) : undefined, false],
+          ['Valid until', data.valid_until, false],
+        ];
+        return (
+          <div className="space-y-3">
+            {fields
+              .filter(([, value]) => value)
+              .map(([label, value, mono]) => (
+                <div key={label}>
+                  <label className="label text-gray-600 dark:text-gray-300">{label}</label>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`text-sm break-words whitespace-pre-wrap ${mono ? 'font-mono' : ''}`}
+                    >
+                      {value}
+                    </span>
+                    <button
+                      onClick={() => onCopy(value!, label)}
+                      aria-label={`Copy ${label}`}
+                      className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
+                    >
+                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+          </div>
+        );
+      }
+
       default:
         return (
           <div className="text-sm text-gray-500 dark:text-gray-400">

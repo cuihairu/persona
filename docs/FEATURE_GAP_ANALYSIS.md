@@ -9,7 +9,7 @@ Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona 
   - Auto-lock policies: [=] auto-lock timers + re-authentication for sensitive ops
 - Vaults/Items
   - Multiple vaults/collections: [−] single workspace by design (identity-scoped); multi-user vault features intentionally out of scope (see `BOUNDARY.md`)
-  - Item types: [≈] password, API key, TOTP, SSH key, bank card, server config, digital certificate, game account, crypto-wallet placeholder; secure notes as a first-class encrypted item type (`CredentialData::SecureNote`, body under the per-item key — 2026-09)
+  - Item types: [≈] password, API key, TOTP, SSH key, bank card, server config, digital certificate, game account, crypto-wallet placeholder; secure notes as a first-class encrypted item type (`CredentialData::SecureNote`, body under the per-item key — 2026-09); Identity + Software License categories (document numbers / license keys under the per-item key, 2026-09)
   - Passkeys (FIDO): [−] not started — the next major parity gap
   - Attachments/versioning: [=] attachments fully landed (files sealed under the owning item's per-item key, survive master-password rotation, cascade-deleted with the item; desktop pane with native file dialogs + `persona credential attach/attachments/save-attachment/remove-attachment` CLI, 2026-09); item change history recorded on every create/update/delete with metadata-only field diffs and surfaced in desktop detail pane + `persona credential history` (2026-09; restore-to-version pending)
 - Autofill & Browser

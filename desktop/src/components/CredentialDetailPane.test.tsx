@@ -262,6 +262,72 @@ describe('components/CredentialDetailPane', () => {
     expect(onCopy).toHaveBeenCalledWith('1111-2222\n3333-4444', 'Note');
   });
 
+  it('Identity pane renders present fields, hides empty ones, and copies document numbers', () => {
+    const { onCopy } = setupPane(
+      { name: 'Passport (main)', credential_type: 'Identity' },
+      {
+        credential_type: 'Identity',
+        data: {
+          first_name: 'Alice',
+          last_name: 'Zhang',
+          email: 'alice@example.com',
+          phone: '+86 13800000000',
+          birthday: undefined,
+          address: '1 Main St\nBeijing',
+          id_number: '110101199001310011',
+          passport_number: undefined,
+          driver_license: undefined,
+          tax_id: undefined,
+          organization: 'Example Inc',
+          job_title: undefined,
+        },
+      },
+    );
+
+    expect(screen.getByText('Alice Zhang')).toBeInTheDocument();
+    expect(screen.getByText('110101199001310011')).toBeInTheDocument();
+    // 多行地址对 textContent 精确断言（getByText 会归一化换行；限定 span
+    // 避免命中逐层相同 textContent 的外层容器）
+    expect(
+      screen.getByText(
+        (_, el) => el?.tagName === 'SPAN' && el.textContent === '1 Main St\nBeijing',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Example Inc')).toBeInTheDocument();
+    // 未提供的字段整行不渲染（birthday / passport / job title 缺席）
+    expect(screen.queryByText('Birthday')).not.toBeInTheDocument();
+    expect(screen.queryByText('Passport no.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Job title')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy ID number' }));
+    expect(onCopy).toHaveBeenCalledWith('110101199001310011', 'ID number');
+  });
+
+  it('SoftwareLicense pane renders the key with metadata and copies it', () => {
+    const { onCopy } = setupPane(
+      { name: 'JetBrains All Products', credential_type: 'SoftwareLicense' },
+      {
+        credential_type: 'SoftwareLicense',
+        data: {
+          license_key: 'AAAA-BBBB-CCCC-DDDD',
+          version: '2024.2',
+          publisher: 'JetBrains',
+          seats: 3,
+          valid_until: '2027-05-01',
+        },
+      },
+    );
+
+    expect(screen.getByText('AAAA-BBBB-CCCC-DDDD')).toBeInTheDocument();
+    expect(screen.getByText('2024.2')).toBeInTheDocument();
+    expect(screen.getByText('JetBrains')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('2027-05-01')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy License key' }));
+    expect(onCopy).toHaveBeenCalledWith('AAAA-BBBB-CCCC-DDDD', 'License key');
+  });
+
   it('item history: lazy-loads the timeline on expand and renders field diffs', async () => {
     const getCredentialHistory = jest.fn().mockResolvedValue([
       {

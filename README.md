@@ -128,6 +128,13 @@ persona credential remove-attachment --attachment-id <UUID>
 persona credential add --identity alice --name "Recovery codes" --credential-type note --note "1111-2222
 3333-4444"
 
+# Identity / Software License (1Password standard categories): document numbers
+# and license keys are sealed under the item's key; unspecified fields stay empty
+persona credential add --identity alice --name "Passport (main)" --credential-type identity \
+  --first-name Alice --last-name Zhang --id-number 110101199001310011 --passport-number E12345678
+persona credential add --identity alice --name "JetBrains All Products" --credential-type software-license \
+  --license-key AAAA-BBBB-CCCC-DDDD --version 2024.2 --seats 3 --valid-until 2027-05-01
+
 # TOTP (two-factor authentication) workflows
 persona totp setup --identity alice --qr ~/Downloads/github.png
 persona totp code --id <UUID>

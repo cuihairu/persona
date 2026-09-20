@@ -4,6 +4,8 @@ import {
   ServerIcon,
   CreditCardIcon,
   ShieldCheckIcon,
+  UserIcon,
+  DocumentTextIcon,
 } from '@heroicons/react/24/outline';
 
 /**
@@ -22,6 +24,10 @@ export const getCredentialIcon = (type: string) => {
       return ServerIcon;
     case 'BankCard':
       return CreditCardIcon;
+    case 'Identity':
+      return UserIcon;
+    case 'SoftwareLicense':
+      return DocumentTextIcon;
     case 'ApiKey':
     case 'Certificate':
     case 'TwoFactor':

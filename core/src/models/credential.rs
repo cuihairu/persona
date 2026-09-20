@@ -26,6 +26,10 @@ pub enum CredentialType {
     TwoFactor,
     /// Encrypted secure note (1Password parity; body in `CredentialData::SecureNote`)
     SecureNote,
+    /// Personal identity information (1Password「Identity」: name, address, documents)
+    Identity,
+    /// Software license keys (1Password「Software License」)
+    SoftwareLicense,
     /// Custom credential type
     Custom(String),
 }
@@ -43,6 +47,8 @@ impl std::fmt::Display for CredentialType {
             CredentialType::Certificate => write!(f, "Certificate"),
             CredentialType::TwoFactor => write!(f, "TwoFactor"),
             CredentialType::SecureNote => write!(f, "SecureNote"),
+            CredentialType::Identity => write!(f, "Identity"),
+            CredentialType::SoftwareLicense => write!(f, "SoftwareLicense"),
             CredentialType::Custom(name) => write!(f, "{}", name),
         }
     }
@@ -301,6 +307,49 @@ pub struct SecureNoteData {
     pub note: String,
 }
 
+/// 1Password「Identity」对齐：个人身份信息条目。
+///
+/// 证件号等敏感字段随 `encrypted_data` 走 per-item key 加密；
+/// 日期类字段沿用自由格式文本（与 1Password 的文本字段一致，不做解析）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityData {
+    pub first_name: String,
+    pub last_name: String,
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    /// 生日（自由格式，如 1990-01-31）
+    pub birthday: Option<String>,
+    /// 多行邮寄地址
+    pub address: Option<String>,
+    /// 证件号（身份证 / SSN 等）
+    pub id_number: Option<String>,
+    pub passport_number: Option<String>,
+    pub driver_license: Option<String>,
+    pub tax_id: Option<String>,
+    pub organization: Option<String>,
+    pub job_title: Option<String>,
+}
+
+/// 1Password「Software License」对齐：软件许可证条目。
+///
+/// `license_key` 是核心敏感字段，随 `encrypted_data` 走 per-item key 加密。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SoftwareLicenseData {
+    pub license_key: String,
+    pub version: Option<String>,
+    pub publisher: Option<String>,
+    /// 购买日期（自由格式）
+    pub purchase_date: Option<String>,
+    pub order_number: Option<String>,
+    pub support_email: Option<String>,
+    pub download_url: Option<String>,
+    /// 授权席位数
+    pub seats: Option<u32>,
+    /// 许可有效期（自由格式）
+    pub valid_until: Option<String>,
+}
+
 /// Helper enum for strongly-typed credential data
 ///
 /// bincode 外部标签枚举：新变体只能追加在末尾，既有变体索引不可变，
@@ -317,6 +366,8 @@ pub enum CredentialData {
     Raw(Vec<u8>),
     GameToken(GameTokenData),
     SecureNote(SecureNoteData),
+    Identity(IdentityData),
+    SoftwareLicense(SoftwareLicenseData),
 }
 
 impl CredentialData {
@@ -459,6 +510,12 @@ mod tests {
         assert_eq!(CredentialType::GameAccount.to_string(), "GameAccount");
         assert_eq!(CredentialType::ServerConfig.to_string(), "ServerConfig");
         assert_eq!(CredentialType::Certificate.to_string(), "Certificate");
+        assert_eq!(CredentialType::SecureNote.to_string(), "SecureNote");
+        assert_eq!(CredentialType::Identity.to_string(), "Identity");
+        assert_eq!(
+            CredentialType::SoftwareLicense.to_string(),
+            "SoftwareLicense"
+        );
     }
 
     #[test]
@@ -522,6 +579,32 @@ mod tests {
             CredentialData::SecureNote(SecureNoteData {
                 note: "recovery codes:\n1111-2222\n3333-4444".to_string(),
             }),
+            CredentialData::Identity(IdentityData {
+                first_name: "Alice".to_string(),
+                last_name: "Zhang".to_string(),
+                username: Some("alicez".to_string()),
+                email: Some("alice@example.com".to_string()),
+                phone: Some("+86 13800000000".to_string()),
+                birthday: Some("1990-01-31".to_string()),
+                address: Some("1 Main St\nBeijing".to_string()),
+                id_number: Some("110101199001310011".to_string()),
+                passport_number: Some("E12345678".to_string()),
+                driver_license: None,
+                tax_id: None,
+                organization: Some("Example Inc".to_string()),
+                job_title: Some("Engineer".to_string()),
+            }),
+            CredentialData::SoftwareLicense(SoftwareLicenseData {
+                license_key: "AAAA-BBBB-CCCC-DDDD".to_string(),
+                version: Some("2.1.0".to_string()),
+                publisher: Some("Example Soft".to_string()),
+                purchase_date: Some("2024-05-01".to_string()),
+                order_number: Some("ORD-42".to_string()),
+                support_email: Some("support@example.com".to_string()),
+                download_url: Some("https://example.com/dl".to_string()),
+                seats: Some(3),
+                valid_until: Some("2027-05-01".to_string()),
+            }),
         ];
 
         for data in variants {
@@ -570,6 +653,44 @@ mod tests {
         assert_eq!(&note[..4], &[9, 0, 0, 0]);
         let decoded = CredentialData::from_bytes(&note).unwrap();
         assert!(matches!(decoded, CredentialData::SecureNote(_)));
+        // Identity 追加在末尾，索引 10
+        let identity = CredentialData::Identity(IdentityData {
+            first_name: "a".to_string(),
+            last_name: "b".to_string(),
+            username: None,
+            email: None,
+            phone: None,
+            birthday: None,
+            address: None,
+            id_number: None,
+            passport_number: None,
+            driver_license: None,
+            tax_id: None,
+            organization: None,
+            job_title: None,
+        })
+        .to_bytes()
+        .unwrap();
+        assert_eq!(&identity[..4], &[10, 0, 0, 0]);
+        let decoded = CredentialData::from_bytes(&identity).unwrap();
+        assert!(matches!(decoded, CredentialData::Identity(_)));
+        // SoftwareLicense 追加在末尾，索引 11
+        let license = CredentialData::SoftwareLicense(SoftwareLicenseData {
+            license_key: "k".to_string(),
+            version: None,
+            publisher: None,
+            purchase_date: None,
+            order_number: None,
+            support_email: None,
+            download_url: None,
+            seats: None,
+            valid_until: None,
+        })
+        .to_bytes()
+        .unwrap();
+        assert_eq!(&license[..4], &[11, 0, 0, 0]);
+        let decoded = CredentialData::from_bytes(&license).unwrap();
+        assert!(matches!(decoded, CredentialData::SoftwareLicense(_)));
     }
 
     #[test]

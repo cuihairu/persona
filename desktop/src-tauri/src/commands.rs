@@ -1196,6 +1196,8 @@ pub async fn get_credential_data(
                             CredentialData::Raw(_) => "Raw".to_string(),
                             CredentialData::GameToken(_) => "GameToken".to_string(),
                             CredentialData::SecureNote(_) => "SecureNote".to_string(),
+                            CredentialData::Identity(_) => "Identity".to_string(),
+                            CredentialData::SoftwareLicense(_) => "SoftwareLicense".to_string(),
                         },
                         data: credential_data_to_json(&data),
                     });

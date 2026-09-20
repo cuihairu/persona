@@ -68,6 +68,8 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
     'TwoFactor',
     'GameToken',
     'SecureNote',
+    'Identity',
+    'SoftwareLicense',
   ];
 
   const securityLevels: SecurityLevel[] = ['Critical', 'High', 'Medium', 'Low'];
@@ -131,6 +133,40 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
         credentialDataRequest = {
           type: 'SecureNote',
           note: credentialData.note || '',
+        };
+        break;
+
+      case 'Identity':
+        credentialDataRequest = {
+          type: 'Identity',
+          first_name: (credentialData.first_name || '').trim(),
+          last_name: (credentialData.last_name || '').trim(),
+          username: (credentialData.username || '').trim() || undefined,
+          email: (credentialData.email || '').trim() || undefined,
+          phone: (credentialData.phone || '').trim() || undefined,
+          birthday: (credentialData.birthday || '').trim() || undefined,
+          address: (credentialData.address || '').trim() || undefined,
+          id_number: (credentialData.id_number || '').trim() || undefined,
+          passport_number: (credentialData.passport_number || '').trim() || undefined,
+          driver_license: (credentialData.driver_license || '').trim() || undefined,
+          tax_id: (credentialData.tax_id || '').trim() || undefined,
+          organization: (credentialData.organization || '').trim() || undefined,
+          job_title: (credentialData.job_title || '').trim() || undefined,
+        };
+        break;
+
+      case 'SoftwareLicense':
+        credentialDataRequest = {
+          type: 'SoftwareLicense',
+          license_key: (credentialData.license_key || '').trim(),
+          version: (credentialData.version || '').trim() || undefined,
+          publisher: (credentialData.publisher || '').trim() || undefined,
+          purchase_date: (credentialData.purchase_date || '').trim() || undefined,
+          order_number: (credentialData.order_number || '').trim() || undefined,
+          support_email: (credentialData.support_email || '').trim() || undefined,
+          download_url: (credentialData.download_url || '').trim() || undefined,
+          seats: credentialData.seats ? Number(credentialData.seats) : undefined,
+          valid_until: (credentialData.valid_until || '').trim() || undefined,
         };
         break;
 
@@ -562,6 +598,158 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({ isOpen, o
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               Stored fully encrypted (per-item key) — unlike the notes field on other item types.
+            </p>
+          </div>
+        );
+
+      case 'Identity':
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-first_name">First name *</label>
+                <input
+                  id="cred-first_name"
+                  type="text"
+                  value={credentialData.first_name || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, first_name: e.target.value })}
+                  className="input"
+                  required
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-last_name">Last name *</label>
+                <input
+                  id="cred-last_name"
+                  type="text"
+                  value={credentialData.last_name || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, last_name: e.target.value })}
+                  className="input"
+                  required
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-email">Email</label>
+                <input
+                  id="cred-email"
+                  type="text"
+                  value={credentialData.email || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, email: e.target.value })}
+                  className="input"
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-phone">Phone</label>
+                <input
+                  id="cred-phone"
+                  type="text"
+                  value={credentialData.phone || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, phone: e.target.value })}
+                  className="input"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="label mb-2 block">Address</label>
+              <textarea
+                value={credentialData.address || ''}
+                onChange={(e) => setCredentialData({ ...credentialData, address: e.target.value })}
+                className="input h-20 resize-y"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-id_number">ID number</label>
+                <input
+                  id="cred-id_number"
+                  type="text"
+                  value={credentialData.id_number || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, id_number: e.target.value })}
+                  className="input font-mono"
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-passport_number">Passport no.</label>
+                <input
+                  id="cred-passport_number"
+                  type="text"
+                  value={credentialData.passport_number || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, passport_number: e.target.value })}
+                  className="input font-mono"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Document numbers are stored encrypted with this item&apos;s key. More fields
+              (birthday, driver license, organization…) can be added from the CLI.
+            </p>
+          </div>
+        );
+
+      case 'SoftwareLicense':
+        return (
+          <div className="space-y-4">
+            <div>
+              <label className="label mb-2 block">License key *</label>
+              <textarea
+                value={credentialData.license_key || ''}
+                onChange={(e) => setCredentialData({ ...credentialData, license_key: e.target.value })}
+                className="input h-24 resize-y font-mono text-sm"
+                placeholder="AAAA-BBBB-CCCC-DDDD"
+                required
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-version">Version</label>
+                <input
+                  id="cred-version"
+                  type="text"
+                  value={credentialData.version || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, version: e.target.value })}
+                  className="input"
+                  placeholder="2024.2"
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-publisher">Publisher</label>
+                <input
+                  id="cred-publisher"
+                  type="text"
+                  value={credentialData.publisher || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, publisher: e.target.value })}
+                  className="input"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-seats">Seats</label>
+                <input
+                  id="cred-seats"
+                  type="number"
+                  min={1}
+                  value={credentialData.seats || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, seats: e.target.value })}
+                  className="input"
+                />
+              </div>
+              <div>
+                <label className="label mb-2 block" htmlFor="cred-valid_until">Valid until</label>
+                <input
+                  id="cred-valid_until"
+                  type="text"
+                  value={credentialData.valid_until || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, valid_until: e.target.value })}
+                  className="input"
+                  placeholder="2027-05-01"
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              The license key is stored encrypted with this item&apos;s key.
             </p>
           </div>
         );

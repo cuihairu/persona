@@ -8,8 +8,8 @@ use uuid::Uuid;
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
     models::{
-        Credential, CredentialData, CredentialType, EntityType, PasswordCredentialData,
-        SecureNoteData, SecurityLevel,
+        Credential, CredentialData, CredentialType, EntityType, IdentityData,
+        PasswordCredentialData, SecureNoteData, SecurityLevel, SoftwareLicenseData,
     },
     Identity, PersonaService,
 };
@@ -18,47 +18,95 @@ use crate::utils::prompt::{PromptUi, TerminalUi};
 
 use super::service::init_service;
 
-#[derive(Args, Debug)]
+#[derive(Args, Clone, Debug)]
 pub struct CredentialArgs {
     #[command(subcommand)]
     command: CredentialCommand,
 }
 
-#[derive(Subcommand, Debug)]
+/// `credential add` 的参数（字段多，收拢成单变体 struct，避免枚举变体大小失衡）
+#[derive(Args, Clone, Debug)]
+pub struct AddArgs {
+    /// Identity name to attach the credential
+    #[arg(short, long)]
+    identity: String,
+    /// Credential display name
+    #[arg(short, long)]
+    name: String,
+    /// Credential type
+    #[arg(long, default_value = "password")]
+    credential_type: CredentialTypeOption,
+    /// Security level (critical/high/medium/low)
+    #[arg(long, default_value = "high")]
+    security_level: SecurityLevelOption,
+    /// Optional username / login
+    #[arg(long)]
+    username: Option<String>,
+    /// Optional URL or service
+    #[arg(long)]
+    url: Option<String>,
+    /// Prompt for password/secret in terminal
+    #[arg(long)]
+    prompt_secret: bool,
+    /// Raw secret value (use only in CI)
+    #[arg(long, conflicts_with = "prompt_secret")]
+    secret: Option<String>,
+    /// Note content for --credential-type note (prompts when omitted)
+    #[arg(long)]
+    note: Option<String>,
+    /// Identity fields (--credential-type identity); first/last name prompt when omitted
+    #[arg(long)]
+    first_name: Option<String>,
+    #[arg(long)]
+    last_name: Option<String>,
+    #[arg(long)]
+    email: Option<String>,
+    #[arg(long)]
+    phone: Option<String>,
+    #[arg(long)]
+    birthday: Option<String>,
+    #[arg(long)]
+    address: Option<String>,
+    #[arg(long)]
+    id_number: Option<String>,
+    #[arg(long)]
+    passport_number: Option<String>,
+    #[arg(long)]
+    driver_license: Option<String>,
+    #[arg(long)]
+    tax_id: Option<String>,
+    #[arg(long)]
+    organization: Option<String>,
+    #[arg(long)]
+    job_title: Option<String>,
+    /// License key (--credential-type software-license; prompts when omitted)
+    #[arg(long)]
+    license_key: Option<String>,
+    #[arg(long)]
+    version: Option<String>,
+    #[arg(long)]
+    publisher: Option<String>,
+    #[arg(long)]
+    purchase_date: Option<String>,
+    #[arg(long)]
+    order_number: Option<String>,
+    #[arg(long)]
+    support_email: Option<String>,
+    #[arg(long)]
+    download_url: Option<String>,
+    #[arg(long)]
+    seats: Option<u32>,
+    #[arg(long)]
+    valid_until: Option<String>,
+    /// Mark as favorite
+    #[arg(long)]
+    favorite: bool,
+}
+
+#[derive(Subcommand, Clone, Debug)]
 pub enum CredentialCommand {
     /// Create a new credential (password/API key/etc.)
-    Add {
-        /// Identity name to attach the credential
-        #[arg(short, long)]
-        identity: String,
-        /// Credential display name
-        #[arg(short, long)]
-        name: String,
-        /// Credential type
-        #[arg(long, default_value = "password")]
-        credential_type: CredentialTypeOption,
-        /// Security level (critical/high/medium/low)
-        #[arg(long, default_value = "high")]
-        security_level: SecurityLevelOption,
-        /// Optional username / login
-        #[arg(long)]
-        username: Option<String>,
-        /// Optional URL or service
-        #[arg(long)]
-        url: Option<String>,
-        /// Prompt for password/secret in terminal
-        #[arg(long)]
-        prompt_secret: bool,
-        /// Raw secret value (use only in CI)
-        #[arg(long, conflicts_with = "prompt_secret")]
-        secret: Option<String>,
-        /// Note content for --credential-type note (prompts when omitted)
-        #[arg(long)]
-        note: Option<String>,
-        /// Mark as favorite
-        #[arg(long)]
-        favorite: bool,
-    },
+    Add(Box<AddArgs>),
     /// List credentials with optional filters
     List {
         /// Identity name filter
@@ -148,6 +196,8 @@ pub enum CredentialTypeOption {
     Certificate,
     TwoFactor,
     Note,
+    Identity,
+    SoftwareLicense,
     Custom,
 }
 
@@ -164,6 +214,8 @@ impl From<CredentialTypeOption> for CredentialType {
             CredentialTypeOption::Certificate => CredentialType::Certificate,
             CredentialTypeOption::TwoFactor => CredentialType::TwoFactor,
             CredentialTypeOption::Note => CredentialType::SecureNote,
+            CredentialTypeOption::Identity => CredentialType::Identity,
+            CredentialTypeOption::SoftwareLicense => CredentialType::SoftwareLicense,
             CredentialTypeOption::Custom => CredentialType::Custom("custom".into()),
         }
     }
@@ -214,34 +266,7 @@ pub(crate) async fn execute_with(
     ui: &dyn PromptUi,
 ) -> Result<()> {
     match args.command {
-        CredentialCommand::Add {
-            identity,
-            name,
-            credential_type,
-            security_level,
-            username,
-            url,
-            prompt_secret,
-            secret,
-            note,
-            favorite,
-        } => {
-            add_credential(
-                config,
-                ui,
-                identity,
-                name,
-                credential_type,
-                security_level,
-                username,
-                url,
-                prompt_secret,
-                secret,
-                note,
-                favorite,
-            )
-            .await?
-        }
+        CredentialCommand::Add(args) => add_credential(config, ui, *args).await?,
         CredentialCommand::List {
             identity,
             credential_type,
@@ -251,9 +276,11 @@ pub(crate) async fn execute_with(
         CredentialCommand::Show { id, reveal } => show_credential(config, ui, id, reveal).await?,
         CredentialCommand::Remove { id, yes } => remove_credential(config, ui, id, yes).await?,
         CredentialCommand::History { id } => show_credential_history(config, ui, id).await?,
-        CredentialCommand::Attach { id, file, no_encrypt } => {
-            attach_file_command(config, ui, id, file, !no_encrypt).await?
-        }
+        CredentialCommand::Attach {
+            id,
+            file,
+            no_encrypt,
+        } => attach_file_command(config, ui, id, file, !no_encrypt).await?,
         CredentialCommand::Attachments { id } => list_attachments_command(config, ui, id).await?,
         CredentialCommand::SaveAttachment {
             attachment_id,
@@ -266,51 +293,125 @@ pub(crate) async fn execute_with(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn add_credential(
-    config: &CliConfig,
-    ui: &dyn PromptUi,
-    identity_name: String,
-    name: String,
-    credential_type: CredentialTypeOption,
-    security_level: SecurityLevelOption,
-    username: Option<String>,
-    url: Option<String>,
-    prompt_secret: bool,
-    secret: Option<String>,
-    note: Option<String>,
-    favorite: bool,
-) -> Result<()> {
+async fn add_credential(config: &CliConfig, ui: &dyn PromptUi, args: AddArgs) -> Result<()> {
+    let AddArgs {
+        identity: identity_name,
+        name,
+        credential_type,
+        security_level,
+        username,
+        url,
+        prompt_secret,
+        secret,
+        note,
+        first_name,
+        last_name,
+        email,
+        phone,
+        birthday,
+        address,
+        id_number,
+        passport_number,
+        driver_license,
+        tax_id,
+        organization,
+        job_title,
+        license_key,
+        version,
+        publisher,
+        purchase_date,
+        order_number,
+        support_email,
+        download_url,
+        seats,
+        valid_until,
+        favorite,
+    } = args;
+
     println!("{}", "➕ Adding credential...".cyan());
     let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
-    // Secure Note：正文走 --note（或可见提示输入），密码路径不适用。
-    let credential_data = if matches!(credential_type, CredentialTypeOption::Note) {
-        if secret.is_some() || prompt_secret {
-            bail!("Note content is provided via --note; --secret/--prompt-secret do not apply");
+    // 三种类型不走 password/secret 路径：note / identity / software-license
+    let credential_data = match credential_type {
+        // Secure Note：正文走 --note（或可见提示输入），密码路径不适用。
+        CredentialTypeOption::Note => {
+            if secret.is_some() || prompt_secret {
+                bail!("Note content is provided via --note; --secret/--prompt-secret do not apply");
+            }
+            let note_text = match note {
+                Some(text) if !text.trim().is_empty() => text,
+                _ => ui.input("Note content", None, false)?,
+            };
+            CredentialData::SecureNote(SecureNoteData {
+                note: note_text.clone(),
+            })
         }
-        let note_text = match note {
-            Some(text) if !text.trim().is_empty() => text,
-            _ => ui.input("Note content", None, false)?,
-        };
-        CredentialData::SecureNote(SecureNoteData {
-            note: note_text.clone(),
-        })
-    } else {
-        let secret_value = if prompt_secret {
-            super::service::prompt_credential_secret(ui)?
-        } else if let Some(raw) = secret {
-            raw
-        } else {
-            ui.input("Secret / password (leave blank to skip)", None, true)?
-        };
+        // Identity：姓名必填（缺省提示），其余可选字段只在提供时入库。
+        CredentialTypeOption::Identity => {
+            if secret.is_some() || prompt_secret {
+                bail!("Identity fields do not use --secret/--prompt-secret");
+            }
+            let first = match first_name {
+                Some(v) if !v.trim().is_empty() => v,
+                _ => ui.input("First name", None, false)?,
+            };
+            let last = match last_name {
+                Some(v) if !v.trim().is_empty() => v,
+                _ => ui.input("Last name", None, false)?,
+            };
+            CredentialData::Identity(IdentityData {
+                first_name: first,
+                last_name: last,
+                username: username.clone(),
+                email,
+                phone,
+                birthday,
+                address,
+                id_number,
+                passport_number,
+                driver_license,
+                tax_id,
+                organization,
+                job_title,
+            })
+        }
+        // Software License：license key 必填（缺省提示），元数据可选。
+        CredentialTypeOption::SoftwareLicense => {
+            if secret.is_some() || prompt_secret {
+                bail!("License key is provided via --license-key; --secret/--prompt-secret do not apply");
+            }
+            let key = match license_key {
+                Some(v) if !v.trim().is_empty() => v,
+                _ => ui.input("License key", None, false)?,
+            };
+            CredentialData::SoftwareLicense(SoftwareLicenseData {
+                license_key: key,
+                version,
+                publisher,
+                purchase_date,
+                order_number,
+                support_email,
+                download_url,
+                seats,
+                valid_until,
+            })
+        }
+        _ => {
+            let secret_value = if prompt_secret {
+                super::service::prompt_credential_secret(ui)?
+            } else if let Some(raw) = secret {
+                raw
+            } else {
+                ui.input("Secret / password (leave blank to skip)", None, true)?
+            };
 
-        CredentialData::Password(PasswordCredentialData {
-            password: secret_value.clone(),
-            email: None,
-            security_questions: Vec::new(),
-        })
+            CredentialData::Password(PasswordCredentialData {
+                password: secret_value.clone(),
+                email: None,
+                security_questions: Vec::new(),
+            })
+        }
     };
 
     let mut created = service
@@ -463,6 +564,51 @@ async fn show_credential(
                         println!("{}", note.note.blue());
                         println!("  ------------");
                     }
+                    CredentialData::Identity(id) => {
+                        println!("  Name: {} {}", id.first_name, id.last_name);
+                        if let Some(v) = &id.email {
+                            println!("  Email: {}", v);
+                        }
+                        if let Some(v) = &id.phone {
+                            println!("  Phone: {}", v);
+                        }
+                        if let Some(v) = &id.address {
+                            println!("  Address: {}", v.replace('\n', ", "));
+                        }
+                        if let Some(v) = &id.id_number {
+                            println!("  ID number: {}", v.blue());
+                        }
+                        if let Some(v) = &id.passport_number {
+                            println!("  Passport: {}", v.blue());
+                        }
+                        if let Some(v) = &id.driver_license {
+                            println!("  Driver license: {}", v.blue());
+                        }
+                        if let Some(v) = &id.tax_id {
+                            println!("  Tax ID: {}", v.blue());
+                        }
+                    }
+                    CredentialData::SoftwareLicense(lic) => {
+                        println!("  License key: {}", lic.license_key.blue());
+                        if let Some(v) = &lic.version {
+                            println!("  Version: {}", v);
+                        }
+                        if let Some(v) = &lic.publisher {
+                            println!("  Publisher: {}", v);
+                        }
+                        if let Some(v) = &lic.purchase_date {
+                            println!("  Purchased: {}", v);
+                        }
+                        if let Some(v) = &lic.valid_until {
+                            println!("  Valid until: {}", v);
+                        }
+                        if let Some(v) = lic.seats {
+                            println!("  Seats: {}", v);
+                        }
+                        if let Some(v) = &lic.download_url {
+                            println!("  Download: {}", v);
+                        }
+                    }
                     other => {
                         println!("  Data: {:?}", other);
                     }
@@ -590,7 +736,11 @@ async fn attach_file_command(
         "{} Attached {} ({}) as {}",
         "✓".green(),
         filename.cyan(),
-        if encrypt { "encrypted".green() } else { "unencrypted".yellow() },
+        if encrypt {
+            "encrypted".green()
+        } else {
+            "unencrypted".yellow()
+        },
         attachment_id
     );
     Ok(())
@@ -610,11 +760,7 @@ struct AttachmentRow {
     attached: String,
 }
 
-async fn list_attachments_command(
-    config: &CliConfig,
-    ui: &dyn PromptUi,
-    id: Uuid,
-) -> Result<()> {
+async fn list_attachments_command(config: &CliConfig, ui: &dyn PromptUi, id: Uuid) -> Result<()> {
     let service = init_service(config, ui).await?;
     let attachments = service
         .get_attachments(&id)
@@ -633,7 +779,11 @@ async fn list_attachments_command(
             id: a.id.to_string(),
             filename: a.filename.clone(),
             size: format_attachment_size(a.size),
-            encrypted: if a.is_encrypted { "yes".into() } else { "no".into() },
+            encrypted: if a.is_encrypted {
+                "yes".into()
+            } else {
+                "no".into()
+            },
             attached: a.created_at.format("%Y-%m-%d %H:%M").to_string(),
         })
         .collect();
@@ -749,7 +899,7 @@ mod tests {
         favorite: bool,
     ) -> CredentialArgs {
         CredentialArgs {
-            command: CredentialCommand::Add {
+            command: CredentialCommand::Add(Box::new(AddArgs {
                 identity: identity.to_string(),
                 name: name.to_string(),
                 credential_type: CredentialTypeOption::Password,
@@ -759,8 +909,29 @@ mod tests {
                 prompt_secret: false,
                 secret: secret.map(String::from),
                 note: None,
+                first_name: None,
+                last_name: None,
+                email: None,
+                phone: None,
+                birthday: None,
+                address: None,
+                id_number: None,
+                passport_number: None,
+                driver_license: None,
+                tax_id: None,
+                organization: None,
+                job_title: None,
+                license_key: None,
+                version: None,
+                publisher: None,
+                purchase_date: None,
+                order_number: None,
+                support_email: None,
+                download_url: None,
+                seats: None,
+                valid_until: None,
                 favorite,
-            },
+            })),
         }
     }
 
@@ -934,12 +1105,8 @@ mod tests {
         // prompt_secret=true reads PERSONA_CREDENTIAL_SECRET instead of the TTY.
         std::env::set_var("PERSONA_CREDENTIAL_SECRET", "env-secret");
         let mut args = add_args("bob", "from-env", None, false);
-        if let CredentialCommand::Add {
-            ref mut prompt_secret,
-            ..
-        } = args.command
-        {
-            *prompt_secret = true;
+        if let CredentialCommand::Add(add) = &mut args.command {
+            add.prompt_secret = true;
         }
         execute(args, &config)
             .await
@@ -1252,14 +1419,9 @@ mod tests {
         // No --secret and no env var: the interactive input prompt is used.
         // Username/URL are left unset so the plain-show branch also renders.
         let mut prompted = add_args("dora", "typed", None, false);
-        if let CredentialCommand::Add {
-            ref mut username,
-            ref mut url,
-            ..
-        } = prompted.command
-        {
-            *username = None;
-            *url = None;
+        if let CredentialCommand::Add(add) = &mut prompted.command {
+            add.username = None;
+            add.url = None;
         }
         let ui = ScriptedUi::new().input("typed-secret");
         execute_with(prompted, &config, &ui)
@@ -1290,7 +1452,7 @@ mod tests {
         ];
         for (i, (ctype, level)) in types.iter().enumerate() {
             let args = CredentialArgs {
-                command: CredentialCommand::Add {
+                command: CredentialCommand::Add(Box::new(AddArgs {
                     identity: "dora".to_string(),
                     name: format!("cred{i}"),
                     credential_type: ctype.clone(),
@@ -1300,8 +1462,29 @@ mod tests {
                     prompt_secret: false,
                     secret: Some("pw".to_string()),
                     note: None,
+                    first_name: None,
+                    last_name: None,
+                    email: None,
+                    phone: None,
+                    birthday: None,
+                    address: None,
+                    id_number: None,
+                    passport_number: None,
+                    driver_license: None,
+                    tax_id: None,
+                    organization: None,
+                    job_title: None,
+                    license_key: None,
+                    version: None,
+                    publisher: None,
+                    purchase_date: None,
+                    order_number: None,
+                    support_email: None,
+                    download_url: None,
+                    seats: None,
+                    valid_until: None,
                     favorite: false,
-                },
+                })),
             };
             execute(args, &config)
                 .await
@@ -1358,7 +1541,7 @@ mod tests {
         seed(&config, "alice").await;
 
         let note_args = |name: &str, secret: Option<&str>, note: Option<&str>| CredentialArgs {
-            command: CredentialCommand::Add {
+            command: CredentialCommand::Add(Box::new(AddArgs {
                 identity: "alice".to_string(),
                 name: name.to_string(),
                 credential_type: CredentialTypeOption::Note,
@@ -1368,8 +1551,29 @@ mod tests {
                 prompt_secret: false,
                 secret: secret.map(String::from),
                 note: note.map(String::from),
+                first_name: None,
+                last_name: None,
+                email: None,
+                phone: None,
+                birthday: None,
+                address: None,
+                id_number: None,
+                passport_number: None,
+                driver_license: None,
+                tax_id: None,
+                organization: None,
+                job_title: None,
+                license_key: None,
+                version: None,
+                publisher: None,
+                purchase_date: None,
+                order_number: None,
+                support_email: None,
+                download_url: None,
+                seats: None,
+                valid_until: None,
                 favorite: false,
-            },
+            })),
         };
 
         // note 类型不适用密码路径。
@@ -1422,6 +1626,195 @@ mod tests {
         match data {
             CredentialData::SecureNote(note) => {
                 assert_eq!(note.note, "1111-2222\n3333-4444");
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// Identity / Software License：flag 驱动建条目，字段逐字往返
+    /// （per-item key 加密）；license key 缺省走交互提示。
+    #[tokio::test]
+    async fn credential_add_identity_and_license_round_trip() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "iris").await;
+
+        // Identity：姓名 + 证件号走 flag，未提供字段保持 None。
+        let identity_args = CredentialArgs {
+            command: CredentialCommand::Add(Box::new(AddArgs {
+                identity: "iris".to_string(),
+                name: "Passport (main)".to_string(),
+                credential_type: CredentialTypeOption::Identity,
+                security_level: SecurityLevelOption::High,
+                username: Some("iris".to_string()),
+                url: None,
+                prompt_secret: false,
+                secret: None,
+                note: None,
+                first_name: Some("Alice".to_string()),
+                last_name: Some("Zhang".to_string()),
+                email: Some("alice@example.com".to_string()),
+                phone: None,
+                birthday: Some("1990-01-31".to_string()),
+                address: Some("1 Main St\nBeijing".to_string()),
+                id_number: Some("110101199001310011".to_string()),
+                passport_number: Some("E12345678".to_string()),
+                driver_license: None,
+                tax_id: None,
+                organization: None,
+                job_title: None,
+                license_key: None,
+                version: None,
+                publisher: None,
+                purchase_date: None,
+                order_number: None,
+                support_email: None,
+                download_url: None,
+                seats: None,
+                valid_until: None,
+                favorite: false,
+            })),
+        };
+        execute(identity_args.clone(), &config)
+            .await
+            .expect("identity add works");
+
+        // SoftwareLicense：license key 缺省 → ScriptedUi 提示输入。
+        let mut license_args = identity_args;
+        if let CredentialCommand::Add(add) = &mut license_args.command {
+            debug_assert!(add.license_key.is_none());
+            add.name = "JetBrains All Products".to_string();
+            add.credential_type = CredentialTypeOption::SoftwareLicense;
+            add.username = None;
+            add.first_name = None;
+            add.last_name = None;
+            add.email = None;
+            add.birthday = None;
+            add.address = None;
+            add.id_number = None;
+            add.passport_number = None;
+        }
+        let scripted = ScriptedUi::new().input("AAAA-BBBB-CCCC-DDDD");
+        execute_with(license_args, &config, &scripted)
+            .await
+            .expect("license add with prompted key works");
+        assert!(scripted.exhausted());
+
+        // 互斥防线：--secret 不适用于这两种类型。
+        let mut bad = CredentialArgs {
+            command: CredentialCommand::Add(Box::new(AddArgs {
+                identity: "iris".to_string(),
+                name: "bad".to_string(),
+                credential_type: CredentialTypeOption::SoftwareLicense,
+                security_level: SecurityLevelOption::High,
+                username: None,
+                url: None,
+                prompt_secret: false,
+                secret: Some("pw".to_string()),
+                note: None,
+                first_name: None,
+                last_name: None,
+                email: None,
+                phone: None,
+                birthday: None,
+                address: None,
+                id_number: None,
+                passport_number: None,
+                driver_license: None,
+                tax_id: None,
+                organization: None,
+                job_title: None,
+                license_key: None,
+                version: None,
+                publisher: None,
+                purchase_date: None,
+                order_number: None,
+                support_email: None,
+                download_url: None,
+                seats: None,
+                valid_until: None,
+                favorite: false,
+            })),
+        };
+        let err = execute_with(bad.clone(), &config, &TerminalUi)
+            .await
+            .expect_err("license with --secret must fail");
+        assert!(err.to_string().contains("--license-key"));
+        if let CredentialCommand::Add(add) = &mut bad.command {
+            add.credential_type = CredentialTypeOption::Identity;
+            add.name = "bad-identity".to_string();
+        }
+        let err = execute_with(bad, &config, &TerminalUi)
+            .await
+            .expect_err("identity with --secret must fail");
+        assert!(err.to_string().contains("--secret"));
+
+        // 读回：类型变体与字段逐字保留。
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let iris = service.get_identity_by_name("iris").await.unwrap().unwrap();
+        let creds = service
+            .get_credentials_for_identity(&iris.id)
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 2);
+
+        let identity_cred = creds.iter().find(|c| c.name == "Passport (main)").unwrap();
+        assert!(matches!(
+            identity_cred.credential_type,
+            CredentialType::Identity
+        ));
+        match service
+            .get_credential_data(&identity_cred.id)
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            CredentialData::Identity(id) => {
+                assert_eq!(id.first_name, "Alice");
+                assert_eq!(id.last_name, "Zhang");
+                assert_eq!(id.email.as_deref(), Some("alice@example.com"));
+                assert_eq!(id.id_number.as_deref(), Some("110101199001310011"));
+                assert_eq!(id.passport_number.as_deref(), Some("E12345678"));
+                assert_eq!(id.address.as_deref(), Some("1 Main St\nBeijing"));
+                assert_eq!(id.phone, None);
+                assert_eq!(id.driver_license, None);
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+
+        let license_cred = creds
+            .iter()
+            .find(|c| c.name == "JetBrains All Products")
+            .unwrap();
+        assert!(matches!(
+            license_cred.credential_type,
+            CredentialType::SoftwareLicense
+        ));
+        match service
+            .get_credential_data(&license_cred.id)
+            .await
+            .unwrap()
+            .unwrap()
+        {
+            CredentialData::SoftwareLicense(lic) => {
+                assert_eq!(lic.license_key, "AAAA-BBBB-CCCC-DDDD");
+                assert_eq!(lic.version, None);
             }
             other => panic!("unexpected data: {:?}", other),
         }

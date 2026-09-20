@@ -431,6 +431,34 @@ export type CredentialDataRequest =
   | { type: 'TwoFactor'; secret_key: string; issuer: string; account_name: string; algorithm: string; digits: number; period: number }
   | { type: 'GameToken'; provider: string; secret_key: string; issuer: string; account_name: string; url?: string }
   | { type: 'SecureNote'; note: string }
+  | {
+      type: 'Identity';
+      first_name: string;
+      last_name: string;
+      username?: string;
+      email?: string;
+      phone?: string;
+      birthday?: string;
+      address?: string;
+      id_number?: string;
+      passport_number?: string;
+      driver_license?: string;
+      tax_id?: string;
+      organization?: string;
+      job_title?: string;
+    }
+  | {
+      type: 'SoftwareLicense';
+      license_key: string;
+      version?: string;
+      publisher?: string;
+      purchase_date?: string;
+      order_number?: string;
+      support_email?: string;
+      download_url?: string;
+      seats?: number;
+      valid_until?: string;
+    }
   | { type: 'Raw'; data: number[] };
 
 export interface SecurityQuestion {
@@ -538,7 +566,7 @@ export interface WalletExportRequest {
 }
 
 export type IdentityType = 'Personal' | 'Work' | 'Social' | 'Financial' | 'Gaming';
-export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' | 'BankCard' | 'GameAccount' | 'ServerConfig' | 'Certificate' | 'TwoFactor' | 'GameToken' | 'SecureNote';
+export type CredentialType = 'Password' | 'CryptoWallet' | 'SshKey' | 'ApiKey' | 'BankCard' | 'GameAccount' | 'ServerConfig' | 'Certificate' | 'TwoFactor' | 'GameToken' | 'SecureNote' | 'Identity' | 'SoftwareLicense';
 export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';
 
 /** 主题偏好三档；'system' 跟随 prefers-color-scheme */

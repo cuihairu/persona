@@ -451,6 +451,78 @@ describe('components/CreateCredentialModal', () => {
     });
   });
 
+  it('submits an Identity credential with names and document numbers', async () => {
+    renderModal();
+    selectType('Identity');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'Passport (main)' },
+    });
+    fireEvent.change(screen.getByLabelText(/First name/), {
+      target: { value: 'Alice' },
+    });
+    fireEvent.change(screen.getByLabelText(/Last name/), {
+      target: { value: 'Zhang' },
+    });
+    fireEvent.change(screen.getByLabelText('Email'), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/ID number/), {
+      target: { value: '110101199001310011' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_type: 'Identity',
+          credential_data: expect.objectContaining({
+            type: 'Identity',
+            first_name: 'Alice',
+            last_name: 'Zhang',
+            email: 'alice@example.com',
+            id_number: '110101199001310011',
+            // 未填的可选字段不进请求体
+            passport_number: undefined,
+          }),
+        }),
+      );
+    });
+  });
+
+  it('submits a SoftwareLicense credential with the key and seat count', async () => {
+    renderModal();
+    selectType('SoftwareLicense');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail Account/), {
+      target: { value: 'JetBrains All Products' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('AAAA-BBBB-CCCC-DDDD'), {
+      target: { value: 'AAAA-BBBB-CCCC-DDDD' },
+    });
+    fireEvent.change(screen.getByLabelText('Version'), {
+      target: { value: '2024.2' },
+    });
+    fireEvent.change(screen.getByLabelText('Seats'), {
+      target: { value: '3' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create Credential' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_type: 'SoftwareLicense',
+          credential_data: expect.objectContaining({
+            type: 'SoftwareLicense',
+            license_key: 'AAAA-BBBB-CCCC-DDDD',
+            version: '2024.2',
+            seats: 3,
+          }),
+        }),
+      );
+    });
+  });
+
   it('submits a TwoFactor credential with manually adjusted TOTP parameters', async () => {
     renderModal();
     selectType('TwoFactor');
