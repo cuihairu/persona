@@ -38,6 +38,16 @@ pub struct AppState {
     /// fake）。vault settings JSON 里的 `server_token` 恒为空串占位，
     /// 真值只存在这里。
     pub token_store: Arc<dyn crate::token_store::TokenStore>,
+    /// OS 级 biometric provider（Touch ID / Windows Hello / polkit）。
+    /// 解锁屏 ceremony 没有活的 PersonaService，provider 挂在这里；
+    /// init_service 建服务后把它注入 PersonaService（SSH agent 的
+    /// require_biometric 策略同一份）。
+    pub biometric_provider: Arc<dyn BiometricProvider>,
+    /// biometric 托管主密码的 keyring 存储（service "persona-biometric"、
+    /// 键 = vault db_path）。条目存在与否 = biometric unlock 是否启用
+    /// （单一真相源，settings 不存开关——vault 文件拷机后 keyring 无
+    /// 条目，功能自然回到未启用）。
+    pub biometric_store: Arc<dyn crate::token_store::TokenStore>,
 }
 
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求

@@ -8,6 +8,7 @@
 //! 只能用 FakeSink 绕过。
 
 pub mod approval;
+pub mod biometric;
 #[cfg(test)]
 mod command_layer_tests;
 pub mod commands;
@@ -114,7 +115,13 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             ssh_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             passkey_approvals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_emitter: Mutex::new(None),
-            token_store: Arc::new(token_store::OsKeyringTokenStore),
+            token_store: Arc::new(token_store::OsKeyringTokenStore::new(
+                token_store::SYNC_SERVICE,
+            )),
+            biometric_provider: Arc::new(biometric::OsBiometricProvider),
+            biometric_store: Arc::new(token_store::OsKeyringTokenStore::new(
+                token_store::BIOMETRIC_SERVICE,
+            )),
         })
         .setup(|app| {
             // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。

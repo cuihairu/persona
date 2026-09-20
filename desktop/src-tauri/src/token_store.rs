@@ -10,8 +10,12 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// keyring 条目的 service 名（seahorse/Keychain 里按它展示）
-const KEYRING_SERVICE: &str = "persona-sync";
+/// sync token 条目的 keyring service 名（seahorse/Keychain 里按它展示）
+pub const SYNC_SERVICE: &str = "persona-sync";
+
+/// biometric 托管主密码条目的 keyring service 名（与 sync 隔离的独立
+/// service；条目存在与否 = biometric unlock 是否启用，单一真相源）
+pub const BIOMETRIC_SERVICE: &str = "persona-biometric";
 
 /// 同步服务器上报令牌的存取接口。
 ///
@@ -28,13 +32,27 @@ pub trait TokenStore: Send + Sync + 'static {
 
 /// 生产实现：OS keyring（经 keyring crate 的平台后端）。
 ///
+/// service 名参数化（sync token / biometric 托管密码各一个 service）。
 /// 构造无 I/O——真正的 keyring 访问发生在每个方法调用时，失败以
 /// `Result` 返回而非 panic（headless/无 secret service 环境安全降级）。
-pub struct OsKeyringTokenStore;
+pub struct OsKeyringTokenStore(&'static str);
+
+impl OsKeyringTokenStore {
+    /// 指定 keyring service 的存储（条目键 = vault db_path）
+    pub fn new(service: &'static str) -> Self {
+        Self(service)
+    }
+}
+
+impl Default for OsKeyringTokenStore {
+    fn default() -> Self {
+        Self(SYNC_SERVICE)
+    }
+}
 
 impl TokenStore for OsKeyringTokenStore {
     fn set(&self, db_path: &str, token: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, db_path)
+        let entry = keyring::Entry::new(self.0, db_path)
             .map_err(|e| format!("OS keyring unavailable: {}", e))?;
         entry
             .set_password(token)
@@ -42,7 +60,7 @@ impl TokenStore for OsKeyringTokenStore {
     }
 
     fn get(&self, db_path: &str) -> Result<Option<String>, String> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, db_path)
+        let entry = keyring::Entry::new(self.0, db_path)
             .map_err(|e| format!("OS keyring unavailable: {}", e))?;
         match entry.get_password() {
             Ok(token) => Ok(Some(token)),
@@ -52,7 +70,7 @@ impl TokenStore for OsKeyringTokenStore {
     }
 
     fn delete(&self, db_path: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, db_path)
+        let entry = keyring::Entry::new(self.0, db_path)
             .map_err(|e| format!("OS keyring unavailable: {}", e))?;
         match entry.delete_credential() {
             Ok(()) => Ok(()),

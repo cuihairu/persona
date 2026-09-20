@@ -33,6 +33,8 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         passkey_approvals: Arc::new(StdMutex::new(HashMap::new())),
         sync_emitter: Mutex::new(None),
         token_store: Arc::new(InMemoryTokenStore::default()),
+        biometric_provider: Arc::new(persona_core::MockBiometricProvider::default()),
+        biometric_store: Arc::new(InMemoryTokenStore::default()),
     });
     app
 }

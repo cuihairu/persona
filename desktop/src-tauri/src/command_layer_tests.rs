@@ -16,6 +16,8 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 
 /// Mock app with a fresh, uninitialized `AppState` and the given token store.
+/// biometric 侧默认注入恒通过的 Mock provider + 独立内存 store（biometric
+/// 专属命令测试用 `mock_app_with_biometric` 换成可控 stub）。
 fn mock_app_with_token_store(
     token_store: Arc<dyn TokenStore>,
 ) -> tauri::App<tauri::test::MockRuntime> {
@@ -32,6 +34,8 @@ fn mock_app_with_token_store(
         sync_emitter: Mutex::new(None),
         // CI/headless 没有 secret service——测试一律走内存 fake
         token_store,
+        biometric_provider: Arc::new(persona_core::MockBiometricProvider::default()),
+        biometric_store: Arc::new(InMemoryTokenStore::default()),
     });
     app
 }
