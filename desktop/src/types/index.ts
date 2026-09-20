@@ -181,6 +181,8 @@ export interface HealthIssue {
   group_size?: number;
   count?: number;
   days?: number;
+  /** two_factor_available：命中 2FA 目录的站点（归一化域名） */
+  site?: string;
 }
 
 export interface HealthReport {
