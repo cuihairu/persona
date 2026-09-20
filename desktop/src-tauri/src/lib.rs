@@ -155,6 +155,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::create_credential,
             commands::get_credentials_for_identity,
             commands::get_credential_data,
+            commands::get_credential_history,
             commands::get_totp_code,
             commands::search_credentials,
             commands::generate_password,

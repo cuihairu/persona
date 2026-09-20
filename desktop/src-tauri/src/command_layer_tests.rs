@@ -2186,6 +2186,63 @@ async fn create_credential_accepts_secure_note_request() {
     assert!(resp.success, "{:?}", resp.error);
 }
 
+/// 1Password 对齐 B 批：item history——创建与 favorite 切换自动落历史行，
+/// get_credential_history 返回时间线（新版本在前）与字段级 diff。
+#[tokio::test]
+async fn credential_history_tracks_create_and_favorite_toggle() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let mut req = password_credential_request(&identity_id);
+    req.name = "Historied".to_string();
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let cred = resp.data.expect("credential created");
+
+    // 初始：created (v1) + 紧随的元数据补写 updated (v2)——
+    // 桌面 create 命令是 create-then-update 架构，两次写库即两条真实历史
+    let resp = get_credential_history(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let history = resp.data.expect("history returned");
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].change_type, "updated");
+    assert_eq!(history[0].version, 2);
+    // 补写 diff = 表单的 url/username/notes/tags 四个元数据字段
+    assert_eq!(history[0].changes.len(), 4);
+    assert!(history[0]
+        .changes
+        .iter()
+        .all(|c| c.field != "encrypted_data"));
+    assert_eq!(history[1].change_type, "created");
+    assert_eq!(history[1].version, 1);
+
+    // favorite 切换 → updated 行，diff 只含 is_favorite
+    let resp = toggle_credential_favorite(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = get_credential_history(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    let history = resp.data.expect("history returned");
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0].change_type, "updated");
+    assert_eq!(history[0].version, 3);
+    assert_eq!(history[0].changes.len(), 1);
+    assert_eq!(history[0].changes[0].field, "is_favorite");
+    assert_eq!(history[0].changes[0].old_value, "false");
+    assert_eq!(history[0].changes[0].new_value, "true");
+
+    let resp = delete_credential(cred.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
 /// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
 #[tokio::test]
 async fn audit_query_filters_and_workspace_repath() {

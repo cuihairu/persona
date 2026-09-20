@@ -845,3 +845,48 @@ impl From<persona_core::models::FaviconCacheEntry> for SerializableFavicon {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Item history（1Password 对齐）
+// ---------------------------------------------------------------------------
+
+/// 字段级 diff（快照 JSON 不回传前端，diff 足够 UI 展示）
+#[derive(Debug, Serialize)]
+pub struct SerializableFieldChange {
+    pub field: String,
+    pub old_value: String,
+    pub new_value: String,
+}
+
+/// 可序列化的历史行。previous_state/new_state 整份 JSON 不回传——
+/// 字段级 diff 是展示所需的最小信息。
+#[derive(Debug, Serialize)]
+pub struct SerializableChangeHistory {
+    pub id: String,
+    pub entity_id: String,
+    pub change_type: String,
+    pub version: u32,
+    pub timestamp: String,
+    pub changes: Vec<SerializableFieldChange>,
+}
+
+impl From<persona_core::models::ChangeHistory> for SerializableChangeHistory {
+    fn from(entry: persona_core::models::ChangeHistory) -> Self {
+        Self {
+            id: entry.id.to_string(),
+            entity_id: entry.entity_id.to_string(),
+            change_type: entry.change_type.to_string(),
+            version: entry.version,
+            timestamp: entry.timestamp.to_rfc3339(),
+            changes: entry
+                .changes_summary
+                .into_iter()
+                .map(|(field, change)| SerializableFieldChange {
+                    field,
+                    old_value: change.old_value,
+                    new_value: change.new_value,
+                })
+                .collect(),
+        }
+    }
+}

@@ -4,6 +4,7 @@ import type {
   Identity,
   Credential,
   CredentialData,
+  CredentialHistoryEntry,
   CreateIdentityRequest,
   UpdateIdentityRequest,
   CreateCredentialRequest,
@@ -146,6 +147,10 @@ class PersonaAPI {
 
   async getCredentialData(credentialId: string): Promise<ApiResponse<CredentialData | null>> {
     return invoke('get_credential_data', { credential_id: credentialId });
+  }
+
+  async getCredentialHistory(credentialId: string): Promise<ApiResponse<CredentialHistoryEntry[]>> {
+    return invoke('get_credential_history', { credential_id: credentialId });
   }
 
   async getTotpCode(credentialId: string): Promise<ApiResponse<TotpCodeResponse>> {

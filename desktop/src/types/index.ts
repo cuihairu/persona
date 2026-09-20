@@ -364,6 +364,23 @@ export interface CredentialData {
   data: any;
 }
 
+/** 字段级 diff（对应 Rust SerializableFieldChange；快照 JSON 不回传） */
+export interface FieldChangeEntry {
+  field: string;
+  old_value: string;
+  new_value: string;
+}
+
+/** 凭据历史行（对应 Rust SerializableChangeHistory；新版本在前） */
+export interface CredentialHistoryEntry {
+  id: string;
+  entity_id: string;
+  change_type: 'created' | 'updated' | 'deleted' | 'restored' | 'archived' | 'activated' | 'deactivated';
+  version: number;
+  timestamp: string;
+  changes: FieldChangeEntry[];
+}
+
 export interface CreateIdentityRequest {
   name: string;
   identity_type: string;

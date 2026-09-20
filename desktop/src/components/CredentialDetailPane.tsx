@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowPathIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ClockIcon,
   DocumentDuplicateIcon,
   HeartIcon,
   TrashIcon,
@@ -10,7 +13,7 @@ import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
-import type { Credential } from '@/types';
+import type { Credential, CredentialHistoryEntry } from '@/types';
 import { clsx } from 'clsx';
 import RevealSecretButton from '@/components/RevealSecretButton';
 import { getCredentialIcon, getSecurityColor } from './credentialDisplay';
@@ -33,7 +36,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   onClose,
   onCopy,
 }) => {
-  const { toggleCredentialFavorite, deleteCredential, getTotpCode, fetchFavicon } =
+  const { toggleCredentialFavorite, deleteCredential, getTotpCode, fetchFavicon, getCredentialHistory } =
     usePersonaService();
   const faviconsEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
   // 头部图标预取（列表页通常已拉好，这里幂等兜底）
@@ -45,11 +48,33 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   const [totpCode, setTotpCode] = useState<string | null>(null);
   const [totpRemaining, setTotpRemaining] = useState<number | null>(null);
   const [isTotpLoading, setIsTotpLoading] = useState(false);
+  // Item history：懒加载——展开时才查一次历史表，切换凭据即重置
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<CredentialHistoryEntry[] | null>(null);
   const IconComponent = getCredentialIcon(credential.credential_type);
 
   useEffect(() => {
     setIsFavorite(credential.is_favorite);
   }, [credential.id, credential.is_favorite]);
+
+  // 切换凭据时重置历史折叠态（不预取）
+  useEffect(() => {
+    setIsHistoryOpen(false);
+    setHistory(null);
+  }, [credential.id]);
+
+  useEffect(() => {
+    if (!isHistoryOpen || history !== null) return;
+    let cancelled = false;
+    getCredentialHistory(credential.id).then((entries) => {
+      if (!cancelled) setHistory(entries);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // history 作为"已加载"标记参与依赖，避免重复拉取
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHistoryOpen, credential.id, history]);
 
   const refreshTotp = useCallback(async () => {
     if (credential.credential_type !== 'TwoFactor') return;
@@ -497,6 +522,71 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
             </div>
           </div>
         )}
+
+        {/* Item history（1Password 对齐）：懒加载的变更时间线 */}
+        <div className="border-t pt-3">
+          <button
+            type="button"
+            onClick={() => setIsHistoryOpen(!isHistoryOpen)}
+            data-testid="history-toggle"
+            className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+          >
+            <ClockIcon className="w-4 h-4" />
+            Item History
+            {isHistoryOpen ? (
+              <ChevronUpIcon className="w-4 h-4" />
+            ) : (
+              <ChevronDownIcon className="w-4 h-4" />
+            )}
+          </button>
+
+          {isHistoryOpen && (
+            <div className="mt-2" data-testid="history-list">
+              {history === null ? (
+                <p className="text-xs text-gray-400 dark:text-gray-500">Loading…</p>
+              ) : history.length === 0 ? (
+                <p className="text-xs text-gray-400 dark:text-gray-500">
+                  No recorded changes.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {history.map((entry) => (
+                    <li
+                      key={entry.id}
+                      className="text-xs bg-gray-50 dark:bg-gray-800 rounded p-2"
+                      data-testid="history-entry"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-gray-700 dark:text-gray-200">
+                          v{entry.version} · {entry.change_type}
+                        </span>
+                        <span className="text-gray-400 dark:text-gray-500">
+                          {new Date(entry.timestamp).toLocaleString()}
+                        </span>
+                      </div>
+                      {entry.changes.length > 0 && (
+                        <ul className="mt-1 space-y-0.5 font-mono text-gray-600 dark:text-gray-300">
+                          {entry.changes.map((change) => (
+                            <li key={change.field}>
+                              {change.field}:{' '}
+                              <span className="text-red-500 dark:text-red-400">
+                                {change.old_value || '(empty)'}
+                              </span>{' '}
+                              →{' '}
+                              <span className="text-green-600 dark:text-green-400">
+                                {change.new_value || '(empty)'}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="flex items-center justify-between pt-4 border-t">
           <span className={clsx(

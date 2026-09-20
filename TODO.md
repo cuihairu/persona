@@ -439,7 +439,13 @@ Game Tokens (游戏令牌)
   创建表单 + 详情面板（正文走 per-item key 加密，区别于 credentials.notes 明文列）；
   存储层 credential_type 字符串往返补 SecureNote 臂（此前读回退化为 Custom）
 - [ ] B 批候选（按用户价值排序）：
-  - item history / change-history UI（core change_history 存储已备，桌面只读视图缺）
+  - [x] item history / change-history（2026-09 落地）：core create/update/delete
+    自动记录（快照与 diff 只含明文元数据，密文变化只记 `<encrypted>` 占位；
+    无实质变化的 update 不记；记录失败 warn 不阻断主操作；version 递增）；
+    desktop `get_credential_history` 命令 + 详情面板懒加载时间线；
+    CLI `persona credential history --id`；凭据删除后历史仍可查询。
+    已知噪声：create-then-update 架构使创建产生 created+updated 两行（真实两次
+    写库，UI 可将来分组展示；恢复旧版本功能待后续评估密文重放风险）
   - attachments 桌面 UI（core attachment/blob 存储已备）
   - Identity / Software License 条目类型（1Password 标准类别）
   - Watchtower expiring items / 2FA-available 提示

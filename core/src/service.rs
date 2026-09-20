@@ -14,7 +14,7 @@ use crate::{
     health::{HealthIssue, HealthIssueKind, HealthReport, HealthScanConfig},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
-        ChangeHistoryStats, Credential, CredentialData, CredentialType, EntityType,
+        ChangeHistoryStats, ChangeType, Credential, CredentialData, CredentialType, EntityType,
         FaviconCacheEntry, Identity, IdentityType, PasskeyItem, ResourceType, SecurityLevel,
         MAX_HOSTS_PER_REQUEST,
     },
@@ -616,6 +616,8 @@ impl PersonaService {
             None,
         )
         .await;
+        self.record_credential_history(ChangeType::Created, None, Some(&created))
+            .await;
         Ok(created)
     }
 
@@ -982,7 +984,13 @@ impl PersonaService {
     pub async fn update_credential(&self, credential: &Credential) -> Result<Credential> {
         self.ensure_unlocked()?;
         self.touch_activity();
+        // Item history 需要变更前快照做字段级 diff
+        let existing = self.credential_repo.find_by_id(&credential.id).await?;
         let updated = self.credential_repo.update(credential).await?;
+        if let Some(old) = existing.as_ref() {
+            self.record_credential_history(ChangeType::Updated, Some(old), Some(&updated))
+                .await;
+        }
         self.log_audit(
             AuditAction::CredentialUpdated,
             ResourceType::Credential,
@@ -1008,6 +1016,10 @@ impl PersonaService {
 
         let _ = self.audit_repo.clear_credential_reference(id).await?;
         let ok = self.credential_repo.delete(id).await?;
+        if ok {
+            self.record_credential_history(ChangeType::Deleted, Some(&existing), None)
+                .await;
+        }
         self.log_audit(
             AuditAction::CredentialDeleted,
             ResourceType::Credential,
@@ -2028,6 +2040,141 @@ impl PersonaService {
 
     // Private helper methods
 
+    /// Item history（1Password 对齐）：凭据变更快照，只含明文元数据字段。
+    /// `encrypted_data` / `wrapped_item_key` 绝不进快照。
+    fn credential_meta_snapshot(credential: &Credential) -> serde_json::Value {
+        serde_json::json!({
+            "name": credential.name,
+            "credential_type": credential.credential_type.to_string(),
+            "security_level": credential.security_level.to_string(),
+            "username": credential.username,
+            "url": credential.url,
+            "notes": credential.notes,
+            "tags": credential.tags,
+            "is_favorite": credential.is_favorite,
+            "is_active": credential.is_active,
+        })
+    }
+
+    /// 元数据字段级 diff；密文变化只记占位标记（历史里可见「密码已轮换」
+    /// 这一事实，但永远看不到内容——与 1Password 的历史展示一致）。
+    fn diff_credential_metadata(
+        old: &Credential,
+        new: &Credential,
+    ) -> Vec<(&'static str, String, String)> {
+        let mut changes = Vec::new();
+        let mut push = |field: &'static str, o: String, n: String| {
+            if o != n {
+                changes.push((field, o, n));
+            }
+        };
+        push("name", old.name.clone(), new.name.clone());
+        push(
+            "credential_type",
+            old.credential_type.to_string(),
+            new.credential_type.to_string(),
+        );
+        push(
+            "security_level",
+            old.security_level.to_string(),
+            new.security_level.to_string(),
+        );
+        push(
+            "username",
+            old.username.clone().unwrap_or_default(),
+            new.username.clone().unwrap_or_default(),
+        );
+        push(
+            "url",
+            old.url.clone().unwrap_or_default(),
+            new.url.clone().unwrap_or_default(),
+        );
+        push(
+            "notes",
+            old.notes.clone().unwrap_or_default(),
+            new.notes.clone().unwrap_or_default(),
+        );
+        push("tags", old.tags.join(","), new.tags.join(","));
+        push(
+            "is_favorite",
+            old.is_favorite.to_string(),
+            new.is_favorite.to_string(),
+        );
+        push(
+            "is_active",
+            old.is_active.to_string(),
+            new.is_active.to_string(),
+        );
+        if old.encrypted_data != new.encrypted_data {
+            changes.push((
+                "encrypted_data",
+                "<encrypted>".to_string(),
+                "<encrypted>".to_string(),
+            ));
+        }
+        changes
+    }
+
+    /// 记一条凭据历史行（created/updated/deleted 由 change_type 区分）。
+    ///
+    /// - Updated 且无实质字段变化时不记（CLI/桌面 create 后紧跟的元数据
+    ///   补写不产生噪声行）
+    /// - version 取该实体当前最大版本 +1
+    /// - 记录失败仅告警不阻断主操作（与 log_audit 的尽力而为一致）：
+    ///   主写已提交，历史是派生数据，不能让历史失败回滚业务事实
+    async fn record_credential_history(
+        &self,
+        change_type: ChangeType,
+        previous: Option<&Credential>,
+        current: Option<&Credential>,
+    ) {
+        let entity_id = match (current, previous) {
+            (Some(c), _) => c.id,
+            (None, Some(p)) => p.id,
+            (None, None) => return,
+        };
+
+        let mut entry = ChangeHistory::new(EntityType::Credential, entity_id, change_type);
+        if let Some(user) = self.current_user {
+            entry = entry.with_user(user.to_string());
+        }
+
+        match (previous, current) {
+            (Some(old), Some(new)) => {
+                let changes = Self::diff_credential_metadata(old, new);
+                if changes.is_empty() {
+                    return;
+                }
+                entry = entry.with_states(
+                    Some(Self::credential_meta_snapshot(old)),
+                    Some(Self::credential_meta_snapshot(new)),
+                );
+                for (field, old_value, new_value) in changes {
+                    entry.add_field_change(field.to_string(), old_value, new_value);
+                }
+            }
+            (None, Some(new)) => {
+                entry = entry.with_states(None, Some(Self::credential_meta_snapshot(new)));
+            }
+            (Some(old), None) => {
+                entry = entry.with_states(Some(Self::credential_meta_snapshot(old)), None);
+            }
+            (None, None) => return,
+        }
+
+        let version = self
+            .change_history_repo
+            .get_latest_version(EntityType::Credential, &entity_id)
+            .await
+            .unwrap_or(0)
+            + 1;
+        entry.version = version;
+
+        if let Err(e) = self.change_history_repo.record(&entry).await {
+            tracing::warn!("failed to record credential history: {}", e);
+        }
+    }
+
     fn ensure_unlocked(&self) -> Result<()> {
         if !self.is_unlocked() {
             return Err(PersonaError::AuthenticationFailed("Service is locked".to_string()).into());
@@ -2520,6 +2667,81 @@ mod tests {
             )
             .await
             .unwrap()
+    }
+
+    // ------------------------------------------------------------------
+    // Item history（1Password 对齐）：create/update/delete 自动记录
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn credential_history_records_created_updated_deleted() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("History Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let mut cred =
+            seed_credential(&service, identity.id, "Gmail", CredentialType::Password).await;
+
+        // 创建 → created 行 v1（新快照有、旧快照无）
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].change_type, ChangeType::Created);
+        assert_eq!(history[0].version, 1);
+        assert!(history[0].new_state.is_some());
+        assert!(history[0].previous_state.is_none());
+
+        // 元数据变化 → updated 行 v2，字段级 diff 记 username 与 url
+        cred.username = Some("alice".to_string());
+        cred.url = Some("https://mail.example.com".to_string());
+        service.update_credential(&cred).await.unwrap();
+
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].change_type, ChangeType::Updated);
+        assert_eq!(history[0].version, 2);
+        assert_eq!(history[0].changes_summary.len(), 2);
+        let username_change = history[0].changes_summary.get("username").unwrap();
+        assert_eq!(username_change.old_value, "");
+        assert_eq!(username_change.new_value, "alice");
+
+        // 无实质变化的重复 update → 不新增历史行
+        service.update_credential(&cred).await.unwrap();
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 2, "no-op update must not add history");
+
+        // 密文变化（密码轮换）→ 只记占位 diff；内容绝不进历史
+        cred.encrypted_data = vec![9u8; 8];
+        service.update_credential(&cred).await.unwrap();
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 3);
+        let enc_change = history[0].changes_summary.get("encrypted_data").unwrap();
+        assert_eq!(enc_change.old_value, "<encrypted>");
+        assert_eq!(enc_change.new_value, "<encrypted>");
+        let states = serde_json::to_string(&history[0].new_state).unwrap();
+        assert!(!states.contains("encrypted_data"));
+
+        // 删除 → deleted 行 v4（凭据行已删，历史仍在）
+        service.delete_credential(&cred.id).await.unwrap();
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].change_type, ChangeType::Deleted);
+        assert_eq!(history[0].version, 4);
     }
 
     // ------------------------------------------------------------------

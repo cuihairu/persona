@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
-import type { Identity } from '@/types';
+import type { CredentialHistoryEntry, Identity } from '@/types';
 import toast from 'react-hot-toast';
 
 export const usePersonaService = () => {
@@ -334,6 +334,20 @@ export const usePersonaService = () => {
     }
   };
 
+  const getCredentialHistory = async (credentialId: string) => {
+    try {
+      const response = await personaAPI.getCredentialHistory(credentialId);
+      if (response.success && response.data) {
+        return response.data;
+      }
+      toast.error(response.error || 'Failed to load item history');
+      return [] as CredentialHistoryEntry[];
+    } catch {
+      toast.error('Failed to load item history');
+      return [] as CredentialHistoryEntry[];
+    }
+  };
+
   const getTotpCode = async (credentialId: string) => {
     try {
       const response = await personaAPI.getTotpCode(credentialId);
@@ -479,6 +493,7 @@ export const usePersonaService = () => {
     searchCredentials,
     generatePassword,
     getCredentialData,
+    getCredentialHistory,
     getTotpCode,
     toggleCredentialFavorite,
     fetchFavicon,

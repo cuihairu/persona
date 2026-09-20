@@ -7,8 +7,8 @@ use uuid::Uuid;
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
     models::{
-        Credential, CredentialData, CredentialType, PasswordCredentialData, SecureNoteData,
-        SecurityLevel,
+        Credential, CredentialData, CredentialType, EntityType, PasswordCredentialData,
+        SecureNoteData, SecurityLevel,
     },
     Identity, PersonaService,
 };
@@ -90,6 +90,12 @@ pub enum CredentialCommand {
         /// Skip confirmation
         #[arg(short, long)]
         yes: bool,
+    },
+    /// Show change history for a credential (item history; metadata-only diffs)
+    History {
+        /// Credential UUID
+        #[arg(long)]
+        id: Uuid,
     },
 }
 
@@ -207,6 +213,7 @@ pub(crate) async fn execute_with(
         } => list_credentials(config, ui, identity, credential_type, favorite, format).await?,
         CredentialCommand::Show { id, reveal } => show_credential(config, ui, id, reveal).await?,
         CredentialCommand::Remove { id, yes } => remove_credential(config, ui, id, yes).await?,
+        CredentialCommand::History { id } => show_credential_history(config, ui, id).await?,
     }
     Ok(())
 }
@@ -438,6 +445,66 @@ async fn remove_credential(
     } else {
         println!("{} Credential {} not found", "⚠".yellow(), id);
     }
+    Ok(())
+}
+
+#[derive(Tabled)]
+struct HistoryRow {
+    #[tabled(rename = "Version")]
+    version: u32,
+    #[tabled(rename = "Time")]
+    time: String,
+    #[tabled(rename = "Change")]
+    change_type: String,
+    #[tabled(rename = "Fields")]
+    fields: String,
+}
+
+/// Item history（1Password 对齐）：凭据的变更时间线。
+/// 历史行只含明文元数据 diff——密文变化仅显示为 `encrypted_data` 占位。
+/// 凭据删除后历史仍可查询（名称退化为 UUID 展示）。
+async fn show_credential_history(config: &CliConfig, ui: &dyn PromptUi, id: Uuid) -> Result<()> {
+    let service = init_service(config, ui).await?;
+    let credential = service.get_credential(&id).await.into_anyhow()?;
+    match &credential {
+        Some(cred) => println!("{} {}", "History for:".bold(), cred.name.cyan()),
+        None => println!(
+            "{} {} (deleted)",
+            "History for:".bold(),
+            id.to_string().cyan()
+        ),
+    }
+
+    let history = service
+        .get_entity_history(EntityType::Credential, &id)
+        .await
+        .into_anyhow()
+        .context("Failed to fetch credential history")?;
+
+    if history.is_empty() {
+        println!("{}", "No recorded changes.".yellow());
+        return Ok(());
+    }
+
+    let rows: Vec<HistoryRow> = history
+        .iter()
+        .map(|entry| HistoryRow {
+            version: entry.version,
+            time: entry.timestamp.format("%Y-%m-%d %H:%M:%S").to_string(),
+            change_type: entry.change_type.to_string(),
+            fields: if entry.changes_summary.is_empty() {
+                "-".to_string()
+            } else {
+                entry
+                    .changes_summary
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        })
+        .collect();
+    println!("{}", Table::new(rows));
     Ok(())
 }
 
@@ -1182,6 +1249,90 @@ mod tests {
             }
             other => panic!("unexpected data: {:?}", other),
         }
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// Item history：add 落 created 行，元数据补写落 updated 行，
+    /// `history` 子命令列出时间线；删除后历史仍可查询。
+    #[tokio::test]
+    async fn credential_history_lists_changes_and_survives_delete() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "gina").await;
+
+        // add = create + 元数据补写（username/url/favorite）→ created + updated 两行
+        execute(add_args("gina", "hist-login", Some("pw"), true), &config)
+            .await
+            .expect("seed add works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let gina = service.get_identity_by_name("gina").await.unwrap().unwrap();
+        let creds = service
+            .get_credentials_for_identity(&gina.id)
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 1);
+        let cred_id = creds[0].id;
+        drop(service);
+
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::History { id: cred_id },
+            },
+            &config,
+        )
+        .await
+        .expect("history lists rows");
+
+        // 删除后：凭据查询 404，历史命令仍列出（含 deleted 行）
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Remove {
+                    id: cred_id,
+                    yes: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("remove works");
+
+        let err = execute(
+            CredentialArgs {
+                command: CredentialCommand::Show {
+                    id: cred_id,
+                    reveal: false,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("show after delete must fail");
+        assert!(err.to_string().contains("not found"));
+
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::History { id: cred_id },
+            },
+            &config,
+        )
+        .await
+        .expect("history survives delete");
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

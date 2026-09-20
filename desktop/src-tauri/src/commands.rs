@@ -1207,6 +1207,42 @@ pub async fn get_credential_data(
     }
 }
 
+/// Get change history for a credential (item history; metadata-only,
+/// 字段级 diff 不含任何密文/密钥材料)
+#[command]
+pub async fn get_credential_history(
+    credential_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<SerializableChangeHistory>>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&credential_id) {
+            Ok(uuid) => match service
+                .get_entity_history(persona_core::models::EntityType::Credential, &uuid)
+                .await
+            {
+                Ok(history) => {
+                    let serializable: Vec<SerializableChangeHistory> =
+                        history.into_iter().map(|entry| entry.into()).collect();
+                    Ok(ApiResponse::success(serializable))
+                }
+                Err(e) => {
+                    let (code, msg) = map_persona_error(&e);
+                    match code {
+                        Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                        None => Ok(ApiResponse::error(format!(
+                            "Failed to get credential history: {}",
+                            msg
+                        ))),
+                    }
+                }
+            },
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
 /// Generate a TOTP code for a TwoFactor credential (without exposing the secret)
 #[command]
 pub async fn get_totp_code(

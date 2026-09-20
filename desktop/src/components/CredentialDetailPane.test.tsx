@@ -50,6 +50,7 @@ const setupPane = (
     toggleCredentialFavorite: jest.fn(),
     deleteCredential: jest.fn(),
     getTotpCode: jest.fn(),
+    getCredentialHistory: jest.fn().mockResolvedValue([]),
     ...serviceOver,
   };
   (usePersonaService as jest.Mock).mockReturnValue(service);
@@ -245,6 +246,65 @@ describe('components/CredentialDetailPane', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy Note' }));
     expect(onCopy).toHaveBeenCalledWith('1111-2222\n3333-4444', 'Note');
+  });
+
+  it('item history: lazy-loads the timeline on expand and renders field diffs', async () => {
+    const getCredentialHistory = jest.fn().mockResolvedValue([
+      {
+        id: 'h2',
+        entity_id: 'c1',
+        change_type: 'updated',
+        version: 2,
+        timestamp: '2026-09-20T10:00:00Z',
+        changes: [
+          { field: 'encrypted_data', old_value: '<encrypted>', new_value: '<encrypted>' },
+          { field: 'username', old_value: '', new_value: 'alice' },
+        ],
+      },
+      {
+        id: 'h1',
+        entity_id: 'c1',
+        change_type: 'created',
+        version: 1,
+        timestamp: '2026-09-19T09:00:00Z',
+        changes: [],
+      },
+    ]);
+    setupPane(
+      { name: 'Gmail', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { getCredentialHistory },
+    );
+
+    // 折叠态不预取
+    expect(getCredentialHistory).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('history-toggle'));
+    });
+
+    expect(await screen.findByText('v2 · updated')).toBeInTheDocument();
+    expect(getCredentialHistory).toHaveBeenCalledWith('c1');
+    // 字段 diff：old 为空展示 (empty)，密文变化只出现占位
+    expect(screen.getByText(/\(empty\)/)).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/<encrypted>/).length,
+    ).toBeGreaterThanOrEqual(2);
+    // created 行（无字段 diff）也在时间线上
+    expect(screen.getByText('v1 · created')).toBeInTheDocument();
+  });
+
+  it('item history: empty timeline shows the no-changes notice', async () => {
+    setupPane(
+      { name: 'Fresh', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('history-toggle'));
+    });
+
+    expect(await screen.findByText('No recorded changes.')).toBeInTheDocument();
   });
 
   it('TwoFactor pane: shows the live code, copies it and refreshes on demand', async () => {
