@@ -304,7 +304,11 @@ Desktop (Tauri v2 + React)
   （SmartScreen/Gatekeeper 安装告警）、版本号恒 0.1.0 无日期区分（资产靠
   nightly release 名日期区分）。Android 不在本矩阵：mobile 是
   persona-mobile Rust FFI（就绪）+ Flutter 宿主（工程未建），无 apk 可打，
-  工程落地后另加 flutter job
+  工程落地后另加 flutter job。发布链实测（2026-09-20 dispatch 验证）：
+  nightly release 六资产齐全——deb/rpm/AppImage（12.3/12.3/85.4MB）、
+  NSIS exe/WiX msi（7.7/10.6MB）、aarch64 dmg（9.7MB）；三轮踩坑已修：
+  pnpm 版本与 packageManager 冲突、passkey 桥 Windows cfg 分流、
+  dist glob 递归 + 空产物防御
 
 Server & Sync (optional)
 - [x] Events API, audit ingestion, metrics
