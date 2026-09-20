@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { useGlobalShortcut } from '@/hooks/useGlobalShortcut';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
-import { getCredentialIcon } from './credentialDisplay';
+import { credentialTypeLabel, getCredentialIcon } from './credentialDisplay';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
 import type { Credential, Identity } from '@/types';
@@ -33,6 +34,7 @@ const groupByIdentity = (
  * 由 CredentialList 注入选中并打开详情面板。
  */
 const QuickSearch = () => {
+  const { t } = useTranslation();
   const { searchCredentials, switchIdentity, currentIdentity } = usePersonaService();
   const identities = useAppStore((s) => s.identities);
   const setPendingCredentialSelection = useAppStore((s) => s.setPendingCredentialSelection);
@@ -119,12 +121,12 @@ const QuickSearch = () => {
       <button
         type="button"
         data-testid="quick-search-trigger"
-        aria-label="Search"
+        aria-label={t('quickSearch.search')}
         onClick={() => setOpen(true)}
         className="flex items-center gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 px-3 py-1.5 text-sm text-gray-400 dark:text-gray-500 hover:border-gray-300 dark:hover:border-gray-600 hover:text-gray-500 dark:hover:text-gray-400 transition-colors"
       >
         <MagnifyingGlassIcon className="w-4 h-4" />
-        <span>Search...</span>
+        <span>{t('quickSearch.searchHint')}</span>
         <kbd className="text-xs font-medium text-gray-400 dark:text-gray-500">⌘K</kbd>
       </button>
 
@@ -149,7 +151,7 @@ const QuickSearch = () => {
                   setQuery(event.target.value);
                   setActiveIndex(0);
                 }}
-                placeholder="Search all identities..."
+                placeholder={t('quickSearch.inputPlaceholder')}
                 className="w-full py-3 text-sm bg-transparent outline-none text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500"
               />
             </div>
@@ -157,15 +159,15 @@ const QuickSearch = () => {
             <div className="max-h-80 overflow-y-auto py-2" data-testid="quick-search-results">
               {!query.trim() ? (
                 <p className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
-                  Type to search across all identities
+                  {t('quickSearch.typeToSearch')}
                 </p>
               ) : isSearching && groups.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
-                  Searching...
+                  {t('quickSearch.searching')}
                 </p>
               ) : groups.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500">
-                  No results for &quot;{query.trim()}&quot;
+                  {t('quickSearch.noResults', { query: query.trim() })}
                 </p>
               ) : (
                 (() => {
@@ -204,7 +206,7 @@ const QuickSearch = () => {
                               {credential.name}
                             </span>
                             <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">
-                              {credential.credential_type}
+                              {credentialTypeLabel(t, credential.credential_type)}
                             </span>
                             {credential.username && (
                               <span className="ml-auto text-xs text-gray-400 dark:text-gray-500 truncate max-w-[40%]">
@@ -221,7 +223,7 @@ const QuickSearch = () => {
             </div>
 
             <div className="px-4 py-2 border-t border-gray-200 dark:border-gray-700 text-xs text-gray-400 dark:text-gray-500">
-              ↑↓ navigate · Enter open · Esc close
+              {t('quickSearch.shortcuts')}
             </div>
           </div>
         </div>

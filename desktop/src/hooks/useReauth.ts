@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { personaAPI } from '@/utils/api';
 
 /**
@@ -10,6 +11,7 @@ import { personaAPI } from '@/utils/api';
  *   if (await requestReauth()) retryOriginalOperation();
  */
 export const useReauth = () => {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
@@ -21,7 +23,7 @@ export const useReauth = () => {
     return new Promise<boolean>((resolve) => {
       resolveRef.current = resolve;
     });
-  }, []);
+  }, [t]);
 
   const submit = useCallback(async (masterPassword: string) => {
     setIsVerifying(true);
@@ -32,19 +34,19 @@ export const useReauth = () => {
         setIsOpen(false);
         resolveRef.current?.(true);
       } else {
-        setError(res.error ?? 'Invalid master password');
+        setError(res.error ?? t('reauth.invalid'));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setIsVerifying(false);
     }
-  }, []);
+  }, [t]);
 
   const cancel = useCallback(() => {
     setIsOpen(false);
     resolveRef.current?.(false);
-  }, []);
+  }, [t]);
 
   return { isOpen, error, isVerifying, requestReauth, submit, cancel };
 };

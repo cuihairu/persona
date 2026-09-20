@@ -111,6 +111,11 @@ class PersonaAPI {
     return invoke('set_password_expiry', { days });
   }
 
+  /** 窄写界面语言（"zh-CN" / "en"）。返回更新后的全量设置 */
+  async setLocale(locale: string): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_locale', { locale });
+  }
+
   /** 修改主密码（旧密码仅存在于本次请求，不落盘不进日志）；成功后前端需重新 init */
   async changeMasterPassword(
     oldPassword: string,

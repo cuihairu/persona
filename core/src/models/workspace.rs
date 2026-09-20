@@ -95,6 +95,10 @@ pub struct WorkspaceSettings {
     /// `AuthResult::PasswordChangeRequired` 引导改密（旧 JSON 缺键时为 None）
     #[serde(default)]
     pub password_expiry_days: Option<u32>,
+
+    /// 界面语言（"zh-CN" / "en"；None = 客户端默认基准语言 zh-CN）
+    #[serde(default)]
+    pub locale: Option<String>,
 }
 
 impl Default for WorkspaceSettings {
@@ -109,6 +113,7 @@ impl Default for WorkspaceSettings {
             features: FeatureFlags::default(),
             sync: None,
             password_expiry_days: None,
+            locale: None,
         }
     }
 }

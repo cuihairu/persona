@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { XMarkIcon, ShieldExclamationIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { personaAPI } from '@/utils/api';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
@@ -31,6 +32,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
   onDone,
   onCancel,
 }) => {
+  const { t } = useTranslation();
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -56,13 +58,13 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
 
   const validate = (): string | null => {
     if (!oldPassword || !newPassword || !confirmPassword) {
-      return 'All fields are required.';
+      return t('changePassword.allRequired');
     }
     if (newPassword !== confirmPassword) {
-      return 'New passwords do not match.';
+      return t('changePassword.mismatch');
     }
     if (newPassword === oldPassword) {
-      return 'New password must be different from the current password.';
+      return t('changePassword.sameAsOld');
     }
     return null;
   };
@@ -84,11 +86,11 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
       if (resp.success) {
         onDone(newPassword);
       } else {
-        setError(resp.error || 'Failed to change master password');
+        setError(resp.error || t('changePassword.failed'));
         setIsSubmitting(false);
       }
     } catch {
-      setError('Failed to change master password');
+      setError(t('changePassword.failed'));
       setIsSubmitting(false);
     }
   };
@@ -101,13 +103,13 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-            {forced ? 'Master password change required' : 'Change master password'}
+            {forced ? t('changePassword.titleForced') : t('changePassword.title')}
           </h2>
           {!forced && (
             <button
               onClick={onCancel}
               className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-              aria-label="Close"
+              aria-label={t('common.close')}
             >
               <XMarkIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
             </button>
@@ -117,9 +119,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
         <form onSubmit={handleSubmit}>
           <div className="px-5 py-4 space-y-3">
             <p className="text-sm text-gray-600 dark:text-gray-300">
-              {forced
-                ? 'Your master password has expired per your security policy. Choose a new one to continue — your data stays untouched.'
-                : 'All entries are re-encrypted under the new password. This may take a moment.'}
+              {forced ? t('changePassword.descForced') : t('changePassword.desc')}
             </p>
             <div>
               <label htmlFor="change-pw-old" className="label mb-1 block">
@@ -137,7 +137,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
             </div>
             <div>
               <label htmlFor="change-pw-new" className="label mb-1 block">
-                New password
+                {t('changePassword.new')}
               </label>
               <input
                 id="change-pw-new"
@@ -150,7 +150,7 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
             </div>
             <div>
               <label htmlFor="change-pw-confirm" className="label mb-1 block">
-                Confirm new password
+                {t('changePassword.confirm')}
               </label>
               <input
                 id="change-pw-confirm"
@@ -183,7 +183,11 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
               disabled={!oldPassword || !newPassword || !confirmPassword || isSubmitting}
               className="btn-primary"
             >
-              {isSubmitting ? 'Changing…' : forced ? 'Change and unlock' : 'Change password'}
+              {isSubmitting
+                ? t('changePassword.changing')
+                : forced
+                  ? t('changePassword.submitForced')
+                  : t('changePassword.submit')}
             </button>
           </div>
         </form>

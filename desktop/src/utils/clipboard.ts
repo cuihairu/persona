@@ -1,6 +1,8 @@
 import { readText as tauriReadText, writeText as tauriWriteText } from '@tauri-apps/plugin-clipboard-manager';
 import toast from 'react-hot-toast';
 
+import i18n from '@/i18n';
+
 const writeClipboardText = async (text: string): Promise<boolean> => {
   try {
     await tauriWriteText(text);
@@ -73,8 +75,8 @@ export const copyWithAutoClear = async (
 export const copyToClipboardWithToast = async (text: string, label: string): Promise<void> => {
   const ok = await copyWithAutoClear(text, 30_000);
   if (ok) {
-    toast.success(`${label} copied (clears in 30s)`);
+    toast.success(i18n.t('common.copiedWithClear', { label }));
   } else {
-    toast.error('Failed to copy to clipboard');
+    toast.error(i18n.t('common.copyFailed'));
   }
 };

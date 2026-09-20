@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import i18n from '@/i18n';
 import { personaAPI } from '@/utils/api';
 import type { PasskeyApprovalRequest } from '@/types';
 
@@ -8,7 +9,9 @@ export const PASSKEY_APPROVAL_EVENT = 'persona://passkey-approval';
 
 /** 通知标题按操作类型区分（create vs assert 用户关心的事不同） */
 const notificationTitle = (operation: string): string =>
-  operation === 'passkey_create' ? 'Passkey creation request' : 'Passkey sign-in request';
+  operation === 'passkey_create'
+    ? i18n.t('notif.passkeyCreateTitle')
+    : i18n.t('notif.passkeySignTitle');
 
 /**
  * 订阅 bridge 转来的 passkey 审批请求（经桌面 Unix socket 服务端）：
@@ -45,7 +48,7 @@ export const usePasskeyApprovals = (enabled: boolean) => {
                 if (granted || requested) {
                   sendNotification({
                     title: notificationTitle(event.payload.operation),
-                    body: `${event.payload.origin} — open Persona to approve or deny`,
+                    body: i18n.t('notif.openToApprove', { source: event.payload.origin }),
                   });
                 }
               },

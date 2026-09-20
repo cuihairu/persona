@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { FingerPrintIcon, ShieldExclamationIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import type { PasskeyApprovalRequest } from '@/types';
 
 export interface PasskeyApprovalModalProps {
@@ -18,8 +19,9 @@ const hostnameOf = (origin: string): string | null => {
   }
 };
 
+/** 标题 i18n key（渲染处 t()） */
 const titleFor = (request: PasskeyApprovalRequest): string =>
-  request.operation === 'passkey_create' ? 'Create a passkey?' : 'Passkey sign-in request';
+  request.operation === 'passkey_create' ? 'passkeyApproval.createTitle' : 'passkeyApproval.assertTitle';
 
 /**
  * Passkey 审批弹窗：bridge（浏览器扩展经 Unix socket）请求注册/断言时弹出。
@@ -32,6 +34,7 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
   pendingCount = 0,
   onRespond,
 }) => {
+  const { t } = useTranslation();
   useEffect(() => {
     if (!request) return;
     const onKey = (e: KeyboardEvent) => {
@@ -53,31 +56,31 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="passkey-approval-modal"
       role="alertdialog"
-      aria-label="Passkey approval"
+      aria-label={t('passkeyApproval.ariaLabel')}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">{titleFor(request)}</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">{t(titleFor(request))}</h2>
           <FingerPrintIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
         </div>
 
         <div className="px-5 py-4 space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-300">
             {isCreate
-              ? 'A website is asking to create a passkey in your vault.'
-              : 'A website is asking to sign in with a passkey from your vault.'}
+              ? t('passkeyApproval.createDescription')
+              : t('passkeyApproval.assertDescription')}
           </p>
 
           <dl className="text-sm space-y-2">
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Site</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('passkeyApproval.site')}</dt>
               <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-origin">
                 {request.origin}
               </dd>
             </div>
             {request.rp_id !== null && (
               <div className="flex gap-2">
-                <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Passkey for</dt>
+                <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('passkeyApproval.passkeyFor')}</dt>
                 <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-rp-id">
                   {request.rp_id}
                 </dd>
@@ -85,14 +88,14 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
             )}
             {request.user_name !== null && (
               <div className="flex gap-2">
-                <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Account</dt>
+                <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('passkeyApproval.account')}</dt>
                 <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-user">
                   {request.user_name}
                 </dd>
               </div>
             )}
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Operation</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('approval.operation')}</dt>
               <dd className="font-mono text-gray-900 dark:text-gray-100" data-testid="approval-operation">
                 {request.operation}
               </dd>
@@ -103,15 +106,14 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
             <div className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded px-3 py-2">
               <ShieldExclamationIcon className="w-4 h-4 shrink-0 mt-0.5" />
               <span data-testid="approval-warning">
-                This site is requesting a passkey for {request.rp_id}, a different domain. Only
-                allow it if you expected this.
+                {t('passkeyApproval.crossDomainWarning', { rpId: request.rp_id })}
               </span>
             </div>
           )}
 
           {pendingCount > 1 && (
             <p className="text-xs text-gray-500 dark:text-gray-400" data-testid="approval-queue-count">
-              {pendingCount - 1} more request{pendingCount - 1 > 1 ? 's' : ''} waiting
+              {t('approval.moreWaiting', { count: pendingCount - 1 })}
             </p>
           )}
         </div>
@@ -123,7 +125,7 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
             className="btn-ghost"
             data-testid="approval-deny"
           >
-            Deny
+            {t('approval.deny')}
           </button>
           <button
             type="button"
@@ -131,7 +133,7 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
             className="btn-primary"
             data-testid="approval-allow"
           >
-            Allow
+            {t('approval.allow')}
           </button>
         </div>
       </div>

@@ -96,6 +96,8 @@ export interface WorkspaceSettings {
   features: FeatureFlags;
   /** 主密码有效期（天）；null = 不过期（默认，旧 JSON 缺键时为 null） */
   password_expiry_days: number | null;
+  /** 界面语言（"zh-CN" / "en"）；null = 默认基准语言 zh-CN */
+  locale: string | null;
   /** 可选同步服务器配置（旧 JSON 缺键时为 null） */
   sync: SyncConfig | null;
 }

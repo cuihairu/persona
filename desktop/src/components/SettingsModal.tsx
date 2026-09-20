@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
+import i18n from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
 import { useAppStore } from '@/stores/appStore';
@@ -17,10 +19,11 @@ type SettingsTab = 'general' | 'identities';
 
 const identityTypes: IdentityType[] = ['Personal', 'Work', 'Social', 'Financial', 'Gaming'];
 
+// label 存 i18n key（模块级常量不能调 hook，渲染处 t()）
 const THEME_OPTIONS: { value: ThemePreference; label: string }[] = [
-  { value: 'system', label: 'System' },
-  { value: 'light', label: 'Light' },
-  { value: 'dark', label: 'Dark' },
+  { value: 'system', label: 'settings.themeSystem' },
+  { value: 'light', label: 'settings.themeLight' },
+  { value: 'dark', label: 'settings.themeDark' },
 ];
 
 /** General 面板的高级功能开关行（1Password 式默认关、opt-in 开） */
@@ -31,24 +34,25 @@ const FEATURE_ROWS: {
   /** 开关生效需要重新解锁等额外说明 */
   note?: string;
 }[] = [
-  { key: 'ssh_agent', label: 'SSH Agent', hint: 'Let terminals and browsers sign with keys stored in Persona' },
-  { key: 'wallet', label: 'Wallets', hint: 'Manage on-chain wallets and sign transactions' },
+  { key: 'ssh_agent', label: 'settings.advanced.sshAgentLabel', hint: 'settings.advanced.sshAgentHint' },
+  { key: 'wallet', label: 'settings.advanced.walletLabel', hint: 'settings.advanced.walletHint' },
   {
     key: 'passkeys',
-    label: 'Passkeys',
-    hint: 'Manage passkeys and run the browser approval server',
-    note: 'Takes effect the next time you unlock',
+    label: 'settings.advanced.passkeysLabel',
+    hint: 'settings.advanced.passkeysHint',
+    note: 'settings.advanced.passkeysNote',
   },
   {
     key: 'fetch_favicons',
-    label: 'Website icons',
-    hint: 'Fetch site icons only when you click "Fetch icon" on an entry; cached locally and shared across entries',
-    note: 'Off by default — no network requests until you opt in',
+    label: 'settings.advanced.fetchFaviconsLabel',
+    hint: 'settings.advanced.fetchFaviconsHint',
+    note: 'settings.advanced.fetchFaviconsNote',
   },
 ];
 
 /** 同步服务器区块：审计事件上报到 persona-server（enabled + url + token）。 */
 const SyncServerPane: React.FC = () => {
+  const { t } = useTranslation();
   const [enabled, setEnabled] = useState(false);
   const [url, setUrl] = useState('');
   const [token, setToken] = useState('');
@@ -61,9 +65,11 @@ const SyncServerPane: React.FC = () => {
   const refreshTokenPlaceholder = async (): Promise<void> => {
     try {
       const resp = await personaAPI.syncTokenPresent();
-      setTokenPlaceholder(resp.success && resp.data ? 'Token saved — leave blank to keep' : 'API token');
+      setTokenPlaceholder(
+        resp.success && resp.data ? t('settings.sync.tokenSavedPlaceholder') : t('settings.sync.tokenPlaceholder'),
+      );
     } catch {
-      setTokenPlaceholder('API token');
+      setTokenPlaceholder(t('settings.sync.tokenPlaceholder'));
     }
   };
 
@@ -86,7 +92,7 @@ const SyncServerPane: React.FC = () => {
 
   const save = async (nextEnabled: boolean) => {
     if (nextEnabled && !url.trim()) {
-      toast.error('Server URL is required when sync is enabled');
+      toast.error(t('settings.sync.urlRequired'));
       return;
     }
     setSaving(true);
@@ -106,12 +112,12 @@ const SyncServerPane: React.FC = () => {
         }
         setToken('');
         await refreshTokenPlaceholder();
-        toast.success('Sync settings saved');
+        toast.success(t('settings.sync.saved'));
       } else {
-        toast.error(resp.error || 'Failed to save sync settings');
+        toast.error(resp.error || t('settings.sync.saveFailed'));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save sync settings');
+      toast.error(err instanceof Error ? err.message : t('settings.sync.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -121,16 +127,16 @@ const SyncServerPane: React.FC = () => {
     <div>
       <div className="flex items-center justify-between gap-4 mb-2">
         <div className="min-w-0">
-          <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">Sync server</h3>
+          <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">{t('settings.sync.title')}</h3>
           <p className="text-xs text-gray-500 dark:text-gray-400">
-            Report audit events to a persona-server. Credentials never leave this device.
+            {t('settings.sync.description')}
           </p>
         </div>
         <button
           type="button"
           role="switch"
           aria-checked={enabled}
-          aria-label="Enable sync server"
+          aria-label={t('settings.sync.enable')}
           data-testid="sync-toggle"
           onClick={() => {
             const next = !enabled;
@@ -153,7 +159,7 @@ const SyncServerPane: React.FC = () => {
         <div className="space-y-3 border border-gray-200 rounded-lg p-4 dark:border-gray-700">
           <div>
             <label className="label mb-1 block" htmlFor="sync-server-url">
-              Server URL
+              {t('settings.sync.serverUrl')}
             </label>
             <input
               id="sync-server-url"
@@ -168,7 +174,7 @@ const SyncServerPane: React.FC = () => {
           </div>
           <div>
             <label className="label mb-1 block" htmlFor="sync-server-token">
-              API token
+              {t('settings.sync.apiToken')}
             </label>
             <input
               id="sync-server-token"
@@ -189,7 +195,7 @@ const SyncServerPane: React.FC = () => {
               disabled={saving}
               className="btn-primary"
             >
-              {saving ? 'Saving…' : 'Save'}
+              {saving ? t('settings.saving') : t('common.save')}
             </button>
           </div>
         </div>
@@ -200,16 +206,17 @@ const SyncServerPane: React.FC = () => {
 
 /** General 面板的密码安全区块：过期策略（NIST 取向默认不过期）+ 手动改密。 */
 const SECURITY_EXPIRY_OPTIONS: { value: string; label: string }[] = [
-  { value: '', label: 'Never' },
-  { value: '90', label: '90 days' },
-  { value: '180', label: '180 days' },
-  { value: '365', label: '365 days' },
+  { value: '', label: 'settings.security.expiryNever' },
+  { value: '90', label: 'settings.security.expiry90' },
+  { value: '180', label: 'settings.security.expiry180' },
+  { value: '365', label: 'settings.security.expiry365' },
 ];
 
 const SecurityPane: React.FC<{
   changingPassword: boolean;
   setChangingPassword: (open: boolean) => void;
 }> = ({ changingPassword, setChangingPassword }) => {
+  const { t } = useTranslation();
   const { lockService } = usePersonaService();
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
@@ -236,12 +243,12 @@ const SecurityPane: React.FC<{
       const resp = await personaAPI.setPasswordExpiry(days);
       if (resp.success && resp.data) {
         setExpiryDays(resp.data.password_expiry_days ?? null);
-        toast.success('Password policy saved');
+        toast.success(t('settings.security.policySaved'));
       } else {
-        toast.error(resp.error || 'Failed to save password policy');
+        toast.error(resp.error || t('settings.security.policySaveFailed'));
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save password policy');
+      toast.error(err instanceof Error ? err.message : t('settings.security.policySaveFailed'));
     } finally {
       setSaving(false);
     }
@@ -251,29 +258,29 @@ const SecurityPane: React.FC<{
   // 锁屏重新解锁以新密码建会话（最简安全语义）
   const handleRotationDone = async () => {
     setChangingPassword(false);
-    toast.success('Master password changed — please sign in again');
+    toast.success(t('settings.security.changedRelock'));
     await lockService();
   };
 
   return (
     <div>
       <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
-        Master password
+        {t('settings.security.title')}
       </h3>
       <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-        Require periodic rotation. When a password expires, the next unlock asks for a new one.
+        {t('settings.security.description')}
       </p>
       <div className="border border-gray-200 rounded-lg p-4 space-y-4 dark:border-gray-700">
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">Expires after</p>
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{t('settings.security.expiresAfter')}</p>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Off by default — rotation is opt-in per your security needs
+              {t('settings.security.expiresHint')}
             </p>
           </div>
           <select
             data-testid="password-expiry-select"
-            aria-label="Password expiry"
+            aria-label={t('settings.security.expiresAfter')}
             value={expiryDays === null ? '' : String(expiryDays)}
             onChange={(e) => changeExpiry(e.target.value)}
             disabled={saving}
@@ -281,7 +288,7 @@ const SecurityPane: React.FC<{
           >
             {SECURITY_EXPIRY_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>
-                {opt.label}
+                {t(opt.label)}
               </option>
             ))}
           </select>
@@ -289,10 +296,10 @@ const SecurityPane: React.FC<{
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
             <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-              Change password
+              {t('settings.security.changePassword')}
             </p>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Re-encrypts every entry under the new password
+              {t('settings.security.changePasswordHint')}
             </p>
           </div>
           <button
@@ -323,10 +330,32 @@ const GeneralPane: React.FC<{
   changingPassword: boolean;
   setChangingPassword: (open: boolean) => void;
 }> = ({ changingPassword, setChangingPassword }) => {
+  const { t } = useTranslation();
   const featureFlags = useAppStore((s) => s.featureFlags);
   const setFeatureFlags = useAppStore((s) => s.setFeatureFlags);
   const theme = useAppStore((s) => s.theme);
   const setTheme = useAppStore((s) => s.setTheme);
+
+  const [locale, setLocale] = useState(i18n.language.startsWith('en') ? 'en' : 'zh-CN');
+
+  // 语言切换：optimistic 先换渲染语言再持久化；失败回滚（UI + i18n 双回退）
+  const changeLocale = async (next: string) => {
+    const previous = locale;
+    setLocale(next);
+    void i18n.changeLanguage(next);
+    try {
+      const resp = await personaAPI.setLocale(next);
+      if (!resp.success) {
+        setLocale(previous);
+        void i18n.changeLanguage(previous);
+        toast.error(resp.error || t('settings.saveFailed'));
+      }
+    } catch (err) {
+      setLocale(previous);
+      void i18n.changeLanguage(previous);
+      toast.error(err instanceof Error ? err.message : t('settings.saveFailed'));
+    }
+  };
 
   // optimistic 写入 → 服务端真相回填；失败回滚并 toast
   const toggle = async (key: keyof FeatureFlags) => {
@@ -340,22 +369,22 @@ const GeneralPane: React.FC<{
         setFeatureFlags(resp.data.features);
       } else {
         setFeatureFlags(previous);
-        toast.error(resp.error || 'Failed to save settings');
+        toast.error(resp.error || t('settings.saveFailed'));
       }
     } catch (err) {
       setFeatureFlags(previous);
-      toast.error(err instanceof Error ? err.message : 'Failed to save settings');
+      toast.error(err instanceof Error ? err.message : t('settings.saveFailed'));
     }
   };
 
   return (
     <div>
       <section className="mb-5">
-        <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">Theme</h3>
+        <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{t('settings.theme')}</h3>
         <div
           className="flex bg-gray-100 rounded-lg p-1 dark:bg-gray-800"
           role="radiogroup"
-          aria-label="Theme"
+          aria-label={t('settings.theme')}
         >
           {THEME_OPTIONS.map((opt) => (
             <button
@@ -371,10 +400,25 @@ const GeneralPane: React.FC<{
                   : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
               }`}
             >
-              {opt.label}
+              {t(opt.label)}
             </button>
           ))}
         </div>
+      </section>
+
+      <section className="mb-5">
+        <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{t('settings.language')}</h3>
+        <select
+          data-testid="locale-select"
+          aria-label={t('settings.language')}
+          value={locale}
+          onChange={(e) => changeLocale(e.target.value)}
+          className="input max-w-[14rem]"
+        >
+          {/* 语言名用各自语言的固有名书写（i18n 惯例，不随界面语言翻译） */}
+          <option value="zh-CN">简体中文</option>
+          <option value="en">English</option>
+        </select>
       </section>
 
       <section className="mb-5">
@@ -390,26 +434,26 @@ const GeneralPane: React.FC<{
 
       <section>
         <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-1">
-          Advanced features
+          {t('settings.advanced.title')}
         </h3>
         <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
-          Advanced features are off by default. Turn on only what you need.
+          {t('settings.advanced.description')}
         </p>
         <div className="border border-gray-200 rounded-lg divide-y divide-gray-100 dark:border-gray-700 dark:divide-gray-800">
           {FEATURE_ROWS.map((row) => (
             <div key={row.key} className="flex items-center justify-between gap-4 px-4 py-3">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{row.label}</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{row.hint}</p>
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{t(row.label)}</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">{t(row.hint)}</p>
                 {row.note && (
-                  <p className="text-xs text-gray-400 dark:text-gray-500">{row.note}</p>
+                  <p className="text-xs text-gray-400 dark:text-gray-500">{t(row.note)}</p>
                 )}
               </div>
               <button
                 type="button"
                 role="switch"
                 aria-checked={featureFlags[row.key]}
-                aria-label={row.label}
+                aria-label={t(row.label)}
                 data-testid={`feature-toggle-${row.key}`}
                 onClick={() => toggle(row.key)}
                 className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
@@ -431,6 +475,7 @@ const GeneralPane: React.FC<{
 };
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+  const { t } = useTranslation();
   const { identities, currentIdentity, updateIdentity, deleteIdentity, isLoading } =
     usePersonaService();
 
@@ -487,7 +532,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
   const handleDelete = async (identity: Identity) => {
     const confirmed = window.confirm(
-      `Delete identity "${identity.name}"? This will remove the identity and its data.`,
+      t('settings.deleteIdentityConfirm', { name: identity.name }),
     );
     if (!confirmed) return;
     await deleteIdentity(identity.id);
@@ -497,8 +542,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   const tabs: { id: SettingsTab; label: string }[] = [
-    { id: 'general', label: 'General' },
-    { id: 'identities', label: 'Identities' },
+    { id: 'general', label: t('settings.tabGeneral') },
+    { id: 'identities', label: t('settings.tabIdentities') },
   ];
 
   return (
@@ -507,34 +552,34 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
         <div className="p-6 pb-0 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Settings</h2>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('settings.title')}</h2>
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                {tab === 'general' ? 'Preferences and feature flags' : 'Manage identities'}
+                {tab === 'general' ? t('settings.subtitleGeneral') : t('settings.subtitleIdentities')}
               </p>
             </div>
             <button
               onClick={onClose}
               className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
-              title="Close"
+              title={t('settings.close')}
             >
               ✕
             </button>
           </div>
 
           <div className="flex gap-1 mt-4" role="tablist">
-            {tabs.map((t) => (
+            {tabs.map((tabItem) => (
               <button
-                key={t.id}
+                key={tabItem.id}
                 role="tab"
-                aria-selected={tab === t.id}
-                onClick={() => setTab(t.id)}
+                aria-selected={tab === tabItem.id}
+                onClick={() => setTab(tabItem.id)}
                 className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors ${
-                  tab === t.id
+                  tab === tabItem.id
                     ? 'text-primary-700 dark:text-primary-300 border-b-2 border-primary-600'
                     : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
                 }`}
               >
-                {t.label}
+                {tabItem.label}
               </button>
             ))}
           </div>
@@ -549,7 +594,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
           ) : (
             <div className="space-y-3">
               {identities.length === 0 ? (
-                <div className="text-sm text-gray-500 dark:text-gray-400">No identities yet.</div>
+                <div className="text-sm text-gray-500 dark:text-gray-400">{t('settings.noIdentitiesYet')}</div>
               ) : (
                 identities.map((identity) => {
                   const isEditing = editingId === identity.id;
@@ -566,7 +611,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                             <div className="space-y-3">
                               <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                  <label className="label mb-1 block">Name</label>
+                                  <label className="label mb-1 block">{t('settings.name')}</label>
                                   <input
                                     className="input"
                                     value={(draft.name as string) || ''}
@@ -574,7 +619,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   />
                                 </div>
                                 <div>
-                                  <label className="label mb-1 block">Type</label>
+                                  <label className="label mb-1 block">{t('settings.type')}</label>
                                   <select
                                     className="input"
                                     value={(draft.identity_type as string) || identity.identity_type}
@@ -593,7 +638,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
 
                               <div className="grid grid-cols-2 gap-3">
                                 <div>
-                                  <label className="label mb-1 block">Email</label>
+                                  <label className="label mb-1 block">{t('settings.email')}</label>
                                   <input
                                     className="input"
                                     value={(draft.email as string) || ''}
@@ -601,7 +646,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   />
                                 </div>
                                 <div>
-                                  <label className="label mb-1 block">Phone</label>
+                                  <label className="label mb-1 block">{t('settings.phone')}</label>
                                   <input
                                     className="input"
                                     value={(draft.phone as string) || ''}
@@ -611,7 +656,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                               </div>
 
                               <div>
-                                <label className="label mb-1 block">Description</label>
+                                <label className="label mb-1 block">{t('settings.description')}</label>
                                 <textarea
                                   className="input h-20 resize-none"
                                   value={(draft.description as string) || ''}
@@ -622,12 +667,12 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                               </div>
 
                               <div>
-                                <label className="label mb-1 block">Tags</label>
+                                <label className="label mb-1 block">{t('settings.tags')}</label>
                                 <input
                                   className="input"
                                   value={draftTags}
                                   onChange={(e) => setDraftTags(e.target.value)}
-                                  placeholder="Comma-separated"
+                                  placeholder={t('settings.commaSeparated')}
                                 />
                               </div>
 
@@ -637,7 +682,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   onClick={cancelEdit}
                                   className="btn-secondary"
                                 >
-                                  Cancel
+                                  {t('common.cancel')}
                                 </button>
                                 <button
                                   type="button"
@@ -645,7 +690,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   disabled={isLoading || !(draft.name as string)?.trim()}
                                   className="btn-primary"
                                 >
-                                  {isLoading ? 'Saving…' : 'Save'}
+                                  {isLoading ? t('settings.saving') : t('common.save')}
                                 </button>
                               </div>
                             </div>
@@ -657,7 +702,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                 </p>
                                 {isCurrent && (
                                   <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-primary-100 text-primary-700 dark:bg-primary-500/20 dark:text-primary-300">
-                                    Current
+                                    {t('settings.current')}
                                   </span>
                                 )}
                               </div>
@@ -692,14 +737,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                             <button
                               className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg"
                               onClick={() => startEdit(identity)}
-                              title="Edit"
+                              title={t('common.edit')}
                             >
                               <PencilSquareIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
                             </button>
                             <button
                               className="p-2 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg"
                               onClick={() => handleDelete(identity)}
-                              title="Delete"
+                              title={t('common.delete')}
                             >
                               <TrashIcon className="w-5 h-5 text-red-600 dark:text-red-400" />
                             </button>

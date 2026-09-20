@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { ShieldCheckIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { clsx } from 'clsx';
 import { personaAPI } from '@/utils/api';
-import type { HealthIssueKindPayload, HealthReport, HealthSeverity } from '@/types';
+import { credentialTypeLabel } from './credentialDisplay';
+import type { HealthIssue, HealthIssueKindPayload, HealthReport, HealthSeverity } from '@/types';
 
 const getSeverityColor = (severity: HealthSeverity) => {
   switch (severity) {
@@ -15,20 +17,47 @@ const getSeverityColor = (severity: HealthSeverity) => {
   }
 };
 
-/** Short rule label, matching the CLI's `persona watchtower` wording. */
+/** 规则短标签的 i18n key（渲染处 t()）；措辞与 CLI `persona watchtower` 对应 */
 const KIND_LABELS: Record<HealthIssueKindPayload['type'], string> = {
-  weak_password: 'weak password',
-  reused_password: 'reused password',
-  breached_password: 'breached password',
-  expired: 'expired',
-  expiring_soon: 'expiring soon',
-  stale_unchanged: 'stale',
-  two_factor_available: '2FA available',
+  weak_password: 'watchtower.kind.weak_password',
+  reused_password: 'watchtower.kind.reused_password',
+  breached_password: 'watchtower.kind.breached_password',
+  expired: 'watchtower.kind.expired',
+  expiring_soon: 'watchtower.kind.expiring_soon',
+  stale_unchanged: 'watchtower.kind.stale_unchanged',
+  two_factor_available: 'watchtower.kind.two_factor_available',
+};
+
+/**
+ * 本地化 detail：按结构化 type 字段渲染（后端 detail 是英文固定模板，供 CLI
+ * 消费；前端不复用，保证界面语言一致）。
+ */
+const detailFor = (
+  issue: HealthIssue,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string => {
+  switch (issue.type) {
+    case 'weak_password':
+      return t('watchtower.detail.weak', { score: issue.score ?? 0 });
+    case 'reused_password':
+      return t('watchtower.detail.reused', { group_size: issue.group_size ?? 0 });
+    case 'breached_password':
+      return t('watchtower.detail.breached', { count: issue.count ?? 0 });
+    case 'expired':
+      return t('watchtower.detail.expired');
+    case 'expiring_soon':
+      return t('watchtower.detail.expiring', { days: issue.days ?? 0 });
+    case 'stale_unchanged':
+      return t('watchtower.detail.stale', { days: issue.days ?? 0 });
+    case 'two_factor_available':
+      return t('watchtower.detail.twoFactor', { site: issue.site ?? '' });
+  }
 };
 
 const SEVERITIES: HealthSeverity[] = ['high', 'medium', 'low'];
 
 const WatchtowerPanel: React.FC = () => {
+  const { t } = useTranslation();
   const [report, setReport] = useState<HealthReport | null>(null);
   const [checkBreaches, setCheckBreaches] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -42,9 +71,9 @@ const WatchtowerPanel: React.FC = () => {
       if (res.success && res.data) {
         setReport(res.data);
       } else if (res.error_code === 'SERVICE_LOCKED') {
-        setError('Service is locked. Unlock and try again.');
+        setError(t('watchtower.serviceLocked'));
       } else {
-        setError(res.error ?? 'Health scan failed');
+        setError(res.error ?? t('watchtower.scanFailed'));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -58,11 +87,9 @@ const WatchtowerPanel: React.FC = () => {
       <section className="bg-white dark:bg-gray-900 shadow rounded-xl p-6 border border-gray-100 dark:border-gray-800">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Watchtower</p>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{t('watchtower.title')}</p>
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-              Scan the vault for weak, reused, breached, expired and stale credentials,
-              plus sites that offer two-factor authentication but have no TOTP stored.
-              Reports contain metadata only — secret material is never included.
+              {t('watchtower.description')}
             </p>
             <label className="mt-3 flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
               <input
@@ -72,11 +99,9 @@ const WatchtowerPanel: React.FC = () => {
                 className="mt-0.5 h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-primary-600 dark:text-primary-400 focus:ring-primary-500"
               />
               <span>
-                Check breach corpora (HIBP)
+                {t('watchtower.checkBreaches')}
                 <span className="block text-xs text-gray-500 dark:text-gray-400">
-                  k-anonymity: only a 5-char hash prefix of each password is sent. If the
-                  network is unavailable the breach check is skipped and offline rules
-                  still run.
+                  {t('watchtower.checkBreachesHint')}
                 </span>
               </span>
             </label>
@@ -87,7 +112,7 @@ const WatchtowerPanel: React.FC = () => {
             className="btn-primary inline-flex items-center self-start md:self-auto"
           >
             <ShieldCheckIcon className="w-4 h-4 mr-1" />
-            {isLoading ? 'Scanning...' : 'Run Scan'}
+            {isLoading ? t('watchtower.scanning') : t('watchtower.runScan')}
           </button>
         </div>
       </section>
@@ -95,11 +120,13 @@ const WatchtowerPanel: React.FC = () => {
       <section className="bg-white dark:bg-gray-900 shadow rounded-xl border border-gray-100 dark:border-gray-800">
         <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
           <div>
-            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">Scan Results</p>
+            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('watchtower.results')}</p>
             {report && (
               <p className="text-sm text-gray-500 dark:text-gray-400">
-                {report.total_credentials} credential(s) scanned ·{' '}
-                {new Date(report.scanned_at).toLocaleString()}
+                {t('watchtower.scannedSummary', {
+                  total: report.total_credentials,
+                  time: new Date(report.scanned_at).toLocaleString(),
+                })}
               </p>
             )}
           </div>
@@ -110,7 +137,7 @@ const WatchtowerPanel: React.FC = () => {
               className="btn-ghost inline-flex items-center"
             >
               <ArrowPathIcon className="w-4 h-4 mr-1" />
-              Rescan
+              {t('watchtower.rescan')}
             </button>
           )}
         </div>
@@ -123,11 +150,11 @@ const WatchtowerPanel: React.FC = () => {
 
         {!report ? (
           <div className="p-8 text-center text-sm text-gray-500 dark:text-gray-400">
-            Run a scan to check your vault.
+            {t('watchtower.guidance')}
           </div>
         ) : report.issues.length === 0 ? (
           <div className="p-8 text-center text-sm text-green-700 dark:text-green-300">
-            ✓ No issues found across {report.total_credentials} credential(s).
+            {t('watchtower.noIssues', { total: report.total_credentials })}
           </div>
         ) : (
           <>
@@ -140,7 +167,7 @@ const WatchtowerPanel: React.FC = () => {
                     getSeverityColor(sev),
                   )}
                 >
-                  {report.counts[sev] ?? 0} {sev}
+                  {report.counts[sev] ?? 0} {t(`watchtower.severity.${sev}`)}
                 </span>
               ))}
             </div>
@@ -156,7 +183,7 @@ const WatchtowerPanel: React.FC = () => {
                       getSeverityColor(issue.severity),
                     )}
                   >
-                    {issue.severity}
+                    {t(`watchtower.severity.${issue.severity}`)}
                   </span>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -164,11 +191,11 @@ const WatchtowerPanel: React.FC = () => {
                         {issue.credential_name}
                       </span>
                       <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded-full">
-                        {KIND_LABELS[issue.type]}
+                        {t(KIND_LABELS[issue.type])}
                       </span>
-                      <span className="text-xs text-gray-400 dark:text-gray-500">{issue.credential_type}</span>
+                      <span className="text-xs text-gray-400 dark:text-gray-500">{credentialTypeLabel(t, issue.credential_type)}</span>
                     </div>
-                    <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{issue.detail}</p>
+                    <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">{detailFor(issue, t)}</p>
                   </div>
                 </li>
               ))}

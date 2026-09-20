@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   WalletIcon,
   PlusIcon,
@@ -20,6 +21,7 @@ import type { WalletAddress, WalletGenerateResponse, WalletSummary } from '@/typ
 type WalletExportFormat = 'json' | 'xpub' | 'mnemonic' | 'private_key' | 'wif';
 
 const WalletPanel: React.FC = () => {
+  const { t } = useTranslation();
   const { currentIdentity } = usePersonaService();
   const [wallets, setWallets] = useState<WalletSummary[]>([]);
   const [selectedWallet, setSelectedWallet] = useState<WalletSummary | null>(null);
@@ -79,11 +81,11 @@ const WalletPanel: React.FC = () => {
       }
       const response = await personaAPI.walletList(currentIdentity.id);
       if (!response.success) {
-        throw new Error(response.error || 'Failed to load wallets');
+        throw new Error(response.error || t('wallet.errors.loadWallets'));
       }
       setWallets(response.data?.wallets || []);
     } catch (err: any) {
-      setError(err.message || 'Failed to load wallets');
+      setError(err.message || t('wallet.errors.loadWallets'));
     } finally {
       setIsLoading(false);
     }
@@ -93,7 +95,7 @@ const WalletPanel: React.FC = () => {
     try {
       const response = await personaAPI.walletListAddresses(walletId);
       if (!response.success) {
-        throw new Error(response.error || 'Failed to load addresses');
+        throw new Error(response.error || t('wallet.errors.loadAddresses'));
       }
       setAddresses(response.data?.addresses || []);
     } catch (err: any) {
@@ -132,12 +134,12 @@ const WalletPanel: React.FC = () => {
     }
   }, [availableExportFormats, exportFormat]);
 
-  const exportRestrictionHint = getExportRestrictionHint(exportTargetWallet, exportFormat);
+  const exportRestrictionHint = getExportRestrictionHint(t, exportTargetWallet, exportFormat);
 
   const performExport = async () => {
     try {
       if (!exportWalletId) {
-        throw new Error('No wallet selected');
+        throw new Error(t('wallet.errors.noWalletSelected'));
       }
       setError(null);
 
@@ -147,7 +149,7 @@ const WalletPanel: React.FC = () => {
         exportFormat === 'wif' ||
         (exportFormat === 'json' && exportIncludePrivate);
       if (needsPassword && !exportPassword) {
-        throw new Error('Password required');
+        throw new Error(t('wallet.errors.passwordRequired'));
       }
 
       const response = await personaAPI.walletExport({
@@ -157,7 +159,7 @@ const WalletPanel: React.FC = () => {
         password: needsPassword ? exportPassword : undefined,
       });
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to export wallet');
+        throw new Error(response.error || t('wallet.errors.exportFailed'));
       }
 
       setExportOutput(response.data);
@@ -172,14 +174,14 @@ const WalletPanel: React.FC = () => {
         URL.revokeObjectURL(url);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to export wallet');
+      setError(err.message || t('wallet.errors.exportFailed'));
     }
   };
 
   const createWallet = async () => {
     try {
       if (!currentIdentity) {
-        throw new Error('Select an identity first');
+        throw new Error(t('wallet.errors.selectIdentityFirst'));
       }
       setError(null);
       const response = await personaAPI.walletGenerate(currentIdentity.id, {
@@ -190,19 +192,19 @@ const WalletPanel: React.FC = () => {
         address_count: createForm.addressCount,
       });
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to create wallet');
+        throw new Error(response.error || t('wallet.errors.createFailed'));
       }
       setCreateResult(response.data);
       await loadWallets();
     } catch (err: any) {
-      setError(err.message || 'Failed to create wallet');
+      setError(err.message || t('wallet.errors.createFailed'));
     }
   };
 
   const importWallet = async () => {
     try {
       if (!currentIdentity) {
-        throw new Error('Select an identity first');
+        throw new Error(t('wallet.errors.selectIdentityFirst'));
       }
       setError(null);
       const response = await personaAPI.walletImport(currentIdentity.id, {
@@ -214,7 +216,7 @@ const WalletPanel: React.FC = () => {
         address_count: importForm.importType === 'mnemonic' ? importForm.addressCount : undefined,
       });
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to import wallet');
+        throw new Error(response.error || t('wallet.errors.importFailed'));
       }
       setShowImportModal(false);
       setImportForm({
@@ -227,31 +229,31 @@ const WalletPanel: React.FC = () => {
       });
       await loadWallets();
     } catch (err: any) {
-      setError(err.message || 'Failed to import wallet');
+      setError(err.message || t('wallet.errors.importFailed'));
     }
   };
 
   const addAddress = async () => {
     try {
       if (!selectedWallet) {
-        throw new Error('Select a wallet first');
+        throw new Error(t('wallet.errors.selectWalletFirst'));
       }
       setError(null);
       const response = await personaAPI.walletAddAddress(selectedWallet.id, addAddressPassword);
       if (!response.success || !response.data) {
-        throw new Error(response.error || 'Failed to generate address');
+        throw new Error(response.error || t('wallet.errors.generateAddressFailed'));
       }
       setShowAddAddressModal(false);
       setAddAddressPassword('');
       await loadAddresses(selectedWallet.id);
       await loadWallets();
     } catch (err: any) {
-      setError(err.message || 'Failed to generate address');
+      setError(err.message || t('wallet.errors.generateAddressFailed'));
     }
   };
 
   const deleteWallet = async (wallet: WalletSummary) => {
-    const confirmed = window.confirm(`Delete wallet "${wallet.name}"? This cannot be undone.`);
+    const confirmed = window.confirm(t('wallet.errors.deleteConfirm', { name: wallet.name }));
     if (!confirmed) {
       return;
     }
@@ -260,7 +262,7 @@ const WalletPanel: React.FC = () => {
       setError(null);
       const response = await personaAPI.walletDelete(wallet.id);
       if (!response.success) {
-        throw new Error(response.error || 'Failed to delete wallet');
+        throw new Error(response.error || t('wallet.errors.deleteFailed'));
       }
 
       if (selectedWallet?.id === wallet.id) {
@@ -270,7 +272,7 @@ const WalletPanel: React.FC = () => {
 
       await loadWallets();
     } catch (err: any) {
-      setError(err.message || 'Failed to delete wallet');
+      setError(err.message || t('wallet.errors.deleteFailed'));
     }
   };
 
@@ -314,10 +316,10 @@ const WalletPanel: React.FC = () => {
           <div>
             <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
               <WalletIcon className="h-8 w-8 text-indigo-600" />
-              Crypto Wallets
+              {t('wallet.title')}
             </h2>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              Manage your cryptocurrency wallets
+              {t('wallet.subtitle')}
             </p>
           </div>
           <div className="flex gap-2">
@@ -326,14 +328,14 @@ const WalletPanel: React.FC = () => {
               className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
               <ArrowDownTrayIcon className="h-5 w-5" />
-              Import
+              {t('wallet.import')}
             </button>
             <button
               onClick={() => setShowCreateModal(true)}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
             >
               <PlusIcon className="h-5 w-5" />
-              New Wallet
+              {t('wallet.newWallet')}
             </button>
           </div>
         </div>
@@ -344,7 +346,7 @@ const WalletPanel: React.FC = () => {
         {/* Loading State */}
         {isLoading && wallets.length === 0 && (
           <div className="flex justify-center py-12">
-            <LoadingSpinner message="Loading wallets..." />
+            <LoadingSpinner message={t('wallet.loadingWallets')} />
           </div>
         )}
 
@@ -352,22 +354,22 @@ const WalletPanel: React.FC = () => {
         {!isLoading && wallets.length === 0 && !error && (
           <div className="text-center py-12 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
             <WalletIcon className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" />
-            <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100">No wallets</h3>
+            <h3 className="mt-2 text-sm font-semibold text-gray-900 dark:text-gray-100">{t('wallet.noWallets')}</h3>
             <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              Get started by creating a new wallet or importing an existing one.
+              {t('wallet.noWalletsHint')}
             </p>
             <div className="mt-6 flex justify-center gap-2">
               <button
                 onClick={() => setShowCreateModal(true)}
                 className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
               >
-                Create Wallet
+                {t('wallet.createWallet')}
               </button>
               <button
                 onClick={() => setShowImportModal(true)}
                 className="px-4 py-2 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               >
-                Import Wallet
+                {t('wallet.importWallet')}
               </button>
             </div>
           </div>
@@ -401,24 +403,24 @@ const WalletPanel: React.FC = () => {
                     </span>
                   </div>
                   {wallet.watch_only && (
-                    <EyeIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" title="Watch-only" />
+                    <EyeIcon className="h-5 w-5 text-gray-400 dark:text-gray-500" title={t('wallet.watchOnly')} />
                   )}
                 </div>
 
                 {/* Balance */}
                 <div className="mb-3">
-                  <p className="text-sm text-gray-500 dark:text-gray-400">Balance</p>
+                  <p className="text-sm text-gray-500 dark:text-gray-400">{t('wallet.balance')}</p>
                   <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{wallet.balance}</p>
                 </div>
 
                 {/* Wallet Info */}
                 <div className="space-y-1 text-sm text-gray-600 dark:text-gray-300">
                   <div className="flex justify-between">
-                    <span>Type:</span>
+                    <span>{t('wallet.typeLabel')}</span>
                     <span className="font-medium">{wallet.wallet_type}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Addresses:</span>
+                    <span>{t('wallet.addressesLabel')}</span>
                     <span className="font-medium">{wallet.address_count}</span>
                   </div>
                 </div>
@@ -438,7 +440,7 @@ const WalletPanel: React.FC = () => {
                     data-testid={`send-button-${wallet.id}`}
                   >
                     <PaperAirplaneIcon className="h-4 w-4" />
-                    Send
+                    {t('wallet.send')}
                   </button>
                   <button
                     onClick={(e) => {
@@ -448,7 +450,7 @@ const WalletPanel: React.FC = () => {
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                   >
                     <ArrowUpTrayIcon className="h-4 w-4" />
-                    Export
+                    {t('wallet.export')}
                   </button>
                   <button
                     onClick={(e) => {
@@ -459,7 +461,7 @@ const WalletPanel: React.FC = () => {
                     className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                     >
                       <ArrowTrendingUpIcon className="h-4 w-4" />
-                      Refresh
+                      {t('wallet.refresh')}
                     </button>
                   <button
                     onClick={(e) => {
@@ -467,10 +469,10 @@ const WalletPanel: React.FC = () => {
                       deleteWallet(wallet);
                     }}
                     className="flex items-center justify-center gap-1 px-2 py-1 text-sm bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-300 rounded hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
-                    aria-label={`Delete wallet ${wallet.name}`}
+                    aria-label={t('wallet.deleteWalletAria', { name: wallet.name })}
                   >
                     <TrashIcon className="h-4 w-4" />
-                    Delete
+                    {t('common.delete')}
                   </button>
                 </div>
               </div>
@@ -483,7 +485,7 @@ const WalletPanel: React.FC = () => {
           <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
-                Wallet Addresses - {selectedWallet.name}
+                {t('wallet.addressesTitle', { name: selectedWallet.name })}
               </h3>
               <button
                 onClick={() => {
@@ -492,7 +494,7 @@ const WalletPanel: React.FC = () => {
                 className="flex items-center gap-2 px-3 py-1 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 transition-colors"
               >
                 <PlusIcon className="h-4 w-4" />
-                Generate Address
+                {t('wallet.generateAddress')}
               </button>
             </div>
 
@@ -501,22 +503,22 @@ const WalletPanel: React.FC = () => {
                 <thead>
                   <tr>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Index
+                      {t('wallet.colIndex')}
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Address
+                      {t('wallet.colAddress')}
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Type
+                      {t('wallet.colType')}
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Balance
+                      {t('wallet.colBalance')}
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Status
+                      {t('wallet.colStatus')}
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Actions
+                      {t('wallet.colActions')}
                     </th>
                   </tr>
                 </thead>
@@ -534,7 +536,7 @@ const WalletPanel: React.FC = () => {
                           <button
                             onClick={() => setShowAddressQr(address.address)}
                             className="text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-                            title="Show QR Code"
+                            title={t('wallet.showQr')}
                           >
                             <QrCodeIcon className="h-4 w-4" />
                           </button>
@@ -554,7 +556,7 @@ const WalletPanel: React.FC = () => {
                               : 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300'
                           }`}
                         >
-                          {address.used ? 'Used' : 'Unused'}
+                          {address.used ? t('wallet.used') : t('wallet.unused')}
                         </span>
                       </td>
                       <td className="px-4 py-2">
@@ -564,7 +566,7 @@ const WalletPanel: React.FC = () => {
                           }}
                           className="text-indigo-600 hover:text-indigo-800 text-sm"
                         >
-                          Copy
+                          {t('common.copy')}
                         </button>
                       </td>
                     </tr>
@@ -574,7 +576,7 @@ const WalletPanel: React.FC = () => {
 
               {addresses.length === 0 && (
                 <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                  No addresses generated yet
+                  {t('wallet.noAddresses')}
                 </div>
               )}
             </div>
@@ -591,7 +593,7 @@ const WalletPanel: React.FC = () => {
               className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-sm w-full mx-4"
               onClick={(e) => e.stopPropagation()}
             >
-              <h3 className="text-lg font-semibold mb-4">Receive Address</h3>
+              <h3 className="text-lg font-semibold mb-4">{t('wallet.receiveAddress')}</h3>
               <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg mb-4 flex items-center justify-center">
                 <QRCodeSVG
                   value={showAddressQr}
@@ -610,7 +612,7 @@ const WalletPanel: React.FC = () => {
                 }}
                 className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
               >
-                Copy Address
+                {t('wallet.copyAddress')}
               </button>
             </div>
           </div>
@@ -622,7 +624,7 @@ const WalletPanel: React.FC = () => {
             isOpen
             onClose={() => setSendWallet(null)}
             wallet={sendWallet}
-            fromAddress={addresses[0]?.address ?? 'Loading address…'}
+            fromAddress={addresses[0]?.address ?? t('wallet.loadingAddress')}
             knownAddresses={
               selectedWallet?.id === sendWallet.id
                 ? addresses.map((a) => a.address)
@@ -635,21 +637,21 @@ const WalletPanel: React.FC = () => {
         {showCreateModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">Create New Wallet</h3>
+              <h3 className="text-lg font-semibold mb-4">{t('wallet.createTitle')}</h3>
               {!createResult ? (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.nameLabel')}</label>
                     <input
                       value={createForm.name}
                       onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      placeholder="My Wallet"
+                      placeholder={t('wallet.namePlaceholder')}
                     />
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Network</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.networkLabel')}</label>
                       <select
                         value={createForm.network}
                         onChange={(e) => setCreateForm({ ...createForm, network: e.target.value })}
@@ -664,7 +666,7 @@ const WalletPanel: React.FC = () => {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Addresses</label>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.addressesCountLabel')}</label>
                       <input
                         type="number"
                         min={1}
@@ -681,13 +683,13 @@ const WalletPanel: React.FC = () => {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Wallet Password</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
                     <input
                       type="password"
                       value={createForm.password}
                       onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      placeholder="At least 8 characters"
+                      placeholder={t('wallet.passwordHint')}
                     />
                   </div>
                   <div className="flex gap-2">
@@ -704,21 +706,21 @@ const WalletPanel: React.FC = () => {
                       }}
                       className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                     >
-                      Cancel
+                      {t('common.cancel')}
                     </button>
                     <button
                       onClick={createWallet}
                       className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                       disabled={!createForm.name.trim() || !createForm.password}
                     >
-                      Create
+                      {t('wallet.create')}
                     </button>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-3">
                   <p className="text-sm text-gray-700 dark:text-gray-300">
-                    Save this recovery phrase now. It will not be shown again.
+                    {t('wallet.saveMnemonicHint')}
                   </p>
                   <textarea
                     readOnly
@@ -726,7 +728,7 @@ const WalletPanel: React.FC = () => {
                     className="w-full h-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg font-mono text-sm"
                   />
                   <div className="text-sm text-gray-600 dark:text-gray-300">
-                    First address: <code className="font-mono">{createResult.first_address}</code>
+                    {t('wallet.firstAddress')}<code className="font-mono">{createResult.first_address}</code>
                   </div>
                   <button
                     onClick={() => {
@@ -741,7 +743,7 @@ const WalletPanel: React.FC = () => {
                     }}
                     className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                   >
-                    Done
+                    {t('wallet.done')}
                   </button>
                 </div>
               )}
@@ -753,20 +755,20 @@ const WalletPanel: React.FC = () => {
         {showImportModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">Import Wallet</h3>
+              <h3 className="text-lg font-semibold mb-4">{t('wallet.importTitle')}</h3>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.nameLabel')}</label>
                   <input
                     value={importForm.name}
                     onChange={(e) => setImportForm({ ...importForm, name: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                    placeholder="Imported Wallet"
+                    placeholder={t('wallet.importedPlaceholder')}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Network</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.networkLabel')}</label>
                     <select
                       value={importForm.network}
                       onChange={(e) => setImportForm({ ...importForm, network: e.target.value })}
@@ -782,7 +784,7 @@ const WalletPanel: React.FC = () => {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Type</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.colType')}</label>
                     <select
                       value={importForm.importType}
                       onChange={(e) =>
@@ -794,15 +796,15 @@ const WalletPanel: React.FC = () => {
                       }
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
                     >
-                      <option value="mnemonic">Mnemonic</option>
-                      <option value="private_key">Private Key</option>
+                      <option value="mnemonic">{t('wallet.importMnemonic')}</option>
+                      <option value="private_key">{t('wallet.importPrivateKey')}</option>
                       <option value="wif">Bitcoin WIF</option>
                     </select>
                   </div>
                 </div>
                 {importForm.importType === 'mnemonic' && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Addresses</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.addressesCountLabel')}</label>
                     <input
                       type="number"
                       min={1}
@@ -821,10 +823,10 @@ const WalletPanel: React.FC = () => {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     {importForm.importType === 'mnemonic'
-                      ? 'Mnemonic Phrase'
+                      ? t('wallet.importMnemonic')
                       : importForm.importType === 'wif'
                         ? 'Bitcoin WIF'
-                        : 'Private Key'}
+                        : t('wallet.importPrivateKey')}
                   </label>
                   <textarea
                     value={importForm.data}
@@ -840,13 +842,13 @@ const WalletPanel: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Wallet Password</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
                   <input
                     type="password"
                     value={importForm.password}
                     onChange={(e) => setImportForm({ ...importForm, password: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                    placeholder="At least 8 characters"
+                    placeholder={t('wallet.passwordHint')}
                   />
                 </div>
                 <div className="flex gap-2">
@@ -864,14 +866,14 @@ const WalletPanel: React.FC = () => {
                     }}
                     className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     onClick={importWallet}
                     className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                     disabled={!importForm.name.trim() || !importForm.data.trim() || !importForm.password}
                   >
-                    Import
+                    {t('wallet.import')}
                   </button>
                 </div>
               </div>
@@ -883,17 +885,17 @@ const WalletPanel: React.FC = () => {
         {showAddAddressModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">Generate Address</h3>
+              <h3 className="text-lg font-semibold mb-4">{t('wallet.generateAddress')}</h3>
               <div className="space-y-4">
                 <div className="text-sm text-gray-600 dark:text-gray-300">
-                  Enter the wallet password for <span className="font-medium">{selectedWallet?.name}</span>.
+                  {t('wallet.enterPasswordPrefix')}<span className="font-medium">{selectedWallet?.name}</span>{t('wallet.enterPasswordSuffix')}
                 </div>
                 <input
                   type="password"
                   value={addAddressPassword}
                   onChange={(e) => setAddAddressPassword(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                  placeholder="Wallet password"
+                  placeholder={t('wallet.passwordPlaceholder')}
                 />
                 <div className="flex gap-2">
                   <button
@@ -903,14 +905,14 @@ const WalletPanel: React.FC = () => {
                     }}
                     className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                   >
-                    Cancel
+                    {t('common.cancel')}
                   </button>
                   <button
                     onClick={addAddress}
                     className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                     disabled={!addAddressPassword}
                   >
-                    Generate
+                    {t('wallet.generate')}
                   </button>
                 </div>
               </div>
@@ -922,20 +924,20 @@ const WalletPanel: React.FC = () => {
         {showExportModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white dark:bg-gray-900 rounded-lg p-6 max-w-md w-full mx-4">
-              <h3 className="text-lg font-semibold mb-4">Export Wallet</h3>
+              <h3 className="text-lg font-semibold mb-4">{t('wallet.exportTitle')}</h3>
               <div className="text-sm text-gray-600 dark:text-gray-300 mb-4">
                 {exportWalletName ? (
                   <>
-                    Wallet: <span className="font-medium">{exportWalletName}</span>
+                    {t('wallet.exportWalletPrefix')}<span className="font-medium">{exportWalletName}</span>
                   </>
                 ) : (
-                  'Wallet export'
+                  t('wallet.exportWalletGeneric')
                 )}
               </div>
 
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Format</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.format')}</label>
                   <select
                     value={exportFormat}
                     onChange={(e) => {
@@ -950,7 +952,7 @@ const WalletPanel: React.FC = () => {
                   >
                     {availableExportFormats.map((format) => (
                       <option key={format} value={format}>
-                        {formatLabel(format)}
+                        {formatLabel(t, format)}
                       </option>
                     ))}
                   </select>
@@ -969,7 +971,7 @@ const WalletPanel: React.FC = () => {
                       checked={exportIncludePrivate}
                       onChange={(e) => setExportIncludePrivate(e.target.checked)}
                     />
-                    Include private data (requires password)
+                    {t('wallet.includePrivate')}
                   </label>
                 )}
 
@@ -978,20 +980,20 @@ const WalletPanel: React.FC = () => {
                   exportFormat === 'wif' ||
                   (exportFormat === 'json' && exportIncludePrivate)) && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Wallet Password</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
                     <input
                       type="password"
                       value={exportPassword}
                       onChange={(e) => setExportPassword(e.target.value)}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      placeholder="Wallet password"
+                      placeholder={t('wallet.passwordPlaceholder')}
                     />
                   </div>
                 )}
 
                 {exportOutput && exportFormat !== 'json' && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Exported Data</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.exportedData')}</label>
                     <textarea
                       readOnly
                       value={exportOutput}
@@ -1003,7 +1005,7 @@ const WalletPanel: React.FC = () => {
                       }}
                       className="mt-2 w-full px-4 py-2 bg-gray-100 dark:bg-gray-800 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                     >
-                      Copy
+                      {t('common.copy')}
                     </button>
                   </div>
                 )}
@@ -1013,13 +1015,13 @@ const WalletPanel: React.FC = () => {
                     onClick={closeExportModal}
                     className="flex-1 px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
                   >
-                    Close
+                    {t('common.close')}
                   </button>
                   <button
                     onClick={performExport}
                     className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                   >
-                    Export
+                    {t('wallet.export')}
                   </button>
                 </div>
               </div>
@@ -1031,16 +1033,16 @@ const WalletPanel: React.FC = () => {
   );
 };
 
-const formatLabel = (format: WalletExportFormat): string => {
+const formatLabel = (t: (key: string) => string, format: WalletExportFormat): string => {
   switch (format) {
     case 'json':
       return 'JSON';
     case 'xpub':
       return 'XPUB';
     case 'mnemonic':
-      return 'Mnemonic';
+      return t('wallet.importMnemonic');
     case 'private_key':
-      return 'Private Key';
+      return t('wallet.importPrivateKey');
     case 'wif':
       return 'Bitcoin WIF';
   }
@@ -1073,6 +1075,7 @@ const getAvailableExportFormats = (wallet: WalletSummary | null): WalletExportFo
 };
 
 const getExportRestrictionHint = (
+  t: (key: string) => string,
   wallet: WalletSummary | null,
   format: WalletExportFormat,
 ): string | null => {
@@ -1081,11 +1084,11 @@ const getExportRestrictionHint = (
   }
 
   if (wallet.watch_only) {
-    return 'Watch-only wallets can only export public data.';
+    return t('wallet.restrictions.watchOnly');
   }
 
   if (wallet.wallet_type === 'SingleAddress' && wallet.network.toLowerCase() === 'bitcoin') {
-    return 'Bitcoin single-address wallets can also export a WIF backup.';
+    return t('wallet.restrictions.btcSingle');
   }
 
   return null;

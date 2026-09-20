@@ -7,6 +7,7 @@ import {
   UserIcon,
   DocumentTextIcon,
 } from '@heroicons/react/24/outline';
+import type { TFunction } from 'i18next';
 
 /**
  * 列表行与详情面板共用的展示 helper（叶子模块，避免两者互相引用）。
@@ -68,3 +69,11 @@ export const getSafeHostname = (url: string) => {
  */
 export const getFaviconCacheKey = (url: string) =>
   getSafeHostname(url).trim().toLowerCase();
+
+/** 凭据类型显示名（未知类型回退原值） */
+export const credentialTypeLabel = (t: TFunction, type: string) =>
+  t(`credentialTypes.${type}`, { defaultValue: type });
+
+/** 安全等级显示名（未知等级回退原值） */
+export const securityLevelLabel = (t: TFunction, level: string) =>
+  t(`securityLevels.${level}`, { defaultValue: level });

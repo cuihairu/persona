@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Cog6ToothIcon,
   HeartIcon,
@@ -16,18 +17,19 @@ export type ViewId = 'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'wa
 
 interface NavItem {
   id: ViewId;
+  /** i18n key（nav.*）——模块级常量不能调 hook，渲染处 t() */
   label: string;
   /** 对应 workspace 功能开关；不带的为主航道视图，恒可见 */
   flag?: keyof FeatureFlags;
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { id: 'credentials', label: 'Credentials' },
-  { id: 'statistics', label: 'Statistics' },
-  { id: 'sshAgent', label: 'SSH Agent', flag: 'ssh_agent' },
-  { id: 'wallets', label: 'Wallets', flag: 'wallet' },
-  { id: 'watchtower', label: 'Watchtower' },
-  { id: 'passkeys', label: 'Passkeys', flag: 'passkeys' },
+  { id: 'credentials', label: 'nav.credentials' },
+  { id: 'statistics', label: 'nav.statistics' },
+  { id: 'sshAgent', label: 'nav.sshAgent', flag: 'ssh_agent' },
+  { id: 'wallets', label: 'nav.wallets', flag: 'wallet' },
+  { id: 'watchtower', label: 'nav.watchtower' },
+  { id: 'passkeys', label: 'nav.passkeys', flag: 'passkeys' },
 ];
 
 interface SidebarProps {
@@ -47,6 +49,7 @@ const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   onLock,
 }) => {
+  const { t } = useTranslation();
   const featureFlags = useAppStore((s) => s.featureFlags);
   const credentials = useAppStore((s) => s.credentials);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
@@ -119,7 +122,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                 : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
             )}
           >
-            {item.label}
+            {t(item.label)}
           </button>
         ))}
       </nav>
@@ -133,7 +136,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={nodeClass(isNodeActive(DEFAULT_SIDEBAR_FILTER))}
           >
             <Squares2X2Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span className="truncate">All Items</span>
+            <span className="truncate">{t('sidebar.allItems')}</span>
             <span className={countClass}>{credentials.length}</span>
           </button>
           <button
@@ -142,13 +145,13 @@ const Sidebar: React.FC<SidebarProps> = ({
             className={nodeClass(isNodeActive({ kind: 'favorites' }))}
           >
             <HeartIcon className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span className="truncate">Favorites</span>
+            <span className="truncate">{t('sidebar.favorites')}</span>
             <span className={countClass}>{favoriteCount}</span>
           </button>
 
           {availableTypes.length > 0 && (
             <div className="pt-3">
-              <p className={groupTitleClass}>Types</p>
+              <p className={groupTitleClass}>{t('sidebar.types')}</p>
               {availableTypes.map((type) => {
                 const TypeIcon = getCredentialIcon(type);
                 return (
@@ -169,7 +172,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 
           {availableTags.length > 0 && (
             <div className="pt-3">
-              <p className={groupTitleClass}>Tags</p>
+              <p className={groupTitleClass}>{t('sidebar.tags')}</p>
               {availableTags.map((tag) => (
                 <button
                   key={tag}
@@ -191,13 +194,13 @@ const Sidebar: React.FC<SidebarProps> = ({
         data-testid="sidebar-footer"
         className="mt-auto border-t border-gray-200 dark:border-gray-700 p-3 flex items-center gap-1"
       >
-        <button className="btn-ghost" aria-label="Settings" title="Settings (⌘,)" onClick={onOpenSettings}>
+        <button className="btn-ghost" aria-label={t('sidebar.settings')} title={t('sidebar.settingsTitle')} onClick={onOpenSettings}>
           <Cog6ToothIcon className="w-4 h-4" />
         </button>
         <button
           className="btn-ghost text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
-          aria-label="Lock session"
-          title="Lock (⌘L)"
+          aria-label={t('sidebar.lock')}
+          title={t('sidebar.lockTitle')}
           onClick={onLock}
         >
           <LockClosedIcon className="w-4 h-4" />

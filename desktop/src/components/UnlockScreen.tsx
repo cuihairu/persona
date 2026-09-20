@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 
@@ -8,6 +9,7 @@ interface UnlockScreenProps {
 }
 
 const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
+  const { t } = useTranslation();
   const [masterPassword, setMasterPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [dbPath, setDbPath] = useState('');
@@ -60,7 +62,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
             <KeyIcon className="w-10 h-10 text-white" />
           </div>
           <h1 className="text-3xl font-bold text-secondary-900 dark:text-secondary-100 mb-2">Persona</h1>
-          <p className="text-secondary-600 dark:text-secondary-400">Master your digital identity</p>
+          <p className="text-secondary-600 dark:text-secondary-400">{t('unlock.tagline')}</p>
         </div>
 
         {/* Unlock Form */}
@@ -68,7 +70,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="master-password" className="label text-secondary-700 dark:text-secondary-300 mb-2 block">
-                Master Password
+                {t('unlock.masterPassword')}
               </label>
               <div className="relative">
                 <input
@@ -77,7 +79,7 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
                   value={masterPassword}
                   onChange={(e) => setMasterPassword(e.target.value)}
                   className="input pr-10"
-                  placeholder="Enter your master password"
+                  placeholder={t('unlock.enterPassword')}
                   required
                 />
                 <button
@@ -103,14 +105,14 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
                   onChange={(e) => setUseCustomPath(e.target.checked)}
                   className="rounded border-gray-300 dark:border-gray-600 text-primary-600 dark:text-primary-400 focus:ring-primary-500"
                 />
-                <span className="ml-2 text-sm text-secondary-700 dark:text-secondary-300">Use custom database path</span>
+                <span className="ml-2 text-sm text-secondary-700 dark:text-secondary-300">{t('unlock.useCustomPath')}</span>
               </label>
             </div>
 
             {useCustomPath && (
               <div>
                 <label htmlFor="db-path" className="label text-secondary-700 dark:text-secondary-300 mb-2 block">
-                  Database Path
+                  {t('unlock.dbPath')}
                 </label>
                 <input
                   id="db-path"
@@ -137,17 +139,17 @@ const UnlockScreen: React.FC<UnlockScreenProps> = ({ onUnlock }) => {
               {isLoading ? (
                 <div className="flex items-center justify-center">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  Unlocking...
+                  {t('unlock.unlocking')}
                 </div>
               ) : (
-                'Unlock Persona'
+                t('unlock.unlock')
               )}
             </button>
           </form>
 
           <div className="mt-6 text-center">
             <p className="text-xs text-secondary-500 dark:text-secondary-400">
-              Don't have a master password? It will be created on first use.
+              {t('unlock.firstUseHint')}
             </p>
           </div>
         </div>

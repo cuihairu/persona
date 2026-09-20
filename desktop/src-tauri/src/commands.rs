@@ -504,6 +504,51 @@ pub async fn set_feature_flags<R: tauri::Runtime>(
     Ok(ApiResponse::success(updated.settings))
 }
 
+/// 窄写界面语言（"zh-CN" / "en"）。与 `set_feature_flags` 同范式：解锁
+/// 门禁 + 窄写单字段 + 返回全量 settings。非法值拒绝（前端只发受支持项）。
+#[command]
+pub async fn set_locale(
+    locale: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    if locale != "zh-CN" && locale != "en" {
+        return Ok(ApiResponse::error(format!("Unsupported locale: {}", locale)));
+    }
+
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
+    };
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {}", e))?;
+
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    ws.settings.locale = Some(locale);
+    ws.touch();
+    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    Ok(ApiResponse::success(updated.settings))
+}
+
 /// 窄写主密码过期策略（天）；None = 不过期。`Some(0)` 无意义，拒绝。
 /// 与 `set_feature_flags` 同范式：解锁门禁 + 窄写单字段 + 返回全量 settings。
 #[command]

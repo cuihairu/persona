@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { KeyIcon, ShieldExclamationIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import type { SshApprovalRequest } from '@/types';
 
 export interface SshApprovalModalProps {
@@ -19,6 +20,7 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
   pendingCount = 0,
   onRespond,
 }) => {
+  const { t } = useTranslation();
   useEffect(() => {
     if (!request) return;
     const onKey = (e: KeyboardEvent) => {
@@ -36,34 +38,34 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="ssh-approval-modal"
       role="alertdialog"
-      aria-label="SSH signature approval"
+      aria-label={t('sshApproval.ariaLabel')}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">SSH signature request</h2>
+          <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">{t('sshApproval.title')}</h2>
           <KeyIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
         </div>
 
         <div className="px-5 py-4 space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-300">
-            An application is requesting an SSH signature using a key from your vault.
+            {t('sshApproval.description')}
           </p>
 
           <dl className="text-sm space-y-2">
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Target host</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('sshApproval.targetHost')}</dt>
               <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-peer">
-                {request.peer ?? 'unknown'}
+                {request.peer ?? t('approval.unknown')}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Key</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('sshApproval.key')}</dt>
               <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="approval-fingerprint">
                 {request.fingerprint}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">Operation</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-24 shrink-0">{t('approval.operation')}</dt>
               <dd className="font-mono text-gray-900 dark:text-gray-100" data-testid="approval-operation">
                 {request.operation}
               </dd>
@@ -77,7 +79,7 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
 
           {pendingCount > 1 && (
             <p className="text-xs text-gray-500 dark:text-gray-400" data-testid="approval-queue-count">
-              {pendingCount - 1} more request{pendingCount - 1 > 1 ? 's' : ''} waiting
+              {t('approval.moreWaiting', { count: pendingCount - 1 })}
             </p>
           )}
         </div>
@@ -89,7 +91,7 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
             className="btn-ghost"
             data-testid="approval-deny"
           >
-            Deny
+            {t('approval.deny')}
           </button>
           <button
             type="button"
@@ -97,7 +99,7 @@ const SshApprovalModal: React.FC<SshApprovalModalProps> = ({
             className="btn-primary"
             data-testid="approval-allow"
           >
-            Allow
+            {t('approval.allow')}
           </button>
         </div>
       </div>

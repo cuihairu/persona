@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { EyeIcon, EyeSlashIcon, DocumentDuplicateIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { personaAPI } from '@/utils/api';
 import { copyWithAutoClear } from '@/utils/clipboard';
 import { useReauth } from '@/hooks/useReauth';
@@ -32,6 +33,7 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
   autoHideSeconds = 30,
   onCopy,
 }) => {
+  const { t } = useTranslation();
   const [revealed, setRevealed] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -54,9 +56,9 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
           await doReveal();
         }
       } else if (res.error_code === 'SERVICE_LOCKED') {
-        setError('Service is locked. Unlock and try again.');
+        setError(t('common.serviceLocked'));
       } else {
-        setError(res.error ?? 'Failed to reveal secret');
+        setError(res.error ?? t('reveal.failed'));
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -100,10 +102,10 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
           </span>
           {remaining !== null && remaining > 0 && (
             <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0" data-testid="reveal-countdown">
-              hides in {remaining}s
+              {t('reveal.hidesIn', { seconds: remaining })}
             </span>
           )}
-          <button onClick={handleHide} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={`Hide ${label}`}>
+          <button onClick={handleHide} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={t('reveal.hide', { label })}>
             <EyeSlashIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
           </button>
         </>
@@ -119,12 +121,12 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
           ) : (
             <EyeIcon className="w-4 h-4" />
           )}
-          Reveal {label}
+          {t('reveal.trigger', { label })}
         </button>
       )}
 
       {revealed !== null && (
-        <button onClick={handleCopy} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={`Copy ${label}`}>
+        <button onClick={handleCopy} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={t('reveal.copy', { label })}>
           <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
         </button>
       )}

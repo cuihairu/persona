@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useReauth } from '@/hooks/useReauth';
 import type {
@@ -11,6 +12,7 @@ import type {
 } from '@/types';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
 import ReauthModal from './ReauthModal';
+import { credentialTypeLabel, securityLevelLabel } from './credentialDisplay';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface CreateCredentialModalProps {
@@ -63,6 +65,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     generatePassword,
     isLoading,
   } = usePersonaService();
+  const { t } = useTranslation();
   const reauth = useReauth();
   const isEditMode = !!editCredential;
   // Esc 关闭：REAUTH 弹窗叠开时让位上层；提交中不逃逸（半提交态关闭观感割裂）
@@ -330,9 +333,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
           return false;
         }
         if (res.error_code === 'SERVICE_LOCKED') {
-          toast.error('Service is locked. Lock screen shown; unlock and retry.');
+          toast.error(t('credForm.serviceLocked'));
         } else {
-          toast.error(res.error || 'Failed to save secret data');
+          toast.error(res.error || t('credForm.saveSecretFailed'));
         }
         return false;
       };
@@ -367,7 +370,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">Email/Username</label>
+              <label className="label mb-2 block">{t('credForm.emailUsername')}</label>
               <input
                 type="email"
                 value={credentialData.email || ''}
@@ -377,7 +380,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               />
             </div>
             <div>
-              <label className="label mb-2 block">Password *</label>
+              <label className="label mb-2 block">{t('credForm.passwordReq')}</label>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <input
@@ -385,7 +388,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                     value={credentialData.password || ''}
                     onChange={(e) => setCredentialData({ ...credentialData, password: e.target.value })}
                     className="input pr-10"
-                    placeholder="Enter password"
+                    placeholder={t('credForm.passwordPlaceholder')}
                     required
                   />
                   <button
@@ -406,7 +409,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                   className="btn-secondary flex items-center"
                 >
                   <KeyIcon className="w-4 h-4 mr-1" />
-                  Generate
+                  {t('credForm.generate')}
                 </button>
               </div>
             </div>
@@ -417,46 +420,46 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">Wallet Type *</label>
+              <label className="label mb-2 block">{t('credForm.walletTypeReq')}</label>
               <input
                 type="text"
                 value={credentialData.wallet_type || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, wallet_type: e.target.value })}
                 className="input"
-                placeholder="Bitcoin, Ethereum, etc."
+                placeholder={t('credForm.walletTypePlaceholder')}
                 required
               />
             </div>
             <div>
-              <label className="label mb-2 block">Address *</label>
+              <label className="label mb-2 block">{t('credForm.addressReq')}</label>
               <input
                 type="text"
                 value={credentialData.address || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, address: e.target.value })}
                 className="input"
-                placeholder="Wallet address"
+                placeholder={t('credForm.addressPlaceholder')}
                 required
               />
             </div>
             <div>
-              <label className="label mb-2 block">Mnemonic Phrase</label>
+              <label className="label mb-2 block">{t('credForm.mnemonic')}</label>
               <textarea
                 value={credentialData.mnemonic_phrase || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, mnemonic_phrase: e.target.value })}
                 className="input h-20 resize-none"
-                placeholder="12-24 word recovery phrase"
+                placeholder={t('credForm.mnemonicPlaceholder')}
               />
             </div>
             <div>
-              <label className="label mb-2 block">Network</label>
+              <label className="label mb-2 block">{t('detail.labels.network')}</label>
               <select
                 value={credentialData.network || 'mainnet'}
                 onChange={(e) => setCredentialData({ ...credentialData, network: e.target.value })}
                 className="input"
               >
-                <option value="mainnet">Mainnet</option>
-                <option value="testnet">Testnet</option>
-                <option value="regtest">Regtest</option>
+                <option value="mainnet">{t('credForm.networkMainnet')}</option>
+                <option value="testnet">{t('credForm.networkTestnet')}</option>
+                <option value="regtest">{t('credForm.networkRegtest')}</option>
               </select>
             </div>
           </div>
@@ -466,7 +469,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">Key Type</label>
+              <label className="label mb-2 block">{t('detail.labels.keyType')}</label>
               <select
                 value={credentialData.key_type || 'rsa'}
                 onChange={(e) => setCredentialData({ ...credentialData, key_type: e.target.value })}
@@ -478,7 +481,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               </select>
             </div>
             <div>
-              <label className="label mb-2 block">Public Key *</label>
+              <label className="label mb-2 block">{t('credForm.publicKeyReq')}</label>
               <textarea
                 value={credentialData.public_key || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, public_key: e.target.value })}
@@ -488,7 +491,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               />
             </div>
             <div>
-              <label className="label mb-2 block">Private Key *</label>
+              <label className="label mb-2 block">{t('credForm.privateKeyReq')}</label>
               <textarea
                 value={credentialData.private_key || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, private_key: e.target.value })}
@@ -498,13 +501,13 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               />
             </div>
             <div>
-              <label className="label mb-2 block">Passphrase</label>
+              <label className="label mb-2 block">{t('detail.labels.passphrase')}</label>
               <input
                 type="password"
                 value={credentialData.passphrase || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, passphrase: e.target.value })}
                 className="input"
-                placeholder="Key passphrase (if any)"
+                placeholder={t('credForm.passphrasePlaceholder')}
               />
             </div>
           </div>
@@ -514,28 +517,28 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">API Key *</label>
+              <label className="label mb-2 block">{t('credForm.apiKeyReq')}</label>
               <input
                 type="text"
                 value={credentialData.api_key || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, api_key: e.target.value })}
                 className="input font-mono"
-                placeholder="API key or token"
+                placeholder={t('credForm.apiKeyPlaceholder')}
                 required
               />
             </div>
             <div>
-              <label className="label mb-2 block">API Secret</label>
+              <label className="label mb-2 block">{t('detail.labels.apiSecret')}</label>
               <input
                 type="password"
                 value={credentialData.api_secret || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, api_secret: e.target.value })}
                 className="input font-mono"
-                placeholder="API secret (if any)"
+                placeholder={t('credForm.apiSecretPlaceholder')}
               />
             </div>
             <div>
-              <label className="label mb-2 block">Permissions</label>
+              <label className="label mb-2 block">{t('detail.labels.permissions')}</label>
               <input
                 type="text"
                 value={(credentialData.permissions || []).join(', ')}
@@ -544,7 +547,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                   permissions: e.target.value.split(',').map(p => p.trim()).filter(Boolean)
                 })}
                 className="input"
-                placeholder="read, write, admin (comma-separated)"
+                placeholder={t('credForm.permissionsPlaceholder')}
               />
             </div>
           </div>
@@ -554,7 +557,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">otpauth URI (Optional)</label>
+              <label className="label mb-2 block">{t('credForm.otpauthUri')}</label>
               <input
                 type="text"
                 value={credentialData.otpauth_uri || ''}
@@ -571,11 +574,11 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 placeholder="otpauth://totp/Issuer:account?secret=BASE32&issuer=Issuer&digits=6&period=30"
               />
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Paste from QR export; fields auto-fill when valid.
+                {t('credForm.otpauthHint')}
               </p>
             </div>
             <div>
-              <label className="label mb-2 block">Secret (Base32) *</label>
+              <label className="label mb-2 block">{t('credForm.secretReq')}</label>
               <input
                 type="text"
                 value={credentialData.secret_key || ''}
@@ -587,7 +590,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block">Issuer</label>
+                <label className="label mb-2 block">{t('detail.labels.issuer')}</label>
                 <input
                   type="text"
                   value={credentialData.issuer || ''}
@@ -597,7 +600,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block">Account</label>
+                <label className="label mb-2 block">{t('detail.labels.account')}</label>
                 <input
                   type="text"
                   value={credentialData.account_name || ''}
@@ -609,7 +612,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </div>
             <div className="grid grid-cols-3 gap-4">
               <div>
-                <label className="label mb-2 block">Algorithm</label>
+                <label className="label mb-2 block">{t('credForm.algorithm')}</label>
                 <select
                   value={credentialData.algorithm || 'SHA1'}
                   onChange={(e) => setCredentialData({ ...credentialData, algorithm: e.target.value })}
@@ -621,7 +624,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 </select>
               </div>
               <div>
-                <label className="label mb-2 block">Digits</label>
+                <label className="label mb-2 block">{t('credForm.digits')}</label>
                 <select
                   value={String(credentialData.digits || 6)}
                   onChange={(e) => setCredentialData({ ...credentialData, digits: Number(e.target.value) })}
@@ -632,7 +635,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 </select>
               </div>
               <div>
-                <label className="label mb-2 block">Period (s)</label>
+                <label className="label mb-2 block">{t('credForm.period')}</label>
                 <input
                   type="number"
                   min={10}
@@ -650,7 +653,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">Provider *</label>
+              <label className="label mb-2 block">{t('credForm.providerReq')}</label>
               <input
                 type="text"
                 value={credentialData.provider || ''}
@@ -660,24 +663,22 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 required
               />
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                Lowercase slug. steam_guard supports offline codes from a base64 shared_secret;
-                vendor-bound providers (Tencent/NetEase/miHoYo…) are recorded only — generate
-                codes in the vendor&apos;s official app.
+                {t('credForm.providerHint')}
               </p>
             </div>
             <div>
-              <label className="label mb-2 block">Shared Secret (Base64, optional)</label>
+              <label className="label mb-2 block">{t('credForm.sharedSecret')}</label>
               <input
                 type="text"
                 value={credentialData.secret_key || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, secret_key: e.target.value })}
                 className="input font-mono"
-                placeholder="Required for steam_guard; optional otherwise"
+                placeholder={t('credForm.sharedSecretPlaceholder')}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block">Issuer</label>
+                <label className="label mb-2 block">{t('detail.labels.issuer')}</label>
                 <input
                   type="text"
                   value={credentialData.issuer || ''}
@@ -687,7 +688,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block">Account *</label>
+                <label className="label mb-2 block">{t('credForm.accountReq')}</label>
                 <input
                   type="text"
                   value={credentialData.account_name || ''}
@@ -704,16 +705,16 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
       case 'SecureNote':
         return (
           <div>
-            <label className="label mb-2 block">Note *</label>
+            <label className="label mb-2 block">{t('credForm.noteReq')}</label>
             <textarea
               value={credentialData.note || ''}
               onChange={(e) => setCredentialData({ ...credentialData, note: e.target.value })}
               className="input h-40 resize-y font-mono text-sm"
-              placeholder="Encrypted note content (recovery codes, secrets, …)"
+              placeholder={t('credForm.notePlaceholder')}
               required
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-              Stored fully encrypted (per-item key) — unlike the notes field on other item types.
+              {t('credForm.noteHint')}
             </p>
           </div>
         );
@@ -723,7 +724,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block" htmlFor="cred-first_name">First name *</label>
+                <label className="label mb-2 block" htmlFor="cred-first_name">{t('credForm.firstNameReq')}</label>
                 <input
                   id="cred-first_name"
                   type="text"
@@ -734,7 +735,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block" htmlFor="cred-last_name">Last name *</label>
+                <label className="label mb-2 block" htmlFor="cred-last_name">{t('credForm.lastNameReq')}</label>
                 <input
                   id="cred-last_name"
                   type="text"
@@ -747,7 +748,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block" htmlFor="cred-email">Email</label>
+                <label className="label mb-2 block" htmlFor="cred-email">{t('detail.labels.email')}</label>
                 <input
                   id="cred-email"
                   type="text"
@@ -757,7 +758,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block" htmlFor="cred-phone">Phone</label>
+                <label className="label mb-2 block" htmlFor="cred-phone">{t('detail.labels.phone')}</label>
                 <input
                   id="cred-phone"
                   type="text"
@@ -768,7 +769,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               </div>
             </div>
             <div>
-              <label className="label mb-2 block">Address</label>
+              <label className="label mb-2 block">{t('detail.labels.address')}</label>
               <textarea
                 value={credentialData.address || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, address: e.target.value })}
@@ -777,7 +778,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block" htmlFor="cred-id_number">ID number</label>
+                <label className="label mb-2 block" htmlFor="cred-id_number">{t('detail.labels.idNumber')}</label>
                 <input
                   id="cred-id_number"
                   type="text"
@@ -787,7 +788,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block" htmlFor="cred-passport_number">Passport no.</label>
+                <label className="label mb-2 block" htmlFor="cred-passport_number">{t('detail.labels.passportNo')}</label>
                 <input
                   id="cred-passport_number"
                   type="text"
@@ -798,8 +799,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               </div>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              Document numbers are stored encrypted with this item&apos;s key. More fields
-              (birthday, driver license, organization…) can be added from the CLI.
+              {t('credForm.identityDocHint')}
             </p>
           </div>
         );
@@ -808,7 +808,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return (
           <div className="space-y-4">
             <div>
-              <label className="label mb-2 block">License key *</label>
+              <label className="label mb-2 block">{t('credForm.licenseKeyReq')}</label>
               <textarea
                 value={credentialData.license_key || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, license_key: e.target.value })}
@@ -819,7 +819,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block" htmlFor="cred-version">Version</label>
+                <label className="label mb-2 block" htmlFor="cred-version">{t('detail.labels.version')}</label>
                 <input
                   id="cred-version"
                   type="text"
@@ -830,7 +830,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block" htmlFor="cred-publisher">Publisher</label>
+                <label className="label mb-2 block" htmlFor="cred-publisher">{t('detail.labels.publisher')}</label>
                 <input
                   id="cred-publisher"
                   type="text"
@@ -842,7 +842,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="label mb-2 block" htmlFor="cred-seats">Seats</label>
+                <label className="label mb-2 block" htmlFor="cred-seats">{t('detail.labels.seats')}</label>
                 <input
                   id="cred-seats"
                   type="number"
@@ -853,7 +853,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
                 />
               </div>
               <div>
-                <label className="label mb-2 block" htmlFor="cred-valid_until">Valid until</label>
+                <label className="label mb-2 block" htmlFor="cred-valid_until">{t('detail.labels.validUntil')}</label>
                 <input
                   id="cred-valid_until"
                   type="text"
@@ -865,7 +865,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               </div>
             </div>
             <p className="text-xs text-gray-500 dark:text-gray-400">
-              The license key is stored encrypted with this item&apos;s key.
+              {t('credForm.licenseHint')}
             </p>
           </div>
         );
@@ -873,12 +873,12 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
       default:
         return (
           <div>
-            <label className="label mb-2 block">Data</label>
+            <label className="label mb-2 block">{t('credForm.data')}</label>
             <textarea
               value={credentialData.raw_data || ''}
               onChange={(e) => setCredentialData({ ...credentialData, raw_data: e.target.value })}
               className="input h-32 resize-none"
-              placeholder="Enter credential data"
+              placeholder={t('credForm.dataPlaceholder')}
             />
           </div>
         );
@@ -891,25 +891,25 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4" data-testid="credential-modal-title">
-          {isEditMode ? 'Edit Item' : 'Add New Credential'}
+          {isEditMode ? t('credForm.editTitle') : t('credForm.addTitle')}
         </h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="label mb-2 block">Name *</label>
+            <label className="label mb-2 block">{t('credForm.nameReq')}</label>
             <input
               type="text"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               className="input"
-              placeholder="e.g., Gmail Account, Work SSH Key"
+              placeholder={t('credForm.namePlaceholder')}
               required
             />
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="label mb-2 block">Type</label>
+              <label className="label mb-2 block">{t('credForm.type')}</label>
               <select
                 value={formData.credential_type}
                 onChange={(e) => {
@@ -922,19 +922,19 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               >
                 {credentialTypes.map((type) => (
                   <option key={type} value={type}>
-                    {type}
+                    {credentialTypeLabel(t, type)}
                   </option>
                 ))}
               </select>
               {isEditMode && (
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Item type can't be changed
+                  {t('credForm.typeLocked')}
                 </p>
               )}
             </div>
 
             <div>
-              <label className="label mb-2 block">Security Level</label>
+              <label className="label mb-2 block">{t('credForm.securityLevel')}</label>
               <select
                 value={formData.security_level}
                 onChange={(e) => setFormData({ ...formData, security_level: e.target.value as SecurityLevel })}
@@ -942,7 +942,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               >
                 {securityLevels.map((level) => (
                   <option key={level} value={level}>
-                    {level}
+                    {securityLevelLabel(t, level)}
                   </option>
                 ))}
               </select>
@@ -950,7 +950,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
           </div>
 
           <div>
-            <label className="label mb-2 block">URL</label>
+            <label className="label mb-2 block">{t('detail.labels.url')}</label>
             <input
               type="url"
               value={formData.url}
@@ -961,38 +961,38 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
           </div>
 
           <div>
-            <label className="label mb-2 block">Username</label>
+            <label className="label mb-2 block">{t('detail.labels.username')}</label>
             <input
               type="text"
               value={formData.username}
               onChange={(e) => setFormData({ ...formData, username: e.target.value })}
               className="input"
-              placeholder="Username or account identifier"
+              placeholder={t('credForm.usernamePlaceholder')}
             />
           </div>
 
           {renderCredentialFields()}
 
           <div>
-            <label className="label mb-2 block">Notes</label>
+            <label className="label mb-2 block">{t('detail.labels.notes')}</label>
             <textarea
               value={formData.notes}
               onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
               className="input h-20 resize-none"
-              placeholder="Additional notes or information"
+              placeholder={t('credForm.notesPlaceholder')}
             />
           </div>
 
           <div>
-            <label className="label mb-2 block">Tags</label>
+            <label className="label mb-2 block">{t('detail.labels.tags')}</label>
             <input
               type="text"
               value={formData.tags}
               onChange={(e) => setFormData({ ...formData, tags: e.target.value })}
               className="input"
-              placeholder="e.g. work, github, prod"
+              placeholder={t('credForm.tagsPlaceholder')}
             />
-            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Comma-separated</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('settings.commaSeparated')}</p>
           </div>
 
           <div className="flex gap-3 pt-4">
@@ -1001,7 +1001,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               onClick={onClose}
               className="btn-secondary flex-1"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               type="submit"
@@ -1010,11 +1010,11 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             >
               {isLoading
                 ? isEditMode
-                  ? 'Saving...'
-                  : 'Creating...'
+                  ? t('credForm.saving')
+                  : t('credForm.creating')
                 : isEditMode
-                  ? 'Save'
-                  : 'Create Credential'}
+                  ? t('common.save')
+                  : t('credForm.createButton')}
             </button>
           </div>
         </form>

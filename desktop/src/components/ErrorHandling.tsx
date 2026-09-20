@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { XCircleIcon, ExclamationTriangleIcon, InformationCircleIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
+import i18n from '@/i18n';
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -54,18 +56,18 @@ export class ErrorBoundary extends React.Component<
             <div className="flex items-center mb-4">
               <XCircleIcon className="w-8 h-8 text-red-500 mr-3" />
               <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                Something went wrong
+                {i18n.t('errorBoundary.title')}
               </h1>
             </div>
 
             <p className="text-gray-600 dark:text-gray-300 mb-4">
-              An unexpected error occurred. This might be a temporary issue.
+              {i18n.t('errorBoundary.description')}
             </p>
 
             {process.env.NODE_ENV === 'development' && this.state.error && (
               <div className="bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-md p-3 mb-4">
                 <p className="text-sm font-medium text-red-800 dark:text-red-300 mb-2">
-                  Error Details (Development):
+                  {i18n.t('errorBoundary.devDetails')}
                 </p>
                 <pre className="text-xs text-red-700 dark:text-red-300 whitespace-pre-wrap">
                   {this.state.error.message}
@@ -78,13 +80,13 @@ export class ErrorBoundary extends React.Component<
                 onClick={this.handleReload}
                 className="btn-primary flex-1"
               >
-                Reload Application
+                {i18n.t('errorBoundary.reload')}
               </button>
               <button
                 onClick={() => this.setState({ hasError: false })}
                 className="btn-secondary flex-1"
               >
-                Try Again
+                {i18n.t('common.retry')}
               </button>
             </div>
           </div>
@@ -102,6 +104,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
   onDismiss,
   details,
 }) => {
+  const { t } = useTranslation();
   const getIcon = () => {
     switch (type) {
       case 'error':
@@ -165,7 +168,7 @@ export const ErrorDisplay: React.FC<ErrorDisplayProps> = ({
               onClick={onDismiss}
               className="inline-flex rounded-md p-1.5 hover:bg-black/10 dark:hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-transparent"
             >
-              <span className="sr-only">Dismiss</span>
+              <span className="sr-only">{t('common.dismiss')}</span>
               <XCircleIcon className="w-4 h-4" />
             </button>
           </div>
@@ -182,7 +185,7 @@ export const useErrorHandler = () => {
   const handleError = React.useCallback((error: unknown, context?: string) => {
     console.error('Error in component:', error, context);
 
-    let errorMessage = 'An unexpected error occurred';
+    let errorMessage = i18n.t('common.unexpectedError');
 
     if (error instanceof Error) {
       errorMessage = error.message;
@@ -218,16 +221,21 @@ export const handleApiError = (error: unknown): string => {
     return error;
   }
 
-  return 'An unexpected error occurred';
+  return i18n.t('common.unexpectedError');
 };
 
 // Loading state component
-export const LoadingSpinner: React.FC<{ message?: string }> = ({ message = 'Loading...' }) => (
-  <div className="flex items-center justify-center p-4">
-    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mr-3"></div>
-    <span className="text-gray-600 dark:text-gray-300">{message}</span>
-  </div>
-);
+export const LoadingSpinner: React.FC<{ message?: string }> = ({
+  message,
+}) => {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center justify-center p-4">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mr-3"></div>
+      <span className="text-gray-600 dark:text-gray-300">{message ?? t('common.loading')}</span>
+    </div>
+  );
+};
 
 // Empty state component
 export const EmptyState: React.FC<{

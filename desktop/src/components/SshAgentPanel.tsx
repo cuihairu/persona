@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowPathIcon, PlayIcon, StopIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { clsx } from 'clsx';
 
 const SshAgentPanel: React.FC = () => {
+  const { t } = useTranslation();
   const {
     sshAgentStatus,
     sshKeys,
@@ -50,17 +52,17 @@ const SshAgentPanel: React.FC = () => {
                   sshAgentStatus?.running ? 'bg-green-100 dark:bg-green-500/10 text-green-800 dark:text-green-300' : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300',
                 )}
               >
-                {sshAgentStatus?.running ? 'Running' : 'Stopped'}
+                {sshAgentStatus?.running ? t('sshAgent.running') : t('sshAgent.stopped')}
               </span>
               {sshAgentStatus?.socket_path && (
                 <span className="ml-3 text-sm text-gray-600 dark:text-gray-300 truncate">
-                  Socket: <span className="font-medium">{sshAgentStatus.socket_path}</span>
+                  {t('sshAgent.socket')} <span className="font-medium">{sshAgentStatus.socket_path}</span>
                 </span>
               )}
             </div>
             {sshAgentStatus?.key_count !== undefined && (
               <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                Loaded keys: <span className="font-medium">{sshAgentStatus.key_count}</span>
+                {t('sshAgent.loadedKeys')} <span className="font-medium">{sshAgentStatus.key_count}</span>
               </p>
             )}
           </div>
@@ -68,7 +70,7 @@ const SshAgentPanel: React.FC = () => {
             <div className="flex gap-2">
               <input
                 type="password"
-                placeholder="Master password (optional)"
+                placeholder={t('sshAgent.passwordPlaceholder')}
                 value={masterPassword}
                 onChange={(e) => setMasterPassword(e.target.value)}
                 className="input-field w-full sm:w-64"
@@ -79,7 +81,7 @@ const SshAgentPanel: React.FC = () => {
                 className="btn-primary inline-flex items-center"
               >
                 <PlayIcon className="w-4 h-4 mr-1" />
-                {isStarting ? 'Starting...' : 'Start'}
+                {isStarting ? t('sshAgent.starting') : t('sshAgent.start')}
               </button>
             </div>
             <div className="flex gap-2">
@@ -89,14 +91,14 @@ const SshAgentPanel: React.FC = () => {
                 className="btn-ghost inline-flex items-center text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
               >
                 <StopIcon className="w-4 h-4 mr-1" />
-                {isStopping ? 'Stopping...' : 'Stop'}
+                {isStopping ? t('sshAgent.stopping') : t('sshAgent.stop')}
               </button>
               <button
                 onClick={refreshSshAgentStatus}
                 className="btn-ghost inline-flex items-center"
               >
                 <ArrowPathIcon className="w-4 h-4 mr-1" />
-                Refresh
+                {t('sshAgent.refresh')}
               </button>
             </div>
           </div>
@@ -106,17 +108,17 @@ const SshAgentPanel: React.FC = () => {
       <section className="bg-white dark:bg-gray-900 shadow rounded-xl border border-gray-100 dark:border-gray-800">
         <div className="p-6 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
           <div>
-            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">SSH Keys in Vault</p>
-            <p className="text-sm text-gray-500 dark:text-gray-400">Keys available to the agent</p>
+            <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t('sshAgent.keysTitle')}</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400">{t('sshAgent.keysSubtitle')}</p>
           </div>
           <button onClick={loadSshKeys} className="btn-ghost inline-flex items-center">
             <ArrowPathIcon className="w-4 h-4 mr-1" />
-            Reload
+            {t('sshAgent.reload')}
           </button>
         </div>
         {sshKeys.length === 0 ? (
           <div className="p-8 text-center text-sm text-gray-500 dark:text-gray-400">
-            No SSH keys found. Create SSH key credentials to use the agent.
+            {t('sshAgent.noKeys')}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -124,16 +126,16 @@ const SshAgentPanel: React.FC = () => {
               <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Identity
+                    {t('sshAgent.identityCol')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Credential
+                    {t('sshAgent.credentialCol')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Tags
+                    {t('sshAgent.tagsCol')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                    Updated
+                    {t('sshAgent.updatedCol')}
                   </th>
                 </tr>
               </thead>

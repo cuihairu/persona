@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import i18n from '@/i18n';
 import { personaAPI } from '@/utils/api';
 import type { SshApprovalRequest } from '@/types';
 
@@ -40,8 +41,10 @@ export const useSshApprovals = (enabled: boolean) => {
               ([granted, requested]) => {
                 if (granted || requested) {
                   sendNotification({
-                    title: 'SSH signature request',
-                    body: `${event.payload.peer ?? 'Unknown host'} — open Persona to approve or deny`,
+                    title: i18n.t('notif.sshTitle'),
+                    body: i18n.t('notif.openToApprove', {
+                      source: event.payload.peer ?? i18n.t('notif.unknownHost'),
+                    }),
                   });
                 }
               },

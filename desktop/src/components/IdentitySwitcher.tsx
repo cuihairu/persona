@@ -10,6 +10,7 @@ import {
   CreditCardIcon,
   PuzzlePieceIcon
 } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { Listbox, Transition } from '@headlessui/react';
 import { usePersonaService } from '@/hooks/usePersonaService';
@@ -55,6 +56,7 @@ interface IdentitySwitcherProps {
 }
 
 const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity }) => {
+  const { t } = useTranslation();
   const { identities, currentIdentity, switchIdentity } = usePersonaService();
 
   return (
@@ -78,14 +80,14 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                       {currentIdentity.name}
                     </p>
                     <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {currentIdentity.identity_type}
+                      {t(`identityTypes.${currentIdentity.identity_type}`, { defaultValue: currentIdentity.identity_type })}
                     </p>
                   </div>
                 </>
               ) : (
                 <div className="flex items-center">
                   <UserCircleIcon className="w-8 h-8 text-gray-400 dark:text-gray-500 mr-3" />
-                  <span className="text-gray-500 dark:text-gray-400">Select an identity</span>
+                  <span className="text-gray-500 dark:text-gray-400">{t('identity.selectIdentity')}</span>
                 </div>
               )}
             </div>
@@ -132,7 +134,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                           {identity.name}
                         </p>
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {identity.identity_type}
+                          {t(`identityTypes.${identity.identity_type}`, { defaultValue: identity.identity_type })}
                         </p>
                       </div>
                       {selected && (
@@ -151,7 +153,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                   className="w-full text-left px-3 py-2 text-sm text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-500/10 flex items-center"
                 >
                   <PlusIcon className="w-4 h-4 mr-2" />
-                  Create new identity
+                  {t('identity.createNew')}
                 </button>
               </div>
             </Listbox.Options>
@@ -168,6 +170,7 @@ interface CreateIdentityModalProps {
 }
 
 const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClose }) => {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [identityType, setIdentityType] = useState<IdentityType>('Personal');
   const [description, setDescription] = useState('');
@@ -195,12 +198,12 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
       <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-md">
-        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Create New Identity</h2>
+        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">{t('identity.createTitle')}</h2>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="identity-name" className="label mb-2 block">
-              Identity Name
+              {t('identity.nameLabel')}
             </label>
             <input
               id="identity-name"
@@ -208,14 +211,14 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="input"
-              placeholder="e.g., John Doe, Work Profile"
+              placeholder={t('identity.namePlaceholder')}
               required
             />
           </div>
 
           <div>
             <label htmlFor="identity-type" className="label mb-2 block">
-              Type
+              {t('identity.typeLabel')}
             </label>
             <select
               id="identity-type"
@@ -225,7 +228,7 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
             >
               {identityTypes.map((type) => (
                 <option key={type} value={type}>
-                  {type}
+                  {t(`identityTypes.${type}`, { defaultValue: type })}
                 </option>
               ))}
             </select>
@@ -233,14 +236,14 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
 
           <div>
             <label htmlFor="identity-description" className="label mb-2 block">
-              Description (Optional)
+              {t('identity.descriptionLabel')}
             </label>
             <textarea
               id="identity-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="input h-20 resize-none"
-              placeholder="Brief description of this identity"
+              placeholder={t('identity.descriptionPlaceholder')}
             />
           </div>
 
@@ -250,14 +253,14 @@ const CreateIdentityModal: React.FC<CreateIdentityModalProps> = ({ isOpen, onClo
               onClick={onClose}
               className="btn-secondary flex-1"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               type="submit"
               disabled={isLoading || !name.trim()}
               className="btn-primary flex-1"
             >
-              {isLoading ? 'Creating...' : 'Create Identity'}
+              {isLoading ? t('identity.creating') : t('identity.create')}
             </button>
           </div>
         </form>

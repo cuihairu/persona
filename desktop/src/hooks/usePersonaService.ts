@@ -9,8 +9,10 @@ import type {
   UpdateCredentialDataRequest,
 } from '@/types';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 
 export const usePersonaService = () => {
+  const { t } = useTranslation();
   const {
     isUnlocked,
     isInitialized,
@@ -59,7 +61,7 @@ export const usePersonaService = () => {
       }
     } catch (err) {
       console.error('Failed to check service status:', err);
-      setError('Failed to check service status');
+      setError(t('svc.checkStatusFailed'));
     }
   };
 
@@ -79,7 +81,7 @@ export const usePersonaService = () => {
         // 解锁成功即清除遗留的强制改密标志（新会话无需再轮换）
         setPasswordChangeRequired(false);
         await loadIdentities();
-        toast.success('Service initialized successfully');
+        toast.success(t('svc.initSuccess'));
         return true;
       } else if (response.error_code === 'PASSWORD_CHANGE_REQUIRED') {
         // 主密码按策略需要轮换：解锁屏渲染强制改密弹窗，
@@ -87,12 +89,12 @@ export const usePersonaService = () => {
         setPasswordChangeRequired(true);
         return false;
       } else {
-        setError(response.error || 'Failed to initialize service');
-        toast.error(response.error || 'Failed to initialize service');
+        setError(response.error || t('svc.initFailed'));
+        toast.error(response.error || t('svc.initFailed'));
         return false;
       }
     } catch {
-      const errorMessage = 'Failed to initialize service';
+      const errorMessage = t('svc.initFailed');
       setError(errorMessage);
       toast.error(errorMessage);
       return false;
@@ -123,12 +125,12 @@ export const usePersonaService = () => {
         setCredentialSearchQuery('');
         // 编辑弹窗同随锁作废（解密 payload 不得跨锁存活）
         setEditingCredential(null);
-        toast.success('Service locked');
+        toast.success(t('svc.lockSuccess'));
       } else {
-        toast.error(response.error || 'Failed to lock service');
+        toast.error(response.error || t('svc.lockFailed'));
       }
     } catch {
-      toast.error('Failed to lock service');
+      toast.error(t('svc.lockFailed'));
     }
   };
 
@@ -159,10 +161,10 @@ export const usePersonaService = () => {
           }
         }
       } else {
-        setError(response.error || 'Failed to load identities');
+        setError(response.error || t('svc.loadIdentitiesFailed'));
       }
     } catch {
-      setError('Failed to load identities');
+      setError(t('svc.loadIdentitiesFailed'));
     }
   };
 
@@ -185,14 +187,14 @@ export const usePersonaService = () => {
         } catch {
           // ignore
         }
-        toast.success('Identity created successfully');
+        toast.success(t('svc.identityCreated'));
         return response.data;
       } else {
-        setError(response.error || 'Failed to create identity');
-        toast.error(response.error || 'Failed to create identity');
+        setError(response.error || t('svc.identityCreateFailed'));
+        toast.error(response.error || t('svc.identityCreateFailed'));
       }
     } catch {
-      const errorMessage = 'Failed to create identity';
+      const errorMessage = t('svc.identityCreateFailed');
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -218,14 +220,14 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         await loadIdentities();
         setCurrentIdentity(response.data);
-        toast.success('Identity updated');
+        toast.success(t('svc.identityUpdated'));
         return response.data;
       }
-      setError(response.error || 'Failed to update identity');
-      toast.error(response.error || 'Failed to update identity');
+      setError(response.error || t('svc.identityUpdateFailed'));
+      toast.error(response.error || t('svc.identityUpdateFailed'));
       return null;
     } catch {
-      const errorMessage = 'Failed to update identity';
+      const errorMessage = t('svc.identityUpdateFailed');
       setError(errorMessage);
       toast.error(errorMessage);
       return null;
@@ -244,13 +246,13 @@ export const usePersonaService = () => {
           setCredentials([]);
         }
         await loadIdentities();
-        toast.success('Identity deleted');
+        toast.success(t('svc.identityDeleted'));
         return true;
       }
-      toast.error(response.error || 'Failed to delete identity');
+      toast.error(response.error || t('svc.identityDeleteFailed'));
       return false;
     } catch {
-      toast.error('Failed to delete identity');
+      toast.error(t('svc.identityDeleteFailed'));
       return false;
     }
   };
@@ -265,7 +267,7 @@ export const usePersonaService = () => {
     await loadCredentialsForIdentity(identity.id);
     // 搜索跳转等场景传 silent：切换是手段不是用户动作，toast 属噪声
     if (!options?.silent) {
-      toast.success(`Switched to ${identity.name}`);
+      toast.success(t('svc.switchedTo', { name: identity.name }));
     }
   };
 
@@ -275,12 +277,12 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         setCredentials(response.data);
       } else {
-        setError(response.error || 'Failed to load credentials');
+        setError(response.error || t('svc.loadCredentialsFailed'));
         // 凭据没加载出来，pending 跳转永远不会被注入；清掉防下次进该身份突然选中
         clearPendingCredentialSelection();
       }
     } catch {
-      setError('Failed to load credentials');
+      setError(t('svc.loadCredentialsFailed'));
       clearPendingCredentialSelection();
     }
   };
@@ -295,14 +297,14 @@ export const usePersonaService = () => {
         if (currentIdentity) {
           await loadCredentialsForIdentity(currentIdentity.id);
         }
-        toast.success('Credential created successfully');
+        toast.success(t('svc.credentialCreated'));
         return response.data;
       } else {
-        setError(response.error || 'Failed to create credential');
-        toast.error(response.error || 'Failed to create credential');
+        setError(response.error || t('svc.credentialCreateFailed'));
+        toast.error(response.error || t('svc.credentialCreateFailed'));
       }
     } catch {
-      const errorMessage = 'Failed to create credential';
+      const errorMessage = t('svc.credentialCreateFailed');
       setError(errorMessage);
       toast.error(errorMessage);
     } finally {
@@ -320,15 +322,15 @@ export const usePersonaService = () => {
         if (currentIdentity) {
           await loadCredentialsForIdentity(currentIdentity.id);
         }
-        toast.success('Item saved');
+        toast.success(t('svc.itemSaved'));
         return response.data;
       }
-      setError(response.error || 'Failed to update credential');
-      toast.error(response.error || 'Failed to update credential');
+      setError(response.error || t('svc.credentialUpdateFailed'));
+      toast.error(response.error || t('svc.credentialUpdateFailed'));
       return null;
     } catch {
-      setError('Failed to update credential');
-      toast.error('Failed to update credential');
+      setError(t('svc.credentialUpdateFailed'));
+      toast.error(t('svc.credentialUpdateFailed'));
       return null;
     } finally {
       setLoading(false);
@@ -350,11 +352,11 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         return response.data;
       } else {
-        toast.error(response.error || 'Failed to search credentials');
+        toast.error(response.error || t('svc.searchFailed'));
         return [];
       }
     } catch {
-      toast.error('Failed to search credentials');
+      toast.error(t('svc.searchFailed'));
       return [];
     }
   };
@@ -365,11 +367,11 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         return response.data;
       } else {
-        toast.error(response.error || 'Failed to generate password');
+        toast.error(response.error || t('svc.generatePasswordFailed'));
         return '';
       }
     } catch {
-      toast.error('Failed to generate password');
+      toast.error(t('svc.generatePasswordFailed'));
       return '';
     }
   };
@@ -380,11 +382,11 @@ export const usePersonaService = () => {
       if (response.success) {
         return response.data;
       } else {
-        toast.error(response.error || 'Failed to get credential data');
+        toast.error(response.error || t('svc.getCredentialDataFailed'));
         return null;
       }
     } catch {
-      toast.error('Failed to get credential data');
+      toast.error(t('svc.getCredentialDataFailed'));
       return null;
     }
   };
@@ -395,10 +397,10 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         return response.data;
       }
-      toast.error(response.error || 'Failed to load item history');
+      toast.error(response.error || t('svc.loadHistoryFailed'));
       return [] as CredentialHistoryEntry[];
     } catch {
-      toast.error('Failed to load item history');
+      toast.error(t('svc.loadHistoryFailed'));
       return [] as CredentialHistoryEntry[];
     }
   };
@@ -410,10 +412,10 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         return response.data;
       }
-      toast.error(response.error || 'Failed to load attachments');
+      toast.error(response.error || t('svc.loadAttachmentsFailed'));
       return [] as AttachmentEntry[];
     } catch {
-      toast.error('Failed to load attachments');
+      toast.error(t('svc.loadAttachmentsFailed'));
       return [] as AttachmentEntry[];
     }
   };
@@ -424,10 +426,10 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         return response.data;
       }
-      toast.error(response.error || 'Failed to attach file');
+      toast.error(response.error || t('svc.attachFileFailed'));
       return null;
     } catch {
-      toast.error('Failed to attach file');
+      toast.error(t('svc.attachFileFailed'));
       return null;
     }
   };
@@ -438,10 +440,10 @@ export const usePersonaService = () => {
       if (response.success) {
         return true;
       }
-      toast.error(response.error || 'Failed to save attachment');
+      toast.error(response.error || t('svc.saveAttachmentFailed'));
       return false;
     } catch {
-      toast.error('Failed to save attachment');
+      toast.error(t('svc.saveAttachmentFailed'));
       return false;
     }
   };
@@ -452,10 +454,10 @@ export const usePersonaService = () => {
       if (response.success) {
         return true;
       }
-      toast.error(response.error || 'Failed to delete attachment');
+      toast.error(response.error || t('svc.deleteAttachmentFailed'));
       return false;
     } catch {
-      toast.error('Failed to delete attachment');
+      toast.error(t('svc.deleteAttachmentFailed'));
       return false;
     }
   };
@@ -466,10 +468,10 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         return response.data;
       }
-      toast.error(response.error || 'Failed to generate TOTP code');
+      toast.error(response.error || t('svc.totpFailed'));
       return null;
     } catch {
-      toast.error('Failed to generate TOTP code');
+      toast.error(t('svc.totpFailed'));
       return null;
     }
   };
@@ -481,13 +483,13 @@ export const usePersonaService = () => {
         setCredentials(
           credentials.map((cred) => (cred.id === credentialId ? response.data! : cred)),
         );
-        toast.success(response.data.is_favorite ? 'Added to favorites' : 'Removed from favorites');
+        toast.success(response.data.is_favorite ? t('svc.favoriteAdded') : t('svc.favoriteRemoved'));
         return response.data;
       }
-      toast.error(response.error || 'Failed to toggle favorite');
+      toast.error(response.error || t('svc.toggleFavoriteFailed'));
       return null;
     } catch {
-      toast.error('Failed to toggle favorite');
+      toast.error(t('svc.toggleFavoriteFailed'));
       return null;
     }
   };
@@ -498,13 +500,13 @@ export const usePersonaService = () => {
       const response = await personaAPI.fetchCredentialFavicon(credentialId);
       if (response.success && response.data) {
         setFaviconEntries([response.data]);
-        toast.success('Icon fetched');
+        toast.success(t('svc.iconFetched'));
         return response.data;
       }
-      toast.error(response.error || 'Failed to fetch icon');
+      toast.error(response.error || t('svc.fetchIconFailed'));
       return null;
     } catch {
-      toast.error('Failed to fetch icon');
+      toast.error(t('svc.fetchIconFailed'));
       return null;
     }
   };
@@ -514,13 +516,13 @@ export const usePersonaService = () => {
       const response = await personaAPI.deleteCredential(credentialId);
       if (response.success && response.data) {
         setCredentials(credentials.filter((cred) => cred.id !== credentialId));
-        toast.success('Credential deleted');
+        toast.success(t('svc.credentialDeleted'));
         return true;
       }
-      toast.error(response.error || 'Failed to delete credential');
+      toast.error(response.error || t('svc.credentialDeleteFailed'));
       return false;
     } catch {
-      toast.error('Failed to delete credential');
+      toast.error(t('svc.credentialDeleteFailed'));
       return false;
     }
   };
@@ -531,10 +533,10 @@ export const usePersonaService = () => {
       if (response.success) {
         setSshAgentStatus(response.data ?? null);
       } else {
-        toast.error(response.error || 'Failed to get SSH agent status');
+        toast.error(response.error || t('svc.sshStatusFailed'));
       }
     } catch {
-      toast.error('Failed to get SSH agent status');
+      toast.error(t('svc.sshStatusFailed'));
     }
   };
 
@@ -543,12 +545,12 @@ export const usePersonaService = () => {
       const response = await personaAPI.startSshAgent(masterPassword);
       if (response.success) {
         setSshAgentStatus(response.data ?? null);
-        toast.success('SSH agent started');
+        toast.success(t('svc.sshAgentStarted'));
       } else {
-        toast.error(response.error || 'Failed to start SSH agent');
+        toast.error(response.error || t('svc.sshAgentStartFailed'));
       }
     } catch {
-      toast.error('Failed to start SSH agent');
+      toast.error(t('svc.sshAgentStartFailed'));
     }
   };
 
@@ -557,12 +559,12 @@ export const usePersonaService = () => {
       const response = await personaAPI.stopSshAgent();
       if (response.success) {
         setSshAgentStatus(null);
-        toast.success('SSH agent stopped');
+        toast.success(t('svc.sshAgentStopped'));
       } else {
-        toast.error(response.error || 'Failed to stop SSH agent');
+        toast.error(response.error || t('svc.sshAgentStopFailed'));
       }
     } catch {
-      toast.error('Failed to stop SSH agent');
+      toast.error(t('svc.sshAgentStopFailed'));
     }
   };
 
@@ -572,10 +574,10 @@ export const usePersonaService = () => {
       if (response.success && response.data) {
         setSshKeys(response.data);
       } else {
-        toast.error(response.error || 'Failed to load SSH keys');
+        toast.error(response.error || t('svc.sshKeysFailed'));
       }
     } catch {
-      toast.error('Failed to load SSH keys');
+      toast.error(t('svc.sshKeysFailed'));
     }
   };
 

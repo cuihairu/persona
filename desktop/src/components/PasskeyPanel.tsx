@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 import {
   ArrowPathIcon,
   DocumentDuplicateIcon,
@@ -43,6 +44,7 @@ const formatDate = (iso?: string): string =>
  * 可能要求重新认证）、删除。创建走浏览器桥接 + 桌面审批链路，不在本页。
  */
 const PasskeyPanel: React.FC = () => {
+  const { t } = useTranslation();
   const { identities } = usePersonaService();
   const [rows, setRows] = useState<PasskeyRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -62,7 +64,7 @@ const PasskeyPanel: React.FC = () => {
         identities.map(async (identity) => {
           const res = await personaAPI.passkeyList(identity.id);
           if (!res.success || !res.data) {
-            throw new Error(res.error ?? `Failed to list passkeys for ${identity.name}`);
+            throw new Error(res.error ?? t('passkey.listFailed', { name: identity.name }));
           }
           return res.data.map((passkey) => ({ passkey, identityName: identity.name }));
         }),
@@ -73,7 +75,7 @@ const PasskeyPanel: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [identities]);
+  }, [identities, t]);
 
   useEffect(() => {
     void loadPasskeys();
@@ -86,10 +88,10 @@ const PasskeyPanel: React.FC = () => {
           <div>
             <p className="text-lg font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
               <FingerPrintIcon className="w-5 h-5 text-gray-400 dark:text-gray-500" />
-              Passkeys
+              {t('passkey.title')}
             </p>
             <p className="text-sm text-gray-500 dark:text-gray-400">
-              Passkeys stored in your vault, across all identities
+              {t('passkey.subtitle')}
             </p>
           </div>
           <button onClick={() => void loadPasskeys()} className="btn-ghost inline-flex items-center" data-testid="passkey-refresh-button">
@@ -98,7 +100,7 @@ const PasskeyPanel: React.FC = () => {
             ) : (
               <ArrowPathIcon className="w-4 h-4 mr-1" />
             )}
-            Refresh
+            {t('passkey.refresh')}
           </button>
         </div>
 
@@ -110,7 +112,7 @@ const PasskeyPanel: React.FC = () => {
 
         {!error && rows.length === 0 && !isLoading && (
           <div className="p-8 text-center text-sm text-gray-500 dark:text-gray-400" data-testid="passkey-empty">
-            No passkeys yet. Create one from a website's passkey flow.
+            {t('passkey.empty')}
           </div>
         )}
 
@@ -119,13 +121,13 @@ const PasskeyPanel: React.FC = () => {
             <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
               <thead className="bg-gray-50 dark:bg-gray-800/50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Identity</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Relying party</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Account</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">UV</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Export</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Created</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Last used</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colIdentity')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colRp')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colAccount')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colUv')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colExport')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colCreated')}</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">{t('passkey.colLastUsed')}</th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
@@ -176,6 +178,7 @@ interface PasskeyDetailModalProps {
 
 /** 详情弹窗：全字段展示 + 自检 / 导出 / 删除（敏感动作走 REAUTH_REQUIRED → ReauthModal → 重试一次） */
 const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, onDeleted }) => {
+  const { t } = useTranslation();
   const { passkey } = row;
   const [testStatus, setTestStatus] = useState<'idle' | 'running' | 'passed' | 'failed'>('idle');
   const [testError, setTestError] = useState<string | null>(null);
@@ -211,27 +214,27 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
       const res = await personaAPI.passkeySelfTest(passkey.id);
       if (res.success && res.data) {
         setTestStatus('passed');
-        toast.success('Self-test passed');
+        toast.success(t('passkey.selfTestPassed'));
       } else if (res.error_code === 'REAUTH_REQUIRED') {
         if (!selfTestRetryRef.current && (await reauth.requestReauth())) {
           selfTestRetryRef.current = true;
           await runSelfTest();
         } else {
           setTestStatus('failed');
-          setTestError('Re-authentication required');
+          setTestError(t('passkey.reauthRequired'));
         }
       } else if (res.error_code === 'SERVICE_LOCKED') {
         setTestStatus('failed');
-        setTestError('Service is locked. Unlock and try again.');
+        setTestError(t('common.serviceLocked'));
       } else {
         setTestStatus('failed');
-        setTestError(res.error ?? 'Self-test failed');
+        setTestError(res.error ?? t('passkey.selfTestFailed'));
       }
     } catch (e) {
       setTestStatus('failed');
       setTestError(e instanceof Error ? e.message : String(e));
     }
-  }, [passkey.id, reauth]);
+  }, [passkey.id, reauth, t]);
 
   const runExport = useCallback(async () => {
     setIsExporting(true);
@@ -246,35 +249,35 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
           exportRetryRef.current = true;
           await runExport();
         } else {
-          setExportError('Re-authentication required');
+          setExportError(t('passkey.reauthRequired'));
         }
       } else if (res.error_code === 'SERVICE_LOCKED') {
-        setExportError('Service is locked. Unlock and try again.');
+        setExportError(t('common.serviceLocked'));
       } else {
         // 含 export_allowed=false 的 "Passkey export is disabled..."（无专用 error_code）
-        setExportError(res.error ?? 'Failed to export private key');
+        setExportError(res.error ?? t('passkey.exportFailed'));
       }
     } catch (e) {
       setExportError(e instanceof Error ? e.message : String(e));
     } finally {
       setIsExporting(false);
     }
-  }, [passkey.id, reauth]);
+  }, [passkey.id, reauth, t]);
 
   const handleDelete = async () => {
     if (isDeleting) return;
     const confirmed = window.confirm(
-      `Delete the passkey for ${passkey.rp_id}? This cannot be undone.`,
+      t('passkey.deleteConfirm', { rp: passkey.rp_id }),
     );
     if (!confirmed) return;
     setIsDeleting(true);
     try {
       const res = await personaAPI.passkeyDelete(passkey.id);
       if (res.success && res.data) {
-        toast.success('Passkey deleted');
+        toast.success(t('passkey.deleted'));
         onDeleted();
       } else {
-        toast.error(res.error ?? 'Failed to delete passkey');
+        toast.error(res.error ?? t('passkey.deleteFailed'));
       }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -287,7 +290,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       role="dialog"
-      aria-label="Passkey details"
+      aria-label={t('passkey.detailAria')}
       data-testid="passkey-detail-modal"
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
@@ -301,57 +304,57 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
         <div className="px-5 py-4 space-y-3">
           <dl className="text-sm space-y-2">
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Relying party</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.colRp')}</dt>
               <dd className="font-mono text-gray-900 dark:text-gray-100 break-all" data-testid="passkey-detail-rp">
                 {passkey.rp_id}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Identity</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.colIdentity')}</dt>
               <dd className="text-gray-900 dark:text-gray-100">{row.identityName}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Account</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.colAccount')}</dt>
               <dd className="text-gray-900 dark:text-gray-100 break-all" data-testid="passkey-detail-user">
                 {passkey.user_name ?? '—'}
               </dd>
             </div>
             {passkey.user_display_name && (
               <div className="flex gap-2">
-                <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Display name</dt>
+                <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.dtDisplayName')}</dt>
                 <dd className="text-gray-900 dark:text-gray-100 break-all">{passkey.user_display_name}</dd>
               </div>
             )}
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Credential ID</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.dtCredentialId')}</dt>
               <dd className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all" data-testid="passkey-detail-credential-id">
                 {b64ToHex(passkey.credential_id_b64)}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">User handle</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.dtUserHandle')}</dt>
               <dd className="font-mono text-xs text-gray-700 dark:text-gray-300 break-all">
                 {b64ToHex(passkey.user_handle_b64)}
               </dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Algorithm</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.dtAlgorithm')}</dt>
               <dd className="text-gray-900 dark:text-gray-100">ES256</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Verified</dt>
-              <dd className="text-gray-900 dark:text-gray-100">{passkey.uv_initialized ? 'Yes' : 'No'}</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.dtVerified')}</dt>
+              <dd className="text-gray-900 dark:text-gray-100">{passkey.uv_initialized ? t('passkey.yes') : t('passkey.no')}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Export allowed</dt>
-              <dd className="text-gray-900 dark:text-gray-100">{passkey.export_allowed ? 'Yes' : 'No'}</dd>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.dtExportAllowed')}</dt>
+              <dd className="text-gray-900 dark:text-gray-100">{passkey.export_allowed ? t('passkey.yes') : t('passkey.no')}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Created</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.colCreated')}</dt>
               <dd className="text-gray-900 dark:text-gray-100">{new Date(passkey.created_at).toLocaleString()}</dd>
             </div>
             <div className="flex gap-2">
-              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">Last used</dt>
+              <dt className="text-gray-500 dark:text-gray-400 w-28 shrink-0">{t('passkey.colLastUsed')}</dt>
               <dd className="text-gray-900 dark:text-gray-100">
                 {passkey.last_used_at ? new Date(passkey.last_used_at).toLocaleString() : '—'}
               </dd>
@@ -369,11 +372,11 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 data-testid="passkey-selftest-button"
               >
                 {testStatus === 'running' && <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />}
-                Run self-test
+                {t('passkey.selfTestButton')}
               </button>
               {testStatus === 'passed' && (
                 <span className="text-sm text-green-700 dark:text-green-300" data-testid="passkey-selftest-result">
-                  Self-test passed
+                  {t('passkey.selfTestPassed')}
                 </span>
               )}
               {testStatus === 'failed' && testError && (
@@ -395,11 +398,11 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 data-testid="passkey-export-button"
               >
                 {isExporting && <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />}
-                Export private key
+                {t('passkey.exportButton')}
               </button>
               {exportCountdown !== null && exportCountdown > 0 && (
                 <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0" data-testid="passkey-export-countdown">
-                  hides in {exportCountdown}s
+                  {t('reveal.hidesIn', { seconds: exportCountdown })}
                 </span>
               )}
               {exportHex !== null && (
@@ -407,14 +410,14 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                   type="button"
                   onClick={() => void copyWithAutoClear(exportHex)}
                   className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
-                  aria-label="Copy private key"
+                  aria-label={t('passkey.copyPrivate')}
                 >
                   <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
               )}
             </div>
             {!passkey.export_allowed && (
-              <p className="text-xs text-gray-400 dark:text-gray-500">Export is disabled for this passkey.</p>
+              <p className="text-xs text-gray-400 dark:text-gray-500">{t('passkey.exportDisabled')}</p>
             )}
             {exportHex !== null && (
               <div className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded px-3 py-2">
@@ -441,10 +444,10 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
             data-testid="passkey-delete-button"
           >
             <TrashIcon className="w-4 h-4 mr-1" />
-            Delete
+            {t('common.delete')}
           </button>
           <button type="button" onClick={onClose} className="btn-primary">
-            Close
+            {t('common.close')}
           </button>
         </div>
 

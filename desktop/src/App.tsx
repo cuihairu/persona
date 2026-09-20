@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
 import { ChartBarIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
+import i18n, { normalizeLocale } from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useGlobalShortcut } from '@/hooks/useGlobalShortcut';
 import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
@@ -25,6 +27,7 @@ import SettingsModal from '@/components/SettingsModal';
 import QuickSearch from '@/components/QuickSearch';
 import Sidebar, { NAV_ITEMS } from '@/components/Sidebar';
 import type { ViewId } from '@/components/Sidebar';
+import { credentialTypeLabel, securityLevelLabel } from '@/components/credentialDisplay';
 
 /** 两个 Toaster（锁定态/主界面）共用的气泡样式；配色走 .persona-toast 的 CSS 变量随主题翻转 */
 const TOAST_OPTIONS = { className: 'persona-toast' };
@@ -32,6 +35,22 @@ const TOAST_OPTIONS = { className: 'persona-toast' };
 const App: React.FC = () => {
   // 主题联动：偏好 → <html>.dark + localStorage + 原生窗口主题（挂在早退 return 之前）
   useTheme();
+  const { t } = useTranslation();
+
+  // 语言偏好恢复：get_workspace_settings 免解锁可读，锁屏阶段即生效；
+  // 读取失败静默保持默认 zh-CN（不阻塞解锁主链路）
+  useEffect(() => {
+    (async () => {
+      try {
+        const resp = await personaAPI.getWorkspaceSettings();
+        if (resp.success && resp.data) {
+          void i18n.changeLanguage(normalizeLocale(resp.data.locale));
+        }
+      } catch {
+        // keep default
+      }
+    })();
+  }, []);
 
   const {
     isUnlocked,
@@ -76,14 +95,14 @@ const App: React.FC = () => {
     const selected = credentials.find((c) => c.id === selectedCredentialId);
     // 无选中 / 选中已悬空（停在别的视图时切身份会残留跨身份 id）都按"未选中"提示
     if (!selected || (currentIdentity && selected.identity_id !== currentIdentity.id)) {
-      toast.error('Select an entry first');
+      toast.error(t('app.selectEntryFirst'));
       return;
     }
     if (!selected.username) {
-      toast.error('This entry has no username');
+      toast.error(t('app.noUsername'));
       return;
     }
-    void copyToClipboardWithToast(selected.username, 'Username');
+    void copyToClipboardWithToast(selected.username, t('app.username'));
   };
   useGlobalShortcut('e', handleCopyUsername, isUnlocked);
 
@@ -149,7 +168,7 @@ const App: React.FC = () => {
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <LoadingSpinner message="Initializing Persona..." />
+        <LoadingSpinner message={t('app.initializing')} />
       </div>
     );
   }
@@ -185,7 +204,7 @@ const App: React.FC = () => {
             data-testid="auto-lock-banner"
             className="bg-amber-50 dark:bg-amber-500/10 border-b border-amber-200 dark:border-amber-500/20 px-4 py-2 text-center text-sm text-amber-800 dark:text-amber-300"
           >
-            检测到长时间无操作，将在 {pendingSeconds} 秒后自动锁定（移动鼠标或按键可保持解锁）
+            {t('app.autoLockBanner', { seconds: pendingSeconds })}
           </div>
         )}
 
@@ -216,7 +235,7 @@ const App: React.FC = () => {
                 data-testid="view-title"
                 className="text-sm font-semibold text-gray-900 dark:text-gray-100"
               >
-                {NAV_ITEMS.find((item) => item.id === currentView)?.label}
+                {t(NAV_ITEMS.find((item) => item.id === currentView)!.label)}
               </h1>
               <QuickSearch />
             </div>
@@ -278,6 +297,7 @@ const App: React.FC = () => {
 };
 
 const StatisticsView: React.FC = () => {
+  const { t } = useTranslation();
   const [statistics, setStatistics] = useState<any>(null);
 
   useEffect(() => {
@@ -309,7 +329,7 @@ const StatisticsView: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Statistics</h2>
+        <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">{t('statistics.title')}</h2>
       </div>
 
       {/* Overview Cards */}
@@ -320,7 +340,7 @@ const StatisticsView: React.FC = () => {
               <ChartBarIcon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Total Identities</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.totalIdentities')}</p>
               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.total_identities}</p>
             </div>
           </div>
@@ -332,7 +352,7 @@ const StatisticsView: React.FC = () => {
               <ChartBarIcon className="w-6 h-6 text-green-600 dark:text-green-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Total Credentials</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.totalCredentials')}</p>
               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.total_credentials}</p>
             </div>
           </div>
@@ -344,7 +364,7 @@ const StatisticsView: React.FC = () => {
               <ChartBarIcon className="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Active Credentials</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.activeCredentials')}</p>
               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.active_credentials}</p>
             </div>
           </div>
@@ -356,7 +376,7 @@ const StatisticsView: React.FC = () => {
               <ChartBarIcon className="w-6 h-6 text-red-600 dark:text-red-400" />
             </div>
             <div>
-              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Favorites</p>
+              <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.favorites')}</p>
               <p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{statistics.favorite_credentials}</p>
             </div>
           </div>
@@ -366,11 +386,11 @@ const StatisticsView: React.FC = () => {
       {/* Credential Types Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="card p-6">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Credential Types</h3>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">{t('statistics.credentialTypes')}</h3>
           <div className="space-y-3">
             {Object.entries(statistics.credential_types).map(([type, count]) => (
               <div key={type} className="flex items-center justify-between">
-                <span className="text-sm text-gray-600 dark:text-gray-300">{type}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-300">{credentialTypeLabel(t, type)}</span>
                 <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{count as number}</span>
               </div>
             ))}
@@ -378,11 +398,11 @@ const StatisticsView: React.FC = () => {
         </div>
 
         <div className="card p-6">
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">Security Levels</h3>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">{t('statistics.securityLevels')}</h3>
           <div className="space-y-3">
             {Object.entries(statistics.security_levels).map(([level, count]) => (
               <div key={level} className="flex items-center justify-between">
-                <span className="text-sm text-gray-600 dark:text-gray-300">{level}</span>
+                <span className="text-sm text-gray-600 dark:text-gray-300">{securityLevelLabel(t, level)}</span>
                 <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{count as number}</span>
               </div>
             ))}

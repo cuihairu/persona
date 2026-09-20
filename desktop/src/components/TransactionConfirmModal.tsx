@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { XMarkIcon, ExclamationTriangleIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
+import { useTranslation } from 'react-i18next';
 import { personaAPI } from '@/utils/api';
 import { copyWithAutoClear } from '@/utils/clipboard';
 import { looksLikeAddressPoisoning } from '@/utils/addressPoisoning';
@@ -29,6 +30,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
   knownAddresses,
   onSuccess,
 }) => {
+  const { t } = useTranslation();
   const [toAddress, setToAddress] = useState('');
   const [amount, setAmount] = useState('');
   const [fee, setFee] = useState('');
@@ -74,7 +76,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
         memo: memo.trim() || undefined,
       });
       if (!created.success || !created.data) {
-        throw new Error(created.error ?? 'Failed to create transaction');
+        throw new Error(created.error ?? t('tx.createFailed'));
       }
 
       const result = await personaAPI.walletSignTransaction({
@@ -82,7 +84,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
         password,
       });
       if (!result.success || !result.data) {
-        throw new Error(result.error ?? 'Failed to sign transaction');
+        throw new Error(result.error ?? t('tx.signFailed'));
       }
 
       setSigned(result.data);
@@ -106,9 +108,9 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">
           <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
-            {step === 'result' ? 'Transaction Signed' : 'Send Transaction'}
+            {step === 'result' ? t('tx.titleResult') : t('tx.titleSign')}
           </h2>
-          <button onClick={handleClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label="Close">
+          <button onClick={handleClose} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded" aria-label={t('common.close')}>
             <XMarkIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
           </button>
         </div>
@@ -118,7 +120,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
             <>
               {/* From */}
               <div>
-                <label className="label text-gray-600 dark:text-gray-300">From ({wallet.name})</label>
+                <label className="label text-gray-600 dark:text-gray-300">{t('tx.from', { name: wallet.name })}</label>
                 <div className="flex items-center justify-between gap-2">
                   <code className="text-xs font-mono break-all text-gray-700 dark:text-gray-300">{fromAddress}</code>
                   <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0">{wallet.network}</span>
@@ -127,12 +129,12 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
               {/* To */}
               <div>
-                <label className="label text-gray-600 dark:text-gray-300">To Address</label>
+                <label className="label text-gray-600 dark:text-gray-300">{t('tx.toAddress')}</label>
                 <input
                   type="text"
                   value={toAddress}
                   onChange={(e) => setToAddress(e.target.value)}
-                  placeholder="Recipient address"
+                  placeholder={t('tx.toPlaceholder')}
                   className="w-full input font-mono text-xs"
                   data-testid="to-address-input"
                 />
@@ -144,10 +146,8 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                   >
                     <ExclamationTriangleIcon className="w-4 h-4 shrink-0 mt-0.5" />
                     <span>
-                      ⚠️ This address closely mimics a known address of yours
-                      (<code className="break-all">{poisonSource}</code>). Address-poisoning
-                      attacks rely on lookalike addresses — double-check every character or paste
-                      the address from a trusted source.
+                      {t('tx.poisoningPrefix')}
+                      (<code className="break-all">{poisonSource}</code>){t('tx.poisoningSuffix')}
                     </span>
                   </div>
                 )}
@@ -156,7 +156,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
               {/* Amount + Fee */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label text-gray-600 dark:text-gray-300">Amount (min. unit)</label>
+                  <label className="label text-gray-600 dark:text-gray-300">{t('tx.amount')}</label>
                   <input
                     type="text"
                     value={amount}
@@ -167,7 +167,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                   />
                 </div>
                 <div>
-                  <label className="label text-gray-600 dark:text-gray-300">Fee (min. unit)</label>
+                  <label className="label text-gray-600 dark:text-gray-300">{t('tx.fee')}</label>
                   <input
                     type="text"
                     value={fee}
@@ -181,7 +181,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
               {/* Memo */}
               <div>
-                <label className="label text-gray-600 dark:text-gray-300">Memo (optional)</label>
+                <label className="label text-gray-600 dark:text-gray-300">{t('tx.memo')}</label>
                 <input
                   type="text"
                   value={memo}
@@ -192,12 +192,12 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
               {/* Password */}
               <div>
-                <label className="label text-gray-600 dark:text-gray-300">Wallet Password</label>
+                <label className="label text-gray-600 dark:text-gray-300">{t('tx.walletPassword')}</label>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Password to sign"
+                  placeholder={t('tx.passwordPlaceholder')}
                   className="w-full input"
                   autoComplete="off"
                   data-testid="sign-password-input"
@@ -214,7 +214,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
 
           {step === 'signing' && (
             <div className="py-8 text-center text-sm text-gray-500 dark:text-gray-400">
-              Signing transaction…
+              {t('tx.signing')}
             </div>
           )}
 
@@ -222,10 +222,10 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
             <div className="space-y-3" data-testid="tx-result">
               <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
                 <CheckCircleIcon className="w-5 h-5" />
-                Signature verified and stored locally (not broadcast).
+                {t('tx.resultNote')}
               </div>
               <div>
-                <label className="label text-gray-600 dark:text-gray-300">Transaction Hash</label>
+                <label className="label text-gray-600 dark:text-gray-300">{t('tx.txHash')}</label>
                 <div className="flex items-start gap-2">
                   <code className="text-xs font-mono break-all" data-testid="tx-hash">
                     {signed.transaction_hash}
@@ -233,7 +233,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                   <button
                     onClick={() => void copyWithAutoClear(signed.transaction_hash)}
                     className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded shrink-0"
-                    aria-label="Copy hash"
+                    aria-label={t('tx.copyHash')}
                   >
                     ⧉
                   </button>
@@ -241,7 +241,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
               </div>
               {signed.raw_signed_transaction.length > 0 && (
                 <div>
-                  <label className="label text-gray-600 dark:text-gray-300">Raw Transaction ({signed.raw_signed_transaction.length} bytes)</label>
+                  <label className="label text-gray-600 dark:text-gray-300">{t('tx.rawTx', { count: signed.raw_signed_transaction.length })}</label>
                   <code className="block text-xs font-mono break-all text-gray-500 dark:text-gray-400">
                     {Array.from(signed.raw_signed_transaction)
                       .map((b) => b.toString(16).padStart(2, '0'))
@@ -257,7 +257,7 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
           {step === 'form' && (
             <>
               <button onClick={handleClose} className="btn-ghost">
-                Cancel
+                {t('common.cancel')}
               </button>
               <button
                 onClick={handleConfirm}
@@ -265,18 +265,18 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
                 className="btn-primary"
                 data-testid="confirm-sign-button"
               >
-                Confirm &amp; Sign
+                {t('tx.confirmSign')}
               </button>
             </>
           )}
           {step === 'signing' && (
             <button disabled className="btn-primary opacity-50">
-              Signing…
+              {t('tx.signingButton')}
             </button>
           )}
           {step === 'result' && (
             <button onClick={handleClose} className="btn-primary">
-              Done
+              {t('tx.done')}
             </button>
           )}
         </div>

@@ -6,12 +6,19 @@ import {
   DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
+import { useTranslation } from 'react-i18next';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import type { Credential } from '@/types';
 import { clsx } from 'clsx';
 import { copyToClipboardWithToast } from '@/utils/clipboard';
-import { getCredentialIcon, getSecurityColor, getSafeHostname } from './credentialDisplay';
+import {
+  getCredentialIcon,
+  getSecurityColor,
+  getSafeHostname,
+  credentialTypeLabel,
+  securityLevelLabel,
+} from './credentialDisplay';
 import CredentialDetailPane from './CredentialDetailPane';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
@@ -53,6 +60,7 @@ interface CredentialListProps {
  * 窄屏（<lg）退化为单列堆叠，面板出现在列表下方。
  */
 const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) => {
+  const { t } = useTranslation();
   const { credentials, currentIdentity, getCredentialData } = usePersonaService();
   // flag 开时批量预取列表页 favicon（纯缓存读；miss 不触发抓取）
   useFavicons(credentials.map((c) => c.url));
@@ -146,7 +154,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
         <div className="text-center">
           <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-          <p>Select an identity to view credentials</p>
+          <p>{t('credList.selectIdentity')}</p>
         </div>
       </div>
     );
@@ -158,10 +166,10 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-            Credentials for {currentIdentity.name}
+            {t('credList.titleFor', { name: currentIdentity.name })}
           </h2>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            {filteredCredentials.length} credential{filteredCredentials.length !== 1 ? 's' : ''}
+            {t('credList.count', { count: filteredCredentials.length })}
           </p>
         </div>
         <button
@@ -169,7 +177,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
           className="btn-primary flex items-center"
         >
           <PlusIcon className="w-4 h-4 mr-2" />
-          Add Credential
+          {t('credList.add')}
         </button>
       </div>
 
@@ -181,7 +189,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
           value={searchQuery}
           onChange={(e) => setCredentialSearchQuery(e.target.value)}
           className="input pl-10"
-          placeholder="Search credentials..."
+          placeholder={t('credList.searchPlaceholder')}
         />
       </div>
 
@@ -189,17 +197,17 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       {filteredCredentials.length === 0 ? (
         <div className="text-center py-12">
           <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No credentials found</h3>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">{t('credList.noResults')}</h3>
           <p className="text-gray-500 dark:text-gray-400 mb-4">
             {searchQuery
-              ? 'Try adjusting your search terms'
+              ? t('credList.tryAdjusting')
               : sidebarFilter.kind === 'all'
-                ? 'Get started by adding your first credential'
-                : 'Try a different category in the sidebar'}
+                ? t('credList.getStarted')
+                : t('credList.tryCategory')}
           </p>
           {!searchQuery && sidebarFilter.kind === 'all' && (
             <button onClick={onCreateCredential} className="btn-primary">
-              Add Your First Credential
+              {t('credList.addFirst')}
             </button>
           )}
         </div>
@@ -241,7 +249,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                       {credential.name}
                     </h3>
                     <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                      {credential.credential_type}
+                      {credentialTypeLabel(t, credential.credential_type)}
                       {credential.url && ' · '}
                       {credential.url && <span>{getSafeHostname(credential.url)}</span>}
                     </p>
@@ -255,17 +263,17 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                       getSecurityColor(credential.security_level),
                     )}
                   >
-                    {credential.security_level}
+                    {securityLevelLabel(t, credential.security_level)}
                   </span>
                   {credential.username && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        void copyToClipboardWithToast(credential.username!, 'Username');
+                        void copyToClipboardWithToast(credential.username!, t('app.username'));
                       }}
                       className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 opacity-0 focus:opacity-100 group-hover:opacity-100 shrink-0"
-                      title="Copy username"
-                      aria-label="Copy username"
+                      title={t('credList.copyUsername')}
+                      aria-label={t('credList.copyUsername')}
                     >
                       <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                     </button>
@@ -294,7 +302,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
               >
                 <div className="text-center">
                   <KeyIcon className="w-10 h-10 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-                  <p>Select an item to see details</p>
+                  <p>{t('credList.selectItem')}</p>
                 </div>
               </div>
             )}
