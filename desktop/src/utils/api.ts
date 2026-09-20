@@ -5,6 +5,7 @@ import type {
   Credential,
   CredentialData,
   CredentialHistoryEntry,
+  AttachmentEntry,
   CreateIdentityRequest,
   UpdateIdentityRequest,
   CreateCredentialRequest,
@@ -151,6 +152,36 @@ class PersonaAPI {
 
   async getCredentialHistory(credentialId: string): Promise<ApiResponse<CredentialHistoryEntry[]>> {
     return invoke('get_credential_history', { credential_id: credentialId });
+  }
+
+  async listAttachments(credentialId: string): Promise<ApiResponse<AttachmentEntry[]>> {
+    return invoke('list_attachments', { credential_id: credentialId });
+  }
+
+  async attachFileToCredential(
+    credentialId: string,
+    filePath: string,
+    encrypt: boolean
+  ): Promise<ApiResponse<AttachmentEntry>> {
+    return invoke('attach_file_to_credential', {
+      credential_id: credentialId,
+      file_path: filePath,
+      encrypt,
+    });
+  }
+
+  async saveAttachmentToFile(
+    attachmentId: string,
+    outputPath: string
+  ): Promise<ApiResponse<boolean>> {
+    return invoke('save_attachment_to_file', {
+      attachment_id: attachmentId,
+      output_path: outputPath,
+    });
+  }
+
+  async deleteAttachment(attachmentId: string): Promise<ApiResponse<boolean>> {
+    return invoke('delete_attachment', { attachment_id: attachmentId });
   }
 
   async getTotpCode(credentialId: string): Promise<ApiResponse<TotpCodeResponse>> {

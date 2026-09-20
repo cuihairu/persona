@@ -397,6 +397,11 @@ impl AttachmentManager {
         Ok(attachment.id)
     }
 
+    /// Look up attachment metadata without touching the blob
+    pub async fn get(&self, attachment_id: &Uuid) -> Result<Option<Attachment>> {
+        self.repository.find_by_id(attachment_id).await
+    }
+
     /// Retrieve an attachment
     pub async fn retrieve(
         &self,

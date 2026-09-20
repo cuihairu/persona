@@ -116,6 +116,13 @@ persona credential remove --id <UUID>
 # field-level diffs; encrypted payloads only ever show as "<encrypted>"
 persona credential history --id <UUID>
 
+# Attachments (1Password-style): files are encrypted with the owning item's
+# key and stay decryptable across master-password rotation
+persona credential attach --id <UUID> --file ~/Documents/recovery-codes.txt
+persona credential attachments --id <UUID>
+persona credential save-attachment --attachment-id <UUID> --output ~/Downloads/recovery-codes.txt
+persona credential remove-attachment --attachment-id <UUID>
+
 # Secure Note (1Password-style): the body is stored fully encrypted under the
 # per-item key — unlike the plain notes column on other item types
 persona credential add --identity alice --name "Recovery codes" --credential-type note --note "1111-2222

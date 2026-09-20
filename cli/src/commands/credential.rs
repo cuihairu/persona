@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use colored::*;
+use std::path::PathBuf;
 use tabled::{Table, Tabled};
 use uuid::Uuid;
 
@@ -96,6 +97,42 @@ pub enum CredentialCommand {
         /// Credential UUID
         #[arg(long)]
         id: Uuid,
+    },
+    /// Attach a file to a credential (encrypted with the item's key)
+    Attach {
+        /// Credential UUID
+        #[arg(long)]
+        id: Uuid,
+        /// Path of the file to attach
+        #[arg(long)]
+        file: PathBuf,
+        /// Store the file without encryption
+        #[arg(long)]
+        no_encrypt: bool,
+    },
+    /// List attachments for a credential
+    Attachments {
+        /// Credential UUID
+        #[arg(long)]
+        id: Uuid,
+    },
+    /// Save an attachment to disk (decrypted)
+    SaveAttachment {
+        /// Attachment UUID (see `credential attachments`)
+        #[arg(long)]
+        attachment_id: Uuid,
+        /// Output file path
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Remove an attachment
+    RemoveAttachment {
+        /// Attachment UUID (see `credential attachments`)
+        #[arg(long)]
+        attachment_id: Uuid,
+        /// Skip confirmation
+        #[arg(short, long)]
+        yes: bool,
     },
 }
 
@@ -214,6 +251,17 @@ pub(crate) async fn execute_with(
         CredentialCommand::Show { id, reveal } => show_credential(config, ui, id, reveal).await?,
         CredentialCommand::Remove { id, yes } => remove_credential(config, ui, id, yes).await?,
         CredentialCommand::History { id } => show_credential_history(config, ui, id).await?,
+        CredentialCommand::Attach { id, file, no_encrypt } => {
+            attach_file_command(config, ui, id, file, !no_encrypt).await?
+        }
+        CredentialCommand::Attachments { id } => list_attachments_command(config, ui, id).await?,
+        CredentialCommand::SaveAttachment {
+            attachment_id,
+            output,
+        } => save_attachment_command(config, ui, attachment_id, output).await?,
+        CredentialCommand::RemoveAttachment { attachment_id, yes } => {
+            remove_attachment_command(config, ui, attachment_id, yes).await?
+        }
     }
     Ok(())
 }
@@ -505,6 +553,134 @@ async fn show_credential_history(config: &CliConfig, ui: &dyn PromptUi, id: Uuid
         })
         .collect();
     println!("{}", Table::new(rows));
+    Ok(())
+}
+
+/// 人类可读的附件大小（B → KB → MB）
+fn format_attachment_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// Attachments（1Password 对齐）：附件经所属凭据的 per-item key 加密封存，
+/// 改密（rewrap）后仍可解密。blob 目录在 init_service 里随解锁一起初始化。
+async fn attach_file_command(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    id: Uuid,
+    file: PathBuf,
+    encrypt: bool,
+) -> Result<()> {
+    let mut service = init_service(config, ui).await?;
+    let attachment_id = service
+        .attach_file(id, &file, encrypt)
+        .await
+        .into_anyhow()
+        .with_context(|| format!("Failed to attach {}", file.display()))?;
+    let filename = file
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| file.display().to_string());
+    println!(
+        "{} Attached {} ({}) as {}",
+        "✓".green(),
+        filename.cyan(),
+        if encrypt { "encrypted".green() } else { "unencrypted".yellow() },
+        attachment_id
+    );
+    Ok(())
+}
+
+#[derive(Tabled)]
+struct AttachmentRow {
+    #[tabled(rename = "ID")]
+    id: String,
+    #[tabled(rename = "File")]
+    filename: String,
+    #[tabled(rename = "Size")]
+    size: String,
+    #[tabled(rename = "Encrypted")]
+    encrypted: String,
+    #[tabled(rename = "Attached")]
+    attached: String,
+}
+
+async fn list_attachments_command(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    id: Uuid,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
+    let attachments = service
+        .get_attachments(&id)
+        .await
+        .into_anyhow()
+        .context("Failed to list attachments")?;
+
+    if attachments.is_empty() {
+        println!("{}", "No attachments.".yellow());
+        return Ok(());
+    }
+
+    let rows: Vec<AttachmentRow> = attachments
+        .iter()
+        .map(|a| AttachmentRow {
+            id: a.id.to_string(),
+            filename: a.filename.clone(),
+            size: format_attachment_size(a.size),
+            encrypted: if a.is_encrypted { "yes".into() } else { "no".into() },
+            attached: a.created_at.format("%Y-%m-%d %H:%M").to_string(),
+        })
+        .collect();
+    println!("{}", Table::new(rows));
+    Ok(())
+}
+
+async fn save_attachment_command(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    attachment_id: Uuid,
+    output: PathBuf,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
+    service
+        .save_attachment(&attachment_id, &output, true)
+        .await
+        .into_anyhow()
+        .with_context(|| format!("Failed to save attachment to {}", output.display()))?;
+    println!(
+        "{} Saved decrypted attachment to {}",
+        "✓".green(),
+        output.display().to_string().cyan()
+    );
+    Ok(())
+}
+
+async fn remove_attachment_command(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    attachment_id: Uuid,
+    yes: bool,
+) -> Result<()> {
+    let mut service = init_service(config, ui).await?;
+    if !yes {
+        let confirm = ui.confirm(&format!("Remove attachment {}?", attachment_id), false)?;
+        if !confirm {
+            println!("{}", "Aborted.".yellow());
+            return Ok(());
+        }
+    }
+    service
+        .delete_attachment(&attachment_id)
+        .await
+        .into_anyhow()
+        .context("Failed to remove attachment")?;
+    println!("{} Removed attachment {}", "✓".green(), attachment_id);
     Ok(())
 }
 
@@ -1333,6 +1509,154 @@ mod tests {
         )
         .await
         .expect("history survives delete");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// Attachments：attach（加密封存）→ attachments 列表 → save-attachment
+    /// 解密读回 → remove-attachment；凭据删除级联清附件。
+    #[tokio::test]
+    async fn credential_attachment_commands_round_trip() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "hana").await;
+        execute(add_args("hana", "attach-login", Some("pw"), false), &config)
+            .await
+            .expect("seed add works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let hana = service.get_identity_by_name("hana").await.unwrap().unwrap();
+        let cred_id = service
+            .get_credentials_for_identity(&hana.id)
+            .await
+            .unwrap()[0]
+            .id;
+        drop(service);
+
+        // 源文件放在独立 tempdir（workspace tempdir 会被 attachments/ 目录复用）
+        let src_dir = TempDir::new().unwrap();
+        let src = src_dir.path().join("recovery.txt");
+        std::fs::write(&src, b"cli-attachment-payload").unwrap();
+
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Attach {
+                    id: cred_id,
+                    file: src.clone(),
+                    no_encrypt: false,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("attach works");
+
+        // 列表命令可跑；元数据断言走 service 层（is_encrypted / 文件名）
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Attachments { id: cred_id },
+            },
+            &config,
+        )
+        .await
+        .expect("attachments list works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let attachments = service.get_attachments(&cred_id).await.unwrap();
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0].filename, "recovery.txt");
+        assert!(attachments[0].is_encrypted);
+        let attachment_id = attachments[0].id;
+        drop(service);
+
+        // 解密保存：读回与源字节一致（item key 封存的核心保障）
+        let out = src_dir.path().join("restored.txt");
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::SaveAttachment {
+                    attachment_id,
+                    output: out.clone(),
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("save-attachment works");
+        assert_eq!(
+            std::fs::read(&out).unwrap(),
+            b"cli-attachment-payload".to_vec()
+        );
+
+        // 移除附件 → 列表清空
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::RemoveAttachment {
+                    attachment_id,
+                    yes: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("remove-attachment works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        assert!(service.get_attachments(&cred_id).await.unwrap().is_empty());
+
+        // 凭据删除级联（再挂一个，然后删凭据）
+        drop(service);
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Attach {
+                    id: cred_id,
+                    file: src.clone(),
+                    no_encrypt: false,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("re-attach works");
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Remove {
+                    id: cred_id,
+                    yes: true,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("credential remove works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        assert!(
+            service.get_attachments(&cred_id).await.unwrap().is_empty(),
+            "credential deletion must cascade attachments"
+        );
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

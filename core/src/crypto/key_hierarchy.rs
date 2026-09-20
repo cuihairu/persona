@@ -54,9 +54,13 @@ impl<'a> KeyHierarchy<'a> {
         })
     }
 
-    /// Unwrap a per-item key without touching its payload (master-password
-    /// rotation: re-wrap the same item key under the new master key).
-    fn unwrap_item_key(&self, wrapped_key: &[u8]) -> Result<[u8; 32]> {
+    /// Unwrap a per-item key without touching its payload.
+    ///
+    /// Used by master-password rotation (re-wrap the same item key under the
+    /// new master key) and by callers that legitimately reuse the item key
+    /// for related data — attachments are sealed under the owning
+    /// credential's item key, which rotation leaves unchanged.
+    pub fn unwrap_item_key(&self, wrapped_key: &[u8]) -> Result<[u8; 32]> {
         let item_key_bytes = self.master_encryption.decrypt(wrapped_key).map_err(|e| {
             PersonaError::CryptographicError(format!("Failed to unwrap item key: {}", e))
         })?;

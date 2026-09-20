@@ -578,9 +578,7 @@ impl CredentialDataRequest {
                 url: url.clone(),
             }),
             CredentialDataRequest::SecureNote { note } => {
-                CredentialData::SecureNote(SecureNoteData {
-                    note: note.clone(),
-                })
+                CredentialData::SecureNote(SecureNoteData { note: note.clone() })
             }
             CredentialDataRequest::Raw { data } => CredentialData::Raw(data.clone()),
         }
@@ -887,6 +885,39 @@ impl From<persona_core::models::ChangeHistory> for SerializableChangeHistory {
                     new_value: change.new_value,
                 })
                 .collect(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Attachments（1Password 对齐）：元数据即可展示信息；
+// encryption_key_id 只是密钥指纹（前 16 字节 hex），不含密钥材料
+// ---------------------------------------------------------------------------
+
+/// 可序列化的附件元数据
+#[derive(Debug, Serialize)]
+pub struct SerializableAttachment {
+    pub id: String,
+    pub credential_id: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub is_encrypted: bool,
+    pub content_hash: String,
+    pub created_at: String,
+}
+
+impl From<persona_core::models::Attachment> for SerializableAttachment {
+    fn from(attachment: persona_core::models::Attachment) -> Self {
+        Self {
+            id: attachment.id.to_string(),
+            credential_id: attachment.credential_id.to_string(),
+            filename: attachment.filename,
+            mime_type: attachment.mime_type,
+            size: attachment.size,
+            is_encrypted: attachment.is_encrypted,
+            content_hash: attachment.content_hash,
+            created_at: attachment.created_at.to_rfc3339(),
         }
     }
 }

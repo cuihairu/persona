@@ -381,6 +381,18 @@ export interface CredentialHistoryEntry {
   changes: FieldChangeEntry[];
 }
 
+/** 附件元数据（对应 Rust SerializableAttachment；blob 内容永不整段回传） */
+export interface AttachmentEntry {
+  id: string;
+  credential_id: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  is_encrypted: boolean;
+  content_hash: string;
+  created_at: string;
+}
+
 export interface CreateIdentityRequest {
   name: string;
   identity_type: string;

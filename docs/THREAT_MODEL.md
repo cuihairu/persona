@@ -59,7 +59,7 @@
 
 ## 已落地安全控制
 
-- **本地加密**：凭据明文使用 AES-256-GCM 加密；新写入凭据使用随机 item key，并由主密钥包裹。
+- **本地加密**：凭据明文使用 AES-256-GCM 加密；新写入凭据使用随机 item key，并由主密钥包裹。附件（attachments）复用所属凭据的 item key 封存——主密码轮换只重包 wrapped key、item key 不变，附件无需重写即跨轮换可解密；legacy 凭据（无 wrapped key）首次挂加密附件时原地升级为 item key 包裹，凭据删除级联清理附件 blob（孤儿 blob 持有的 item key 已不可恢复）。
 - **密钥派生**：密码导出与部分数据加密使用 Argon2id；核心主密钥服务当前仍包含 PBKDF2 路径，需在安全复审中跟踪参数和迁移策略。
 - **会话与锁定**：服务层支持自动锁、敏感操作再认证、生物识别 Provider 抽象和远程认证抽象。
 - **浏览器桥接**：Native Messaging 协议包含配对、HMAC 请求认证、短期 session、重放窗口、origin binding 和 user gesture 要求。

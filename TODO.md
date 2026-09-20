@@ -446,7 +446,20 @@ Game Tokens (游戏令牌)
     CLI `persona credential history --id`；凭据删除后历史仍可查询。
     已知噪声：create-then-update 架构使创建产生 created+updated 两行（真实两次
     写库，UI 可将来分组展示；恢复旧版本功能待后续评估密文重放风险）
-  - attachments 桌面 UI（core attachment/blob 存储已备）
+  - [x] attachments（2026-09 落地）：**修复加密链路致命缺陷**——原实现
+    attach 时随机生成密钥用后即丢、retrieve 再随机生成解密密钥，加密附件
+    永远无法解密（该缺陷存续期内创建的加密附件不可恢复，无迁移负担）。
+    修复后附件复用所属凭据的 per-item key 封存：主密码轮换只重包
+    wrapped key、item key 不变 → 附件零重写跨轮换可解密；legacy 凭据
+    （无 wrapped key）首次挂加密附件时原地升级为 item key 包裹（否则
+    主密钥封存的附件会在轮换后变砖）；凭据删除级联清附件 blob。
+    三端落地：desktop 4 命令（list/attach/save/delete）+ 详情面板
+    Attachments 区（tauri-plugin-dialog 原生文件选择/保存对话框，
+    字节不过 IPC）+ CLI `credential attach/attachments/save-attachment/
+    remove-attachment`（附件目录约定 `<db dir>/attachments`，desktop/CLI
+    一致）。已知限制：附件大小受单文件读入内存约束（BlobStore 整文件
+    加密后 >100MB 才分块，但读取路径全内存，超大文件会撑内存——
+    实际用户附件场景通常 <10MB，暂不优化）
   - Identity / Software License 条目类型（1Password 标准类别）
   - Watchtower expiring items / 2FA-available 提示
   - biometric unlock 原生接线（底层已备，缺系统指纹对话框）

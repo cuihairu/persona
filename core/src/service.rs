@@ -1015,6 +1015,22 @@ impl PersonaService {
         let existing = existing.unwrap();
 
         let _ = self.audit_repo.clear_credential_reference(id).await?;
+
+        // Cascade-delete attachments: they are sealed under this credential's
+        // item key, so orphaned blobs could never be decrypted again.
+        if let Some(manager) = self.attachment_manager.as_ref() {
+            let attachments = manager.list_for_credential(id).await?;
+            for attachment in attachments {
+                if let Err(e) = manager.delete(&attachment.id).await {
+                    tracing::warn!(
+                        attachment_id = %attachment.id,
+                        error = %e,
+                        "failed to delete attachment during credential deletion"
+                    );
+                }
+            }
+        }
+
         let ok = self.credential_repo.delete(id).await?;
         if ok {
             self.record_credential_history(ChangeType::Deleted, Some(&existing), None)
@@ -1744,8 +1760,8 @@ impl PersonaService {
     ///
     /// Scope: `credentials` (wrapped + legacy rows) and `passkeys` (always
     /// wrapped). Crypto wallets use a dedicated wallet password; attachments
-    /// use caller-supplied keys; change history stores plaintext JSON — none
-    /// are sealed under the master key.
+    /// are sealed under the owning credential's item key, which rotation
+    /// leaves unchanged; change history stores plaintext JSON.
     async fn rewrap_all_item_keys(
         &self,
         old_enc: &EncryptionService,
@@ -1853,7 +1869,68 @@ impl PersonaService {
 
     // ===== Attachment Management =====
 
+    /// Resolve the per-item key an attachment should be sealed under.
+    ///
+    /// Legacy rows (`wrapped_item_key` NULL, payload sealed directly with the
+    /// master key) are upgraded in place first: master-password rotation
+    /// re-encrypts legacy rows but never touches attachment blobs, so sealing
+    /// an attachment with the master key would break it on rotation. After
+    /// the upgrade the payload sits under a fresh item key and both the
+    /// credential and its attachments are rotation-safe.
+    async fn credential_item_key_for_attachment(
+        &self,
+        credential_id: &Uuid,
+    ) -> Result<[u8; 32]> {
+        let mut credential = self
+            .credential_repo
+            .find_by_id(credential_id)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!("credential {credential_id} not found"))
+            })?;
+
+        if credential.wrapped_item_key.is_none() {
+            let master_encryption = self.get_master_encryption_service()?;
+            let mut plaintext = master_encryption
+                .decrypt(&credential.encrypted_data)
+                .map_err(|e| {
+                    PersonaError::CryptographicError(format!(
+                        "Failed to decrypt legacy credential for item-key upgrade: {e}"
+                    ))
+                })?;
+            let envelope = KeyHierarchy::new(master_encryption)
+                .encrypt_with_new_item_key(&plaintext)?;
+            plaintext.zeroize();
+            credential.encrypted_data = envelope.ciphertext;
+            credential.wrapped_item_key = Some(envelope.wrapped_key);
+            self.credential_repo.update(&credential).await?;
+            tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key for attachment sealing");
+        }
+
+        let wrapped = credential
+            .wrapped_item_key
+            .as_ref()
+            .ok_or_else(|| {
+                PersonaError::CryptographicError(
+                    "credential has no per-item key after upgrade".to_string(),
+                )
+            })?;
+        let master_encryption = self.get_master_encryption_service()?;
+        let key = KeyHierarchy::new(master_encryption)
+            .unwrap_item_key(wrapped)
+            .map_err(|e| {
+                PersonaError::CryptographicError(format!(
+                    "Failed to unwrap item key for attachment sealing: {e}"
+                ))
+            })?;
+        Ok(key)
+    }
+
     /// Attach a file to a credential
+    ///
+    /// Encrypted attachments are sealed under the owning credential's
+    /// per-item key: the key survives master-password rotation untouched
+    /// (rotation only re-wraps it), so the attachment stays decryptable.
     pub async fn attach_file<P: AsRef<Path>>(
         &mut self,
         credential_id: Uuid,
@@ -1867,10 +1944,11 @@ impl PersonaService {
             .as_ref()
             .ok_or_else(|| PersonaError::Io("Attachment storage not initialized".to_string()))?;
 
-        // For now, use a fixed key or generate one per attachment
-        // In a real implementation, you'd use the master key hierarchy
-        let encryption_key = if encrypt {
-            Some(&EncryptionService::generate_key())
+        // Legacy rows (no wrapped key) are upgraded first — see
+        // `credential_item_key_for_attachment`. Plaintext attachments skip
+        // the key entirely and never trigger the upgrade.
+        let mut item_key = if encrypt {
+            Some(self.credential_item_key_for_attachment(&credential_id).await?)
         } else {
             None
         };
@@ -1880,9 +1958,13 @@ impl PersonaService {
                 file_path,
                 credential_id,
                 encrypt,
-                encryption_key.as_ref().map(|k| k.as_slice()),
+                item_key.as_ref().map(|k| k.as_slice()),
             )
             .await?;
+
+        if let Some(key) = item_key.as_mut() {
+            key.zeroize();
+        }
 
         // Log audit
         self.log_audit(
@@ -1911,6 +1993,11 @@ impl PersonaService {
     }
 
     /// Retrieve attachment content
+    ///
+    /// Encrypted attachments decrypt with the owning credential's per-item
+    /// key — the same key that sealed them at attach time. Attachments
+    /// created before this invariant held were sealed with a discarded
+    /// random key and are reported as undecryptable.
     pub async fn retrieve_attachment(
         &self,
         attachment_id: &Uuid,
@@ -1923,21 +2010,56 @@ impl PersonaService {
             .as_ref()
             .ok_or_else(|| PersonaError::Io("Attachment storage not initialized".to_string()))?;
 
-        // For now, use the same fixed key for decryption
-        // In a real implementation, you'd retrieve the correct key from key hierarchy
-        let decryption_key = if decrypt {
-            Some(&EncryptionService::generate_key())
+        let mut item_key = if decrypt {
+            match manager.get(attachment_id).await? {
+                Some(attachment) if attachment.is_encrypted => {
+                    let credential = self
+                        .credential_repo
+                        .find_by_id(&attachment.credential_id)
+                        .await?
+                        .ok_or_else(|| {
+                            PersonaError::InvalidInput(format!(
+                                "credential {} not found for attachment",
+                                attachment.credential_id
+                            ))
+                        })?;
+                    let wrapped = credential.wrapped_item_key.as_ref().ok_or_else(|| {
+                        PersonaError::CryptographicError(
+                            "attachment predates item-key sealing and cannot be decrypted"
+                                .to_string(),
+                        )
+                    })?;
+                    let master_encryption = self.get_master_encryption_service()?;
+                    Some(
+                        KeyHierarchy::new(master_encryption)
+                            .unwrap_item_key(wrapped)
+                            .map_err(|e| {
+                                PersonaError::CryptographicError(format!(
+                                    "Failed to unwrap item key for attachment: {e}"
+                                ))
+                            })?,
+                    )
+                }
+                // Plaintext attachment (or missing metadata): the blob layer
+                // ignores the key when `is_encrypted` is false.
+                _ => None,
+            }
         } else {
             None
         };
 
-        manager
+        let content = manager
             .retrieve(
                 attachment_id,
                 decrypt,
-                decryption_key.as_ref().map(|k| k.as_slice()),
+                item_key.as_ref().map(|k| k.as_slice()),
             )
-            .await
+            .await?;
+
+        if let Some(key) = item_key.as_mut() {
+            key.zeroize();
+        }
+        Ok(content)
     }
 
     /// Save attachment content to a file
@@ -3667,12 +3789,13 @@ mod tests {
             .unwrap();
         assert_ne!(raw, b"top-secret-bytes".to_vec());
 
-        // The service derives a throwaway decryption key, so the decrypt
-        // attempt must fail cleanly rather than hand back garbage.
-        assert!(service
+        // The attachment is sealed under the credential's per-item key, so
+        // decrypting through the service yields the original bytes.
+        let plain = service
             .retrieve_attachment(&attachment_id, true)
             .await
-            .is_err());
+            .unwrap();
+        assert_eq!(plain, b"top-secret-bytes".to_vec());
 
         // Saving with decrypt=false still writes the stored bytes to disk.
         let out_path = dir.path().join("raw-copy.bin");
@@ -3681,6 +3804,156 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(std::fs::read(&out_path).unwrap(), raw);
+    }
+
+    /// 加密附件复用凭据 item key 的核心保障：改密（rewrap）后附件仍可解密。
+    /// rotation 只重包 wrapped_item_key，item key 本身不变，blob 无需重写。
+    #[tokio::test]
+    async fn encrypted_attachment_survives_master_password_rotation() {
+        let (db, mut service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Rotation Attach".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential = seed_credential(
+            &service,
+            identity.id,
+            "rot attach",
+            CredentialType::Password,
+        )
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db)
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("doc.txt");
+        std::fs::write(&file_path, b"survive-rotation-payload").unwrap();
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, true)
+            .await
+            .unwrap();
+
+        service
+            .change_master_password("master-pin", "master-pin-2")
+            .await
+            .unwrap();
+
+        let plain = service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .unwrap();
+        assert_eq!(plain, b"survive-rotation-payload".to_vec());
+
+        // 凭据本体同样可解（改密事务的既有承诺），防回归连带断言
+        let data = service.get_credential_data(&credential.id).await.unwrap();
+        assert!(data.is_some());
+    }
+
+    /// legacy 凭据（wrapped_item_key NULL）首次挂加密附件时升级为 per-item key：
+    /// 升级后凭据 payload 仍可读、行获得 wrapped key、附件可解密往返。
+    #[tokio::test]
+    async fn attach_upgrades_legacy_credential_to_item_key() {
+        let (db, mut service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Legacy Attach".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // 手工构造 legacy 行：encrypted_data 直接用主密钥封、无 wrapped key
+        let master = service.get_master_encryption_service().unwrap();
+        let plaintext = CredentialData::Password(PasswordCredentialData {
+            password: "legacy-pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        })
+        .to_bytes()
+        .unwrap();
+        let sealed = master.encrypt(&plaintext).unwrap();
+        let credential = Credential::new(
+            identity.id,
+            "legacy row".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Medium,
+            sealed,
+            None,
+        );
+        let credentials = crate::storage::CredentialRepository::new(db.clone());
+        credentials.create(&credential).await.unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db)
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("legacy-attach.bin");
+        std::fs::write(&file_path, b"legacy-attachment-bytes").unwrap();
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, true)
+            .await
+            .unwrap();
+
+        // 升级后：行有 wrapped key、凭据数据可解回原值、附件往返成功
+        let upgraded = service.get_credential(&credential.id).await.unwrap().unwrap();
+        assert!(upgraded.wrapped_item_key.is_some());
+
+        let data = service
+            .get_credential_data(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+        match data {
+            CredentialData::Password(p) => assert_eq!(p.password, "legacy-pw"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+
+        let plain = service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .unwrap();
+        assert_eq!(plain, b"legacy-attachment-bytes".to_vec());
+    }
+
+    /// 凭据删除级联清附件：blob 元数据随行消失，不留不可解密的孤儿。
+    #[tokio::test]
+    async fn delete_credential_cascades_attachments() {
+        let (db, mut service) = unlocked_service().await;
+
+        let identity = service
+            .create_identity("Cascade Attach".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential = seed_credential(
+            &service,
+            identity.id,
+            "cascade attach",
+            CredentialType::Password,
+        )
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db)
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("cascade.bin");
+        std::fs::write(&file_path, b"cascade-bytes").unwrap();
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, true)
+            .await
+            .unwrap();
+        assert_eq!(service.get_attachments(&credential.id).await.unwrap().len(), 1);
+
+        assert!(service.delete_credential(&credential.id).await.unwrap());
+
+        assert!(service.get_attachments(&credential.id).await.unwrap().is_empty());
+        assert!(service.retrieve_attachment(&attachment_id, true).await.is_err());
     }
 
     #[tokio::test]

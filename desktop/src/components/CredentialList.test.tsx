@@ -63,6 +63,12 @@ const setupList = (credentials: any[], serviceOver: Record<string, any> = {}) =>
     toggleCredentialFavorite: jest.fn(),
     deleteCredential: jest.fn(),
     getTotpCode: jest.fn(),
+    getCredentialHistory: jest.fn().mockResolvedValue([]),
+    // 挂载期拉取不产生 setState（悬挂 promise），与 DetailPane 专测各自覆盖附件流
+    listAttachments: jest.fn(() => new Promise(() => {})),
+    attachFileToCredential: jest.fn(),
+    saveAttachmentToFile: jest.fn().mockResolvedValue(true),
+    deleteAttachment: jest.fn().mockResolvedValue(true),
     ...serviceOver,
   };
   (usePersonaService as jest.Mock).mockReturnValue(service);

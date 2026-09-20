@@ -103,6 +103,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
     tauri::Builder::<R>::new()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             service: Arc::new(Mutex::new(None)),
             db_path: Mutex::new(None),
@@ -157,6 +158,10 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::get_credential_data,
             commands::get_credential_history,
             commands::get_totp_code,
+            commands::list_attachments,
+            commands::attach_file_to_credential,
+            commands::save_attachment_to_file,
+            commands::delete_attachment,
             commands::search_credentials,
             commands::generate_password,
             commands::get_statistics,

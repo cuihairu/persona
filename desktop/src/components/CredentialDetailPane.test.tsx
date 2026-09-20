@@ -2,9 +2,16 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import CredentialDetailPane from './CredentialDetailPane';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
+import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
+}));
+
+// 原生文件对话框只在用户点击 Add File / 保存时触发；jsdom 下哑掉
+jest.mock('@tauri-apps/plugin-dialog', () => ({
+  open: jest.fn(),
+  save: jest.fn(),
 }));
 
 // flag 开时面板会挂 useFavicons 预取；这里哑掉 IPC（缓存命中路径另有专测）
@@ -51,6 +58,13 @@ const setupPane = (
     deleteCredential: jest.fn(),
     getTotpCode: jest.fn(),
     getCredentialHistory: jest.fn().mockResolvedValue([]),
+    // 默认返回永不 resolve 的 promise：挂载期拉取不产生 setState，
+    // 同步收尾的旧用例不受影响（悬挂 promise 卸载后无害）；附件用例
+    // 显式传 mockResolvedValue 并用 findBy/act 收尾
+    listAttachments: jest.fn(() => new Promise(() => {})),
+    attachFileToCredential: jest.fn(),
+    saveAttachmentToFile: jest.fn().mockResolvedValue(true),
+    deleteAttachment: jest.fn().mockResolvedValue(true),
     ...serviceOver,
   };
   (usePersonaService as jest.Mock).mockReturnValue(service);
@@ -305,6 +319,152 @@ describe('components/CredentialDetailPane', () => {
     });
 
     expect(await screen.findByText('No recorded changes.')).toBeInTheDocument();
+  });
+
+  it('attachments: loads on mount and renders filename, size and encrypted marker', async () => {
+    const listAttachments = jest.fn().mockResolvedValue([
+      {
+        id: 'a1',
+        credential_id: 'c1',
+        filename: 'recovery-codes.txt',
+        mime_type: 'text/plain',
+        size: 2048,
+        is_encrypted: true,
+        content_hash: 'deadbeef',
+        created_at: '2026-09-20T00:00:00Z',
+      },
+    ]);
+    setupPane(
+      { name: 'With Attachment', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { listAttachments },
+    );
+
+    expect(await screen.findByText('recovery-codes.txt')).toBeInTheDocument();
+    expect(listAttachments).toHaveBeenCalledWith('c1');
+    // 大小（2 KB）与加密标记
+    expect(screen.getByText(/2\.0 KB/)).toBeInTheDocument();
+    expect(screen.getByText(/encrypted/)).toBeInTheDocument();
+    expect(screen.getByTestId('attachment-save-a1')).toBeInTheDocument();
+    expect(screen.getByTestId('attachment-delete-a1')).toBeInTheDocument();
+  });
+
+  it('attachments: empty state explains item-key encryption', async () => {
+    setupPane(
+      { name: 'Bare', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+    );
+
+    expect(
+      await screen.findByText(/No attachments\. Files are encrypted with this item's key\./),
+    ).toBeInTheDocument();
+  });
+
+  it('attachments: Add File picks via native dialog, attaches encrypted and appends', async () => {
+    const attachFileToCredential = jest
+      .fn()
+      .mockResolvedValue({
+        id: 'a9',
+        credential_id: 'c1',
+        filename: 'picked.bin',
+        mime_type: 'application/octet-stream',
+        size: 10,
+        is_encrypted: true,
+        content_hash: 'x',
+        created_at: '2026-09-20T00:00:00Z',
+      });
+    setupPane(
+      { name: 'Attach Flow', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { attachFileToCredential },
+    );
+
+    (openDialog as jest.Mock).mockResolvedValue('/tmp/picked.bin');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('attachment-add'));
+    });
+
+    expect(await screen.findByText('picked.bin')).toBeInTheDocument();
+    expect(openDialog).toHaveBeenCalledWith(expect.objectContaining({ multiple: false }));
+    expect(attachFileToCredential).toHaveBeenCalledWith('c1', '/tmp/picked.bin', true);
+  });
+
+  it('attachments: canceling the picker never calls attach', async () => {
+    const attachFileToCredential = jest.fn();
+    setupPane(
+      { name: 'Cancel Flow', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { attachFileToCredential },
+    );
+
+    (openDialog as jest.Mock).mockResolvedValue(null);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('attachment-add'));
+    });
+
+    expect(attachFileToCredential).not.toHaveBeenCalled();
+  });
+
+  it('attachments: Save goes through the native save dialog and decrypts to disk', async () => {
+    const saveAttachmentToFile = jest.fn().mockResolvedValue(true);
+    const listAttachments = jest.fn().mockResolvedValue([
+      {
+        id: 'a1',
+        credential_id: 'c1',
+        filename: 'doc.pdf',
+        mime_type: 'application/pdf',
+        size: 500,
+        is_encrypted: true,
+        content_hash: 'h',
+        created_at: '2026-09-20T00:00:00Z',
+      },
+    ]);
+    setupPane(
+      { name: 'Save Flow', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { listAttachments, saveAttachmentToFile },
+    );
+
+    (saveDialog as jest.Mock).mockResolvedValue('/tmp/out/doc.pdf');
+    await screen.findByText('doc.pdf');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('attachment-save-a1'));
+    });
+
+    expect(saveDialog).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: 'doc.pdf' }),
+    );
+    expect(saveAttachmentToFile).toHaveBeenCalledWith('a1', '/tmp/out/doc.pdf');
+  });
+
+  it('attachments: Delete confirms, removes from the list on success', async () => {
+    const deleteAttachment = jest.fn().mockResolvedValue(true);
+    const listAttachments = jest.fn().mockResolvedValue([
+      {
+        id: 'a1',
+        credential_id: 'c1',
+        filename: 'gone.txt',
+        mime_type: 'text/plain',
+        size: 3,
+        is_encrypted: true,
+        content_hash: 'h',
+        created_at: '2026-09-20T00:00:00Z',
+      },
+    ]);
+    setupPane(
+      { name: 'Delete Flow', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { listAttachments, deleteAttachment },
+    );
+
+    await screen.findByText('gone.txt');
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('attachment-delete-a1'));
+    });
+
+    expect(deleteAttachment).toHaveBeenCalledWith('a1');
+    expect(await screen.findByText(/No attachments\./)).toBeInTheDocument();
   });
 
   it('TwoFactor pane: shows the live code, copies it and refreshes on demand', async () => {

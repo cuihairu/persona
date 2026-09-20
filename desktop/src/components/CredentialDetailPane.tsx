@@ -1,22 +1,33 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ArrowDownTrayIcon,
   ArrowPathIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   ClockIcon,
   DocumentDuplicateIcon,
   HeartIcon,
+  PaperClipIcon,
+  PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
+import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
-import type { Credential, CredentialHistoryEntry } from '@/types';
+import type { AttachmentEntry, Credential, CredentialHistoryEntry } from '@/types';
 import { clsx } from 'clsx';
 import RevealSecretButton from '@/components/RevealSecretButton';
 import { getCredentialIcon, getSecurityColor } from './credentialDisplay';
+
+/** 人类可读的附件大小（B → KB → MB） */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /**
  * 右侧常驻详情面板：原 CredentialDetailModal 平移，外壳从全屏 overlay
@@ -36,8 +47,17 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   onClose,
   onCopy,
 }) => {
-  const { toggleCredentialFavorite, deleteCredential, getTotpCode, fetchFavicon, getCredentialHistory } =
-    usePersonaService();
+  const {
+    toggleCredentialFavorite,
+    deleteCredential,
+    getTotpCode,
+    fetchFavicon,
+    getCredentialHistory,
+    listAttachments,
+    attachFileToCredential,
+    saveAttachmentToFile,
+    deleteAttachment,
+  } = usePersonaService();
   const faviconsEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
   // 头部图标预取（列表页通常已拉好，这里幂等兜底）
   useFavicons([credential.url]);
@@ -51,11 +71,26 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   // Item history：懒加载——展开时才查一次历史表，切换凭据即重置
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [history, setHistory] = useState<CredentialHistoryEntry[] | null>(null);
+  // Attachments：主功能，选中即拉取；切换凭据重置后重拉
+  const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
+  const [isAttachmentBusy, setIsAttachmentBusy] = useState(false);
   const IconComponent = getCredentialIcon(credential.credential_type);
 
   useEffect(() => {
     setIsFavorite(credential.is_favorite);
   }, [credential.id, credential.is_favorite]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setAttachments([]);
+    listAttachments(credential.id).then((entries) => {
+      if (!cancelled) setAttachments(entries);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // listAttachments 来自 context hook，返回值每渲染重建但仅作启动调用
+  }, [credential.id]);
 
   // 切换凭据时重置历史折叠态（不预取）
   useEffect(() => {
@@ -73,7 +108,6 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       cancelled = true;
     };
     // history 作为"已加载"标记参与依赖，避免重复拉取
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHistoryOpen, credential.id, history]);
 
   const refreshTotp = useCallback(async () => {
@@ -145,6 +179,54 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       if (ok) onClose();
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  /** 添加附件：原生文件选择 → 恒走加密封存（凭据 item key）→ 追加进列表 */
+  const handleAttachFile = async () => {
+    if (isAttachmentBusy) return;
+    const selected = await openFileDialog({ multiple: false, title: 'Attach file' });
+    const filePath = Array.isArray(selected) ? selected[0] : selected;
+    if (!filePath) return; // 用户取消
+    setIsAttachmentBusy(true);
+    try {
+      const attachment = await attachFileToCredential(credential.id, filePath, true);
+      if (attachment) setAttachments((prev) => [...prev, attachment]);
+    } finally {
+      setIsAttachmentBusy(false);
+    }
+  };
+
+  /** 保存附件：原生保存对话框 → 解密写出 */
+  const handleSaveAttachment = async (attachment: AttachmentEntry) => {
+    if (isAttachmentBusy) return;
+    const outputPath = await saveFileDialog({
+      title: 'Save attachment',
+      defaultPath: attachment.filename,
+    });
+    if (!outputPath) return; // 用户取消
+    setIsAttachmentBusy(true);
+    try {
+      await saveAttachmentToFile(attachment.id, outputPath);
+    } finally {
+      setIsAttachmentBusy(false);
+    }
+  };
+
+  const handleDeleteAttachment = async (attachment: AttachmentEntry) => {
+    if (isAttachmentBusy) return;
+    const confirmed = window.confirm(
+      `Delete attachment "${attachment.filename}"? This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setIsAttachmentBusy(true);
+    try {
+      const ok = await deleteAttachment(attachment.id);
+      if (ok) {
+        setAttachments((prev) => prev.filter((a) => a.id !== attachment.id));
+      }
+    } finally {
+      setIsAttachmentBusy(false);
     }
   };
 
@@ -522,6 +604,79 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
             </div>
           </div>
         )}
+
+        {/* Attachments（1Password 对齐）：附件经凭据 item key 加密封存 */}
+        <div className="border-t pt-3">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
+              <PaperClipIcon className="w-4 h-4" />
+              Attachments
+            </span>
+            <button
+              type="button"
+              onClick={handleAttachFile}
+              disabled={isAttachmentBusy}
+              data-testid="attachment-add"
+              className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+            >
+              <PlusIcon className="w-3.5 h-3.5" />
+              Add File
+            </button>
+          </div>
+
+          <div className="mt-2" data-testid="attachment-list">
+            {attachments.length === 0 ? (
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                No attachments. Files are encrypted with this item's key.
+              </p>
+            ) : (
+              <ul className="space-y-1.5">
+                {attachments.map((attachment) => (
+                  <li
+                    key={attachment.id}
+                    className="flex items-center justify-between gap-2 text-xs bg-gray-50 dark:bg-gray-800 rounded p-2"
+                    data-testid="attachment-entry"
+                  >
+                    <div className="min-w-0">
+                      <p
+                        className="truncate font-medium text-gray-700 dark:text-gray-200"
+                        data-testid="attachment-filename"
+                      >
+                        {attachment.filename}
+                      </p>
+                      <p className="text-gray-400 dark:text-gray-500">
+                        {formatFileSize(attachment.size)}
+                        {attachment.is_encrypted && ' · encrypted'}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleSaveAttachment(attachment)}
+                        disabled={isAttachmentBusy}
+                        title={`Save ${attachment.filename} to disk`}
+                        data-testid={`attachment-save-${attachment.id}`}
+                        className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                      >
+                        <ArrowDownTrayIcon className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteAttachment(attachment)}
+                        disabled={isAttachmentBusy}
+                        title={`Delete ${attachment.filename}`}
+                        data-testid={`attachment-delete-${attachment.id}`}
+                        className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
+                      >
+                        <TrashIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
 
         {/* Item history（1Password 对齐）：懒加载的变更时间线 */}
         <div className="border-t pt-3">

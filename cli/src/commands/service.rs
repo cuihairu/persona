@@ -160,10 +160,25 @@ pub(crate) async fn init_service(config: &CliConfig, ui: &dyn PromptUi) -> Resul
         .await
         .into_anyhow()
         .context("Failed to run database migrations")?;
+    let db_for_attachments = db.clone();
     let mut service = crate::commands::service::new_service(db)
         .await
         .into_anyhow()
         .context("Failed to create PersonaService")?;
+
+    // 附件 blob 存储：目录约定与 desktop 一致（<db dir>/attachments）。
+    // 初始化失败只降级附件命令（报 "Attachment storage not initialized"），
+    // 不阻断解锁与其余命令。
+    let attachments_dir = db_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("attachments");
+    if let Err(e) = service
+        .init_attachment_storage(&attachments_dir, db_for_attachments)
+        .await
+    {
+        eprintln!("Warning: attachment storage unavailable: {}", e);
+    }
 
     if !service
         .has_users()

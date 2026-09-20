@@ -193,6 +193,28 @@ describe('utils/api command mapping coverage', () => {
     await personaAPI.getFavicons(['a.com', 'b.com']);
     expect(mockInvoke).toHaveBeenCalledWith('get_favicons', { hosts: ['a.com', 'b.com'] });
 
+    await personaAPI.getCredentialHistory('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_credential_history', { credential_id: 'c1' });
+
+    await personaAPI.listAttachments('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('list_attachments', { credential_id: 'c1' });
+
+    await personaAPI.attachFileToCredential('c1', '/tmp/f.bin', true);
+    expect(mockInvoke).toHaveBeenCalledWith('attach_file_to_credential', {
+      credential_id: 'c1',
+      file_path: '/tmp/f.bin',
+      encrypt: true,
+    });
+
+    await personaAPI.saveAttachmentToFile('a1', '/tmp/out.bin');
+    expect(mockInvoke).toHaveBeenCalledWith('save_attachment_to_file', {
+      attachment_id: 'a1',
+      output_path: '/tmp/out.bin',
+    });
+
+    await personaAPI.deleteAttachment('a1');
+    expect(mockInvoke).toHaveBeenCalledWith('delete_attachment', { attachment_id: 'a1' });
+
     await personaAPI.deleteCredential('c1');
     expect(mockInvoke).toHaveBeenCalledWith('delete_credential', { credential_id: 'c1' });
   });

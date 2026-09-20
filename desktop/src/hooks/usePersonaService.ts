@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
-import type { CredentialHistoryEntry, Identity } from '@/types';
+import type { AttachmentEntry, CredentialHistoryEntry, Identity } from '@/types';
 import toast from 'react-hot-toast';
 
 export const usePersonaService = () => {
@@ -348,6 +348,63 @@ export const usePersonaService = () => {
     }
   };
 
+  /** 附件四动作。列表失败回 []（面板显示空态）；增删保存失败 toast 且返回 null/[] */
+  const listAttachments = async (credentialId: string) => {
+    try {
+      const response = await personaAPI.listAttachments(credentialId);
+      if (response.success && response.data) {
+        return response.data;
+      }
+      toast.error(response.error || 'Failed to load attachments');
+      return [] as AttachmentEntry[];
+    } catch {
+      toast.error('Failed to load attachments');
+      return [] as AttachmentEntry[];
+    }
+  };
+
+  const attachFileToCredential = async (credentialId: string, filePath: string, encrypt: boolean) => {
+    try {
+      const response = await personaAPI.attachFileToCredential(credentialId, filePath, encrypt);
+      if (response.success && response.data) {
+        return response.data;
+      }
+      toast.error(response.error || 'Failed to attach file');
+      return null;
+    } catch {
+      toast.error('Failed to attach file');
+      return null;
+    }
+  };
+
+  const saveAttachmentToFile = async (attachmentId: string, outputPath: string) => {
+    try {
+      const response = await personaAPI.saveAttachmentToFile(attachmentId, outputPath);
+      if (response.success) {
+        return true;
+      }
+      toast.error(response.error || 'Failed to save attachment');
+      return false;
+    } catch {
+      toast.error('Failed to save attachment');
+      return false;
+    }
+  };
+
+  const deleteAttachment = async (attachmentId: string) => {
+    try {
+      const response = await personaAPI.deleteAttachment(attachmentId);
+      if (response.success) {
+        return true;
+      }
+      toast.error(response.error || 'Failed to delete attachment');
+      return false;
+    } catch {
+      toast.error('Failed to delete attachment');
+      return false;
+    }
+  };
+
   const getTotpCode = async (credentialId: string) => {
     try {
       const response = await personaAPI.getTotpCode(credentialId);
@@ -494,6 +551,10 @@ export const usePersonaService = () => {
     generatePassword,
     getCredentialData,
     getCredentialHistory,
+    listAttachments,
+    attachFileToCredential,
+    saveAttachmentToFile,
+    deleteAttachment,
     getTotpCode,
     toggleCredentialFavorite,
     fetchFavicon,
