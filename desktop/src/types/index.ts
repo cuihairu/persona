@@ -155,7 +155,8 @@ export interface HealthIssueKindPayload {
     | 'breached_password'
     | 'expired'
     | 'expiring_soon'
-    | 'stale_unchanged';
+    | 'stale_unchanged'
+    | 'two_factor_available';
   /** weak_password：zxcvbn 分数 */
   score?: number;
   /** reused_password：共用同一明文密码的凭据数 */
@@ -164,6 +165,8 @@ export interface HealthIssueKindPayload {
   count?: number;
   /** expiring_soon / stale_unchanged：距过期/未更新天数 */
   days?: number;
+  /** two_factor_available：命中 2FA 目录的站点（归一化域名） */
+  site?: string;
 }
 
 export interface HealthIssue {

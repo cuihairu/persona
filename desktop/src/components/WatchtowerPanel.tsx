@@ -23,6 +23,7 @@ const KIND_LABELS: Record<HealthIssueKindPayload['type'], string> = {
   expired: 'expired',
   expiring_soon: 'expiring soon',
   stale_unchanged: 'stale',
+  two_factor_available: '2FA available',
 };
 
 const SEVERITIES: HealthSeverity[] = ['high', 'medium', 'low'];
@@ -59,7 +60,8 @@ const WatchtowerPanel: React.FC = () => {
           <div>
             <p className="text-sm font-medium text-gray-500 dark:text-gray-400">Watchtower</p>
             <p className="mt-1 text-sm text-gray-600 dark:text-gray-300">
-              Scan the vault for weak, reused, breached, expired and stale credentials.
+              Scan the vault for weak, reused, breached, expired and stale credentials,
+              plus sites that offer two-factor authentication but have no TOTP stored.
               Reports contain metadata only — secret material is never included.
             </p>
             <label className="mt-3 flex items-start gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">

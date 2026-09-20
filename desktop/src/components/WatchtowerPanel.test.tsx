@@ -72,6 +72,37 @@ describe('components/WatchtowerPanel', () => {
     expect(getByText('stale')).toBeInTheDocument();
   });
 
+  it('renders the 2FA-available hint with its site label', async () => {
+    mockHealthScan.mockResolvedValue({
+      success: true,
+      data: mkReport({
+        total_credentials: 1,
+        counts: { high: 0, medium: 0, low: 1 },
+        issues: [
+          {
+            credential_id: '33333333-3333-3333-3333-333333333333',
+            credential_name: 'GitHub',
+            credential_type: 'Password',
+            severity: 'low',
+            detail:
+              'github.com offers two-factor authentication, but no TOTP is stored for it in this vault. Add a TOTP credential to strengthen the login.',
+            type: 'two_factor_available',
+            site: 'github.com',
+          },
+        ],
+      }),
+    });
+
+    const { getByText, getByRole } = render(<WatchtowerPanel />);
+    fireEvent.click(getByRole('button', { name: 'Run Scan' }));
+
+    await waitFor(() => {
+      expect(getByText('GitHub')).toBeInTheDocument();
+    });
+    expect(getByText('2FA available')).toBeInTheDocument();
+    expect(getByText(/github\.com offers two-factor authentication/)).toBeInTheDocument();
+  });
+
   it('passes check_breaches: true when the checkbox is ticked', async () => {
     mockHealthScan.mockResolvedValue({ success: true, data: mkReport() });
 

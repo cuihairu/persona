@@ -109,6 +109,7 @@ fn kind_label(kind: &persona_core::HealthIssueKind) -> &'static str {
         Expired => "expired",
         ExpiringSoon { .. } => "expiring soon",
         StaleUnchanged { .. } => "stale",
+        TwoFactorAvailable { .. } => "2FA available",
     }
 }
 

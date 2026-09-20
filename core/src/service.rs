@@ -815,6 +815,10 @@ impl PersonaService {
         // credential_id → (name, type) so issues can be attributed later
         // without holding decrypted data.
         let mut secrets: HashMap<Uuid, (String, String, String)> = HashMap::new();
+        // 2FA-available rule inputs: Password credentials carrying a site
+        // URL, and the site keys already covered by TOTP-like credentials.
+        let mut login_urls: Vec<(Uuid, String, String, String)> = Vec::new();
+        let mut totp_sites: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         let mut issues: Vec<HealthIssue> = Vec::new();
         let mut push_issue = |credential: &Credential, kind: HealthIssueKind| {
@@ -863,6 +867,46 @@ impl PersonaService {
                         push_issue(credential, kind);
                     }
                 }
+                CredentialData::SoftwareLicense(lic) => {
+                    // `valid_until` is free text; unparseable values are
+                    // skipped (data quality, not a security finding).
+                    if let Some(valid_until) = &lic.valid_until {
+                        if let Some(kind) = crate::health::check_text_expiry(
+                            valid_until,
+                            now,
+                            config.expiry_warning_days,
+                        ) {
+                            push_issue(credential, kind);
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            // 2FA-available rule inputs: which logins have a site URL, and
+            // which sites already have a TOTP-like credential.
+            match &data {
+                CredentialData::TwoFactor(_) | CredentialData::GameToken(_) => {
+                    if let Some(site) = credential
+                        .url
+                        .as_deref()
+                        .and_then(crate::health::normalize_site_key)
+                    {
+                        totp_sites.insert(site);
+                    }
+                }
+                CredentialData::Password(_) => {
+                    if let Some(url) = credential.url.as_deref() {
+                        if crate::health::normalize_site_key(url).is_some() {
+                            login_urls.push((
+                                credential.id,
+                                credential.name.clone(),
+                                credential.credential_type.to_string(),
+                                url.to_string(),
+                            ));
+                        }
+                    }
+                }
                 _ => {}
             }
 
@@ -897,6 +941,22 @@ impl PersonaService {
                         String::new(),
                     ),
                 );
+            }
+        }
+
+        // 2FA-available rule (1Password Watchtower "2FA available"):
+        // directory sites with no TOTP-like credential covering them.
+        for (credential_id, name, credential_type, url) in &login_urls {
+            if let Some(site) = crate::health::check_two_factor_available(url, &totp_sites) {
+                let kind = HealthIssueKind::TwoFactorAvailable { site };
+                issues.push(HealthIssue {
+                    credential_id: *credential_id,
+                    credential_name: name.clone(),
+                    credential_type: credential_type.clone(),
+                    severity: kind.severity(),
+                    detail: kind.detail(),
+                    kind,
+                });
             }
         }
 
@@ -4562,6 +4622,159 @@ mod tests {
     }
 
     // ---- favicon（feature = "favicon"）：编排与缓存语义 ----
+
+    // ------------------------------------------------------------------
+    // Watchtower 扩展规则（1Password 对齐）：软件许可到期 + 2FA available
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn scan_health_flags_expiring_software_license() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Watchtower Licenses".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let make_license = |valid_until: Option<String>| {
+            CredentialData::SoftwareLicense(crate::models::credential::SoftwareLicenseData {
+                license_key: "LICENSE-1".to_string(),
+                version: None,
+                publisher: None,
+                purchase_date: None,
+                order_number: None,
+                support_email: None,
+                download_url: None,
+                seats: None,
+                valid_until,
+            })
+        };
+
+        // 快到期（ISO 文本）与远未到期（点分文本）各一条；另留一条到期日
+        // 不可解析的自由文本——必须静默跳过而不是报错。
+        let soon = (chrono::Utc::now() + chrono::Duration::days(10))
+            .format("%Y-%m-%d")
+            .to_string();
+        let far = (chrono::Utc::now() + chrono::Duration::days(400))
+            .format("%d.%m.%Y")
+            .to_string();
+        service
+            .create_credential(
+                identity.id,
+                "JetBrains".to_string(),
+                CredentialType::SoftwareLicense,
+                SecurityLevel::Medium,
+                &make_license(Some(soon)),
+            )
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "Perpetual Tool".to_string(),
+                CredentialType::SoftwareLicense,
+                SecurityLevel::Medium,
+                &make_license(Some(far)),
+            )
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "Lifetime Deal".to_string(),
+                CredentialType::SoftwareLicense,
+                SecurityLevel::Medium,
+                &make_license(Some("lifetime".to_string())),
+            )
+            .await
+            .unwrap();
+
+        let report = service
+            .scan_health(HealthScanConfig::default())
+            .await
+            .unwrap();
+        let expiring: Vec<&HealthIssue> = report
+            .issues
+            .iter()
+            .filter(|i| matches!(i.kind, HealthIssueKind::ExpiringSoon { .. }))
+            .collect();
+        assert_eq!(expiring.len(), 1, "only the soon license is flagged");
+        assert_eq!(expiring[0].credential_name, "JetBrains");
+    }
+
+    #[tokio::test]
+    async fn scan_health_flags_two_factor_available_until_covered() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Watchtower 2FA".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // GitHub 登录（目录站点、无 TOTP）→ 应提示；内部站点不在目录 → 不提示。
+        let mut github =
+            seed_credential(&service, identity.id, "GitHub", CredentialType::Password).await;
+        github.url = Some("https://github.com".to_string());
+        service.update_credential(&github).await.unwrap();
+        let mut intranet =
+            seed_credential(&service, identity.id, "Intranet", CredentialType::Password).await;
+        intranet.url = Some("https://internal.corp.local".to_string());
+        service.update_credential(&intranet).await.unwrap();
+
+        let report = service
+            .scan_health(HealthScanConfig::default())
+            .await
+            .unwrap();
+        let two_fa: Vec<&HealthIssue> = report
+            .issues
+            .iter()
+            .filter(|i| matches!(i.kind, HealthIssueKind::TwoFactorAvailable { .. }))
+            .collect();
+        assert_eq!(two_fa.len(), 1);
+        assert_eq!(two_fa[0].credential_name, "GitHub");
+        match &two_fa[0].kind {
+            HealthIssueKind::TwoFactorAvailable { site } => assert_eq!(site, "github.com"),
+            other => panic!("wrong kind: {other:?}"),
+        }
+
+        // 存进 GitHub 的 TOTP 后再扫：提示消失（同站覆盖）。
+        service
+            .create_credential(
+                identity.id,
+                "GitHub TOTP".to_string(),
+                CredentialType::TwoFactor,
+                SecurityLevel::High,
+                &CredentialData::TwoFactor(crate::models::credential::TwoFactorData {
+                    secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+                    issuer: "GitHub".to_string(),
+                    account_name: "alice".to_string(),
+                    algorithm: "SHA1".to_string(),
+                    digits: 6,
+                    period: 30,
+                }),
+            )
+            .await
+            .unwrap();
+        // create_credential 无 url 参数：历史测试同款 update 路径补 url
+        let mut totp = service
+            .get_credentials_for_identity(&identity.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "GitHub TOTP")
+            .expect("seeded TOTP credential");
+        totp.url = Some("https://github.com".to_string());
+        service.update_credential(&totp).await.unwrap();
+
+        let report = service
+            .scan_health(HealthScanConfig::default())
+            .await
+            .unwrap();
+        assert!(
+            !report
+                .issues
+                .iter()
+                .any(|i| matches!(i.kind, HealthIssueKind::TwoFactorAvailable { .. })),
+            "covering TOTP must quiet the 2FA-available issue"
+        );
+    }
 
     // ------------------------------------------------------------------
     // Password expiry policy + master password rotation

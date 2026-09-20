@@ -531,7 +531,18 @@ Game Tokens (游戏令牌)
     flag 全覆盖，first/last name 与 license key 缺省交互提示，--secret 互斥
     校验）+ show --reveal 展示臂。日期字段沿用自由格式文本（与 1Password
     文本字段一致，不做解析）
-  - Watchtower expiring items / 2FA-available 提示
+  - [x] Watchtower expiring items / 2FA-available 提示（2026-09-20 落地）：
+    **expiring items**——SoftwareLicense.valid_until 自由文本到期检查
+    （`parse_flexible_date` 宽容解析 ISO/斜线/点分三种风格，不可解析
+    静默跳过；到期语义"当天仍有效"，到期时刻 = 当日 23:59:59，对齐
+    BankCard 月末规则）。**2FA available**——Password 条目 url 命中内置
+    2FA 目录（BUILTIN_2FA_SITES，2fa.directory 精选 62 站，随版本更新，
+    纯离线不外联）且库内无 TOTP 类凭据（TwoFactor/GameToken）覆盖该站
+    （host 归一化去 scheme/www/端口，子域互认）→ Low 级提示。新变体
+    `TwoFactorAvailable { site }`（serde tag two_factor_available）；
+    三端落地：CLI kind_label / desktop 前端类型 + KIND_LABELS + 描述
+    文案 + 渲染测试。已知限制：目录硬编码会过时（follow-up：随发布
+    刷新）；不做 HTML link 解析式 favicon 的 2FA 联动
   - biometric unlock 原生接线（底层已备，缺系统指纹对话框）
   - Travel Mode（vault 级可见性开关）
   - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）

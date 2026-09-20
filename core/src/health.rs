@@ -67,6 +67,9 @@ pub enum HealthIssueKind {
     ExpiringSoon { days: i64 },
     /// Not modified for longer than the stale threshold
     StaleUnchanged { days: i64 },
+    /// The site offers TOTP but no TOTP-like credential covers it in
+    /// this vault (1Password Watchtower "2FA available" rule)
+    TwoFactorAvailable { site: String },
 }
 
 impl HealthIssueKind {
@@ -86,7 +89,9 @@ impl HealthIssueKind {
                 }
             }
             HealthIssueKind::ExpiringSoon { .. } => HealthSeverity::Medium,
-            HealthIssueKind::StaleUnchanged { .. } => HealthSeverity::Low,
+            HealthIssueKind::StaleUnchanged { .. } | HealthIssueKind::TwoFactorAvailable { .. } => {
+                HealthSeverity::Low
+            }
         }
     }
 
@@ -111,6 +116,10 @@ impl HealthIssueKind {
             HealthIssueKind::StaleUnchanged { days } => {
                 format!("Unchanged for {days} day(s). Verify it is still needed and current.")
             }
+            HealthIssueKind::TwoFactorAvailable { site } => format!(
+                "{site} offers two-factor authentication, but no TOTP is stored for it \
+                 in this vault. Add a TOTP credential to strengthen the login."
+            ),
         }
     }
 }
@@ -253,6 +262,169 @@ pub fn check_stale(
     } else {
         None
     }
+}
+
+/// Leniently parse a free-text date the way users type it into fields like
+/// `SoftwareLicenseData::valid_until`: `YYYY-MM-DD`, `YYYY/M/D`,
+/// `D.M.YYYY` / `DM.YYYY` (dot style). Anything else returns `None` and the
+/// caller skips the check — an unparseable field is a data-quality issue,
+/// not a security finding (same policy as [`check_bank_card_expiry`]).
+pub fn parse_flexible_date(text: &str) -> Option<chrono::NaiveDate> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    use chrono::NaiveDate;
+    if let Some((y, rest)) = text.split_once('-') {
+        // YYYY-MM-DD
+        let (m, d) = rest.split_once('-')?;
+        return NaiveDate::from_ymd_opt(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
+    }
+    if let Some((y, rest)) = text.split_once('/') {
+        // YYYY/M/D
+        let (m, d) = rest.split_once('/')?;
+        return NaiveDate::from_ymd_opt(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
+    }
+    if let Some((d, rest)) = text.split_once('.') {
+        // D.M.YYYY
+        let (m, y) = rest.split_once('.')?;
+        return NaiveDate::from_ymd_opt(y.parse().ok()?, m.parse().ok()?, d.parse().ok()?);
+    }
+    None
+}
+
+/// Expiry check for free-text date fields. `valid_until = 2026-09-27`
+/// reads as "valid through Sep 27", so the expiry instant is the last
+/// second of that day (same policy as [`check_bank_card_expiry`]'s
+/// end-of-month rule).
+pub fn check_text_expiry(
+    text: &str,
+    now: DateTime<Utc>,
+    warning_days: i64,
+) -> Option<HealthIssueKind> {
+    let date = parse_flexible_date(text)?;
+    let end_of_day = date
+        .checked_add_days(chrono::Days::new(1))?
+        .and_hms_opt(0, 0, 0)?
+        .and_utc()
+        - ChronoDuration::seconds(1);
+    check_expiry(end_of_day, now, warning_days)
+}
+
+/// Normalize a URL to a comparable site key: lowercase host, `www.`
+/// prefix stripped, port and path dropped. Returns `None` for inputs
+/// without a usable host.
+pub fn normalize_site_key(url: &str) -> Option<String> {
+    let no_scheme = url
+        .trim()
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url.trim());
+    let host_port = no_scheme.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = host_port.rsplit_once(':').map_or(host_port, |(h, _)| h);
+    let host = host.trim().to_ascii_lowercase();
+    if host.is_empty() || !host.contains('.') {
+        return None;
+    }
+    Some(host.strip_prefix("www.").unwrap_or(&host).to_string())
+}
+
+/// Sites known to offer TOTP two-factor authentication. A curated subset
+/// of the public 2fa.directory dataset (entries with a TOTP method),
+/// shipped in-binary so the check stays offline and nothing about the
+/// vault leaks; refresh ride along with app releases, like 1Password.
+pub const BUILTIN_2FA_SITES: &[&str] = &[
+    "amazon.com",
+    "amazon.de",
+    "atlassian.com",
+    "bitbucket.org",
+    "cloudflare.com",
+    "coinbase.com",
+    "disqus.com",
+    "docusign.com",
+    "dropbox.com",
+    "ebay.com",
+    "etsy.com",
+    "evernote.com",
+    "facebook.com",
+    "figma.com",
+    "github.com",
+    "gitlab.com",
+    "google.com",
+    "hover.com",
+    "hubspot.com",
+    "icloud.com",
+    "instagram.com",
+    "intuit.com",
+    "kickstarter.com",
+    "lastpass.com",
+    "linkedin.com",
+    "mail.com",
+    "mastodon.social",
+    "microsoft.com",
+    "namecheap.com",
+    "netflix.com",
+    "nextdns.io",
+    "npmjs.com",
+    "okta.com",
+    "pinterest.com",
+    "plex.tv",
+    "proton.me",
+    "reddit.com",
+    "robinhood.com",
+    "shopify.com",
+    "slack.com",
+    "smtp2go.com",
+    "spotify.com",
+    "squarespace.com",
+    "stackexchange.com",
+    "stackoverflow.com",
+    "steamcommunity.com",
+    "steampowered.com",
+    "telegram.org",
+    "twitch.tv",
+    "twitter.com",
+    "uber.com",
+    "upwork.com",
+    "vimeo.com",
+    "whatsapp.com",
+    "wikipedia.org",
+    "wordpress.com",
+    "x.com",
+    "yahoo.com",
+    "zoom.us",
+];
+
+/// 2FA-available check (1Password Watchtower "2FA available" rule).
+///
+/// Fires when `url` belongs to a site known to offer TOTP and no TOTP-like
+/// credential in this vault covers that site (`totp_sites` holds the
+/// normalized site keys of TwoFactor/GameToken credentials). Subdomains
+/// count as covered: a TOTP stored for `github.com` also covers
+/// `api.github.com` and vice versa. Returns the matched directory key on
+/// hit so the issue can name the site.
+pub fn check_two_factor_available(
+    url: &str,
+    totp_sites: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let key = normalize_site_key(url)?;
+    let directory: std::collections::HashSet<&str> = BUILTIN_2FA_SITES.iter().copied().collect();
+    if !directory.contains(key.as_str()) {
+        return None;
+    }
+    let covered = totp_sites.iter().any(|stored| {
+        stored == &key || site_is_subdomain(&key, stored) || site_is_subdomain(stored, &key)
+    });
+    if covered {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+/// `api.github.com` is a subdomain of `github.com`.
+fn site_is_subdomain(host: &str, base: &str) -> bool {
+    host != base && host.ends_with(&format!(".{base}"))
 }
 
 #[cfg(test)]
@@ -460,5 +632,145 @@ mod tests {
             "high severity must sort first"
         );
         assert_eq!(report.issues[2].severity, HealthSeverity::Low);
+    }
+
+    // ---- parse_flexible_date / check_text_expiry ----
+
+    #[test]
+    fn flexible_date_parses_common_styles() {
+        assert_eq!(
+            parse_flexible_date("2026-09-20"),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 20)
+        );
+        assert_eq!(
+            parse_flexible_date("2026/9/3"),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 3)
+        );
+        assert_eq!(
+            parse_flexible_date("5.3.2027"),
+            chrono::NaiveDate::from_ymd_opt(2027, 3, 5)
+        );
+    }
+
+    #[test]
+    fn flexible_date_rejects_garbage_and_impossible_dates() {
+        for bad in [
+            "",
+            "  ",
+            "someday",
+            "2026",
+            "Sep 2026",
+            "2026-13-01",
+            "2026-02-30",
+            "32.1.2026",
+            "2026-09",
+        ] {
+            assert_eq!(parse_flexible_date(bad), None, "{bad:?} must not parse");
+        }
+    }
+
+    #[test]
+    fn text_expiry_uses_midnight_of_parsed_date() {
+        let now = Utc::now();
+        let past = (now - ChronoDuration::days(2))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(
+            check_text_expiry(&past, now, 30),
+            Some(HealthIssueKind::Expired)
+        );
+        let soon = (now + ChronoDuration::days(7))
+            .format("%Y-%m-%d")
+            .to_string();
+        assert_eq!(
+            check_text_expiry(&soon, now, 30),
+            Some(HealthIssueKind::ExpiringSoon { days: 7 })
+        );
+        let far = (now + ChronoDuration::days(400))
+            .format("%d.%m.%Y")
+            .to_string();
+        assert_eq!(check_text_expiry(&far, now, 30), None);
+        // unparseable free text is skipped, not reported
+        assert_eq!(check_text_expiry("lifetime license", now, 30), None);
+    }
+
+    // ---- normalize_site_key ----
+
+    #[test]
+    fn site_key_normalizes_scheme_host_port_www() {
+        assert_eq!(
+            normalize_site_key("https://GitHub.com/alice?tab=repos"),
+            Some("github.com".to_string())
+        );
+        assert_eq!(
+            normalize_site_key("http://www.example.com:8443/x"),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            normalize_site_key("api.github.com"),
+            Some("api.github.com".to_string())
+        );
+        assert_eq!(normalize_site_key("not a url"), None);
+        assert_eq!(normalize_site_key("localhost"), None);
+    }
+
+    // ---- check_two_factor_available ----
+
+    fn totp_sites(keys: &[&str]) -> std::collections::HashSet<String> {
+        keys.iter().map(|k| k.to_string()).collect()
+    }
+
+    #[test]
+    fn two_factor_available_fires_for_directory_site_without_totp() {
+        assert_eq!(
+            check_two_factor_available("https://github.com", &totp_sites(&[])),
+            Some("github.com".to_string())
+        );
+        assert_eq!(
+            check_two_factor_available("https://github.com", &totp_sites(&["gitlab.com"])),
+            Some("github.com".to_string())
+        );
+    }
+
+    #[test]
+    fn two_factor_available_quiets_when_totp_covers_site_or_subdomain() {
+        assert_eq!(
+            check_two_factor_available("https://github.com", &totp_sites(&["github.com"])),
+            None
+        );
+        // TOTP stored for a subdomain covers the apex and vice versa
+        assert_eq!(
+            check_two_factor_available("https://api.github.com", &totp_sites(&["github.com"])),
+            None
+        );
+        assert_eq!(
+            check_two_factor_available("https://github.com", &totp_sites(&["api.github.com"])),
+            None
+        );
+    }
+
+    #[test]
+    fn two_factor_available_ignores_sites_outside_the_directory() {
+        assert_eq!(
+            check_two_factor_available("https://internal-intranet.local", &totp_sites(&[])),
+            None
+        );
+        assert_eq!(
+            check_two_factor_available("https://bank-of-nowhere.com", &totp_sites(&[])),
+            None
+        );
+    }
+
+    #[test]
+    fn two_factor_available_issue_is_low_severity_with_site_template() {
+        let kind = HealthIssueKind::TwoFactorAvailable {
+            site: "github.com".to_string(),
+        };
+        assert_eq!(kind.severity(), HealthSeverity::Low);
+        let detail = kind.detail();
+        assert!(detail.contains("github.com"), "{detail}");
+        assert!(detail.to_lowercase().contains("totp"), "{detail}");
+        let json = serde_json::to_string(&kind).unwrap();
+        assert!(json.contains("two_factor_available"), "{json}");
     }
 }
