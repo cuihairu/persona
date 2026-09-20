@@ -129,6 +129,16 @@ jobs:
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Verify downloaded bundles
+        shell: bash
+        run: |
+          found=$(find dist -type f | wc -l)
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no bundle files found under dist/"
+            exit 1
+          fi
+          find dist -type f -printf '%s %p\n' | sort -n
+
       - name: Remove previous nightly release
         if: steps.rel.outputs.tag == 'nightly'
         shell: bash
@@ -143,4 +153,5 @@ jobs:
           name: ${{ steps.rel.outputs.name }}
           prerelease: ${{ steps.rel.outputs.prerelease == 'true' }}
           generate_release_notes: ${{ steps.rel.outputs.prerelease == 'false' }}
-          files: dist/*
+          # artifacts keep their bundler subdirectories (deb/, nsis/, ...)
+          files: dist/**/*
