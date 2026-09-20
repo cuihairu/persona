@@ -275,16 +275,23 @@ Desktop (Tauri v2 + React)
   二进制 36MB ELF，ldd 零缺失（webkit2gtk-4.1/gtk-3/javascriptcore 健全）。
   已知限制：`--bundles deb` 为本机 CLI 限定（bundle.targets 保持 "all"
   不改——本机无 rpmbuild，AppImage 需联网拉 linuxdeploy）；deb 未签名；
-  control 描述为占位 "Persona Desktop Application (none)"（tauri.conf
-  未填 description）；本环境无 GUI，仅产物元数据验证、未真机安装。
+  本环境无 GUI，仅产物元数据验证、未真机安装。
   follow-up：CI 打包矩阵（rpm/appimage/dmg/msi）、deb 签名、
-  更新器（updater）签名密钥、tauri.conf description 补全。
+  更新器（updater）签名密钥。
   手工验收：① `sudo dpkg -i
   desktop/src-tauri/target/release/bundle/deb/Persona_0.1.0_amd64.deb`
   ② 应用列表启动 persona-desktop → 初始化 vault（主密码）→ 解锁
   ③ 冒烟：身份/凭据 CRUD、⌘K/⌘L/⌘E/⌘, 四快捷键、设置四开关、
-  favicon 抓取、SSH agent 面板/托盘、自动锁定、暗色模式
+  favicon 抓取、SSH agent 面板/托盘、自动锁定、暗色模式、设置页开
+  关 passkeys/SSH agent 即时生效（开即拉起、关即停，无需 lock→unlock）
   ④ `sudo dpkg -r persona` 卸载 → 确认 vault 数据目录保留
+- [x] deb control description 补全（2026-09-20 桌面稳定化第 4 项）：
+  tauri.conf.json bundle 层补 shortDescription/longDescription（注意字段
+  在 `bundle` 直下——顶层 description 与 `bundle.linux.deb` 均被 v2
+  schema deny_unknown_fields 拒绝）；重打包验证 control Description
+  落地（短句 + 完整产品长描述），产物同步带上开关联动批次代码（12.4
+  →13MB，Installed-Size 37→41MB），内容（二进制/hicolor 三档图标/
+  .desktop）与 ldd 依赖零缺失复核通过
 
 Server & Sync (optional)
 - [x] Events API, audit ingestion, metrics
