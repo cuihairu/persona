@@ -1,0 +1,146 @@
+# Desktop multi-platform packaging: Linux (deb/rpm/AppImage), Windows
+# (NSIS/MSI), macOS (dmg).
+#
+# Three entry points:
+#   - push tag v*        → official GitHub Release with generated notes
+#   - schedule (daily)   → rolling `nightly` prerelease (assets overwritten)
+#   - workflow_dispatch  → build only; tick `upload` to publish to nightly
+#
+# Binaries are unsigned (SmartScreen/Gatekeeper will warn on install);
+# signing keys are tracked as a follow-up in TODO.md. Assets are
+# architecture-pinned per runner: linux/windows x64, macos arm64.
+name: Desktop Build
+
+on:
+  push:
+    tags: ['v*']
+  schedule:
+    - cron: '23 18 * * *' # daily 02:23 Beijing, off the whole-hour marks
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: '上传产物到 nightly release（覆盖旧 nightly）'
+        type: boolean
+        default: false
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            bundles: deb,rpm,appimage
+          - name: windows
+            os: windows-latest
+            bundles: nsis,msi
+          - name: macos
+            os: macos-latest
+            bundles: dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev rpm
+
+      - name: Install JS dependencies (desktop slice only)
+        shell: bash
+        run: pnpm install --frozen-lockfile --filter persona-desktop...
+
+      - name: Build bundles
+        working-directory: desktop
+        shell: bash
+        run: pnpm exec tauri build --bundles ${{ matrix.bundles }}
+
+      - name: Upload bundle artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.name }}
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.deb
+            desktop/src-tauri/target/release/bundle/**/*.rpm
+            desktop/src-tauri/target/release/bundle/**/*.AppImage
+            desktop/src-tauri/target/release/bundle/**/*.exe
+            desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.dmg
+          if-no-files-found: error
+
+  release:
+    name: publish
+    needs: build
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'schedule' ||
+      inputs.upload
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          path: dist
+          merge-multiple: true
+
+      - name: Compute release target
+        id: rel
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+            echo "name=Nightly build $(date -u +%F)" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Remove previous nightly release
+        if: steps.rel.outputs.tag == 'nightly'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete nightly --cleanup-tag --yes || true
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel.outputs.tag }}
+          name: ${{ steps.rel.outputs.name }}
+          prerelease: ${{ steps.rel.outputs.prerelease == 'true' }}
+          generate_release_notes: ${{ steps.rel.outputs.prerelease == 'false' }}
+          files: dist/*

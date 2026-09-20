@@ -283,8 +283,8 @@ Desktop (Tauri v2 + React)
   路径 checkbox/禁用态 Unlock 按钮），日志零 panic（WARNING 均为服务器
   环境级：RealtimeKit/PipeWire 缺失、无 DRI3）
   ③④ 交互冒烟与卸载保留数据 → 待有 GUI 的机器执行（deb 可直接拷贝）
-  follow-up：CI 打包矩阵（rpm/appimage/dmg/msi）、deb 签名、
-  更新器（updater）签名密钥。
+  follow-up：deb 签名、更新器（updater）签名密钥、macOS x86_64/universal
+  与 Linux arm64 产物。CI 打包矩阵已落地（见 desktop-build.yml 条目）。
 - [x] deb control description 补全（2026-09-20 桌面稳定化第 4 项）：
   tauri.conf.json bundle 层补 shortDescription/longDescription（注意字段
   在 `bundle` 直下——顶层 description 与 `bundle.linux.deb` 均被 v2
@@ -293,6 +293,18 @@ Desktop (Tauri v2 + React)
   →13MB，Installed-Size 37→41MB），内容（二进制/hicolor 三档图标/
   .desktop）与 ldd 依赖零缺失复核通过；产物在本机（服务器）dpkg 安装
   + xvfb 虚拟显示启动验证通过（见上条真机安装验收记录）
+- [x] CI 多平台打包矩阵 desktop-build.yml（2026-09-20）：三平台矩阵——
+  Linux ubuntu-22.04（deb/rpm/AppImage，apt 装 webkit2gtk-4.1/appindicator/
+  rpm 工具链）、Windows（NSIS exe + WiX msi）、macOS arm64（dmg）。三个入口：
+  push tag v* → 正式 Release（自动生成 notes）；每日 cron 02:23（北京）→
+  滚动 nightly prerelease（删旧 release+tag 重建，产物覆盖）；手动 dispatch
+  可仅构建（勾选 upload 才发布 nightly）。仓库 PUBLIC 无 runner 额度压力；
+  pnpm 按 workspace 根 lockfile --filter persona-desktop... 装依赖，
+  rust-cache 缓存 desktop/src-tauri workspace。已知限制：产物未签名
+  （SmartScreen/Gatekeeper 安装告警）、版本号恒 0.1.0 无日期区分（资产靠
+  nightly release 名日期区分）。Android 不在本矩阵：mobile 是
+  persona-mobile Rust FFI（就绪）+ Flutter 宿主（工程未建），无 apk 可打，
+  工程落地后另加 flutter job
 
 Server & Sync (optional)
 - [x] Events API, audit ingestion, metrics
@@ -528,9 +540,15 @@ Quality & Security
 - [x] Threat model & periodic security review
 - [x] Fuzz tests for parsers (mnemonic/keystore/QR)
 - [x] Supply chain checks (cargo-deny, npm audit)
-- [ ] Dependabot 开放警报（2026-09）：glib 0.18.5 medium（gtk-rs 绑定链，升级需跟
-  libadwaita/gtk 整体升版）；elliptic 6.6.1 low（crypto-browserify 传递依赖，
-  构建工具链，暂无上游修复版）——均不在运行时敏感边界内，观察上游
+- [x] Dependabot 开放警报处理（2026-09-20，两条均 dismissed tolerable_risk）：
+  glib <0.20 medium（GHSA-wrw7-89jp-8q8g，VariantStrIter unsoundness）——修复
+  版在 glib 0.20，但 tauri 2.11.6/wry 0.55.1（当前最新）仍锁 gtk-rs 0.18 线
+  （gtk 0.18 semver 强制 glib ^0.18），上游迁移前不可达；受影响 API 在本仓库
+  依赖树无调用方（desktop 零直接 glib 代码）。重评估条件：tauri 迁移
+  gtk-rs 0.20+。elliptic <=6.6.1 low——npm 上游无修复版（最新即 6.6.1），仅
+  website umi bundler 构建链引入（node-libs-browser→crypto-browserify），
+  不进 desktop/扩展产物；umi 已升 4.7.19 复核仍在，上游出补丁版即
+  override。顺带：tauri 2.11.5→2.11.6（desktop 全量测试+clippy 绿）
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
