@@ -29,11 +29,11 @@ This separation keeps the cryptographic unlock path in Rust while letting UI lay
 桌面端（Tauri）提供 `OsBiometricProvider`（`desktop/src-tauri/src/biometric/`），
 按平台分发到三个 cfg 模块，同步 trait 由专用 ceremony 线程 + 120s 超时桥接：
 
-| 平台 | 模块 | 后端 | 语义 |
-| ---- | ---- | ---- | ---- |
-| Linux | `biometric/polkit.rs` | 手写 zbus `CheckAuthorization`（action `com.persona.desktop.biometric-unlock`，subject 用 system-bus-name） | `auth_self`：指纹（fprintd）或密码回退 |
-| macOS | `biometric/macos.rs` | objc2-local-authentication `LAPolicy::DeviceOwnerAuthentication` | Touch ID + 系统密码回退 |
-| Windows | `biometric/windows_hello.rs` | `UserConsentVerifier::RequestVerificationAsync` | Windows Hello（PIN/生物） |
+| 平台    | 模块                         | 后端                                                                                                        | 语义                                   |
+| ------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Linux   | `biometric/polkit.rs`        | 手写 zbus `CheckAuthorization`（action `com.persona.desktop.biometric-unlock`，subject 用 system-bus-name） | `auth_self`：指纹（fprintd）或密码回退 |
+| macOS   | `biometric/macos.rs`         | objc2-local-authentication `LAPolicy::DeviceOwnerAuthentication`                                            | Touch ID + 系统密码回退                |
+| Windows | `biometric/windows_hello.rs` | `UserConsentVerifier::RequestVerificationAsync`                                                             | Windows Hello（PIN/生物）              |
 
 不依赖 zbus_polkit（CVE-2026-78422）；mac/win 仅经 nightly CI 编译验证。
 

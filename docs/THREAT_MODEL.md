@@ -30,7 +30,7 @@
 | SSH Agent socket/pipe | `SSH_AUTH_SOCK`、Windows Named Pipe           | 未授权签名、agent 转发滥用        |
 | 审计日志              | 登录、解锁、凭据解密、SSH 签名摘要            | 篡改、删除、敏感字段误写入        |
 | 备份/导入导出文件     | JSON/YAML/CSV、加密备份                       | 备份泄露、格式注入、弱 passphrase |
-| OS 钥匙串托管条目     | keyring 中的主密码（biometric unlock 用）      | 同用户恶意进程读取、陈旧条目       |
+| OS 钥匙串托管条目     | keyring 中的主密码（biometric unlock 用）     | 同用户恶意进程读取、陈旧条目      |
 
 ## 信任边界
 
