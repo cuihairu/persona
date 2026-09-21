@@ -16,7 +16,7 @@ struct HttpKey {
 
 /// `snapshot()` 的返回形状（测试专用，别名避免 clippy::type_complexity）。
 #[cfg(test)]
-type HttpSnapshot = (Vec<(String, String, u16, u64)>, u64, u64, u64);
+type HttpSnapshot = (Vec<(String, String, u16, u64)>, u64, u64, u64, u64, u64);
 
 /// Prometheus label 值转义：`\`、`"`、换行（先转反斜杠，避免二次转义）。
 fn escape_label_value(value: &str) -> String {
@@ -32,6 +32,8 @@ struct Counters {
     events_ingested: u64,
     events_duplicates: u64,
     events_rejected: u64,
+    backups_created: u64,
+    backups_deleted: u64,
 }
 
 pub struct Metrics {
@@ -71,6 +73,14 @@ impl Metrics {
 
     pub fn add_events_rejected(&self, n: u64) {
         self.lock().events_rejected += n;
+    }
+
+    pub fn add_backups_created(&self, n: u64) {
+        self.lock().backups_created += n;
+    }
+
+    pub fn add_backups_deleted(&self, n: u64) {
+        self.lock().backups_deleted += n;
     }
 
     pub fn uptime_seconds(&self) -> f64 {
@@ -114,6 +124,16 @@ impl Metrics {
                 "persona_events_rejected_total",
                 counters.events_rejected,
                 "Total audit events rejected by validation.",
+            ),
+            (
+                "persona_backups_created_total",
+                counters.backups_created,
+                "Total encrypted vault backups stored.",
+            ),
+            (
+                "persona_backups_deleted_total",
+                counters.backups_deleted,
+                "Total encrypted vault backups removed.",
             ),
         ] {
             out.push_str(&format!(
@@ -161,6 +181,8 @@ impl Metrics {
             counters.events_ingested,
             counters.events_duplicates,
             counters.events_rejected,
+            counters.backups_created,
+            counters.backups_deleted,
         )
     }
 }
@@ -176,7 +198,7 @@ mod tests {
         metrics.record_http("GET", "/health", 200);
         metrics.record_http("POST", "/api/v1/events", 202);
 
-        let (http, _, _, _) = metrics.snapshot();
+        let (http, _, _, _, _, _) = metrics.snapshot();
         assert_eq!(http.len(), 2);
         assert!(http.contains(&("GET".into(), "/health".into(), 200, 2)));
         assert!(http.contains(&("POST".into(), "/api/v1/events".into(), 202, 1)));
@@ -188,9 +210,12 @@ mod tests {
         metrics.add_events_ingested(3);
         metrics.add_events_duplicates(1);
         metrics.add_events_rejected(2);
+        metrics.add_backups_created(4);
+        metrics.add_backups_deleted(1);
 
-        let (_, ingested, duplicates, rejected) = metrics.snapshot();
+        let (_, ingested, duplicates, rejected, created, deleted) = metrics.snapshot();
         assert_eq!((ingested, duplicates, rejected), (3, 1, 2));
+        assert_eq!((created, deleted), (4, 1));
     }
 
     #[test]
@@ -226,8 +251,10 @@ mod tests {
         assert!(text.contains("persona_events_ingested_total 2"));
         assert!(text.contains("persona_events_duplicates_total 0"));
         assert!(text.contains("persona_events_rejected_total 1"));
+        assert!(text.contains("persona_backups_created_total 0"));
+        assert!(text.contains("persona_backups_deleted_total 0"));
         assert!(text.contains("process_start_time_seconds 1758182400"));
         assert!(text.contains("process_uptime_seconds"));
-        assert_eq!(text.matches("# TYPE ").count(), 6);
+        assert_eq!(text.matches("# TYPE ").count(), 8);
     }
 }

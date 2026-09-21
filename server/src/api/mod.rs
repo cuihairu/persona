@@ -1,13 +1,17 @@
 //! /api 子路由：统一错误形状、请求体守卫与事件端点。
 
+mod backups;
 mod events;
 
 use axum::extract::Request;
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::Serialize;
 
+pub use backups::{delete, download, list, size_guard, upload};
 pub use events::{ingest, query};
 
 /// 请求体上限（线上字节）。带 Content-Length 的请求由
@@ -127,12 +131,23 @@ impl ApiError {
         )
     }
 
-    /// 413：请求体超限。
+    /// 413：请求体超限（events 线路上限 [`MAX_BODY_BYTES`]；备份上限
+    /// 由 backups::size_guard 按 AppState.max_backup_bytes 自行构造）。
     pub fn payload_too_large() -> Self {
         Self::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
             format!("request body exceeds {MAX_BODY_BYTES} bytes"),
+            Vec::new(),
+        )
+    }
+
+    /// 413：请求体超限（自定义上限，备份路径用）。
+    pub fn payload_too_large_with(limit_bytes: usize) -> Self {
+        Self::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            format!("request body exceeds {limit_bytes} bytes"),
             Vec::new(),
         )
     }
@@ -186,5 +201,52 @@ impl IntoResponse for ApiError {
             response.headers_mut().insert(name, value);
         }
         response
+    }
+}
+
+// ---- 稳定游标编解码（events 与 backups 的分页共用）----
+// base64url("v1:{毫秒时间戳}:{行 id}")，无 padding。
+
+pub(crate) fn encode_cursor(ms: i64, id: &str) -> String {
+    URL_SAFE_NO_PAD.encode(format!("v1:{ms}:{id}"))
+}
+
+pub(crate) fn decode_cursor(raw: &str) -> Result<(i64, String), ApiError> {
+    let invalid = || {
+        ApiError::validation(
+            "invalid cursor",
+            vec![ErrorItem::batch("cursor", "malformed cursor token")],
+        )
+    };
+    let decoded = URL_SAFE_NO_PAD.decode(raw).map_err(|_| invalid())?;
+    let text = String::from_utf8(decoded).map_err(|_| invalid())?;
+    let rest = text.strip_prefix("v1:").ok_or_else(invalid)?;
+    let (ms, id) = rest.split_once(':').ok_or_else(invalid)?;
+    let ms: i64 = ms.parse().map_err(|_| invalid())?;
+    if id.is_empty() {
+        return Err(invalid());
+    }
+    Ok((ms, id.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_cursor, encode_cursor};
+
+    #[test]
+    fn cursor_roundtrip() {
+        let encoded = encode_cursor(1_758_182_400_123, "0e2c5a6b-1c2d-3e4f-5a6b-7c8d9e0f1a2b");
+        let (ms, id) = decode_cursor(&encoded).unwrap();
+        assert_eq!(ms, 1_758_182_400_123);
+        assert_eq!(id, "0e2c5a6b-1c2d-3e4f-5a6b-7c8d9e0f1a2b");
+    }
+
+    #[test]
+    fn cursor_rejects_garbage() {
+        assert!(decode_cursor("not-a-cursor").is_err());
+        assert!(decode_cursor("").is_err());
+        // base64url 可解但不是 v1 前缀 / 缺 id / 缺毫秒
+        assert!(decode_cursor("aXY6").is_err());
+        assert!(decode_cursor("djE6MTIz").is_err()); // "v1:123" 无 id 段
     }
 }

@@ -338,6 +338,18 @@ Server & Sync (optional)
   token 起服 → POST 事件（202）→ 重复
   client_event_id（duplicates 计数）→ GET 翻页 → /metrics 观察 →
   不设 token 重启（/api 503）→ compose 卷重启后事件仍在。
+- [x] 设备令牌 + 整库加密备份保管（同步第一阶段）
+  ——`PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"` 多设备令牌
+  （设备名由令牌推导、客户端不可自报；legacy 单令牌兼容为 "default"
+  设备；对全部条目无早退常量时间比较；非法格式启动即错）+
+  `POST/GET/DELETE /api/v1/backups`（流式落盘 256 MiB 上限、CL 预检 +
+  流式计数双保险、边写边算 sha256、同设备最新版本去重 deduplicated、
+  倒序游标分页 limit 默认 20 上限 100、下载 ETag=sha256 流式回传、
+  删除先文件后行；`PERSONA_SERVER_BACKUP_MAX_VERSIONS` 全局删最旧）+
+  backups 元数据表（文件本体在 {backup_dir}/{uuid}.persenc，服务器只
+  见 PERSENC1 密文）+ metrics 加 backups_created/deleted + compose 透
+  传新 env（BACKUP_DIR=/data/backups 落命名卷）。THREAT_MODEL 登记
+  "备份保管端点"（不防扣留/回滚、恢复双要素、附件不进 v1 备份）。
 - [x] core::events::Emitter 客户端上报器（批量+重试）
   ——512b2495 wire 镜像 + 字节口径预校验（毒丸客户端逐条丢弃，防
   server 全有或全无整批 422；action 走 Display 非 serde，externally

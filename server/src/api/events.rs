@@ -11,8 +11,6 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use chrono::{DateTime, Utc};
 use persona_core::ResourceType;
 use serde::{Deserialize, Serialize};
@@ -20,7 +18,7 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::{Pool, Row, Sqlite};
 use uuid::Uuid;
 
-use super::{ApiError, ErrorItem};
+use super::{decode_cursor, encode_cursor, ApiError, ErrorItem};
 use crate::state::AppState;
 
 /// 单批事件上限。
@@ -423,52 +421,6 @@ fn row_to_event(row: &SqliteRow) -> Result<StoredEvent, ApiError> {
 
 fn internal_from(error: sqlx::Error) -> ApiError {
     ApiError::internal(error)
-}
-
-// ---- 游标编解码：base64url("v1:{received_at_ms}:{id}")，无 padding ----
-
-fn encode_cursor(received_at_ms: i64, id: &str) -> String {
-    URL_SAFE_NO_PAD.encode(format!("v1:{received_at_ms}:{id}"))
-}
-
-fn decode_cursor(raw: &str) -> Result<(i64, String), ApiError> {
-    let invalid = || {
-        ApiError::validation(
-            "invalid cursor",
-            vec![ErrorItem::batch("cursor", "malformed cursor token")],
-        )
-    };
-    let decoded = URL_SAFE_NO_PAD.decode(raw).map_err(|_| invalid())?;
-    let text = String::from_utf8(decoded).map_err(|_| invalid())?;
-    let rest = text.strip_prefix("v1:").ok_or_else(invalid)?;
-    let (ms, id) = rest.split_once(':').ok_or_else(invalid)?;
-    let ms: i64 = ms.parse().map_err(|_| invalid())?;
-    if id.is_empty() {
-        return Err(invalid());
-    }
-    Ok((ms, id.to_owned()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{decode_cursor, encode_cursor};
-
-    #[test]
-    fn cursor_roundtrip() {
-        let encoded = encode_cursor(1_758_182_400_123, "0e2c5a6b-1c2d-3e4f-5a6b-7c8d9e0f1a2b");
-        let (ms, id) = decode_cursor(&encoded).unwrap();
-        assert_eq!(ms, 1_758_182_400_123);
-        assert_eq!(id, "0e2c5a6b-1c2d-3e4f-5a6b-7c8d9e0f1a2b");
-    }
-
-    #[test]
-    fn cursor_rejects_garbage() {
-        assert!(decode_cursor("not-a-cursor").is_err());
-        assert!(decode_cursor("").is_err());
-        // base64url 可解但不是 v1 前缀 / 缺 id / 缺毫秒
-        assert!(decode_cursor("aXY6").is_err());
-        assert!(decode_cursor("djE6MTIz").is_err()); // "v1:123" 无 id 段
-    }
 }
 
 #[cfg(test)]

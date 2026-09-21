@@ -39,9 +39,10 @@ Existing experimental base: BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana d
 
 Milestone 6 – Server & Sync (optional)
 
-- [ ] Events API, audit ingestion, metrics
+- [x] Events API, audit ingestion, metrics
+- [x] Device tokens + encrypted vault-backup custody (`/api/v1/backups`: multi-device bearer tokens, streaming upload with sha256 dedup, versioned list/download/delete, retention policy; server holds PERSENC1 ciphertext only — sync phase 1, 2026-09)
 - [ ] Connect-like local-first secrets automation endpoint
-- [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
+- [ ] End-to-end encrypted sync (key envelopes, conflict resolution; per-item incremental sync is sync phase 2 — backup custody leaves room for it without implementing it)
 - [ ] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted
 
 Ongoing quality

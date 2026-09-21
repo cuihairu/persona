@@ -11,8 +11,15 @@ services:
       # 未设置时拒绝启动（fail-closed 的部署侧对应：服务器不会以 API 禁用
       # 状态悄悄上线；token 本体只在运行环境注入，不落 compose 文件）
       PERSONA_SERVER_TOKEN: "${PERSONA_SERVER_TOKEN:?PERSONA_SERVER_TOKEN is required}"
+      # 多设备令牌（可选，叠加在 legacy 单令牌之上）："laptop:tok1,phone:tok2"。
+      # 设备名用于备份版本归属（客户端不可自报）；非法格式启动即错
+      PERSONA_SERVER_TOKENS: "${PERSONA_SERVER_TOKENS:-}"
       # 事件库落命名卷，容器重启后审计事件保留
       PERSONA_SERVER_DB: /data/persona-server.db
+      # 加密备份落同一命名卷（服务器只见 PERSENC1 密文，不可解）
+      PERSONA_SERVER_BACKUP_DIR: /data/backups
+      # 保留版本数上限（0=不限，超出删最旧；全局跨设备）
+      PERSONA_SERVER_BACKUP_MAX_VERSIONS: "${PERSONA_SERVER_BACKUP_MAX_VERSIONS:-0}"
     volumes:
       - persona-server-data:/data
     healthcheck:

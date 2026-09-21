@@ -45,6 +45,11 @@ base64.workspace = true
 # Bearer 令牌常量时间比较
 subtle.workspace = true
 
+# 备份端点：sha256 边写边算（去重键/ETag）、流式 body 读写、下载 ReaderStream
+sha2.workspace = true
+futures.workspace = true
+tokio-util.workspace = true
+
 # 环境变量（.env）
 dotenvy = "0.15"
 

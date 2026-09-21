@@ -15,7 +15,7 @@
 
 - 不防御已经完全控制当前用户会话的恶意内核、调试器或系统级恶意软件。
 - 不承诺在未解锁且主密码丢失时恢复明文数据。
-- 不把 Server/Sync 作为强依赖；可选服务端不得接触明文身份材料。
+- 不把 Server/Sync 作为强依赖；可选服务端不得接触明文身份材料（加密备份恢复点除外——见"备份保管端点"，服务端持密文不持密钥）。
 - 不把钱包能力作为当前安全主线，钱包相关能力仍按实验性范围处理。
 
 ## 资产
@@ -39,7 +39,7 @@
 3. **工作区边界**：SQLite、附件和配置文件属于同一个本地工作区；迁移必须保持向后兼容和最小权限。
 4. **浏览器桥接边界**：浏览器扩展通过 Native Messaging 调用 `persona bridge`，敏感操作必须经过配对、HMAC、短期 session、origin binding 和 user gesture。
 5. **SSH Agent 边界**：OpenSSH 客户端通过 socket/pipe 请求签名；agent 只暴露公钥列表和签名能力，不导出私钥。
-6. **可选服务端边界**：server/sync 只能处理事件摘要、密文或同步元数据，不得成为明文解密方。已落地的 events API 仅接收审计事件摘要（action、资源类型、可选 ID、时间戳、成功标记与受限 metadata），以单 Bearer 令牌认证，未配置令牌即整体禁用（fail-closed）。
+6. **可选服务端边界**：server/sync 只能处理事件摘要、密文或同步元数据，不得成为明文解密方。已落地的 events API 仅接收审计事件摘要（action、资源类型、可选 ID、时间戳、成功标记与受限 metadata），以 Bearer 令牌认证（多设备令牌或 legacy 单令牌），未配置令牌即整体禁用（fail-closed）。备份保管端点（2026-09）只存储客户端加密的 PERSENC1 密文与元数据，恢复需备份口令 + 主密码双要素，详见"备份保管端点"一节。
 7. **自动化边界**：非交互模式允许用环境变量注入主密码，适合 CI，但环境变量由调用方负责隔离和清理。
 
 ## 主要威胁与控制
@@ -75,8 +75,8 @@
 - 当前审计日志强调可追踪性，不提供加密签名链或远端不可抵赖性。
 - `PERSONA_MASTER_PASSWORD` 适合自动化，但会暴露给同一执行环境中的进程/日志风险；CI 必须使用 secret store 并禁用命令回显。
 - 没有 URL 的浏览器凭据无法做严格 origin binding；高价值凭据必须绑定 URL。
-- 可选 Server/Sync 仍是后续方向；在 E2EE 同步完成前，不应把服务端当作恢复或信任根。
-- persona-server 的 events API 是单令牌门禁的观测面：接受客户端自报的事件摘要（`client_timestamp` 不可信，排序只用 server 的 `received_at`），无保留策略（事件库无界增长），不构成防篡改审计账本。
+- 可选 Server/Sync 仍不是信任根：加密备份让服务端可作为密文快照的恢复点，但恢复能力以本地持有备份口令与主密码为前提，服务端不可用不应导致数据不可恢复（本地库是第一事实源）。
+- persona-server 的 events API 是令牌门禁的观测面：接受客户端自报的事件摘要（`client_timestamp` 不可信，排序只用 server 的 `received_at`），无保留策略（事件库无界增长），不构成防篡改审计账本。
 - 钱包能力仍是实验性，不能用当前主线安全承诺覆盖生产级资金安全。
 
 ## 安全复审节奏
@@ -118,7 +118,7 @@
 Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的第一批生产网络端点，按"变更门槛"在此登记：
 
 - **数据处理范围**：仅接收与存储审计事件摘要与元数据——action、resource_type、可选的 user/identity/credential/session ID、时间戳、成功标记、受限 metadata（≤32 条、键值长度有界）。协议上不承载明文 secret 或密钥材料；请求体双层限长——`Content-Length` 预检线上字节 ≤1 MiB（含 gzip 压缩传输）、解压后明文 ≤10 MiB（防解压炸弹，兼兜底无 Content-Length 的 chunked）、单批 ≤500 条。
-- **认证**：单共享 Bearer 令牌（`PERSONA_SERVER_TOKEN`），常量时间比较；未配置即 503 整体禁用（fail-closed）。`/`、`/health`、`/metrics` 免认证。
+- **认证**：共享 Bearer 令牌（legacy 单令牌 `PERSONA_SERVER_TOKEN` 或多设备令牌 `PERSONA_SERVER_TOKENS`），对全部条目常量时间比较；未配置即 503 整体禁用（fail-closed）。`/`、`/health`、`/metrics` 免认证。
 - **明确不宣称**：该存储不是防篡改账本，不提供防抵赖保证——持有令牌的客户端可上报任意内容，`client_timestamp` 不可信；审计语义以各端本地审计日志为准，server 侧只作聚合观测。
 - **指标面**：`/metrics` 输出请求计数（方法 + 路由模板 + 状态码）与事件接入计数，标签基数有界，不含用户数据或路径参数。
 - **已知限制**：无保留策略（事件库无界增长）；无速率限制与配额；`ip_address`/`user_agent` 为客户端自报字段；permissive CORS（当前客户端非浏览器）；单令牌无 per-client 身份。
@@ -138,6 +138,17 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **CLI**：env-only（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用，空白视同未设置），**不落盘**——配置文件通道故意不提供；`main` 尾部 `stop()` 尽力 flush，release `panic = "abort"` 的崩溃路径不经 flush（丢失窗口与上面内存队列限制一致）。
 - **mobile（persona-mobile，Rust FFI 层）**：手写 extern "C" 宿主接线——`persona_service_init`（建户/认证序列对齐 desktop）、`persona_service_unlock/lock/is_unlocked`、`persona_configure_sync`（url+token trim 后都非空才启用、任一空白即摘除，fail-closed 对齐 CLI；URL 不做格式预校验，与 desktop attach 一致，格式错误在发送期暴露并退避）、`persona_shutdown`（落锁清密钥 + 尽力最终 flush + 清槽位）。**Rust 侧不落盘、不读环境变量**：url/token 由宿主（Dart 层）经 FFI 参数注入，服务状态留 Rust 侧全局槽位、密钥材料不跨 FFI 边界。如实标注未完成面：Flutter 工程本身（android/ios 目录、gradle）、Dart FFI 绑定层与 flutter_secure_storage 的 token 存储接线均未落地（本机无 Flutter SDK），当前安全结论只覆盖 Rust FFI 层；杀进程丢未 flush 批为已知限制（与 CLI/desktop 同）。手工验收（cargo-ndk 交叉编译、真 server 上报）转交有设备环境时执行。
 - **上报面不变**：三宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。
+
+## 备份保管端点（`/api/v1/backups`，2026-09）
+
+同步第一阶段：整库加密备份的保管。客户端把 VACUUM INTO 物理快照 gzip 后按 PERSENC1（Argon2id + AES-256-GCM，与 CLI `--encrypt` 导出同一格式）加密上传，服务器只见密文。
+
+- **数据处理范围**：仅存储密文文件（`{backup_dir}/{uuid}.persenc`）与元数据（设备名、字节数、sha256、时间戳）。服务器无备份口令与主密码，密文不可解；设备名由命中的设备令牌推导，客户端不可自报。
+- **认证**：与 events 同一 Bearer 门禁——多设备令牌 `PERSONA_SERVER_TOKENS`（`"laptop:tok1,phone:tok2"`，对全部条目无早退常量时间比较）或 legacy 单令牌（"default" 设备）；非法格式启动即错（fail-closed）。上传上限 256 MiB（Content-Length 预检 + 流式计数双保险，超限删半成品）；子路由无解压层（密文不可压，少一个解压炸弹面）。
+- **明确不宣称**：不防服务器操作者**扣留、删除或回滚**备份——无哈希链、无签名、无版本不可抵赖证明，持有令牌或主机控制权的一方可将库回退到旧版本（客户端恢复时无新鲜度校验）。phase 2 可加哈希链/签名；当前接受此风险并以"本地库是第一事实源"对冲。
+- **恢复双要素**：恢复 = 下载密文 + 备份口令解密 + 主密码解锁库。备份口令丢失 = 备份不可恢复（无托管、无重置）；主密码丢失同理。
+- **保留与去重**：同设备与最新版本 sha256 相同则去重（幂等重传）；`PERSONA_SERVER_BACKUP_MAX_VERSIONS`（默认 0 不限）全局删最旧（文件与行同删）。
+- **已知限制**：附件 blob 不在 v1 备份内（恢复后附件元数据在、文件体缺失，客户端 UI/CLI 明示）；备份内容为新版本创建时的完整快照，不含后续增量。
 
 ## Biometric Unlock（桌面指纹/生物识别解锁）
 

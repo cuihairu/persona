@@ -4,20 +4,32 @@
 //! 下的迁移，不复用 `persona_core::storage::Database`（那会带上全套
 //! 身份 schema）。
 
+use crate::auth::AuthTokens;
 use crate::metrics::Metrics;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// 备份上传上限（线上字节 = 落盘字节：备份子路由无解压层）。
+pub const MAX_BACKUP_BYTES: usize = 256 * 1024 * 1024;
 
 /// 全局共享状态（Clone；内部全是 Arc/连接池）。
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub metrics: Arc<Metrics>,
-    /// `None` => /api 整体禁用（fail-closed：未配置 PERSONA_SERVER_TOKEN）。
-    pub auth_token: Option<Arc<str>>,
+    /// `None` => /api 整体禁用（fail-closed：未配置任何设备令牌）。
+    pub auth: Option<Arc<AuthTokens>>,
+    /// 备份文件落盘目录（POST 写、GET 下载读；`{dir}/{id}.persenc`）。
+    pub backup_dir: PathBuf,
+    /// 保留版本数上限；0 = 不限（PERSONA_SERVER_BACKUP_MAX_VERSIONS）。
+    pub backup_max_versions: usize,
+    /// 备份上传字节上限（生产恒 [`MAX_BACKUP_BYTES`]；测试调小以覆盖
+    /// 流式中断路径，256 MiB 的真实上限不适合逐测试生成）。
+    pub max_backup_bytes: usize,
     /// uptime 起点（单调时钟）。
     pub started_at: Instant,
     /// `process_start_time_seconds` 用（Unix 秒）。
@@ -25,9 +37,9 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool, auth_token: Option<String>, metrics: Arc<Metrics>) -> Self {
-        // 空串与未配置等价：API 禁用，避免"配了但配错成空"形成半开状态。
-        let auth_token = auth_token.filter(|token| !token.is_empty()).map(Arc::from);
+    pub fn new(pool: SqlitePool, auth: Option<AuthTokens>, metrics: Arc<Metrics>) -> Self {
+        // 空集合与未配置等价：API 禁用，避免"配了但配错成空"形成半开状态。
+        let auth = auth.filter(|tokens| !tokens.is_empty()).map(Arc::new);
         let start_time_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -35,17 +47,21 @@ impl AppState {
         Self {
             pool,
             metrics,
-            auth_token,
+            auth,
+            backup_dir: PathBuf::from("./backups"),
+            backup_max_versions: 0,
+            max_backup_bytes: MAX_BACKUP_BYTES,
             started_at: Instant::now(),
             start_time_unix,
         }
     }
-}
 
-/// 从 `PERSONA_SERVER_DB`（默认 `./persona-server.db`）打开连接池。
-pub async fn init_pool_from_env() -> anyhow::Result<SqlitePool> {
-    let path = std::env::var("PERSONA_SERVER_DB").unwrap_or_else(|_| "./persona-server.db".into());
-    init_pool(&path).await
+    /// 覆盖备份落盘目录与保留策略（main 从 env 读入；测试用 tempdir）。
+    pub fn with_backup_settings(mut self, dir: PathBuf, max_versions: usize) -> Self {
+        self.backup_dir = dir;
+        self.backup_max_versions = max_versions;
+        self
+    }
 }
 
 /// 按路径打开连接池：不存在则建库（mode=rwc），WAL + 5s busy_timeout。
@@ -82,7 +98,7 @@ pub(crate) async fn test_pool() -> SqlitePool {
 pub(crate) async fn test_state(token: Option<&str>) -> AppState {
     AppState::new(
         test_pool().await,
-        token.map(str::to_owned),
+        token.filter(|t| !t.is_empty()).map(AuthTokens::single),
         Arc::new(Metrics::new(0)),
     )
 }
@@ -96,17 +112,17 @@ mod tests {
     async fn empty_token_is_treated_as_disabled() {
         let state = AppState::new(
             test_pool().await,
-            Some(String::new()),
+            Some(AuthTokens::single("")),
             Arc::new(Metrics::new(0)),
         );
-        assert!(state.auth_token.is_none());
+        assert!(state.auth.is_none());
 
         let state = AppState::new(
             test_pool().await,
-            Some("token".into()),
+            Some(AuthTokens::single("token")),
             Arc::new(Metrics::new(0)),
         );
-        assert!(state.auth_token.is_some());
+        assert!(state.auth.is_some());
     }
 
     #[tokio::test]
