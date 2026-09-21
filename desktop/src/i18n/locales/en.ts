@@ -59,6 +59,7 @@ export default {
     unlocking: 'Unlocking…',
     unlock: 'Unlock Persona',
     firstUseHint: "Don't have a master password? It will be created on first use.",
+    biometricUnlock: 'Unlock with fingerprint',
   },
   statistics: {
     title: 'Statistics',
@@ -120,6 +121,12 @@ export default {
       policySaved: 'Password policy saved',
       policySaveFailed: 'Failed to save password policy',
       changedRelock: 'Master password changed — please sign in again',
+      biometricUnlock: 'Biometric unlock',
+      biometricHint: 'Unlock with system biometrics instead of the master password (the password is held in the OS keychain)',
+      biometricUnavailable: 'Biometrics are unavailable or not set up on this system',
+      biometricEnabled: 'Biometric unlock enabled',
+      biometricDisabled: 'Biometric unlock disabled',
+      biometricOperationFailed: 'Failed to change biometric unlock',
     },
     advanced: {
       title: 'Advanced features',
@@ -396,6 +403,7 @@ export default {
     checkStatusFailed: 'Failed to check service status',
     initSuccess: 'Service initialized successfully',
     initFailed: 'Failed to initialize service',
+    biometricReset: 'Biometric unlock is no longer valid (the keychain entry is missing or the password was changed). Please unlock with your master password.',
     lockSuccess: 'Service locked',
     lockFailed: 'Failed to lock service',
     loadIdentitiesFailed: 'Failed to load identities',

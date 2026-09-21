@@ -64,7 +64,7 @@ const App: React.FC = () => {
         // keep default
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅 mount 时判断初始锁定态
+    // 仅 mount 时判断初始锁定态（effect 内只引用模块级导入，无响应式依赖）
   }, []);
 
   const featureFlags = useAppStore((s) => s.featureFlags);

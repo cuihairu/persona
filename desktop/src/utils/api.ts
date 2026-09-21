@@ -16,6 +16,7 @@ import type {
   FeatureFlags,
   SyncConfig,
   FaviconData,
+  BiometricStatus,
   WorkspaceSettings,
   SshAgentStatus,
   SshAgentKey,
@@ -143,6 +144,26 @@ class PersonaAPI {
   /** OS keyring 里是否存有 sync token（免解锁只读；真值不经 IPC） */
   async syncTokenPresent(): Promise<ApiResponse<boolean>> {
     return invoke('sync_token_present');
+  }
+
+  /** biometric unlock 状态（免解锁只读；解锁屏 mount 即查，决定指纹按钮显隐） */
+  async biometricStatus(dbPath?: string): Promise<ApiResponse<BiometricStatus>> {
+    return invoke('biometric_status', { dbPath: dbPath ?? null });
+  }
+
+  /** 启用 biometric unlock：后端先验密码再弹 OS 认证框，然后托管进 keyring */
+  async biometricEnable(masterPassword: string): Promise<ApiResponse<BiometricStatus>> {
+    return invoke('biometric_enable', { request: { master_password: masterPassword } });
+  }
+
+  /** 禁用 biometric unlock：幂等删 keyring 条目 */
+  async biometricDisable(): Promise<ApiResponse<BiometricStatus>> {
+    return invoke('biometric_disable');
+  }
+
+  /** biometric 解锁：OS 认证 → keyring 取回主密码走 init_service（密码不出进程） */
+  async biometricUnlock(dbPath?: string): Promise<ApiResponse<boolean>> {
+    return invoke('biometric_unlock', { request: { db_path: dbPath ?? null } });
   }
 
   async createCredential(request: CreateCredentialRequest): Promise<ApiResponse<Credential>> {

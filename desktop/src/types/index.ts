@@ -3,17 +3,28 @@
  * REAUTH_REQUIRED：敏感操作需要重新认证 → 前端弹 ReauthModal。
  * SERVICE_LOCKED：服务已锁定 → 前端回到解锁屏。
  * PASSWORD_CHANGE_REQUIRED：主密码按策略需轮换 → 前端弹强制改密弹窗。
+ * BIOMETRIC_RESET：biometric 托管条目不存在或已失效自删 → 解锁屏隐藏
+ * 指纹按钮、提示改用主密码登录。
  */
 export type ApiErrorCode =
   | 'REAUTH_REQUIRED'
   | 'SERVICE_LOCKED'
-  | 'PASSWORD_CHANGE_REQUIRED';
+  | 'PASSWORD_CHANGE_REQUIRED'
+  | 'BIOMETRIC_RESET';
 
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
   error_code?: ApiErrorCode;
+}
+
+/** biometric unlock 状态（对应 Rust BiometricStatusResponse；enabled 只表示
+ * "本 vault 配置过生物解锁"这一位元数据，托管的主密码真值永不出 keyring） */
+export interface BiometricStatus {
+  available: boolean;
+  enabled: boolean;
+  platform: string;
 }
 
 /** persona://auto-lock 事件的载荷（与 Rust 侧 SerializableAutoLockEvent 对应） */

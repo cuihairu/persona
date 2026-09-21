@@ -10,12 +10,23 @@ jest.mock('@/hooks/usePersonaService', () => ({
 jest.mock('@/utils/api', () => ({
   personaAPI: {
     changeMasterPassword: jest.fn(),
+    biometricStatus: jest.fn(),
   },
 }));
 
 const mockChange = personaAPI.changeMasterPassword as jest.Mock;
+const mockBiometricStatus = personaAPI.biometricStatus as jest.Mock;
 
 describe('components/UnlockScreen', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // 默认未配置 biometric（fail-closed 静默降级：无指纹按钮）
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: false, enabled: false, platform: 'linux-polkit' },
+    });
+  });
+
   it('disables submit when password empty', () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       initializeService: jest.fn(),
@@ -174,6 +185,116 @@ describe('components/UnlockScreen', () => {
           'tried-pw',
         );
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // biometric 指纹解锁按钮（status 防抖 200ms 后驱动显隐）
+  // -------------------------------------------------------------------------
+
+  describe('biometric unlock', () => {
+    const enabledStatus = {
+      success: true,
+      data: { available: true, enabled: true, platform: 'linux-polkit' },
+    };
+
+    const mockHook = (unlockWithBiometric: jest.Mock) => {
+      (usePersonaService as jest.Mock).mockReturnValue({
+        initializeService: jest.fn(),
+        unlockWithBiometric,
+        isLoading: false,
+        error: null,
+      });
+    };
+
+    it('hides the fingerprint button when biometric is not configured', async () => {
+      mockHook(jest.fn());
+      mockBiometricStatus.mockResolvedValue({
+        success: true,
+        data: { available: false, enabled: false, platform: 'linux-polkit' },
+      });
+
+      render(<UnlockScreen onUnlock={() => {}} />);
+
+      // 防抖 200ms 后仍无按钮
+      await waitFor(
+        () => {
+          expect(mockBiometricStatus).toHaveBeenCalled();
+        },
+        { timeout: 3000 },
+      );
+      expect(screen.queryByTestId('biometric-unlock-button')).not.toBeInTheDocument();
+    });
+
+    it('unlocks via biometric when configured', async () => {
+      const unlockWithBiometric = jest.fn().mockResolvedValue({ success: true, data: true });
+      const onUnlock = jest.fn();
+      mockHook(unlockWithBiometric);
+      mockBiometricStatus.mockResolvedValue(enabledStatus);
+
+      render(<UnlockScreen onUnlock={onUnlock} />);
+
+      const button = await screen.findByTestId(
+        'biometric-unlock-button',
+        {},
+        { timeout: 3000 },
+      );
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(unlockWithBiometric).toHaveBeenCalledWith(undefined);
+      });
+      await waitFor(() => {
+        expect(onUnlock).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('passes the custom db path through to the biometric unlock', async () => {
+      const unlockWithBiometric = jest.fn().mockResolvedValue({ success: true, data: true });
+      mockHook(unlockWithBiometric);
+      mockBiometricStatus.mockResolvedValue(enabledStatus);
+
+      render(<UnlockScreen onUnlock={() => {}} />);
+      fireEvent.click(screen.getByLabelText('使用自定义数据库路径'));
+      fireEvent.change(screen.getByLabelText('数据库路径'), {
+        target: { value: '/tmp/bio.db' },
+      });
+
+      const button = await screen.findByTestId(
+        'biometric-unlock-button',
+        {},
+        { timeout: 3000 },
+      );
+      // 自定义路径变化触发 status 重查（防抖后），仍启用
+      fireEvent.click(button);
+
+      await waitFor(() => {
+        expect(unlockWithBiometric).toHaveBeenCalledWith('/tmp/bio.db');
+      });
+    });
+
+    it('hides the button after a stale keyring entry self-deletes (BIOMETRIC_RESET)', async () => {
+      const unlockWithBiometric = jest
+        .fn()
+        .mockResolvedValue({ success: false, error_code: 'BIOMETRIC_RESET', error: 'reset' });
+      const onUnlock = jest.fn();
+      mockHook(unlockWithBiometric);
+      mockBiometricStatus.mockResolvedValue(enabledStatus);
+
+      render(<UnlockScreen onUnlock={onUnlock} />);
+
+      const button = await screen.findByTestId(
+        'biometric-unlock-button',
+        {},
+        { timeout: 3000 },
+      );
+      fireEvent.click(button);
+
+      // 条目已被后端自删：按钮立即消失，且绝不能算解锁成功
+      await waitFor(() => {
+        expect(screen.queryByTestId('biometric-unlock-button')).not.toBeInTheDocument();
+      });
+      expect(onUnlock).not.toHaveBeenCalled();
     });
   });
 });

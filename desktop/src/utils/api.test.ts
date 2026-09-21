@@ -332,6 +332,36 @@ describe('utils/api command mapping coverage', () => {
     });
   });
 
+  it('biometric methods map with dbPath/null arg shapes', async () => {
+    // status：顶层 dbPath 参数（命令签名单参，非 request 包装）
+    await personaAPI.biometricStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('biometric_status', { dbPath: null });
+
+    await personaAPI.biometricStatus('/tmp/x.db');
+    expect(mockInvoke).toHaveBeenCalledWith('biometric_status', { dbPath: '/tmp/x.db' });
+
+    // enable：密码只存在于 request 体内
+    await personaAPI.biometricEnable('pw');
+    expect(mockInvoke).toHaveBeenCalledWith('biometric_enable', {
+      request: { master_password: 'pw' },
+    });
+
+    // disable：幂等删，无参数
+    await personaAPI.biometricDisable();
+    expect(mockInvoke).toHaveBeenCalledWith('biometric_disable');
+
+    // unlock：db_path 走 request 体内（与 init_service 同形）
+    await personaAPI.biometricUnlock();
+    expect(mockInvoke).toHaveBeenCalledWith('biometric_unlock', {
+      request: { db_path: null },
+    });
+
+    await personaAPI.biometricUnlock('/tmp/x.db');
+    expect(mockInvoke).toHaveBeenCalledWith('biometric_unlock', {
+      request: { db_path: '/tmp/x.db' },
+    });
+  });
+
   it('wallet transaction and approval methods', async () => {
     await personaAPI.walletCreateTransaction({ wallet_id: 'w1' } as any);
     expect(mockInvoke).toHaveBeenCalledWith('wallet_create_transaction', {

@@ -17,6 +17,9 @@ jest.mock('@/utils/api', () => ({
     syncTokenPresent: jest.fn(),
     setPasswordExpiry: jest.fn(),
     changeMasterPassword: jest.fn(),
+    biometricStatus: jest.fn(),
+    biometricEnable: jest.fn(),
+    biometricDisable: jest.fn(),
   },
 }));
 
@@ -31,6 +34,9 @@ const mockSetSync = personaAPI.setSyncConfig as jest.Mock;
 const mockTokenPresent = personaAPI.syncTokenPresent as jest.Mock;
 const mockSetExpiry = personaAPI.setPasswordExpiry as jest.Mock;
 const mockChangePw = personaAPI.changeMasterPassword as jest.Mock;
+const mockBiometricStatus = personaAPI.biometricStatus as jest.Mock;
+const mockBiometricEnable = personaAPI.biometricEnable as jest.Mock;
+const mockBiometricDisable = personaAPI.biometricDisable as jest.Mock;
 
 /** 空设置响应（SyncServerPane 的初始加载） */
 const emptySettings = { success: true, data: null };
@@ -48,6 +54,11 @@ describe('components/SettingsModal', () => {
     mockGetSettings.mockResolvedValue(emptySettings);
     // 默认 keyring 无 token（placeholder = 'API token'）
     mockTokenPresent.mockResolvedValue({ success: true, data: false });
+    // 默认系统不可用 biometric（开关禁用 + 不可用提示）
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: false, enabled: false, platform: 'linux-polkit' },
+    });
   });
 
   it('renders nothing when closed', () => {
@@ -618,5 +629,122 @@ describe('components/SettingsModal', () => {
     });
     expect(toast.success).toHaveBeenCalledWith('主密码已修改——请重新登录');
     expect(screen.queryByTestId('change-password-modal')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // biometric 解锁区块（开 = ReauthModal 验密；关 = 直接禁用）
+  // -------------------------------------------------------------------------
+
+  it('disables the biometric switch with an unavailable hint when the OS lacks support', async () => {
+    mockIdentityHook();
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    const toggle = await screen.findByTestId('biometric-toggle');
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    // status 回填后切换到不可用提示（加载中显示的是普通 hint）
+    await waitFor(() => {
+      expect(toggle.closest('div')).toHaveTextContent('当前系统不支持或未配置生物识别');
+    });
+  });
+
+  it('enables biometric through the reauth modal and adopts the returned status', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: false, platform: 'linux-polkit' },
+    });
+    mockBiometricEnable.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: true, platform: 'linux-polkit' },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    const toggle = await screen.findByTestId('biometric-toggle');
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+
+    // 开启先验主密码（ReauthModal），不直接调 enable
+    const modal = screen.getByTestId('reauth-modal');
+    expect(mockBiometricEnable).not.toHaveBeenCalled();
+    fireEvent.change(modal.querySelector('input') as HTMLInputElement, {
+      target: { value: 'master-pw' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+
+    await waitFor(() => {
+      expect(mockBiometricEnable).toHaveBeenCalledWith('master-pw');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('biometric-toggle')).toHaveAttribute('aria-checked', 'true');
+    });
+    expect(toast.success).toHaveBeenCalledWith('指纹解锁已开启');
+    expect(screen.queryByTestId('reauth-modal')).not.toBeInTheDocument();
+  });
+
+  it('keeps the reauth modal open with the backend error when enable fails', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: false, platform: 'linux-polkit' },
+    });
+    mockBiometricEnable.mockResolvedValue({
+      success: false,
+      error: 'Invalid master password',
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    const toggle = await screen.findByTestId('biometric-toggle');
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+
+    const modal = screen.getByTestId('reauth-modal');
+    fireEvent.change(modal.querySelector('input') as HTMLInputElement, {
+      target: { value: 'wrong-pw' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+
+    // 密码不对：错误留在弹窗内原地重试，开关不翻
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-error')).toHaveTextContent('Invalid master password');
+    });
+    expect(screen.getByTestId('biometric-toggle')).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('disables biometric without a password prompt', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: true, platform: 'linux-polkit' },
+    });
+    mockBiometricDisable.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: false, platform: 'linux-polkit' },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    const toggle = await screen.findByTestId('biometric-toggle');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+    // 收紧操作不设密码门禁：一键直删 keyring 条目
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    await waitFor(() => {
+      expect(mockBiometricDisable).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId('reauth-modal')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('biometric-toggle')).toHaveAttribute('aria-checked', 'false');
+    });
+    expect(toast.success).toHaveBeenCalledWith('指纹解锁已关闭');
   });
 });

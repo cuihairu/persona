@@ -3,6 +3,7 @@ import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
 import type {
   AttachmentEntry,
+  ApiResponse,
   CredentialHistoryEntry,
   Identity,
   UpdateCredentialRequest,
@@ -98,6 +99,41 @@ export const usePersonaService = () => {
       setError(errorMessage);
       toast.error(errorMessage);
       return false;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** biometric 解锁：后端已走 init_service 全链路（OS 认证 → keyring 取回
+   * 密码），前端只做会话状态编排。返回原始 ApiResponse 供解锁屏按
+   * error_code 分流（BIOMETRIC_RESET 刷 status 隐藏按钮；改密码走既有
+   * forced 机制）。失败不 toast——解锁屏的错误条/按钮显隐是唯一反馈面。 */
+  const unlockWithBiometric = async (dbPath?: string): Promise<ApiResponse<boolean>> => {
+    setLoading(true);
+    clearError();
+    try {
+      const response = await personaAPI.biometricUnlock(dbPath);
+      if (response.success) {
+        setUnlocked(true);
+        setInitialized(true);
+        setPasswordChangeRequired(false);
+        await loadIdentities();
+        toast.success(t('svc.initSuccess'));
+        return response;
+      }
+      if (response.error_code === 'PASSWORD_CHANGE_REQUIRED') {
+        // 生物解锁成功但策略要求轮换：与密码路径共用 forced 改密弹窗
+        setPasswordChangeRequired(true);
+      } else if (response.error_code === 'BIOMETRIC_RESET') {
+        // 托管条目不存在/已自删：本地化提示（后端消息为英文），解锁屏随后刷 status
+        setError(t('svc.biometricReset'));
+      } else {
+        setError(response.error || t('svc.initFailed'));
+      }
+      return response;
+    } catch {
+      setError(t('svc.initFailed'));
+      return { success: false } as ApiResponse<boolean>;
     } finally {
       setLoading(false);
     }
@@ -596,6 +632,7 @@ export const usePersonaService = () => {
 
     // Actions
     initializeService,
+    unlockWithBiometric,
     lockService,
     loadIdentities,
     createIdentity,

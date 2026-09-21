@@ -29,6 +29,7 @@ describe('hooks/usePersonaService', () => {
       sshKeys: [],
       isLoading: false,
       error: null,
+      passwordChangeRequired: false,
       sidebarFilter: { kind: 'all' },
     });
   });
@@ -871,5 +872,121 @@ describe('hooks/usePersonaService', () => {
     });
 
     consoleError.mockRestore();
+  });
+
+  // -- biometric 解锁（返回原始 ApiResponse 供解锁屏分流） ------------------
+
+  it('unlockWithBiometric succeeds, unlocks and returns the raw response', async () => {
+    jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
+      success: true,
+      data: false,
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'biometricUnlock').mockResolvedValueOnce({
+      success: true,
+      data: true,
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'getIdentities').mockResolvedValue({
+      success: true,
+      data: [makeIdentity('id-1')],
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'getActiveIdentity').mockResolvedValue({
+      success: true,
+      data: 'id-1',
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+
+    let resp: any;
+    await act(async () => {
+      resp = await result.current.unlockWithBiometric('/tmp/x.db');
+    });
+
+    expect(personaAPI.biometricUnlock).toHaveBeenCalledWith('/tmp/x.db');
+    expect(resp.success).toBe(true);
+    expect(useAppStore.getState().isUnlocked).toBe(true);
+    expect(useAppStore.getState().identities).toHaveLength(1);
+    // 成功路径与密码解锁同款 toast
+    expect(toastSuccess).toHaveBeenCalled();
+  });
+
+  it('unlockWithBiometric maps BIOMETRIC_RESET to a localized error without unlocking', async () => {
+    jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
+      success: true,
+      data: false,
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'biometricUnlock').mockResolvedValueOnce({
+      success: false,
+      data: undefined,
+      error: 'Biometric entry missing',
+      error_code: 'BIOMETRIC_RESET',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+
+    let resp: any;
+    await act(async () => {
+      resp = await result.current.unlockWithBiometric();
+    });
+
+    expect(resp.success).toBe(false);
+    expect(resp.error_code).toBe('BIOMETRIC_RESET');
+    expect(useAppStore.getState().isUnlocked).toBe(false);
+    // 后端消息是英文：给用户的是本地化提示
+    expect(useAppStore.getState().error).toBe(
+      '指纹解锁已失效（系统钥匙串中的托管条目不存在或密码已变更），请改用主密码解锁。',
+    );
+  });
+
+  it('unlockWithBiometric flags PASSWORD_CHANGE_REQUIRED instead of toasting an error', async () => {
+    jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
+      success: true,
+      data: false,
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'biometricUnlock').mockResolvedValueOnce({
+      success: false,
+      data: undefined,
+      error: 'password change required',
+      error_code: 'PASSWORD_CHANGE_REQUIRED',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+
+    await act(async () => {
+      await result.current.unlockWithBiometric();
+    });
+
+    // 与密码路径共用 forced 改密弹窗机制，不走通用错误
+    expect(useAppStore.getState().passwordChangeRequired).toBe(true);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('unlockWithBiometric survives an IPC rejection without unlocking', async () => {
+    jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
+      success: true,
+      data: false,
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'biometricUnlock').mockRejectedValueOnce(
+      new Error('bridge down'),
+    );
+
+    const { result } = renderHook(() => usePersonaService());
+
+    let resp: any;
+    await act(async () => {
+      resp = await result.current.unlockWithBiometric();
+    });
+
+    expect(resp.success).toBe(false);
+    expect(useAppStore.getState().isUnlocked).toBe(false);
+    expect(useAppStore.getState().error).toBe('服务初始化失败');
+    // 失败不 toast：解锁屏的错误条是唯一反馈面
+    expect(toastError).not.toHaveBeenCalled();
   });
 });

@@ -5,9 +5,10 @@ import i18n from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
 import { useAppStore } from '@/stores/appStore';
-import type { FeatureFlags, Identity, IdentityType, ThemePreference } from '@/types';
+import type { BiometricStatus, FeatureFlags, Identity, IdentityType, ThemePreference } from '@/types';
 import { PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
 import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
+import ReauthModal from './ReauthModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface SettingsModalProps {
@@ -220,6 +221,12 @@ const SecurityPane: React.FC<{
   const { lockService } = usePersonaService();
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+  // biometric：enabled = keyring 有托管条目（活查；不随 settings JSON 走，
+  // 双真相源会漂移）。null = 尚未查到（toggle 禁用）。
+  const [biometric, setBiometric] = useState<BiometricStatus | null>(null);
+  const [showEnableModal, setShowEnableModal] = useState(false);
+  const [enabling, setEnabling] = useState(false);
+  const [enableError, setEnableError] = useState<string | null>(null);
 
   // 初始值来自服务端真相（旧 JSON 缺键 → null = 不过期）
   useEffect(() => {
@@ -229,6 +236,12 @@ const SecurityPane: React.FC<{
       .then((resp) => {
         if (cancelled || !resp.success || !resp.data) return;
         setExpiryDays(resp.data.password_expiry_days ?? null);
+      })
+      .catch(() => {});
+    personaAPI
+      .biometricStatus()
+      .then((resp) => {
+        if (!cancelled && resp.success && resp.data) setBiometric(resp.data);
       })
       .catch(() => {});
     return () => {
@@ -260,6 +273,54 @@ const SecurityPane: React.FC<{
     setChangingPassword(false);
     toast.success(t('settings.security.changedRelock'));
     await lockService();
+  };
+
+  // 开 = 先验主密码（ReauthModal）→ 后端再弹 OS 认证框；关 = 幂等删
+  //（收紧操作不设密码门禁）。enable 的成败在弹窗内闭环，可原地重试。
+  const handleBiometricToggle = () => {
+    if (biometric?.enabled) {
+      void disableBiometric();
+    } else {
+      setEnableError(null);
+      setShowEnableModal(true);
+    }
+  };
+
+  const disableBiometric = async () => {
+    setSaving(true);
+    try {
+      const resp = await personaAPI.biometricDisable();
+      if (resp.success && resp.data) {
+        setBiometric(resp.data);
+        toast.success(t('settings.security.biometricDisabled'));
+      } else {
+        toast.error(resp.error || t('settings.security.biometricOperationFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.security.biometricOperationFailed'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ReauthModal 收到的明文密码即请求体；失败留在弹窗内（enableError 驱动
+  // 弹窗错误条），不吞掉关闭
+  const handleBiometricEnable = async (masterPassword: string) => {
+    setEnabling(true);
+    try {
+      const resp = await personaAPI.biometricEnable(masterPassword);
+      if (resp.success && resp.data) {
+        setBiometric(resp.data);
+        setShowEnableModal(false);
+        toast.success(t('settings.security.biometricEnabled'));
+      } else {
+        setEnableError(resp.error || t('settings.security.biometricOperationFailed'));
+      }
+    } catch {
+      setEnableError(t('settings.security.biometricOperationFailed'));
+    } finally {
+      setEnabling(false);
+    }
   };
 
   return (
@@ -311,6 +372,34 @@ const SecurityPane: React.FC<{
             Change…
           </button>
         </div>
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">{t('settings.security.biometricUnlock')}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {biometric && !biometric.available
+                ? t('settings.security.biometricUnavailable')
+                : t('settings.security.biometricHint')}
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={biometric?.enabled ?? false}
+            aria-label={t('settings.security.biometricUnlock')}
+            data-testid="biometric-toggle"
+            disabled={saving || enabling || !biometric || !biometric.available}
+            onClick={handleBiometricToggle}
+            className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              biometric?.enabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'
+            }`}
+          >
+            <span
+              className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                biometric?.enabled ? 'translate-x-6' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
       </div>
 
       {changingPassword && (
@@ -320,6 +409,18 @@ const SecurityPane: React.FC<{
             void handleRotationDone();
           }}
           onCancel={() => setChangingPassword(false)}
+        />
+      )}
+
+      {/* 直接用组件而非 useReauth hook：enable 需要密码本身作请求体，
+          而非"验证通过"这一结果 */}
+      {showEnableModal && (
+        <ReauthModal
+          isOpen
+          error={enableError}
+          isVerifying={enabling}
+          onSubmit={handleBiometricEnable}
+          onClose={() => setShowEnableModal(false)}
         />
       )}
     </div>

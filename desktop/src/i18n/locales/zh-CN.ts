@@ -59,6 +59,7 @@ export default {
     unlocking: '解锁中…',
     unlock: '解锁 Persona',
     firstUseHint: '还没有主密码？首次使用时会自动创建。',
+    biometricUnlock: '使用指纹解锁',
   },
   statistics: {
     title: '统计',
@@ -120,6 +121,12 @@ export default {
       policySaved: '密码策略已保存',
       policySaveFailed: '密码策略保存失败',
       changedRelock: '主密码已修改——请重新登录',
+      biometricUnlock: '指纹解锁',
+      biometricHint: '用系统生物识别代替主密码解锁（主密码托管在系统钥匙串中）',
+      biometricUnavailable: '当前系统不支持或未配置生物识别',
+      biometricEnabled: '指纹解锁已开启',
+      biometricDisabled: '指纹解锁已关闭',
+      biometricOperationFailed: '指纹解锁设置失败',
     },
     advanced: {
       title: '高级功能',
@@ -395,6 +402,7 @@ export default {
     checkStatusFailed: '检查服务状态失败',
     initSuccess: '服务初始化成功',
     initFailed: '服务初始化失败',
+    biometricReset: '指纹解锁已失效（系统钥匙串中的托管条目不存在或密码已变更），请改用主密码解锁。',
     lockSuccess: '服务已锁定',
     lockFailed: '锁定服务失败',
     loadIdentitiesFailed: '加载身份失败',
