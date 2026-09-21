@@ -32,12 +32,10 @@ pub fn ceremony(reason: &str) -> Result<(), String> {
     let ctx = LAContext::new();
     let reason_ns = NSString::from_str(reason);
     let (tx, rx) = std::sync::mpsc::channel::<bool>();
-    let reply = StackBlock::new(
-        |success: Bool, _error: *mut objc2_foundation::NSError| {
-            // 接收端超时放弃后 send 失败无所谓（弹窗已被系统收走）
-            let _ = tx.send(success.as_bool());
-        },
-    );
+    let reply = StackBlock::new(|success: Bool, _error: *mut objc2_foundation::NSError| {
+        // 接收端超时放弃后 send 失败无所谓（弹窗已被系统收走）
+        let _ = tx.send(success.as_bool());
+    });
     unsafe {
         ctx.evaluatePolicy_localizedReason_reply(
             LAPolicy::DeviceOwnerAuthentication,

@@ -6823,7 +6823,9 @@ async fn biometric_status_reports_disabled_without_entry() {
         .clone()
         .unwrap();
 
-    let resp = biometric_status(None, app.state::<AppState>()).await.unwrap();
+    let resp = biometric_status(None, app.state::<AppState>())
+        .await
+        .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let status = resp.data.unwrap();
     // provider 可用 + keyring 可达（Ok(None)）但条目不存在
@@ -6877,7 +6879,10 @@ async fn biometric_enable_ceremony_then_writes_entry() {
     let status = resp.data.unwrap();
     assert!(status.available && status.enabled);
     // 托管的正是验证过的主密码（键 = db_path，一库一钥匙）
-    assert_eq!(store.get(&db_path).unwrap().as_deref(), Some("correct-horse"));
+    assert_eq!(
+        store.get(&db_path).unwrap().as_deref(),
+        Some("correct-horse")
+    );
 }
 
 #[tokio::test]
@@ -6920,7 +6925,10 @@ async fn biometric_enable_ceremony_failure_writes_nothing() {
 #[tokio::test]
 async fn biometric_enable_requires_unlocked_service() {
     // 未初始化：直接拒绝
-    let app = mock_app_with_biometric(mock_provider(true, false), Arc::new(InMemoryTokenStore::default()));
+    let app = mock_app_with_biometric(
+        mock_provider(true, false),
+        Arc::new(InMemoryTokenStore::default()),
+    );
     let resp = biometric_enable(
         BiometricEnableRequest {
             master_password: "x".to_string(),
@@ -6933,7 +6941,10 @@ async fn biometric_enable_requires_unlocked_service() {
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
     // 锁定：启用是解锁会话里的敏感配置操作
-    let app = mock_app_with_biometric(mock_provider(true, false), Arc::new(InMemoryTokenStore::default()));
+    let app = mock_app_with_biometric(
+        mock_provider(true, false),
+        Arc::new(InMemoryTokenStore::default()),
+    );
     init_service_ok(&app, "correct-horse").await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = biometric_enable(
@@ -7001,13 +7012,20 @@ async fn biometric_unlock_unlocks_via_init_service() {
     assert_eq!(resp.data, Some(true));
 
     let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
-    assert_eq!(resp.data, Some(true), "biometric unlock must unlock the service");
+    assert_eq!(
+        resp.data,
+        Some(true),
+        "biometric unlock must unlock the service"
+    );
 }
 
 #[tokio::test]
 async fn biometric_unlock_without_entry_skips_ceremony_and_reports_reset() {
     // force_fail provider：若真弹了框，结果会是 Err(String) 而非带码错误
-    let app = mock_app_with_biometric(mock_provider(true, true), Arc::new(InMemoryTokenStore::default()));
+    let app = mock_app_with_biometric(
+        mock_provider(true, true),
+        Arc::new(InMemoryTokenStore::default()),
+    );
     init_service_ok(&app, "correct-horse").await;
     // 从锁定态出发：无条目时必须既不弹框也不解锁
     lock_service(app.state::<AppState>()).await.unwrap();
@@ -7074,7 +7092,10 @@ async fn biometric_unlock_fails_closed_when_provider_unavailable() {
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("not available"));
     // 条目保留（不可用 ≠ 陈旧），解锁屏报错但可改用主密码登录
-    assert_eq!(store.get(&db_path).unwrap().as_deref(), Some("correct-horse"));
+    assert_eq!(
+        store.get(&db_path).unwrap().as_deref(),
+        Some("correct-horse")
+    );
 }
 
 #[tokio::test]
@@ -7105,7 +7126,10 @@ async fn change_master_password_updates_biometric_entry() {
     .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     // 托管条目随改密联动更新
-    assert_eq!(store.get(&db_path).unwrap().as_deref(), Some("new-password"));
+    assert_eq!(
+        store.get(&db_path).unwrap().as_deref(),
+        Some("new-password")
+    );
 
     // 闭环：用新托管条目 biometric 解锁成功
     lock_service(app.state::<AppState>()).await.unwrap();
@@ -7172,7 +7196,10 @@ async fn biometric_enable_keyring_write_failure_reports_and_leaves_no_half_state
 async fn init_service_injects_state_biometric_provider() {
     // force_fail provider：默认 Mock 恒通过——若注入生效，service 层
     // authenticate_biometric 必须失败
-    let app = mock_app_with_biometric(mock_provider(true, true), Arc::new(InMemoryTokenStore::default()));
+    let app = mock_app_with_biometric(
+        mock_provider(true, true),
+        Arc::new(InMemoryTokenStore::default()),
+    );
     init_service_ok(&app, "correct-horse").await;
 
     let state = app.state::<AppState>();

@@ -682,11 +682,10 @@ pub async fn biometric_status(
     // 探测错误一律 enabled=false——不把读取故障误报成已配置。
     let entry_probe = state.biometric_store.get(&db_path);
     let provider = state.biometric_provider.clone();
-    let provider_available = tauri::async_runtime::spawn_blocking(move || {
-        provider.is_available(None)
-    })
-    .await
-    .unwrap_or(false);
+    let provider_available =
+        tauri::async_runtime::spawn_blocking(move || provider.is_available(None))
+            .await
+            .unwrap_or(false);
     Ok(ApiResponse::success(BiometricStatusResponse {
         available: provider_available && entry_probe.is_ok(),
         enabled: matches!(entry_probe, Ok(Some(_))),
@@ -716,9 +715,9 @@ pub async fn biometric_enable(
     }
     let db_path = {
         let guard = state.db_path.lock().await;
-        guard.clone().ok_or_else(|| {
-            "Database path unavailable. Initialize the service first.".to_string()
-        })?
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
     };
 
     // 1. 验主密码（走活服务，继承失败计数 / AccountLocked 语义；语义同
@@ -750,12 +749,18 @@ pub async fn biometric_enable(
             "Biometric authentication is not available on this device".to_string(),
         ));
     }
-    run_biometric_ceremony(state.biometric_provider.clone(), "Enable biometric unlock for Persona")
-        .await?;
+    run_biometric_ceremony(
+        state.biometric_provider.clone(),
+        "Enable biometric unlock for Persona",
+    )
+    .await?;
 
     // 3. 托管进 keyring（ceremony 已花掉：写失败给明确错误，不留半态；
     //    用户改用密码登录不受影响）
-    if let Err(e) = state.biometric_store.set(&db_path, &request.master_password) {
+    if let Err(e) = state
+        .biometric_store
+        .set(&db_path, &request.master_password)
+    {
         return Ok(ApiResponse::error(format!(
             "Biometric verified but OS keyring write failed: {}",
             e
@@ -778,9 +783,9 @@ pub async fn biometric_disable(
 ) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
     let db_path = {
         let guard = state.db_path.lock().await;
-        guard.clone().ok_or_else(|| {
-            "Database path unavailable. Initialize the service first.".to_string()
-        })?
+        guard
+            .clone()
+            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
     };
     if let Err(e) = state.biometric_store.delete(&db_path) {
         return Ok(ApiResponse::error(format!(
