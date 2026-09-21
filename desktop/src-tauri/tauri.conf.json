@@ -41,6 +41,13 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "files": {
+          "/usr/share/polkit-1/actions/com.persona.desktop.biometric-unlock.policy": "polkit/com.persona.desktop.biometric-unlock.policy"
+        }
+      }
+    }
   }
 }

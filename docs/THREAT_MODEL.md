@@ -30,6 +30,7 @@
 | SSH Agent socket/pipe | `SSH_AUTH_SOCK`、Windows Named Pipe           | 未授权签名、agent 转发滥用        |
 | 审计日志              | 登录、解锁、凭据解密、SSH 签名摘要            | 篡改、删除、敏感字段误写入        |
 | 备份/导入导出文件     | JSON/YAML/CSV、加密备份                       | 备份泄露、格式注入、弱 passphrase |
+| OS 钥匙串托管条目     | keyring 中的主密码（biometric unlock 用）      | 同用户恶意进程读取、陈旧条目       |
 
 ## 信任边界
 
@@ -137,3 +138,43 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **CLI**：env-only（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用，空白视同未设置），**不落盘**——配置文件通道故意不提供；`main` 尾部 `stop()` 尽力 flush，release `panic = "abort"` 的崩溃路径不经 flush（丢失窗口与上面内存队列限制一致）。
 - **mobile（persona-mobile，Rust FFI 层）**：手写 extern "C" 宿主接线——`persona_service_init`（建户/认证序列对齐 desktop）、`persona_service_unlock/lock/is_unlocked`、`persona_configure_sync`（url+token trim 后都非空才启用、任一空白即摘除，fail-closed 对齐 CLI；URL 不做格式预校验，与 desktop attach 一致，格式错误在发送期暴露并退避）、`persona_shutdown`（落锁清密钥 + 尽力最终 flush + 清槽位）。**Rust 侧不落盘、不读环境变量**：url/token 由宿主（Dart 层）经 FFI 参数注入，服务状态留 Rust 侧全局槽位、密钥材料不跨 FFI 边界。如实标注未完成面：Flutter 工程本身（android/ios 目录、gradle）、Dart FFI 绑定层与 flutter_secure_storage 的 token 存储接线均未落地（本机无 Flutter SDK），当前安全结论只覆盖 Rust FFI 层；杀进程丢未 flush 批为已知限制（与 CLI/desktop 同）。手工验收（cargo-ndk 交叉编译、真 server 上报）转交有设备环境时执行。
 - **上报面不变**：三宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。
+
+## Biometric Unlock（桌面指纹/生物识别解锁）
+
+桌面端把主密码托管进 OS 钥匙串，用系统认证框（Linux polkit `auth_self` /
+macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
+免输主密码解锁。**该设计把"知道主密码"降级为"能通过 OS 用户认证"**，
+新增资产与威胁面在此白纸黑字：
+
+- **资产**：keyring（Linux secret-service `persona-biometric` service /
+  macOS Keychain / Windows Credential Manager）中按 vault db_path 为键存的
+  主密码明文。
+- **固有暴露（接受）**：**同 OS 用户的任意进程可读 OS 钥匙串**——
+  Linux secret-service 对同会话进程基本不设防；**Windows Credential
+  Manager 无 per-entry ACL，同用户任意用户态进程可直接读取**。这是
+  1Password 同款直存设计的固有代价：本机用户边界一旦被攻破（恶意软件
+  以当前用户运行），托管的主密码即泄露。缓解只有"用户级前置防线"
+  （OS 用户认证、应用来源管控）；对抗该场景需要专用硬件（TPM/SEP
+  绑定 + ATTCK 级进程隔离），超出本设计范围。
+- **生物路径爆破**：biometric_unlock 取回密码后走 `authenticate_user`
+  本尊，**吃与密码路径共享的失败计数**（5 次锁户）。控制：条目不存在
+  时干净报错不弹框；InvalidCredentials 当场自删条目并返回
+  `BIOMETRIC_RESET`（防反复点指纹把账户锁死）。
+- **陈旧条目**：桌面外改密（CLI）覆盖不到 keyring 联动——InvalidCredentials
+  自删（上一条）即兜底；桌面内改密成功则同步更新条目，写失败即删
+  （fail-closed：宁可让用户重输密码，不留打不开库的旧密码）。
+- **系统弹窗仿冒**：任何进程都能请求 OS 认证框，用户无法从框本身分辨
+  是谁发起。缓解：action id/message 固定为 Persona 专属
+  （`com.persona.desktop.biometric-unlock`）；polkit subject 用
+  system-bus-name（bus daemon 解析对端凭据，免疫 PID 复用类缺陷，
+  规避 zbus_polkit <5.1.0 的 CVE-2026-78422）。
+- **可用性 fail-closed**：无 fprintd/polkit agent、无 secret service、
+  rpm/AppImage/dev 构建未装 action 文件 → availability 探测失败即整体
+  降级为不可用（按钮不渲染），不做半开半关。
+- **超时**：ceremony 专用线程 120s 超时 + macOS 内层 reply 等待 110s，
+  弹框卡死不拖死 UI 线程。
+- **enable 门禁**：先验主密码后弹 OS 认证框——绝不把未验证的密码写进
+  keyring；enable 走解锁门禁（同 set_locale），disable 幂等删且不设门禁
+  （收紧操作从宽）。
+- **SSH agent 联动**：agent 的 require_biometric 策略默认拒绝 + 显式注入
+  OS provider（消除内置 Mock 静默放行面）。

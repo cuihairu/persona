@@ -562,7 +562,19 @@ Game Tokens (游戏令牌)
     已解锁路径与 flags 读取共用一次调用（避免重复 IPC）。CLI 保持英文。
     jest 侧为 i18next CJS default import 开 esModuleInterop（仅 jest
     tsconfig override，不影响 vite 构建）；434 用例断言中文化全绿
-  - biometric unlock 原生接线（底层已备，缺系统指纹对话框）
+  - [x] biometric unlock 原生接线（2026-09-21 落地）：三平台 OS provider
+    （Linux polkit `auth_self` 手写 CheckAuthorization 规避 CVE-2026-78422 /
+    macOS LocalAuthentication / Windows Hello；mac/win 经 CI 编译验证）。
+    主密码托管 OS keyring（`persona-biometric` service、键 = db_path，
+    1Password 同款直存）；四命令 status/enable/disable/unlock——enable 先验
+    密码后弹框、unlock 走 init_service 本尊密码不出进程、InvalidCredentials
+    自删条目 + `BIOMETRIC_RESET` 防指纹路径爆破吃满锁户、改密联动更新条目。
+    前端：解锁屏指纹按钮（status 防抖活查）+ 设置 SecurityPane 开关
+    （ReauthModal 验密）；SSH agent require_biometric 默认拒绝 + provider
+    显式注入。polkit action 随 deb 安装（rpm/AppImage/dev fail-closed 降级，
+    `scripts/verify-biometric-linux.md` 实机脚本）；威胁登记见
+    THREAT_MODEL.md「Biometric Unlock」（同用户恶意进程可读 keyring 为固有
+    暴露，Windows Credential Manager 无 ACL）
   - Travel Mode（vault 级可见性开关）
   - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）
 

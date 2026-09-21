@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Persona biometric unlock 的 polkit action。
+
+  本机活跃会话（allow_active）= auth_self：弹指纹/密码框认证当前用户
+  即可（对齐 macOS LocalAuthentication / Windows Hello 的
+  DeviceOwnerAuthentication 语义）；非活跃会话与任意远程（any/inactive）
+  收紧为 auth_admin。rpm/AppImage/dev 构建不带本文件——
+  CheckAuthorization 会报 ActionUnknown，biometric 功能按文档
+  fail-closed 降级（见 docs/THREAT_MODEL.md 与
+  docs/BIOMETRIC_HOOKS.md）。
+-->
+<policyconfig>
+
+  <action id="com.persona.desktop.biometric-unlock">
+    <description>Unlock the Persona vault</description>
+    <description xml:lang="zh_CN">解锁 Persona 密码库</description>
+    <message>Authentication is required to unlock the Persona vault with biometrics</message>
+    <message xml:lang="zh_CN">使用生物识别解锁 Persona 密码库需要认证</message>
+
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+  </action>
+
+</policyconfig>
