@@ -100,6 +100,19 @@ pub(crate) async fn register_auto_lock_bridge<R: tauri::Runtime>(
     }
 }
 
+/// 默认 vault 路径（init_service 与 biometric status/unlock 的路径解析
+/// 共用——解锁屏上 `state.db_path` 还是 None，必须能独立解析）
+pub(crate) fn default_db_path() -> String {
+    let app_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::env::current_dir().unwrap())
+        .join("persona");
+    std::fs::create_dir_all(&app_data_dir).ok();
+    app_data_dir
+        .join("persona.db")
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Initialize the Persona service with master password
 #[command]
 pub async fn init_service<R: tauri::Runtime>(
@@ -107,16 +120,7 @@ pub async fn init_service<R: tauri::Runtime>(
     state: State<'_, AppState>,
     app: tauri::AppHandle<R>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
-    let db_path = request.db_path.unwrap_or_else(|| {
-        let app_data_dir = dirs::data_dir()
-            .unwrap_or_else(|| std::env::current_dir().unwrap())
-            .join("persona");
-        std::fs::create_dir_all(&app_data_dir).ok();
-        app_data_dir
-            .join("persona.db")
-            .to_string_lossy()
-            .to_string()
-    });
+    let db_path = request.db_path.unwrap_or_else(default_db_path);
 
     // Store db_path
     {
@@ -144,6 +148,12 @@ pub async fn init_service<R: tauri::Runtime>(
 
             match PersonaService::new(db).await {
                 Ok(mut service) => {
+                    // 注入 OS 级 biometric provider：PersonaService::new 内置
+                    // 的 Mock（恒通过）会让 service.authenticate_biometric
+                    // 的任何未来调用方静默放行——一律换成 AppState 持有的
+                    // 真实 provider（SSH agent 的 require_biometric 策略
+                    // 同一份）
+                    service.set_biometric_provider(state.biometric_provider.clone());
                     // 附件 blob 存储跟随库文件（<db dir>/attachments）。
                     // 初始化失败只降级附件功能（相关命令报 not initialized），
                     // 绝不阻断解锁主流程。
@@ -426,7 +436,24 @@ pub async fn change_master_password(
         .change_master_password(&request.old_password, &request.new_password)
         .await
     {
-        Ok(()) => Ok(ApiResponse::success(true)),
+        Ok(()) => {
+            // biometric 托管条目联动：条目存在 → 更新为新密码；写失败 →
+            // 删除（fail-closed：宁可让用户重新启用，也不留坏条目——
+            // 坏条目会在每次 biometric_unlock 时触发 InvalidCredentials
+            // 自删 + 白白累计失败计数）。CLI 改密不经此处，那条路由
+            // biometric_unlock 的陈旧自愈兜底。
+            match state.biometric_store.get(&db_path) {
+                Ok(Some(_)) => {
+                    if let Err(e) = state.biometric_store.set(&db_path, &request.new_password) {
+                        tracing::warn!("biometric keyring update failed: {}", e);
+                        let _ = state.biometric_store.delete(&db_path);
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!("biometric keyring probe failed: {}", e),
+            }
+            Ok(ApiResponse::success(true))
+        }
         Err(e) => {
             let (code, msg) = map_persona_error(&e);
             match code {
@@ -597,6 +624,234 @@ pub async fn set_password_expiry(
     ws.touch();
     let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
     Ok(ApiResponse::success(updated.settings))
+}
+
+// ---------------------------------------------------------------------------
+// Biometric unlock（OS 认证弹框 + OS keychain 托管主密码）
+// ---------------------------------------------------------------------------
+
+/// biometric 命令的 vault 路径解析：参数优先（前端勾选自定义库路径时
+/// 传入——一个 db_path 一把钥匙），其次本会话 db_path，最后默认路径
+/// （解锁屏上 state.db_path 还是 None）。
+async fn resolve_biometric_db_path(
+    requested: Option<String>,
+    state: &State<'_, AppState>,
+) -> String {
+    if let Some(path) = requested {
+        return path;
+    }
+    if let Some(path) = state.db_path.lock().await.clone() {
+        return path;
+    }
+    default_db_path()
+}
+
+/// 在 blocking 线程上跑一次 OS 认证弹框（provider 内部自带 120s 超时，
+/// 不泊车 tokio worker）。
+async fn run_biometric_ceremony(
+    provider: Arc<dyn persona_core::BiometricProvider>,
+    reason: &str,
+) -> std::result::Result<(), String> {
+    let reason = reason.to_string();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        provider.authenticate(&persona_core::BiometricPrompt {
+            user_id: uuid::Uuid::nil(),
+            reason,
+            platform: None,
+        })
+    })
+    .await
+    .map_err(|e| format!("biometric ceremony task failed: {}", e))?;
+    result
+        .map(|_| ())
+        .map_err(|e| format!("Biometric verification failed: {}", e))
+}
+
+/// 只读：biometric unlock 状态（免解锁——解锁屏 mount 即查，决定指纹
+/// 按钮显隐）。`enabled` 只泄露"本 vault 是否配置过生物解锁"一位元
+/// 数据（与 sync_token_present 同级）；托管的主密码真值永不出 keyring、
+/// 不经 IPC。
+#[command]
+pub async fn biometric_status(
+    db_path: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
+    let db_path = resolve_biometric_db_path(db_path, &state).await;
+    // keyring 可达性也是 availability 的一部分：存不进去的 keyring 没有
+    // 可启用的生物解锁（fail-closed，与 attach_sync_emitter 同口径）。
+    // 探测错误一律 enabled=false——不把读取故障误报成已配置。
+    let entry_probe = state.biometric_store.get(&db_path);
+    let provider = state.biometric_provider.clone();
+    let provider_available = tauri::async_runtime::spawn_blocking(move || {
+        provider.is_available(None)
+    })
+    .await
+    .unwrap_or(false);
+    Ok(ApiResponse::success(BiometricStatusResponse {
+        available: provider_available && entry_probe.is_ok(),
+        enabled: matches!(entry_probe, Ok(Some(_))),
+        platform: crate::biometric::platform_name().to_string(),
+    }))
+}
+
+/// 启用 biometric unlock：验主密码 → OS 认证弹框 → 主密码托管进
+/// keyring。顺序刻意为先密码后弹框——密码是要托管的秘密，必须先证明
+/// 正确（绝不把未验证的密码写进 keyring）；毫秒级验证先跑可 fail-fast，
+/// 把系统级弹窗这个稀缺的注意力资源留到最后。设备指纹通过者 ≠ 必然
+/// 知道 vault 主密码，已解锁会话中仍要求主密码 = 复用"敏感操作再认证"
+/// 先例（1Password 启用 Touch ID 同款体验）。
+#[command]
+pub async fn biometric_enable(
+    request: BiometricEnableRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
+    // 解锁门禁（同 set_locale）：启用是解锁会话里的敏感配置操作
+    {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) if service.is_unlocked() => {}
+            Some(_) => return Ok(ApiResponse::error("Service is locked".to_string())),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    }
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard.clone().ok_or_else(|| {
+            "Database path unavailable. Initialize the service first.".to_string()
+        })?
+    };
+
+    // 1. 验主密码（走活服务，继承失败计数 / AccountLocked 语义；语义同
+    //    reauth_verify——错误码原样映射；authenticate_user 需 &mut）
+    {
+        let mut guard = state.service.lock().await;
+        let service = guard.as_mut().ok_or("Service not initialized")?;
+        match service.authenticate_user(&request.master_password).await {
+            Ok(persona_core::AuthResult::Success) => {}
+            Ok(persona_core::AuthResult::AccountLocked) => {
+                return Ok(ApiResponse::error(
+                    "Account is locked due to too many failed attempts".to_string(),
+                ))
+            }
+            Ok(_) => return Ok(ApiResponse::error("Invalid master password".to_string())),
+            Err(e) => {
+                let (code, msg) = map_persona_error(&e);
+                return Ok(match code {
+                    Some(code) => ApiResponse::error_with_code(code, msg),
+                    None => ApiResponse::error(format!("Authentication error: {}", msg)),
+                });
+            }
+        }
+    }
+
+    // 2. OS 认证弹框
+    if !state.biometric_provider.is_available(None) {
+        return Ok(ApiResponse::error(
+            "Biometric authentication is not available on this device".to_string(),
+        ));
+    }
+    run_biometric_ceremony(state.biometric_provider.clone(), "Enable biometric unlock for Persona")
+        .await?;
+
+    // 3. 托管进 keyring（ceremony 已花掉：写失败给明确错误，不留半态；
+    //    用户改用密码登录不受影响）
+    if let Err(e) = state.biometric_store.set(&db_path, &request.master_password) {
+        return Ok(ApiResponse::error(format!(
+            "Biometric verified but OS keyring write failed: {}",
+            e
+        )));
+    }
+
+    Ok(ApiResponse::success(BiometricStatusResponse {
+        available: true,
+        enabled: true,
+        platform: crate::biometric::platform_name().to_string(),
+    }))
+}
+
+/// 禁用 biometric unlock：删 keyring 条目（幂等，连删两次都成功）。
+/// 不需要 ceremony 也不设解锁门禁——这是收紧暴露面的操作（无敏感
+/// 读取，删掉后解锁屏指纹按钮消失，主密码登录不受影响）。
+#[command]
+pub async fn biometric_disable(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard.clone().ok_or_else(|| {
+            "Database path unavailable. Initialize the service first.".to_string()
+        })?
+    };
+    if let Err(e) = state.biometric_store.delete(&db_path) {
+        return Ok(ApiResponse::error(format!(
+            "OS keyring delete failed: {}",
+            e
+        )));
+    }
+    Ok(ApiResponse::success(BiometricStatusResponse {
+        available: false,
+        enabled: false,
+        platform: crate::biometric::platform_name().to_string(),
+    }))
+}
+
+/// biometric 解锁：先查条目（没有就干净报错，不弹系统框）→ OS 认证
+/// 弹框 → keyring 取回主密码 → 走既有 [`init_service`] 全链路（成功/
+/// InvalidCredentials / AccountLocked / PASSWORD_CHANGE_REQUIRED 原样
+/// 透传；主密码全程不出进程、不进 ApiResponse）。
+#[command]
+pub async fn biometric_unlock<R: tauri::Runtime>(
+    request: BiometricUnlockRequest,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle<R>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let db_path = resolve_biometric_db_path(request.db_path, &state).await;
+
+    let master_password = match state.biometric_store.get(&db_path) {
+        Ok(Some(password)) => password,
+        Ok(None) => {
+            // 未配置/已被重置：BIOMETRIC_RESET 让前端隐藏按钮并提示
+            return Ok(ApiResponse::error_with_code(
+                crate::error::CODE_BIOMETRIC_RESET.to_string(),
+                "Biometric unlock is not configured for this vault".to_string(),
+            ));
+        }
+        Err(e) => return Ok(ApiResponse::error(format!("OS keyring read failed: {}", e))),
+    };
+
+    if !state.biometric_provider.is_available(None) {
+        return Ok(ApiResponse::error(
+            "Biometric authentication is not available on this device".to_string(),
+        ));
+    }
+    run_biometric_ceremony(state.biometric_provider.clone(), "Unlock Persona").await?;
+
+    // init_service 本尊复用：锁内全链路（auto-lock 桥、passkey 服务端、
+    // sync emitter、biometric provider 注入）与密码解锁完全一致
+    let biometric_store = state.biometric_store.clone();
+    let resp = init_service(
+        InitRequest {
+            master_password,
+            db_path: Some(db_path.clone()),
+        },
+        state,
+        app,
+    )
+    .await?;
+
+    // 陈旧条目自愈（桌面外改密等场景）：取回的密码对这把锁已证明
+    // 错误，条目必坏，当场删除——防止反复点指纹白白累计失败计数
+    // （core 5 次失败锁户）把账号锁死
+    if !resp.success && resp.error.as_deref() == Some("Invalid master password") {
+        if let Err(e) = biometric_store.delete(&db_path) {
+            tracing::warn!("stale biometric entry cleanup failed: {}", e);
+        }
+        return Ok(ApiResponse::error_with_code(
+            crate::error::CODE_BIOMETRIC_RESET.to_string(),
+            "Stored biometric credential was stale and has been removed; unlock with your master password".to_string(),
+        ));
+    }
+    Ok(resp)
 }
 
 /// 读当前 vault 的同步服务器配置段（vault 打不开/行不存在一律 None——
@@ -1955,6 +2210,9 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         app,
         state.ssh_approvals.clone(),
     ));
+    // biometric provider 与解锁屏/init_service 注入的是同一份：SSH key 的
+    // require_biometric 策略走 OS 认证弹框（Agent::new 默认拒绝，注入才放行）
+    let biometric = state.biometric_provider.clone();
     // tauri 全局运行时而非调用方的 tokio 上下文：mock_app（测试）的
     // reactor 上 socket IO 永不唤醒，agent 必须活在健康的多线程运行时里。
     let handle = tauri::async_runtime::spawn(async move {
@@ -1965,9 +2223,10 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         }
         std::env::set_var("PERSONA_DB_PATH", &db_path_clone);
         std::env::set_var("PERSONA_AGENT_STATE_DIR", &state_dir);
-        if let Err(err) = persona_ssh_agent::run_agent_with_approval(Some(
-            handler as Arc<dyn persona_ssh_agent::ApprovalHandler>,
-        ))
+        if let Err(err) = persona_ssh_agent::run_agent_with_hooks(
+            Some(handler as Arc<dyn persona_ssh_agent::ApprovalHandler>),
+            Some(biometric as Arc<dyn persona_core::BiometricProvider>),
+        )
         .await
         {
             eprintln!("SSH agent exited: {}", err);

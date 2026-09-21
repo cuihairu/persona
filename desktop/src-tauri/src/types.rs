@@ -83,6 +83,32 @@ pub struct PasskeyApprovalRequest {
     pub item_id: Option<String>,
 }
 
+/// biometric unlock 状态查询响应。`available` = OS 认证栈 + keyring 均
+/// 可达（fail-closed：任一不可用即 false，前端隐藏指纹入口）；
+/// `enabled` = 本 vault 的 keyring 托管条目存在——单一真相源，
+/// workspace settings 不存开关（vault 文件拷机后 keyring 无条目，
+/// 功能自然回到未启用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct BiometricStatusResponse {
+    pub available: bool,
+    pub enabled: bool,
+    /// 平台名（"touch-id" / "windows-hello" / "linux-polkit" / "unsupported"）
+    pub platform: String,
+}
+
+/// 启用 biometric unlock：主密码经 OS 认证弹框确认后托管进 keyring
+#[derive(Debug, Deserialize)]
+pub struct BiometricEnableRequest {
+    pub master_password: String,
+}
+
+/// biometric 解锁：参数 db_path 在前端勾选自定义库路径时传入
+/// （默认 None = 本会话路径或默认路径）
+#[derive(Debug, Deserialize)]
+pub struct BiometricUnlockRequest {
+    pub db_path: Option<String>,
+}
+
 /// Response structure for API calls
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T> {

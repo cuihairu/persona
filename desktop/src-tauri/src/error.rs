@@ -8,6 +8,9 @@ pub const CODE_REAUTH_REQUIRED: &str = "REAUTH_REQUIRED";
 pub const CODE_SERVICE_LOCKED: &str = "SERVICE_LOCKED";
 /// 错误码：主密码按策略需要轮换（前端应引导改密流程）
 pub const CODE_PASSWORD_CHANGE_REQUIRED: &str = "PASSWORD_CHANGE_REQUIRED";
+/// 错误码：biometric 托管条目已失效并被删除（未配置/陈旧自删，前端应
+/// 刷新 status 隐藏指纹按钮、提示改用主密码登录）
+pub const CODE_BIOMETRIC_RESET: &str = "BIOMETRIC_RESET";
 
 /// 将任意 service 错误映射为 `(error_code, message)`。
 ///

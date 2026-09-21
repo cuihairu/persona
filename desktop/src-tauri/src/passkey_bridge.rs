@@ -21,6 +21,8 @@
 //! gesture gate.
 
 use crate::approval::PendingApprovals;
+// Windows 分流不构建审批 sink 链路（CI 编译实测该路径零使用）
+#[cfg(unix)]
 use crate::types::PasskeyApprovalRequest;
 use std::path::PathBuf;
 #[cfg(unix)]

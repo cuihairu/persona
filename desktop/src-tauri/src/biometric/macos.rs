@@ -3,10 +3,12 @@
 //! `kLAPolicyDeviceOwnerAuthentication` = 生物识别 + 系统密码回退，
 //! 对齐 1Password 的解锁语义。evaluatePolicy 的 reply 回调在私有
 //! dispatch queue 上执行——内层 channel 等回调到达（时限比外层
-//! CEREMONY_TIMEOUT 短 10s，让本层先超时报出更精确的错误）。
+//! CEREMONY_TIMEOUT 短 10s，让本层先超时报出更精确的错误）。等待期间
+//! `StackBlock` 活在本函数栈帧上，回调到达时 block 一定仍然有效。
 //!
 //! 仅经 nightly CI 编译验证（本仓库无 macOS 实机）。
 
+use block2::StackBlock;
 use objc2::runtime::Bool;
 use objc2_foundation::NSString;
 use objc2_local_authentication::{LAContext, LAPolicy};
@@ -21,20 +23,26 @@ pub fn platform_name() -> &'static str {
 
 pub fn available() -> bool {
     let ctx = LAContext::new();
-    unsafe { ctx.canEvaluatePolicy(LAPolicy::DeviceOwnerAuthentication) }
+    // canEvaluatePolicy_error 返回 Result<(), Retained<NSError>>：
+    // Err（无生物硬件/系统限制）一律按不可用处理
+    unsafe { ctx.canEvaluatePolicy_error(LAPolicy::DeviceOwnerAuthentication) }.is_ok()
 }
 
 pub fn ceremony(reason: &str) -> Result<(), String> {
     let ctx = LAContext::new();
     let reason_ns = NSString::from_str(reason);
     let (tx, rx) = std::sync::mpsc::channel::<bool>();
+    let reply = StackBlock::new(
+        |success: Bool, _error: *mut objc2_foundation::NSError| {
+            // 接收端超时放弃后 send 失败无所谓（弹窗已被系统收走）
+            let _ = tx.send(success.as_bool());
+        },
+    );
     unsafe {
         ctx.evaluatePolicy_localizedReason_reply(
             LAPolicy::DeviceOwnerAuthentication,
             &reason_ns,
-            |success: Bool, _error: *mut objc2_foundation::NSError| {
-                let _ = tx.send(success.as_bool());
-            },
+            &reply,
         );
     }
     match rx.recv_timeout(REPLY_TIMEOUT) {
