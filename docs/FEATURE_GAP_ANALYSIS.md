@@ -5,12 +5,12 @@ Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona 
 - Security
   - E2E encryption, zero-knowledge: [=] per-item keys wrapped by the master key (AES-256-GCM); Argon2id for export/backup encryption; legacy direct-encryption rows still readable
   - SRP auth model: [≈] SRP-like remote-auth abstraction landed (PBKDF2-HMAC-SHA256, 100k iterations); full server-side flow waits for the sync track
-  - Biometric unlock: [≈] provider abstraction + hooks landed; native Touch ID/Windows Hello wiring lands with the desktop app
+  - Biometric unlock: [=] native wiring landed on all three desktop platforms (Linux polkit `auth_self` / macOS LocalAuthentication / Windows Hello; master password escrowed in the OS keyring, InvalidCredentials self-purges the entry, fail-closed when the OS provider is unavailable — 2026-09)
   - Auto-lock policies: [=] auto-lock timers + re-authentication for sensitive ops
 - Vaults/Items
   - Multiple vaults/collections: [−] single workspace by design (identity-scoped); multi-user vault features intentionally out of scope (see `BOUNDARY.md`)
   - Item types: [≈] password, API key, TOTP, SSH key, bank card, server config, digital certificate, game account, crypto-wallet placeholder; secure notes as a first-class encrypted item type (`CredentialData::SecureNote`, body under the per-item key — 2026-09); Identity + Software License categories (document numbers / license keys under the per-item key, 2026-09)
-  - Passkeys (FIDO): [−] not started — the next major parity gap
+  - Passkeys (FIDO): [=] software authenticator in core/CLI (ES256, per-item-key-wrapped storage), browser-bridge interception with approval gating (protocol v2), desktop management page + Unix-socket approval server; cross-device sync waits for the phase-2 E2EE sync track; OS platform authenticators (macOS/Windows) still pending
   - Attachments/versioning: [=] attachments fully landed (files sealed under the owning item's per-item key, survive master-password rotation, cascade-deleted with the item; desktop pane with native file dialogs + `persona credential attach/attachments/save-attachment/remove-attachment` CLI, 2026-09); item change history recorded on every create/update/delete with metadata-only field diffs and surfaced in desktop detail pane + `persona credential history` (2026-09; restore-to-version pending)
 - Autofill & Browser
   - Browser extension: [≈] Chromium extension + Native Messaging bridge MVP (username/password fill, TOTP verb, pairing + HMAC + origin binding + user gesture, domain policies, phishing resistance); Safari host shell present
@@ -20,7 +20,7 @@ Status as of 2026-09. Legend: [=] parity or similar, [≈] partial, [+] Persona 
 - Sharing/Admin
   - Multi-user vaults, RBAC, SCIM/SSO, account recovery: [−] out of scope for a single-principal product (`BOUNDARY.md`)
 - Apps & Interfaces
-  - Desktop app: [≈] full command wiring on Tauri v2 (50+ commands: vault/credential CRUD, TOTP, auto-lock with backend-enforced lock, audit query, passkey seams, reveal + re-auth gating, wallet create/sign confirmations with address-poisoning heuristics, SSH signature approvals via in-app modal + system notification, passkey approval gate for browser bridge requests via Unix socket + approval modal + system tray with close-to-tray, passkey management page: cross-identity list/detail/delete/self-test/private-key export, secure-note item type + item-history timeline + attachments (native file dialogs) in the detail pane); remaining: biometric unlock, packaged-build acceptance
+  - Desktop app: [≈] full command wiring on Tauri v2 (50+ commands: vault/credential CRUD, TOTP, auto-lock with backend-enforced lock, audit query, passkey seams, reveal + re-auth gating, wallet create/sign confirmations with address-poisoning heuristics, SSH signature approvals via in-app modal + system notification, passkey approval gate for browser bridge requests via Unix socket + approval modal + system tray with close-to-tray, passkey management page: cross-identity list/detail/delete/self-test/private-key export, biometric unlock on all three platforms (OS keyring escrow + system auth prompt), secure-note item type + item-history timeline + attachments (native file dialogs) in the detail pane); remaining: packaged-build acceptance
   - Mobile: [−] placeholder
   - CLI: [=] full CRUD, TOTP (QR setup + watch), password generator, TUI, export/import (gzip + encryption), 1Password migration (`import-1pux`: per-vault identities, Login/API Credential/SSH Key mapping, TOTP split-out, skip reporting), non-interactive CI mode, migrations
 - Developer

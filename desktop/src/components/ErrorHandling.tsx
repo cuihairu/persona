@@ -1,7 +1,24 @@
 import * as React from 'react';
 import { XCircleIcon, ExclamationTriangleIcon, InformationCircleIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import i18n from '@/i18n';
+
+/**
+ * production 前端错误落本地日志文件（Rust 侧脱敏 subscriber），上报失败
+ * 静默——错误已经发生，上报路径不允许再制造二次噪声。
+ */
+const reportFrontendError = (
+  message: string,
+  stack: string | null,
+  componentStack: string | null,
+): void => {
+  invoke('report_frontend_error', {
+    message,
+    stack,
+    componentStack,
+  }).catch(() => {});
+};
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -33,14 +50,12 @@ export class ErrorBoundary extends React.Component<
     console.error('Error caught by boundary:', error, errorInfo);
     this.setState({ error, errorInfo });
 
-    // Report to error tracking service in production
     if (process.env.NODE_ENV === 'production') {
-      // TODO: Send error to tracking service
-      console.log('Would report error to tracking service:', {
-        error: error.message,
-        stack: error.stack,
-        componentStack: errorInfo.componentStack,
-      });
+      reportFrontendError(
+        error.message,
+        error.stack ?? null,
+        errorInfo.componentStack ?? null,
+      );
     }
   }
 
@@ -191,6 +206,14 @@ export const useErrorHandler = () => {
       errorMessage = error.message;
     } else if (typeof error === 'string') {
       errorMessage = error;
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      reportFrontendError(
+        context ? `${context}: ${errorMessage}` : errorMessage,
+        error instanceof Error ? error.stack ?? null : null,
+        null,
+      );
     }
 
     if (context) {

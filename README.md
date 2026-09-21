@@ -242,9 +242,9 @@ Priority policy: the password-manager track targets 1Password parity first; wall
 - [x] Browser extension + native messaging bridge (autofill MVP, domain policies, phishing resistance)
 - [x] CLI parity: CRUD, TOTP, password generator, TUI, non-interactive CI mode
 - [x] Wallet material (experimental): BTC/ETH/Solana derivation + signing on audited crates (rust-bitcoin/alloy)
-- [ ] Passkeys (WebAuthn) storage + autofill
-- [ ] Watchtower-class health checks (weak/reused/expired, breach checks)
-- [ ] Desktop app data wiring and polished UI
+- [x] Passkeys (WebAuthn) storage + autofill
+- [x] Watchtower-class health checks (weak/reused/expired, breach checks)
+- [x] Desktop app data wiring and polished UI
 - [ ] Optional sync/automation service with a local-first design
 - [ ] Wallet graduation: design doc, signing confirmations, PSBT, keystore JSON (after parity)
 

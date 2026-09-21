@@ -56,7 +56,11 @@ pub struct RedactedLoggerBuilder {
     include_timestamp: bool,
     include_target: bool,
     policy: RedactionPolicy,
+    writer: Option<WriterFactory>,
 }
+
+/// Factory producing the sink the subscriber writes formatted lines to.
+type WriterFactory = Box<dyn Fn() -> Box<dyn std::io::Write + Send> + Send + Sync>;
 
 impl RedactedLoggerBuilder {
     /// Start a new builder at the desired log level.
@@ -66,6 +70,7 @@ impl RedactedLoggerBuilder {
             include_timestamp: true,
             include_target: false,
             policy: RedactionPolicy::default(),
+            writer: None,
         }
     }
 
@@ -87,17 +92,37 @@ impl RedactedLoggerBuilder {
         self
     }
 
+    /// Route log output to a custom writer factory instead of stdout.
+    ///
+    /// The factory is called once per formatted event and must return a writer
+    /// safe to write a single line to; sharing a `Mutex<File>` behind the
+    /// factory is the intended pattern for file-backed logging.
+    pub fn with_writer(
+        mut self,
+        make: impl Fn() -> Box<dyn std::io::Write + Send> + Send + Sync + 'static,
+    ) -> Self {
+        self.writer = Some(Box::new(make));
+        self
+    }
+
     /// Finish configuring and install the subscriber globally.
     pub fn init(self) -> Result<(), tracing_subscriber::util::TryInitError> {
         let formatter =
             RedactingFormatter::new(self.policy, self.include_timestamp, self.include_target);
 
-        tracing_subscriber::util::SubscriberInitExt::try_init(
-            tracing_subscriber::fmt()
-                .with_max_level(self.level)
-                .with_target(self.include_target)
-                .event_format(formatter),
-        )?;
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(self.level)
+            .with_target(self.include_target)
+            .event_format(formatter);
+
+        match self.writer {
+            Some(factory) => {
+                tracing_subscriber::util::SubscriberInitExt::try_init(
+                    subscriber.with_writer(factory),
+                )?;
+            }
+            None => tracing_subscriber::util::SubscriberInitExt::try_init(subscriber)?,
+        };
 
         Ok(())
     }
@@ -513,11 +538,29 @@ mod tests {
         assert!(!builder.include_timestamp);
         assert!(builder.include_target);
         assert_eq!(builder.policy.mask, "[X]");
+        assert!(builder.writer.is_none(), "stdout is the default sink");
 
         // Default builder state.
         let default = RedactedLoggerBuilder::new(tracing::Level::INFO);
         assert!(default.include_timestamp);
         assert!(!default.include_target);
+    }
+
+    #[test]
+    fn with_writer_stores_a_working_factory() {
+        let sink = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let builder = RedactedLoggerBuilder::new(tracing::Level::INFO).with_writer({
+            let sink = sink.clone();
+            move || Box::new(SharedWriter(sink.0.clone()))
+        });
+
+        let factory = builder.writer.as_ref().expect("writer factory stored");
+        let mut writer = factory();
+        writer.write_all(b"a line\n").unwrap();
+        writer.write_all(b"password=hunter2\n").unwrap();
+
+        let out = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(out, "a line\npassword=hunter2\n");
     }
 
     #[test]

@@ -96,6 +96,78 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+/// 安装脱敏日志 subscriber：production 写 `app_log_dir` 下日志文件
+/// （>5 MiB 单代轮转），dev 构建与降级路径保持 stdout。
+///
+/// 必须在任何 tracing 事件之前调用（setup 最前）。全局 subscriber 只能
+/// 装一次，重复安装（测试进程多次 build）静默保持已装的。
+fn init_desktop_logging<R: tauri::Runtime>(app: &tauri::App<R>) {
+    use std::io::Write;
+
+    let init_stdout = || {
+        let _ = persona_core::logging::init_redacted_tracing(tracing::Level::INFO);
+    };
+
+    // dev/test 构建：stdout 可见且不写开发机磁盘
+    if cfg!(debug_assertions) {
+        init_stdout();
+        return;
+    }
+
+    let Some(log_dir) = app.path().app_log_dir().ok() else {
+        init_stdout();
+        return;
+    };
+    if std::fs::create_dir_all(&log_dir).is_err() {
+        init_stdout();
+        return;
+    }
+
+    let log_path = log_dir.join("persona-desktop.log");
+    // 单代轮转：超限改名为 .1（删旧 .1），在无界增长与写放大之间取中
+    const ROTATE_BYTES: u64 = 5 * 1024 * 1024;
+    if std::fs::metadata(&log_path)
+        .map(|meta| meta.len() > ROTATE_BYTES)
+        .unwrap_or(false)
+    {
+        let rotated = log_dir.join("persona-desktop.log.1");
+        let _ = std::fs::remove_file(&rotated);
+        let _ = std::fs::rename(&log_path, &rotated);
+    }
+
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(file) => Arc::new(std::sync::Mutex::new(file)),
+        Err(_) => {
+            init_stdout();
+            return;
+        }
+    };
+
+    struct SharedFileWriter(Arc<std::sync::Mutex<std::fs::File>>);
+    impl Write for SharedFileWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .write(buf)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .flush()
+        }
+    }
+
+    let _ = persona_core::logging::RedactedLoggerBuilder::new(tracing::Level::INFO)
+        .with_writer(move || Box::new(SharedFileWriter(file.clone())))
+        .init();
+}
+
 /// 组装应用（托盘、passkey 审批服务端、全部命令注册）。
 ///
 /// context 参数化：生产 [`run`] 传 `generate_context!`，集成测试传
@@ -124,6 +196,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             )),
         })
         .setup(|app| {
+            // 日志先行：后续所有 tracing 事件（含托盘降级提示）都有落点
+            init_desktop_logging(app);
             // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。
             // 无显示会话（CI/容器/ssh-only）下 muda 菜单会直接 panic，
             // 跳过托盘降级运行 —— 审批链路不依赖托盘存活。
@@ -219,6 +293,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::export_identity,
             commands::reveal_credential_secret,
             commands::reauth_verify,
+            commands::report_frontend_error,
         ])
         .build(context)
         .expect("error while building tauri application")

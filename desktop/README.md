@@ -134,10 +134,10 @@ npm run tauri:build
 
 | Shortcut | Action |
 |----------|--------|
+| `Ctrl/Cmd + K` | Quick search (cross-identity) |
 | `Ctrl/Cmd + L` | Lock application |
-| `Ctrl/Cmd + N` | New credential |
-| `Ctrl/Cmd + F` | Search credentials |
 | `Ctrl/Cmd + ,` | Open settings |
+| `Ctrl/Cmd + E` | Copy username of the selected credential |
 | `Escape` | Close modals |
 
 ## Configuration

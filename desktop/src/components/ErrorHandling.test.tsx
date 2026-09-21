@@ -8,6 +8,11 @@ import {
   useErrorHandler,
 } from './ErrorHandling';
 
+const mockInvoke = jest.fn().mockResolvedValue(undefined);
+jest.mock('@tauri-apps/api/core', () => ({
+  invoke: (cmd: string, args?: unknown) => mockInvoke(cmd, args),
+}));
+
 /** 渲染时抛错的哑组件（React 需要 key 提示重渲染边界）。 */
 const Bomb = ({ message }: { message: string }) => {
   throw new Error(message);
@@ -128,11 +133,11 @@ describe('components/ErrorHandling', () => {
     consoleSpy.mockRestore();
   });
 
-  it('ErrorBoundary reports to tracking in production builds', () => {
+  it('ErrorBoundary reports to the local log sink in production builds', () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
+    mockInvoke.mockClear();
 
     render(
       <ErrorBoundary>
@@ -140,14 +145,57 @@ describe('components/ErrorHandling', () => {
       </ErrorBoundary>,
     );
 
-    expect(logSpy).toHaveBeenCalledWith(
-      'Would report error to tracking service:',
-      expect.objectContaining({ error: 'prod-failure' }),
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'report_frontend_error',
+      expect.objectContaining({ message: 'prod-failure' }),
     );
 
     process.env.NODE_ENV = prevEnv;
     consoleSpy.mockRestore();
-    logSpy.mockRestore();
+  });
+
+  it('ErrorBoundary stays upright when error reporting itself fails', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    mockInvoke.mockReset();
+    mockInvoke.mockRejectedValueOnce(new Error('ipc down'));
+
+    render(
+      <ErrorBoundary>
+        <Bomb message="still-rendered" />
+      </ErrorBoundary>,
+    );
+
+    // 上报失败被静默吞掉，fallback UI 正常渲染
+    expect(screen.getByText('出错了')).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.getByText('出错了')).toBeInTheDocument();
+
+    process.env.NODE_ENV = prevEnv;
+    mockInvoke.mockResolvedValue(undefined);
+    consoleSpy.mockRestore();
+  });
+
+  it('useErrorHandler reports handled errors in production builds', () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    mockInvoke.mockClear();
+
+    const { result } = renderHook(() => useErrorHandler());
+    act(() => {
+      result.current.handleError(new Error('hook-failure'), 'Ctx');
+    });
+
+    expect(mockInvoke).toHaveBeenCalledWith(
+      'report_frontend_error',
+      expect.objectContaining({ message: 'Ctx: hook-failure' }),
+    );
+    expect(result.current.error).toBe('Ctx: hook-failure');
+
+    process.env.NODE_ENV = prevEnv;
+    consoleSpy.mockRestore();
   });
 
   it('ErrorBoundary renders children untouched when nothing throws', () => {

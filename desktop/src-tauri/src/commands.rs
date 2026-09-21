@@ -1089,6 +1089,40 @@ pub async fn sync_token_present(
     Ok(ApiResponse::success(present))
 }
 
+/// 前端错误上报：production 构建里 ErrorBoundary / handleError 落本地
+/// 日志文件（setup 安装的脱敏 subscriber）。各字段截断防日志爆炸；上报
+/// 路径永不失败——错误已经发生，上报再报错只会制造二次噪声。
+#[command]
+pub fn report_frontend_error(
+    message: String,
+    stack: Option<String>,
+    component_stack: Option<String>,
+) -> ApiResponse<bool> {
+    const MAX_FIELD_BYTES: usize = 8 * 1024;
+
+    fn truncate_field(value: &str, max_bytes: usize) -> String {
+        if value.len() <= max_bytes {
+            value.to_string()
+        } else {
+            // 按 char 边界回退，不切断 UTF-8
+            let mut end = max_bytes;
+            while end > 0 && !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}…[truncated]", &value[..end])
+        }
+    }
+
+    tracing::error!(
+        target: "frontend",
+        message = %truncate_field(&message, MAX_FIELD_BYTES),
+        stack = %stack.as_deref().map(|s| truncate_field(s, MAX_FIELD_BYTES)).unwrap_or_default(),
+        component_stack = %component_stack.as_deref().map(|s| truncate_field(s, MAX_FIELD_BYTES)).unwrap_or_default(),
+        "frontend error reported"
+    );
+    ApiResponse::success(true)
+}
+
 /// 只读 passkey 开关：vault 打不开/行不存在一律视为关（审批链路另有
 /// 解锁门禁兜底，静默跳过安全）。
 async fn passkeys_flag_enabled(db_path: &str) -> bool {

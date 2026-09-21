@@ -7215,3 +7215,24 @@ async fn init_service_injects_state_biometric_provider() {
         "service must use the AppState provider, not the silent-pass default Mock"
     );
 }
+
+#[tokio::test]
+async fn report_frontend_error_never_fails_on_any_input_shape() {
+    // 上报路径永不失败：空参数
+    let resp = report_frontend_error(String::new(), None, None);
+    assert!(resp.success);
+
+    // 常规参数
+    let resp = report_frontend_error(
+        "boom".to_string(),
+        Some("at Foo (bar.tsx:1)".to_string()),
+        Some("in ErrorBoundary".to_string()),
+    );
+    assert!(resp.success);
+
+    // 超长字段（> 8 KiB，含多字节字符）：按 char 边界截断不 panic
+    let long_message = "错".repeat(10_000);
+    let long_stack = "x".repeat(50_000);
+    let resp = report_frontend_error(long_message, Some(long_stack), None);
+    assert!(resp.success);
+}
