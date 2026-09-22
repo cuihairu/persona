@@ -7,6 +7,7 @@ pub mod favicon;
 pub mod filesystem;
 pub mod passkey_repository;
 pub mod repository;
+pub mod sync_repository;
 pub mod user_auth;
 pub mod wallet_repository;
 

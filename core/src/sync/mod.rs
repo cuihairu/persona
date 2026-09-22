@@ -6,10 +6,12 @@
 //!
 //! - [`keys`]：group key / 设备密钥对的生成与类型
 //! - [`envelope`]：`persona-dev-env-1` 信封密封与开启
+//! - [`oplog`]：SyncOp 结构 + LWW/冲突双版本纯逻辑（DR-4）
 //!
-//! 本模块只做纯密码层与数据结构；oplog 存储、LWW 冲突、同步引擎随阶段 2
-//! 后续批次落地。设备私钥的持久化（OS keyring `persona-device` / 0600 文件
-//! fallback）由宿主负责——core 不依赖 keyring。
+//! 本模块只做纯密码层与数据结构；本地持久化在 [`crate::storage::sync_repository`]，
+//! 同步编排（push/pull、travel 闸）随阶段 2 后续批次落地。设备私钥的持久化
+//! （OS keyring `persona-device` / 0600 文件 fallback）由宿主负责——core 不依赖 keyring。
 
 pub mod envelope;
 pub mod keys;
+pub mod oplog;
