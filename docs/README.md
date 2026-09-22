@@ -24,6 +24,7 @@
 - [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md) – CI/CD 非交互模式指南
 - [REMOTE_AUTH](./REMOTE_AUTH.md) – 远程认证抽象
 - [KEY_HIERARCHY](./KEY_HIERARCHY.md) – 密钥层级与 KDF 路径
+- [E2EE_SYNC_DESIGN](./E2EE_SYNC_DESIGN.md) – E2EE 同步设计稿（阶段 0：设备密钥/SRP 选型/组密钥信封/冲突解决四决策，未实现）
 
 ## 安全
 
