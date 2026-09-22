@@ -21,3 +21,13 @@ Persona prepares for a future client-server sync model by exposing a protocol-ag
 4. Higher layers can now bind this fingerprint to the unlock key/sessions.
 
 The mock provider serves tests/UI wiring only; server implementations will supply real SRP math and persist salts/verifiers.
+
+## Real implementation (2026-09, E2EE sync track phase 1)
+
+Server-side SRP is live:
+
+- `core/src/auth/srp.rs` — production SRP-6a math (RFC 5054 4096-bit group, SHA-256, Argon2id pre-hash), shared by client and server; correctness locked by the RFC 5054 Appendix B interop vectors.
+- `server/src/api/auth.rs` — `POST /api/v1/auth/register` (requires an existing bearer token), `/challenge`, `/verify` (issues a 15-minute bearer token; lockout after 5 failures). The static `PERSONA_SERVER_TOKENS` bearer path stays in place alongside it.
+- Threat-model registration: `docs/THREAT_MODEL.md`, section "SRP 设备认证端点"; design decisions in `docs/E2EE_SYNC_DESIGN.md` (DR-2).
+
+The `RemoteAuthProvider` trait above remains the client-side seam; wiring a real client implementation through it is the remaining half of phase 1.

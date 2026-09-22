@@ -150,6 +150,19 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **保留与去重**：同设备与最新版本 sha256 相同则去重（幂等重传）；`PERSONA_SERVER_BACKUP_MAX_VERSIONS`（默认 0 不限）全局删最旧（文件与行同删）。
 - **已知限制**：附件 blob 不在 v1 备份内（恢复后附件元数据在、文件体缺失，客户端 UI/CLI 明示）；备份内容为新版本创建时的完整快照，不含后续增量。
 
+## SRP 设备认证端点（`/api/v1/auth/*`，2026-09，E2EE 同步轨道阶段 1）
+
+SRP-6a（RFC 5054 4096-bit group + SHA-256）设备登录：客户端本地以 Argon2id
+预 hash 主密码派生 SRP 私钥，服务器只存 verifier（`auth_devices` 表：设备名、
+salt、verifier，密码与 Argon2 派生值永不出机）。设计见
+`docs/E2EE_SYNC_DESIGN.md` DR-2。
+
+- **数据处理范围**：落盘仅设备名 + salt + verifier（注册时经既有 Bearer 上传——引导链）；未决握手（session_id、服务器临时私钥、客户端公开值，TTL 120s）、已签发短期令牌（TTL 15 分钟）、失败计数**全部内存态、有意不持久化**——服务器重启即全部失效（fail-closed，重新登录）。
+- **认证**：`/register` 需既有 Bearer（静态令牌或已登录 SRP 令牌）；`/challenge` 与 `/verify` 免 Bearer（它们就是换取令牌的登录步骤），凭 SRP 证明放行；签发令牌为随机 ≥256-bit base64url，`require_bearer` 静态令牌优先、miss 后查 SRP 令牌表——**TOKENS Bearer 路径保留共存，备份链不打断**。认证体系未配置（无 TOKENS）时三端点整体 503（与 events/backups 同 fail-closed）。
+- **爆破与滥用缓解**：Argon2id 预 hash（v19，m=19 MiB、t=2、p=1，与本地库解锁同参数、域分隔盐 `persona-srp-v1`）使 verifier 泄露后的离线猜解成本 ≈ Argon2 成本；连续 5 次验证失败锁 15 分钟（对齐本机 user_auth 语义，返回 423）；challenge 一次性（verify 即从缓存取走）+ 120s TTL；设备名不存在与任何握手失败同形 401（不暴露注册状态）；M1/M2 双向证明核验（客户端核验 M2 防恶意服务器/中间人降级）。`/auth` 子路由整体 64 KiB body 上限，base64 字段解码有逐字段字节上限。
+- **明确不宣称**：不防服务器操作者对 `auth_devices` 表**离线爆破 verifier**（verifier 在服务器手里，成本 = Argon2 + 主密码强度——与本地库被拖库同级，主密码强度仍是核心风险）；不防**未认证 challenge 刷量**（内存会话缓存无速率限制，已知 DoS 面，部署侧反代缓解）；不防服务器**拒绝服务/删除注册记录**（设备无第二副本，重新注册即可，但属可用性损失）；SRP 数学依赖 RustCrypto `srp` crate（低维护，见设计稿 crate 调研）——由 RFC 5054 官方向量回归测试锁定实现，seam 隔离可换。
+- **已知限制**：设备吊销/移除未实现（`auth_devices` 无删除路径，阶段 2 随设备生命周期落地）；无变更门槛外的审计——注册/登录仅服务器日志（`tracing`），不入事件库；短期令牌无服务端主动吊销（TTL 到期自然失效，最长暴露 15 分钟）。
+
 ## Travel Mode（travel.persenc sidecar，2026-09）
 
 按 identity 粒度的"从本设备移除"：enter 把被标记身份的全部数据（含附件密文

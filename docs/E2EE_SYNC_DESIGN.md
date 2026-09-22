@@ -66,9 +66,13 @@ info="persona-dev-env-1"), plaintext = group key)`。组合层自写约 30 行�
 实化 `core/src/auth/remote.rs` 的 `RemoteAuthProvider`（现为 129 行纯 mock）：
 
 - **协议**：SRP-6a，RFC 5054 4096-bit group（有官方测试向量，跨实现互通）。
-- **防 verifier 泄露离线爆破**：客户端先对「主密码 ‖ 站点常数」做 Argon2id
-  （参数复用本机 KDF 约定）得到 SRP 私钥 x——服务器存的是 SRP verifier，泄露后
-  离线猜解的成本 ≈ Argon2 成本，与本地密码验证同级。
+  数学走 RustCrypto `srp` 0.6（`core/src/auth/srp.rs` 封装），握手哈希 SHA-256；
+  实现正确性由 RFC 5054 附录 B 官方向量（1024-bit/SHA-1 interop 向量）锁定。
+- **防 verifier 泄露离线爆破**：客户端先对「主密码 ‖ 域分隔盐
+  （`persona-srp-v1` ‖ 服务器 salt）」做 Argon2id（Argon2id v19，m=19 MiB、
+  t=2、p=1——与本地库解锁 KDF 同参数，即 argon2 crate 默认；较备份文件
+  KDF 的 64 MiB/t3 轻，因登录路径高频执行）得到 SRP 私钥 x——服务器存的是
+  SRP verifier，泄露后离线猜解的成本 ≈ Argon2 成本，与本地密码验证同级。
 - **会话**：SRP 握手成功 → 双方派生会话密钥 → 客户端用它换取短期 access token
   （TTL 分钟级），后续请求 `Authorization: Bearer`。锁户对齐本机 5 次语义。
 - **兼容硬约束**：既有 `PERSONA_SERVER_TOKENS` Bearer 路径**保留共存**——备份链
@@ -205,13 +209,13 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
 
 ## 10. 实施阶段映射
 
-| 阶段      | 内容                                                                                                                              | 验收要点                                                                                                       | 威胁模型登记           |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| 0（本文） | 设计稿                                                                                                                            | 四决策定稿 + 用户确认                                                                                          | 骨架（§9）             |
-| 1         | SRP 设备认证：实化 `RemoteAuthProvider`、server 存 verifier（非密码哈希）、SRP 会话换短期 token、与 TOKENS Bearer 共存、锁户 5 次 | RFC 5054 测试向量回归；备份链回归（token 共存不打断）；跨端（CLI↔server）握手集成测试                         | 更新「同步服务器」章   |
-| 2         | E2EE sync 核心：device envelope（DR-1 格式）、group key 层级、oplog push/pull、LWW+冲突双版本、travel 闸                          | 服务端只见密文的断言测试；断网/重放/乱序容错；换主密码后同步零影响；两端收敛测试（含双端离线编辑冲突保双版本） | 「E2EE 同步」章写实    |
-| 3         | 端到端接线：desktop 设备管理页 + 冲突裁决 UI + `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」整节重写                            | 双设备真机同步演示脚本；吊销流程 UI 走查；文档与实现一致                                                       | 复查 §9 清单与实现相符 |
-| 4         | Connect endpoint：本机 127.0.0.1 HTTP API + scope token（形态 A），默认关闭 fail-closed                                           | 越权/越 scope 拒绝测试；默认关闭断言                                                                           | 新章「自动化端点」     |
+| 阶段 | 内容 | 验收要点 | 威胁模型登记 |
+| --- | --- | --- | --- |
+| 0（本文） | 设计稿 | 四决策定稿 + 用户确认 | 骨架（§9） |
+| 1 | SRP 设备认证：实化 `RemoteAuthProvider`、server 存 verifier（非密码哈希）、SRP 会话换短期 token、与 TOKENS Bearer 共存、锁户 5 次 | RFC 5054 测试向量回归；备份链回归（token 共存不打断）；跨端（CLI↔server）握手集成测试 | 更新「同步服务器」章（服务端部分已落地 2026-09：`server/src/api/auth.rs` + THREAT_MODEL「SRP 设备认证端点」章；客户端 `RemoteAuthProvider` 实化待续） |
+| 2 | E2EE sync 核心：device envelope（DR-1 格式）、group key 层级、oplog push/pull、LWW+冲突双版本、travel 闸 | 服务端只见密文的断言测试；断网/重放/乱序容错；换主密码后同步零影响；两端收敛测试（含双端离线编辑冲突保双版本） | 「E2EE 同步」章写实 |
+| 3 | 端到端接线：desktop 设备管理页 + 冲突裁决 UI + `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」整节重写 | 双设备真机同步演示脚本；吊销流程 UI 走查；文档与实现一致 | 复查 §9 清单与实现相符 |
+| 4 | Connect endpoint：本机 127.0.0.1 HTTP API + scope token（形态 A），默认关闭 fail-closed | 越权/越 scope 拒绝测试；默认关闭断言 | 新章「自动化端点」 |
 
 规模预估：10–12 个会话量级，每阶段独立 PR。
 
