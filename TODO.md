@@ -615,7 +615,16 @@ Game Tokens (游戏令牌)
     `scripts/verify-biometric-linux.md` 实机脚本）；威胁登记见
     THREAT_MODEL.md「Biometric Unlock」（同用户恶意进程可读 keyring 为固有
     暴露，Windows Credential Manager 无 ACL）
-  - Travel Mode（vault 级可见性开关）
+  - [x] Travel Mode（vault 级可见性开关，2026-09-22 落地）：按 identity 粒度
+    "从本设备移除"——enter 把被标记身份全部数据（含附件密文文件字节 +
+    change_history）打包 PERSENC1（独立 travel 口令）为 travel.persenc
+    sidecar 后事务内从主库删除，主密码打不开 sidecar（by design）；exit
+    输口令原样恢复。三端落地：core（core/src/travel.rs 行编解码 + service
+    四方法 + 崩溃窗口语义）、CLI（status/mark/unmark/enter/exit）、desktop
+    （4 命令 + SecurityPane TravelModeSection + Identities 编辑表单标记开关
+    + TRAVEL_MODE_ACTIVE 错误码触发 ReauthModal 重试）。开启期间拒绝改主
+    密码；激活期间 inconsistent 红警告诚实呈现；威胁登记见
+    THREAT_MODEL.md「Travel Mode」
   - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）
 
 Quality & Security

@@ -150,6 +150,35 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **保留与去重**：同设备与最新版本 sha256 相同则去重（幂等重传）；`PERSONA_SERVER_BACKUP_MAX_VERSIONS`（默认 0 不限）全局删最旧（文件与行同删）。
 - **已知限制**：附件 blob 不在 v1 备份内（恢复后附件元数据在、文件体缺失，客户端 UI/CLI 明示）；备份内容为新版本创建时的完整快照，不含后续增量。
 
+## Travel Mode（travel.persenc sidecar，2026-09）
+
+按 identity 粒度的"从本设备移除"：enter 把被标记身份的全部数据（含附件密文
+文件字节）打包 gzip 后按 PERSENC1（独立 travel 口令，Argon2id 64 MiB 默认
+参数）加密为 `<db dir>/travel.persenc`，再在单事务内从主库删除——主库零痕迹，
+**主密码打不开 sidecar（by design，非缺陷）**；exit 输 travel 口令原样恢复。
+该设计引入新的单点资产与新的丢失面：
+
+- **口令强度自担**：sidecar 只有一个口令保护，强度完全由用户承担；口令丢失
+  = 被移除身份永久不可恢复（无托管、无重置、无主密码回退）。UI/CLI 在
+  enter 时明示"no master-password fallback"。
+- **sidecar 删除 = 数据丢失**：travel 激活期间（`travel_mode=true`）手删或
+  介质损坏丢失 sidecar 即数据永久丢失。status 命令与桌面设置页以
+  `inconsistent` 红色警告诚实呈现（不假装可恢复），不做任何自动清理。
+- **本机攻击者可删 sidecar（拒绝服务，接受）**：同 OS 用户进程对
+  sidecar 文件有写权限即可销毁被移除身份的唯一副本。不宣称防本机攻击者
+  破坏数据（与"恶意进程可读 keyring"同一信任边界）；恶意进程同样可删主库，
+  travel mode 未新增该边界，只是把丢失面集中到一个文件。
+- **加密面**：sidecar 密文对持有设备者、云同步目录、USB 拷贝均不泄露明文
+  （与整库备份同一 PERSENC1 格式）；崩溃窗口语义——sidecar 写成功后才动库，
+  4→5 之间崩 = sidecar 在但旗标 false（enter 拒绝，提示 exit 或删残留），
+  5→6 之间崩 = exit 自愈覆写。
+- **改密互斥**：travel 激活期间拒绝改主密码（sidecar 无主密码绑定，改密
+  本身不破坏 sidecar，但为避免"激活期间密钥材料语义漂移"的全部组合证明，
+  直接拒绝并返回 `TRAVEL_MODE_ACTIVE`，exit 后可改）。
+- **运行态清理**：desktop enter 成功后停 SSH agent（agent 内存可能持有被
+  移除身份的密钥）；audit_logs 只保留 id 引用（明文元数据随 change_history
+  一并搬入 sidecar，主库不留可读残留）。
+
 ## Biometric Unlock（桌面指纹/生物识别解锁）
 
 桌面端把主密码托管进 OS 钥匙串，用系统认证框（Linux polkit `auth_self` /
