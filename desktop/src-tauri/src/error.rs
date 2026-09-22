@@ -11,6 +11,9 @@ pub const CODE_PASSWORD_CHANGE_REQUIRED: &str = "PASSWORD_CHANGE_REQUIRED";
 /// 错误码：biometric 托管条目已失效并被删除（未配置/陈旧自删，前端应
 /// 刷新 status 隐藏指纹按钮、提示改用主密码登录）
 pub const CODE_BIOMETRIC_RESET: &str = "BIOMETRIC_RESET";
+/// 错误码：旅行模式进行中（改密等与 sidecar 中 wrapped key 不兼容的
+/// 操作被拒；前端应提示先退出旅行模式）
+pub const CODE_TRAVEL_MODE_ACTIVE: &str = "TRAVEL_MODE_ACTIVE";
 
 /// 将任意 service 错误映射为 `(error_code, message)`。
 ///
@@ -22,6 +25,9 @@ pub fn map_persona_error(err: &anyhow::Error) -> (Option<String>, String) {
             match pe {
                 PersonaError::ReauthRequired(_) => {
                     return (Some(CODE_REAUTH_REQUIRED.to_string()), pe.to_string());
+                }
+                PersonaError::TravelModeActive(_) => {
+                    return (Some(CODE_TRAVEL_MODE_ACTIVE.to_string()), pe.to_string());
                 }
                 PersonaError::AuthenticationFailed(msg)
                     if msg.contains("locked") || msg.contains("Service is locked") =>
@@ -78,5 +84,18 @@ mod tests {
         let (code, msg) = map_persona_error(&err);
         assert!(code.is_none());
         assert_eq!(msg, "boom");
+    }
+
+    #[test]
+    fn travel_mode_active_maps_to_code_even_wrapped() {
+        // 改密拦截在 core 内部经 thiserror From 链进 anyhow，链条中途
+        // 出现 TravelModeActive 也必须被翻出对应码
+        let err = anyhow::Error::from(PersonaError::TravelModeActive(
+            "exit travel mode first".to_string(),
+        ))
+        .context("change_master_password failed");
+        let (code, msg) = map_persona_error(&err);
+        assert_eq!(code.as_deref(), Some(CODE_TRAVEL_MODE_ACTIVE));
+        assert!(msg.contains("Travel mode is active"));
     }
 }

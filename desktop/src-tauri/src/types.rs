@@ -324,6 +324,8 @@ pub struct SerializableIdentity {
     pub created_at: String,
     pub updated_at: String,
     pub is_active: bool,
+    /// 旅行模式标记：enter 时随之移出本设备（编辑表单的开关直读写）。
+    pub travel_marked: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -385,6 +387,7 @@ impl From<Identity> for SerializableIdentity {
             created_at: identity.created_at.to_rfc3339(),
             updated_at: identity.updated_at.to_rfc3339(),
             is_active: identity.is_active,
+            travel_marked: identity.travel_marked,
         }
     }
 }
