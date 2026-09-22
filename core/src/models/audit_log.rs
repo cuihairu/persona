@@ -106,6 +106,11 @@ pub enum AuditAction {
     TravelModeExited,
     TravelMarkChanged,
 
+    // Connect 自动化端点（CONNECT_AUTOMATION_DESIGN；Used 走节流防刷屏）
+    ConnectTokenCreated,
+    ConnectTokenRevoked,
+    ConnectTokenUsed,
+
     // 安全事件
     SecurityScanPerformed,
     UnauthorizedAccess,
@@ -158,6 +163,9 @@ impl std::fmt::Display for AuditAction {
             AuditAction::TravelModeEntered => "travel_mode_entered",
             AuditAction::TravelModeExited => "travel_mode_exited",
             AuditAction::TravelMarkChanged => "travel_mark_changed",
+            AuditAction::ConnectTokenCreated => "connect_token_created",
+            AuditAction::ConnectTokenRevoked => "connect_token_revoked",
+            AuditAction::ConnectTokenUsed => "connect_token_used",
             AuditAction::SecurityScanPerformed => "security_scan_performed",
             AuditAction::UnauthorizedAccess => "unauthorized_access",
             AuditAction::BruteForceDetected => "brute_force_detected",
@@ -212,6 +220,9 @@ impl std::str::FromStr for AuditAction {
             "travel_mode_entered" => Ok(AuditAction::TravelModeEntered),
             "travel_mode_exited" => Ok(AuditAction::TravelModeExited),
             "travel_mark_changed" => Ok(AuditAction::TravelMarkChanged),
+            "connect_token_created" => Ok(AuditAction::ConnectTokenCreated),
+            "connect_token_revoked" => Ok(AuditAction::ConnectTokenRevoked),
+            "connect_token_used" => Ok(AuditAction::ConnectTokenUsed),
             "security_scan_performed" => Ok(AuditAction::SecurityScanPerformed),
             "unauthorized_access" => Ok(AuditAction::UnauthorizedAccess),
             "brute_force_detected" => Ok(AuditAction::BruteForceDetected),
@@ -236,6 +247,8 @@ pub enum ResourceType {
     Database,
     Backup,
     System,
+    /// Connect 自动化端点（token 生命周期与使用审计）
+    Connect,
     Unknown,
 }
 
@@ -252,6 +265,7 @@ impl std::fmt::Display for ResourceType {
             ResourceType::Database => "database",
             ResourceType::Backup => "backup",
             ResourceType::System => "system",
+            ResourceType::Connect => "connect",
             ResourceType::Unknown => "unknown",
         };
         write!(f, "{}", resource_str)
@@ -273,6 +287,7 @@ impl std::str::FromStr for ResourceType {
             "database" => Ok(ResourceType::Database),
             "backup" => Ok(ResourceType::Backup),
             "system" => Ok(ResourceType::System),
+            "connect" => Ok(ResourceType::Connect),
             "unknown" => Ok(ResourceType::Unknown),
             _ => Err(format!("Unknown resource type: {}", s)),
         }

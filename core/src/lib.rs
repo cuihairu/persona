@@ -7,6 +7,7 @@ pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
 pub mod breach;
+pub mod connect;
 pub mod crypto;
 pub mod events;
 #[cfg(feature = "favicon")]
@@ -104,6 +105,11 @@ pub enum PersonaError {
     /// 客户端应提示先退出旅行模式）
     #[error("Travel mode is active: {0}")]
     TravelModeActive(String),
+
+    /// 保险库处于锁定态，Connect 自动化数据面据此返回 503
+    /// （CONNECT_AUTOMATION_DESIGN DR-4：解锁即恢复，token 不扣限额）。
+    #[error("Vault is locked: {0}")]
+    VaultLocked(String),
 }
 
 // Implement From conversions for common error types

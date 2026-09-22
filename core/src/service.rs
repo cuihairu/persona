@@ -8,6 +8,7 @@ use crate::{
         UserAuth,
     },
     breach::BreachChecker,
+    connect::{ConnectItemType, ConnectTokenRow, ConnectTokenScope, ConnectVerb},
     crypto::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
         EncryptionService, KeyHierarchy, Sha256Hasher,
@@ -23,9 +24,9 @@ use crate::{
     password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
         AttachmentManager, AttachmentRepository, AuditLogRepository, AuditLogStatistics, BlobStore,
-        ChangeHistoryRepository, CredentialRepository, Database, FaviconRepository,
-        IdentityRepository, PasskeyRepository, Repository, UserAuthRepository, WorkspaceRepository,
-        SECURITY_SENSITIVE_AUDIT_ACTIONS,
+        ChangeHistoryRepository, ConnectTokenRepository, CredentialRepository, Database,
+        FaviconRepository, IdentityRepository, PasskeyRepository, Repository, UserAuthRepository,
+        WorkspaceRepository, SECURITY_SENSITIVE_AUDIT_ACTIONS,
     },
     PersonaError, Result,
 };
@@ -87,6 +88,10 @@ pub struct PersonaService {
     current_session_id: Arc<RwLock<Option<String>>>,
     /// 可选审计事件上报器（`events::Emitter`；`set_event_emitter` 注入）
     event_emitter: Option<Emitter>,
+    /// Connect token 审计/last_used 落库节流标记（key = token id 或指纹前缀，
+    /// 值 = 窗口起点）。内存态、进程重启即清——语义是防刷屏/批量写，
+    /// 不是访问限额（限额属宿主层 HTTP 面）。
+    connect_audit_marks: Mutex<HashMap<String, Instant>>,
 }
 
 /// RFC3339 serialization for user_auth timestamps written via raw SQL
@@ -128,6 +133,7 @@ impl PersonaService {
             auto_lock_manager,
             current_session_id: Arc::new(RwLock::new(None)),
             event_emitter: None,
+            connect_audit_marks: Mutex::new(HashMap::new()),
         })
     }
 
@@ -1972,6 +1978,282 @@ impl PersonaService {
     }
 
     // -----------------------------------------------------------------------
+    // Connect 本机自动化端点（CONNECT_AUTOMATION_DESIGN 阶段 1）。框架无关：
+    // HTTP 面（Host/Origin 三防线、限额、响应包络）在宿主层；本节提供
+    // token 生命周期、每请求鉴权与数据面的 scope 过滤编排。token 明文只在
+    // create 返回时出现一次，库里只有哈希 + 指纹；无效/吊销/越 scope 一律
+    // None（404/403 同形由端点层落实，防探测）。
+    // -----------------------------------------------------------------------
+
+    /// Connect 审计与 last_used 落库节流窗口（同 key 每 60s 至多一次）。
+    const CONNECT_THROTTLE: Duration = Duration::from_secs(60);
+
+    /// 锁定门禁：Connect 数据面只在解锁会话内可用（DR-4；端点层把
+    /// [`PersonaError::VaultLocked`] 映射为 503）。
+    fn connect_gate(&self) -> Result<()> {
+        if !self.is_unlocked() {
+            return Err(PersonaError::VaultLocked(
+                "connect endpoint requires an unlocked vault".to_string(),
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    /// 同 key 节流：窗口内已写过则 false，否则刷新窗口并放行。
+    /// 内存态，进程重启即清——防刷屏/批量写，不是访问限额。
+    fn connect_throttle_should_write(&self, key: &str) -> bool {
+        let mut marks = self.connect_audit_marks.lock().unwrap();
+        let now = Instant::now();
+        match marks.get(key) {
+            Some(t) if now.duration_since(*t) < Self::CONNECT_THROTTLE => false,
+            _ => {
+                marks.insert(key.to_string(), now);
+                true
+            }
+        }
+    }
+
+    /// 创建 Connect token：返回 `(presented 明文, 库行)`——明文仅此一次
+    /// 展示，调用方（桌面设置页/CLI）负责「关闭后无法再次查看」语义。
+    /// 管理操作要求解锁会话（宿主层另加 reauth 门禁）。
+    pub async fn create_connect_token(
+        &self,
+        label: String,
+        scope: ConnectTokenScope,
+    ) -> Result<(String, ConnectTokenRow)> {
+        self.connect_gate()?;
+        scope
+            .validate()
+            .map_err(|e| PersonaError::InvalidInput(format!("invalid connect scope: {e}")))
+            .map_err(anyhow::Error::from)?;
+        let label = label.trim();
+        if label.is_empty() || label.chars().count() > 128 {
+            return Err(PersonaError::InvalidInput(
+                "connect token label must be 1..=128 characters".to_string(),
+            )
+            .into());
+        }
+
+        let presented = crate::connect::generate_token();
+        let hash = crate::connect::hash_token(&presented).ok_or_else(|| {
+            PersonaError::CryptographicError("connect token hash failed".to_string())
+        })?;
+        let row = ConnectTokenRow {
+            id: Uuid::new_v4(),
+            label: label.to_string(),
+            fingerprint: crate::connect::fingerprint_from_hash(&hash),
+            hash,
+            scope,
+            created_at: chrono::Utc::now(),
+            last_used_at: None,
+            revoked_at: None,
+        };
+        ConnectTokenRepository::new(self.db.clone())
+            .insert(&row)
+            .await?;
+
+        self.log_audit(
+            AuditAction::ConnectTokenCreated,
+            ResourceType::Connect,
+            true,
+            Some(row.id),
+            None,
+            None,
+        )
+        .await;
+
+        Ok((presented, row))
+    }
+
+    /// Token 管理列表（含已吊销，管理面展示吊销状态）。行含哈希——调用方
+    /// 序列化时剥除（桌面/CLI 都只展示 label/指纹/scope/时间戳）。
+    pub async fn list_connect_tokens(&self) -> Result<Vec<ConnectTokenRow>> {
+        self.connect_gate()?;
+        Ok(ConnectTokenRepository::new(self.db.clone())
+            .list_all()
+            .await?)
+    }
+
+    /// 吊销（幂等：重复吊销返回 false）。即时生效——鉴权每请求查表，
+    /// 无缓存窗口（DR-2）。
+    pub async fn revoke_connect_token(&self, id: &Uuid) -> Result<bool> {
+        self.connect_gate()?;
+        let revoked = ConnectTokenRepository::new(self.db.clone())
+            .revoke(id, chrono::Utc::now())
+            .await?;
+        if revoked {
+            self.log_audit(
+                AuditAction::ConnectTokenRevoked,
+                ResourceType::Connect,
+                true,
+                Some(*id),
+                None,
+                None,
+            )
+            .await;
+        }
+        Ok(revoked)
+    }
+
+    /// 每请求鉴权：呈现值 → SHA-256 → 查表 → 吊销判定。命中即节流落库
+    /// `last_used_at` 并节流记审计（自动化轮询不刷屏）；未知/吊销 token
+    /// 的尝试也节流记失败审计（指纹前缀做 key，可审计但不刷屏）。
+    pub async fn connect_authenticate(&self, presented: &str) -> Result<Option<ConnectTokenRow>> {
+        let Some(hash) = crate::connect::hash_token(presented) else {
+            return Ok(None);
+        };
+        let repo = ConnectTokenRepository::new(self.db.clone());
+        let Some(row) = repo.find_by_hash(&hash).await? else {
+            let fp = crate::connect::fingerprint_from_hash(&hash);
+            if self.connect_throttle_should_write(&format!("unknown:{fp}")) {
+                self.log_audit(
+                    AuditAction::ConnectTokenUsed,
+                    ResourceType::Connect,
+                    false,
+                    None,
+                    None,
+                    Some(format!("unknown token {fp}")),
+                )
+                .await;
+            }
+            return Ok(None);
+        };
+        if row.revoked() {
+            if self.connect_throttle_should_write(&format!("revoked:{}", row.id)) {
+                self.log_audit(
+                    AuditAction::ConnectTokenUsed,
+                    ResourceType::Connect,
+                    false,
+                    Some(row.id),
+                    None,
+                    Some("revoked token".to_string()),
+                )
+                .await;
+            }
+            return Ok(None);
+        }
+        if self.connect_throttle_should_write(&format!("used:{}", row.id)) {
+            repo.touch_last_used(&row.id, chrono::Utc::now()).await?;
+            self.log_audit(
+                AuditAction::ConnectTokenUsed,
+                ResourceType::Connect,
+                true,
+                Some(row.id),
+                None,
+                None,
+            )
+            .await;
+        }
+        Ok(Some(row))
+    }
+
+    /// scope 内身份列表（id + 名称）。
+    pub async fn connect_list_identities(
+        &self,
+        scope: &ConnectTokenScope,
+    ) -> Result<Vec<Identity>> {
+        self.connect_gate()?;
+        if !scope.allows_verb(ConnectVerb::Read) {
+            return Ok(vec![]);
+        }
+        let all = self.get_identities().await?;
+        Ok(all
+            .into_iter()
+            .filter(|i| scope.allows_identity(&i.id))
+            .collect())
+    }
+
+    /// scope 内条目元数据。`?identity=`/`?type=`/`?title=` 精确过滤；
+    /// identity 参数越 scope 返回空列表（不报错，防探测）。
+    pub async fn connect_list_items(
+        &self,
+        scope: &ConnectTokenScope,
+        identity: Option<Uuid>,
+        item_type: Option<ConnectItemType>,
+        title: Option<String>,
+    ) -> Result<Vec<Credential>> {
+        self.connect_gate()?;
+        if !scope.allows_verb(ConnectVerb::Read) {
+            return Ok(vec![]);
+        }
+        if let Some(want) = &identity {
+            if !scope.allows_identity(want) {
+                return Ok(vec![]);
+            }
+        }
+        let all = Repository::find_all(&self.credential_repo).await?;
+        Ok(all
+            .into_iter()
+            .filter(|c| c.is_active)
+            .filter(|c| identity.as_ref().is_none_or(|want| &c.identity_id == want))
+            .filter(|c| scope.allows_identity(&c.identity_id))
+            .filter(|c| scope.allows_credential_type(&c.credential_type))
+            .filter(|c| {
+                item_type.is_none_or(|want| {
+                    ConnectItemType::from_credential_type(&c.credential_type) == Some(want)
+                })
+            })
+            .filter(|c| title.as_ref().is_none_or(|t| &c.name == t))
+            .collect())
+    }
+
+    /// 单条全字段（解密后）。scope 外/归档/不存在一律 `None`——端点层
+    /// 统一映射 404（与 403 同形）。
+    pub async fn connect_get_item_data(
+        &self,
+        scope: &ConnectTokenScope,
+        id: &Uuid,
+    ) -> Result<Option<(Credential, CredentialData)>> {
+        self.connect_gate()?;
+        if !scope.allows_verb(ConnectVerb::Read) {
+            return Ok(None);
+        }
+        let Some(cred) = self.get_credential(id).await? else {
+            return Ok(None);
+        };
+        if !cred.is_active
+            || !scope.allows_identity(&cred.identity_id)
+            || !scope.allows_credential_type(&cred.credential_type)
+        {
+            return Ok(None);
+        }
+        let Some(data) = self.get_credential_data(id).await? else {
+            return Ok(None);
+        };
+        Ok(Some((cred, data)))
+    }
+
+    /// 当前 TOTP 码 + 剩余秒（复用 core RFC 6238 路径；scope 外/非
+    /// TwoFactor 一律 `None`）。
+    pub async fn connect_totp(
+        &self,
+        scope: &ConnectTokenScope,
+        id: &Uuid,
+    ) -> Result<Option<crate::crypto::totp::TotpCode>> {
+        self.connect_gate()?;
+        if !scope.allows_verb(ConnectVerb::Read) {
+            return Ok(None);
+        }
+        let Some(cred) = self.get_credential(id).await? else {
+            return Ok(None);
+        };
+        if !cred.is_active || !scope.allows_identity(&cred.identity_id) {
+            return Ok(None);
+        }
+        if !scope.allows_credential_type(&CredentialType::TwoFactor) {
+            return Ok(None);
+        }
+        let Some(data) = self.get_credential_data(id).await? else {
+            return Ok(None);
+        };
+        let CredentialData::TwoFactor(tf) = data else {
+            return Ok(None);
+        };
+        Ok(Some(crate::crypto::totp::totp_now(&tf)?))
+    }
+
+    // -----------------------------------------------------------------------
     // Travel Mode（旅行模式）。重量级逻辑（打包/加密/事务/文件 IO）在
     // crate::travel（cfg backup）；本节只做门禁、前置校验与审计编排。
     // sidecar 路径由调用方显式传 db_path——PersonaService 不知道库路径。
@@ -2827,9 +3109,12 @@ impl PersonaService {
                 | AuditAction::PasskeyViewed
                 | AuditAction::PasskeyAsserted
                 | AuditAction::PasskeyExported
-                | AuditAction::PasskeyDeleted => {
-                    // A passkey id is not a credential FK; resource_id carries
-                    // the primary key, so just attach the identity context.
+                | AuditAction::PasskeyDeleted
+                | AuditAction::ConnectTokenCreated
+                | AuditAction::ConnectTokenRevoked
+                | AuditAction::ConnectTokenUsed => {
+                    // Passkey/Connect token id 均不是 credential/identity FK;
+                    // resource_id 载主键,只附身份上下文。
                     if let Some(identity_id_val) = identity_id {
                         log = log.with_identity_id(Some(identity_id_val));
                     }
@@ -2900,6 +3185,330 @@ mod tests {
     use super::*;
     use crate::models::{CredentialData, PasswordCredentialData};
     use crate::storage::Database;
+
+    // ----- Connect 本机自动化(阶段 1:token 生命周期/scope/锁定门禁)-----
+
+    use crate::connect::{ConnectItemType, ConnectTokenScope, ConnectVerb};
+
+    fn connect_read_scope() -> ConnectTokenScope {
+        ConnectTokenScope {
+            identities: vec![],
+            item_types: vec![],
+            verbs: vec![ConnectVerb::Read],
+        }
+    }
+
+    /// 已解锁服务 + 独立 Database 句柄(直接查表断言哈希存储用)。
+    async fn connect_fixture() -> (PersonaService, Database) {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        let salt = service.generate_salt();
+        service.unlock("test_password", &salt).unwrap();
+        (service, db)
+    }
+
+    fn assert_vault_locked(err: anyhow::Error) {
+        assert!(matches!(
+            err.downcast_ref::<PersonaError>(),
+            Some(PersonaError::VaultLocked(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn connect_token_requires_unlocked_vault() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let service = PersonaService::new(db).await.unwrap();
+        assert!(!service.is_unlocked());
+
+        let err = service
+            .create_connect_token("t".into(), connect_read_scope())
+            .await
+            .unwrap_err();
+        assert_vault_locked(err);
+        assert_vault_locked(service.list_connect_tokens().await.unwrap_err());
+    }
+
+    #[tokio::test]
+    async fn connect_token_lifecycle_hash_only_storage_and_revocation() {
+        let (service, db) = connect_fixture().await;
+
+        let (presented, row) = service
+            .create_connect_token("  ci runner  ".into(), connect_read_scope())
+            .await
+            .unwrap();
+        // 明文形态:前缀 + 32B base64url(43 字符),哈希/指纹与呈现值一致
+        assert!(presented.starts_with("pconn_"));
+        assert_eq!(presented.len(), "pconn_".len() + 43);
+        assert_eq!(row.label, "ci runner");
+        assert_eq!(row.hash, crate::connect::hash_token(&presented).unwrap());
+        assert_eq!(
+            row.fingerprint,
+            crate::connect::fingerprint_from_hash(&row.hash)
+        );
+        assert!(row.last_used_at.is_none() && row.revoked_at.is_none());
+
+        // 库里只有哈希(64 hex)与指纹,绝无呈现值明文
+        let raw = sqlx::query("SELECT hash, fingerprint FROM connect_tokens")
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(raw.len(), 1);
+        let stored_hash: String = raw[0].get("hash");
+        assert_eq!(stored_hash, row.hash);
+        assert_eq!(stored_hash.len(), 64);
+        assert!(!stored_hash.contains("pconn_"));
+
+        // 鉴权命中 + last_used 落库
+        assert!(service
+            .connect_authenticate(&presented)
+            .await
+            .unwrap()
+            .is_some());
+        let listed = service.list_connect_tokens().await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].last_used_at.is_some());
+
+        // 吊销即时生效;重复吊销幂等返回 false
+        assert!(service.revoke_connect_token(&row.id).await.unwrap());
+        assert!(!service.revoke_connect_token(&row.id).await.unwrap());
+        assert!(service
+            .connect_authenticate(&presented)
+            .await
+            .unwrap()
+            .is_none());
+
+        // 未知/畸形 token 一律 None(同形,防探测)
+        assert!(service
+            .connect_authenticate("pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .connect_authenticate("garbage-without-prefix")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_data_plane_filters_by_scope() {
+        let (service, _db) = connect_fixture().await;
+        let id_a = service
+            .create_identity("A".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let id_b = service
+            .create_identity("B".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let pwd = CredentialData::Password(PasswordCredentialData {
+            password: "p1".into(),
+            email: None,
+            security_questions: vec![],
+        });
+        let card = CredentialData::BankCard(crate::models::credential::BankCardData {
+            card_number: "4111 1111 1111 1111".into(),
+            cardholder_name: "ALICE SMITH".into(),
+            expiry_date: "12/29".into(),
+            cvv: "123".into(),
+            bank_name: "Example Bank".into(),
+            card_type: "visa".into(),
+        });
+        let totp_data = CredentialData::TwoFactor(crate::models::credential::TwoFactorData {
+            secret_key: "JBSWY3DPEHPK3PXP".into(),
+            issuer: "Example".into(),
+            account_name: "alice".into(),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+        });
+
+        let cred_a = service
+            .create_credential(
+                id_a.id,
+                "A login".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                &pwd,
+            )
+            .await
+            .unwrap();
+        let cred_b = service
+            .create_credential(
+                id_b.id,
+                "B card".into(),
+                CredentialType::BankCard,
+                SecurityLevel::High,
+                &card,
+            )
+            .await
+            .unwrap();
+        let cred_totp = service
+            .create_credential(
+                id_a.id,
+                "A totp".into(),
+                CredentialType::TwoFactor,
+                SecurityLevel::Medium,
+                &totp_data,
+            )
+            .await
+            .unwrap();
+
+        // 全量 scope:全部身份/条目可见
+        let all = connect_read_scope();
+        assert_eq!(
+            service.connect_list_identities(&all).await.unwrap().len(),
+            2
+        );
+        assert_eq!(
+            service
+                .connect_list_items(&all, None, None, None)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+
+        // identities 限定 [A]:B 的条目不可见;显式 identity=B 参数 → 空列表(防探测)
+        let only_a = ConnectTokenScope {
+            identities: vec![id_a.id],
+            ..connect_read_scope()
+        };
+        assert_eq!(
+            service
+                .connect_list_identities(&only_a)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            service
+                .connect_list_items(&only_a, None, None, None)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(service
+            .connect_list_items(&only_a, Some(id_b.id), None, None)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // item_types 限定 Password:卡与 TOTP 不在列
+        let pwd_only = ConnectTokenScope {
+            item_types: vec![ConnectItemType::Password],
+            ..connect_read_scope()
+        };
+        let items = service
+            .connect_list_items(&pwd_only, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, cred_a.id);
+
+        // 单条读取:scope 外与不存在同形 None
+        assert!(service
+            .connect_get_item_data(&only_a, &cred_b.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .connect_get_item_data(&all, &Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+        let (cred, data) = service
+            .connect_get_item_data(&all, &cred_a.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cred.id, cred_a.id);
+        assert!(matches!(data, CredentialData::Password(_)));
+
+        // TOTP:TwoFactor 项出码,密码项 None
+        let code = service
+            .connect_totp(&all, &cred_totp.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(code.code.len(), 6);
+        assert!(service
+            .connect_totp(&all, &cred_a.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn connect_hides_archived_items_and_gates_when_locked() {
+        let (mut service, _db) = connect_fixture().await;
+        let identity = service
+            .create_identity("A".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let pwd = CredentialData::Password(PasswordCredentialData {
+            password: "p1".into(),
+            email: None,
+            security_questions: vec![],
+        });
+        let cred = service
+            .create_credential(
+                identity.id,
+                "login".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                &pwd,
+            )
+            .await
+            .unwrap();
+        let all = connect_read_scope();
+        assert!(service
+            .connect_get_item_data(&all, &cred.id)
+            .await
+            .unwrap()
+            .is_some());
+
+        // 归档后对 Connect 数据面不可见
+        let mut archived = service.get_credential(&cred.id).await.unwrap().unwrap();
+        archived.is_active = false;
+        service.update_credential(&archived).await.unwrap();
+        assert!(service
+            .connect_get_item_data(&all, &cred.id)
+            .await
+            .unwrap()
+            .is_none());
+        let items = service
+            .connect_list_items(&all, None, None, None)
+            .await
+            .unwrap();
+        assert!(items.iter().all(|c| c.id != cred.id));
+
+        // 锁定后数据面/管理面全部 503 语义(VaultLocked)
+        service.lock();
+        let err = service
+            .connect_get_item_data(&all, &cred.id)
+            .await
+            .unwrap_err();
+        assert_vault_locked(err);
+        assert_vault_locked(
+            service
+                .connect_list_items(&all, None, None, None)
+                .await
+                .unwrap_err(),
+        );
+        // authenticate 本身无锁定门禁:DR-4 的 503 由宿主层在鉴权之前拦截,
+        // core 层的 token 验证只读 connect_tokens 表(不涉解密)。
+        assert!(service
+            .connect_authenticate("pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+            .await
+            .unwrap()
+            .is_none());
+    }
 
     #[tokio::test]
     async fn test_persona_service_basic_operations() {

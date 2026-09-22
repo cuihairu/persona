@@ -4503,6 +4503,7 @@ dependencies = [
  "flate2",
  "getrandom 0.4.2",
  "hex",
+ "hkdf 0.12.4",
  "hmac 0.12.1",
  "k256",
  "p256",
@@ -4519,6 +4520,7 @@ dependencies = [
  "sha2 0.10.9",
  "sha3 0.10.8",
  "sqlx",
+ "srp",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -4526,6 +4528,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "x25519-dalek",
  "zeroize",
  "zip",
  "zxcvbn",
@@ -6341,6 +6344,19 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "srp"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cdd40049b29ab1315ccba7ffcf1eece8162982eab14edfac3cf2c2ffab18193"
+dependencies = [
+ "digest 0.10.7",
+ "generic-array",
+ "lazy_static",
+ "num-bigint",
+ "subtle",
 ]
 
 [[package]]
@@ -8694,6 +8710,18 @@ name = "x11rb-protocol"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
+
+[[package]]
+name = "x25519-dalek"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
+dependencies = [
+ "curve25519-dalek",
+ "rand_core 0.6.4",
+ "serde",
+ "zeroize",
+]
 
 [[package]]
 name = "yoke"
