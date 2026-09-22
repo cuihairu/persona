@@ -297,12 +297,13 @@ mod tests {
     use crate::utils::prompt::scripted::ScriptedUi;
     use persona_core::models::{Identity, IdentityType};
     use persona_core::storage::repository::{IdentityRepository, Repository};
-    use std::sync::{Mutex, MutexGuard};
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn env_guard() -> MutexGuard<'static, ()> {
-        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    /// 进程 env 单槽（PERSONA_* 全局名空间）：与 bridge/switch/ssh/travel
+    /// 的 env 测试共用 bridge 测试的全局锁串行。
+    fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+        crate::commands::bridge::tests::ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     fn config_for(dir: &tempfile::TempDir) -> CliConfig {

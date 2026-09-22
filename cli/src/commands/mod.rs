@@ -19,6 +19,7 @@ pub mod show;
 pub mod ssh;
 pub mod switch;
 pub mod totp;
+pub mod travel;
 pub mod tui;
 pub(crate) mod tui_runtime;
 pub mod wallet;
