@@ -18,6 +18,7 @@ pub mod models;
 pub mod password;
 pub mod service;
 pub mod storage;
+pub mod sync;
 #[cfg(feature = "backup")]
 pub mod travel;
 

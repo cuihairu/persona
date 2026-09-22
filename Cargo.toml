@@ -26,6 +26,11 @@ aes-gcm = "0.10"
 # （core/src/auth/srp.rs），调用方经封装隔离可整体换实现（设计稿 DR-2）
 srp = "0.6"
 ed25519-dalek = { version = "2.0", features = ["zeroize"] }
+# E2EE 同步 device envelope（E2EE_SYNC_DESIGN DR-1）：X25519 ephemeral DH
+# + HKDF-SHA256 展开（key‖nonce）+ AES-256-GCM；组合层约 30 行自写，
+# round-trip/篡改/跨设备失败测试覆盖（core/src/sync/envelope.rs）
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+hkdf = "0.12"
 rand = { version = "0.10", features = ["sys_rng", "thread_rng"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
 zeroize = { version = "1.8", features = ["derive"] }

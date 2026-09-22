@@ -17,6 +17,9 @@ aes-gcm.workspace = true
 # 设备认证 SRP-6a（auth/srp.rs，E2EE 同步轨道阶段 1）
 srp.workspace = true
 ed25519-dalek.workspace = true
+# E2EE 同步 device envelope + group key 层级（sync/，阶段 2，DR-1）
+x25519-dalek.workspace = true
+hkdf.workspace = true
 rand.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
