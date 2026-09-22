@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 persona-core = { path = "../../core" }
 persona-ssh-agent = { path = "../../agents/ssh-agent" }
+# Connect HTTP 端点（DR-1 A1 宿主内嵌；router/三防线在独立 crate 与 CLI 共用）
+persona-connect-server = { path = "../../connect-server" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
@@ -59,7 +61,5 @@ windows = { version = "0.61", features = ["Security_Credentials_UI", "Foundation
 tempfile = "3"
 # mock_app() for AppHandle in tests; release builds keep tauri without this feature
 tauri = { version = "2", features = ["test"] }
-# connect_server 单测的 Router::oneshot（三防线/限额全拒绝路径无网络测试）
-tower = { version = "0.4", features = ["util"] }
 
 [workspace]

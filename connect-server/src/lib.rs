@@ -1,4 +1,9 @@
-//! Connect 本机自动化端点（CONNECT_AUTOMATION_DESIGN DR-1 A1 / DR-3 / DR-4）。
+//! Connect 本机自动化 HTTP 端点（CONNECT_AUTOMATION_DESIGN DR-1/DR-3/DR-4）。
+//!
+//! 独立 crate：桌面（DR-1 A1）与 CLI `persona connect serve`（A2）
+//! 两个宿主共用同一 router/三防线/限额实现与同一 core 服务层——
+//! token 存储（工作区库内 `connect_tokens` 表）跨宿主天然互通。
+//! 其余语义见下（模块文档自 desktop 迁移时保持原样）。
 //!
 //! axum listener 内嵌在宿主进程内，bind 硬编码 `127.0.0.1`（端口 0 =
 //! OS 分配；地址无配置面，「拒绝非 loopback 配置」由硬编码天然满足）。

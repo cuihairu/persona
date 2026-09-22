@@ -2,10 +2,11 @@
 resolver = "2"
 members = [
     "core",
-    "server", 
+    "server",
     "mobile/rust",
     "cli",
-    "agents/ssh-agent"
+    "agents/ssh-agent",
+    "connect-server"
 ]
 
 [workspace.package]

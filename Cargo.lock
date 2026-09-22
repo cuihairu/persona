@@ -4047,6 +4047,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "persona-connect-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "persona-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "persona-core"
 version = "0.1.0"
 dependencies = [
