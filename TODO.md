@@ -66,6 +66,17 @@ SSH Agent (developer focus)
 - [x] CLI commands: `persona ssh import|generate|list|list-all|export-pub|add-to-agent|start-agent|stop-agent|agent-status|run|remove`
 - [x] Complete README documentation with usage examples
 - [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
+  手工验收步骤（需用户 GitHub 账号，本机无凭据不可代跑；2026-09-22 落步骤）：
+  ① `persona ssh generate --name github-e2e`（或 import 既有私钥）→
+     `persona ssh export-pub --id <id>` 公钥添加到 GitHub → Settings → SSH keys
+  ② `persona ssh add-to-agent --id <id>` → `persona ssh start-agent` →
+     `persona ssh agent-status` 显示 running 且 `persona ssh list-all` 见密钥
+  ③ `persona ssh run --host github.com -- ssh -T git@github.com`
+     预期：TTY 确认「Allow SSH signature for host 'github.com'? [y/N]」→ y →
+     GitHub 返回「Hi <user>! You've successfully authenticated...」
+  ④ 负向用例：确认拒 n → sign refused；`PERSONA_AGENT_REQUIRE_CONFIRM=true`、
+     `PERSONA_AGENT_MIN_INTERVAL_MS` 限速生效；`audit_log` 落 `ssh_sign` 行
+  ⑤ Windows named-pipe 同流程 → 与下条 Windows-specific testing 合并执行
 - [ ] Windows-specific testing and optimization
 
 Wallet Material (experimental — deferred until 1Password parity; see priority policy above)
@@ -288,7 +299,19 @@ Desktop (Tauri v2 + React)
   ffmpeg x11grab 截图确认解锁屏完整渲染（logo/主密码输入框/自定义 db
   路径 checkbox/禁用态 Unlock 按钮），日志零 panic（WARNING 均为服务器
   环境级：RealtimeKit/PipeWire 缺失、无 DRI3）
-  ③④ 交互冒烟与卸载保留数据 → 待有 GUI 的机器执行（deb 可直接拷贝）
+  ③④ 交互冒烟与卸载保留数据 → 待有 GUI 的机器执行（deb 可直接拷贝）。
+  重验（2026-09-22，含 restore/TOTP-polish 联动批次）：`tauri build
+  --bundles deb` 1m56s 增量出包，deb 13.4MB（control 长描述在、
+  usr/bin + hicolor 三档 + .desktop 齐全），ldd 零缺失；Xvfb 启动回归
+  进程存活、解锁屏完整渲染（截图正中的 × 是 x11grab 光标伪影非 UI 缺陷）、
+  日志零 panic。
+  ③ 交互冒烟清单（GUI 机器）：解锁/创建库 → 身份 CRUD + 切换 → 凭据
+  增删改 + reveal（re-auth 门禁）→ TOTP 出码 → 条目历史时间线 +
+  **Restore 按钮回滚元数据**（本批新功能）→ 附件挂/存/删 → Watchtower
+  扫描（含可选 HIBP）→ SSH agent 审批弹窗 → passkey 管理页 → 自动锁
+  倒计时横幅 → 设置页（含同步 token 进 keyring）→ 托盘关闭进托盘
+  ④ 卸载保留数据：`sudo dpkg -r persona` 后 `~/.persona`（或自定义库
+  路径）与 OS keyring 条目仍在；重装 `dpkg -i` 后能直接解锁旧库
   follow-up：deb 签名、更新器（updater）签名密钥、macOS x86_64/universal
   与 Linux arm64 产物。CI 打包矩阵已落地（见 desktop-build.yml 条目）。
 - [x] deb control description 补全（2026-09-20 桌面稳定化第 4 项）：
@@ -467,6 +490,13 @@ Browser & Autofill (future)
   - [x] Implement CLI native host: `persona bridge` (stdio JSON loop) + audit logging
   - [x] Enforce origin binding + user-gesture requirement for fill/copy/reveal
   - [x] Minimal autofill MVP: username/password fill on matched domain
+  - [x] TOTP in-page UX polish（2026-09-22 落地）：登录填充后同页 OTP 框链式填
+    （`autoFillTotpAfterLogin` 设置，popup 可关）；临期码（剩余 ≤3s）等过周期
+    边界重取一次新码再填；filled/copied 通知携带剩余秒；多候选且无默认记忆时
+    就地弹出选择下拉（不再静默不填）；纯逻辑抽 `autofillUx.ts` + 11 个 jest 用例
+    （pickSuggestion 歧义标记/默认记忆/强度门槛、临期判定、通知文案）。
+    follow-up：页内部件 Shadow DOM 隔离；码展示小组件刻意不做（页脚本可读
+    content-script DOM，密钥不上页）
   - [x] Policy integration: domain trust/blocked + confirm-on-unknown
   - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
   - [x] 扩展单测套件（jest + ts-jest + jsdom，60 用例）：domainPolicy 启发式/policy 覆盖、
@@ -495,6 +525,13 @@ Browser & Autofill (future)
     Login/API Credential/SSH Key 映射、TOTP 拆独立凭据、未映射类别跳过并报告；
     真实 .1pux 导出待人工验收
   - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation
+    ——2026-09-22 细化为可执行计划（`docs/PASSKEYS_DESIGN.md` §13.1）：
+    二者是同一工作流（原生 passkey 选择 UI 出 Persona 条目 = 向 OS 注册
+    凭据提供方，JS 拦截 conditional 会破坏原生回退，设计已排除）。
+    P4.1 桥接 provider 消息族 → P4.2 macOS ASAuthorization 扩展 →
+    P4.3 Windows passkey 插件 → P4.4 UV/审计对齐 → P4.5 CXF 跟踪。
+    **阻塞：需 macOS/Windows 真机与签名环境**，本机（Linux）不可编译验证，
+    不写不可测平台代码。1PUX 导入已提前落地（上条）
 - [x] Phishing protections; identity-based context switching
 
 Game Tokens (游戏令牌)
@@ -561,7 +598,15 @@ Game Tokens (游戏令牌)
     desktop `get_credential_history` 命令 + 详情面板懒加载时间线；
     CLI `persona credential history --id`；凭据删除后历史仍可查询。
     已知噪声：create-then-update 架构使创建产生 created+updated 两行（真实两次
-    写库，UI 可将来分组展示；恢复旧版本功能待后续评估密文重放风险）
+    写库，UI 可将来分组展示）
+  - [x] restore-to-version（元数据，2026-09-22 落地）：core
+    `restore_credential_version`（套用目标版本 new_state 快照回滚 name/type/
+    security_level/username/url/notes/tags/is_favorite/is_active 九字段，落
+    ChangeType::Restored 历史行 + reason + credential_restored 审计）+ CLI
+    `persona credential restore --id --version` + desktop `restore_credential_version`
+    命令与历史时间线恢复按钮（restorable 一位布尔过 IPC，快照本体仍不回传）。
+    秘密字段不回滚：历史快照不含密文是不变量；秘密版本化仍待密文重放风险
+    评估（TODO 上方注记保留此门槛）。已删条目不支持重建（无 new_state/无密文外壳）
   - [x] attachments（2026-09 落地）：**修复加密链路致命缺陷**——原实现
     attach 时随机生成密钥用后即丢、retrieve 再随机生成解密密钥，加密附件
     永远无法解密（该缺陷存续期内创建的加密附件不可恢复，无迁移负担）。
@@ -665,6 +710,7 @@ Quality & Security
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
+- [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / Sherlock 式 OSINT 标识符查询（用户名/邮箱/手机跨站探测）——**押后（2026-09-22 决策，post-parity 再评估，不进主线）**：标识符明文出机与「不常驻外联、不默认抓取」隐私红线冲突，跨站用户名枚举撞 `BOUNDARY.md` 的 social identity aggregation 出界条款；即便将来放 persona-server 侧代查（限速/站点目录集中维护），本轮也不做，属 1Password 对齐完成后的「其他」议题。重启条件：Milestone 4 对齐完成 + 按 `THREAT_MODEL.md` 变更门槛登记新外联面 + 明确 opt-in 形态。对照注记见 `docs/FEATURE_GAP_ANALYSIS.md` Watchtower 节
 - [ ] Reproducible builds
 
 References

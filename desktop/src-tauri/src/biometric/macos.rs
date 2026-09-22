@@ -34,10 +34,12 @@ pub fn ceremony(reason: &str) -> Result<(), String> {
     let reason_ns = NSString::from_str(reason);
     let (tx, rx) = std::sync::mpsc::channel::<bool>();
     // StackBlock 要求 'static：tx move 进闭包（rx 在本函数继续等）
-    let reply = StackBlock::new(move |success: Bool, _error: *mut objc2_foundation::NSError| {
-        // 接收端超时放弃后 send 失败无所谓（弹窗已被系统收走）
-        let _ = tx.send(success.as_bool());
-    });
+    let reply = StackBlock::new(
+        move |success: Bool, _error: *mut objc2_foundation::NSError| {
+            // 接收端超时放弃后 send 失败无所谓（弹窗已被系统收走）
+            let _ = tx.send(success.as_bool());
+        },
+    );
     unsafe {
         ctx.evaluatePolicy_localizedReason_reply(
             LAPolicy::DeviceOwnerAuthentication,

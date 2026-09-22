@@ -22,7 +22,7 @@ Milestone 4 – 1Password Parity (current focus)
 - [x] Desktop: TOTP display (shared core path, RFC 6238 vectors); password reveal flow (re-auth gate + 30s auto-hide + copy-once clipboard); SshKey/ApiKey/BankCard rendering
 - [x] Desktop: SSH agent controls; signature approvals via in-app modal + system notification (agent stays UI-free behind an ApprovalHandler seam; CLI keeps TTY prompts unchanged)
 - [x] Desktop: auto-lock end-to-end (backend event → countdown banner → enforced lock clears in-memory master key even if the frontend is gone)
-- [ ] Browser: polished TOTP autofill UX
+- [x] Browser: polished TOTP autofill UX (chained fill after login, stale-code refetch, remaining-seconds notices, multi-candidate picker — 2026-09)
 - [ ] SSH agent: real-host E2E test (`ssh -T git@github.com`); Windows-specific testing and optimization
 - [ ] Reproducible builds
 
@@ -44,7 +44,7 @@ Milestone 6 – Server & Sync (optional)
 - [x] Client-side backup chain (core `backup` feature: VACUUM INTO snapshot → gzip → PERSENC1, byte-compatible with `--encrypt` exports; `BackupClient` for the custody endpoints; CLI `persona backup push/list/pull/restore/delete` — push needs no master-password unlock, restore stages via a verified temp file and keeps a `.bak`; attachments are not in v1 backups, 2026-09)
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution; per-item incremental sync is sync phase 2 — backup custody leaves room for it without implementing it)
-- [ ] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted
+- [x] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted (`STORAGE_AND_SYNC.md`, 2026-09)
 
 Ongoing quality
 
