@@ -515,9 +515,17 @@ Server & Sync (optional)
         零影响（引擎无主密码参数，重建实例续用）、两端收敛真 TCP 集成测试
         （双端同 lamport 离线编辑冲突保双版本）；THREAT_MODEL「E2EE 同步中
         继」章 + E2EE_SYNC_DESIGN §10 阶段 2 写实
+  - [x] 阶段 3a core 数据面（2026-09-22）：SyncCapture 捕获缝 + OplogCapture
+        默认装配（service 五写路径接线，未装配零开销、失败不阻断；service
+        不持 group key）；SyncItemSnapshot 条目快照（oplog payload =
+        bincode(元数据+CredentialData) 的 item key 密封——主库与同步密文
+        同 key 异封）；Materializer pull 物化（item_view 推导主位落主库、
+        item key 重包本机主密钥、tombstone 落地、真冲突败方留驻 oplog 等
+        裁决 UI、身份未同步挂起下轮补齐、幂等可反复跑）；revealed item key
+        变体（Zeroizing）
   - [ ] 阶段 3 接线：desktop 设备管理页 + 冲突裁决 UI +
-        `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」节重写；service 写
-        路径接入 record_local_change；group key 轮换（开放问题 2）
+        `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」节重写；group key
+        轮换（开放问题 2）
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=
