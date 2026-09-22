@@ -3,6 +3,7 @@
 mod auth;
 mod backups;
 mod events;
+mod sync;
 
 use axum::extract::Request;
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
@@ -15,6 +16,11 @@ use serde::Serialize;
 pub use auth::{challenge as auth_challenge, register as auth_register, verify as auth_verify};
 pub use backups::{delete, download, list, size_guard, upload};
 pub use events::{ingest, query};
+pub use sync::{
+    delete_device as sync_delete_device, get_group_keys as sync_get_group_keys,
+    list_devices as sync_list_devices, pull as sync_pull, push as sync_push,
+    put_group_key as sync_put_group_key, register_device as sync_register_device,
+};
 
 /// 请求体上限（线上字节）。带 Content-Length 的请求由
 /// `payload_size_guard` 预检直接给出确定性 413——这是压缩传输的真实
@@ -152,6 +158,11 @@ impl ApiError {
             format!("request body exceeds {limit_bytes} bytes"),
             Vec::new(),
         )
+    }
+
+    /// 409：资源已存在（如 sync 设备重名——公钥不可被静默替换）。
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, "conflict", message, Vec::new())
     }
 
     /// 404：路由表外（fallback 兜底）。

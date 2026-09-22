@@ -18,7 +18,7 @@ use axum::extract::{DefaultBodyLimit, MatchedPath, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{middleware, Router};
 
 pub use state::AppState;
@@ -75,6 +75,30 @@ pub fn build_router(state: AppState) -> Router {
                 .route("/challenge", post(api::auth_challenge))
                 .route("/verify", post(api::auth_verify))
                 .layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        // E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文
+        // 中继 + 设备/信封登记。独立中间件栈（在 api 整体 require_bearer
+        // 之外）：无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限
+        // 沿 events 线上限 1 MiB——凭据密文 KB 级，500 条/批足够（附件走
+        // 备份通道，是 §11 v2 议题）。
+        .nest(
+            "/sync",
+            Router::new()
+                .route(
+                    "/devices",
+                    post(api::sync_register_device).get(api::sync_list_devices),
+                )
+                .route("/devices/:id", delete(api::sync_delete_device))
+                .route(
+                    "/group-keys",
+                    get(api::sync_get_group_keys).put(api::sync_put_group_key),
+                )
+                .route("/oplog", post(api::sync_push).get(api::sync_pull))
+                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::require_bearer,
+                )),
         );
 
     // 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight
