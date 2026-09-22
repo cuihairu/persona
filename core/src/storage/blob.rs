@@ -21,6 +21,11 @@ pub struct BlobStore {
 }
 
 impl BlobStore {
+    /// 存储根目录（只读透传；travel mode 打包附件文件用）
+    pub fn storage_root(&self) -> &Path {
+        &self.storage_root
+    }
+
     /// Create a new blob store
     pub fn new<P: AsRef<Path>>(storage_root: P) -> Self {
         Self::with_chunk_size(storage_root, DEFAULT_CHUNK_SIZE)
@@ -349,6 +354,12 @@ impl AttachmentManager {
     /// Initialize storage
     pub async fn init(&self) -> Result<()> {
         self.blob_store.init().await
+    }
+
+    /// 附件根目录（travel mode 打包/恢复 blob 文件用；storage_path 列
+    /// 存的是相对此根的路径）
+    pub fn storage_root(&self) -> &Path {
+        self.blob_store.storage_root()
     }
 
     /// Store an attachment

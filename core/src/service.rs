@@ -1,3 +1,5 @@
+#[cfg(feature = "backup")]
+use crate::travel::{TravelCounts, TravelStatus};
 use crate::{
     auth::{
         AuthResult, AuthService, AutoLockEvent, AutoLockManager, BiometricPlatform,
@@ -1903,6 +1905,204 @@ impl PersonaService {
         )
         .await;
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Travel Mode（旅行模式）。重量级逻辑（打包/加密/事务/文件 IO）在
+    // crate::travel（cfg backup）；本节只做门禁、前置校验与审计编排。
+    // sidecar 路径由调用方显式传 db_path——PersonaService 不知道库路径。
+    // -----------------------------------------------------------------------
+
+    /// 旅行模式状态。无门禁：旗标与 sidecar 存在性都不含秘密（锁屏界面
+    /// 也要能提示"数据不在这台设备上"）。
+    #[cfg(feature = "backup")]
+    pub async fn travel_status(&self, db_path: &Path) -> Result<TravelStatus> {
+        let workspaces = Repository::find_all(&self.workspace_repo).await?;
+        let (active, entered_at) = workspaces
+            .first()
+            .map(|ws| {
+                (
+                    ws.settings.travel_mode,
+                    ws.settings.travel_entered_at.clone(),
+                )
+            })
+            .unwrap_or((false, None));
+        let sidecar_exists = crate::travel::sidecar_path(db_path).exists();
+        Ok(TravelStatus {
+            active,
+            entered_at,
+            sidecar_exists,
+            // 旗标说在旅行模式，但数据容器没了（被手删/损毁）：数据已丢，
+            // 诚实呈现而非假装可恢复（见 travel.rs 模块注释崩溃窗口表）。
+            inconsistent: active && !sidecar_exists,
+        })
+    }
+
+    /// 标记/取消标记身份（enter 时随之整包移出本设备）。编辑元数据级
+    /// 操作，与 update_identity 同门禁（不设敏感重认证——移动秘密的
+    /// 门禁在 enter 这一步）。幂等：重复标记同一状态直接成功。
+    #[cfg(feature = "backup")]
+    pub async fn set_travel_marked(&self, identity_id: &Uuid, marked: bool) -> Result<()> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+        let mut identity = self
+            .identity_repo
+            .find_by_id(identity_id)
+            .await?
+            .ok_or_else(|| PersonaError::IdentityNotFound(identity_id.to_string()))?;
+        if identity.travel_marked == marked {
+            return Ok(());
+        }
+        identity.travel_marked = marked;
+        self.identity_repo.update(&identity).await?;
+        self.log_audit(
+            AuditAction::TravelMarkChanged,
+            ResourceType::Identity,
+            true,
+            Some(*identity_id),
+            None,
+            None,
+        )
+        .await;
+        Ok(())
+    }
+
+    /// 进入旅行模式：被标记身份全部数据打包加密进 sidecar 后从主库删除
+    /// （真移除语义，主库零痕迹）。顺序即安全语义：先写 sidecar 再动库。
+    #[cfg(feature = "backup")]
+    pub async fn enter_travel_mode(
+        &self,
+        db_path: &Path,
+        passphrase: &str,
+    ) -> Result<TravelCounts> {
+        self.ensure_sensitive_operation_allowed().await?;
+
+        if self.travel_mode_active().await? {
+            return Err(PersonaError::TravelModeActive(
+                "Travel mode is already active".to_string(),
+            )
+            .into());
+        }
+
+        let sidecar = crate::travel::sidecar_path(db_path);
+        if sidecar.exists() {
+            // 崩溃窗口 1 的残留（sidecar 已写、事务未提交）：库与盘面
+            // 不一致时不自动覆盖——由用户决定删残留还是直接 exit 恢复。
+            return Err(PersonaError::Validation(format!(
+                "travel sidecar already exists at {}; remove the leftover file or run travel exit to restore",
+                sidecar.display()
+            ))
+            .into());
+        }
+
+        let marked: Vec<String> =
+            sqlx::query_as("SELECT id FROM identities WHERE travel_marked = 1")
+                .fetch_all(self.db.pool())
+                .await
+                .map_err(|e| PersonaError::Database(e.to_string()))?
+                .into_iter()
+                .map(|(id,)| id)
+                .collect();
+        if marked.is_empty() {
+            return Err(PersonaError::InvalidInput(
+                "no identities are marked for travel mode".to_string(),
+            )
+            .into());
+        }
+        if passphrase.is_empty() {
+            return Err(PersonaError::InvalidInput(
+                "travel passphrase must not be empty".to_string(),
+            )
+            .into());
+        }
+
+        let attachments_root = self.attachment_manager.as_ref().map(|m| m.storage_root());
+        let pack = crate::travel::build_pack(self.db.pool(), attachments_root, &marked).await?;
+        let counts = TravelCounts::from_pack(&pack);
+
+        let sealed = crate::travel::seal_pack(&pack, passphrase, None)?;
+        crate::travel::write_sidecar_atomic(&sidecar, &sealed)?;
+
+        if let Err(e) = crate::travel::apply_enter_tx(self.db.pool(), &pack).await {
+            // 事务失败（非崩溃）：回收 sidecar，盘面回到 enter 前状态
+            let _ = std::fs::remove_file(&sidecar);
+            return Err(e.into());
+        }
+
+        // 事务已提交：blob 文件删除 best-effort——失败项在 exit 时按
+        // storage_path 原路径覆写自愈，不阻塞 enter 的成功。
+        if let Some(root) = attachments_root {
+            for failure in crate::travel::delete_blob_files(root, &pack.attachment_files) {
+                tracing::warn!("travel enter: attachment file not removed: {failure}");
+            }
+        }
+
+        self.log_audit(
+            AuditAction::TravelModeEntered,
+            ResourceType::Workspace,
+            true,
+            None,
+            None,
+            None,
+        )
+        .await;
+        Ok(counts)
+    }
+
+    /// 退出旅行模式：sidecar 解密解包后原样恢复（行 id 与加密形态字节
+    /// 不变），全部落地后删 sidecar。中途任何失败 sidecar 都保留，整条
+    /// exit 可重试（恢复行与文件覆写均幂等）。
+    #[cfg(feature = "backup")]
+    pub async fn exit_travel_mode(&self, db_path: &Path, passphrase: &str) -> Result<TravelCounts> {
+        self.ensure_sensitive_operation_allowed().await?;
+
+        let sidecar = crate::travel::sidecar_path(db_path);
+        let sealed = std::fs::read(&sidecar).map_err(|e| {
+            PersonaError::NotFound(format!(
+                "travel sidecar not found at {}: {e}",
+                sidecar.display()
+            ))
+        })?;
+        let pack = crate::travel::open_pack(&sealed, passphrase)?;
+
+        crate::travel::apply_exit_tx(self.db.pool(), &pack).await?;
+
+        // 行已恢复：blob 文件覆写。pack 带着附件却没有存储位就无法落
+        // 字节——报配置错误而不是悄悄丢数据（行已插回，补上存储后重试）。
+        if !pack.attachment_files.is_empty() {
+            let root = self
+                .attachment_manager
+                .as_ref()
+                .map(|m| m.storage_root())
+                .ok_or_else(|| {
+                    PersonaError::ConfigurationError(
+                        "pack contains attachments but attachment storage is not initialized"
+                            .to_string(),
+                    )
+                })?;
+            crate::travel::write_blob_files(root, &pack.attachment_files)?;
+        }
+
+        if let Err(e) = std::fs::remove_file(&sidecar) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    "travel exit: failed to remove sidecar {}: {e}",
+                    sidecar.display()
+                );
+            }
+        }
+
+        let counts = TravelCounts::from_pack(&pack);
+        self.log_audit(
+            AuditAction::TravelModeExited,
+            ResourceType::Workspace,
+            true,
+            None,
+            None,
+            None,
+        )
+        .await;
+        Ok(counts)
     }
 
     /// Re-wrap every stored item key (and re-encrypt legacy rows) under the
@@ -5166,6 +5366,486 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("must differ"));
+    }
+
+    // ------------------------------------------------------------------
+    // Travel Mode（旅行模式）集成：enter 真移除 → exit 原样恢复
+    // ------------------------------------------------------------------
+
+    /// travel 测试夹具：解锁服务 + workspaces 行（travel_status/enter/exit
+    /// 读写 settings 需要；unlocked_service 不建行）+ sidecar 目录。
+    async fn travel_fixture() -> (tempfile::TempDir, Database, PersonaService) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        let ws_repo = crate::storage::WorkspaceRepository::new(db.clone());
+        if Repository::find_all(&ws_repo).await.unwrap().is_empty() {
+            Repository::create(
+                &ws_repo,
+                &crate::models::Workspace::new(dir.path(), "test".to_string()),
+            )
+            .await
+            .unwrap();
+        }
+        (dir, db, service)
+    }
+
+    #[tokio::test]
+    async fn travel_round_trip_moves_secrets_out_and_back() {
+        let (dir, db, mut service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+
+        let work = service
+            .create_identity("work".to_string(), IdentityType::Work)
+            .await
+            .unwrap();
+        let personal = service
+            .create_identity("personal".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, work.id, "GitHub", CredentialType::Password).await;
+        service.set_travel_marked(&work.id, true).await.unwrap();
+
+        // 附件（密封 blob 落盘）+ passkey + 钱包族（raw SQL 造行）
+        let att_dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(att_dir.path(), db.clone())
+            .await
+            .unwrap();
+        let src = att_dir.path().join("doc.txt");
+        std::fs::write(&src, b"sealed attachment bytes").unwrap();
+        let att = service.attach_file(cred.id, &src, false).await.unwrap();
+        let passkey = service
+            .create_passkey(
+                work.id,
+                "example.com".to_string(),
+                "https://example.com",
+                br#"{"type":"webauthn.create","origin":"https://example.com","challenge":"Y2hhbGxlbmdl"}"#,
+                Some(vec![1, 2]),
+                None,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+        let wallet_id = Uuid::new_v4();
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            "INSERT INTO crypto_wallets (id, identity_id, name, network, wallet_type, \
+             encrypted_private_key, watch_only, security_level, created_at, updated_at) \
+             VALUES (?, ?, 'w', 'ethereum', 'hd', x'0102', 0, 'High', ?, ?)",
+        )
+        .bind(wallet_id.to_string())
+        .bind(work.id.to_string())
+        .bind(now)
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO wallet_addresses (id, wallet_id, address, address_type, \
+             \"index\", used, metadata, created_at) VALUES (?, ?, '0xabc', 'receive', 0, 0, '{}', ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(wallet_id.to_string())
+        .bind(now)
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // workspace active 指针指向被移除身份（enter 清除、exit 还原）
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(work.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // enter 前基线：密封字节、历史行、带 FK 引用的审计行
+        let (wrapped_before, enc_before): (Vec<u8>, Option<Vec<u8>>) =
+            sqlx::query_as("SELECT wrapped_item_key, encrypted_data FROM credentials WHERE id = ?")
+                .bind(cred.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        let history_before: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM change_history")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let audit_fk_before: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM audit_logs WHERE identity_id = ?")
+                .bind(work.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert!(
+            audit_fk_before >= 1,
+            "fixture must have FK-bearing audit rows"
+        );
+
+        let status = service.travel_status(&db_path).await.unwrap();
+        assert!(!status.active && !status.sidecar_exists && !status.inconsistent);
+
+        let counts = service
+            .enter_travel_mode(&db_path, "travel-secret")
+            .await
+            .unwrap();
+        assert!(counts.identities >= 1);
+        assert!(counts.credentials >= 1);
+        assert!(counts.attachments >= 1);
+        assert!(counts.passkeys >= 1);
+        assert!(counts.wallets >= 1);
+        assert!(counts.history_rows >= 1);
+        assert_eq!(counts.files, 1);
+
+        // 主库零痕迹：被标记身份与其全部从属行消失，未标记身份完好
+        assert!(service
+            .identity_repo
+            .find_by_id(&work.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .identity_repo
+            .find_by_id(&personal.id)
+            .await
+            .unwrap()
+            .is_some());
+        let wallet_left: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM crypto_wallets WHERE identity_id = ?")
+                .bind(work.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(wallet_left, 0);
+
+        let status = service.travel_status(&db_path).await.unwrap();
+        assert!(status.active && status.sidecar_exists && !status.inconsistent);
+        assert!(status.entered_at.is_some());
+
+        // active 指针已清除
+        let active: Option<String> =
+            sqlx::query_scalar("SELECT active_identity_id FROM workspaces LIMIT 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(active, None);
+
+        // audit FK 剥离：引用列空了，审计行本身留下（resource_id 仍存证）
+        let audit_fk_after: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM audit_logs WHERE identity_id = ?")
+                .bind(work.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(audit_fk_after, 0);
+        let audit_kept: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM audit_logs WHERE resource_id = ?")
+                .bind(work.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert!(audit_kept >= 1, "audit rows survive with resource_id only");
+
+        // travel 期间改密被拒（sidecar 里 wrapped key 是旧主密钥包的）
+        let err = service
+            .change_master_password("master-pin", "rotated-pin")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Travel mode is active"), "{err}");
+
+        // ---- exit：错口令 sidecar 保留，行仍缺失 ----
+        let err = service
+            .exit_travel_mode(&db_path, "wrong-passphrase")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("passphrase is wrong"), "{err}");
+        assert!(crate::travel::sidecar_path(&db_path).exists());
+        assert!(service
+            .identity_repo
+            .find_by_id(&work.id)
+            .await
+            .unwrap()
+            .is_none());
+
+        // ---- exit：对口令原样恢复 ----
+        let counts = service
+            .exit_travel_mode(&db_path, "travel-secret")
+            .await
+            .unwrap();
+        assert_eq!(counts.identities, 1);
+
+        // 行字节级相等（wrapped_item_key/encrypted_data 原样）
+        let (wrapped_after, enc_after): (Vec<u8>, Option<Vec<u8>>) =
+            sqlx::query_as("SELECT wrapped_item_key, encrypted_data FROM credentials WHERE id = ?")
+                .bind(cred.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(wrapped_after, wrapped_before);
+        assert_eq!(enc_after, enc_before);
+
+        // 原主密码可解
+        match service
+            .get_credential_data(&cred.id)
+            .await
+            .unwrap()
+            .expect("credential restored")
+        {
+            CredentialData::Password(p) => assert_eq!(p.password, "pw"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+
+        // 附件文件与行恢复：解密回原字节
+        assert_eq!(
+            service.retrieve_attachment(&att, false).await.unwrap(),
+            b"sealed attachment bytes"
+        );
+
+        // passkey 与钱包族恢复
+        assert!(service.get_passkey(&passkey.id).await.unwrap().is_some());
+        let wallets_back: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM crypto_wallets WHERE identity_id = ?")
+                .bind(work.id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(wallets_back, 1);
+        let addresses_back: i64 =
+            sqlx::query_scalar("SELECT COUNT(1) FROM wallet_addresses WHERE wallet_id = ?")
+                .bind(wallet_id.to_string())
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(addresses_back, 1);
+
+        // change_history 随行走了一遭，总数不变
+        let history_after: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM change_history")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(history_after, history_before);
+
+        // active 指针还原、sidecar 已删、旗标复位
+        let active: Option<String> =
+            sqlx::query_scalar("SELECT active_identity_id FROM workspaces LIMIT 1")
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(active.as_deref(), Some(work.id.to_string().as_str()));
+        assert!(!crate::travel::sidecar_path(&db_path).exists());
+        let status = service.travel_status(&db_path).await.unwrap();
+        assert!(!status.active && status.entered_at.is_none() && !status.inconsistent);
+    }
+
+    #[tokio::test]
+    async fn travel_enter_rejects_unready_states() {
+        let (dir, _db, service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+        let identity = service
+            .create_identity("a".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // 无被标记身份
+        let err = service.enter_travel_mode(&db_path, "pw").await.unwrap_err();
+        assert!(
+            err.to_string().contains("no identities are marked"),
+            "{err}"
+        );
+
+        // 空口令
+        service.set_travel_marked(&identity.id, true).await.unwrap();
+        let err = service.enter_travel_mode(&db_path, "").await.unwrap_err();
+        assert!(
+            err.to_string().contains("passphrase must not be empty"),
+            "{err}"
+        );
+
+        // sidecar 已存在（崩溃窗口 1 的残留）：拒绝且不覆盖
+        std::fs::write(crate::travel::sidecar_path(&db_path), b"leftover").unwrap();
+        let err = service.enter_travel_mode(&db_path, "pw").await.unwrap_err();
+        assert!(err.to_string().contains("already exists"), "{err}");
+        assert_eq!(
+            std::fs::read(crate::travel::sidecar_path(&db_path)).unwrap(),
+            b"leftover"
+        );
+        std::fs::remove_file(crate::travel::sidecar_path(&db_path)).unwrap();
+
+        // 已激活
+        service.enter_travel_mode(&db_path, "pw").await.unwrap();
+        let err = service.enter_travel_mode(&db_path, "pw").await.unwrap_err();
+        assert!(err.to_string().contains("Travel mode is active"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn travel_set_marked_is_idempotent_and_audited() {
+        let (_dir, db, service) = travel_fixture().await;
+        let identity = service
+            .create_identity("m".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        service.set_travel_marked(&identity.id, true).await.unwrap();
+        // 重复标记同一状态：幂等成功且不再写审计
+        service.set_travel_marked(&identity.id, true).await.unwrap();
+        let fetched = service
+            .identity_repo
+            .find_by_id(&identity.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(fetched.travel_marked);
+
+        service
+            .set_travel_marked(&identity.id, false)
+            .await
+            .unwrap();
+        let fetched = service
+            .identity_repo
+            .find_by_id(&identity.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!fetched.travel_marked);
+
+        let audits: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM audit_logs WHERE action = 'travel_mark_changed'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(audits, 2, "only actual flips are audited");
+
+        let err = service
+            .set_travel_marked(&Uuid::new_v4(), true)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not found"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn travel_mode_blocks_master_password_change_until_exit() {
+        let (dir, _db, mut service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+
+        // 未激活对照：改密正常走
+        service
+            .change_master_password("master-pin", "master-pin-2")
+            .await
+            .unwrap();
+        service
+            .change_master_password("master-pin-2", "master-pin")
+            .await
+            .unwrap();
+
+        let identity = service
+            .create_identity("t".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        service.set_travel_marked(&identity.id, true).await.unwrap();
+        service.enter_travel_mode(&db_path, "pw").await.unwrap();
+
+        let err = service
+            .change_master_password("master-pin", "rotated")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Travel mode is active"), "{err}");
+
+        service.exit_travel_mode(&db_path, "pw").await.unwrap();
+        service
+            .change_master_password("master-pin", "rotated")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn travel_status_reports_inconsistent_when_sidecar_removed() {
+        let (dir, _db, service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+        let identity = service
+            .create_identity("t".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        service.set_travel_marked(&identity.id, true).await.unwrap();
+
+        // 未激活时 sidecar 缺失是正常态
+        let status = service.travel_status(&db_path).await.unwrap();
+        assert!(!status.active && !status.sidecar_exists && !status.inconsistent);
+
+        service.enter_travel_mode(&db_path, "pw").await.unwrap();
+        std::fs::remove_file(crate::travel::sidecar_path(&db_path)).unwrap();
+        let status = service.travel_status(&db_path).await.unwrap();
+        assert!(
+            status.active && !status.sidecar_exists && status.inconsistent,
+            "flag says active but the only copy of the data is gone"
+        );
+    }
+
+    /// favicon_cache 里仅被被移除凭据引用的 host 随 enter 清除；
+    /// 仍被保留凭据（或同 host 多凭据）引用的 host 保留。
+    #[cfg(feature = "favicon")]
+    #[tokio::test]
+    async fn travel_enter_prunes_favicon_hosts_only_when_unreferenced() {
+        let (dir, db, service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+
+        let marked_i = service
+            .create_identity("rm".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let kept_i = service
+            .create_identity("keep".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let doomed =
+            seed_credential(&service, marked_i.id, "doomed", CredentialType::Password).await;
+        let mut doomed = doomed;
+        doomed.url = Some("https://doomed.example.com/login".to_string());
+        service.update_credential(&doomed).await.unwrap();
+        // 被移除身份上的第二个凭据与保留凭据同 host：kept host 必须活下来
+        let alt = seed_credential(&service, marked_i.id, "alt", CredentialType::Password).await;
+        let mut alt = alt;
+        alt.url = Some("https://kept.example.com/alt".to_string());
+        service.update_credential(&alt).await.unwrap();
+        let kept = seed_credential(&service, kept_i.id, "kept", CredentialType::Password).await;
+        let mut kept = kept;
+        kept.url = Some("https://kept.example.com/".to_string());
+        service.update_credential(&kept).await.unwrap();
+
+        for host in ["doomed.example.com", "kept.example.com"] {
+            sqlx::query(
+                "INSERT INTO favicon_cache (host, mime_type, data, created_at, updated_at) \
+                 VALUES (?, 'image/png', x'89504e47', '2026-01-01', '2026-01-01')",
+            )
+            .bind(host)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        }
+
+        service.set_travel_marked(&marked_i.id, true).await.unwrap();
+        service.enter_travel_mode(&db_path, "pw").await.unwrap();
+
+        let doomed_left: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM favicon_cache WHERE host = 'doomed.example.com'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        let kept_left: i64 = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM favicon_cache WHERE host = 'kept.example.com'",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(doomed_left, 0, "unreferenced host must be pruned");
+        assert_eq!(
+            kept_left, 1,
+            "host still referenced by kept credentials stays"
+        );
     }
 
     #[cfg(all(test, feature = "favicon"))]

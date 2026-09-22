@@ -18,6 +18,8 @@ pub mod models;
 pub mod password;
 pub mod service;
 pub mod storage;
+#[cfg(feature = "backup")]
+pub mod travel;
 
 // Re-export commonly used types
 pub use auth::*;
@@ -46,6 +48,8 @@ pub use storage::user_auth::*;
 
 pub use password::*;
 pub use service::*;
+#[cfg(feature = "backup")]
+pub use travel::{TravelCounts, TravelStatus};
 
 /// Core result type used throughout the library
 pub type Result<T> = anyhow::Result<T>;
