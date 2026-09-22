@@ -104,6 +104,9 @@ enum Commands {
 
     /// Travel mode: move marked identities off this device and back
     Travel(commands::travel::TravelArgs),
+
+    /// Connect local automation: token management and the local HTTP listener
+    Connect(commands::connect::ConnectArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -169,6 +172,7 @@ async fn main() -> Result<()> {
         Commands::Watchtower(args) => commands::watchtower::execute(args, &config).await,
         Commands::Passwd(args) => commands::passwd::execute(args, &config).await,
         Commands::Travel(args) => commands::travel::execute(args, &config).await,
+        Commands::Connect(args) => commands::connect::execute(args, &config).await,
     };
     // 尽力 flush 队列剩余审计事件（未启用时为无操作）
     commands::service::shutdown_event_emitter().await;

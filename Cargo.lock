@@ -4018,6 +4018,7 @@ dependencies = [
  "hmac",
  "image",
  "indicatif",
+ "persona-connect-server",
  "persona-core",
  "predicates",
  "proptest",

@@ -19,6 +19,8 @@ path = "src/main.rs"
 [dependencies]
 # Core library
 persona-core = { path = "../core" }
+# Connect 本机自动化 HTTP 端点（serve 与桌面共用同一 router/三防线）
+persona-connect-server = { path = "../connect-server" }
 
 async-trait.workspace = true
 

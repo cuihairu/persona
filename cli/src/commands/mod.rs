@@ -2,6 +2,7 @@ pub mod add;
 pub mod auto_lock;
 pub mod backup;
 pub mod bridge;
+pub mod connect;
 pub mod credential;
 pub mod edit;
 pub mod export;
