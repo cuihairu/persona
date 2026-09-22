@@ -1135,4 +1135,99 @@ mod tests {
 
         task.abort();
     }
+
+    // SyncAdminApi（core 客户端 wire 层）与 server 契约的真 TCP 对齐测试：
+    // handler 语义已由上面的单测覆盖（409/422/级联等），这里验证客户端侧
+    // 类型转换（device_id Uuid、public_key [u8;32]、envelope 字节原样往返）
+    // 与错误路径（409 message 透传到 Err、幽灵设备 fail-closed）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn admin_api_client_manages_devices_and_group_keys_over_real_tcp() {
+        use persona_core::sync::remote::SyncAdminApi;
+
+        const TOKEN: &str = "sync-admin-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+
+        let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
+
+        // 注册两台设备
+        let laptop_id = admin
+            .register_device("laptop", &[7u8; 32])
+            .await
+            .expect("register laptop");
+        let phone_id = admin
+            .register_device("phone", &[9u8; 32])
+            .await
+            .expect("register phone");
+        assert_ne!(laptop_id, phone_id);
+
+        // 重名 → 409，message 透传到 Err（客户端不吞服务器语义）
+        let dup = admin
+            .register_device("laptop", &[1u8; 32])
+            .await
+            .unwrap_err();
+        assert!(
+            dup.to_string().contains("already registered"),
+            "unexpected error: {dup:#}"
+        );
+
+        // 列表：名称 + 公钥字节级还原
+        let devices = admin.list_devices().await.expect("list devices");
+        assert_eq!(devices.len(), 2);
+        let laptop = devices
+            .iter()
+            .find(|d| d.id == laptop_id)
+            .expect("laptop in list");
+        assert_eq!(laptop.device_name, "laptop");
+        assert_eq!(laptop.public_key, [7u8; 32]);
+        assert!(!laptop.created_at.is_empty());
+
+        // 起始无信封
+        assert!(admin.group_keys().await.expect("empty keys").is_empty());
+
+        // 上传信封（恰 80B）→ 原样取回，sealed_by = AuthTokens::single 的设备名
+        let envelope: Vec<u8> = (0..80).map(|i| i as u8).collect();
+        admin
+            .put_group_key(laptop_id, &envelope)
+            .await
+            .expect("put group key");
+        // 幽灵设备 fail-closed → Err
+        admin
+            .put_group_key(Uuid::new_v4(), &[0u8; 80])
+            .await
+            .expect_err("ghost device must be rejected");
+        // 同设备覆盖（upsert）不报错
+        admin
+            .put_group_key(laptop_id, &[0xAA; 80])
+            .await
+            .expect("overwrite group key");
+
+        let keys = admin.group_keys().await.expect("group keys");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].device_id, laptop_id);
+        assert_eq!(keys[0].envelope, vec![0xAA; 80]);
+        assert_eq!(keys[0].sealed_by, "default");
+
+        // 吊销 laptop：幂等（二次删除同 204）+ 信封级联消失
+        admin.delete_device(laptop_id).await.expect("revoke laptop");
+        admin
+            .delete_device(laptop_id)
+            .await
+            .expect("revoke laptop twice is idempotent");
+        let devices = admin.list_devices().await.expect("list after revoke");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id, phone_id);
+        assert!(admin
+            .group_keys()
+            .await
+            .expect("keys after revoke")
+            .is_empty());
+
+        task.abort();
+    }
 }

@@ -1,5 +1,6 @@
-//! 同步远端的 HTTP 客户端（feature `remote-auth`）：把
-//! [`super::engine::SyncRemote`] 接到 persona-server 的 `/api/v1/sync/oplog`。
+//! 同步远端的 HTTP 客户端（feature `remote-auth`）：[`super::engine::SyncRemote`]
+//! 接 persona-server 的 `/api/v1/sync/oplog`（oplog 收发），[`SyncAdminApi`]
+//! 接 `/devices` + `/group-keys`（设备登记/group key 信封，§6 设备生命周期）。
 //! wire 契约的权威定义在 `server/src/api/sync.rs`：base64 STANDARD、错误
 //! 包络 `{"error":{"code","message",…}}`。
 //!
@@ -161,20 +162,20 @@ fn op_from_wire(wire: WireOp) -> Option<SyncOp> {
     })
 }
 
-/// 对 persona-server `/api/v1/sync/oplog` 的同步远端。token 每请求携带
-/// （静态令牌或 SRP 短期令牌——服务器同一 `require_bearer`）。
+/// 共享 HTTP 底座：base URL 归一、bearer 注入、非 2xx 统一转错。
+/// [`HttpSyncRemote`]（oplog 推拉）与 [`SyncAdminApi`]（设备/信封管理）共用。
 #[derive(Clone)]
-pub struct HttpSyncRemote {
+struct SyncHttp {
     base_url: String,
     token: String,
     http: reqwest::Client,
 }
 
-impl HttpSyncRemote {
+impl SyncHttp {
     /// `base_url` 形如 `http://127.0.0.1:8080`（尾部 `/` 容忍）。请求超时
     /// 60s：单批最多 500 条 KB 级密文，要覆盖慢速链路，但远小于备份链的
     /// 300s。
-    pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
+    fn new(base_url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(60))
             .build()
@@ -190,6 +191,12 @@ impl HttpSyncRemote {
 
     fn url(&self, path: &str) -> String {
         format!("{}/api/v1/sync{path}", self.base_url)
+    }
+
+    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
+        self.http
+            .request(method, self.url(path))
+            .bearer_auth(&self.token)
     }
 
     /// 非 2xx 统一转 [`PersonaError::Io`]：带状态码与服务器 error.message
@@ -219,6 +226,21 @@ impl HttpSyncRemote {
     }
 }
 
+/// 对 persona-server `/api/v1/sync/oplog` 的同步远端。token 每请求携带
+/// （静态令牌或 SRP 短期令牌——服务器同一 `require_bearer`）。
+#[derive(Clone)]
+pub struct HttpSyncRemote {
+    http: SyncHttp,
+}
+
+impl HttpSyncRemote {
+    pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
+        Ok(Self {
+            http: SyncHttp::new(base_url, token)?,
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl SyncRemote for HttpSyncRemote {
     async fn push_ops(&self, ops: &[SyncOp]) -> Result<(u64, u64)> {
@@ -227,13 +249,12 @@ impl SyncRemote for HttpSyncRemote {
         };
         let resp = self
             .http
-            .post(self.url("/oplog"))
-            .bearer_auth(&self.token)
+            .request(reqwest::Method::POST, "/oplog")
             .json(&request)
             .send()
             .await
             .map_err(|e| PersonaError::Io(format!("sync push request failed: {e}")))?;
-        let resp = Self::ensure_success(resp, "push").await?;
+        let resp = SyncHttp::ensure_success(resp, "push").await?;
         let body: PushResponseWire = resp
             .json()
             .await
@@ -248,8 +269,7 @@ impl SyncRemote for HttpSyncRemote {
     ) -> Result<(Vec<SyncOp>, Option<String>)> {
         let mut builder = self
             .http
-            .get(self.url("/oplog"))
-            .bearer_auth(&self.token)
+            .request(reqwest::Method::GET, "/oplog")
             .query(&[("limit", limit.to_string())]);
         if let Some(cursor) = since {
             builder = builder.query(&[("since", cursor)]);
@@ -258,7 +278,7 @@ impl SyncRemote for HttpSyncRemote {
             .send()
             .await
             .map_err(|e| PersonaError::Io(format!("sync pull request failed: {e}")))?;
-        let resp = Self::ensure_success(resp, "pull").await?;
+        let resp = SyncHttp::ensure_success(resp, "pull").await?;
         let body: PullResponseWire = resp
             .json()
             .await
@@ -271,6 +291,212 @@ impl SyncRemote for HttpSyncRemote {
             // else：条目级损坏，跳过（模块文档的容错口径）
         }
         Ok((ops, body.next_cursor))
+    }
+}
+
+// ---- 设备与 group key 信封管理（§6 设备生命周期，desktop/CLI 共用）----
+
+/// 已登记设备（server `sync_devices` 行的客户端视图）。`public_key` 已解
+/// base64——坏值让本层报错，不让调用方处理编码。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncDevice {
+    pub id: Uuid,
+    pub device_name: String,
+    pub public_key: [u8; 32],
+    pub created_at: String,
+}
+
+/// group key 信封条目（server `sync_group_keys` 行的客户端视图）。
+/// 信封字节保持原样（`envelope::open_group_key` 的输入）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncGroupKeyEntry {
+    pub device_id: Uuid,
+    pub envelope: Vec<u8>,
+    pub sealed_by: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireDeviceInfo {
+    id: String,
+    device_name: String,
+    public_key: String,
+    created_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireDeviceList {
+    devices: Vec<WireDeviceInfo>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireGroupKeyEntry {
+    device_id: String,
+    envelope: String,
+    sealed_by: String,
+    created_at: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireGroupKeys {
+    keys: Vec<WireGroupKeyEntry>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct WireRegisterDevice<'a> {
+    device_name: &'a str,
+    public_key: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireRegisterDeviceResponse {
+    device_id: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct WirePutGroupKey<'a> {
+    device_id: String,
+    envelope: &'a str,
+}
+
+fn decode_b32(s: &str, what: &str) -> Result<[u8; 32]> {
+    let bytes = B64
+        .decode(s)
+        .map_err(|_| PersonaError::Io(format!("malformed {what} in sync response (bad base64)")))?;
+    let key: [u8; 32] = bytes.try_into().map_err(|_: Vec<u8>| {
+        PersonaError::Io(format!("malformed {what} in sync response (bad length)"))
+    })?;
+    Ok(key)
+}
+
+/// `/api/v1/sync/devices` + `/api/v1/sync/group-keys` 的管理客户端——
+/// 注册/列出/吊销设备、收发 group key 信封（DR-1/DR-3）。授权流在调用方
+/// 组装：拆自己可开的信封得 group key → 用新设备公钥包新信封上传。
+#[derive(Clone)]
+pub struct SyncAdminApi {
+    http: SyncHttp,
+}
+
+impl SyncAdminApi {
+    pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Result<Self> {
+        Ok(Self {
+            http: SyncHttp::new(base_url, token)?,
+        })
+    }
+
+    /// 登记设备（公钥 + 设备名），返回服务器分配的 device_id。
+    /// 重名 409（公钥不可被静默替换）——错误串含服务器 message。
+    pub async fn register_device(&self, device_name: &str, public_key: &[u8; 32]) -> Result<Uuid> {
+        let resp = self
+            .http
+            .request(reqwest::Method::POST, "/devices")
+            .json(&WireRegisterDevice {
+                device_name,
+                public_key: B64.encode(public_key),
+            })
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync register request failed: {e}")))?;
+        let resp = SyncHttp::ensure_success(resp, "register device").await?;
+        let body: WireRegisterDeviceResponse = resp
+            .json()
+            .await
+            .map_err(|_| PersonaError::Io("malformed sync register response".to_string()))?;
+        let device_id = Uuid::parse_str(&body.device_id).map_err(|_| {
+            PersonaError::Io("malformed device_id in sync register response".to_string())
+        })?;
+        Ok(device_id)
+    }
+
+    /// 列出全部已登记设备（含待授权的——信封未上传的设备）。
+    pub async fn list_devices(&self) -> Result<Vec<SyncDevice>> {
+        let resp = self
+            .http
+            .request(reqwest::Method::GET, "/devices")
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync list devices failed: {e}")))?;
+        let resp = SyncHttp::ensure_success(resp, "list devices").await?;
+        let body: WireDeviceList = resp
+            .json()
+            .await
+            .map_err(|_| PersonaError::Io("malformed sync device list".to_string()))?;
+        let mut devices = Vec::with_capacity(body.devices.len());
+        for wire in body.devices {
+            let id = Uuid::parse_str(&wire.id).map_err(|_| {
+                PersonaError::Io("malformed device id in sync device list".to_string())
+            })?;
+            let public_key = decode_b32(&wire.public_key, "device public_key")?;
+            devices.push(SyncDevice {
+                id,
+                device_name: wire.device_name,
+                public_key,
+                created_at: wire.created_at,
+            });
+        }
+        Ok(devices)
+    }
+
+    /// 吊销设备（删登记与其信封；幂等，204）。已知的 group key 不可追溯
+    /// 撤销（DR-3 诚实边界）——提示文案归调用方。
+    pub async fn delete_device(&self, device_id: Uuid) -> Result<()> {
+        let resp = self
+            .http
+            .request(reqwest::Method::DELETE, &format!("/devices/{device_id}"))
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync revoke device failed: {e}")))?;
+        SyncHttp::ensure_success(resp, "revoke device").await?;
+        Ok(())
+    }
+
+    /// 取全部设备信封。调用方只认自己 device_id 的那条；未授权设备拿到
+    /// 别人的信封也拆不开（fail-closed）。
+    pub async fn group_keys(&self) -> Result<Vec<SyncGroupKeyEntry>> {
+        let resp = self
+            .http
+            .request(reqwest::Method::GET, "/group-keys")
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync get group keys failed: {e}")))?;
+        let resp = SyncHttp::ensure_success(resp, "get group keys").await?;
+        let body: WireGroupKeys = resp
+            .json()
+            .await
+            .map_err(|_| PersonaError::Io("malformed sync group keys".to_string()))?;
+        let mut keys = Vec::with_capacity(body.keys.len());
+        for wire in body.keys {
+            let device_id = Uuid::parse_str(&wire.device_id).map_err(|_| {
+                PersonaError::Io("malformed device_id in sync group keys".to_string())
+            })?;
+            let envelope = B64.decode(&wire.envelope).map_err(|_| {
+                PersonaError::Io("malformed envelope in sync group keys (bad base64)".to_string())
+            })?;
+            keys.push(SyncGroupKeyEntry {
+                device_id,
+                envelope,
+                sealed_by: wire.sealed_by,
+                created_at: wire.created_at,
+            });
+        }
+        Ok(keys)
+    }
+
+    /// 为设备上传 group key 信封（授权动作）。信封必须已登记设备的公钥封出
+    /// （服务器校验 80 字节 + 设备存在；挂幽灵设备 fail-closed）。
+    pub async fn put_group_key(&self, device_id: Uuid, envelope: &[u8]) -> Result<()> {
+        let resp = self
+            .http
+            .request(reqwest::Method::PUT, "/group-keys")
+            .json(&WirePutGroupKey {
+                device_id: device_id.to_string(),
+                envelope: &B64.encode(envelope),
+            })
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync put group key failed: {e}")))?;
+        SyncHttp::ensure_success(resp, "put group key").await?;
+        Ok(())
     }
 }
 
