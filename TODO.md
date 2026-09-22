@@ -472,7 +472,8 @@ Server & Sync (optional)
         宿主零改动；THREAT_MODEL 已登记）
   - [ ] follow-up：mobile Flutter 工程/Dart 绑定（需 Flutter SDK 与设备
         验证；桥方向手写 FFI vs frb v2 待工程落地时定）、持久 outbox/回补
-- [ ] Connect-like local-first secrets automation endpoint
+- [x] Connect-like local-first secrets automation endpoint（2026-09-22 阶段
+      0–4 全部落地，见下方子项）
   - [x] 设计稿（2026-09-22 `docs/CONNECT_AUTOMATION_DESIGN.md` 阶段 0）：
         五决策拍板——宿主进程内嵌监听（桌面 A1 先行/CLI serve A2 同核，否决
         独立进程/容器）、pconn\_ scope token（一次性展示只存哈希、identity/
