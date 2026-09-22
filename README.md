@@ -158,6 +158,12 @@ persona password generate --pronounceable --length 18 --set lowercase --set uppe
 # TUI dashboard (ratatui + crossterm)
 persona tui --identity alice   # optional: preselect identity
 q to quit, r to reload, ↑/↓ or j/k to navigate
+
+# Connect local automation (secrets automation): read-only HTTP API on
+# 127.0.0.1 for scripts/CI — token plaintext is shown exactly once
+persona connect token create --label "my CI script"
+persona connect serve
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items
 ```
 
 ### Export / Import (Compression + Encryption)

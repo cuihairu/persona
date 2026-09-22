@@ -494,10 +494,15 @@ Server & Sync (optional)
         列表/创建弹窗 scope 选择/明文一次性展示；REAUTH_REQUIRED →
         ReauthModal → 原表单意图重放）+ THREAT_MODEL「Connect 本机自动化
         端点」章写实；jest 8 用例 + desktop 163 测试 + core connect 测试
-  - [ ] 阶段 3 CLI：`persona connect token create/list/revoke` +
-        `persona connect serve`（非交互沿用 --passphrase-env 惯例）
-  - [ ] 阶段 4 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速
-        上手（curl 示例）
+  - [x] 阶段 3 CLI（2026-09-22）：`persona connect token create/list/revoke`
+        （label 校验、--identity 按名解析、--type snake_case 词汇 fail-fast、
+        缺省 = 全部；指纹或 UUID 吊销幂等且明示 no-op；明文一次性展示）+
+        `persona connect serve`（前台 + Ctrl-C、--port/--passphrase-env）+
+        内嵌测试 6 用例（ENV_LOCK 串行 + 裸 TCP health 冒烟；桌面类型清单
+        补 certificate 缺口并加断言）
+  - [x] 阶段 4 文档收口（2026-09-22）：STORAGE_AND_SYNC「本机自动化
+        （Connect API）」节（两步上手 + curl 示例 + 诚实边界）+ 根 README
+        Getting Started connect 示例 + GAP 条目收口
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
   - [x] 阶段 2 核心（2026-09-22，批 1–4）：device envelope（DR-1，X25519
         `persona-dev-env-1` 信封）+ group key 层级；oplog 结构 + LWW/冲突双

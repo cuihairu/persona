@@ -172,6 +172,51 @@ persona backup push
   一台设备（加密 sidecar 随身带走），回来时口令恢复——多设备场景下
   控制单台设备数据暴露面的工具。
 
+## 本机自动化（Connect API）
+
+让本机的脚本 / CI / 命令行工具**只读**读取 vault 条目的 HTTP 接口。默认
+关闭；开启后只监听 `127.0.0.1`（端口由系统分配），请求永不离开本机。
+详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)
+与 [THREAT_MODEL](./THREAT_MODEL.md#connect-本机自动化端点127001-http2026-09-secrets-automation)。
+
+**两步用起来：**
+
+1. 创建 token（明文只展示一次，丢了只能吊销重建）：
+
+   ```bash
+   # 桌面：设置 → 安全 → Connect 本机自动化 → 创建 Token
+   # CLI（默认授权全部身份的全部可授权类型，只读）：
+   persona connect token create --label "我的 CI 脚本"
+   # 收窄 scope（给了限定就收窄，缺省 = 全部）：
+   persona connect token create --label "deploy" --identity work --type password --type api_key
+   ```
+
+2. 启动监听（前台进程，Ctrl-C 退出；桌面版在设置里开关）：
+
+   ```bash
+   persona connect serve            # 或 --port 8737 固定端口
+   ```
+
+**curl 快速上手**（`$TOKEN` 为创建时保存的 `pconn_…` 明文，`$PORT` 见
+serve 启动输出）：
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/health
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/identities
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items/<id>/totp
+```
+
+边界（诚实版）：
+
+- **只读**。写路径不存在；scope 只能收窄不能提权；passkey / wallet /
+  SSH 密钥 / 自定义类型**永远不可**经此接口授权。
+- token 只存 SHA-256 哈希，列表只见指纹；`persona connect token revoke`
+  （id 或指纹均可）即时生效、幂等。
+- 限速 120 请求/分钟；vault 锁定时返回 503（锁定不消耗限额）。
+- 防线只对本机浏览器侧攻击（恶意网页）有效——**不要**把 token 交给浏览
+  器扩展或任何网页可达的存储；本机恶意进程本来就在信任边界之外。
+
 ## 故障后果速查
 
 | 场景                 | 后果                 | 能否补救                                         |
