@@ -272,6 +272,10 @@ function renderSuggestions(items, tabId, origin, defaults) {
     }
     for (const item of items) {
         const kind = (item.credential_type ?? 'password');
+        if (kind === 'bank_card') {
+            renderCardRow(item);
+            continue;
+        }
         const isDefault = kind === 'totp'
             ? defaults?.totpItemId === item.item_id
             : defaults?.passwordItemId === item.item_id;
@@ -337,6 +341,61 @@ function renderSuggestions(items, tabId, origin, defaults) {
         suggestionsEl.appendChild(row);
     }
 }
+/**
+ * Bank-card suggestion row. Card filling is URL-independent (cards have no
+ * canonical site), so actions are: fill the card on the page, or copy a
+ * field — including CVV, which is copy-only by design (never filled).
+ */
+function renderCardRow(item) {
+    if (!suggestionsEl)
+        return;
+    const row = document.createElement('div');
+    row.style.cssText =
+        'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
+    const title = document.createElement('div');
+    title.style.cssText = 'font-weight:600;color:#111827;';
+    title.textContent = item.title ?? item.item_id;
+    const meta = document.createElement('div');
+    meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
+    meta.textContent = `BANK CARD • match ${item.match_strength ?? '?'}`;
+    const actions = document.createElement('div');
+    actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
+    const fillBtn = document.createElement('button');
+    fillBtn.className = 'secondary';
+    fillBtn.style.width = 'auto';
+    fillBtn.textContent = 'Fill card';
+    fillBtn.addEventListener('click', async () => {
+        const active = await getActiveTabOrigin();
+        if (!active)
+            return;
+        await chrome.tabs
+            .sendMessage(active.tabId, { type: 'persona_popup_fill_card', itemId: item.item_id })
+            .catch(() => null);
+        window.close();
+    });
+    actions.appendChild(fillBtn);
+    for (const [label, field] of [
+        ['Copy number', 'card_number'],
+        ['Copy expiry', 'expiry_date'],
+        ['Copy CVV', 'cvv']
+    ]) {
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'secondary';
+        copyBtn.style.width = 'auto';
+        copyBtn.textContent = label;
+        copyBtn.addEventListener('click', async () => {
+            const active = await getActiveTabOrigin();
+            if (!active)
+                return;
+            await requestCopy(active.origin, item.item_id, field);
+        });
+        actions.appendChild(copyBtn);
+    }
+    row.appendChild(title);
+    row.appendChild(meta);
+    row.appendChild(actions);
+    suggestionsEl.appendChild(row);
+}
 async function refreshAutofill() {
     if (!autofillStatusEl)
         return;
@@ -354,9 +413,15 @@ async function refreshAutofill() {
         renderSuggestions([], active.tabId, active.origin, null);
         return;
     }
+    // Card suggestions ride a second request (form_type=card): every active
+    // bank card, independent of the page URL. Failures just drop the section.
+    const cardResp = await chrome.runtime
+        .sendMessage({ type: 'persona_get_suggestions', origin: active.origin, formType: 'card' })
+        .catch(() => null);
+    const cardItems = cardResp?.success ? cardResp?.data?.items ?? [] : [];
     const items = resp?.data?.items ?? resp?.data?.payload?.items ?? resp?.data?.items;
     const defaults = await getAutofillDefaultsForOrigin(active.origin).catch(() => null);
-    renderSuggestions(items ?? [], active.tabId, active.origin, defaults);
+    renderSuggestions([...(items ?? []), ...cardItems], active.tabId, active.origin, defaults);
 }
 async function requestCopy(origin, itemId, field) {
     if (!autofillStatusEl)

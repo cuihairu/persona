@@ -1,6 +1,29 @@
 const USERNAME_HINTS = ['user', 'login', 'identifier'];
 const EMAIL_HINTS = ['email', 'mail'];
 const TOTP_HINTS = ['otp', 'totp', '2fa', 'mfa', 'token', 'one-time', 'onetime', 'verification', 'auth', 'security code'];
+// Payment-card detection. Note the ordering constraint: card classification
+// must run BEFORE isLikelyTotp — cc-csc (maxLength 3-4) and cc-exp (4-5) are
+// numeric and would otherwise be swallowed by the OTP length heuristics.
+const CARD_AUTOCOMPLETE = {
+    'cc-number': 'card_number',
+    'cc-name': 'card_name',
+    'cc-given-name': 'card_name',
+    'cc-additional-name': 'card_name',
+    'cc-family-name': 'card_name',
+    'cc-exp': 'card_expiry',
+    'cc-exp-month': 'card_expiry',
+    'cc-exp-year': 'card_expiry',
+    'cc-csc': 'card_cvv'
+};
+// Hints are matched against the de-symbolized haystack (spaces/_/- removed),
+// so each entry below is written in compact form. Deliberately conservative:
+// no bare 'pan', no 'security code'/'verification code' (those stay TOTP
+// hints — card forms and login 2FA share those labels and changing them
+// would regress TOTP detection).
+const CARD_CVV_HINTS = ['cvv', 'cvv2', 'cvc', 'csc', 'cardverification'];
+const CARD_EXPIRY_HINTS = ['expiry', 'expiration', 'expdate', 'expmonth', 'expyear', 'ccexp', 'validuntil', 'validthru'];
+const CARD_NAME_HINTS = ['cardholder', 'nameoncard', 'cardname', 'ccname'];
+const CARD_NUMBER_HINTS = ['cardnumber', 'cardnum', 'ccnumber', 'ccnum'];
 function isVisibleInput(input) {
     if (input.disabled)
         return false;
@@ -38,12 +61,43 @@ function isLikelyTotp(input) {
         return true;
     return false;
 }
+function classifyCardField(input) {
+    const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
+    if (autocomplete && CARD_AUTOCOMPLETE[autocomplete])
+        return CARD_AUTOCOMPLETE[autocomplete];
+    const raw = [
+        input.name,
+        input.id,
+        input.placeholder,
+        input.getAttribute('aria-label'),
+        input.getAttribute('data-testid')
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+    if (!raw)
+        return null;
+    const compact = raw.replace(/[\s_-]/g, '');
+    if (CARD_CVV_HINTS.some((hint) => compact.includes(hint)))
+        return 'card_cvv';
+    if (CARD_EXPIRY_HINTS.some((hint) => compact.includes(hint)))
+        return 'card_expiry';
+    if (CARD_NAME_HINTS.some((hint) => compact.includes(hint)))
+        return 'card_name';
+    if (CARD_NUMBER_HINTS.some((hint) => compact.includes(hint)))
+        return 'card_number';
+    return null;
+}
 function classifyField(input) {
     const type = input.type.toLowerCase();
     if (type === 'password')
         return 'password';
     if (type === 'email')
         return 'email';
+    // Card first: cc-csc/cc-exp shapes would be swallowed by isLikelyTotp.
+    const cardKind = classifyCardField(input);
+    if (cardKind)
+        return cardKind;
     if (isLikelyTotp(input))
         return 'totp';
     if (type === 'text' || type === 'search' || type === 'tel') {
@@ -84,6 +138,12 @@ function scoreForm(fields) {
         if (field.type === 'username' || field.type === 'email')
             score += 2;
         if (field.type === 'totp')
+            score += 3;
+        if (field.type === 'card_number')
+            score += 5;
+        if (field.type === 'card_name' || field.type === 'card_expiry')
+            score += 2;
+        if (field.type === 'card_cvv')
             score += 3;
     });
     return score;
@@ -158,7 +218,9 @@ export function scanForms(root = document) {
         if (input.form)
             continue;
         const kind = classifyField(input);
-        if (kind !== 'password' && kind !== 'totp')
+        // Card checkout pages have no password field: card_number seeds the
+        // virtual-form grouping just like password/totp do for logins.
+        if (kind !== 'password' && kind !== 'totp' && kind !== 'card_number')
             continue;
         const groupRoot = findVirtualFormRoot(input);
         if (seenRoots.has(groupRoot))

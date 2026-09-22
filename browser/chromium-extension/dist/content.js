@@ -45,6 +45,12 @@ function init() {
             void requestFill(message.itemId);
             sendResponse({ ok: true });
         }
+        // Card fill rides the same request_fill round-trip as logins; the
+        // CLI marks the response with a `card` payload and no CVV.
+        if (message?.type === 'persona_popup_fill_card') {
+            void requestFill(message.itemId);
+            sendResponse({ ok: true });
+        }
         if (message?.type === 'persona_popup_fill_totp') {
             void requestTotp(message.itemId);
             sendResponse({ ok: true });
@@ -649,6 +655,10 @@ function selectFormForTarget(targetInput) {
 }
 // Fill credential into form
 function fillCredential(credential, targetInput) {
+    if (credential.card) {
+        fillCard(credential.card);
+        return;
+    }
     const form = selectFormForTarget(targetInput);
     if (!form) {
         console.warn('[Persona] No form detected');
@@ -676,6 +686,59 @@ function fillCredential(credential, targetInput) {
     }
     showNotification('Credentials filled successfully!', 'success');
     void maybeChainFillTotp();
+}
+/** Count payment-card fields in a detected form (used to pick the checkout form). */
+function cardFieldCount(form) {
+    return form.fields.filter((field) => field.type.startsWith('card_')).length;
+}
+/**
+ * Fill card fields on the page. CVV is deliberately not auto-filled: the
+ * bridge never returns it, and injecting it into page DOM would expose it to
+ * page scripts — CVV stays a copy-only value end to end.
+ */
+function fillCard(card) {
+    if (!currentForms.length) {
+        console.warn('[Persona] No form detected');
+        showNotification('No form detected on this page', 'error');
+        return;
+    }
+    // Checkout pages can also host login forms: target the form with the
+    // most card fields.
+    const form = [...currentForms]
+        .sort((a, b) => cardFieldCount(b) - cardFieldCount(a))
+        .find((candidate) => cardFieldCount(candidate) > 0);
+    if (!form) {
+        console.warn('[Persona] No card form detected');
+        showNotification('No card form detected on this page', 'error');
+        return;
+    }
+    // Mapping of bridge card payload keys → scanned field kinds. cvv has no
+    // entry on purpose (see above).
+    const mapping = [
+        ['card_number', 'card_number'],
+        ['cardholder_name', 'card_name'],
+        ['expiry_date', 'card_expiry']
+    ];
+    let filled = 0;
+    for (const [dataKey, fieldKind] of mapping) {
+        const value = card[dataKey];
+        if (!value)
+            continue;
+        const field = form.fields.find((candidate) => candidate.type === fieldKind);
+        if (!field)
+            continue;
+        const input = document.querySelector(field.selector);
+        if (input && !hasValue(input)) {
+            fillInput(input, value);
+            filled += 1;
+        }
+    }
+    if (filled > 0) {
+        showNotification('Card filled (CVV not auto-filled)', 'success');
+    }
+    else {
+        showNotification('No matching card fields to fill', 'error');
+    }
 }
 /** 登录填充成功后同页若有 OTP 框则链式填 2FA（合并登录+OTP 表单场景）。 */
 async function maybeChainFillTotp() {
