@@ -367,6 +367,17 @@ Server & Sync (optional)
   解锁；口令 `--passphrase-env VAR`→PERSONA_PAYLOAD_PASSPHRASE→
   交互三级；restore 确认在前口令在后、staged 临时文件复验成功才
   换库、旧库留 .bak、附件缺失提示）。
+  手工验收（2026-09-22，真 server + CLI 端到端，隔离 workspace）：
+  init/add → push（201，device=laptop 由 token 推导）→ list →
+  pull（sha256 对 ETag 复验通过）→ 库加第二条 → restore from
+  server（.bak 保留 2 条、恢复库回 1 条、user_auth 验证子在、
+  CLI 解锁可用）→ delete + 幂等 delete；服务器目录只见
+  {uuid}.persenc 密文。已知限制：PERSENC1 随机 salt+nonce 使同
+  明文每次加密密文必不同 → 服务器「同设备最新版本 sha256 去重」
+  对 CLI fresh push 永不触发（仅防同密文重试），每次 push 产生新
+  版本、由 PERSONA_SERVER_BACKUP_MAX_VERSIONS 封顶；push 失败重试
+  会留两个版本。follow-up（可选）：客户端传明文快照指纹供内容级
+  去重，或 push 前比对 list 结果提示"无变化"。
 - [x] core::events::Emitter 客户端上报器（批量+重试）
   ——512b2495 wire 镜像 + 字节口径预校验（毒丸客户端逐条丢弃，防
   server 全有或全无整批 422；action 走 Display 非 serde，externally
