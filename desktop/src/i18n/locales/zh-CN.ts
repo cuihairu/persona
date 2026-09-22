@@ -192,6 +192,7 @@ export default {
       typeNote: '安全笔记',
       typeBankCard: '银行卡',
       typeServerConfig: '服务器配置',
+      typeCertificate: '证书',
       typeGameAccount: '游戏账号',
       typeIdentity: '身份信息',
       typeSoftwareLicense: '软件许可',

@@ -25,6 +25,7 @@ const CONNECT_ITEM_TYPES: { value: string; label: string }[] = [
   { value: 'note', label: 'settings.connect.typeNote' },
   { value: 'bank_card', label: 'settings.connect.typeBankCard' },
   { value: 'server_config', label: 'settings.connect.typeServerConfig' },
+  { value: 'certificate', label: 'settings.connect.typeCertificate' },
   { value: 'game_account', label: 'settings.connect.typeGameAccount' },
   { value: 'identity', label: 'settings.connect.typeIdentity' },
   { value: 'software_license', label: 'settings.connect.typeSoftwareLicense' },

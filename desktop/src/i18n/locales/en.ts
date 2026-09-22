@@ -199,6 +199,7 @@ export default {
       typeNote: 'Secure note',
       typeBankCard: 'Bank card',
       typeServerConfig: 'Server config',
+      typeCertificate: 'Certificate',
       typeGameAccount: 'Game account',
       typeIdentity: 'Identity',
       typeSoftwareLicense: 'Software license',

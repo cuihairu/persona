@@ -243,6 +243,10 @@ describe('components/ConnectAutomationSection', () => {
     expect(mockCreate).not.toHaveBeenCalled();
 
     // 勾上后放行，scope 携带指定身份
+    // 类型清单须含全部 10 个可授权类型（曾漏 certificate 导致证书条目无法授权）
+    fireEvent.click(screen.getByTestId('connect-types-pick'));
+    expect(screen.getByTestId('connect-type-certificate')).toBeInTheDocument();
+    expect(screen.getByTestId('connect-type-software_license')).toBeInTheDocument();
     mockCreate.mockResolvedValue({
       success: true,
       data: { token: 'pconn_BBBB', info: { ...activeToken, id: 'tok-new' } },
