@@ -326,7 +326,11 @@ mod tests {
     async fn identity_count(path: &std::path::Path) -> usize {
         let db = Database::from_file(path).await.unwrap();
         let repo = IdentityRepository::new(db.clone());
-        repo.find_all().await.unwrap().len()
+        let count = repo.find_all().await.unwrap().len();
+        // 显式关闭：drop 只把池交给后台回收，Windows 上句柄可能仍短暂
+        // 持有，紧随其后的 restore rename 会撞 os error 5（Access denied）。
+        db.close().await;
+        count
     }
 
     #[test]
