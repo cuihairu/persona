@@ -463,9 +463,15 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{resp}");
         let server_proof = B64.decode(resp["server_proof"].as_str().unwrap()).unwrap();
         let session_key = proof.verify_server(&server_proof).unwrap();
-        // premaster 原始字节 = 群模数字节长度(4096-bit group → 512B);
+        // premaster 理论长度 = 群模数字节长度(4096-bit group → 512B),但
+        // srp crate 的大数输出去前导零:共享秘密首字节恰为 0(概率 1/256)
+        // 时是 511B——客户端/服务器拿到同一去零字节,密钥材料不受影响;
         // 用作密钥材料前由调用方再过 KDF(设计稿:信封加密另走 KDF 链)
-        assert_eq!(session_key.len(), 512);
+        assert!((1..=512).contains(&session_key.len()));
+        assert!(
+            session_key.iter().any(|&b| b != 0),
+            "session key must not be all-zero"
+        );
     }
 
     #[tokio::test]
