@@ -117,6 +117,22 @@ struct PairingFinalizePayload {
 #[serde(rename_all = "snake_case")]
 struct SuggestionsPayload {
     origin: String,
+    /// What kind of form the page scanned: "login" (default) or "card".
+    /// The extension already sends this; older payloads without it fall
+    /// back to "login" so existing behavior is unchanged.
+    #[serde(default)]
+    form_type: Option<String>,
+}
+
+/// Card fields safe for in-page fill. Deliberately excludes CVV: fill
+/// targets page DOM inputs that any page script can read; CVV is copy-only
+/// (clipboard) — see BRIDGE_PROTOCOL.md.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct CardFillData {
+    card_number: String,
+    cardholder_name: String,
+    expiry_date: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,6 +168,10 @@ struct FillPayload {
 struct FillResponse {
     username: Option<String>,
     password: Option<String>,
+    /// Present only for BankCard fills; omitted (not null) for logins so the
+    /// login response shape is byte-identical to before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    card: Option<CardFillData>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -423,7 +443,8 @@ async fn handle_request(
             let parsed: SuggestionsPayload = serde_json::from_value(req.payload)
                 .context("invalid payload for get_suggestions")?;
             let host = origin_to_host(&parsed.origin)?;
-            let items = get_credential_suggestions(db_path, &host).await?;
+            let form_type = parsed.form_type.as_deref().unwrap_or("login");
+            let items = get_credential_suggestions(db_path, &host, form_type).await?;
             let payload = serde_json::to_value(SuggestionsResponse {
                 items,
                 suggesting_for: host,
@@ -473,7 +494,12 @@ async fn handle_request(
                     ));
                 }
             }
-            if cred.credential_type != CredentialType::Password {
+            // Password and BankCard credentials are fillable. Bank cards
+            // deliberately skip origin binding below: cred.url is None for
+            // cards and validate_origin_binding already allows that.
+            if cred.credential_type != CredentialType::Password
+                && cred.credential_type != CredentialType::BankCard
+            {
                 return Err(anyhow!("unsupported_credential_type"));
             }
 
@@ -496,14 +522,28 @@ async fn handle_request(
                 CredentialData::Password(p) => FillResponse {
                     username: cred.username.clone().or(p.email.clone()),
                     password: Some(p.password),
+                    card: None,
+                },
+                // CVV is intentionally absent: fill targets page DOM inputs
+                // readable by page scripts; CVV is copy-only (clipboard).
+                CredentialData::BankCard(c) => FillResponse {
+                    username: None,
+                    password: None,
+                    card: Some(CardFillData {
+                        card_number: c.card_number,
+                        cardholder_name: c.cardholder_name,
+                        expiry_date: c.expiry_date,
+                    }),
                 },
                 CredentialData::Raw(_) => FillResponse {
                     username: cred.username.clone(),
                     password: None,
+                    card: None,
                 },
                 _ => FillResponse {
                     username: cred.username.clone(),
                     password: None,
+                    card: None,
                 },
             };
 
@@ -701,6 +741,33 @@ async fn handle_request(
                         }
                         _ => return Err(anyhow!("unsupported_credential_type")),
                     }
+                }
+                // Card fields are copy-only. There is deliberately no card
+                // branch under request_fill's `card` payload for CVV: fill
+                // targets page DOM (readable by page scripts), copy targets
+                // the clipboard — a 60s-window value the user pastes by hand.
+                "card_number" | "cardholder_name" | "expiry_date" | "cvv" => {
+                    if cred.credential_type != CredentialType::BankCard {
+                        return Err(anyhow!("unsupported_credential_type"));
+                    }
+                    let data = service
+                        .get_credential_data(&item_id)
+                        .await?
+                        .ok_or_else(|| anyhow!("not_found"))?;
+                    let card = match data {
+                        CredentialData::BankCard(c) => c,
+                        _ => return Err(anyhow!("unsupported_credential_type")),
+                    };
+                    let text = match field.as_str() {
+                        "card_number" => card.card_number,
+                        "cardholder_name" => card.cardholder_name,
+                        "expiry_date" => card.expiry_date,
+                        _ => card.cvv,
+                    };
+                    if text.trim().is_empty() {
+                        return Err(anyhow!("not_found: field '{field}' is empty"));
+                    }
+                    text
                 }
                 other => return Err(anyhow!("invalid_payload: unknown field '{other}'")),
             };
@@ -1586,7 +1653,11 @@ async fn compute_status(db_path: &Path) -> Result<(bool, Option<String>)> {
     Ok((locked, active_identity))
 }
 
-async fn get_credential_suggestions(db_path: &Path, host: &str) -> Result<Vec<SuggestionItem>> {
+async fn get_credential_suggestions(
+    db_path: &Path,
+    host: &str,
+    form_type: &str,
+) -> Result<Vec<SuggestionItem>> {
     let db = open_db(db_path).await?;
     let active_identity_id = get_active_identity_id(&db).await;
     let repo = CredentialRepository::new(db);
@@ -1595,9 +1666,27 @@ async fn get_credential_suggestions(db_path: &Path, host: &str) -> Result<Vec<Su
         None => repo.find_all().await?,
     };
 
+    // Card fills intentionally skip URL matching: a bank card has no canonical
+    // site (checkout pages differ per merchant), so every active BankCard is a
+    // candidate and the user picks one in the popup — same as 1Password.
+    let want_cards = form_type.eq_ignore_ascii_case("card");
+
     let mut out = Vec::new();
     for cred in all {
         if !cred.is_active {
+            continue;
+        }
+        if want_cards {
+            if cred.credential_type != CredentialType::BankCard {
+                continue;
+            }
+            out.push(SuggestionItem {
+                item_id: cred.id.to_string(),
+                title: cred.name,
+                username_hint: None,
+                match_strength: 100,
+                credential_type: "bank_card".to_string(),
+            });
             continue;
         }
         let kind = match cred.credential_type {
@@ -1631,8 +1720,9 @@ async fn get_credential_suggestions(db_path: &Path, host: &str) -> Result<Vec<Su
 
     debug!(
         host = %host,
+        form_type = %form_type,
         suggestions = out.len(),
-        "password suggestions retrieved"
+        "credential suggestions retrieved"
     );
 
     Ok(out)
@@ -3286,6 +3376,47 @@ pub(crate) mod tests {
         cred.id
     }
 
+    /// Seed a BankCard credential. `cvv` may be empty to exercise the
+    /// copy-empty-field rejection. Bank cards carry no URL (they are not
+    /// bound to a site), matching how `import_1pux` and the desktop create
+    /// them; pass `url` to override for origin-binding tests.
+    async fn seed_bank_card_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        cvv: &str,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::{BankCardData, SecurityLevel};
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::BankCard,
+                SecurityLevel::High,
+                &CredentialData::BankCard(BankCardData {
+                    card_number: "4111 1111 1111 1111".to_string(),
+                    cardholder_name: "ALICE SMITH".to_string(),
+                    expiry_date: "12/29".to_string(),
+                    cvv: cvv.to_string(),
+                    bank_name: "Example Bank".to_string(),
+                    card_type: "visa".to_string(),
+                }),
+            )
+            .await
+            .unwrap();
+        cred.url = None;
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
     /// Seed an API-key credential (a type the bridge never suggests or fills).
     async fn seed_api_key_credential(
         db_path: &Path,
@@ -4527,6 +4658,270 @@ pub(crate) mod tests {
         .expect_err("binding-based provider must not generate offline codes");
         assert!(
             err.to_string().contains("Unsupported game token provider"),
+            "got: {err}"
+        );
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_get_suggestions_form_type_card_lists_bank_cards() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let card_a = seed_bank_card_credential(&db_path, identity_id, "Personal card", "123").await;
+        let card_b = seed_bank_card_credential(&db_path, identity_id, "Work card", "456").await;
+        let _pw = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Shop login",
+            Some("https://shop.example.com"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+
+        // form_type=card: every active BankCard, no URL filtering, password
+        // credentials excluded.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_suggestions",
+                serde_json::json!({
+                    "origin": "https://checkout.anywhere.example",
+                    "form_type": "card"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "card suggestions must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "suggestions_response");
+        let payload = resp.payload.unwrap();
+        let items = payload["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2, "both active cards must be listed");
+        assert_eq!(items[0]["credential_type"], "bank_card");
+        assert_eq!(items[0]["match_strength"], 100);
+        let listed: Vec<&str> = items
+            .iter()
+            .map(|i| i["item_id"].as_str().unwrap())
+            .collect();
+        assert!(listed.contains(&card_a.to_string().as_str()));
+        assert!(listed.contains(&card_b.to_string().as_str()));
+
+        // Default (no form_type) stays login-only: the password matches the
+        // origin, the cards never appear.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_suggestions",
+                serde_json::json!({ "origin": "https://shop.example.com" }),
+            ),
+        )
+        .await
+        .unwrap();
+        let payload = resp.payload.unwrap();
+        let items = payload["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "default must remain login-only");
+        assert_eq!(items[0]["credential_type"], "password");
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_request_fill_bank_card_returns_card_without_cvv() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let card_id =
+            seed_bank_card_credential(&db_path, identity_id, "Personal card", "123").await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Shop login",
+            Some("https://shop.example.com"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+
+        // Cards carry no URL: any checkout origin must be accepted.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://checkout.anywhere.example",
+                    "item_id": card_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "bank card fill must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "fill_response");
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["card"]["card_number"], "4111 1111 1111 1111");
+        assert_eq!(payload["card"]["cardholder_name"], "ALICE SMITH");
+        assert_eq!(payload["card"]["expiry_date"], "12/29");
+        // CVV never leaves the bridge on the fill path.
+        assert!(payload.get("cvv").is_none(), "no top-level cvv");
+        assert!(
+            payload["card"].get("cvv").is_none(),
+            "no cvv inside card object"
+        );
+        assert_eq!(payload["username"], serde_json::Value::Null);
+        assert_eq!(payload["password"], serde_json::Value::Null);
+
+        // Login fills keep the exact pre-card response shape: no "card" key.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://shop.example.com",
+                    "item_id": pw_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["password"], "hunter2");
+        let mut keys: Vec<&str> = payload
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["password", "username"],
+            "login fill response shape must not gain a card key"
+        );
+
+        // A non-fillable type stays rejected.
+        let api_id = seed_api_key_credential(&db_path, identity_id, "API key", None).await;
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "request_fill",
+                serde_json::json!({
+                    "origin": "https://shop.example.com",
+                    "item_id": api_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("api key fill must stay rejected");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_copy_bank_card_fields_and_rejections() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        let clip_ok = clipboard_available();
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let card_id =
+            seed_bank_card_credential(&db_path, identity_id, "Personal card", "123").await;
+        let blank_id = seed_bank_card_credential(&db_path, identity_id, "Blank cvv card", "").await;
+        let pw_id = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Shop login",
+            Some("https://shop.example.com"),
+            Some("alice@example.com"),
+            "hunter2",
+        )
+        .await;
+
+        // All four card fields are copyable (cards have no URL, so any
+        // origin passes origin binding).
+        for field in ["card_number", "cardholder_name", "expiry_date", "cvv"] {
+            let result = handle_request(
+                &db_path,
+                &state_dir,
+                request(
+                    "copy",
+                    serde_json::json!({
+                        "origin": "https://checkout.anywhere.example",
+                        "item_id": card_id.to_string(),
+                        "field": field,
+                        "user_gesture": true
+                    }),
+                ),
+            )
+            .await;
+            assert_copy_outcome(result, clip_ok);
+        }
+
+        // Empty card field -> not_found, not a silent empty clipboard.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://checkout.anywhere.example",
+                    "item_id": blank_id.to_string(),
+                    "field": "cvv",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("copying an empty field must fail");
+        assert!(err.to_string().contains("is empty"), "got: {err}");
+
+        // Card fields on a password credential -> unsupported type.
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "copy",
+                serde_json::json!({
+                    "origin": "https://shop.example.com",
+                    "item_id": pw_id.to_string(),
+                    "field": "cvv",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("cvv copy on a non-card must fail");
+        assert!(
+            err.to_string().contains("unsupported_credential_type"),
             "got: {err}"
         );
 

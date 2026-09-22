@@ -270,6 +270,14 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 | 80             | 域名包含匹配 |
 | 60             | 顶级域名匹配 |
 
+**`form_type` 参数（2026-09 起）：**
+
+- `"login"`（默认，缺省时回退）：返回 password/totp 建议并按 URL 匹配强度过滤。
+- `"card"`：返回当前 workspace 的**全部 active BankCard**，不做 URL 过滤
+  （卡没有规范归属站点，结账页因商户而异），`match_strength` 恒为 100，
+  `credential_type` 为 `"bank_card"`，`username_hint` 为 `null`；由用户在
+  弹窗里自行选择。
+
 ### 6. request_fill - 请求填充
 
 请求特定凭证的实际值用于填充。
@@ -299,6 +307,30 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   }
 }
 ```
+
+**BankCard 填充（2026-09 起）：** BankCard 凭据也可 `request_fill`（需要
+`user_gesture`；卡无 URL，不做 origin 绑定校验）。响应负载的 `card` 字段
+仅在卡填充时出现，登录填充的响应形状不变：
+
+```json
+{
+  "type": "fill_response",
+  "ok": true,
+  "payload": {
+    "username": null,
+    "password": null,
+    "card": {
+      "card_number": "4111 1111 1111 1111",
+      "cardholder_name": "ALICE SMITH",
+      "expiry_date": "12/29"
+    }
+  }
+}
+```
+
+> 安全登记：**CVV 永远不出现在 `request_fill` 响应里。** fill 的去向是页面
+> DOM 输入框，同页任意脚本可读；CVV 仅支持 `copy`（剪贴板路径，30s 自动
+> 清除），由用户手动粘贴。扩展侧同样不得把 CVV 注入页内元素。
 
 **错误码：**
 
@@ -371,6 +403,11 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   }
 }
 ```
+
+**`field` 取值：** `username`、`password`、`totp`，以及 BankCard 的
+`card_number` / `cardholder_name` / `expiry_date` / `cvv`（2026-09 起）。
+卡字段要求凭据类型为 BankCard 且对应字段非空（空串返回 `not_found`）；
+卡无 URL，origin 绑定对卡一律放行。
 
 ### 9. passkey_list - 列出 Passkey
 
