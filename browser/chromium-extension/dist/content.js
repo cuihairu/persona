@@ -2,10 +2,14 @@ import { observeForms } from './formScanner';
 import { evaluateDomain } from './domainPolicy';
 import { DEFAULT_AUTOFILL_SETTINGS, getAutofillSettings, onAutofillSettingsChanged } from './settings';
 import { getAutofillDefaultsForOrigin, onAutofillDefaultsChanged, setAutofillDefaultsForOrigin } from './autofillDefaults';
+import { freshTotpWaitMs, pickSuggestion, shouldWaitForFreshTotp, totpCopiedNotice, totpFilledNotice } from './autofillUx';
+import { mountPersonaUi } from './shadowUi';
 // Current page state
 let currentForms = [];
 let currentSuggestions = [];
 let autofillOverlay = null;
+// Inline icon lives in the shadow root; page-side class lookups can't see it.
+let inlineIcon = null;
 let currentSettings = DEFAULT_AUTOFILL_SETTINGS;
 const POLICY_MESSAGE_CACHE_MS = 10000;
 let cachedAssessment = null;
@@ -152,19 +156,10 @@ function isFillableInput(input) {
         return false;
     return true;
 }
-async function selectSuggestionWithDefault(mode, minStrength) {
-    const filtered = currentSuggestions
-        .filter((s) => (s.credential_type ?? 'password') === mode)
-        .filter((s) => (typeof s.match_strength === 'number' ? s.match_strength : 0) >= minStrength)
-        .sort((a, b) => b.match_strength - a.match_strength);
-    if (filtered.length === 0)
-        return null;
-    if (filtered.length === 1)
-        return filtered[0];
+/** 唯一命中/有默认则返回；多候选无默认返回 ambiguous，调用方弹选择器。 */
+function selectSuggestionWithDefault(mode, minStrength) {
     const wantedId = mode === 'totp' ? currentOriginDefaults?.totpItemId : currentOriginDefaults?.passwordItemId;
-    if (!wantedId)
-        return null;
-    return filtered.find((s) => s.item_id === wantedId) ?? null;
+    return pickSuggestion(currentSuggestions, mode, minStrength, wantedId);
 }
 function normalizeUsername(value) {
     return value.trim().toLowerCase();
@@ -248,13 +243,19 @@ async function maybeAutoFillTotp(_trigger, focusedInput) {
         return;
     if (!(await isDomainAllowedForAutoFill()))
         return;
-    const suggestion = await selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
-    if (!suggestion)
+    const { picked, ambiguous } = selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
+    if (!picked) {
+        // 多候选且无默认记忆：不再静默失败，就地弹出选择下拉
+        if (ambiguous && focusedInput && !hasValue(focusedInput)) {
+            lastTotpAutofillAttemptAt = now;
+            showSuggestionsDropdown(focusedInput, 'totp');
+        }
         return;
+    }
     if (focusedInput && hasValue(focusedInput))
         return;
     lastTotpAutofillAttemptAt = now;
-    await requestTotp(suggestion.item_id, focusedInput, true);
+    await requestTotp(picked.item_id, focusedInput, true);
 }
 // Handle keyboard shortcuts
 function handleKeydown(event) {
@@ -313,9 +314,9 @@ function isLikelyTotpInput(input, cachedFieldName) {
 // Show inline Persona icon next to input field
 function showInlineIcon(input, mode) {
     // Remove existing icon
-    const existingIcon = document.querySelector('.persona-inline-icon');
-    if (existingIcon) {
-        existingIcon.remove();
+    if (inlineIcon) {
+        inlineIcon.remove();
+        inlineIcon = null;
     }
     // Create icon element
     const icon = document.createElement('div');
@@ -345,12 +346,16 @@ function showInlineIcon(input, mode) {
         e.stopPropagation();
         showSuggestionsDropdown(input, mode);
     });
-    document.body.appendChild(icon);
+    mountPersonaUi(document).root.appendChild(icon);
+    inlineIcon = icon;
     // Remove icon when input loses focus
     const removeIcon = () => {
         setTimeout(() => {
             if (!icon.matches(':hover')) {
                 icon.remove();
+                if (inlineIcon === icon) {
+                    inlineIcon = null;
+                }
             }
         }, 200);
     };
@@ -427,9 +432,12 @@ function showSuggestionsDropdown(input, mode) {
         });
         dropdown.appendChild(item);
     });
-    document.body.appendChild(dropdown);
+    mountPersonaUi(document).root.appendChild(dropdown);
     autofillOverlay = dropdown;
-    // Close on click outside
+    // Close on click outside. Clicks inside the shadow root never reach this
+    // document listener (shadowUi stops them at the root), so every click
+    // observed here is a genuine outside click even though the event target
+    // of anything under the closed root is retargeted away from the dropdown.
     setTimeout(() => {
         document.addEventListener('click', function closeDropdown(e) {
             if (!dropdown.contains(e.target)) {
@@ -465,20 +473,35 @@ async function requestFill(itemId, targetInput, userGesture = true) {
         console.error('[Persona] Fill request error:', error);
     }
 }
+function sendTotpRequest(itemId, userGesture) {
+    return chrome.runtime.sendMessage({
+        type: 'persona_get_totp',
+        origin: location.origin,
+        itemId,
+        userGesture
+    });
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 async function requestTotp(itemId, targetInput, userGesture = true) {
     try {
-        const response = await chrome.runtime.sendMessage({
-            type: 'persona_get_totp',
-            origin: location.origin,
-            itemId,
-            userGesture
-        });
+        let response = await sendTotpRequest(itemId, userGesture);
+        // 临期码（剩余 ≤3s）可能在用户提交前过期：等过周期边界再取一次新码。
+        // 重取仍属同一次用户动作，userGesture 照传（桥侧手势闸门语义不变）。
+        if (response?.success &&
+            response.data?.code &&
+            shouldWaitForFreshTotp(response.data.remaining_seconds)) {
+            await sleep(freshTotpWaitMs(response.data.remaining_seconds));
+            response = await sendTotpRequest(itemId, true);
+        }
         if (response?.success && response.data?.code) {
             const code = String(response.data.code);
+            const remaining = response.data.remaining_seconds;
             const input = targetInput ?? findTotpInput();
             if (input) {
                 fillTotpCode(input, code);
-                showNotification('2FA code filled', 'success');
+                showNotification(totpFilledNotice(remaining), 'success');
             }
             else {
                 const copied = await chrome.runtime
@@ -492,11 +515,11 @@ async function requestTotp(itemId, targetInput, userGesture = true) {
                     .then((r) => Boolean(r?.success && r?.data?.copied))
                     .catch(() => false);
                 if (copied) {
-                    showNotification('2FA code copied', 'success');
+                    showNotification(totpCopiedNotice(remaining), 'success');
                 }
                 else {
                     await copyToClipboard(code);
-                    showNotification('2FA code copied (fallback)', 'success');
+                    showNotification(totpCopiedNotice(remaining, true), 'success');
                 }
             }
         }
@@ -652,6 +675,21 @@ function fillCredential(credential, targetInput) {
         }
     }
     showNotification('Credentials filled successfully!', 'success');
+    void maybeChainFillTotp();
+}
+/** 登录填充成功后同页若有 OTP 框则链式填 2FA（合并登录+OTP 表单场景）。 */
+async function maybeChainFillTotp() {
+    if (!currentSettings.autoFillTotpAfterLogin)
+        return;
+    const input = findTotpInput();
+    if (!input || hasValue(input))
+        return;
+    if (!(await isDomainAllowedForAutoFill()))
+        return;
+    const { picked } = selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
+    if (!picked)
+        return;
+    await requestTotp(picked.item_id, input, true);
 }
 // Fill input with proper events
 function fillInput(input, value) {
@@ -789,10 +827,11 @@ function showSuggestionsOverlay(suggestions) {
         });
     }
     overlay.appendChild(content);
-    document.body.appendChild(overlay);
+    mountPersonaUi(document).root.appendChild(overlay);
     autofillOverlay = overlay;
-    // Close button
-    document.getElementById('persona-close')?.addEventListener('click', hideOverlay);
+    // Close button (inside the shadow root — query the overlay subtree, not
+    // the document)
+    overlay.querySelector('#persona-close')?.addEventListener('click', hideOverlay);
 }
 // Hide overlay
 function hideOverlay() {
@@ -800,8 +839,10 @@ function hideOverlay() {
         autofillOverlay.remove();
         autofillOverlay = null;
     }
-    document.querySelector('.persona-inline-icon')?.remove();
-    document.querySelector('.persona-dropdown')?.remove();
+    if (inlineIcon) {
+        inlineIcon.remove();
+        inlineIcon = null;
+    }
 }
 // Show notification
 function showNotification(message, type) {
@@ -821,19 +862,11 @@ function showNotification(message, type) {
         animation: persona-slide-in 0.3s ease;
     `;
     notification.textContent = message;
-    // Add animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes persona-slide-in {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-    `;
-    document.head.appendChild(style);
-    document.body.appendChild(notification);
+    // The persona-slide-in keyframes ship once inside the shadow root
+    // (shadowUi.ts) — no stylesheet in document.head.
+    mountPersonaUi(document).root.appendChild(notification);
     setTimeout(() => {
         notification.remove();
-        style.remove();
     }, 3000);
 }
 // HTML escape helper
@@ -1074,7 +1107,7 @@ function showPasskeyDialog(dialog) {
     }
     box.appendChild(footer);
     backdrop.appendChild(box);
-    document.body.appendChild(backdrop);
+    mountPersonaUi(document).root.appendChild(backdrop);
     passkeyOverlay = backdrop;
 }
 // Start

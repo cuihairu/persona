@@ -19,6 +19,7 @@ import {
     totpCopiedNotice,
     totpFilledNotice
 } from './autofillUx';
+import { mountPersonaUi } from './shadowUi';
 
 interface SuggestionItem {
     item_id: string;
@@ -37,6 +38,8 @@ interface FillCredential {
 let currentForms: DetectedForm[] = [];
 let currentSuggestions: SuggestionItem[] = [];
 let autofillOverlay: HTMLElement | null = null;
+// Inline icon lives in the shadow root; page-side class lookups can't see it.
+let inlineIcon: HTMLElement | null = null;
 let currentSettings: AutofillSettings = DEFAULT_AUTOFILL_SETTINGS;
 
 const POLICY_MESSAGE_CACHE_MS = 10_000;
@@ -372,9 +375,9 @@ function isLikelyTotpInput(input: HTMLInputElement, cachedFieldName?: string): b
 // Show inline Persona icon next to input field
 function showInlineIcon(input: HTMLInputElement, mode: 'password' | 'totp') {
     // Remove existing icon
-    const existingIcon = document.querySelector('.persona-inline-icon');
-    if (existingIcon) {
-        existingIcon.remove();
+    if (inlineIcon) {
+        inlineIcon.remove();
+        inlineIcon = null;
     }
 
     // Create icon element
@@ -408,13 +411,17 @@ function showInlineIcon(input: HTMLInputElement, mode: 'password' | 'totp') {
         showSuggestionsDropdown(input, mode);
     });
 
-    document.body.appendChild(icon);
+    mountPersonaUi(document).root.appendChild(icon);
+    inlineIcon = icon;
 
     // Remove icon when input loses focus
     const removeIcon = () => {
         setTimeout(() => {
             if (!icon.matches(':hover')) {
                 icon.remove();
+                if (inlineIcon === icon) {
+                    inlineIcon = null;
+                }
             }
         }, 200);
     };
@@ -500,10 +507,13 @@ function showSuggestionsDropdown(input: HTMLInputElement, mode: 'password' | 'to
         dropdown.appendChild(item);
     });
 
-    document.body.appendChild(dropdown);
+    mountPersonaUi(document).root.appendChild(dropdown);
     autofillOverlay = dropdown;
 
-    // Close on click outside
+    // Close on click outside. Clicks inside the shadow root never reach this
+    // document listener (shadowUi stops them at the root), so every click
+    // observed here is a genuine outside click even though the event target
+    // of anything under the closed root is retargeted away from the dropdown.
     setTimeout(() => {
         document.addEventListener('click', function closeDropdown(e) {
             if (!dropdown.contains(e.target as Node)) {
@@ -913,11 +923,12 @@ function showSuggestionsOverlay(suggestions: SuggestionItem[]) {
     }
 
     overlay.appendChild(content);
-    document.body.appendChild(overlay);
+    mountPersonaUi(document).root.appendChild(overlay);
     autofillOverlay = overlay;
 
-    // Close button
-    document.getElementById('persona-close')?.addEventListener('click', hideOverlay);
+    // Close button (inside the shadow root — query the overlay subtree, not
+    // the document)
+    overlay.querySelector('#persona-close')?.addEventListener('click', hideOverlay);
 }
 
 // Hide overlay
@@ -926,8 +937,10 @@ function hideOverlay() {
         autofillOverlay.remove();
         autofillOverlay = null;
     }
-    document.querySelector('.persona-inline-icon')?.remove();
-    document.querySelector('.persona-dropdown')?.remove();
+    if (inlineIcon) {
+        inlineIcon.remove();
+        inlineIcon = null;
+    }
 }
 
 // Show notification
@@ -949,21 +962,12 @@ function showNotification(message: string, type: 'success' | 'error') {
     `;
     notification.textContent = message;
 
-    // Add animation
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes persona-slide-in {
-            from { transform: translateX(100%); opacity: 0; }
-            to { transform: translateX(0); opacity: 1; }
-        }
-    `;
-    document.head.appendChild(style);
-
-    document.body.appendChild(notification);
+    // The persona-slide-in keyframes ship once inside the shadow root
+    // (shadowUi.ts) — no stylesheet in document.head.
+    mountPersonaUi(document).root.appendChild(notification);
 
     setTimeout(() => {
         notification.remove();
-        style.remove();
     }, 3000);
 }
 
@@ -1255,7 +1259,7 @@ function showPasskeyDialog(dialog: {
     box.appendChild(footer);
 
     backdrop.appendChild(box);
-    document.body.appendChild(backdrop);
+    mountPersonaUi(document).root.appendChild(backdrop);
     passkeyOverlay = backdrop;
 }
 

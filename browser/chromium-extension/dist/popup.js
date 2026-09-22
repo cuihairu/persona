@@ -20,6 +20,7 @@ const suggestionsEl = document.getElementById('suggestions');
 const autoFillLoginOnFocusEl = document.getElementById('autoFillLoginOnFocus');
 const autoFillLoginOnLoadEl = document.getElementById('autoFillLoginOnLoad');
 const autoFillTotpOnFocusEl = document.getElementById('autoFillTotpOnFocus');
+const autoFillTotpAfterLoginEl = document.getElementById('autoFillTotpAfterLogin');
 const requireTrustedDomainEl = document.getElementById('requireTrustedDomain');
 const minMatchStrengthLoginEl = document.getElementById('minMatchStrengthLogin');
 const minMatchStrengthTotpEl = document.getElementById('minMatchStrengthTotp');
@@ -390,6 +391,8 @@ async function refreshSettings() {
         autoFillLoginOnLoadEl.checked = settings.autoFillLoginOnLoad;
     if (autoFillTotpOnFocusEl)
         autoFillTotpOnFocusEl.checked = settings.autoFillTotpOnFocus;
+    if (autoFillTotpAfterLoginEl)
+        autoFillTotpAfterLoginEl.checked = settings.autoFillTotpAfterLogin;
     if (requireTrustedDomainEl)
         requireTrustedDomainEl.checked = settings.requireTrustedDomain;
     if (minMatchStrengthLoginEl)
@@ -406,6 +409,11 @@ function bindSettings() {
     });
     autoFillTotpOnFocusEl?.addEventListener('change', () => {
         void setAutofillSettings({ autoFillTotpOnFocus: Boolean(autoFillTotpOnFocusEl.checked) });
+    });
+    autoFillTotpAfterLoginEl?.addEventListener('change', () => {
+        void setAutofillSettings({
+            autoFillTotpAfterLogin: Boolean(autoFillTotpAfterLoginEl.checked)
+        });
     });
     requireTrustedDomainEl?.addEventListener('change', () => {
         void setAutofillSettings({ requireTrustedDomain: Boolean(requireTrustedDomainEl.checked) });

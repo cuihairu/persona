@@ -495,8 +495,23 @@ Browser & Autofill (future)
     边界重取一次新码再填；filled/copied 通知携带剩余秒；多候选且无默认记忆时
     就地弹出选择下拉（不再静默不填）；纯逻辑抽 `autofillUx.ts` + 11 个 jest 用例
     （pickSuggestion 歧义标记/默认记忆/强度门槛、临期判定、通知文案）。
-    follow-up：页内部件 Shadow DOM 隔离；码展示小组件刻意不做（页脚本可读
-    content-script DOM，密钥不上页）
+    follow-up：码展示小组件刻意不做（页脚本可读 content-script DOM，密钥不上页）
+  - [x] 页内部件 Shadow DOM 隔离（2026-09-22 落地，对应上条 follow-up）：
+    `shadowUi.ts` 单一 `persona-autofill-host` 自定义元素 + **closed** shadow
+    root（页脚本拿不到 shadowRoot 引用，页 CSS 选择器不跨边界）收拢全部
+    5 处 UI（inline 图标/建议下拉/全局面板/passkey 对话框/toast）——host
+    `display:contents` 保持布局与层叠透明（部件 absolute/fixed 定位、z-index
+    语义不变）；`@keyframes persona-slide-in` 迁入 root 内 `<style>`（消除
+    document.head 全局样式泄漏）；root 上 stopPropagation 拦 click 冒泡——
+    closed root 下事件 target 重定向为 host，不拦会把"点击自身 UI"误判为
+    外部点击关掉下拉；查询全部改 JS 引用（shadow 内 class/id 的 document
+    查询失效），close 按钮改 overlay 子树内查询；剪贴板 fallback 的瞬时
+    textarea 保留在主文档（execCommand('copy') 需可聚焦选中，不属 UI 部件）。
+    测试：shadowUi 6 个 jest 用例（closed 语义/幂等/断线重挂/head 零样式/
+    click 拦截）+ 存量 71 用例回归。已知限制：页面 document 捕获阶段监听
+    仍能在 stop 前观察到以 host 为 target 的 UI 事件（closed shadow 规范
+    行为）；host 元素本身（id/localName/display:none !important 之外的
+    覆盖）对页面可见，内容不可见——与 1Password 同暴露级
   - [x] Policy integration: domain trust/blocked + confirm-on-unknown
   - [x] Installation: native host manifest + install scripts (macOS/Windows/Linux) + docs
   - [x] 扩展单测套件（jest + ts-jest + jsdom，60 用例）：domainPolicy 启发式/policy 覆盖、
