@@ -4133,6 +4133,7 @@ dependencies = [
  "futures",
  "persona-core",
  "rand 0.10.2",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",
