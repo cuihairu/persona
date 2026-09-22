@@ -657,3 +657,40 @@ export interface InitRequest {
   master_password: string;
   db_path?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Connect 本机自动化（与 Rust connect_server/commands 的 serde 输出对应）
+// ---------------------------------------------------------------------------
+
+/** Connect listener 运行状态（设置页渲染 + 自动化开关判定） */
+export interface ConnectServerStatus {
+  running: boolean;
+  /** listener 实际端口（未运行 = null；端口 0 = OS 分配后的真实值） */
+  port: number | null;
+}
+
+/** token 授权范围（三维：身份列表空 = 全部、类型枚举、动词；read 起步唯一合法值） */
+export interface ConnectTokenScope {
+  identities: string[];
+  /** snake_case 类型词汇表（password/api_key/totp/…；passkey/wallet/ssh 恒不可授权） */
+  item_types: string[];
+  verbs: string[];
+}
+
+/** token 管理列表条目（哈希不出库；只展示指纹） */
+export interface ConnectTokenView {
+  id: string;
+  label: string;
+  /** SHA-256 前 8 字节十六进制，供人工核对 */
+  fingerprint: string;
+  scope: ConnectTokenScope;
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+/** 创建成功响应：明文 token 只此一次，关闭弹窗后无法再次查看 */
+export interface ConnectTokenCreatedView {
+  token: string;
+  info: ConnectTokenView;
+}

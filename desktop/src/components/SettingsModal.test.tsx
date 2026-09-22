@@ -25,6 +25,14 @@ jest.mock('@/utils/api', () => ({
     enterTravelMode: jest.fn(),
     exitTravelMode: jest.fn(),
     reauthVerify: jest.fn(),
+    // Connect 本机自动化区块（SecurityPane 后的 section）
+    connectServerStatus: jest.fn(),
+    connectServerStart: jest.fn(),
+    connectServerStop: jest.fn(),
+    connectTokenList: jest.fn(),
+    connectTokenCreate: jest.fn(),
+    connectTokenRevoke: jest.fn(),
+    getIdentities: jest.fn(),
   },
 }));
 
@@ -47,6 +55,9 @@ const mockSetTravelMarked = personaAPI.setTravelMarked as jest.Mock;
 const mockEnterTravel = personaAPI.enterTravelMode as jest.Mock;
 const mockExitTravel = personaAPI.exitTravelMode as jest.Mock;
 const mockReauthVerify = personaAPI.reauthVerify as jest.Mock;
+const mockConnectStatus = personaAPI.connectServerStatus as jest.Mock;
+const mockConnectList = personaAPI.connectTokenList as jest.Mock;
+const mockGetIdentities = personaAPI.getIdentities as jest.Mock;
 
 const inactiveTravel = {
   success: true,
@@ -84,6 +95,10 @@ describe('components/SettingsModal', () => {
     });
     // 默认旅行模式关闭
     mockGetTravelStatus.mockResolvedValue(inactiveTravel);
+    // 默认 Connect listener 关闭、无 token、无身份
+    mockConnectStatus.mockResolvedValue({ success: true, data: { running: false, port: null } });
+    mockConnectList.mockResolvedValue({ success: true, data: [] });
+    mockGetIdentities.mockResolvedValue({ success: true, data: [] });
   });
 
   it('renders nothing when closed', () => {

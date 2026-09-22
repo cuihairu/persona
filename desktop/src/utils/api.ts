@@ -19,6 +19,10 @@ import type {
   BiometricStatus,
   TravelStatus,
   TravelCounts,
+  ConnectServerStatus,
+  ConnectTokenScope,
+  ConnectTokenView,
+  ConnectTokenCreatedView,
   WorkspaceSettings,
   SshAgentStatus,
   SshAgentKey,
@@ -156,6 +160,43 @@ class PersonaAPI {
   /** 退出旅行模式：输 travel 口令把被移除身份原样恢复回主库 */
   async exitTravelMode(passphrase: string): Promise<ApiResponse<TravelCounts>> {
     return invoke('exit_travel_mode', { passphrase });
+  }
+
+  // ---------------------------------------------------------------------
+  // Connect 本机自动化（secrets automation）
+  // ---------------------------------------------------------------------
+
+  /** 启动 Connect listener（bind 127.0.0.1；端口 null = OS 分配） */
+  async connectServerStart(port?: number | null): Promise<ApiResponse<ConnectServerStatus>> {
+    return invoke('connect_server_start', { port: port ?? null });
+  }
+
+  /** 停止 Connect listener（幂等） */
+  async connectServerStop(): Promise<ApiResponse<ConnectServerStatus>> {
+    return invoke('connect_server_stop');
+  }
+
+  /** Connect listener 运行状态 */
+  async connectServerStatus(): Promise<ApiResponse<ConnectServerStatus>> {
+    return invoke('connect_server_status');
+  }
+
+  /** 创建 Connect token（敏感操作：reauth 门禁；明文仅响应一次） */
+  async connectTokenCreate(
+    label: string,
+    scope: ConnectTokenScope,
+  ): Promise<ApiResponse<ConnectTokenCreatedView>> {
+    return invoke('connect_token_create', { label, scope });
+  }
+
+  /** token 管理列表（含已吊销；哈希不出库） */
+  async connectTokenList(): Promise<ApiResponse<ConnectTokenView[]>> {
+    return invoke('connect_token_list');
+  }
+
+  /** 吊销 Connect token（幂等，即时生效） */
+  async connectTokenRevoke(id: string): Promise<ApiResponse<boolean>> {
+    return invoke('connect_token_revoke', { id });
   }
 
   /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token（真值存 OS keyring） */

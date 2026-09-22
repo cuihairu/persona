@@ -17,6 +17,7 @@ import { PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
 import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 import ReauthModal from './ReauthModal';
 import TravelPassphraseModal from './TravelPassphraseModal';
+import ConnectAutomationSection from './ConnectAutomationSection';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface SettingsModalProps {
@@ -720,6 +721,10 @@ const GeneralPane: React.FC<{
           changingPassword={changingPassword}
           setChangingPassword={setChangingPassword}
         />
+      </section>
+
+      <section className="mb-5">
+        <ConnectAutomationSection />
       </section>
 
       <section>
