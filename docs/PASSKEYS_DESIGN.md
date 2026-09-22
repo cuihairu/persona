@@ -240,13 +240,13 @@ JS 侧拦截 `mediation: "conditional"` 并自造 UI 会破坏原生 passkey 回
 
 先决条件：macOS / Windows 真机与签名环境（本仓库 Linux CI 只做协议与 core 回归）。
 
-| 步骤 | 平台 | 内容 | 验收 |
-| --- | --- | --- | --- |
-| P4.1 | 共通 | 桥接协议补 `passkey_credential_provider_*` 消息族（枚举本 origin 可用条目 + 代断言），沿用 HMAC 配对与 user gesture 闸门；core 侧 origin↔rp_id 校验不变 | 协议用例 + 桌面审批弹窗走通 |
-| P4.2 | macOS | AuthenticationServices `ASAuthorizationCredentialProviderExtension` + `ASAuthorizationPlatformPublicKeyCredentialProvider`：系统弹「使用 Persona 登录」→ extension 进程经 App Group/Unix socket 调 persona bridge → `passkey_assert` | Safari/Chrome 的 conditional-UI 下拉出现 Persona 条目；webauthn.io 登录走通 |
-| P4.3 | Windows | Windows Hello passkey 插件（WebAuthn UX entitlement / Credential Provider）：系统选择器出 Persona 条目 → 本地 IPC 调 bridge | Edge/Chrome conditional-UI 出条目；GitHub 登录走通 |
-| P4.4 | 共通 | UV/再认证闸门与审计对齐 §9（provider 路径的 assert 同样过敏感操作门禁；`passkey_asserted` 审计区分 provider 来源） | 策略测试 + 审计抽查 |
-| P4.5 | 共通 | CXF（FIDO 凭据交换）跟踪：字段预留 `foreign_key_ref`，标准定稿前不实现 | — |
+| 步骤 | 平台    | 内容                                                                                                                                                                                                                                 | 验收                                                                        |
+| ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| P4.1 | 共通    | 桥接协议补 `passkey_credential_provider_*` 消息族（枚举本 origin 可用条目 + 代断言），沿用 HMAC 配对与 user gesture 闸门；core 侧 origin↔rp_id 校验不变                                                                             | 协议用例 + 桌面审批弹窗走通                                                 |
+| P4.2 | macOS   | AuthenticationServices `ASAuthorizationCredentialProviderExtension` + `ASAuthorizationPlatformPublicKeyCredentialProvider`：系统弹「使用 Persona 登录」→ extension 进程经 App Group/Unix socket 调 persona bridge → `passkey_assert` | Safari/Chrome 的 conditional-UI 下拉出现 Persona 条目；webauthn.io 登录走通 |
+| P4.3 | Windows | Windows Hello passkey 插件（WebAuthn UX entitlement / Credential Provider）：系统选择器出 Persona 条目 → 本地 IPC 调 bridge                                                                                                          | Edge/Chrome conditional-UI 出条目；GitHub 登录走通                          |
+| P4.4 | 共通    | UV/再认证闸门与审计对齐 §9（provider 路径的 assert 同样过敏感操作门禁；`passkey_asserted` 审计区分 provider 来源）                                                                                                                   | 策略测试 + 审计抽查                                                         |
+| P4.5 | 共通    | CXF（FIDO 凭据交换）跟踪：字段预留 `foreign_key_ref`，标准定稿前不实现                                                                                                                                                               | —                                                                           |
 
 非目标不变：caBLE/hybrid、CTAP2 传输层、attestation（§2）。
 

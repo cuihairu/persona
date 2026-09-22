@@ -58,7 +58,7 @@ keyring（service 名 `persona-device`，与既有 `persona-biometric`/`persona-
 - **算法与依赖**：`x25519-dalek`（dalek 家族，公开审视充分）+ `hkdf`（RustCrypto，
   与已有 `sha2` 配套）+ 既有 `aes-gcm`。信封格式（`persona-dev-env-1`）：
   `ephemeral_pub(32) ‖ AES-256-GCM(key = HKDF-SHA256(x25519(eph, device_pub),
-  info="persona-dev-env-1"), plaintext = group key)`。组合层自写约 30 行，
+info="persona-dev-env-1"), plaintext = group key)`。组合层自写约 30 行，
   round-trip + 篡改 + 跨设备失败路径测试覆盖；不为此引入 HPKE 重依赖（远期可选）。
 
 ### DR-2 设备认证：SRP-6a + RFC 5054 4096-bit group 起步（OPAQUE 列远期升级）
@@ -146,12 +146,12 @@ SyncOp {
 
 **端点**（挂现有 axum server，`/api/v1/sync/*`，认证 = DR-2 的 SRP 会话 token）：
 
-| 端点 | 方法 | 用途 |
-| --- | --- | --- |
-| `/sync/devices` | POST / GET / DELETE | 注册（公钥+设备名）/ 列出 / 吊销 |
-| `/sync/group-keys` | GET / PUT | 取全部设备信封 / 上传本设备的 group key 信封 |
-| `/sync/oplog` | POST | push 本地新 oplog 段（≤500 条/批，沿 events 惯例） |
-| `/sync/oplog?since=cursor` | GET | pull 增量（游标分页） |
+| 端点                       | 方法                | 用途                                               |
+| -------------------------- | ------------------- | -------------------------------------------------- |
+| `/sync/devices`            | POST / GET / DELETE | 注册（公钥+设备名）/ 列出 / 吊销                   |
+| `/sync/group-keys`         | GET / PUT           | 取全部设备信封 / 上传本设备的 group key 信封       |
+| `/sync/oplog`              | POST                | push 本地新 oplog 段（≤500 条/批，沿 events 惯例） |
+| `/sync/oplog?since=cursor` | GET                 | pull 增量（游标分页）                              |
 
 **推送/拉取语义**：push 按 `op_id` 幂等；pull 从 since 游标起增量。服务端按到达
 顺序追加存储，不排序、不合并（DR-4）。配额/上限沿用 server 既有 1 MiB/批、
@@ -181,13 +181,13 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
 
 ## 8. 与既有系统的边界
 
-| 既有资产 | 关系 |
-| --- | --- |
-| 备份链（`/api/v1/backups`、PERSENC1） | **不动**。备份是整库快照，同步是凭据级增量；token 共存（DR-2）。恢复整库备份后，本机以 Lamport 重新对齐（备份点之后的远端 oplog 重放） |
-| `change_history` | 本地审计，含明文元数据，**不上同步通道**；oplog 是独立写入（§5 捕获点） |
-| 审计事件上报（WireEvent） | 元数据级、本来就不含载荷，与同步无耦合，各走各的 |
-| **Travel Mode** | **同步在 travel 激活期间必须整体暂停（push 与 pull 双停）**：enter 事务的批量删除若进 oplog，会把 tombstone 推到其他设备毁库；pull 则可能把被移出身份写回主库，直接违反「主库零痕迹」。exit 恢复后需手动/提示恢复同步。此交互列入 §11 首位开放问题，阶段 2 实现时落地为 push/pull 的前置闸 |
-| 桌面 keyring 双 service（`persona-biometric`/`persona-sync`） | 新增 `persona-device`（DR-1），三 service 并列，语义同款：真值在 keyring，库里只留占位 |
+| 既有资产                                                      | 关系                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 备份链（`/api/v1/backups`、PERSENC1）                         | **不动**。备份是整库快照，同步是凭据级增量；token 共存（DR-2）。恢复整库备份后，本机以 Lamport 重新对齐（备份点之后的远端 oplog 重放）                                                                                                                                                     |
+| `change_history`                                              | 本地审计，含明文元数据，**不上同步通道**；oplog 是独立写入（§5 捕获点）                                                                                                                                                                                                                    |
+| 审计事件上报（WireEvent）                                     | 元数据级、本来就不含载荷，与同步无耦合，各走各的                                                                                                                                                                                                                                           |
+| **Travel Mode**                                               | **同步在 travel 激活期间必须整体暂停（push 与 pull 双停）**：enter 事务的批量删除若进 oplog，会把 tombstone 推到其他设备毁库；pull 则可能把被移出身份写回主库，直接违反「主库零痕迹」。exit 恢复后需手动/提示恢复同步。此交互列入 §11 首位开放问题，阶段 2 实现时落地为 push/pull 的前置闸 |
+| 桌面 keyring 双 service（`persona-biometric`/`persona-sync`） | 新增 `persona-device`（DR-1），三 service 并列，语义同款：真值在 keyring，库里只留占位                                                                                                                                                                                                     |
 
 ## 9. 服务端可见面与威胁模型登记骨架
 
@@ -205,13 +205,13 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
 
 ## 10. 实施阶段映射
 
-| 阶段 | 内容 | 验收要点 | 威胁模型登记 |
-| --- | --- | --- | --- |
-| 0（本文） | 设计稿 | 四决策定稿 + 用户确认 | 骨架（§9） |
-| 1 | SRP 设备认证：实化 `RemoteAuthProvider`、server 存 verifier（非密码哈希）、SRP 会话换短期 token、与 TOKENS Bearer 共存、锁户 5 次 | RFC 5054 测试向量回归；备份链回归（token 共存不打断）；跨端（CLI↔server）握手集成测试 | 更新「同步服务器」章 |
-| 2 | E2EE sync 核心：device envelope（DR-1 格式）、group key 层级、oplog push/pull、LWW+冲突双版本、travel 闸 | 服务端只见密文的断言测试；断网/重放/乱序容错；换主密码后同步零影响；两端收敛测试（含双端离线编辑冲突保双版本） | 「E2EE 同步」章写实 |
-| 3 | 端到端接线：desktop 设备管理页 + 冲突裁决 UI + `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」整节重写 | 双设备真机同步演示脚本；吊销流程 UI 走查；文档与实现一致 | 复查 §9 清单与实现相符 |
-| 4 | Connect endpoint：本机 127.0.0.1 HTTP API + scope token（形态 A），默认关闭 fail-closed | 越权/越 scope 拒绝测试；默认关闭断言 | 新章「自动化端点」 |
+| 阶段      | 内容                                                                                                                              | 验收要点                                                                                                       | 威胁模型登记           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| 0（本文） | 设计稿                                                                                                                            | 四决策定稿 + 用户确认                                                                                          | 骨架（§9）             |
+| 1         | SRP 设备认证：实化 `RemoteAuthProvider`、server 存 verifier（非密码哈希）、SRP 会话换短期 token、与 TOKENS Bearer 共存、锁户 5 次 | RFC 5054 测试向量回归；备份链回归（token 共存不打断）；跨端（CLI↔server）握手集成测试                         | 更新「同步服务器」章   |
+| 2         | E2EE sync 核心：device envelope（DR-1 格式）、group key 层级、oplog push/pull、LWW+冲突双版本、travel 闸                          | 服务端只见密文的断言测试；断网/重放/乱序容错；换主密码后同步零影响；两端收敛测试（含双端离线编辑冲突保双版本） | 「E2EE 同步」章写实    |
+| 3         | 端到端接线：desktop 设备管理页 + 冲突裁决 UI + `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」整节重写                            | 双设备真机同步演示脚本；吊销流程 UI 走查；文档与实现一致                                                       | 复查 §9 清单与实现相符 |
+| 4         | Connect endpoint：本机 127.0.0.1 HTTP API + scope token（形态 A），默认关闭 fail-closed                                           | 越权/越 scope 拒绝测试；默认关闭断言                                                                           | 新章「自动化端点」     |
 
 规模预估：10–12 个会话量级，每阶段独立 PR。
 
