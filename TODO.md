@@ -247,13 +247,13 @@ Desktop (Tauri v2 + React)
         的中间帧误触清选中（jsdom 渲染探针定位）
   - [x] 条目图标：favicon 按需下载 + 本地缓存 + 设置可关
         （隐私红线：不常驻外联，不默认抓取——1Password 同款做法）
-        ——7fe5b07b core（favicon_cache 表 + FaviconFetcher：SSRF 六规则校验、
-        redirect 不跟随、512KiB 双保险、text/_ 拒收）/ d54fc666 开关第 4 位
-        fetch_favicons（默认关）+ 命令层（后端 flag 兜底）/ 本条 渲染接入
+        ——7fe5b07b core（favicon*cache 表 + FaviconFetcher：SSRF 六规则校验、
+        redirect 不跟随、512KiB 双保险、text/* 拒收）/ d54fc666 开关第 4 位
+        fetch*favicons（默认关）+ 命令层（后端 flag 兜底）/ 本条 渲染接入
         （useFavicons 批量预取 + FaviconImg 三态收口 + 详情面板 Fetch icon
         按钮；缓存 host 级共享、锁屏清空）。已知限制：DNS rebinding 不防
         （校验只覆盖 URL 字面 host）；仅 GET favicon.ico（无 HTML link 解析，
-        404 站点抓不到）；重定向不跟随（301 跳 favicon 的站点失败）；text/_
+        404 站点抓不到）；重定向不跟随（301 跳 favicon 的站点失败）；text/*
         拒缓存；前后端 host 归一化边缘差异（只影响键匹配，降级静态图标）；
         无 TTL/刷新；抓取不进 audit log（公开数据）。follow-up：HTML link
         解析 + TTL、audit log、IPv6/IDN 显示归一
@@ -553,6 +553,22 @@ Browser & Autofill (future)
         删除 bridge.ts HTTP 探测死路径（`127.0.0.1:19945/status` 从未有服务端实现，
         BridgeStatus 类型迁入 nativeBridge.ts，扩展只走 native messaging 单通道）
   - [x] 补齐 public/icons/icon128.png（复用 desktop Tauri 128x128 图标；此前 manifest 引用落空）
+  - [x] Bank Card（信用卡）表单填充（2026-09-22 落地，批 6 CLI + 批 7 扩展）：
+        bridge `get_suggestions` 收 `form_type`（默认 "login"；"card" → 全部
+        active BankCard 不按 URL 过滤，`match_strength` 恒 100——卡无规范归属
+        站点，结账页因商户而异，用户在 popup 自选）；`request_fill` 放行
+        BankCard 并返回 `card` 三字段（**CVV 恒不进 fill 响应**——fill 去向是
+        页 DOM 输入框、页脚本可读，CVV 只走 `copy` 剪贴板路径，协议文档已登记）；
+        `copy` 新增 `card_number`/`cardholder_name`/`expiry_date`/`cvv` 四字段
+        （空串拒绝、非 BankCard 类型拒绝、卡无 URL 故 origin 绑定放行）；扩展
+        formScanner 新增四个 card 角色（autocomplete `cc-*` 精确 token + 去符号
+        关键词，**在 TOTP 启发式之前判**——cc-csc maxLen 3-4 / cc-exp 4-5 会被
+        OTP 长度启发式吞掉；`security code`/`verification code` 保持 TOTP 语义
+        防回归）；popup 卡行（Fill card + 复制卡号/有效期/CVV）+ content
+        `fillCard`（按卡字段最多的表单填充，**页内填充刻意跳过 cvv 字段**）。
+        测试：CLI 3 个 bridge 测试（card/login 建议分离、fill 卡含 origin 放行 + 响应无 cvv + login 响应形状不变、copy 四字段 + 空值 + 非卡拒绝），
+        扩展 6 个 jest（autocomplete/关键词/先于 TOTP/标签不回归/virtual
+        form/普通文本不误伤）。
 - [ ] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`
   - [x] P1: 软件验证器 core/CLI（ES256 生成/签名、p256+coset、passkeys 表与 KeyHierarchy 包裹、
         PersonaService create/list/show/delete/assertion/self-test/export、审计事件、

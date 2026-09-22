@@ -1,6 +1,6 @@
 /**
- * formScanner 测试（jsdom）：字段分类（password/email/totp 启发式/username/email 提示词）、
- * 表单评分与过滤、virtual form 聚合、隐藏/禁用输入剔除、observeForms 生命周期。
+ * formScanner 测试（jsdom）：字段分类（password/email/totp 启发式/username/email 提示词、
+ * 信用卡四角色）、表单评分与过滤、virtual form 聚合、隐藏/禁用输入剔除、observeForms 生命周期。
  */
 import { scanForms, observeForms, type DetectedForm } from './formScanner';
 
@@ -169,6 +169,108 @@ describe('scanForms: virtual forms (no <form> element)', () => {
         `;
         // 真实 form 扫描出 1 个；form 内输入不进入 virtual 聚合
         expect(scanForms()).toHaveLength(1);
+    });
+});
+
+describe('scanForms: payment-card fields', () => {
+    it('classifies card fields via autocomplete tokens (authoritative)', () => {
+        document.body.innerHTML = `
+            <form>
+                <input name="pay" autocomplete="cc-number" type="tel">
+                <input name="who" autocomplete="cc-name" type="text">
+                <input name="when" autocomplete="cc-exp" type="tel">
+                <input name="secret" autocomplete="cc-csc" type="tel">
+            </form>
+        `;
+        const forms = scanForms();
+        expect(forms).toHaveLength(1);
+        expect(fieldTypes(forms[0])).toEqual({
+            pay: 'card_number',
+            who: 'card_name',
+            when: 'card_expiry',
+            secret: 'card_cvv'
+        });
+        // card_number 5 + card_name 2 + card_expiry 2 + card_cvv 3
+        expect(forms[0].score).toBe(12);
+    });
+
+    it('classifies card fields from de-symbolized name/id hints', () => {
+        document.body.innerHTML = `
+            <form>
+                <input name="card-number" type="tel">
+                <input name="cardHolderName" type="text">
+                <input id="expiry-date" type="tel">
+                <input name="inputCvv" type="tel">
+            </form>
+        `;
+        const types = fieldTypes(scanForms()[0]);
+        expect(types['card-number']).toBe('card_number');
+        expect(types.cardHolderName).toBe('card_name');
+        expect(types['expiry-date']).toBe('card_expiry');
+        expect(types.inputCvv).toBe('card_cvv');
+    });
+
+    it('classifies card fields before the TOTP heuristics can claim them', () => {
+        document.body.innerHTML = `
+            <form>
+                <input name="cc-csc" type="tel" maxlength="4" pattern="[0-9]*">
+                <input name="cc-exp" type="tel" maxlength="5" inputmode="numeric">
+                <input name="cardnumber" type="tel" maxlength="19">
+            </form>
+        `;
+        const types = fieldTypes(scanForms()[0]);
+        // cc-csc (3-4 numeric) and cc-exp (4-5 numeric) would otherwise match
+        // the OTP length shape.
+        expect(types['cc-csc']).toBe('card_cvv');
+        expect(types['cc-exp']).toBe('card_expiry');
+        expect(types.cardnumber).toBe('card_number');
+    });
+
+    it('keeps login 2FA labels as TOTP even though card forms share them', () => {
+        document.body.innerHTML = `
+            <form>
+                <input name="pw" type="password">
+                <input id="code2" aria-label="verification code" type="text">
+                <input name="sc" placeholder="Security code" type="text">
+            </form>
+        `;
+        const types = fieldTypes(scanForms()[0]);
+        expect(types.code2).toBe('totp');
+        expect(types.sc).toBe('totp');
+    });
+
+    it('groups formless card inputs into a virtual checkout form', () => {
+        document.body.innerHTML = `
+            <div id="checkout">
+                <input name="cardnumber" type="tel" maxlength="19">
+                <input name="cardholder" type="text">
+                <input name="exp-date" type="tel">
+                <input name="cvc" type="tel" maxlength="4">
+            </div>
+        `;
+        const forms = scanForms();
+        expect(forms).toHaveLength(1);
+        expect(fieldTypes(forms[0])).toEqual({
+            cardnumber: 'card_number',
+            cardholder: 'card_name',
+            'exp-date': 'card_expiry',
+            cvc: 'card_cvv'
+        });
+        expect(forms[0].score).toBe(12);
+    });
+
+    it('does not miscarry ordinary text fields as card fields', () => {
+        document.body.innerHTML = `
+            <form>
+                <input name="username" type="text">
+                <input name="company" type="text">
+                <input name="desc" type="text">
+            </form>
+        `;
+        const types = fieldTypes(scanForms()[0]);
+        expect(types.username).toBe('username');
+        expect(types.company).toBe('text');
+        expect(types.desc).toBe('text');
     });
 });
 

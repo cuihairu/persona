@@ -95,7 +95,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     // Get autofill suggestions for current page
     if (message?.type === 'persona_get_suggestions') {
-        handleGetSuggestions(message.origin).then(sendResponse);
+        handleGetSuggestions(message.origin, message.formType).then(sendResponse);
         return true;
     }
 
@@ -284,9 +284,11 @@ interface AutofillResult<T = any> {
 }
 
 /**
- * Get autofill suggestions for a given origin.
+ * Get autofill suggestions for a given origin. `formType` selects the
+ * suggestion pool: "login" (default, URL-matched passwords/TOTP) or "card"
+ * (all active bank cards, no URL filtering).
  */
-async function handleGetSuggestions(origin: string): Promise<AutofillResult<SuggestionsPayload>> {
+async function handleGetSuggestions(origin: string, formType = 'login'): Promise<AutofillResult<SuggestionsPayload>> {
     try {
         // Check domain policy first
         const policies = await getPolicies();
@@ -300,7 +302,7 @@ async function handleGetSuggestions(origin: string): Promise<AutofillResult<Sugg
             };
         }
 
-        const response = await getSuggestions(origin);
+        const response = await getSuggestions(origin, formType);
 
         if (!response.ok) {
             return {
@@ -309,9 +311,10 @@ async function handleGetSuggestions(origin: string): Promise<AutofillResult<Sugg
             };
         }
 
-        // Cache suggestions for quick access
+        // Cache suggestions for quick access (keyed per form type so card
+        // and login pools don't clobber each other)
         await chrome.storage.local.set({
-            [SUGGESTIONS_KEY]: {
+            [`${SUGGESTIONS_KEY}:${formType}`]: {
                 origin,
                 suggestions: response.payload,
                 timestamp: Date.now()
