@@ -2016,12 +2016,13 @@ impl PersonaService {
 
     /// 创建 Connect token：返回 `(presented 明文, 库行)`——明文仅此一次
     /// 展示，调用方（桌面设置页/CLI）负责「关闭后无法再次查看」语义。
-    /// 管理操作要求解锁会话（宿主层另加 reauth 门禁）。
+    /// 管理操作走敏感门禁（reauth）+ 解锁会话（DR-5）。
     pub async fn create_connect_token(
         &self,
         label: String,
         scope: ConnectTokenScope,
     ) -> Result<(String, ConnectTokenRow)> {
+        self.ensure_sensitive_operation_allowed().await?;
         self.connect_gate()?;
         scope
             .validate()
@@ -2076,8 +2077,9 @@ impl PersonaService {
     }
 
     /// 吊销（幂等：重复吊销返回 false）。即时生效——鉴权每请求查表，
-    /// 无缓存窗口（DR-2）。
+    /// 无缓存窗口（DR-2）。管理操作走敏感门禁（reauth）+ 解锁会话。
     pub async fn revoke_connect_token(&self, id: &Uuid) -> Result<bool> {
+        self.ensure_sensitive_operation_allowed().await?;
         self.connect_gate()?;
         let revoked = ConnectTokenRepository::new(self.db.clone())
             .revoke(id, chrono::Utc::now())
@@ -3222,12 +3224,28 @@ mod tests {
         let service = PersonaService::new(db).await.unwrap();
         assert!(!service.is_unlocked());
 
+        // 锁定态管理面被拒:敏感门禁先于解锁门禁触发,按 SERVICE_LOCKED
+        // 语义报认证失败(桌面据此回解锁屏);数据面的 VaultLocked/503
+        // 语义由 connect_hides_archived_items_and_gates_when_locked 覆盖。
         let err = service
             .create_connect_token("t".into(), connect_read_scope())
             .await
             .unwrap_err();
-        assert_vault_locked(err);
-        assert_vault_locked(service.list_connect_tokens().await.unwrap_err());
+        assert!(matches!(
+            err.downcast_ref::<PersonaError>(),
+            Some(PersonaError::AuthenticationFailed(_))
+        ));
+        assert_vault_locked_but_auth_gate_first_free(
+            service.list_connect_tokens().await.unwrap_err(),
+        );
+    }
+
+    /// list_connect_tokens 只挂解锁门禁(无 reauth):锁定即 VaultLocked。
+    fn assert_vault_locked_but_auth_gate_first_free(err: anyhow::Error) {
+        assert!(matches!(
+            err.downcast_ref::<PersonaError>(),
+            Some(PersonaError::VaultLocked(_))
+        ));
     }
 
     #[tokio::test]

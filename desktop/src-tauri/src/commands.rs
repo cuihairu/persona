@@ -5,7 +5,7 @@ use persona_core::models::wallet::CryptoWallet;
 use persona_core::models::CredentialType;
 use persona_core::storage::{CryptoWalletRepository, Database, WorkspaceRepository};
 use persona_core::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -4341,6 +4341,228 @@ pub(crate) fn query_agent_key_count(sock_path: &str) -> std::result::Result<usiz
 #[cfg(not(unix))]
 fn query_agent_key_count(_sock_path: &str) -> std::result::Result<usize, String> {
     Err("Agent key count not supported on this platform".to_string())
+}
+
+// -----------------------------------------------------------------------
+// Connect 本机自动化（CONNECT_AUTOMATION_DESIGN DR-1/DR-4/DR-5）。服务面
+// 在 connect_server.rs（三防线/限额/端点）；这里只做生命周期命令与 token
+// 管理命令。错误模式与命令层一致：业务失败一律 Ok(ApiResponse::error)，
+// reauth 走 map_persona_error 的 REAUTH_REQUIRED 码。
+// -----------------------------------------------------------------------
+
+/// Connect listener 运行状态（设置页渲染 + 自动化开关判定）。
+#[derive(Debug, Serialize)]
+pub struct ConnectServerStatus {
+    pub running: bool,
+    /// listener 实际端口（未运行 = None；端口 0 = OS 分配后的真实值）。
+    pub port: Option<u16>,
+}
+
+/// token 管理列表视图——剥除哈希（哈希不出库；列表只展示指纹）。
+#[derive(Debug, Serialize)]
+pub struct ConnectTokenView {
+    pub id: String,
+    pub label: String,
+    pub fingerprint: String,
+    pub scope: persona_core::connect::ConnectTokenScope,
+    pub created_at: String,
+    pub last_used_at: Option<String>,
+    pub revoked_at: Option<String>,
+}
+
+impl From<&persona_core::connect::ConnectTokenRow> for ConnectTokenView {
+    fn from(row: &persona_core::connect::ConnectTokenRow) -> Self {
+        Self {
+            id: row.id.to_string(),
+            label: row.label.clone(),
+            fingerprint: row.fingerprint.clone(),
+            scope: row.scope.clone(),
+            created_at: row.created_at.to_rfc3339(),
+            last_used_at: row.last_used_at.map(|t| t.to_rfc3339()),
+            revoked_at: row.revoked_at.map(|t| t.to_rfc3339()),
+        }
+    }
+}
+
+/// 创建成功响应：明文 token 只此一次（前端展示 + 复制，关闭后无法再查）。
+#[derive(Debug, Serialize)]
+pub struct ConnectTokenCreatedView {
+    pub token: String,
+    pub info: ConnectTokenView,
+}
+
+async fn connect_server_status_of(state: &State<'_, AppState>) -> ConnectServerStatus {
+    let guard = state.connect_server.lock().await;
+    match guard.as_ref() {
+        Some(handle) => ConnectServerStatus {
+            running: true,
+            port: Some(handle.port),
+        },
+        None => ConnectServerStatus {
+            running: false,
+            port: None,
+        },
+    }
+}
+
+/// 启动 Connect listener（bind 硬编码 127.0.0.1；端口 None = 0 = OS 分配）。
+/// 需要解锁会话；已运行时报错（前端先 stop 或按状态渲染）。
+#[command]
+pub async fn connect_server_start(
+    state: State<'_, AppState>,
+    port: Option<u16>,
+) -> std::result::Result<ApiResponse<ConnectServerStatus>, String> {
+    {
+        let guard = state.connect_server.lock().await;
+        if guard.is_some() {
+            return Ok(ApiResponse::error(
+                "Connect server is already running".to_string(),
+            ));
+        }
+    }
+    let unlocked = {
+        let service_guard = state.service.lock().await;
+        match service_guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => false,
+        }
+    };
+    if !unlocked {
+        return Ok(ApiResponse::error_with_code(
+            crate::error::CODE_SERVICE_LOCKED.to_string(),
+            "Vault must be unlocked before starting the Connect server".to_string(),
+        ));
+    }
+    match crate::connect_server::start_connect_server(state.service.clone(), port.unwrap_or(0))
+        .await
+    {
+        Ok(handle) => {
+            let status = ConnectServerStatus {
+                running: true,
+                port: Some(handle.port),
+            };
+            let mut guard = state.connect_server.lock().await;
+            // 竞态防御：重入时后到者不写槽（先到者已持有 listener），
+            // 后到的 handle 直接 drop（oneshot sender drop = 没有启动过
+            // 的 shutdown 通道被丢弃，不影响先到 listener）。
+            if guard.is_some() {
+                drop(handle);
+                return Ok(ApiResponse::error(
+                    "Connect server is already running".to_string(),
+                ));
+            }
+            *guard = Some(handle);
+            Ok(ApiResponse::success(status))
+        }
+        Err(e) => Ok(ApiResponse::error(format!("Failed to start: {}", e))),
+    }
+}
+
+/// 停止 Connect listener（幂等：未运行返回 running=false）。
+#[command]
+pub async fn connect_server_stop(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<ConnectServerStatus>, String> {
+    let handle = state.connect_server.lock().await.take();
+    if let Some(handle) = handle {
+        handle.stop();
+    }
+    Ok(ApiResponse::success(ConnectServerStatus {
+        running: false,
+        port: None,
+    }))
+}
+
+/// 查询 Connect listener 运行状态。
+#[command]
+pub async fn connect_server_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<ConnectServerStatus>, String> {
+    Ok(ApiResponse::success(connect_server_status_of(&state).await))
+}
+
+/// 创建 Connect token（敏感操作：core 权威 reauth 门禁；明文仅响应一次）。
+#[command]
+pub async fn connect_token_create(
+    state: State<'_, AppState>,
+    label: String,
+    scope: persona_core::connect::ConnectTokenScope,
+) -> std::result::Result<ApiResponse<ConnectTokenCreatedView>, String> {
+    let result = {
+        let service_guard = state.service.lock().await;
+        match service_guard.as_ref() {
+            Some(service) => service.create_connect_token(label, scope).await,
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    match result {
+        Ok((token, row)) => Ok(ApiResponse::success(ConnectTokenCreatedView {
+            token,
+            info: ConnectTokenView::from(&row),
+        })),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(msg),
+            })
+        }
+    }
+}
+
+/// token 管理列表（含已吊销，剥除哈希）。敏感面：需解锁会话。
+#[command]
+pub async fn connect_token_list(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<ConnectTokenView>>, String> {
+    let result = {
+        let service_guard = state.service.lock().await;
+        match service_guard.as_ref() {
+            Some(service) => service.list_connect_tokens().await,
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    match result {
+        Ok(rows) => Ok(ApiResponse::success(
+            rows.iter().map(ConnectTokenView::from).collect(),
+        )),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(msg),
+            })
+        }
+    }
+}
+
+/// 吊销 Connect token（幂等；core 权威 reauth 门禁）。即时生效。
+#[command]
+pub async fn connect_token_revoke(
+    state: State<'_, AppState>,
+    id: String,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let token_id = match Uuid::parse_str(&id) {
+        Ok(id) => id,
+        Err(_) => return Ok(ApiResponse::error(format!("Invalid token id: {}", id))),
+    };
+    let result = {
+        let service_guard = state.service.lock().await;
+        match service_guard.as_ref() {
+            Some(service) => service.revoke_connect_token(&token_id).await,
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    match result {
+        Ok(revoked) => Ok(ApiResponse::success(revoked)),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(msg),
+            })
+        }
+    }
 }
 
 #[cfg(test)]

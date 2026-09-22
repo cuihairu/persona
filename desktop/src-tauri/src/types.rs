@@ -48,6 +48,10 @@ pub struct AppState {
     /// （单一真相源，settings 不存开关——vault 文件拷机后 keyring 无
     /// 条目，功能自然回到未启用）。
     pub biometric_store: Arc<dyn crate::token_store::TokenStore>,
+    /// Connect 本机自动化 listener 句柄（端口 + 关停通道）；None = 未
+    /// 启动（DR-4 默认关闭 = 不创建 listener）。槽位即真相源，start/stop
+    /// 换槽防双 listener。
+    pub connect_server: Mutex<Option<crate::connect_server::ConnectServerHandle>>,
 }
 
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求

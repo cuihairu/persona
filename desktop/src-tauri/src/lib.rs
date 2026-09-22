@@ -12,6 +12,7 @@ pub mod biometric;
 #[cfg(test)]
 mod command_layer_tests;
 pub mod commands;
+pub mod connect_server;
 mod error;
 pub mod passkey_bridge;
 #[cfg(test)]
@@ -194,6 +195,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             biometric_store: Arc::new(token_store::OsKeyringTokenStore::new(
                 token_store::BIOMETRIC_SERVICE,
             )),
+            connect_server: Mutex::new(None),
         })
         .setup(|app| {
             // 日志先行：后续所有 tracing 事件（含托盘降级提示）都有落点
@@ -232,6 +234,12 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::set_password_expiry,
             commands::set_locale,
             commands::change_master_password,
+            commands::connect_server_start,
+            commands::connect_server_stop,
+            commands::connect_server_status,
+            commands::connect_token_create,
+            commands::connect_token_list,
+            commands::connect_token_revoke,
             commands::get_travel_status,
             commands::set_travel_marked,
             commands::enter_travel_mode,

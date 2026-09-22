@@ -39,6 +39,7 @@ fn mock_app_with_parts(
         token_store,
         biometric_provider,
         biometric_store,
+        connect_server: Mutex::new(None),
     });
     app
 }
