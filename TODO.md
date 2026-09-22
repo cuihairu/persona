@@ -202,9 +202,9 @@ Desktop (Tauri v2 + React)
     start，对齐 1Password 语义）
   - 已知限制：设置页开关与 active identity 对同一 workspace 行是
     last-write-wins
-- [ ] UI 对齐 1Password 8 交互范式（分阶段；身份维度保留为 Persona 特色，
+- [x] UI 对齐 1Password 8 交互范式（分阶段；身份维度保留为 Persona 特色，
   信息架构不照搬——1Password 无身份/上下文概念，IdentitySwitcher 语义是
-  "身份"而非"账户"）
+  "身份"而非"账户"）——2026-09-22 五个子项全部落地后勾选主条目
   - [x] 双栏布局：中间条目列表（图标+标题+副标题，行内复制/详情按钮）+
     右侧常驻详情面板，取代凭据卡片网格 + 点击弹 modal
   - [x] 全局快速搜索（⌘K / 顶栏搜索框，跨身份跨类型结果分组；范围天然
