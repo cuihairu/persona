@@ -15,6 +15,7 @@ const makeIdentity = (id: string, name: string) => ({
   created_at: '2023-01-01T00:00:00Z',
   updated_at: '2023-01-01T00:00:00Z',
   is_active: true,
+  travel_marked: false,
 });
 
 const makeCred = (over: Record<string, any> = {}) => ({
@@ -28,6 +29,7 @@ const makeCred = (over: Record<string, any> = {}) => ({
   created_at: '2023-01-01T00:00:00Z',
   updated_at: '2023-01-01T00:00:00Z',
   is_active: true,
+  travel_marked: false,
   is_favorite: false,
   ...over,
 });

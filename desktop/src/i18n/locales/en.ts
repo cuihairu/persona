@@ -128,6 +128,37 @@ export default {
       biometricDisabled: 'Biometric unlock disabled',
       biometricOperationFailed: 'Failed to change biometric unlock',
     },
+    travel: {
+      title: 'Travel mode',
+      activeHint:
+        'On ({{time}}) — marked identities are off this device, sealed in the encrypted sidecar only',
+      inactiveHint:
+        'Seal marked identities into an encrypted sidecar and remove them from this device ({{count}} identity/identities marked). Useful at borders or when lending a device.',
+      inconsistentWarning:
+        'Warning: travel mode is flagged active, but the encrypted sidecar file is gone — the removed data lived only in that file and is lost.',
+      enterButton: 'Enter…',
+      exitButton: 'Exit…',
+      setTitle: 'Enter travel mode',
+      setDescription:
+        'Set a travel passphrase. Marked identities will be removed from this device and can only be restored with it.',
+      enterTitle: 'Exit travel mode',
+      enterDescription:
+        'Enter the travel passphrase to restore the removed identities to this device.',
+      passphrasePlaceholder: 'Travel passphrase',
+      confirmPlaceholder: 'Repeat travel passphrase',
+      passphraseMismatch: 'Passphrases do not match',
+      noFallbackWarning:
+        'The master password cannot recover travel data — a lost passphrase means lost data.',
+      setConfirm: 'Enter travel mode',
+      enterConfirm: 'Restore data',
+      entered: 'Travel mode on — {{count}} identity/identities moved off this device',
+      exited: 'Travel mode off — {{count}} identity/identities restored',
+      operationFailed: 'Travel mode operation failed',
+      markLabel: 'Remove with travel mode',
+      markHint:
+        'When travel mode is entered, all data of this identity is sealed and deleted from this device',
+      markFailed: 'Failed to save the travel mark',
+    },
     advanced: {
       title: 'Advanced features',
       description: 'Advanced features are off by default. Turn on only what you need.',

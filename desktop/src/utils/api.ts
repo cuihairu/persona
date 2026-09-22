@@ -17,6 +17,8 @@ import type {
   SyncConfig,
   FaviconData,
   BiometricStatus,
+  TravelStatus,
+  TravelCounts,
   WorkspaceSettings,
   SshAgentStatus,
   SshAgentKey,
@@ -130,6 +132,30 @@ class PersonaAPI {
         db_path: dbPath ?? null,
       },
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // 旅行模式（Travel Mode）
+  // ---------------------------------------------------------------------
+
+  /** 旅行模式状态（免解锁读取；inconsistent = active && !sidecar_exists） */
+  async getTravelStatus(): Promise<ApiResponse<TravelStatus>> {
+    return invoke('get_travel_status');
+  }
+
+  /** 窄写身份的 travel 标记位（enter 时随之移出本设备的身份清单） */
+  async setTravelMarked(identityId: string, marked: boolean): Promise<ApiResponse<boolean>> {
+    return invoke('set_travel_marked', { identityId, marked });
+  }
+
+  /** 进入旅行模式：被标记身份打包加密进 sidecar 并从主库删除 */
+  async enterTravelMode(passphrase: string): Promise<ApiResponse<TravelCounts>> {
+    return invoke('enter_travel_mode', { passphrase });
+  }
+
+  /** 退出旅行模式：输 travel 口令把被移除身份原样恢复回主库 */
+  async exitTravelMode(passphrase: string): Promise<ApiResponse<TravelCounts>> {
+    return invoke('exit_travel_mode', { passphrase });
   }
 
   /** 窄写同步服务器配置；server_token 空串 = 后端保留旧 token（真值存 OS keyring） */

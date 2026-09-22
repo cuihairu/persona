@@ -5,10 +5,18 @@ import i18n from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
 import { useAppStore } from '@/stores/appStore';
-import type { BiometricStatus, FeatureFlags, Identity, IdentityType, ThemePreference } from '@/types';
+import type {
+  BiometricStatus,
+  FeatureFlags,
+  Identity,
+  IdentityType,
+  ThemePreference,
+  TravelStatus,
+} from '@/types';
 import { PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
 import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 import ReauthModal from './ReauthModal';
+import TravelPassphraseModal from './TravelPassphraseModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface SettingsModalProps {
@@ -213,12 +221,71 @@ const SECURITY_EXPIRY_OPTIONS: { value: string; label: string }[] = [
   { value: '365', label: 'settings.security.expiry365' },
 ];
 
+/** 旅行模式状态行（SecurityPane 底部）：inactive 显 enter 入口、active 显
+ *  exit 入口；inconsistent（旗标在但 sidecar 没了）红警告诚实告知数据已丢 */
+const TravelModeSection: React.FC<{
+  status: TravelStatus | null;
+  busy: boolean;
+  onEnter: () => void;
+  onExit: () => void;
+}> = ({ status, busy, onEnter, onExit }) => {
+  const { t } = useTranslation();
+  const identities = useAppStore((s) => s.identities);
+  const markedCount = identities.filter((i) => i.travel_marked).length;
+
+  return (
+    <div className="flex items-start justify-between gap-4" data-testid="travel-section">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+          {t('settings.travel.title')}
+        </p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          {status?.active
+            ? t('settings.travel.activeHint', {
+                time: status.entered_at ?? '',
+              })
+            : t('settings.travel.inactiveHint', { count: markedCount })}
+        </p>
+        {status?.inconsistent && (
+          <p
+            className="mt-2 text-xs text-red-600 dark:text-red-400"
+            data-testid="travel-inconsistent-warning"
+          >
+            {t('settings.travel.inconsistentWarning')}
+          </p>
+        )}
+      </div>
+      {status?.active ? (
+        <button
+          type="button"
+          data-testid="travel-exit-button"
+          onClick={onExit}
+          disabled={busy}
+          className="btn-secondary flex-shrink-0"
+        >
+          {t('settings.travel.exitButton')}
+        </button>
+      ) : (
+        <button
+          type="button"
+          data-testid="travel-enter-button"
+          onClick={onEnter}
+          disabled={busy}
+          className="btn-secondary flex-shrink-0"
+        >
+          {t('settings.travel.enterButton')}
+        </button>
+      )}
+    </div>
+  );
+};
+
 const SecurityPane: React.FC<{
   changingPassword: boolean;
   setChangingPassword: (open: boolean) => void;
 }> = ({ changingPassword, setChangingPassword }) => {
   const { t } = useTranslation();
-  const { lockService } = usePersonaService();
+  const { lockService, loadIdentities } = usePersonaService();
   const [expiryDays, setExpiryDays] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   // biometric：enabled = keyring 有托管条目（活查；不随 settings JSON 走，
@@ -227,6 +294,25 @@ const SecurityPane: React.FC<{
   const [showEnableModal, setShowEnableModal] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
+
+  // 旅行模式：状态免解锁可读；enter/exit 弹口令窗。REAUTH_REQUIRED 时先
+  // 验主密码再重开口令窗（不保存明文口令跨弹窗）。
+  const [travelStatus, setTravelStatus] = useState<TravelStatus | null>(null);
+  const [travelModalMode, setTravelModalMode] = useState<null | 'set' | 'enter'>(null);
+  // REAUTH 打断前的原意图（reauth 成功后据此重开口令窗）
+  const [travelPendingMode, setTravelPendingMode] = useState<'set' | 'enter'>('set');
+  const [travelBusy, setTravelBusy] = useState(false);
+  const [travelError, setTravelError] = useState<string | null>(null);
+  const [travelReauthOpen, setTravelReauthOpen] = useState(false);
+
+  const refreshTravelStatus = async () => {
+    try {
+      const resp = await personaAPI.getTravelStatus();
+      if (resp.success && resp.data) setTravelStatus(resp.data);
+    } catch {
+      // 状态读取失败不打断面板，保持上次值
+    }
+  };
 
   // 初始值来自服务端真相（旧 JSON 缺键 → null = 不过期）
   useEffect(() => {
@@ -244,6 +330,7 @@ const SecurityPane: React.FC<{
         if (!cancelled && resp.success && resp.data) setBiometric(resp.data);
       })
       .catch(() => {});
+    void refreshTravelStatus();
     return () => {
       cancelled = true;
     };
@@ -320,6 +407,64 @@ const SecurityPane: React.FC<{
       setEnableError(t('settings.security.biometricOperationFailed'));
     } finally {
       setEnabling(false);
+    }
+  };
+
+  // ---------------------------------------------------------------------
+  // 旅行模式：enter（口令窗 mode='set'）/ exit（mode='enter'）。
+  // REAUTH_REQUIRED → 关口令窗、弹 ReauthModal；验证过后按原意图重开
+  // 口令窗再输 travel 口令（口令不跨弹窗保留）。成功后刷新状态 + 重载
+  // 身份列表。
+  // ---------------------------------------------------------------------
+  const submitTravelPassphrase = async (passphrase: string) => {
+    const mode = travelModalMode;
+    if (!mode) return;
+    setTravelBusy(true);
+    setTravelError(null);
+    try {
+      const resp =
+        mode === 'set'
+          ? await personaAPI.enterTravelMode(passphrase)
+          : await personaAPI.exitTravelMode(passphrase);
+      if (resp.success && resp.data) {
+        setTravelModalMode(null);
+        await refreshTravelStatus();
+        await loadIdentities();
+        toast.success(
+          t(mode === 'set' ? 'settings.travel.entered' : 'settings.travel.exited', {
+            count: resp.data.identities,
+          }),
+        );
+      } else if (resp.error_code === 'REAUTH_REQUIRED') {
+        setTravelPendingMode(mode);
+        setTravelModalMode(null);
+        setTravelReauthOpen(true);
+      } else {
+        setTravelError(resp.error || t('settings.travel.operationFailed'));
+      }
+    } catch {
+      setTravelError(t('settings.travel.operationFailed'));
+    } finally {
+      setTravelBusy(false);
+    }
+  };
+
+  // reauth 失败也显示在 ReauthModal 的错误条（travelError 此时只喂它）
+  const handleTravelReauth = async (masterPassword: string) => {
+    setTravelBusy(true);
+    try {
+      const resp = await personaAPI.reauthVerify(masterPassword);
+      if (resp.success && resp.data) {
+        setTravelError(null);
+        setTravelReauthOpen(false);
+        setTravelModalMode(travelPendingMode);
+      } else {
+        setTravelError(resp.error || t('settings.travel.operationFailed'));
+      }
+    } catch {
+      setTravelError(t('settings.travel.operationFailed'));
+    } finally {
+      setTravelBusy(false);
     }
   };
 
@@ -400,6 +545,18 @@ const SecurityPane: React.FC<{
             />
           </button>
         </div>
+        <TravelModeSection
+          status={travelStatus}
+          busy={travelBusy}
+          onEnter={() => {
+            setTravelError(null);
+            setTravelModalMode('set');
+          }}
+          onExit={() => {
+            setTravelError(null);
+            setTravelModalMode('enter');
+          }}
+        />
       </div>
 
       {changingPassword && (
@@ -421,6 +578,38 @@ const SecurityPane: React.FC<{
           isVerifying={enabling}
           onSubmit={handleBiometricEnable}
           onClose={() => setShowEnableModal(false)}
+        />
+      )}
+
+      {travelModalMode && (
+        <TravelPassphraseModal
+          isOpen
+          mode={travelModalMode}
+          description={t(
+            travelModalMode === 'set'
+              ? 'settings.travel.setDescription'
+              : 'settings.travel.enterDescription',
+          )}
+          error={travelError}
+          isBusy={travelBusy}
+          onSubmit={submitTravelPassphrase}
+          onClose={() => {
+            setTravelModalMode(null);
+            setTravelError(null);
+          }}
+        />
+      )}
+
+      {travelReauthOpen && (
+        <ReauthModal
+          isOpen
+          error={travelError}
+          isVerifying={travelBusy}
+          onSubmit={handleTravelReauth}
+          onClose={() => {
+            setTravelReauthOpen(false);
+            setTravelError(null);
+          }}
         />
       )}
     </div>
@@ -577,16 +766,34 @@ const GeneralPane: React.FC<{
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const { t } = useTranslation();
-  const { identities, currentIdentity, updateIdentity, deleteIdentity, isLoading } =
+  const { identities, currentIdentity, updateIdentity, deleteIdentity, isLoading, loadIdentities } =
     usePersonaService();
 
   const [tab, setTab] = useState<SettingsTab>('general');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Partial<Identity>>({});
   const [draftTags, setDraftTags] = useState<string>('');
+  // travel 标记开关是即时生效（非草稿字段）：请求中锁行防双击
+  const [markBusyId, setMarkBusyId] = useState<string | null>(null);
   // 改密弹窗开关提升到本层：SettingsModal 的 Esc 在其叠开时让位上层
   const [changingPassword, setChangingPassword] = useState(false);
   useEscapeToClose(isOpen && !changingPassword, onClose);
+
+  const toggleTravelMark = async (identity: Identity) => {
+    setMarkBusyId(identity.id);
+    try {
+      const resp = await personaAPI.setTravelMarked(identity.id, !identity.travel_marked);
+      if (resp.success) {
+        await loadIdentities();
+      } else {
+        toast.error(resp.error || t('settings.travel.markFailed'));
+      }
+    } catch {
+      toast.error(t('settings.travel.markFailed'));
+    } finally {
+      setMarkBusyId(null);
+    }
+  };
 
   const editingIdentity = useMemo(
     () => identities.find((id) => id.id === editingId) ?? null,
@@ -775,6 +982,40 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
                                   onChange={(e) => setDraftTags(e.target.value)}
                                   placeholder={t('settings.commaSeparated')}
                                 />
+                              </div>
+
+                              {/* 旅行模式标记：即时生效（enter 时随之移出本设备）。
+                                  enter 之后该身份已从列表移除，故"激活中"的
+                                  disabled 天然不可达，无需全局 travel 状态。 */}
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <label className="label mb-1 block">
+                                    {t('settings.travel.markLabel')}
+                                  </label>
+                                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                                    {t('settings.travel.markHint')}
+                                  </p>
+                                </div>
+                                <button
+                                  type="button"
+                                  role="switch"
+                                  aria-checked={identity.travel_marked}
+                                  aria-label={t('settings.travel.markLabel')}
+                                  data-testid={`travel-mark-toggle-${identity.id}`}
+                                  disabled={markBusyId === identity.id}
+                                  onClick={() => void toggleTravelMark(identity)}
+                                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    identity.travel_marked
+                                      ? 'bg-primary-600'
+                                      : 'bg-gray-200 dark:bg-gray-700'
+                                  }`}
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                                      identity.travel_marked ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                                  />
+                                </button>
                               </div>
 
                               <div className="flex gap-2 pt-2">

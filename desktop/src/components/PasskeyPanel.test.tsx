@@ -6,8 +6,8 @@ import toast from 'react-hot-toast';
 import type { Identity, Passkey } from '@/types';
 
 const mockIdentities: Identity[] = [
-  { id: 'id-1', name: 'Personal', identity_type: 'Personal', tags: [], created_at: '', updated_at: '', is_active: true },
-  { id: 'id-2', name: 'Work', identity_type: 'Work', tags: [], created_at: '', updated_at: '', is_active: true },
+  { id: 'id-1', name: 'Personal', identity_type: 'Personal', tags: [], created_at: '', updated_at: '', is_active: true, travel_marked: false },
+  { id: 'id-2', name: 'Work', identity_type: 'Work', tags: [], created_at: '', updated_at: '', is_active: true, travel_marked: false },
 ];
 /** 个别用例（空身份短路）需要替换；beforeEach 恢复默认 */
 let identitiesFixture: Identity[] = mockIdentities;

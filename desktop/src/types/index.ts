@@ -5,12 +5,14 @@
  * PASSWORD_CHANGE_REQUIRED：主密码按策略需轮换 → 前端弹强制改密弹窗。
  * BIOMETRIC_RESET：biometric 托管条目不存在或已失效自删 → 解锁屏隐藏
  * 指纹按钮、提示改用主密码登录。
+ * TRAVEL_MODE_ACTIVE：旅行模式进行中，改密等不兼容操作被拒 → 提示先退出。
  */
 export type ApiErrorCode =
   | 'REAUTH_REQUIRED'
   | 'SERVICE_LOCKED'
   | 'PASSWORD_CHANGE_REQUIRED'
-  | 'BIOMETRIC_RESET';
+  | 'BIOMETRIC_RESET'
+  | 'TRAVEL_MODE_ACTIVE';
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -358,6 +360,35 @@ export interface Identity {
   created_at: string;
   updated_at: string;
   is_active: boolean;
+  /** 旅行模式标记：enter 时随之移出本设备 */
+  travel_marked: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 旅行模式（与 Rust TravelStatus/TravelCounts 的 serde 输出对应）
+// ---------------------------------------------------------------------------
+
+/** 旅行模式状态（读取免解锁免 travel 口令） */
+export interface TravelStatus {
+  /** settings 里的 travel_mode 旗标 */
+  active: boolean;
+  /** 进入时刻（RFC3339；enter 写入、exit 清空） */
+  entered_at: string | null;
+  /** `<db dir>/travel.persenc` 是否存在 */
+  sidecar_exists: boolean;
+  /** active && !sidecar_exists：数据容器没了——数据已丢失 */
+  inconsistent: boolean;
+}
+
+/** enter/exit 完成后的数量报告 */
+export interface TravelCounts {
+  identities: number;
+  credentials: number;
+  attachments: number;
+  passkeys: number;
+  wallets: number;
+  history_rows: number;
+  files: number;
 }
 
 export interface Credential {

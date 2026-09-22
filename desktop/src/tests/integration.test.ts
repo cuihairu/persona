@@ -85,6 +85,7 @@ describe('Desktop Application Integration Tests', () => {
       created_at: '2023-01-01T00:00:00Z',
       updated_at: '2023-01-01T00:00:00Z',
       is_active: true,
+      travel_marked: false,
     };
 
     it('should create a new identity', async () => {
@@ -147,6 +148,7 @@ describe('Desktop Application Integration Tests', () => {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         is_active: true,
+        travel_marked: false,
       };
 
       const mockResponse: ApiResponse<Identity> = {

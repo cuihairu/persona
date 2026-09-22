@@ -20,6 +20,11 @@ jest.mock('@/utils/api', () => ({
     biometricStatus: jest.fn(),
     biometricEnable: jest.fn(),
     biometricDisable: jest.fn(),
+    getTravelStatus: jest.fn(),
+    setTravelMarked: jest.fn(),
+    enterTravelMode: jest.fn(),
+    exitTravelMode: jest.fn(),
+    reauthVerify: jest.fn(),
   },
 }));
 
@@ -37,6 +42,16 @@ const mockChangePw = personaAPI.changeMasterPassword as jest.Mock;
 const mockBiometricStatus = personaAPI.biometricStatus as jest.Mock;
 const mockBiometricEnable = personaAPI.biometricEnable as jest.Mock;
 const mockBiometricDisable = personaAPI.biometricDisable as jest.Mock;
+const mockGetTravelStatus = personaAPI.getTravelStatus as jest.Mock;
+const mockSetTravelMarked = personaAPI.setTravelMarked as jest.Mock;
+const mockEnterTravel = personaAPI.enterTravelMode as jest.Mock;
+const mockExitTravel = personaAPI.exitTravelMode as jest.Mock;
+const mockReauthVerify = personaAPI.reauthVerify as jest.Mock;
+
+const inactiveTravel = {
+  success: true,
+  data: { active: false, entered_at: null, sidecar_exists: false, inconsistent: false },
+};
 
 /** 空设置响应（SyncServerPane 的初始加载） */
 const emptySettings = { success: true, data: null };
@@ -45,6 +60,14 @@ const emptySettings = { success: true, data: null };
 const openIdentitiesTab = () => {
   fireEvent.click(screen.getByRole('tab', { name: '身份' }));
 };
+
+/** 旅行口令弹窗输入辅助 */
+const typeTravel = (value: string) =>
+  fireEvent.change(screen.getByTestId('travel-passphrase-input'), { target: { value } });
+const typeTravelConfirm = (value: string) =>
+  fireEvent.change(screen.getByTestId('travel-passphrase-confirm-input'), {
+    target: { value },
+  });
 
 describe('components/SettingsModal', () => {
   beforeEach(() => {
@@ -59,6 +82,8 @@ describe('components/SettingsModal', () => {
       success: true,
       data: { available: false, enabled: false, platform: 'linux-polkit' },
     });
+    // 默认旅行模式关闭
+    mockGetTravelStatus.mockResolvedValue(inactiveTravel);
   });
 
   it('renders nothing when closed', () => {
@@ -746,5 +771,247 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('biometric-toggle')).toHaveAttribute('aria-checked', 'false');
     });
     expect(toast.success).toHaveBeenCalledWith('指纹解锁已关闭');
+  });
+
+  // -------------------------------------------------------------------------
+  // 旅行模式区块（SecurityPane 状态行 + 口令弹窗 + REAUTH 重试）
+  // -------------------------------------------------------------------------
+
+  /** travel 用例的 hook mock：带 loadIdentities（enter/exit 成功后重载列表） */
+  const travelHook = () => {
+    const loadIdentities = jest.fn().mockResolvedValue(undefined);
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+      lockService: jest.fn(),
+      loadIdentities,
+    });
+    return loadIdentities;
+  };
+
+  it('renders the travel enter button while inactive and exit while active', async () => {
+    travelHook();
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-enter-button')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('travel-exit-button')).not.toBeInTheDocument();
+
+    // 活动态换显 exit 按钮
+    mockGetTravelStatus.mockResolvedValue({
+      success: true,
+      data: {
+        active: true,
+        entered_at: '2026-09-22T08:00:00Z',
+        sidecar_exists: true,
+        inconsistent: false,
+      },
+    });
+    await act(async () => {});
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-exit-button')).toBeInTheDocument();
+    });
+  });
+
+  it('shows the inconsistent warning when the sidecar is gone', async () => {
+    travelHook();
+    mockGetTravelStatus.mockResolvedValue({
+      success: true,
+      data: { active: true, entered_at: null, sidecar_exists: false, inconsistent: true },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-inconsistent-warning')).toHaveTextContent('sidecar');
+    });
+  });
+
+  it('enters travel mode with a matched passphrase and reloads identities', async () => {
+    const loadIdentities = travelHook();
+    mockEnterTravel.mockResolvedValue({
+      success: true,
+      data: { identities: 2, credentials: 5, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-enter-button')).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId('travel-enter-button'));
+
+    // 口令窗 mode=set：双录
+    expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
+    expect(mockEnterTravel).not.toHaveBeenCalled();
+
+    typeTravel('travel-pw');
+    typeTravelConfirm('different');
+    fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    await act(async () => {});
+    expect(mockEnterTravel).not.toHaveBeenCalled();
+    expect(screen.getByTestId('travel-passphrase-error')).toHaveTextContent('两次输入的口令不一致');
+
+    typeTravelConfirm('travel-pw');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+
+    await waitFor(() => {
+      expect(mockEnterTravel).toHaveBeenCalledWith('travel-pw');
+    });
+    await waitFor(() => {
+      expect(loadIdentities).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('旅行模式已开启——2 个身份已移出本设备');
+    });
+    expect(screen.queryByTestId('travel-passphrase-modal')).not.toBeInTheDocument();
+  });
+
+  it('exits travel mode; a wrong passphrase stays in the modal for retry', async () => {
+    travelHook();
+    mockGetTravelStatus.mockResolvedValue({
+      success: true,
+      data: { active: true, entered_at: null, sidecar_exists: true, inconsistent: false },
+    });
+    mockExitTravel.mockResolvedValueOnce({ success: false, error: 'passphrase is wrong' });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-exit-button')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('travel-exit-button'));
+
+    // mode=enter：单录
+    expect(screen.queryByTestId('travel-passphrase-confirm-input')).not.toBeInTheDocument();
+    typeTravel('wrong-pw');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+
+    await waitFor(() => {
+      expect(mockExitTravel).toHaveBeenCalledWith('wrong-pw');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-passphrase-error')).toHaveTextContent(
+        'passphrase is wrong',
+      );
+    });
+    expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
+
+    // 改对口令原地重试成功
+    mockExitTravel.mockResolvedValueOnce({
+      success: true,
+      data: { identities: 1, credentials: 0, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
+    });
+    typeTravel('right-pw');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('travel-passphrase-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  it('interrupts enter with REAUTH_REQUIRED, verifies, and reopens the passphrase modal', async () => {
+    travelHook();
+    mockEnterTravel.mockResolvedValueOnce({
+      success: false,
+      error_code: 'REAUTH_REQUIRED',
+      error: 'Re-authentication required',
+    });
+    mockReauthVerify.mockResolvedValueOnce({ success: true, data: true });
+    mockEnterTravel.mockResolvedValueOnce({
+      success: true,
+      data: { identities: 1, credentials: 0, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-enter-button')).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId('travel-enter-button'));
+    typeTravel('travel-pw');
+    typeTravelConfirm('travel-pw');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+
+    // 敏感操作门禁：口令窗收起、弹主密码重验
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-modal')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('travel-passphrase-modal')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('reauth-modal').querySelector('input') as HTMLInputElement, {
+      target: { value: 'master-pw' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+
+    // 验证通过 → 按原意图（enter）重开口令窗，travel 口令需重输
+    await waitFor(() => {
+      expect(mockReauthVerify).toHaveBeenCalledWith('master-pw');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
+    });
+    expect((screen.getByTestId('travel-passphrase-input') as HTMLInputElement).value).toBe('');
+    expect(mockEnterTravel).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // 身份编辑表单的 travel 标记开关（即时生效）
+  // -------------------------------------------------------------------------
+
+  it('toggles the identity travel mark immediately and reloads', async () => {
+    const identity = {
+      id: 'id-1',
+      name: 'Work',
+      identity_type: 'Work',
+      description: '',
+      email: '',
+      phone: '',
+      tags: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      is_active: true,
+      travel_marked: false,
+    } as any;
+    const loadIdentities = jest.fn().mockResolvedValue(undefined);
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [identity],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+      lockService: jest.fn(),
+      loadIdentities,
+    });
+    mockSetTravelMarked.mockResolvedValue({ success: true, data: true });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    openIdentitiesTab();
+    fireEvent.click(screen.getByTitle('编辑'));
+
+    const toggle = await screen.findByTestId('travel-mark-toggle-id-1');
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    await waitFor(() => {
+      expect(mockSetTravelMarked).toHaveBeenCalledWith('id-1', true);
+    });
+    await waitFor(() => {
+      expect(loadIdentities).toHaveBeenCalled();
+    });
   });
 });
