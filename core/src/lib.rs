@@ -4,6 +4,8 @@
 //! including cryptographic operations, secure storage, and identity management.
 
 pub mod auth;
+#[cfg(feature = "backup")]
+pub mod backup;
 pub mod breach;
 pub mod crypto;
 pub mod events;

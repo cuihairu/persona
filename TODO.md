@@ -350,6 +350,23 @@ Server & Sync (optional)
   见 PERSENC1 密文）+ metrics 加 backups_created/deleted + compose 透
   传新 env（BACKUP_DIR=/data/backups 落命名卷）。THREAT_MODEL 登记
   "备份保管端点"（不防扣留/回滚、恢复双要素、附件不进 v1 备份）。
+- [x] 客户端备份链 core 模块 + CLI 命令（2026-09）
+  ——core `backup` feature（进 default，reqwest/flate2/sqlite 均已在
+  default 树零增量）：`file_crypto`（PERSENC1 字节级平移自 CLI，与
+  `--encrypt` 导出互解，解密侧 iterations/parallelism 恒 3/1 的历史
+  格式约束保留）、`snapshot`（VACUUM INTO 绑定参数优先+转义字面量
+  退路、**产物存在性校验**——sqlx 对 `:memory:` 池的 VACUUM INTO 会
+  返回 Ok 却不落盘（实测 0.8.6），生产路径 identities.db 恒为文件库
+  不受影响、校验防静默失败流出空备份；gzip 魔数自适应；恢复链解密→
+  解压→SQLite 头校验→写文件）、`client`（BackupClient 四端点，
+  300s 超时、下载本地复算 sha256 对 ETag、delete 幂等 404 视成功、
+  手写 TcpListener 假服务器测试——core 不引 axum/tower dev-dep）。
+  CLI：`utils/file_crypto` 改薄包装（签名/测试/错误文案不变）+
+  `persona backup push/list/pull/restore/delete`（env 沿用
+  PERSONA_SERVER_URL/TOKEN 都非空才启用 fail-closed；push 不要求
+  解锁；口令 `--passphrase-env VAR`→PERSONA_PAYLOAD_PASSPHRASE→
+  交互三级；restore 确认在前口令在后、staged 临时文件复验成功才
+  换库、旧库留 .bak、附件缺失提示）。
 - [x] core::events::Emitter 客户端上报器（批量+重试）
   ——512b2495 wire 镜像 + 字节口径预校验（毒丸客户端逐条丢弃，防
   server 全有或全无整批 422；action 走 Display 非 serde，externally

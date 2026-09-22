@@ -57,6 +57,9 @@ enum Commands {
     /// Edit an identity
     Edit(commands::edit::EditArgs),
 
+    /// Push/list/pull/restore/delete encrypted vault backups
+    Backup(commands::backup::BackupArgs),
+
     /// Export identities
     Export(commands::export::ExportArgs),
 
@@ -148,6 +151,7 @@ async fn main() -> Result<()> {
         Commands::Remove(args) => commands::remove::execute(args, &config).await,
         Commands::Edit(args) => commands::edit::execute(args, &config).await,
         Commands::Export(args) => commands::export::execute(args, &config).await,
+        Commands::Backup(args) => commands::backup::execute(args, &config).await,
         Commands::Import(args) => commands::import::execute(args, &config).await,
         Commands::Import1Pux(args) => commands::import_1pux::execute(args, &config).await,
         Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
