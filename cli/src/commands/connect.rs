@@ -323,7 +323,10 @@ async fn revoke_token(config: &CliConfig, ui: &dyn PromptUi, target: &str) -> Re
         .context("failed to revoke connect token")?;
     // 幂等：core 对已吊销 token 返回 false（且不重复记审计）——照实说
     if already_revoked {
-        println!("{}", format!("Token {id} was already revoked (no-op)").yellow());
+        println!(
+            "{}",
+            format!("Token {id} was already revoked (no-op)").yellow()
+        );
     } else {
         println!("{}", format!("✓ Token {id} revoked").green());
     }
