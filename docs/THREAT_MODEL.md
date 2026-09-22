@@ -163,6 +163,22 @@ salt、verifier，密码与 Argon2 派生值永不出机）。设计见
 - **明确不宣称**：不防服务器操作者对 `auth_devices` 表**离线爆破 verifier**（verifier 在服务器手里，成本 = Argon2 + 主密码强度——与本地库被拖库同级，主密码强度仍是核心风险）；不防**未认证 challenge 刷量**（内存会话缓存无速率限制，已知 DoS 面，部署侧反代缓解）；不防服务器**拒绝服务/删除注册记录**（设备无第二副本，重新注册即可，但属可用性损失）；SRP 数学依赖 RustCrypto `srp` crate（低维护，见设计稿 crate 调研）——由 RFC 5054 官方向量回归测试锁定实现，seam 隔离可换。
 - **已知限制**：设备吊销/移除未实现（`auth_devices` 无删除路径，阶段 2 随设备生命周期落地）；无变更门槛外的审计——注册/登录仅服务器日志（`tracing`），不入事件库；短期令牌无服务端主动吊销（TTL 到期自然失效，最长暴露 15 分钟）。
 
+## E2EE 同步中继（`/api/v1/sync/*`，2026-09，E2EE 同步轨道阶段 2）
+
+设备间端到端加密同步的密文中继：oplog（逐条 `SyncOp`：item UUID、kind、
+`(lamport, device_id)` 排序键、密文载荷）按到达顺序追加、按游标转发；
+group key 以「设备信封」形态保管（X25519 静态公钥密封 + AES-256-GCM，
+`persona-dev-env-1`）。服务器是**纯中继**：盲存、追加、转发，不做任何
+胜负判定或合并。设计见 `docs/E2EE_SYNC_DESIGN.md`（DR-1/3/4），服务端
+可见面清单见其 §9。
+
+- **信任根**：主密码（仅本地，从不外发）+ 每设备 X25519 私钥（DR-1，持久化由宿主负责——OS keyring / 0600 文件，core 不依赖 keyring）。服务器没有任何解密路径：不见 group key 明文、不见 per-item key，只有密文与元数据（集成测试 `server_stores_only_ciphertext` 锁定）。
+- **数据处理范围**：oplog 行（op_id/item_id/kind/op/lamport/device_id/timestamp + 密文两列，单批 ≤500 条、载荷 ≤512 KiB、body ≤1 MiB）、设备登记（设备名 + 32 字节 X25519 公钥，重名 409——公钥不可被静默替换）、信封（80 字节，**只能挂已登记设备**——信封不能挂幽灵设备，服务器侧 fail-closed 的一半）。**诚实登记的元数据侧信道**：服务器可观察条目数量、尺寸、到达时间与设备拓扑——不缓解（by design，密文长度不可避免）。
+- **冲突由客户端裁决**（DR-4）：胜负以 `(lamport, device_id)` 全序由各客户端独立计算（同 item 同 lamport 异 device = 真冲突，保双版本等用户裁决）；服务器按到达顺序存储转发，`server_does_not_arbitrate_conflicts` 与双端收敛测试 `two_devices_converge_over_real_tcp_conflict_keeps_both_versions`（真 TCP，双端离线编辑真冲突 → 两端收敛同一主位 + 双版本密文都在）锁定该语义。
+- **认证与授权**：整个子路由挂 `require_bearer`（静态令牌与 SRP 短期令牌共存，同 events/backups）。授权语义 = **「有信封 = 已授权」，由密码学而非服务器 ACL 承担**：未授权设备 GET 拿得到别人的信封，但无对应私钥则 GCM tag 校验必失败——拿不到 group key 也解不开任何条目（`group_key_envelope_round_trip_and_fail_closed` 锁定）。
+- **明确不宣称**：不防服务器篡改/回滚/选择性扣留 oplog（「设备私钥签名 oplog」是设计稿 §11 开放问题 6，远期）；不防恶意服务器/客户端无限灌 oplog（批内上限只缓解量级，不根除）；**本阶段不校验 op.device_id 与认证身份的对应**（静态 token 与 SRP token 混用，无统一映射）——恶意客户端可向 oplog 写任意密文垃圾或伪造更高 lamport 的假版本，但解不开任何条目，也删不掉其他设备的本地库（本地优先：服务器永远不是事实源，伪造版本在正常设备上同样进 LWW、不覆盖其本地明文库）。设备被攻破的爆炸半径 = 该设备私钥 → group key → 全部同步数据，与「本机被攻破 = 本库全失」同级，不因同步而放大额外资产。
+- **已知限制**：附件不经 oplog（512 KiB 载荷上限；v2 议题）；travel 激活期间 push/pull 双停是**客户端引擎闸**（`SyncEngine` 构造注入，服务器无感知）——闸失效的后果是 travel 语义被同步破坏，属阶段 3 接线时的走查项；group key 轮换未实现——当前移除设备只删信封与登记，历史密文仍可被该设备移除前持有的密钥解开（**无前向安全**，DR-3 已声明，安全轮换是闭环前提，§11 开放问题 2）；oplog 无限增长，保留策略未定（§11 开放问题 3）。
+
 ## Travel Mode（travel.persenc sidecar，2026-09）
 
 按 identity 粒度的"从本设备移除"：enter 把被标记身份的全部数据（含附件密文
