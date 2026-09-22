@@ -111,6 +111,13 @@ fn determine_workspace_path(
         return Ok(path);
     }
 
+    // PERSONA_WORKSPACE_PATH 与 config::load 的 env 覆盖同源（--path
+    // 显式优先）：`-y` 不再绕过 env 直落 home 默认，否则 init 写 A 处、
+    // 后续命令按 env 读 B 处
+    if let Some(env_path) = crate::config::workspace_path_from_env() {
+        return Ok(env_path);
+    }
+
     if yes {
         // Use default path in non-interactive mode
         let default_path = dirs::home_dir()
@@ -287,10 +294,8 @@ mod tests {
     use tempfile::TempDir;
 
     /// Serializes env mutations (HOME) against the bridge and service tests.
-    #[allow(dead_code)]
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    #[allow(dead_code)]
     fn lock_process_env() -> (
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
@@ -313,6 +318,40 @@ mod tests {
             master_password: None,
             backup_dir: None,
         }
+    }
+
+    /// `--path` 显式 > `PERSONA_WORKSPACE_PATH` > home 默认；空白 env 视同
+    /// 未设置（否则会落到空 PathBuf = 当前目录）。
+    #[test]
+    fn workspace_path_env_overrides_yes_default_but_not_explicit_path() {
+        let (_bridge_guard, _guard) = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let env_path = dir.path().join("env-ws");
+
+        let previous = std::env::var("PERSONA_WORKSPACE_PATH").ok();
+        let restore = |prev: Option<String>| match prev {
+            Some(v) => std::env::set_var("PERSONA_WORKSPACE_PATH", v),
+            None => std::env::remove_var("PERSONA_WORKSPACE_PATH"),
+        };
+
+        std::env::set_var("PERSONA_WORKSPACE_PATH", &env_path);
+        // -y 且 ui 队列为空：若实现误走交互/prompt，ScriptedUi 直接 panic
+        let got = determine_workspace_path(None, true, &ScriptedUi::new()).unwrap();
+        assert_eq!(got, env_path, "env must override the -y home default");
+
+        let explicit = dir.path().join("explicit-ws");
+        let got =
+            determine_workspace_path(Some(explicit.clone()), true, &ScriptedUi::new()).unwrap();
+        assert_eq!(got, explicit, "--path wins over env");
+
+        std::env::set_var("PERSONA_WORKSPACE_PATH", "   ");
+        let got = determine_workspace_path(None, true, &ScriptedUi::new()).unwrap();
+        assert!(
+            got.is_absolute(),
+            "blank env must fall back to the home default, got {got:?}"
+        );
+
+        restore(previous);
     }
 
     /// The workspace directory must pre-exist `create_directory`'s parent

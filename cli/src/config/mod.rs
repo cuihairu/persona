@@ -144,8 +144,8 @@ impl CliConfig {
         }
 
         // Workspace path
-        if let Ok(path) = std::env::var("PERSONA_WORKSPACE_PATH") {
-            self.workspace.path = PathBuf::from(path);
+        if let Some(path) = workspace_path_from_env() {
+            self.workspace.path = path;
         }
 
         // Master password (for CI/automation)
@@ -198,6 +198,17 @@ impl CliConfig {
     pub fn get_database_path(&self) -> PathBuf {
         self.workspace.path.join("identities.db")
     }
+}
+
+/// `PERSONA_WORKSPACE_PATH` 的统一读取（空白视同未设置）——init 的
+/// workspace 路径推导与 `apply_env_overrides` 共用同一来源。否则
+/// `init -y` 落 home 默认而后续命令按 env 找库，两边语义割裂。
+pub(crate) fn workspace_path_from_env() -> Option<PathBuf> {
+    std::env::var("PERSONA_WORKSPACE_PATH")
+        .ok()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
 }
 
 #[cfg(test)]
@@ -436,6 +447,26 @@ max_files = 2
         let path = CliConfig::get_config_path().unwrap();
         assert!(path.to_string_lossy().contains("persona"));
         assert!(path.to_string_lossy().contains("persona"));
+    }
+
+    #[test]
+    fn workspace_path_from_env_trims_and_ignores_blank() {
+        let (_bridge_guard, _guard) = lock_process_env();
+
+        let previous = set_var("PERSONA_WORKSPACE_PATH", "  /env/ws-trim  ");
+        assert_eq!(
+            workspace_path_from_env(),
+            Some(PathBuf::from("/env/ws-trim"))
+        );
+        restore_var("PERSONA_WORKSPACE_PATH", previous);
+
+        // 空白视同未设置：不让 apply 覆盖出空 PathBuf（= 当前目录）
+        let previous = set_var("PERSONA_WORKSPACE_PATH", "   ");
+        assert_eq!(workspace_path_from_env(), None);
+        restore_var("PERSONA_WORKSPACE_PATH", previous);
+
+        std::env::remove_var("PERSONA_WORKSPACE_PATH");
+        assert_eq!(workspace_path_from_env(), None);
     }
 
     #[test]

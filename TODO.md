@@ -635,8 +635,10 @@ Game Tokens (游戏令牌)
     不阻塞）。顺带发现：`persona init -y` 忽略
     PERSONA_WORKSPACE_PATH 直接用 home 默认（config::load 的 env
     覆盖对 init 的 determine_workspace_path 不生效），曾误在
-    ~/.persona 建出空壳库（已确认零损害并清理）；follow-up：
-    init 尊重 env 或文档明示。
+    ~/.persona 建出空壳库（已确认零损害并清理）；follow-up 已修：
+    init 的 determine_workspace_path 现与 config::load 共用
+    workspace_path_from_env（--path 显式 > env > home 默认，空白 env
+    视同未设置）。
   - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）
 
 Quality & Security
