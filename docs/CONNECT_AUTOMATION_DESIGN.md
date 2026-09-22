@@ -92,16 +92,16 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 
 `/api/v1/connect/*`，全部要求 `Authorization: Bearer pconn_…`（health 除外）：
 
-| 端点 | 方法 | 语义 |
-| --- | --- | --- |
-| `/connect/health` | GET | `{ "service": "persona-connect", "version": … }`，零库信息，免认证 |
-| `/connect/identities` | GET | scope 内身份列表（id + 名称） |
-| `/connect/items` | GET | scope 内条目元数据（id、title、type、urls、updated_at）；`?identity=`/`?type=`/`?title=` 精确过滤 |
-| `/connect/items/{id}` | GET | 单条全字段（解密后 JSON；scope 外返回 404） |
-| `/connect/items/{id}/totp` | POST | 当前 TOTP 码 + 剩余秒（复用 CLI/desktop 的 TOTP 解析路径） |
+| 端点                       | 方法 | 语义                                                                                              |
+| -------------------------- | ---- | ------------------------------------------------------------------------------------------------- |
+| `/connect/health`          | GET  | `{ "service": "persona-connect", "version": … }`，零库信息，免认证                                |
+| `/connect/identities`      | GET  | scope 内身份列表（id + 名称）                                                                     |
+| `/connect/items`           | GET  | scope 内条目元数据（id、title、type、urls、updated_at）；`?identity=`/`?type=`/`?title=` 精确过滤 |
+| `/connect/items/{id}`      | GET  | 单条全字段（解密后 JSON；scope 外返回 404）                                                       |
+| `/connect/items/{id}/totp` | POST | 当前 TOTP 码 + 剩余秒（复用 CLI/desktop 的 TOTP 解析路径）                                        |
 
 - **响应包络**：沿用 server 惯例 `{"ok":true,"data":…}` / `{"ok":false,
-  "error":{…}}`，错误码与 desktop `ApiResponse` 对齐，消费者错误处理
+"error":{…}}`，错误码与 desktop `ApiResponse` 对齐，消费者错误处理
   只学一套。
 - **限额**：每 token 每分钟 120 请求（内存计数，超限 429）——防失控
   轮询循环拖垮宿主；上限写死，不做配置（配置面越大误用面越大）。
@@ -157,15 +157,15 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 
 ## 5. 与既有系统的边界
 
-| 既有资产 | 关系 |
-| --- | --- |
-| `PersonaService` 解锁态 | 唯一数据面；端点不做自己的缓存（DR-3 限额计数除外，非数据） |
-| desktop 设置/feature flags | 开关持久化同模式；automation 开关是第 N 个 feature flag + token 表 |
-| passkey 桌面审批（Unix socket） | 先例参照（本机 IPC + GUI 审批）；connect 不复用 socket（HTTP 面向任意语言消费者），审批链**不接** token 端点 |
-| audit log | 新 `AuditAction::ConnectTokenCreated/Revoked/Used`(命名实现时定)；Used 走节流防刷屏（如每 token 每分钟一条聚合） |
-| 备份链 | `connect_tokens` 表随 VACUUM INTO 快照走（scope/哈希是库数据）；恢复备份 = token 集合回到备份时点，明文 token 本来就不在任何备份里 |
-| server / 同步轨道 | 无耦合；connect 是纯本机面。server 的 Bearer/SRP 体系不复用（不同信任域：远程设备 vs 本机消费者） |
-| Travel Mode | travel 激活期间端点随锁定门禁自然 503；被移出身份在 scope 内的 token 请求返回 404（条目不存在），不暴露 travel 状态 |
+| 既有资产                        | 关系                                                                                                                               |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `PersonaService` 解锁态         | 唯一数据面；端点不做自己的缓存（DR-3 限额计数除外，非数据）                                                                        |
+| desktop 设置/feature flags      | 开关持久化同模式；automation 开关是第 N 个 feature flag + token 表                                                                 |
+| passkey 桌面审批（Unix socket） | 先例参照（本机 IPC + GUI 审批）；connect 不复用 socket（HTTP 面向任意语言消费者），审批链**不接** token 端点                       |
+| audit log                       | 新 `AuditAction::ConnectTokenCreated/Revoked/Used`(命名实现时定)；Used 走节流防刷屏（如每 token 每分钟一条聚合）                   |
+| 备份链                          | `connect_tokens` 表随 VACUUM INTO 快照走（scope/哈希是库数据）；恢复备份 = token 集合回到备份时点，明文 token 本来就不在任何备份里 |
+| server / 同步轨道               | 无耦合；connect 是纯本机面。server 的 Bearer/SRP 体系不复用（不同信任域：远程设备 vs 本机消费者）                                  |
+| Travel Mode                     | travel 激活期间端点随锁定门禁自然 503；被移出身份在 scope 内的 token 请求返回 404（条目不存在），不暴露 travel 状态                |
 
 ## 6. 威胁模型登记骨架（实现时在 THREAT_MODEL.md 写实）
 
@@ -192,13 +192,13 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 
 ## 8. 实施阶段映射
 
-| 阶段 | 内容 | 验收要点 | 威胁模型登记 |
-| --- | --- | --- | --- |
-| 0（本文） | 设计稿 | 决策拍板 + 用户确认 | 骨架（§6） |
-| 1 | core `connect` 服务层：token 表迁移 + 管理 API + scope 过滤 + 锁定门禁编排（框架无关，纯函数化） | core 测试：token 生命周期/scope 过滤/404 同形 | — |
-| 2 | desktop 内嵌 axum（DR-1 A1）+ 三防线 + 限额 + 设置页 token 管理 UI | DR-4 全拒绝路径测试；`cargo test -p persona-desktop` + jest | 「Connect 本机自动化端点」章写实 |
-| 3 | CLI `persona connect token …` + `serve`（DR-1 A2） | CLI 集成测试（ScriptedUi 缝）；跨宿主同 token 存储互通 | 复查与实现相符 |
-| 4 | 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速上手（curl 示例） | 文档与实现一致 | — |
+| 阶段      | 内容                                                                                             | 验收要点                                                    | 威胁模型登记                     |
+| --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | -------------------------------- |
+| 0（本文） | 设计稿                                                                                           | 决策拍板 + 用户确认                                         | 骨架（§6）                       |
+| 1         | core `connect` 服务层：token 表迁移 + 管理 API + scope 过滤 + 锁定门禁编排（框架无关，纯函数化） | core 测试：token 生命周期/scope 过滤/404 同形               | —                                |
+| 2         | desktop 内嵌 axum（DR-1 A1）+ 三防线 + 限额 + 设置页 token 管理 UI                               | DR-4 全拒绝路径测试；`cargo test -p persona-desktop` + jest | 「Connect 本机自动化端点」章写实 |
+| 3         | CLI `persona connect token …` + `serve`（DR-1 A2）                                               | CLI 集成测试（ScriptedUi 缝）；跨宿主同 token 存储互通      | 复查与实现相符                   |
+| 4         | 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速上手（curl 示例）                       | 文档与实现一致                                              | —                                |
 
 规模预估：3–4 个会话量级；阶段 1–2 是主面。
 
