@@ -28,6 +28,9 @@ use crate::{
         FaviconRepository, IdentityRepository, PasskeyRepository, Repository, UserAuthRepository,
         WorkspaceRepository, SECURITY_SENSITIVE_AUDIT_ACTIONS,
     },
+    sync::capture::SyncCapture,
+    sync::oplog::{ItemKind, OpType},
+    sync::snapshot::SyncItemSnapshot,
     PersonaError, Result,
 };
 use std::{
@@ -38,7 +41,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use sqlx::Row;
 
@@ -92,6 +95,9 @@ pub struct PersonaService {
     /// 值 = 窗口起点）。内存态、进程重启即清——语义是防刷屏/批量写，
     /// 不是访问限额（限额属宿主层 HTTP 面）。
     connect_audit_marks: Mutex<HashMap<String, Instant>>,
+    /// 同步捕获缝（E2EE_SYNC_DESIGN §5）。`None` = 未启用同步，写路径
+    /// 直接跳过（与 `attachment_manager` 同款可选组件模式）。
+    sync_capture: RwLock<Option<Arc<dyn SyncCapture>>>,
 }
 
 /// RFC3339 serialization for user_auth timestamps written via raw SQL
@@ -134,6 +140,7 @@ impl PersonaService {
             current_session_id: Arc::new(RwLock::new(None)),
             event_emitter: None,
             connect_audit_marks: Mutex::new(HashMap::new()),
+            sync_capture: RwLock::new(None),
         })
     }
 
@@ -239,6 +246,16 @@ impl PersonaService {
     pub fn set_event_emitter(&mut self, emitter: Option<Emitter>) {
         self.event_emitter = emitter.clone();
         self.auto_lock_manager.set_event_emitter(emitter);
+    }
+
+    /// 注入同步捕获缝（E2EE_SYNC_DESIGN §5）。装配层（宿主/集成测试）在
+    /// 解锁后调用：service 把条目级写变更交给实现方，由它包 group 信封并
+    /// 记入 oplog。`None` = 未启用同步，写路径零开销跳过。
+    ///
+    /// 不需要 `&mut`：捕获缝是运行期可换的运行态附件，与
+    /// [`Self::set_event_emitter`] 的生命周期不同（后者构造期注入即可）。
+    pub async fn attach_sync_capture(&self, capture: Option<Arc<dyn SyncCapture>>) {
+        *self.sync_capture.write().await = capture;
     }
 
     /// Begin the SRP-like remote authentication handshake for a username.
@@ -603,7 +620,7 @@ impl PersonaService {
             PersonaError::CryptographicError(format!("Failed to serialize credential data: {}", e))
         })?;
 
-        let envelope = hierarchy.encrypt_with_new_item_key(&plaintext)?;
+        let (envelope, item_key) = hierarchy.encrypt_with_new_item_key_revealed(&plaintext)?;
 
         let credential = Credential::new(
             identity_id,
@@ -626,6 +643,26 @@ impl PersonaService {
         .await;
         self.record_credential_history(ChangeType::Created, None, Some(&created), None)
             .await;
+        // 同步载荷 = 完整条目快照（元数据 + CredentialData）的密封——与
+        // 主库 `encrypted_data` 同一把 item key、两份不同密文（见
+        // `sync::snapshot` 模块文档）。密封失败只跳过捕获，不影响主库写入。
+        match SyncItemSnapshot::from_credential(&created, credential_data).seal(&item_key) {
+            Ok(sealed) => {
+                self.capture_sync(
+                    created.id,
+                    ItemKind::Credential,
+                    OpType::Put,
+                    Some(sealed),
+                    Some(item_key),
+                )
+                .await;
+            }
+            Err(e) => tracing::warn!(
+                credential_id = %created.id,
+                error = %e,
+                "sync snapshot seal failed; capture skipped"
+            ),
+        }
         Ok(created)
     }
 
@@ -1068,6 +1105,18 @@ impl PersonaService {
             None,
         )
         .await;
+        // 元数据编辑同样进同步（快照含元数据全字段）；legacy 行由 helper
+        // 判定跳过。
+        if let Some((sealed, item_key)) = self.sync_put_payload_for(&updated).await {
+            self.capture_sync(
+                updated.id,
+                ItemKind::Credential,
+                OpType::Put,
+                Some(sealed),
+                Some(item_key),
+            )
+            .await;
+        }
         Ok(updated)
     }
 
@@ -1104,27 +1153,50 @@ impl PersonaService {
         let master_encryption = self.get_master_encryption_service()?;
         let hierarchy = KeyHierarchy::new(master_encryption);
 
-        match credential.wrapped_item_key.as_ref() {
-            Some(wrapped) => {
-                // 复用原 item key 重封；wrapped key 字节不动（附件不变量）。
-                let item_key = hierarchy.unwrap_item_key(wrapped)?;
-                credential.encrypted_data =
-                    hierarchy.encrypt_with_item_key(&item_key, &plaintext)?;
-            }
-            None => {
-                // legacy 行（payload 直接用主密钥封存）：编辑时升级为 per-item
-                // key，与附件封存路径同一模式，改密轮换后不再依赖 legacy 解密。
-                let envelope = hierarchy.encrypt_with_new_item_key(&plaintext)?;
-                credential.encrypted_data = envelope.ciphertext;
-                credential.wrapped_item_key = Some(envelope.wrapped_key);
-                tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key on edit");
-            }
+        let (new_ciphertext, new_wrapped_key, sync_item_key) =
+            match credential.wrapped_item_key.as_ref() {
+                Some(wrapped) => {
+                    // 复用原 item key 重封；wrapped key 字节不动（附件不变量）。
+                    let item_key = hierarchy.unwrap_item_key(wrapped)?;
+                    let ciphertext = hierarchy.encrypt_with_item_key(&item_key, &plaintext)?;
+                    (ciphertext, None, Zeroizing::new(item_key))
+                }
+                None => {
+                    // legacy 行（payload 直接用主密钥封存）：编辑时升级为 per-item
+                    // key，与附件封存路径同一模式，改密轮换后不再依赖 legacy 解密。
+                    let (envelope, item_key) =
+                        hierarchy.encrypt_with_new_item_key_revealed(&plaintext)?;
+                    (envelope.ciphertext, Some(envelope.wrapped_key), item_key)
+                }
+            };
+        credential.encrypted_data = new_ciphertext;
+        if let Some(wrapped) = new_wrapped_key {
+            credential.wrapped_item_key = Some(wrapped);
+            tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key on edit");
         }
         credential.touch();
 
         let updated = self.credential_repo.update(&credential).await?;
         self.record_credential_history(ChangeType::Updated, Some(&existing), Some(&updated), None)
             .await;
+        // 同步载荷 = 完整条目快照的密封（与 create 同款；同一把 item key）。
+        match SyncItemSnapshot::from_credential(&updated, credential_data).seal(&sync_item_key) {
+            Ok(sealed) => {
+                self.capture_sync(
+                    updated.id,
+                    ItemKind::Credential,
+                    OpType::Put,
+                    Some(sealed),
+                    Some(sync_item_key),
+                )
+                .await;
+            }
+            Err(e) => tracing::warn!(
+                credential_id = %updated.id,
+                error = %e,
+                "sync snapshot seal failed; capture skipped"
+            ),
+        }
         self.log_audit(
             AuditAction::CredentialUpdated,
             ResourceType::Credential,
@@ -1169,6 +1241,8 @@ impl PersonaService {
         let ok = self.credential_repo.delete(id).await?;
         if ok {
             self.record_credential_history(ChangeType::Deleted, Some(&existing), None, None)
+                .await;
+            self.capture_sync(*id, ItemKind::Credential, OpType::Delete, None, None)
                 .await;
         }
         self.log_audit(
@@ -1244,6 +1318,17 @@ impl PersonaService {
             None,
         )
         .await;
+        // 元数据回滚同样改变快照语义字段，进同步（同款 legacy 跳过）。
+        if let Some((sealed, item_key)) = self.sync_put_payload_for(&updated).await {
+            self.capture_sync(
+                updated.id,
+                ItemKind::Credential,
+                OpType::Put,
+                Some(sealed),
+                Some(item_key),
+            )
+            .await;
+        }
         Ok(updated)
     }
 
@@ -3005,6 +3090,53 @@ impl PersonaService {
             ));
         }
         changes
+    }
+
+    /// 把一次条目级写变更交给同步捕获缝（未装配即零开销跳过）。
+    ///
+    /// 容错语义与 [`Self::record_credential_history`] 一致：捕获是尽力而为
+    /// 的旁路（trait 方法返回 `()`，实现方自行 log），service 侧不做任何
+    /// 可失败的准备——主库才是第一事实源。
+    async fn capture_sync(
+        &self,
+        item_id: Uuid,
+        kind: ItemKind,
+        op: OpType,
+        ciphertext: Option<Vec<u8>>,
+        item_key: Option<Zeroizing<[u8; 32]>>,
+    ) {
+        let capture = self.sync_capture.read().await.clone();
+        if let Some(capture) = capture {
+            capture
+                .capture(item_id, kind, op, ciphertext, item_key)
+                .await;
+        }
+    }
+
+    /// 为元数据级写变更（[`Self::update_credential`] / restore）构建同步
+    /// put 载荷：解密现 payload 组装完整条目快照再密封。legacy 行（无
+    /// per-item key）返回 `None`——它还不能与同步信封共享 item key，跳过
+    /// 捕获；首次 [`Self::update_credential_data`] 会把它升级，此后恢复捕获。
+    async fn sync_put_payload_for(
+        &self,
+        credential: &Credential,
+    ) -> Option<(Vec<u8>, Zeroizing<[u8; 32]>)> {
+        let data = self.decrypt_credential(credential).ok()?;
+        let master_encryption = self.get_master_encryption_service().ok()?;
+        let item_key = KeyHierarchy::new(master_encryption)
+            .unwrap_item_key(credential.wrapped_item_key.as_ref()?)
+            .ok()?;
+        match SyncItemSnapshot::from_credential(credential, &data).seal(&item_key) {
+            Ok(sealed) => Some((sealed, Zeroizing::new(item_key))),
+            Err(e) => {
+                tracing::warn!(
+                    credential_id = %credential.id,
+                    error = %e,
+                    "sync snapshot seal failed; capture skipped"
+                );
+                None
+            }
+        }
     }
 
     /// 记一条凭据历史行（created/updated/deleted/restored 由 change_type 区分）。

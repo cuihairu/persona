@@ -205,6 +205,21 @@ impl SyncRepository {
         .map_err(|e| PersonaError::Database(e.to_string()))?;
         rows.iter().map(row_to_op).collect()
     }
+
+    /// oplog 中出现过写入的全部 item（去重，供物化层逐 item 推导视图）。
+    /// 数量级 = 本工作区被同步过的条目总数，单查询足够。
+    pub async fn item_ids(&self) -> Result<Vec<Uuid>> {
+        let rows = sqlx::query("SELECT DISTINCT item_id FROM sync_oplog")
+            .fetch_all(self.db.pool())
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        rows.iter()
+            .map(|row| {
+                Uuid::parse_str(&row.get::<String, _>("item_id"))
+                    .map_err(|e| PersonaError::Database(e.to_string()).into())
+            })
+            .collect()
+    }
 }
 
 fn row_to_op(row: &sqlx::sqlite::SqliteRow) -> Result<SyncOp> {

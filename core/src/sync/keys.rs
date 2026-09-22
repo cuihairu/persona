@@ -77,6 +77,36 @@ impl DeviceKeyPair {
     }
 }
 
+/// 同步 payload 的 item key 包裹（`SyncPayload.wrapped_item_key`）。
+///
+/// oplog 只持密文：条目密文用 item key 封（主库同款），item key 再用
+/// group key 对称封——远端设备拆开 group 信封得到 group key 后即可
+/// 解出 item key 还原条目，服务器两级都不可读。格式复用
+/// `EncryptionService` 的「随机 nonce 前置 12B ‖ AES-256-GCM 密文」：
+/// 同一 (group, item) 对每次包裹 nonce 全新，无复用风险。
+pub fn wrap_item_key_with_group(item_key: &[u8; 32], group_key: &GroupKey) -> Vec<u8> {
+    crate::crypto::encryption::EncryptionService::new(group_key.as_bytes())
+        .encrypt(item_key)
+        .expect("AES-GCM with fresh random nonce cannot fail")
+}
+
+/// 拆开 group 包裹还原 item key。失败 = group key 不对或包裹被篡改
+/// （不区分成因，fail-closed，同 [`super::envelope::open_group_key`]）。
+pub fn unwrap_item_key_with_group(
+    wrapped: &[u8],
+    group_key: &GroupKey,
+) -> Result<[u8; 32], PersonaError> {
+    let plaintext = crate::crypto::encryption::EncryptionService::new(group_key.as_bytes())
+        .decrypt(wrapped)
+        .map_err(|_| {
+            PersonaError::CryptographicError("failed to unwrap item key with group key".to_string())
+        })?;
+    let bytes: [u8; 32] = plaintext.try_into().map_err(|_| {
+        PersonaError::CryptographicError("unwrapped item key has wrong length".to_string())
+    })?;
+    Ok(bytes)
+}
+
 impl Drop for DeviceKeyPair {
     fn drop(&mut self) {
         self.secret.zeroize();
@@ -114,5 +144,42 @@ mod tests {
         let b = DeviceKeyPair::generate().unwrap();
         assert_ne!(a.secret_bytes(), b.secret_bytes());
         assert_ne!(a.public_bytes(), b.public_bytes());
+    }
+
+    #[test]
+    fn group_wrap_round_trips_item_key() {
+        let group = GroupKey::generate().unwrap();
+        let item_key = [7u8; 32];
+        let wrapped = wrap_item_key_with_group(&item_key, &group);
+        assert_ne!(wrapped[..32], item_key, "包裹必须是密文而非明文透传");
+        let opened = unwrap_item_key_with_group(&wrapped, &group).unwrap();
+        assert_eq!(opened, item_key);
+    }
+
+    #[test]
+    fn group_wrap_is_randomized_per_call() {
+        let group = GroupKey::generate().unwrap();
+        let item_key = [9u8; 32];
+        let a = wrap_item_key_with_group(&item_key, &group);
+        let b = wrap_item_key_with_group(&item_key, &group);
+        assert_ne!(a, b, "随机 nonce 使每次包裹字节不同");
+        assert_eq!(
+            unwrap_item_key_with_group(&a, &group).unwrap(),
+            unwrap_item_key_with_group(&b, &group).unwrap()
+        );
+    }
+
+    #[test]
+    fn wrong_group_key_cannot_unwrap() {
+        let group = GroupKey::generate().unwrap();
+        let other = GroupKey::generate().unwrap();
+        let wrapped = wrap_item_key_with_group(&[1u8; 32], &group);
+        assert!(unwrap_item_key_with_group(&wrapped, &other).is_err());
+        // 篡改包裹同样 fail-closed
+        let mut tampered = wrapped.clone();
+        tampered[20] ^= 0xff;
+        assert!(unwrap_item_key_with_group(&tampered, &group).is_err());
+        // 截断/超长同样报错而非 panic
+        assert!(unwrap_item_key_with_group(&wrapped[..16], &group).is_err());
     }
 }

@@ -1,4 +1,4 @@
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::encryption::EncryptionService;
 use crate::{PersonaError, Result};
@@ -21,6 +21,19 @@ impl<'a> KeyHierarchy<'a> {
 
     /// Encrypt plaintext with a randomly generated item key and wrap that key with the master key.
     pub fn encrypt_with_new_item_key(&self, plaintext: &[u8]) -> Result<ItemKeyEnvelope> {
+        Ok(self.encrypt_with_new_item_key_revealed(plaintext)?.0)
+    }
+
+    /// Like [`Self::encrypt_with_new_item_key`], but also returns the freshly
+    /// generated item key (zeroized on drop).
+    ///
+    /// Sole consumer is the sync capture path (E2EE_SYNC_DESIGN §5): the
+    /// assembler wraps the same item key under the group key so the ciphertext
+    /// on the oplog and the one in the local database share one item key.
+    pub fn encrypt_with_new_item_key_revealed(
+        &self,
+        plaintext: &[u8],
+    ) -> Result<(ItemKeyEnvelope, Zeroizing<[u8; 32]>)> {
         let mut item_key = EncryptionService::generate_key();
         let item_cipher = EncryptionService::new(&item_key);
 
@@ -32,12 +45,17 @@ impl<'a> KeyHierarchy<'a> {
             PersonaError::CryptographicError(format!("Failed to wrap item key: {}", e))
         })?;
 
+        let mut revealed = [0u8; 32];
+        revealed.copy_from_slice(&item_key);
         item_key.zeroize();
 
-        Ok(ItemKeyEnvelope {
-            wrapped_key,
-            ciphertext,
-        })
+        Ok((
+            ItemKeyEnvelope {
+                wrapped_key,
+                ciphertext,
+            },
+            Zeroizing::new(revealed),
+        ))
     }
 
     /// Encrypt plaintext with an already-unwrapped item key, leaving the
