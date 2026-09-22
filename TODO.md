@@ -464,6 +464,14 @@ Server & Sync (optional)
   - [ ] follow-up：mobile Flutter 工程/Dart 绑定（需 Flutter SDK 与设备
     验证；桥方向手写 FFI vs frb v2 待工程落地时定）、持久 outbox/回补
 - [ ] Connect-like local-first secrets automation endpoint
+  - [x] 设计稿（2026-09-22 `docs/CONNECT_AUTOMATION_DESIGN.md` 阶段 0）：
+    五决策拍板——宿主进程内嵌监听（桌面 A1 先行/CLI serve A2 同核，否决
+    独立进程/容器）、pconn_ scope token（一次性展示只存哈希、identity/
+    type/verbs 三维 scope、敏感类型恒不可授权）、最小只读端点面
+    （health/identities/items/item/totp，否决写路径）、默认不 bind +
+    Host 白名单/CORS 全关/token 必需三防线防浏览器侧攻击、token 管理
+    走桌面设置页+CLI（无编辑 scope，改权限=换 token）。实现按 §8 阶段
+    1–4 推进，不依赖 E2EE 同步轨道
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`

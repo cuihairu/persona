@@ -42,7 +42,7 @@ Milestone 6 – Server & Sync (optional)
 - [x] Events API, audit ingestion, metrics
 - [x] Device tokens + encrypted vault-backup custody (`/api/v1/backups`: multi-device bearer tokens, streaming upload with sha256 dedup, versioned list/download/delete, retention policy; server holds PERSENC1 ciphertext only — sync phase 1, 2026-09)
 - [x] Client-side backup chain (core `backup` feature: VACUUM INTO snapshot → gzip → PERSENC1, byte-compatible with `--encrypt` exports; `BackupClient` for the custody endpoints; CLI `persona backup push/list/pull/restore/delete` — push needs no master-password unlock, restore stages via a verified temp file and keeps a `.bak`; attachments are not in v1 backups, 2026-09)
-- [ ] Connect-like local-first secrets automation endpoint
+- [ ] Connect-like local-first secrets automation endpoint (design doc `CONNECT_AUTOMATION_DESIGN.md` stage 0, 2026-09-22; implementation stages 1–4 pending)
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution; per-item incremental sync is sync phase 2 — backup custody leaves room for it without implementing it)
 - [x] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted (`STORAGE_AND_SYNC.md`, 2026-09)
 
