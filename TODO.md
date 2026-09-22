@@ -443,7 +443,15 @@ Server & Sync (optional)
 - [ ] Connect-like local-first secrets automation endpoint
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
 - [ ] SCIM/SSO bridging (future)
-- [ ] 文档：用户可选的存储/同步模式（纯本地、自托管云/自有 iCloud、Persona Server 辅助）
+- [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
+  用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=
+  审计事件副本+整库加密备份保管 / 网盘仅限密文冷备并警告活库上云盘
+  的 SQLite 损坏风险）；**如实写明当前无凭据级实时同步**（多设备=独立
+  库+各自备份+整库恢复）；服务器部署 env 全表 + 端点表 + fail-closed；
+  桌面（keyring 存令牌）与 CLI（env-only）两通道独立的配置说明；
+  备份五命令实操（备份口令独立、附件不在 v1 备份、.bak 保留）；故障
+  后果速查表（主密码丢/备份口令丢/服务器被删均无补救——本地库是第一
+  事实源）
 
 Browser & Autofill (future)
 - [x] Browser extension skeleton (autofill; domain rules)
@@ -639,7 +647,7 @@ Game Tokens (游戏令牌)
     init 的 determine_workspace_path 现与 config::load 共用
     workspace_path_from_env（--path 显式 > env > home 默认，空白 env
     视同未设置）。
-  - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）
+  - 文档：存储/同步模式说明——已落地 `docs/STORAGE_AND_SYNC.md`（同上条）
 
 Quality & Security
 - [x] Threat model & periodic security review

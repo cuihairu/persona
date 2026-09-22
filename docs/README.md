@@ -17,6 +17,7 @@
 
 ## 架构
 
+- [STORAGE_AND_SYNC](./STORAGE_AND_SYNC.md) – 存储与同步模式用户指南（纯本地 / 自托管 Persona Server / 网盘冷备；备份恢复实操与故障后果）
 - [CLIENT_COMMUNICATION_ARCHITECTURE](./CLIENT_COMMUNICATION_ARCHITECTURE.md) – 统一客户端通信架构（CLI/桌面/浏览器/Agent 共用同一本地服务/IPC 协议）
 - [LOCAL_SERVICE](./LOCAL_SERVICE.md) – 本地服务、IPC 传输（Unix Socket 优先）与三种存储/同步模式（纯本地 / 自托管云 / Persona 服务器辅助）
 - [BRIDGE_PROTOCOL](./BRIDGE_PROTOCOL.md) – 浏览器扩展 Native Messaging 协议
