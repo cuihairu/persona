@@ -99,6 +99,17 @@ pub struct WorkspaceSettings {
     /// 界面语言（"zh-CN" / "en"；None = 客户端默认基准语言 zh-CN）
     #[serde(default)]
     pub locale: Option<String>,
+
+    /// 旅行模式进行中。与 sidecar 文件存在性互为共真值：sidecar 是数据
+    /// 权威，此标志驱动 UI 状态、改密拦截与崩溃恢复语义（见 core/src/travel.rs
+    /// 模块注释的崩溃窗口表；旧 JSON 缺键时回退 false）
+    #[serde(default)]
+    pub travel_mode: bool,
+
+    /// 进入旅行模式的时刻（RFC3339）。仅供 status 展示（读它不需要 travel
+    /// 口令）；enter 写入、exit 清空
+    #[serde(default)]
+    pub travel_entered_at: Option<String>,
 }
 
 impl Default for WorkspaceSettings {
@@ -114,6 +125,8 @@ impl Default for WorkspaceSettings {
             sync: None,
             password_expiry_days: None,
             locale: None,
+            travel_mode: false,
+            travel_entered_at: None,
         }
     }
 }
@@ -254,6 +267,9 @@ mod tests {
         let settings: WorkspaceSettings = serde_json::from_str(legacy).unwrap();
         assert_eq!(settings.features, FeatureFlags::default());
         assert!(settings.sync.is_none());
+        // 旅行模式字段（013 批次）同样缺键回退
+        assert!(!settings.travel_mode);
+        assert_eq!(settings.travel_entered_at, None);
     }
 
     #[test]

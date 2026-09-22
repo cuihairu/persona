@@ -94,6 +94,11 @@ pub enum PersonaError {
 
     #[error("Validation error: {0}")]
     Validation(String),
+
+    /// 旅行模式进行中（改密等与 sidecar 中 wrapped key 不兼容的操作被拒；
+    /// 客户端应提示先退出旅行模式）
+    #[error("Travel mode is active: {0}")]
+    TravelModeActive(String),
 }
 
 // Implement From conversions for common error types

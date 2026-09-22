@@ -100,6 +100,11 @@ pub enum AuditAction {
     BackupRestored,
     ConfigurationChanged,
 
+    // 旅行模式
+    TravelModeEntered,
+    TravelModeExited,
+    TravelMarkChanged,
+
     // 安全事件
     SecurityScanPerformed,
     UnauthorizedAccess,
@@ -148,6 +153,9 @@ impl std::fmt::Display for AuditAction {
             AuditAction::BackupCreated => "backup_created",
             AuditAction::BackupRestored => "backup_restored",
             AuditAction::ConfigurationChanged => "configuration_changed",
+            AuditAction::TravelModeEntered => "travel_mode_entered",
+            AuditAction::TravelModeExited => "travel_mode_exited",
+            AuditAction::TravelMarkChanged => "travel_mark_changed",
             AuditAction::SecurityScanPerformed => "security_scan_performed",
             AuditAction::UnauthorizedAccess => "unauthorized_access",
             AuditAction::BruteForceDetected => "brute_force_detected",
@@ -198,6 +206,9 @@ impl std::str::FromStr for AuditAction {
             "backup_created" => Ok(AuditAction::BackupCreated),
             "backup_restored" => Ok(AuditAction::BackupRestored),
             "configuration_changed" => Ok(AuditAction::ConfigurationChanged),
+            "travel_mode_entered" => Ok(AuditAction::TravelModeEntered),
+            "travel_mode_exited" => Ok(AuditAction::TravelModeExited),
+            "travel_mark_changed" => Ok(AuditAction::TravelMarkChanged),
             "security_scan_performed" => Ok(AuditAction::SecurityScanPerformed),
             "unauthorized_access" => Ok(AuditAction::UnauthorizedAccess),
             "brute_force_detected" => Ok(AuditAction::BruteForceDetected),

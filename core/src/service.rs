@@ -1720,6 +1720,18 @@ impl PersonaService {
         }
     }
 
+    /// 旅行模式是否激活。与 load_password_expiry_days 的 fail-open 相反：
+    /// 本方法服务于改密拦截（旅行模式下改密会让 sidecar 里的 wrapped key
+    /// 变砖），settings 读不出来时宁可拒绝改密也不冒险放行（fail-closed）。
+    #[cfg(feature = "backup")]
+    async fn travel_mode_active(&self) -> Result<bool> {
+        let workspaces = Repository::find_all(&self.workspace_repo).await?;
+        Ok(workspaces
+            .first()
+            .map(|ws| ws.settings.travel_mode)
+            .unwrap_or(false))
+    }
+
     /// Authenticate existing user
     pub async fn authenticate_user(&mut self, master_password: &str) -> Result<AuthResult> {
         // Load first user (single-user MVP)
@@ -1808,6 +1820,18 @@ impl PersonaService {
         old_password: &str,
         new_password: &str,
     ) -> Result<()> {
+        // 旅行模式开启期间拒绝改密：sidecar 里被移除身份的 wrapped_item_key
+        // 由旧主密钥包裹，改密只重包库内存活行 → 恢复后数据变砖。
+        // PersonaService 不知道 db 路径，现读 workspaces 首行 settings
+        //（与 user_auth_repo.get_first() 的"首行即真相"先例一致）。
+        #[cfg(feature = "backup")]
+        if self.travel_mode_active().await? {
+            return Err(PersonaError::TravelModeActive(
+                "Exit travel mode before changing the master password".to_string(),
+            )
+            .into());
+        }
+
         if new_password.is_empty() {
             return Err(PersonaError::AuthenticationFailed(
                 "New master password must not be empty".to_string(),

@@ -33,7 +33,7 @@ impl IdentityRepository {
     pub async fn find_by_type(&self, identity_type: &IdentityType) -> Result<Vec<Identity>> {
         let type_str = identity_type.to_string();
         let rows = sqlx::query(
-            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active FROM identities WHERE identity_type = ?"
+            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active, travel_marked FROM identities WHERE identity_type = ?"
         )
         .bind(&type_str)
         .fetch_all(self.db.pool())
@@ -49,7 +49,7 @@ impl IdentityRepository {
 
     pub async fn find_by_name(&self, name: &str) -> Result<Option<Identity>> {
         let row = sqlx::query(
-            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active FROM identities WHERE name = ?"
+            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active, travel_marked FROM identities WHERE name = ?"
         )
         .bind(name)
         .fetch_optional(self.db.pool())
@@ -104,6 +104,7 @@ impl IdentityRepository {
             created_at,
             updated_at,
             is_active: row.get("is_active"),
+            travel_marked: row.get("travel_marked"),
         })
     }
 }
@@ -122,8 +123,8 @@ impl Repository<Identity> for IdentityRepository {
             r#"
             INSERT INTO identities (
                 id, name, identity_type, description, email, phone, ssh_key, gpg_key,
-                tags, attributes, created_at, updated_at, is_active
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                tags, attributes, created_at, updated_at, is_active, travel_marked
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(identity.id.to_string())
@@ -139,6 +140,7 @@ impl Repository<Identity> for IdentityRepository {
         .bind(identity.created_at.to_rfc3339())
         .bind(identity.updated_at.to_rfc3339())
         .bind(identity.is_active)
+        .bind(identity.travel_marked)
         .execute(self.db.pool())
         .await
         .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -148,7 +150,7 @@ impl Repository<Identity> for IdentityRepository {
 
     async fn find_by_id(&self, id: &Uuid) -> Result<Option<Identity>> {
         let row = sqlx::query(
-            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active FROM identities WHERE id = ?"
+            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active, travel_marked FROM identities WHERE id = ?"
         )
         .bind(id.to_string())
         .fetch_optional(self.db.pool())
@@ -163,7 +165,7 @@ impl Repository<Identity> for IdentityRepository {
 
     async fn find_all(&self) -> Result<Vec<Identity>> {
         let rows = sqlx::query(
-            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active FROM identities ORDER BY created_at DESC"
+            "SELECT id, name, identity_type, description, email, phone, ssh_key, gpg_key, tags, attributes, created_at, updated_at, is_active, travel_marked FROM identities ORDER BY created_at DESC"
         )
         .fetch_all(self.db.pool())
         .await
@@ -188,7 +190,8 @@ impl Repository<Identity> for IdentityRepository {
             r#"
             UPDATE identities SET
                 name = ?, identity_type = ?, description = ?, email = ?, phone = ?,
-                ssh_key = ?, gpg_key = ?, tags = ?, attributes = ?, updated_at = ?, is_active = ?
+                ssh_key = ?, gpg_key = ?, tags = ?, attributes = ?, updated_at = ?, is_active = ?,
+                travel_marked = ?
             WHERE id = ?
             "#,
         )
@@ -203,6 +206,7 @@ impl Repository<Identity> for IdentityRepository {
         .bind(&attributes_json)
         .bind(identity.updated_at.to_rfc3339())
         .bind(identity.is_active)
+        .bind(identity.travel_marked)
         .bind(identity.id.to_string())
         .execute(self.db.pool())
         .await
@@ -1714,6 +1718,27 @@ mod tests {
             Some("eng")
         );
         assert!(repo.find_by_name("ghost").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn identity_travel_marked_round_trips() {
+        let db = test_db().await;
+        let repo = IdentityRepository::new(db);
+
+        let mut marked = sample_identity("travel light");
+        assert!(!marked.travel_marked, "new identities default unmarked");
+        marked.travel_marked = true;
+        repo.create(&marked).await.unwrap();
+
+        let fetched = repo.find_by_name("travel light").await.unwrap().unwrap();
+        assert!(fetched.travel_marked);
+
+        // update 路径同样保列
+        let mut flipped = fetched.clone();
+        flipped.travel_marked = false;
+        repo.update(&flipped).await.unwrap();
+        let refetched = repo.find_by_id(&marked.id).await.unwrap().unwrap();
+        assert!(!refetched.travel_marked);
     }
 
     #[tokio::test]

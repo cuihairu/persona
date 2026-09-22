@@ -43,6 +43,11 @@ pub struct Identity {
 
     /// Whether this identity is currently active
     pub is_active: bool,
+
+    /// 旅行模式标记：travel mode 进入时该身份的数据随身份一起移出本设备
+    /// （打包进加密 sidecar 后从库中删除），退出时原样恢复
+    #[serde(default)]
+    pub travel_marked: bool,
 }
 
 /// Types of digital identities
@@ -102,6 +107,7 @@ impl Identity {
             created_at: now,
             updated_at: now,
             is_active: true,
+            travel_marked: false,
         }
     }
 
