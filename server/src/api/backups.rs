@@ -543,7 +543,11 @@ mod endpoint_tests {
     #[tokio::test]
     async fn list_pages_desc_without_gaps_or_duplicates() {
         let (router, _, _dir) = setup_with_backups(SPEC, 0, 1024).await;
+        // 排序键是 (created_at_ms, id)：同毫秒内 tie-breaker 是随机 UUID
+        // （id DESC），v2/v3 同 ms 时顺序 50% 翻车（批 11 的 CI 撞过）。
+        // 单设备串行 push 真实间隔远超 1ms，这里拉开毫秒保证确定性。
         for content in ["v1", "v2", "v3"] {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             let (status, _) = upload(&router, content, LAPTOP).await;
             assert_eq!(status, StatusCode::CREATED);
         }
@@ -659,7 +663,10 @@ mod endpoint_tests {
     async fn retention_drops_oldest_versions_beyond_limit() {
         // max_versions=2：传 3 个版本，最旧的 v1（文件+行）被清
         let (router, state, _dir) = setup_with_backups(SPEC, 2, 1024).await;
+        // 同毫秒 tie-breaker 是随机 UUID（见 list_pages_desc 的注释）——
+        // 保留清理（删 ASC 首行）与列表顺序都要确定，故拉开毫秒
         for content in ["v1", "v2", "v3"] {
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
             let (status, _) = upload(&router, content, LAPTOP).await;
             assert_eq!(status, StatusCode::CREATED);
         }
