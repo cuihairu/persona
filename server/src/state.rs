@@ -4,7 +4,7 @@
 //! 下的迁移，不复用 `persona_core::storage::Database`（那会带上全套
 //! 身份 schema）。
 
-use crate::auth::AuthTokens;
+use crate::auth::{AuthTokens, SrpAuthState};
 use crate::metrics::Metrics;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use sqlx::SqlitePool;
@@ -23,6 +23,9 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     /// `None` => /api 整体禁用（fail-closed：未配置任何设备令牌）。
     pub auth: Option<Arc<AuthTokens>>,
+    /// SRP 会话/短期令牌状态。与 `auth` 同生命周期（静态令牌未配置 =
+    /// 认证体系整体未启用 = SRP 端点同样禁用）。
+    pub srp: Option<Arc<SrpAuthState>>,
     /// 备份文件落盘目录（POST 写、GET 下载读；`{dir}/{id}.persenc`）。
     pub backup_dir: PathBuf,
     /// 保留版本数上限；0 = 不限（PERSONA_SERVER_BACKUP_MAX_VERSIONS）。
@@ -40,6 +43,7 @@ impl AppState {
     pub fn new(pool: SqlitePool, auth: Option<AuthTokens>, metrics: Arc<Metrics>) -> Self {
         // 空集合与未配置等价：API 禁用，避免"配了但配错成空"形成半开状态。
         let auth = auth.filter(|tokens| !tokens.is_empty()).map(Arc::new);
+        let srp = auth.as_ref().map(|_| Arc::new(SrpAuthState::new()));
         let start_time_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -48,6 +52,7 @@ impl AppState {
             pool,
             metrics,
             auth,
+            srp,
             backup_dir: PathBuf::from("./backups"),
             backup_max_versions: 0,
             max_backup_bytes: MAX_BACKUP_BYTES,

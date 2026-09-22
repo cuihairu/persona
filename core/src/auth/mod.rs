@@ -7,6 +7,7 @@ pub mod permissions;
 pub mod remote;
 pub mod security_strategies;
 pub mod session;
+pub mod srp;
 
 pub use authentication::*;
 pub use auto_lock::*;

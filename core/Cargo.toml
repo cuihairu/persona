@@ -14,6 +14,8 @@ doctest = false
 ring.workspace = true
 argon2.workspace = true
 aes-gcm.workspace = true
+# 设备认证 SRP-6a（auth/srp.rs，E2EE 同步轨道阶段 1）
+srp.workspace = true
 ed25519-dalek.workspace = true
 rand.workspace = true
 getrandom.workspace = true

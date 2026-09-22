@@ -4091,6 +4091,7 @@ dependencies = [
  "sha2",
  "sha3 0.10.9",
  "sqlx",
+ "srp",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
@@ -4131,10 +4132,12 @@ dependencies = [
  "flate2",
  "futures",
  "persona-core",
+ "rand 0.10.2",
  "serde",
  "serde_json",
  "sha2",
  "sqlx",
+ "srp",
  "subtle",
  "tempfile",
  "thiserror 1.0.69",
@@ -5854,6 +5857,19 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "srp"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cdd40049b29ab1315ccba7ffcf1eece8162982eab14edfac3cf2c2ffab18193"
+dependencies = [
+ "digest 0.10.7",
+ "generic-array",
+ "lazy_static",
+ "num-bigint",
+ "subtle",
 ]
 
 [[package]]

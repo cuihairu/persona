@@ -57,6 +57,24 @@ pub fn build_router(state: AppState) -> Router {
                     state.clone(),
                     api::size_guard,
                 )),
+        )
+        // SRP 设备认证子路由（E2EE 同步轨道阶段 1）：challenge/verify 免
+        // Bearer（它们就是换取令牌的登录步骤）；register 需既有 Bearer
+        // （引导链）。独立中间件栈（在 api 整体 require_bearer 之外），
+        // body 上限 64 KiB——盐/verifier/公开值都远小于此，防异常载荷。
+        .nest(
+            "/auth",
+            Router::new()
+                .route(
+                    "/register",
+                    post(api::auth_register).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                .route("/challenge", post(api::auth_challenge))
+                .route("/verify", post(api::auth_verify))
+                .layer(DefaultBodyLimit::max(64 * 1024)),
         );
 
     // 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight

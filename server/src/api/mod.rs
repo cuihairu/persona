@@ -1,5 +1,6 @@
 //! /api 子路由：统一错误形状、请求体守卫与事件端点。
 
+mod auth;
 mod backups;
 mod events;
 
@@ -11,6 +12,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde::Serialize;
 
+pub use auth::{challenge as auth_challenge, register as auth_register, verify as auth_verify};
 pub use backups::{delete, download, list, size_guard, upload};
 pub use events::{ingest, query};
 

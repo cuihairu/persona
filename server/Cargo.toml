@@ -42,6 +42,10 @@ uuid.workspace = true
 # 游标编码（/api/v1/events 的 next_cursor）
 base64.workspace = true
 
+# SRP 设备认证（auth/srp.rs 复用 core 封装）+ 短期令牌随机源
+srp.workspace = true
+rand.workspace = true
+
 # Bearer 令牌常量时间比较
 subtle.workspace = true
 
