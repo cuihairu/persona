@@ -75,6 +75,7 @@ pub enum AuditAction {
     // 凭据管理
     CredentialCreated,
     CredentialUpdated,
+    CredentialRestored,
     CredentialDeleted,
     CredentialViewed,
     CredentialDecrypted,
@@ -135,6 +136,7 @@ impl std::fmt::Display for AuditAction {
             AuditAction::IdentitySwitched => "identity_switched",
             AuditAction::CredentialCreated => "credential_created",
             AuditAction::CredentialUpdated => "credential_updated",
+            AuditAction::CredentialRestored => "credential_restored",
             AuditAction::CredentialDeleted => "credential_deleted",
             AuditAction::CredentialViewed => "credential_viewed",
             AuditAction::CredentialDecrypted => "credential_decrypted",
@@ -188,6 +190,7 @@ impl std::str::FromStr for AuditAction {
             "identity_switched" => Ok(AuditAction::IdentitySwitched),
             "credential_created" => Ok(AuditAction::CredentialCreated),
             "credential_updated" => Ok(AuditAction::CredentialUpdated),
+            "credential_restored" => Ok(AuditAction::CredentialRestored),
             "credential_deleted" => Ok(AuditAction::CredentialDeleted),
             "credential_viewed" => Ok(AuditAction::CredentialViewed),
             "credential_decrypted" => Ok(AuditAction::CredentialDecrypted),

@@ -146,6 +146,15 @@ pub enum CredentialCommand {
         #[arg(long)]
         id: Uuid,
     },
+    /// Restore a credential's metadata to an earlier item-history version
+    Restore {
+        /// Credential UUID
+        #[arg(long)]
+        id: Uuid,
+        /// Target version number (see `persona credential history`)
+        #[arg(long)]
+        version: u32,
+    },
     /// Attach a file to a credential (encrypted with the item's key)
     Attach {
         /// Credential UUID
@@ -276,6 +285,9 @@ pub(crate) async fn execute_with(
         CredentialCommand::Show { id, reveal } => show_credential(config, ui, id, reveal).await?,
         CredentialCommand::Remove { id, yes } => remove_credential(config, ui, id, yes).await?,
         CredentialCommand::History { id } => show_credential_history(config, ui, id).await?,
+        CredentialCommand::Restore { id, version } => {
+            restore_credential_version_command(config, ui, id, version).await?
+        }
         CredentialCommand::Attach {
             id,
             file,
@@ -699,6 +711,30 @@ async fn show_credential_history(config: &CliConfig, ui: &dyn PromptUi, id: Uuid
         })
         .collect();
     println!("{}", Table::new(rows));
+    Ok(())
+}
+
+/// Restore metadata to an earlier item-history version (1Password item history).
+/// Secret payload is metadata-only in history and never rolls back: rotating a
+/// password stays forward-only.
+async fn restore_credential_version_command(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    id: Uuid,
+    version: u32,
+) -> Result<()> {
+    let service = init_service(config, ui).await?;
+    let restored = service
+        .restore_credential_version(&id, version)
+        .await
+        .into_anyhow()
+        .context("Failed to restore credential version")?;
+    println!(
+        "{} Restored metadata of {} to version {} (secrets are never rolled back)",
+        "✓".green(),
+        restored.name.cyan(),
+        version
+    );
     Ok(())
 }
 
@@ -1902,6 +1938,88 @@ mod tests {
         )
         .await
         .expect("history survives delete");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// restore：元数据回滚到目标版本；秘密不回滚（历史只有元数据快照）。
+    #[tokio::test]
+    async fn credential_restore_reverts_metadata_to_target_version() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "gina").await;
+
+        execute(add_args("gina", "restore-me", Some("pw"), false), &config)
+            .await
+            .expect("seed add works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let gina = service.get_identity_by_name("gina").await.unwrap().unwrap();
+        let creds = service
+            .get_credentials_for_identity(&gina.id)
+            .await
+            .unwrap();
+        let cred_id = creds[0].id;
+
+        let mut cred = service.get_credential(&cred_id).await.unwrap().unwrap();
+        cred.name = "renamed".to_string();
+        service.update_credential(&cred).await.unwrap();
+        drop(service);
+
+        execute(
+            CredentialArgs {
+                command: CredentialCommand::Restore {
+                    id: cred_id,
+                    version: 1,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect("restore works");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let restored = service.get_credential(&cred_id).await.unwrap().unwrap();
+        assert_eq!(restored.name, "restore-me");
+        assert_eq!(restored.username, None);
+        assert_eq!(restored.url, None);
+
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred_id)
+            .await
+            .unwrap();
+        assert_eq!(history[0].change_type.to_string(), "restored");
+        assert_eq!(history[0].version, 4);
+
+        let err = execute(
+            CredentialArgs {
+                command: CredentialCommand::Restore {
+                    id: cred_id,
+                    version: 99,
+                },
+            },
+            &config,
+        )
+        .await
+        .expect_err("unknown version must fail");
+        assert!(format!("{err:?}").contains("99"));
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }

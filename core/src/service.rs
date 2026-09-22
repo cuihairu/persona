@@ -618,7 +618,7 @@ impl PersonaService {
             None,
         )
         .await;
-        self.record_credential_history(ChangeType::Created, None, Some(&created))
+        self.record_credential_history(ChangeType::Created, None, Some(&created), None)
             .await;
         Ok(created)
     }
@@ -1050,7 +1050,7 @@ impl PersonaService {
         let existing = self.credential_repo.find_by_id(&credential.id).await?;
         let updated = self.credential_repo.update(credential).await?;
         if let Some(old) = existing.as_ref() {
-            self.record_credential_history(ChangeType::Updated, Some(old), Some(&updated))
+            self.record_credential_history(ChangeType::Updated, Some(old), Some(&updated), None)
                 .await;
         }
         self.log_audit(
@@ -1117,7 +1117,7 @@ impl PersonaService {
         credential.touch();
 
         let updated = self.credential_repo.update(&credential).await?;
-        self.record_credential_history(ChangeType::Updated, Some(&existing), Some(&updated))
+        self.record_credential_history(ChangeType::Updated, Some(&existing), Some(&updated), None)
             .await;
         self.log_audit(
             AuditAction::CredentialUpdated,
@@ -1162,7 +1162,7 @@ impl PersonaService {
 
         let ok = self.credential_repo.delete(id).await?;
         if ok {
-            self.record_credential_history(ChangeType::Deleted, Some(&existing), None)
+            self.record_credential_history(ChangeType::Deleted, Some(&existing), None, None)
                 .await;
         }
         self.log_audit(
@@ -1175,6 +1175,70 @@ impl PersonaService {
         )
         .await;
         Ok(ok)
+    }
+
+    /// Restore a credential's plaintext metadata to an earlier item-history version.
+    ///
+    /// Applies the `new_state` snapshot of `target_version` — the state after
+    /// that version's change — over the live row's metadata fields (name, type,
+    /// security level, username, url, notes, tags, favorite/active flags).
+    ///
+    /// The secret payload is **not** versioned: history snapshots are
+    /// metadata-only by design (`encrypted_data` never enters a snapshot), so
+    /// a restore never rolls back passwords or other `CredentialData` secrets —
+    /// rotating a secret stays a forward-only action. Records a `Restored`
+    /// item-history row (reason names the target version) plus an audit entry.
+    /// Deletion rows carry no `new_state` and are not restorable.
+    pub async fn restore_credential_version(
+        &self,
+        credential_id: &Uuid,
+        target_version: u32,
+    ) -> Result<Credential> {
+        self.ensure_unlocked()?;
+        self.touch_activity();
+        let existing = self
+            .credential_repo
+            .find_by_id(credential_id)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!("credential {credential_id} not found"))
+            })?;
+        let row = self
+            .change_history_repo
+            .get_version(EntityType::Credential, credential_id, target_version)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!(
+                    "credential {credential_id} has no history version {target_version}"
+                ))
+            })?;
+        let snapshot = row.new_state.as_ref().ok_or_else(|| {
+            PersonaError::InvalidInput(format!(
+                "history version {target_version} has no restorable state"
+            ))
+        })?;
+
+        let mut restored = existing.clone();
+        Self::apply_meta_snapshot(&mut restored, snapshot)?;
+        restored.touch();
+        let updated = self.credential_repo.update(&restored).await?;
+        self.record_credential_history(
+            ChangeType::Restored,
+            Some(&existing),
+            Some(&updated),
+            Some(format!("restore to version {target_version}")),
+        )
+        .await;
+        self.log_audit(
+            AuditAction::CredentialRestored,
+            ResourceType::Credential,
+            true,
+            Some(updated.id),
+            Some(updated.identity_id),
+            None,
+        )
+        .await;
+        Ok(updated)
     }
 
     // ------------------------------------------------------------------
@@ -2526,6 +2590,80 @@ impl PersonaService {
         })
     }
 
+    /// 把 [`Self::credential_meta_snapshot`] 写出的快照套回凭据元数据
+    /// （restore-to-version 用）。整份校验通过后才落字段，坏快照不半套；
+    /// 秘密字段（`encrypted_data` / `wrapped_item_key`）不在快照里，保持原样。
+    fn apply_meta_snapshot(
+        credential: &mut Credential,
+        snapshot: &serde_json::Value,
+    ) -> Result<()> {
+        let obj = snapshot.as_object().ok_or_else(|| {
+            PersonaError::InvalidInput("history snapshot is not an object".to_string())
+        })?;
+        let required_str = |key: &str| -> Result<String> {
+            obj.get(key)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    PersonaError::InvalidInput(format!("history snapshot missing field {key}"))
+                        .into()
+                })
+        };
+        let optional_str = |key: &str| -> Option<String> {
+            obj.get(key).and_then(|v| v.as_str()).map(str::to_string)
+        };
+
+        let name = required_str("name")?;
+        let credential_type = required_str("credential_type")?
+            .parse::<CredentialType>()
+            .map_err(PersonaError::InvalidInput)?;
+        let security_level = required_str("security_level")?
+            .parse::<SecurityLevel>()
+            .map_err(PersonaError::InvalidInput)?;
+        let tags = match obj.get("tags") {
+            Some(serde_json::Value::Array(items)) => {
+                let mut tags = Vec::with_capacity(items.len());
+                for item in items {
+                    tags.push(item.as_str().map(str::to_string).ok_or_else(|| {
+                        PersonaError::InvalidInput(
+                            "history snapshot tag is not a string".to_string(),
+                        )
+                    })?);
+                }
+                tags
+            }
+            _ => {
+                return Err(PersonaError::InvalidInput(
+                    "history snapshot missing field tags".to_string(),
+                )
+                .into())
+            }
+        };
+        let is_favorite = obj
+            .get("is_favorite")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| {
+                PersonaError::InvalidInput("history snapshot missing field is_favorite".to_string())
+            })?;
+        let is_active = obj
+            .get("is_active")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| {
+                PersonaError::InvalidInput("history snapshot missing field is_active".to_string())
+            })?;
+
+        credential.name = name;
+        credential.credential_type = credential_type;
+        credential.security_level = security_level;
+        credential.username = optional_str("username");
+        credential.url = optional_str("url");
+        credential.notes = optional_str("notes");
+        credential.tags = tags;
+        credential.is_favorite = is_favorite;
+        credential.is_active = is_active;
+        Ok(())
+    }
+
     /// 元数据字段级 diff；密文变化只记占位标记（历史里可见「密码已轮换」
     /// 这一事实，但永远看不到内容——与 1Password 的历史展示一致）。
     fn diff_credential_metadata(
@@ -2585,11 +2723,12 @@ impl PersonaService {
         changes
     }
 
-    /// 记一条凭据历史行（created/updated/deleted 由 change_type 区分）。
+    /// 记一条凭据历史行（created/updated/deleted/restored 由 change_type 区分）。
     ///
     /// - Updated 且无实质字段变化时不记（CLI/桌面 create 后紧跟的元数据
     ///   补写不产生噪声行）
     /// - version 取该实体当前最大版本 +1
+    /// - `reason` 可选（restore 用来标注目标版本）
     /// - 记录失败仅告警不阻断主操作（与 log_audit 的尽力而为一致）：
     ///   主写已提交，历史是派生数据，不能让历史失败回滚业务事实
     async fn record_credential_history(
@@ -2597,6 +2736,7 @@ impl PersonaService {
         change_type: ChangeType,
         previous: Option<&Credential>,
         current: Option<&Credential>,
+        reason: Option<String>,
     ) {
         let entity_id = match (current, previous) {
             (Some(c), _) => c.id,
@@ -2607,6 +2747,9 @@ impl PersonaService {
         let mut entry = ChangeHistory::new(EntityType::Credential, entity_id, change_type);
         if let Some(user) = self.current_user {
             entry = entry.with_user(user.to_string());
+        }
+        if let Some(reason) = reason {
+            entry = entry.with_reason(reason);
         }
 
         match (previous, current) {
@@ -3212,6 +3355,115 @@ mod tests {
         assert_eq!(history.len(), 4);
         assert_eq!(history[0].change_type, ChangeType::Deleted);
         assert_eq!(history[0].version, 4);
+    }
+
+    #[tokio::test]
+    async fn restore_credential_version_reverts_metadata_and_keeps_secrets() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Restore Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let mut cred =
+            seed_credential(&service, identity.id, "Gmail", CredentialType::Password).await;
+        let original_ciphertext = cred.encrypted_data.clone();
+
+        // v2：username/url
+        cred.username = Some("alice".to_string());
+        cred.url = Some("https://mail.example.com".to_string());
+        service.update_credential(&cred).await.unwrap();
+
+        // v3：rename
+        cred.name = "Gmail Work".to_string();
+        service.update_credential(&cred).await.unwrap();
+
+        // 恢复到 v1（创建态）：元数据回滚，密文原样
+        let restored = service
+            .restore_credential_version(&cred.id, 1)
+            .await
+            .unwrap();
+        assert_eq!(restored.name, "Gmail");
+        assert_eq!(restored.username, None);
+        assert_eq!(restored.url, None);
+        assert_eq!(restored.tags, Vec::<String>::new());
+        assert!(!restored.is_favorite);
+        assert!(restored.is_active);
+        assert_eq!(
+            restored.encrypted_data, original_ciphertext,
+            "metadata restore must never touch the secret payload"
+        );
+
+        // 历史多一行 restored，reason 标注目标版本
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 4);
+        assert_eq!(history[0].change_type, ChangeType::Restored);
+        assert_eq!(history[0].version, 4);
+        assert_eq!(history[0].reason.as_deref(), Some("restore to version 1"));
+        let name_change = history[0].changes_summary.get("name").unwrap();
+        assert_eq!(name_change.old_value, "Gmail Work");
+        assert_eq!(name_change.new_value, "Gmail");
+        let username_change = history[0].changes_summary.get("username").unwrap();
+        assert_eq!(username_change.old_value, "alice");
+        assert_eq!(username_change.new_value, "");
+
+        // 中间版本也可恢复：回到 v2（username=alice、name=Gmail）
+        let restored = service
+            .restore_credential_version(&cred.id, 2)
+            .await
+            .unwrap();
+        assert_eq!(restored.name, "Gmail");
+        assert_eq!(restored.username.as_deref(), Some("alice"));
+        assert_eq!(restored.url.as_deref(), Some("https://mail.example.com"));
+
+        // 恢复到当前状态 = 无实质变化 → 不记噪声历史行
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 5);
+        service
+            .restore_credential_version(&cred.id, 2)
+            .await
+            .unwrap();
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 5, "no-op restore must not add history");
+    }
+
+    #[tokio::test]
+    async fn restore_credential_version_rejects_bad_targets() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Restore Errors".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "Temp", CredentialType::Password).await;
+
+        let err = service
+            .restore_credential_version(&cred.id, 99)
+            .await
+            .expect_err("unknown version must fail");
+        assert!(err.to_string().contains("no history version 99"));
+
+        let missing = Uuid::new_v4();
+        let err = service
+            .restore_credential_version(&missing, 1)
+            .await
+            .expect_err("unknown credential must fail");
+        assert!(err.to_string().contains("not found"));
+
+        // 删除后的条目不可恢复（行已不在；历史仍可查但不重建秘密外壳）
+        service.delete_credential(&cred.id).await.unwrap();
+        let err = service
+            .restore_credential_version(&cred.id, 1)
+            .await
+            .expect_err("deleted credential must not restore");
+        assert!(err.to_string().contains("not found"));
     }
 
     // ------------------------------------------------------------------

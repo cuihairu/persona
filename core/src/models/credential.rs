@@ -54,6 +54,30 @@ impl std::fmt::Display for CredentialType {
     }
 }
 
+impl std::str::FromStr for CredentialType {
+    type Err = String;
+
+    /// 与 [`Display`](std::fmt::Display) / 存储层字符串往返对齐：未知字符串
+    /// 归入 `Custom`（与 `row_to_credential` 同一策略）。
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "Password" => CredentialType::Password,
+            "CryptoWallet" => CredentialType::CryptoWallet,
+            "SshKey" => CredentialType::SshKey,
+            "ApiKey" => CredentialType::ApiKey,
+            "BankCard" => CredentialType::BankCard,
+            "GameAccount" => CredentialType::GameAccount,
+            "ServerConfig" => CredentialType::ServerConfig,
+            "Certificate" => CredentialType::Certificate,
+            "TwoFactor" => CredentialType::TwoFactor,
+            "SecureNote" => CredentialType::SecureNote,
+            "Identity" => CredentialType::Identity,
+            "SoftwareLicense" => CredentialType::SoftwareLicense,
+            custom => CredentialType::Custom(custom.to_string()),
+        })
+    }
+}
+
 /// Security level for credentials
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum SecurityLevel {
@@ -74,6 +98,20 @@ impl std::fmt::Display for SecurityLevel {
             SecurityLevel::High => write!(f, "High"),
             SecurityLevel::Medium => write!(f, "Medium"),
             SecurityLevel::Low => write!(f, "Low"),
+        }
+    }
+}
+
+impl std::str::FromStr for SecurityLevel {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Critical" => Ok(SecurityLevel::Critical),
+            "High" => Ok(SecurityLevel::High),
+            "Medium" => Ok(SecurityLevel::Medium),
+            "Low" => Ok(SecurityLevel::Low),
+            other => Err(format!("Unknown security level: {other}")),
         }
     }
 }
