@@ -95,12 +95,14 @@ describe('getAutofillSettings normalization', () => {
             autoFillLoginOnFocus: 'false',
             autoFillLoginOnLoad: 'true',
             autoFillTotpOnFocus: 'false',
+            autoFillTotpAfterLogin: 'false',
             requireTrustedDomain: 'true'
         });
         const settings = await getAutofillSettings();
         expect(settings.autoFillLoginOnFocus).toBe(false);
         expect(settings.autoFillLoginOnLoad).toBe(true);
         expect(settings.autoFillTotpOnFocus).toBe(false);
+        expect(settings.autoFillTotpAfterLogin).toBe(false);
         expect(settings.requireTrustedDomain).toBe(true);
     });
 

@@ -4,6 +4,7 @@ export interface AutofillSettings {
     autoFillLoginOnFocus: boolean;
     autoFillLoginOnLoad: boolean;
     autoFillTotpOnFocus: boolean;
+    autoFillTotpAfterLogin: boolean;
     requireTrustedDomain: boolean;
     minMatchStrengthLogin: number;
     minMatchStrengthTotp: number;
@@ -13,6 +14,7 @@ export const DEFAULT_AUTOFILL_SETTINGS: AutofillSettings = {
     autoFillLoginOnFocus: true,
     autoFillLoginOnLoad: false,
     autoFillTotpOnFocus: true,
+    autoFillTotpAfterLogin: true,
     requireTrustedDomain: true,
     minMatchStrengthLogin: 90,
     minMatchStrengthTotp: 90
@@ -37,6 +39,7 @@ function normalizeSettings(value: any): AutofillSettings {
         autoFillLoginOnFocus: coerceBoolean(raw.autoFillLoginOnFocus, DEFAULT_AUTOFILL_SETTINGS.autoFillLoginOnFocus),
         autoFillLoginOnLoad: coerceBoolean(raw.autoFillLoginOnLoad, DEFAULT_AUTOFILL_SETTINGS.autoFillLoginOnLoad),
         autoFillTotpOnFocus: coerceBoolean(raw.autoFillTotpOnFocus, DEFAULT_AUTOFILL_SETTINGS.autoFillTotpOnFocus),
+        autoFillTotpAfterLogin: coerceBoolean(raw.autoFillTotpAfterLogin, DEFAULT_AUTOFILL_SETTINGS.autoFillTotpAfterLogin),
         requireTrustedDomain: coerceBoolean(raw.requireTrustedDomain, DEFAULT_AUTOFILL_SETTINGS.requireTrustedDomain),
         minMatchStrengthLogin: clampMatchStrength(raw.minMatchStrengthLogin, DEFAULT_AUTOFILL_SETTINGS.minMatchStrengthLogin),
         minMatchStrengthTotp: clampMatchStrength(raw.minMatchStrengthTotp, DEFAULT_AUTOFILL_SETTINGS.minMatchStrengthTotp)

@@ -26,6 +26,7 @@ const suggestionsEl = document.getElementById('suggestions');
 const autoFillLoginOnFocusEl = document.getElementById('autoFillLoginOnFocus') as HTMLInputElement | null;
 const autoFillLoginOnLoadEl = document.getElementById('autoFillLoginOnLoad') as HTMLInputElement | null;
 const autoFillTotpOnFocusEl = document.getElementById('autoFillTotpOnFocus') as HTMLInputElement | null;
+const autoFillTotpAfterLoginEl = document.getElementById('autoFillTotpAfterLogin') as HTMLInputElement | null;
 const requireTrustedDomainEl = document.getElementById('requireTrustedDomain') as HTMLInputElement | null;
 const minMatchStrengthLoginEl = document.getElementById('minMatchStrengthLogin') as HTMLInputElement | null;
 const minMatchStrengthTotpEl = document.getElementById('minMatchStrengthTotp') as HTMLInputElement | null;
@@ -410,6 +411,7 @@ async function refreshSettings() {
     if (autoFillLoginOnFocusEl) autoFillLoginOnFocusEl.checked = settings.autoFillLoginOnFocus;
     if (autoFillLoginOnLoadEl) autoFillLoginOnLoadEl.checked = settings.autoFillLoginOnLoad;
     if (autoFillTotpOnFocusEl) autoFillTotpOnFocusEl.checked = settings.autoFillTotpOnFocus;
+    if (autoFillTotpAfterLoginEl) autoFillTotpAfterLoginEl.checked = settings.autoFillTotpAfterLogin;
     if (requireTrustedDomainEl) requireTrustedDomainEl.checked = settings.requireTrustedDomain;
     if (minMatchStrengthLoginEl) minMatchStrengthLoginEl.value = String(settings.minMatchStrengthLogin);
     if (minMatchStrengthTotpEl) minMatchStrengthTotpEl.value = String(settings.minMatchStrengthTotp);
@@ -424,6 +426,11 @@ function bindSettings() {
     });
     autoFillTotpOnFocusEl?.addEventListener('change', () => {
         void setAutofillSettings({ autoFillTotpOnFocus: Boolean(autoFillTotpOnFocusEl.checked) });
+    });
+    autoFillTotpAfterLoginEl?.addEventListener('change', () => {
+        void setAutofillSettings({
+            autoFillTotpAfterLogin: Boolean(autoFillTotpAfterLoginEl.checked)
+        });
     });
     requireTrustedDomainEl?.addEventListener('change', () => {
         void setAutofillSettings({ requireTrustedDomain: Boolean(requireTrustedDomainEl.checked) });

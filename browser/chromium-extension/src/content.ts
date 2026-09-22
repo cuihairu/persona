@@ -12,6 +12,13 @@ import {
     setAutofillDefaultsForOrigin,
     type OriginAutofillDefaults
 } from './autofillDefaults';
+import {
+    freshTotpWaitMs,
+    pickSuggestion,
+    shouldWaitForFreshTotp,
+    totpCopiedNotice,
+    totpFilledNotice
+} from './autofillUx';
 
 interface SuggestionItem {
     item_id: string;
@@ -193,19 +200,13 @@ function isFillableInput(input: HTMLInputElement): boolean {
     return true;
 }
 
-async function selectSuggestionWithDefault(mode: 'password' | 'totp', minStrength: number): Promise<SuggestionItem | null> {
-    const filtered = currentSuggestions
-        .filter((s) => (s.credential_type ?? 'password') === mode)
-        .filter((s) => (typeof s.match_strength === 'number' ? s.match_strength : 0) >= minStrength)
-        .sort((a, b) => b.match_strength - a.match_strength);
-
-    if (filtered.length === 0) return null;
-    if (filtered.length === 1) return filtered[0];
-
+/** 唯一命中/有默认则返回；多候选无默认返回 ambiguous，调用方弹选择器。 */
+function selectSuggestionWithDefault(
+    mode: 'password' | 'totp',
+    minStrength: number
+): { picked: SuggestionItem | null; ambiguous: boolean } {
     const wantedId = mode === 'totp' ? currentOriginDefaults?.totpItemId : currentOriginDefaults?.passwordItemId;
-    if (!wantedId) return null;
-
-    return filtered.find((s) => s.item_id === wantedId) ?? null;
+    return pickSuggestion(currentSuggestions, mode, minStrength, wantedId);
 }
 
 function normalizeUsername(value: string): string {
@@ -291,13 +292,20 @@ async function maybeAutoFillTotp(_trigger: 'focus', focusedInput?: HTMLInputElem
 
     if (!(await isDomainAllowedForAutoFill())) return;
 
-    const suggestion = await selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
-    if (!suggestion) return;
+    const { picked, ambiguous } = selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
+    if (!picked) {
+        // 多候选且无默认记忆：不再静默失败，就地弹出选择下拉
+        if (ambiguous && focusedInput && !hasValue(focusedInput)) {
+            lastTotpAutofillAttemptAt = now;
+            showSuggestionsDropdown(focusedInput, 'totp');
+        }
+        return;
+    }
 
     if (focusedInput && hasValue(focusedInput)) return;
 
     lastTotpAutofillAttemptAt = now;
-    await requestTotp(suggestion.item_id, focusedInput, true);
+    await requestTotp(picked.item_id, focusedInput, true);
 }
 
 // Handle keyboard shortcuts
@@ -532,21 +540,41 @@ async function requestFill(itemId: string, targetInput?: HTMLInputElement, userG
     }
 }
 
+function sendTotpRequest(itemId: string, userGesture: boolean) {
+    return chrome.runtime.sendMessage({
+        type: 'persona_get_totp',
+        origin: location.origin,
+        itemId,
+        userGesture
+    });
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function requestTotp(itemId: string, targetInput?: HTMLInputElement, userGesture = true) {
     try {
-        const response = await chrome.runtime.sendMessage({
-            type: 'persona_get_totp',
-            origin: location.origin,
-            itemId,
-            userGesture
-        });
+        let response = await sendTotpRequest(itemId, userGesture);
+
+        // 临期码（剩余 ≤3s）可能在用户提交前过期：等过周期边界再取一次新码。
+        // 重取仍属同一次用户动作，userGesture 照传（桥侧手势闸门语义不变）。
+        if (
+            response?.success &&
+            response.data?.code &&
+            shouldWaitForFreshTotp(response.data.remaining_seconds)
+        ) {
+            await sleep(freshTotpWaitMs(response.data.remaining_seconds));
+            response = await sendTotpRequest(itemId, true);
+        }
 
         if (response?.success && response.data?.code) {
             const code = String(response.data.code);
+            const remaining = response.data.remaining_seconds as number | undefined;
             const input = targetInput ?? findTotpInput();
             if (input) {
                 fillTotpCode(input, code);
-                showNotification('2FA code filled', 'success');
+                showNotification(totpFilledNotice(remaining), 'success');
             } else {
                 const copied = await chrome.runtime
                     .sendMessage({
@@ -560,10 +588,10 @@ async function requestTotp(itemId: string, targetInput?: HTMLInputElement, userG
                     .catch(() => false);
 
                 if (copied) {
-                    showNotification('2FA code copied', 'success');
+                    showNotification(totpCopiedNotice(remaining), 'success');
                 } else {
                     await copyToClipboard(code);
-                    showNotification('2FA code copied (fallback)', 'success');
+                    showNotification(totpCopiedNotice(remaining, true), 'success');
                 }
             }
         } else {
@@ -722,6 +750,20 @@ function fillCredential(credential: FillCredential, targetInput?: HTMLInputEleme
     }
 
     showNotification('Credentials filled successfully!', 'success');
+    void maybeChainFillTotp();
+}
+
+/** 登录填充成功后同页若有 OTP 框则链式填 2FA（合并登录+OTP 表单场景）。 */
+async function maybeChainFillTotp() {
+    if (!currentSettings.autoFillTotpAfterLogin) return;
+    const input = findTotpInput();
+    if (!input || hasValue(input)) return;
+    if (!(await isDomainAllowedForAutoFill())) return;
+
+    const { picked } = selectSuggestionWithDefault('totp', currentSettings.minMatchStrengthTotp);
+    if (!picked) return;
+
+    await requestTotp(picked.item_id, input, true);
 }
 
 // Fill input with proper events
