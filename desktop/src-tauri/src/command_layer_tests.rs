@@ -2505,6 +2505,71 @@ async fn credential_history_tracks_create_and_favorite_toggle() {
     assert!(resp.success, "{:?}", resp.error);
 }
 
+/// restore-to-version：元数据回滚到目标版本并落 restored 历史行；
+/// 秘密不回滚（历史快照不含密文）。
+#[tokio::test]
+async fn restore_credential_version_reverts_metadata() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let mut req = password_credential_request(&identity_id);
+    req.name = "Versioned".to_string();
+    let resp = create_credential(req, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let cred = resp.data.expect("credential created");
+
+    // 再改一次元数据 → 多一个版本
+    let resp = update_credential(
+        UpdateCredentialRequest {
+            id: cred.id.clone(),
+            name: "Renamed".to_string(),
+            security_level: None,
+            url: Some("https://renamed.example.com".to_string()),
+            username: Some("bob".to_string()),
+            notes: None,
+            tags: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 恢复到 v1（创建态）：表单补写与改名一并回滚
+    let resp = restore_credential_version(cred.id.clone(), 1, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let restored = resp.data.expect("restored");
+    assert_eq!(restored.name, "Versioned");
+    assert_eq!(restored.username, None);
+    assert_eq!(restored.url, None);
+
+    let resp = get_credential_history(cred.id.clone(), app.state::<AppState>())
+        .await
+        .unwrap();
+    let history = resp.data.expect("history returned");
+    assert_eq!(history[0].change_type, "restored");
+    assert!(
+        history[0].restorable,
+        "restore rows carry a restorable state"
+    );
+    assert!(history[1].restorable);
+
+    // 未知版本 → 业务错误而非 panic
+    let resp = restore_credential_version(cred.id.clone(), 99, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap_or_default().contains("99"));
+
+    let resp = delete_credential(cred.id, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
 /// 审计查询过滤分支 + init_service 把唯一工作区改道到新路径。
 #[tokio::test]
 async fn audit_query_filters_and_workspace_repath() {

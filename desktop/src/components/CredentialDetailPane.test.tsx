@@ -65,6 +65,7 @@ const setupPane = (
     attachFileToCredential: jest.fn(),
     saveAttachmentToFile: jest.fn().mockResolvedValue(true),
     deleteAttachment: jest.fn().mockResolvedValue(true),
+    restoreCredentialVersion: jest.fn().mockResolvedValue(null),
     ...serviceOver,
   };
   (usePersonaService as jest.Mock).mockReturnValue(service);
@@ -373,6 +374,55 @@ describe('components/CredentialDetailPane', () => {
     ).toBeGreaterThanOrEqual(2);
     // created 行（无字段 diff）也在时间线上
     expect(screen.getByText('v1 · created')).toBeInTheDocument();
+  });
+
+  it('item history: restore button reverts to the chosen version and reloads', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const restoredCred = { ...makeCred(), name: 'Old name' };
+    const restoreCredentialVersion = jest.fn().mockResolvedValue(restoredCred);
+    const getCredentialHistory = jest.fn().mockResolvedValue([
+      {
+        id: 'h1',
+        entity_id: 'c1',
+        change_type: 'created',
+        version: 1,
+        timestamp: '2026-09-19T09:00:00Z',
+        changes: [],
+        restorable: true,
+      },
+      {
+        id: 'h0',
+        entity_id: 'c1',
+        change_type: 'deleted',
+        version: 0,
+        timestamp: '2026-09-18T09:00:00Z',
+        changes: [],
+        restorable: false,
+      },
+    ]);
+    setupPane(
+      { name: 'Gmail', credential_type: 'Password' },
+      { credential_type: 'Password', data: {} },
+      { getCredentialHistory, restoreCredentialVersion },
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('history-toggle'));
+    });
+    await screen.findByText('v1 · created');
+
+    // restorable 行有恢复按钮；不可恢复行（如删除行）没有
+    const buttons = screen.getAllByTestId('history-restore');
+    expect(buttons).toHaveLength(1);
+
+    await act(async () => {
+      fireEvent.click(buttons[0]);
+    });
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(restoreCredentialVersion).toHaveBeenCalledWith('c1', 1);
+    // 成功后重置已加载标记 → 时间线重新拉取
+    expect(getCredentialHistory).toHaveBeenCalledTimes(2);
+    confirmSpy.mockRestore();
   });
 
   it('item history: empty timeline shows the no-changes notice', async () => {

@@ -1939,6 +1939,37 @@ pub async fn get_credential_history(
     }
 }
 
+/// Restore a credential's metadata to an earlier item-history version.
+/// 只回滚元数据（name/username/url/notes/tags 等 9 字段）；历史快照从不含
+/// 密文，密码等秘密不会被回滚。删除行无可恢复状态，不支持重建已删条目。
+#[command]
+pub async fn restore_credential_version(
+    credential_id: String,
+    version: u32,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SerializableCredential>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&credential_id) {
+            Ok(uuid) => match service.restore_credential_version(&uuid, version).await {
+                Ok(restored) => Ok(ApiResponse::success(restored.into())),
+                Err(e) => {
+                    let (code, msg) = map_persona_error(&e);
+                    match code {
+                        Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                        None => Ok(ApiResponse::error(format!(
+                            "Failed to restore credential version: {}",
+                            msg
+                        ))),
+                    }
+                }
+            },
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
 /// List attachments for a credential (metadata only; no blob content)
 #[command]
 pub async fn list_attachments(

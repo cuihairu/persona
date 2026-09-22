@@ -1025,7 +1025,8 @@ pub struct SerializableFieldChange {
 }
 
 /// 可序列化的历史行。previous_state/new_state 整份 JSON 不回传——
-/// 字段级 diff 是展示所需的最小信息。
+/// 字段级 diff 是展示所需的最小信息。`restorable` 只暴露「是否可恢复」
+/// 一位（删除行无 new_state 不可恢复），快照本身仍不进 IPC。
 #[derive(Debug, Serialize)]
 pub struct SerializableChangeHistory {
     pub id: String,
@@ -1034,6 +1035,7 @@ pub struct SerializableChangeHistory {
     pub version: u32,
     pub timestamp: String,
     pub changes: Vec<SerializableFieldChange>,
+    pub restorable: bool,
 }
 
 impl From<persona_core::models::ChangeHistory> for SerializableChangeHistory {
@@ -1053,6 +1055,7 @@ impl From<persona_core::models::ChangeHistory> for SerializableChangeHistory {
                     new_value: change.new_value,
                 })
                 .collect(),
+            restorable: entry.new_state.is_some(),
         }
     }
 }

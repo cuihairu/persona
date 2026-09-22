@@ -428,6 +428,8 @@ export interface CredentialHistoryEntry {
   version: number;
   timestamp: string;
   changes: FieldChangeEntry[];
+  /** 该版本可否恢复（删除行无 new_state，不可恢复） */
+  restorable: boolean;
 }
 
 /** 附件元数据（对应 Rust SerializableAttachment；blob 内容永不整段回传） */

@@ -218,6 +218,13 @@ class PersonaAPI {
     return invoke('get_credential_history', { credential_id: credentialId });
   }
 
+  async restoreCredentialVersion(
+    credentialId: string,
+    version: number
+  ): Promise<ApiResponse<Credential>> {
+    return invoke('restore_credential_version', { credential_id: credentialId, version });
+  }
+
   async listAttachments(credentialId: string): Promise<ApiResponse<AttachmentEntry[]>> {
     return invoke('list_attachments', { credential_id: credentialId });
   }

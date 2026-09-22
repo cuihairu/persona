@@ -441,6 +441,25 @@ export const usePersonaService = () => {
     }
   };
 
+  /** 元数据恢复到历史版本：成功后刷新列表并返回更新行（秘密永不回滚） */
+  const restoreCredentialVersion = async (credentialId: string, version: number) => {
+    try {
+      const response = await personaAPI.restoreCredentialVersion(credentialId, version);
+      if (response.success && response.data) {
+        if (currentIdentity) {
+          await loadCredentialsForIdentity(currentIdentity.id);
+        }
+        toast.success(t('svc.itemRestored'));
+        return response.data;
+      }
+      toast.error(response.error || t('svc.restoreFailed'));
+      return null;
+    } catch {
+      toast.error(t('svc.restoreFailed'));
+      return null;
+    }
+  };
+
   /** 附件四动作。列表失败回 []（面板显示空态）；增删保存失败 toast 且返回 null/[] */
   const listAttachments = async (credentialId: string) => {
     try {
@@ -647,6 +666,7 @@ export const usePersonaService = () => {
     generatePassword,
     getCredentialData,
     getCredentialHistory,
+    restoreCredentialVersion,
     listAttachments,
     attachFileToCredential,
     saveAttachmentToFile,

@@ -61,6 +61,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     getTotpCode,
     fetchFavicon,
     getCredentialHistory,
+    restoreCredentialVersion,
     listAttachments,
     attachFileToCredential,
     saveAttachmentToFile,
@@ -80,6 +81,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   // Item history：懒加载——展开时才查一次历史表，切换凭据即重置
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [history, setHistory] = useState<CredentialHistoryEntry[] | null>(null);
+  const [isRestoringVersion, setIsRestoringVersion] = useState(false);
   // Attachments：主功能，选中即拉取；切换凭据重置后重拉
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const [isAttachmentBusy, setIsAttachmentBusy] = useState(false);
@@ -236,6 +238,23 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       }
     } finally {
       setIsAttachmentBusy(false);
+    }
+  };
+
+  const handleRestoreVersion = async (entry: CredentialHistoryEntry) => {
+    if (isRestoringVersion) return;
+    const confirmed = window.confirm(
+      t('detail.restoreConfirm', { name: credential.name, version: entry.version })
+    );
+    if (!confirmed) return;
+    setIsRestoringVersion(true);
+    try {
+      const restored = await restoreCredentialVersion(credential.id, entry.version);
+      if (restored) {
+        setHistory(null);
+      }
+    } finally {
+      setIsRestoringVersion(false);
     }
   };
 
@@ -814,7 +833,18 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                         <span className="font-medium text-gray-700 dark:text-gray-200">
                           v{entry.version} · {entry.change_type}
                         </span>
-                        <span className="text-gray-400 dark:text-gray-500">
+                        <span className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
+                          {entry.restorable && (
+                            <button
+                              type="button"
+                              data-testid="history-restore"
+                              disabled={isRestoringVersion}
+                              onClick={() => handleRestoreVersion(entry)}
+                              className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                            >
+                              {t('detail.restoreVersion')}
+                            </button>
+                          )}
                           {new Date(entry.timestamp).toLocaleString()}
                         </span>
                       </div>
@@ -837,6 +867,11 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                     </li>
                   ))}
                 </ul>
+              )}
+              {history !== null && history.length > 0 && (
+                <p className="mt-2 text-[10px] text-gray-400 dark:text-gray-500">
+                  {t('detail.restoreHint')}
+                </p>
               )}
             </div>
           )}

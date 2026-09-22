@@ -196,6 +196,12 @@ describe('utils/api command mapping coverage', () => {
     await personaAPI.getCredentialHistory('c1');
     expect(mockInvoke).toHaveBeenCalledWith('get_credential_history', { credential_id: 'c1' });
 
+    await personaAPI.restoreCredentialVersion('c1', 3);
+    expect(mockInvoke).toHaveBeenCalledWith('restore_credential_version', {
+      credential_id: 'c1',
+      version: 3,
+    });
+
     await personaAPI.listAttachments('c1');
     expect(mockInvoke).toHaveBeenCalledWith('list_attachments', { credential_id: 'c1' });
 
