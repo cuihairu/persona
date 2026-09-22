@@ -624,7 +624,19 @@ Game Tokens (游戏令牌)
     （4 命令 + SecurityPane TravelModeSection + Identities 编辑表单标记开关
     + TRAVEL_MODE_ACTIVE 错误码触发 ReauthModal 重试）。开启期间拒绝改主
     密码；激活期间 inconsistent 红警告诚实呈现；威胁登记见
-    THREAT_MODEL.md「Travel Mode」
+    THREAT_MODEL.md「Travel Mode」。
+    手工验收（2026-09-22，CLI 端到端，隔离 workspace）：init(-e) →
+    add work → mark → enter（--passphrase-env）→ 断言 identities/
+    credentials/change_history 全 0 行、travel.persenc 为 PERSENC1
+    magic + 0600、审计 travel_mark_changed/entered 落行、status
+    ACTIVE → exit（对口令）→ work 行原样恢复（travel_marked=1 保留）、
+    sidecar 删除、user_auth 完好、status 回 inactive。改密拦截由
+    core/desktop 命令层测试覆盖（CLI 手工路径卡 dialoguer TTY，
+    不阻塞）。顺带发现：`persona init -y` 忽略
+    PERSONA_WORKSPACE_PATH 直接用 home 默认（config::load 的 env
+    覆盖对 init 的 determine_workspace_path 不生效），曾误在
+    ~/.persona 建出空壳库（已确认零损害并清理）；follow-up：
+    init 尊重 env 或文档明示。
   - 文档：存储/同步模式说明（sync server 拓扑已有，缺用户文档）
 
 Quality & Security
