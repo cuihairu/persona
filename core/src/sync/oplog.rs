@@ -19,14 +19,18 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// 同步条目类型。与服务器 wire 层的 kind 字符串一一对应（snake_case）；
-/// 未知 kind 的前向兼容在 wire 解析层处理（跳过，不进本枚举）。
+/// 同步条目类型。与服务器 wire 层的 kind 字符串一一对应（snake_case）。
+/// `Unknown` 是前向兼容兜底：新版客户端引入的新 kind 在旧版 pull 落库后
+/// 可存可参与 LWW（kind 不参与裁决），只是不被本地理解/渲染——序列化
+/// 回 wire 时写作 "unknown"（不保真，但未知 kind 本就不产生本地写）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ItemKind {
     Credential,
     Identity,
     Passkey,
+    #[serde(other)]
+    Unknown,
 }
 
 /// 操作类型：put = 写入/更新；delete = tombstone（payload 恒空）。

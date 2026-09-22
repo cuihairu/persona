@@ -542,7 +542,6 @@ pub async fn pull(State(state): State<AppState>, Query(params): Query<PullQuery>
         Ok(rows) => rows,
         Err(error) => return ApiError::internal(error).into_response(),
     };
-    let has_more = rows.len() > limit as usize;
     let page = &rows[..rows.len().min(limit as usize)];
     let mut ops = Vec::with_capacity(page.len());
     for row in page {
@@ -569,15 +568,13 @@ pub async fn pull(State(state): State<AppState>, Query(params): Query<PullQuery>
             },
         });
     }
-    let next_cursor = if has_more {
-        let last = &rows[limit as usize - 1];
-        Some(encode_cursor(
-            last.get::<i64, _>("seq"),
-            &last.get::<String, _>("op_id"),
-        ))
-    } else {
-        None
-    };
+    // 非空页恒返回该页最后一行的游标（与 events 的 has_more 语义有意
+    // 分叉）：sync 客户端（core engine.pull_cycle）按「空页才停」循环，
+    // 游标必须始终指向已处理位置——最后一页处理完即存游标，崩溃重启
+    // 不重拉。空页给 null，客户端 break。
+    let next_cursor = page
+        .last()
+        .map(|last| encode_cursor(last.get::<i64, _>("seq"), &last.get::<String, _>("op_id")));
     (Json(PullResponse { ops, next_cursor })).into_response()
 }
 
@@ -797,13 +794,13 @@ mod tests {
         assert_eq!(body["accepted"], 3);
         assert_eq!(body["duplicates"], 0);
 
-        // 第一页 limit=2 → 2 条 + next_cursor
+        // 第一页 limit=2 → 2 条 + next_cursor（指向第 2 行）
         let (status, body) = send(router.clone(), get_req("/api/v1/sync/oplog?limit=2")).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["ops"].as_array().unwrap().len(), 2);
         let cursor = body["next_cursor"].as_str().unwrap().to_string();
 
-        // since 游标续拉 → 剩 1 条，无更多
+        // since 游标续拉 → 剩 1 条；非空页恒返回游标（指向第 3 行）
         let (status, body) = send(
             router.clone(),
             get_req(&format!("/api/v1/sync/oplog?since={cursor}")),
@@ -812,6 +809,16 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         let rest = body["ops"].as_array().unwrap();
         assert_eq!(rest.len(), 1);
+        let last_cursor = body["next_cursor"].as_str().unwrap().to_string();
+
+        // 从最后一行游标再拉 → 空页 + null 游标（客户端循环的停点）
+        let (status, body) = send(
+            router.clone(),
+            get_req(&format!("/api/v1/sync/oplog?since={last_cursor}")),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["ops"].as_array().unwrap().len(), 0);
         assert!(body["next_cursor"].is_null());
 
         // 载荷 b64 round-trip
@@ -1004,5 +1011,128 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    // E2EE_SYNC_DESIGN 阶段 2 批 4 验收「两端收敛测试」：真 HTTP 栈 +
+    // 客户端 wire 层（core HttpSyncRemote）+ 两份独立 oplog（各挂
+    // SyncEngine）。覆盖：单向 push→pull、双端同 lamport 离线编辑的真
+    // 冲突（两端收敛到同一主位 + 双版本保留）、重建 engine 实例（状态全
+    // 在库：local_lamport/游标/pending 不随实例走——换主密码零影响同步
+    // 的构造性证明：SyncEngine 全链路无主密码参数，实例可弃可换）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn two_devices_converge_over_real_tcp_conflict_keeps_both_versions() {
+        use persona_core::storage::sync_repository::SyncRepository;
+        use persona_core::storage::Database;
+        use persona_core::sync::engine::SyncEngine;
+        use persona_core::sync::oplog::{item_view, ItemKind, OpType, SyncPayload};
+        use persona_core::sync::remote::HttpSyncRemote;
+
+        const TOKEN: &str = "sync-e2e-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+
+        async fn fresh_repo() -> (SyncRepository, Database) {
+            let db = Database::in_memory().await.unwrap();
+            db.migrate().await.unwrap();
+            let repo = SyncRepository::new(db.clone());
+            (repo, db)
+        }
+
+        fn engine_for(
+            db: Database,
+            base: &str,
+            token: &str,
+            device_id: Uuid,
+        ) -> SyncEngine<HttpSyncRemote> {
+            SyncEngine::new(
+                SyncRepository::new(db),
+                HttpSyncRemote::new(base, token).unwrap(),
+                device_id,
+                Box::new(|| false),
+            )
+        }
+
+        fn payload(tag: u8) -> Option<SyncPayload> {
+            Some(SyncPayload {
+                ciphertext: vec![tag; 8],
+                wrapped_item_key: vec![tag; 32],
+            })
+        }
+
+        let device_a = Uuid::new_v4();
+        let device_b = Uuid::new_v4();
+        let (repo_a, db_a) = fresh_repo().await;
+        let (repo_b, db_b) = fresh_repo().await;
+        let engine_a = engine_for(db_a.clone(), &base, TOKEN, device_a);
+        let engine_b = engine_for(db_b, &base, TOKEN, device_b);
+
+        // A 离线写 lamport 1 并 push
+        let item = Uuid::new_v4();
+        let a1 = engine_a
+            .record_local_change(item, ItemKind::Credential, OpType::Put, payload(0xA1))
+            .await
+            .unwrap();
+        assert_eq!(a1.lamport, 1);
+        assert_eq!(engine_a.push_cycle().await.unwrap().pushed, 1);
+
+        // B 上线拉到 A1，看到的主位就是 A 的版本
+        let pull = engine_b.pull_cycle().await.unwrap();
+        assert_eq!(pull.applied, 1);
+        assert_eq!(repo_b.get_state().await.unwrap().local_lamport, 1);
+        let view_b = item_view(repo_b.item_ops(item).await.unwrap());
+        assert_eq!(view_b.primary.as_ref().unwrap().device_id, device_a);
+        assert!(view_b.conflicts.is_empty());
+
+        // 双端离线同 lamport 编辑：B 从 lamport 1 出发写 2 并 push；A 不
+        // 知情（没拉过 B2），也从 1 出发写 2——真冲突的典型形态
+        let b2 = engine_b
+            .record_local_change(item, ItemKind::Credential, OpType::Put, payload(0xB2))
+            .await
+            .unwrap();
+        assert_eq!(b2.lamport, 2);
+        assert_eq!(engine_b.push_cycle().await.unwrap().pushed, 1);
+
+        // A 端重建 engine 实例（同一库句柄）：时钟延续正确——下一条仍接
+        // lamport 2（local_lamport 在库不在实例）
+        let engine_a2 = engine_for(db_a, &base, TOKEN, device_a);
+        let a2 = engine_a2
+            .record_local_change(item, ItemKind::Credential, OpType::Put, payload(0xA2))
+            .await
+            .unwrap();
+        assert_eq!(a2.lamport, 2);
+        assert_eq!(engine_a2.push_cycle().await.unwrap().pushed, 1);
+
+        // 双端各拉一轮 → 各自 oplog 持有 {A1, B2, A2} 全集
+        let pull_a = engine_a2.pull_cycle().await.unwrap();
+        assert_eq!(pull_a.applied, 1); // A1 是自己的本地 op，去重跳过
+        let pull_b = engine_b.pull_cycle().await.unwrap();
+        assert_eq!(pull_b.applied, 1);
+
+        // 收敛断言：两端 oplog 全集一致，主位收敛到同一 op（全序裁决），
+        // 冲突区恰一条，胜者/负者双版本密文都在（数据不丢）
+        let ops_a = repo_a.item_ops(item).await.unwrap();
+        let ops_b = repo_b.item_ops(item).await.unwrap();
+        assert_eq!(ops_a.len(), 3);
+        assert_eq!(ops_b.len(), 3);
+        let view_a = item_view(ops_a);
+        let view_b = item_view(ops_b);
+        let primary_a = view_a.primary.as_ref().unwrap();
+        let primary_b = view_b.primary.as_ref().unwrap();
+        assert_eq!(primary_a.op_id, primary_b.op_id);
+        assert_eq!(primary_a.device_id, device_a.max(device_b)); // 字典序大者胜
+        assert_eq!(view_a.conflicts.len(), 1);
+        assert_eq!(view_b.conflicts.len(), 1);
+        assert_eq!(view_a.conflicts[0].op_id, view_b.conflicts[0].op_id);
+        // 双版本密文都可读且可区分（胜者/负者都不丢——数据不丢的落库证明）
+        let primary_tag = primary_a.payload.as_ref().unwrap().ciphertext[0];
+        let conflict_tag = view_a.conflicts[0].payload.as_ref().unwrap().ciphertext[0];
+        assert_ne!(primary_tag, conflict_tag);
+
+        task.abort();
     }
 }
