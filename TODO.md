@@ -481,6 +481,23 @@ Server & Sync (optional)
         Host 白名单/CORS 全关/token 必需三防线防浏览器侧攻击、token 管理
         走桌面设置页+CLI（无编辑 scope，改权限=换 token）。实现按 §8 阶段
         1–4 推进，不依赖 E2EE 同步轨道
+  - [x] 阶段 1 core 服务层（2026-09-22）：`connect_tokens` 表（015 迁移）+
+        `core::connect::token`（pconn\_ 生成/SHA-256 哈希/指纹/scope
+        validate）+ `ConnectTokenRepository` + `PersonaService` connect\_\*
+        方法群（创建 reauth+解锁双门禁/列表/吊销/认证/data-plane scope
+        过滤；404 与 403 同形、锁定 `VaultLocked`）+ audit 三变体（Used
+        每 token 每分钟节流）
+  - [x] 阶段 2 desktop HTTP 服务面 + 设置页（2026-09-22）：宿主内嵌 axum
+        0.7（bind 127.0.0.1 端口 0=OS 分配）+ guard 管线（Host 白名单
+        421→Origin 出现即 403 + CORS 全关→Bearer 认证→锁定 503 不扣限额→
+        429 每分钟 120 请求）+ 包络 no-store + 6 个命令（start/stop/status + token create/list/revoke）+ 设置页 Connect 区块（开关/token
+        列表/创建弹窗 scope 选择/明文一次性展示；REAUTH_REQUIRED →
+        ReauthModal → 原表单意图重放）+ THREAT_MODEL「Connect 本机自动化
+        端点」章写实；jest 8 用例 + desktop 163 测试 + core connect 测试
+  - [ ] 阶段 3 CLI：`persona connect token create/list/revoke` +
+        `persona connect serve`（非交互沿用 --passphrase-env 惯例）
+  - [ ] 阶段 4 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速
+        上手（curl 示例）
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
   - [x] 阶段 2 核心（2026-09-22，批 1–4）：device envelope（DR-1，X25519
         `persona-dev-env-1` 信封）+ group key 层级；oplog 结构 + LWW/冲突双

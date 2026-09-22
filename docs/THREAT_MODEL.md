@@ -247,3 +247,40 @@ macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
   （收紧操作从宽）。
 - **SSH agent 联动**：agent 的 require_biometric 策略默认拒绝 + 显式注入
   OS provider（消除内置 Mock 静默放行面）。
+
+## Connect 本机自动化端点（`127.0.0.1` HTTP，2026-09，secrets automation）
+
+桌面宿主进程内嵌 axum listener（DR-1），让本机脚本/工具按 token 范围只读
+拉取凭据。**开关默认关闭**：不创建 listener 即无端口面；启用时 bind 硬编码
+loopback、端口由 OS 分配（无配置面，不可被诱导监听 0.0.0.0）。新增威胁面：
+
+- **信任根与可见面**：解锁态 + token 二元门禁（缺一即拒）。token 决定
+  「哪个身份下的哪些类型」；scope 外条目 404 与 403 同形（对消费者不存在，
+  防探测）。health 免认证但零信息（不报解锁态、不报库存在性）。
+- **不宣称**：防本机恶意进程——token 交到它手里的那一刻（环境变量/参数/
+  配置文件）就对它可见，与 1Password CLI 同边界；防宿主进程被攻破——
+  automation 不扩大也不缩小该边界；多用户 OS 隔离（同既有口径）。
+- **恶意网页三防线**（DR-4）：浏览器是 127.0.0.1 上唯一"陌生调用方"，
+  三道独立防线各自 fail-closed——① Host 头白名单（仅
+  `127.0.0.1`/`localhost`/`[::1]`），DNS rebinding 后 Host 是攻击域，
+  421 拒绝；② 请求带 `Origin` 头（浏览器 fetch 的标记）即 403，CORS
+  全关（不回 `Access-Control-Allow-*`，preflight 直接失败）；③ Bearer
+  token 必需，缺失/未知/已吊销同形 401。恶意网页同时需要绕过全部三道
+  才能触达数据，而 token 本身不在网页可及处。
+- **已知残面（文档禁止此用法）**：若用户把明文 token 配置进**浏览器
+  扩展可及的存储**（localStorage、扩展 settings），上述三防线对持有该
+  token 的网页形同虚设——防线防的是"无 token 的网页"。设置页明文展示
+  处的警示只说明一次性，不改变此边界。
+- **token 泄露爆炸半径**：三维 scope 圈定的**只读**面（verbs 恒 read，
+  无写路径 = 无篡改半径）+ 即时吊销（无缓存，下一请求即 401）+ audit
+  可见（Used 走每 token 每分钟节流聚合）。token 只存 SHA-256 哈希，
+  库/备份泄露不等于 token 泄露；明文 `pconn_` 前缀 + 32B 随机，离线
+  不可爆破。passkey/wallet/ssh/custom 类型恒不可授权（词汇表层面不存在）。
+- **管理面**：创建/吊销走 reauth 门禁（core `ensure_sensitive_operation_allowed`
+  权威）；明文只在创建响应出现一次；锁定态管理动作先被敏感门禁拒绝。
+- **DoS / 资源面**：每 token 每分钟 120 请求 429 上限（写死），保护宿主
+  不被自动化消费者拖垮；锁定期间 503 `vault_locked` 且**不扣限额**；
+  health 不占限额。listener 占用面极小（loopback 单口），仅解锁态返回
+  数据，锁定 503。
+- **吊销与审计**：吊销即时幂等；`ConnectTokenCreated/Revoked/Used` 三
+  audit 动作入审计日志；创建/吊销记录 resource_id，不落 token 明文。
