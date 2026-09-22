@@ -515,4 +515,62 @@ mod tests {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(resp["error"]["code"], "api_disabled");
     }
+
+    // ---- 跨端集成：core HttpRemoteAuthProvider ↔ 本 router（真 TCP）----
+    // E2EE_SYNC_DESIGN 阶段 1 验收要点「跨端（CLI↔server）握手集成测试」：
+    // 客户端 wire 编排（remote_http.rs）与服务器三端点在真实 HTTP 栈上
+    // 互通，签发的 SRP token 能过 require_bearer（与静态 token 共存）。
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn http_provider_full_round_trip_over_real_tcp() {
+        use persona_core::auth::remote_http::HttpRemoteAuthProvider;
+
+        let (router, _) = setup(Some(BOOTSTRAP)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+
+        let provider = HttpRemoteAuthProvider::new(format!("http://{addr}")).unwrap();
+        provider
+            .register_device(BOOTSTRAP, DEVICE, PASSWORD)
+            .await
+            .unwrap();
+
+        let outcome = provider
+            .begin_login(DEVICE)
+            .await
+            .unwrap()
+            .finish(PASSWORD)
+            .await
+            .unwrap();
+        assert!(!outcome.token.is_empty());
+        assert_eq!(outcome.expires_in_secs, 900);
+        // premaster 512B（4096-bit group）；指纹 = sha256 hex 64 字符
+        assert_eq!(outcome.session_key.len(), 512);
+        assert_eq!(outcome.session_key_fingerprint.len(), 64);
+
+        // SRP 签发的 token 走 require_bearer：静态 TOKENS miss 后查 SRP 表
+        // → 200（token 共存不打断既有链路）
+        let probe = reqwest::Client::new()
+            .get(format!("http://{addr}/api/v1/events?limit=1"))
+            .bearer_auth(&outcome.token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(probe.status(), StatusCode::OK, "{probe:?}");
+
+        // 错密码 → 服务器 401（与未注册同形），客户端转 AuthenticationFailed
+        let err = provider
+            .begin_login(DEVICE)
+            .await
+            .unwrap()
+            .finish("totally wrong")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("HTTP 401"), "{err}");
+
+        task.abort();
+    }
 }

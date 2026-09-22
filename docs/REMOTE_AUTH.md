@@ -30,4 +30,7 @@ Server-side SRP is live:
 - `server/src/api/auth.rs` — `POST /api/v1/auth/register` (requires an existing bearer token), `/challenge`, `/verify` (issues a 15-minute bearer token; lockout after 5 failures). The static `PERSONA_SERVER_TOKENS` bearer path stays in place alongside it.
 - Threat-model registration: `docs/THREAT_MODEL.md`, section "SRP 设备认证端点"; design decisions in `docs/E2EE_SYNC_DESIGN.md` (DR-2).
 
-The `RemoteAuthProvider` trait above remains the client-side seam; wiring a real client implementation through it is the remaining half of phase 1.
+Client-side HTTP wiring is live too (2026-09-22):
+
+- `core/src/auth/remote_http.rs` (feature `remote-auth`) — `HttpRemoteAuthProvider` (`register_device` / `begin_login` / `PendingRemoteLogin::finish`) drives the real three-endpoint flow and verifies the server proof `M2` before handing out the token. The mock trait above stays as the UI seam: its two-step shape cannot carry a real SRP session (`a_priv` must live with one owner from `A` to `M2` verification), so the real client is a standalone type and future OPAQUE work replaces this file only.
+- Cross-end integration test: `server/src/api/auth.rs::tests::http_provider_full_round_trip_over_real_tcp` runs the full register → challenge → verify flow over real TCP against the server router and asserts the issued SRP token passes `require_bearer` alongside static tokens.

@@ -109,3 +109,6 @@ events-server = ["dep:reqwest", "dep:flate2"]
 # 整库加密备份：PERSENC1 字节加密（flate2）+ VACUUM INTO 快照（sqlite）
 # + persona-server 备份端点客户端（reqwest；同上在 default 树零增量）
 backup = ["dep:reqwest", "dep:flate2", "sqlite"]
+# SRP 设备认证的 HTTP 客户端编排（auth/remote_http.rs；reqwest 同上在
+# default 树零增量）。E2EE 同步轨道阶段 1 客户端半边
+remote-auth = ["dep:reqwest"]

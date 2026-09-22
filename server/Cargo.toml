@@ -61,3 +61,7 @@ dotenvy = "0.15"
 tempfile.workspace = true
 # 测试构造 gzip 请求体（生产解压在 tower-http，压缩仅测试侧需要）
 flate2.workspace = true
+# 跨端集成测试：core HttpRemoteAuthProvider ↔ 本 router 真 TCP（阶段 1
+# 验收要点「跨端握手集成测试」）
+reqwest.workspace = true
+persona-core = { path = "../core", features = ["remote-auth"] }

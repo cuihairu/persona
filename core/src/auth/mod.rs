@@ -5,6 +5,8 @@ pub mod auto_lock_dashboard;
 pub mod biometric;
 pub mod permissions;
 pub mod remote;
+#[cfg(feature = "remote-auth")]
+pub mod remote_http;
 pub mod security_strategies;
 pub mod session;
 pub mod srp;
