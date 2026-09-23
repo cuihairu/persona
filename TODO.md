@@ -532,9 +532,19 @@ Server & Sync (optional)
         backfill_existing 存量幂等灌入 / run_cycle pull→materialize→push /
         capture 产出）+ desktop sync_now（travel 闸采样、整轮成功才挂捕获缝、
         lock 时 detach——group key 不跨锁存活）
-  - [ ] 阶段 3c/3d 接线：冲突裁决 UI（item_view conflicts 展示 + 采纳产生
-        新 lamport put）+ `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」节
-        重写 + 双设备演示脚本；group key 轮换（开放问题 2）
+  - [x] 阶段 3c 接线（2026-09-23，批 3c-1..3c-4）：冲突裁决数据面
+        （resolve.rs 副本解封 + list_conflicts/resolve_conflict——采纳以
+        新 lamport 重新入账赢回主位、写序先主库后 oplog、run_cycle
+        conflicts 真值修 3b 错位）+ desktop 双命令（sync_conflicts_list /
+        sync_conflict_resolve，门禁矩阵）+ 前端接线（SyncConflictsModal
+        裁决弹窗 + 设置页「立即同步」按钮与冲突横幅，i18n 双语）+
+        首设备自举（bootstrap_group_if_empty——空组自建组密钥，修复全新
+        服务器上第一台设备永远待授权、同步无法开始的缺口；真 TCP 测试）+
+        文档收口（STORAGE_AND_SYNC「当前没有凭据级实时同步」节重写为
+        E2EE 凭据同步专节：同步范围/诚实边界/冲突裁决/服务端可见面 +
+        双设备演示脚本 + 多设备三路径与故障速查口径更新；
+        E2EE_SYNC_DESIGN §6 补自举语义）
+  - [ ] 阶段 3d：group key 轮换（开放问题 2）
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

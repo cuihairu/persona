@@ -1461,9 +1461,14 @@ pub async fn sync_join(
         )));
     }
     // pending = group-keys 尚无本机信封；查询失败按「等授权」保守处理
-    // （fail-closed：授权状态宁可显示未授权）
-    let pending = match api.group_keys().await {
-        Ok(keys) => !keys.iter().any(|k| k.device_id == device_id),
+    // （fail-closed：授权状态宁可显示未授权）。空组时本机自举：全新服务器
+    // 上没有既有设备可代为授权，首台设备生成 group key 自封信封上传——
+    // 否则第一台设备永远停在待授权（无人能授权它）。
+    let pending = match api
+        .bootstrap_group_if_empty(device_id, identity.key_pair.public_bytes())
+        .await
+    {
+        Ok(bootstrapped) => !bootstrapped,
         Err(_) => true,
     };
     Ok(ApiResponse::success(SyncJoinOutcome {

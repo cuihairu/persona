@@ -168,6 +168,11 @@ oplog——元数据明文只留在本地 change_history，oplog 只持有 §5 �
 
 - **注册**：生成 X25519 对（DR-1）→ SRP 登录 → `POST /sync/devices`（公钥 +
   设备名）。新设备此时**还读不到 group key**——处于「待授权」。
+- **自举**（2026-09 阶段 3c 补）：全新服务器上不存在「既有设备」可代为
+  授权——第一台设备 join 时若 `GET /sync/group-keys` 为空，本机生成
+  group key 并自封信封上传（`bootstrap_group_if_empty`）。令牌持有者
+  本来就能读全部密文，自建组不放大信任面。已知边界：两台设备在彼此
+  可见前先后见到空组会各自建组，重复一侧 leave 重走即可。
 - **授权**：任一既有设备拆出 group key，为新设备包信封并上传（桌面给设备管理
   页一行确认；CLI 给 `persona sync authorize` 类命令）。未授权设备 pull 不到
   group key，也解不开任何条目——fail-closed。

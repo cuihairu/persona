@@ -1230,4 +1230,70 @@ mod tests {
 
         task.abort();
     }
+
+    // 首设备自举：全新服务器上第一台设备 join 时无人能授权它（信封由
+    // 「既有设备」封出，而此刻不存在既有设备）——bootstrap_group_if_empty
+    // 在空组上自建组密钥 + 自封信封，第二台设备起恢复「等既有设备授权」
+    // 流程。这是 join 流程能在真机上跑通的前提（阶段 3 演示脚本第一步）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn admin_api_bootstrap_creates_group_on_fresh_server_and_second_device_still_pends() {
+        use persona_core::sync::device::DeviceIdentity;
+        use persona_core::sync::envelope::{open_group_key, seal_group_key};
+        use persona_core::sync::remote::SyncAdminApi;
+
+        const TOKEN: &str = "sync-bootstrap-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+
+        let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
+
+        // 首设备：登记后空组自举 → true，且本机能拆开自己的信封
+        let laptop = DeviceIdentity::generate("laptop").unwrap();
+        let laptop_id = admin
+            .register_device("laptop", laptop.key_pair.public_bytes())
+            .await
+            .expect("register first device");
+        let bootstrapped = admin
+            .bootstrap_group_if_empty(laptop_id, laptop.key_pair.public_bytes())
+            .await
+            .expect("bootstrap on fresh server");
+        assert!(bootstrapped);
+        let keys = admin.group_keys().await.expect("keys after bootstrap");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].device_id, laptop_id);
+        let group = open_group_key(&keys[0].envelope, laptop.key_pair.secret_bytes())
+            .expect("own envelope opens");
+
+        // 第二台设备：组已非空 → 不自举（false），等首设备授权
+        let phone = DeviceIdentity::generate("phone").unwrap();
+        let phone_id = admin
+            .register_device("phone", phone.key_pair.public_bytes())
+            .await
+            .expect("register second device");
+        let bootstrapped = admin
+            .bootstrap_group_if_empty(phone_id, phone.key_pair.public_bytes())
+            .await
+            .expect("bootstrap on non-empty group");
+        assert!(!bootstrapped);
+
+        // 首设备代授权：拆自己的 group key → 用对方公钥封新信封上传
+        let envelope = seal_group_key(&group, phone.key_pair.public_bytes());
+        admin
+            .put_group_key(phone_id, &envelope)
+            .await
+            .expect("authorize phone");
+        let keys = admin.group_keys().await.expect("keys after authorize");
+        assert_eq!(keys.len(), 2);
+        let phone_entry = keys.iter().find(|k| k.device_id == phone_id).unwrap();
+        let group_phone = open_group_key(&phone_entry.envelope, phone.key_pair.secret_bytes())
+            .expect("phone opens its envelope");
+        assert_eq!(group, group_phone, "both devices hold the same group key");
+
+        task.abort();
+    }
 }

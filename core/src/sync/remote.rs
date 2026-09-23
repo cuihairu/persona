@@ -482,6 +482,31 @@ impl SyncAdminApi {
         Ok(keys)
     }
 
+    /// 首设备自举（空组建组）：服务器上尚无任何 group key 信封时，本机生成
+    /// group key 并用自己的公钥封唯一信封上传。全新服务器上不存在「既有
+    /// 设备」可代为授权——令牌持有者本来就能读到全部密文，首台设备自建组
+    /// 不放大信任面。返回 `true` = 本机完成自举（即已授权）；`false` = 组
+    /// 非空，走既有流程等他机授权。
+    ///
+    /// 已知边界：两台设备在彼此可见前先后见到空组会各自建组（并发自举），
+    /// 各自只能拆开自己的信封、对方条目解不开按容错跳过——事后在重复的
+    /// 一侧 leave 重走即可。全员离开后组回到空态，下一个加入者自举出
+    /// **新**组密钥：服务器残留的旧组密文解不开、按容错逐条跳过（不废
+    /// 整轮），不回读旧数据。
+    pub async fn bootstrap_group_if_empty(
+        &self,
+        device_id: Uuid,
+        device_public: &[u8; 32],
+    ) -> Result<bool> {
+        if !self.group_keys().await?.is_empty() {
+            return Ok(false);
+        }
+        let group = super::keys::GroupKey::generate()?;
+        let envelope = super::envelope::seal_group_key(group.as_bytes(), device_public);
+        self.put_group_key(device_id, &envelope).await?;
+        Ok(true)
+    }
+
     /// 为设备上传 group key 信封（授权动作）。信封必须已登记设备的公钥封出
     /// （服务器校验 80 字节 + 设备存在；挂幽灵设备 fail-closed）。
     pub async fn put_group_key(&self, device_id: Uuid, envelope: &[u8]) -> Result<()> {
