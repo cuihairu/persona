@@ -653,4 +653,81 @@ mod tests {
             .unwrap()
             .is_none());
     }
+
+    /// materialize_all 的报告面：pending 身份进报告留待下轮；单 item
+    /// 快照损坏（wrapped key 合法但密文坏）走 Err 臂只记 warn，不中断
+    /// 整批——两条 op 都留驻 oplog。
+    #[tokio::test]
+    async fn materialize_all_reports_pending_and_tolerates_corrupt_snapshot() {
+        let (_db, materializer, _identity_repo, group, _identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+
+        // pending：引用未知身份（Identity 尚未同步）
+        let pending_item = Uuid::new_v4();
+        let pending_identity = Uuid::new_v4();
+        let pending_snapshot = SyncItemSnapshot {
+            identity_id: pending_identity,
+            name: "悬空凭据".to_string(),
+            credential_type: CredentialType::Password,
+            security_level: SecurityLevel::Medium,
+            url: None,
+            username: None,
+            notes: None,
+            tags: vec![],
+            metadata: Default::default(),
+            is_favorite: false,
+            is_active: true,
+            data: password_data("y"),
+        };
+        materializer
+            .sync_repo
+            .record_remote_op(&put_op(
+                pending_item,
+                Uuid::new_v4(),
+                1,
+                &pending_snapshot,
+                &group,
+            ))
+            .await
+            .unwrap();
+
+        // 损坏：wrapped item key 合法（group 能拆），但密文解不出快照
+        let corrupt_item = Uuid::new_v4();
+        let broken = SyncOp {
+            op_id: Uuid::new_v4(),
+            item_id: corrupt_item,
+            kind: ItemKind::Credential,
+            op: OpType::Put,
+            lamport: 1,
+            device_id: Uuid::new_v4(),
+            timestamp: Some(Utc::now()),
+            payload: Some(SyncPayload {
+                ciphertext: vec![7; 64],
+                wrapped_item_key: wrap_item_key_with_group(
+                    &EncryptionService::generate_key(),
+                    &group,
+                ),
+            }),
+        };
+        materializer
+            .sync_repo
+            .record_remote_op(&broken)
+            .await
+            .unwrap();
+
+        let report = materializer
+            .materialize_all(&master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(report.written, 0);
+        assert_eq!(
+            report.pending_identity,
+            vec![(pending_item, pending_identity)]
+        );
+        assert_eq!(
+            materializer.sync_repo.item_ids().await.unwrap().len(),
+            2,
+            "两条 op 都留在 oplog，可重跑补齐"
+        );
+    }
 }

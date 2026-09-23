@@ -135,4 +135,20 @@ mod tests {
             assert!(DeviceIdentity::from_stored_json(&record.to_string()).is_err());
         }
     }
+
+    /// 三个字段逐个整条缺失（不是坏值）各有专属报错，fail-closed 不猜。
+    #[test]
+    fn stored_json_rejects_missing_fields_individually() {
+        let id = "00000000-0000-0000-0000-000000000000";
+        let must_reject = |raw: String, needle: &str| match DeviceIdentity::from_stored_json(&raw) {
+            Err(e) => assert!(e.to_string().contains(needle), "{e}"),
+            Ok(_) => panic!("record must be rejected: missing {needle}"),
+        };
+        must_reject("{}".to_string(), "missing device_id");
+        must_reject(format!(r#"{{"device_id":"{id}"}}"#), "missing device_name");
+        must_reject(
+            format!(r#"{{"device_id":"{id}","device_name":"d"}}"#),
+            "missing secret_key",
+        );
+    }
 }
