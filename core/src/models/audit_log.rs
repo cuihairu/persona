@@ -755,4 +755,43 @@ mod tests {
         let failure = AuditLog::new(AuditAction::Logout, ResourceType::User, false);
         assert!(failure.is_failure());
     }
+
+    // Connect 变体（Connect 自动化批次加入）也要走 Display/parse 往返。
+    #[test]
+    fn test_resource_type_connect_display_and_parse() {
+        let text = ResourceType::Connect.to_string();
+        assert_eq!(text.parse::<ResourceType>().unwrap(), ResourceType::Connect);
+    }
+
+    // 构建器链的其余 with_* 槽位（首次 builder 测试只碰了 user/identity/
+    // metadata 三槽）逐一落值。
+    #[test]
+    fn test_audit_log_builder_full_chain() {
+        let credential_id = Uuid::new_v4();
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("scope".to_string(), "export".to_string());
+
+        let log = AuditLog::new(AuditAction::CredentialCreated, ResourceType::Backup, true)
+            .with_credential_id(Some(credential_id))
+            .with_session_id(Some("sess-1".to_string()))
+            .with_error_message(Some("boom".to_string()))
+            .with_details(Some("full vault".to_string()))
+            .with_resource_id(Some("bkp-9".to_string()))
+            .with_ip_address(Some("127.0.0.1".to_string()))
+            .with_user_agent(Some("persona-test".to_string()))
+            .with_metadata_map(extra);
+
+        assert_eq!(log.credential_id, Some(credential_id));
+        assert_eq!(log.session_id.as_deref(), Some("sess-1"));
+        // with_details 与 with_error_message 写同一存储槽，链尾的 details 覆盖前者
+        assert_eq!(log.error_message.as_deref(), Some("full vault"));
+        assert_eq!(log.resource_id.as_deref(), Some("bkp-9"));
+        assert_eq!(log.ip_address.as_deref(), Some("127.0.0.1"));
+        assert_eq!(log.user_agent.as_deref(), Some("persona-test"));
+        assert_eq!(
+            log.metadata.get("scope"),
+            Some(&"export".to_string()),
+            "with_metadata_map merges alongside single-key inserts"
+        );
+    }
 }

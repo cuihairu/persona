@@ -773,4 +773,36 @@ mod tests {
         let json = serde_json::to_string(&kind).unwrap();
         assert!(json.contains("two_factor_available"), "{json}");
     }
+
+    // 剩余变体的 severity 分层与 detail 模板逐一断言（模板永不嵌入
+    // 扫描到的口令本体）。
+    #[test]
+    fn remaining_issue_kinds_cover_severity_and_detail_templates() {
+        let reused = HealthIssueKind::ReusedPassword { group_size: 3 };
+        assert_eq!(reused.severity(), HealthSeverity::High);
+        assert!(
+            reused.detail().contains("3"),
+            "group size appears in detail: {}",
+            reused.detail()
+        );
+
+        let expired = HealthIssueKind::Expired;
+        assert_eq!(expired.severity(), HealthSeverity::High);
+        assert!(expired.detail().contains("expired"));
+
+        // WeakPassword：score<=1 提到 High，score 2 只到 Medium。
+        let weak_low = HealthIssueKind::WeakPassword { score: 1 };
+        assert_eq!(weak_low.severity(), HealthSeverity::High);
+        assert!(weak_low.detail().contains("score is 1"));
+        let weak_mid = HealthIssueKind::WeakPassword { score: 2 };
+        assert_eq!(weak_mid.severity(), HealthSeverity::Medium);
+
+        let soon = HealthIssueKind::ExpiringSoon { days: 4 };
+        assert_eq!(soon.severity(), HealthSeverity::Medium);
+        assert!(soon.detail().contains("4 day(s)"));
+
+        let stale = HealthIssueKind::StaleUnchanged { days: 200 };
+        assert_eq!(stale.severity(), HealthSeverity::Low);
+        assert!(stale.detail().contains("200 day(s)"));
+    }
 }

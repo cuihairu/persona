@@ -308,4 +308,35 @@ mod tests {
         let sink = ServerEventSink::new(&format!("http://{addr}"), "s3cret").unwrap();
         assert!(sink.send(wire_events(1)).await.is_err());
     }
+
+    // 401 响应体超长（>200 字符）：预览按字符截断并以 … 结尾——按字节
+    // 截断会切在多字节字符中间 panic，这里连同多字节字符一起验证。
+    #[tokio::test]
+    async fn oversized_error_body_is_truncated_in_preview() {
+        let long_body: &'static str = Box::leak(format!("{}世", "x".repeat(300)).into_boxed_str());
+        let (base_url, _captured) = spawn_fake_server("HTTP/1.1 401 Unauthorized", long_body).await;
+        let sink = ServerEventSink::new(&base_url, "s3cret").unwrap();
+
+        let error = sink.send(wire_events(1)).await.unwrap_err().to_string();
+        assert!(error.contains('…'), "preview must be truncated: {error}");
+        assert!(
+            !error.contains(long_body),
+            "full body must not leak: {error}"
+        );
+    }
+
+    // request_complete 直接单测：头部未收全/Content-Length 未读满都
+    // 不算完成；无 Content-Length 时头部收全即放行。
+    #[test]
+    fn request_complete_rejects_partial_and_headerless_requests() {
+        assert!(!request_complete(b""));
+        assert!(!request_complete(b"POST /x HTTP/1.1\r\n"));
+        assert!(!request_complete(
+            b"POST /x HTTP/1.1\r\nContent-Length: 10\r\n\r\nshort"
+        ));
+
+        let full = b"POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+        assert!(request_complete(full));
+        assert!(request_complete(b"GET /x HTTP/1.1\r\n\r\n"));
+    }
 }

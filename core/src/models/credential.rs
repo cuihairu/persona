@@ -791,4 +791,116 @@ mod tests {
         cred.touch();
         assert!(cred.updated_at >= before);
     }
+
+    // FromStr 与 Display/存储层字符串对齐：已知串逐一归位，未知串归入
+    // Custom（与 row_to_credential 同一策略）。
+    #[test]
+    fn credential_type_from_str_roundtrips_all_known_variants() {
+        for name in [
+            "Password",
+            "CryptoWallet",
+            "SshKey",
+            "ApiKey",
+            "BankCard",
+            "GameAccount",
+            "ServerConfig",
+            "Certificate",
+            "TwoFactor",
+            "SecureNote",
+            "Identity",
+            "SoftwareLicense",
+        ] {
+            let parsed: CredentialType = name.parse().unwrap();
+            assert_eq!(parsed.to_string(), name, "roundtrip must hold for {name}");
+        }
+
+        // 未知串不报错，归入 Custom 并保留原文
+        let custom: CredentialType = "LoyaltyCard".parse().unwrap();
+        assert_eq!(custom, CredentialType::Custom("LoyaltyCard".to_string()));
+        assert_eq!(custom.to_string(), "LoyaltyCard");
+    }
+
+    #[test]
+    fn security_level_from_str_rejects_unknown() {
+        let low: SecurityLevel = "Low".parse().unwrap();
+        assert_eq!(low, SecurityLevel::Low);
+        assert_eq!(
+            "Critical".parse::<SecurityLevel>().unwrap(),
+            SecurityLevel::Critical
+        );
+        assert_eq!(
+            "High".parse::<SecurityLevel>().unwrap(),
+            SecurityLevel::High
+        );
+        assert_eq!(
+            "Medium".parse::<SecurityLevel>().unwrap(),
+            SecurityLevel::Medium
+        );
+
+        let err = "extreme".parse::<SecurityLevel>().unwrap_err();
+        assert_eq!(err, "Unknown security level: extreme");
+    }
+
+    // serde 派生覆盖全部字段：is_active/is_favorite/metadata 也要在
+    // roundtrip 里断言（序列化/反序列化的字段赋值行才全部落地）。
+    #[test]
+    fn credential_serde_roundtrip_preserves_every_field() {
+        let mut cred = Credential::new(
+            Uuid::new_v4(),
+            "Full field row".to_string(),
+            CredentialType::SoftwareLicense,
+            SecurityLevel::Low,
+            vec![7, 8, 9],
+            Some(vec![1, 1]),
+        );
+        cred.url = Some("https://example.com".to_string());
+        cred.username = Some("alice".to_string());
+        cred.notes = Some("perpetual license".to_string());
+        cred.tags = vec!["office".to_string(), "license".to_string()];
+        cred.set_metadata("vendor".to_string(), "acme".to_string());
+        cred.mark_accessed();
+        cred.is_active = false;
+        cred.is_favorite = true;
+
+        let json = serde_json::to_string(&cred).unwrap();
+        let decoded: Credential = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.id, cred.id);
+        assert_eq!(decoded.identity_id, cred.identity_id);
+        assert_eq!(decoded.name, cred.name);
+        assert_eq!(decoded.credential_type, CredentialType::SoftwareLicense);
+        assert_eq!(decoded.security_level, SecurityLevel::Low);
+        assert_eq!(decoded.url, cred.url);
+        assert_eq!(decoded.username, cred.username);
+        assert_eq!(decoded.encrypted_data, cred.encrypted_data);
+        assert_eq!(decoded.wrapped_item_key, Some(vec![1, 1]));
+        assert_eq!(decoded.notes, cred.notes);
+        assert_eq!(decoded.tags, cred.tags);
+        assert_eq!(decoded.metadata, cred.metadata);
+        assert_eq!(decoded.created_at, cred.created_at);
+        assert_eq!(decoded.updated_at, cred.updated_at);
+        assert_eq!(decoded.last_accessed, cred.last_accessed);
+        assert!(!decoded.is_active);
+        assert!(decoded.is_favorite);
+    }
+
+    #[test]
+    fn bank_card_data_serde_roundtrip() {
+        let card = BankCardData {
+            card_number: "4111 1111 1111 1111".to_string(),
+            cardholder_name: "Alice".to_string(),
+            expiry_date: "09/28".to_string(),
+            cvv: "123".to_string(),
+            bank_name: "Test Bank".to_string(),
+            card_type: "visa".to_string(),
+        };
+
+        let json = serde_json::to_string(&card).unwrap();
+        let decoded: BankCardData = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.card_number, card.card_number);
+        assert_eq!(decoded.cardholder_name, card.cardholder_name);
+        assert_eq!(decoded.expiry_date, card.expiry_date);
+        assert_eq!(decoded.cvv, card.cvv);
+        assert_eq!(decoded.bank_name, card.bank_name);
+        assert_eq!(decoded.card_type, card.card_type);
+    }
 }

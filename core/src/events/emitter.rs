@@ -420,4 +420,43 @@ mod tests {
         let total: usize = sink.batches().iter().map(Vec::len).sum();
         assert_eq!(total, 2);
     }
+
+    /// send 永远失败的上报目的地（stop 的最终 flush 失败路径用）。
+    struct FailingSink;
+
+    #[async_trait::async_trait]
+    impl EventSink for FailingSink {
+        async fn send(&self, _events: Vec<WireEvent>) -> Result<SendReport> {
+            Err(anyhow::anyhow!("sink down"))
+        }
+    }
+
+    // Debug 渲染走 queued()/dropped_total() 读数；Emitter::new 是
+    // with_config 的默认参数便捷入口。
+    #[tokio::test]
+    async fn debug_and_convenience_new_render_queue_state() {
+        let sink = Arc::new(FakeSink::default());
+        let emitter = Emitter::new(sink.clone());
+        let text = format!("{emitter:?}");
+        assert!(text.contains("Emitter"), "{text}");
+
+        emitter.emit(&audit_log("dbg"));
+        let text = format!("{emitter:?}");
+        assert!(text.contains("queued: 1"), "{text}");
+
+        emitter.stop().await;
+        assert_eq!(emitter.queued(), 0);
+        assert_eq!(sink.batches().len(), 1);
+    }
+
+    // stop 的最终 flush 失败：只 warn 并放弃（本地 sqlite 审计库才是存证
+    // 源），绝不 panic；失败批次留在队列，观测依旧可用，重复 stop 幂等。
+    #[tokio::test]
+    async fn stop_with_failing_sink_still_stops_and_keeps_queue() {
+        let emitter = Emitter::with_config(Arc::new(FailingSink), test_config());
+        emitter.emit(&audit_log("lost"));
+        emitter.stop().await;
+        assert_eq!(emitter.queued(), 1, "failed batch must stay queued");
+        emitter.stop().await; // 二次 stop 依旧干净
+    }
 }
