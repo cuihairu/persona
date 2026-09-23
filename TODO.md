@@ -544,7 +544,18 @@ Server & Sync (optional)
         E2EE 凭据同步专节：同步范围/诚实边界/冲突裁决/服务端可见面 +
         双设备演示脚本 + 多设备三路径与故障速查口径更新；
         E2EE_SYNC_DESIGN §6 补自举语义）
-  - [ ] 阶段 3d：group key 轮换（开放问题 2）
+  - [x] 阶段 3d：group key 轮换（2026-09-23，开放问题 2 v1 落地）：
+        core `SyncSession::rotate_group_key`（drain 旧组密文上线 → 为
+        全部仍授权设备重封新信封 → rewrap_all 全量重包（主库为事实源，
+        每条新 lamport 的 put，LWW 自然成为新主位）→ 推空；
+        SyncRotateReport）+ 三条诚实边界登记（窗口未推送改动 / 未裁决
+        冲突副本清出视图 / 并发轮换无仲裁）；desktop sync_rotate 命令
+        （与 sync_now 同门禁矩阵）+ 前端「轮换组密钥」入口（诚实确认
+        文案 + 计数汇报，i18n 双语）；测试：core rewrap/零副作用单测 +
+        server 真 TCP 全流程集成（rotate → B/C 拉全量物化）+ 命令门禁
+        + 前端用例；文档：STORAGE_AND_SYNC「轮换组密钥」节 +
+        E2EE_SYNC_DESIGN DR-3/§11-2 写实 + THREAT_MODEL 前向安全口径
+        （吊销 ≠ 轮换）
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=
