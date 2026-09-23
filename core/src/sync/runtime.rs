@@ -21,15 +21,15 @@ use super::capture::OplogCapture;
 use super::device::DeviceIdentity;
 use super::engine::{SyncEngine, SyncRemote};
 use super::keys::{wrap_item_key_with_group, GroupKey};
-use super::materialize::Materializer;
-use super::oplog::{ItemKind, OpType, SyncPayload};
+use super::materialize::{MaterializeOutcome, Materializer};
+use super::oplog::{item_view, ItemKind, OpType, SyncPayload};
+use super::resolve::{self, ConflictEntry};
 use super::snapshot::SyncItemSnapshot;
 use crate::crypto::encryption::EncryptionService;
 use crate::crypto::key_hierarchy::KeyHierarchy;
 use crate::models::credential::CredentialData;
 use crate::storage::sync_repository::SyncRepository;
-use crate::storage::{CredentialRepository, Database};
-#[cfg(feature = "remote-auth")]
+use crate::storage::{CredentialRepository, Database, Repository};
 use crate::PersonaError;
 use crate::Result;
 
@@ -193,7 +193,9 @@ impl<R: SyncRemote> SyncSession<R> {
         Ok(SyncNowReport {
             pulled: pull.applied,
             materialized: materialize.written,
-            conflicts: materialize.skipped_local_primary,
+            // 待裁决冲突条目数（从 oplog 现算真值；3b 曾错用
+            // skipped_local_primary——那是「主位是本机 op」的跳过计数）。
+            conflicts: self.conflict_item_count().await?,
             pending_identity: materialize.pending_identity.len(),
             pushed: push.pushed,
             backfilled: 0,
@@ -207,6 +209,109 @@ impl<R: SyncRemote> SyncSession<R> {
             self.engine.clone(),
             self.group_key.clone(),
         ))
+    }
+
+    /// 冲突裁决视图（阶段 3c）：全部待裁决条目（主位 + 副本的解密快照）。
+    /// 任一版本解不开（损坏）的条目整条跳过——不可裁决但留驻 oplog，
+    /// 不阻塞其余条目的展示。
+    pub async fn list_conflicts(&self) -> Result<Vec<ConflictEntry>> {
+        let mut entries = Vec::new();
+        for item_id in self.sync_repo.item_ids().await? {
+            let ops = self.sync_repo.item_ops(item_id).await?;
+            if let Some(entry) = resolve::conflict_entry(item_id, &ops, &self.group_key) {
+                entries.push(entry);
+            }
+        }
+        entries.sort_by_key(|entry| entry.item_id);
+        Ok(entries)
+    }
+
+    /// 当前待裁决的冲突条目数（run_cycle 报告的 `conflicts` 真值）。
+    pub async fn conflict_item_count(&self) -> Result<usize> {
+        Ok(self.list_conflicts().await?.len())
+    }
+
+    /// 裁决：采纳一个冲突副本。副本内容以本机新 lamport 重新入账
+    /// （put 复用副本 payload 字节——快照与 wrapped item key 都是 group 域
+    /// 的，设备无关；tombstone 复用空 payload），并按其内容写主库。新
+    /// lamport 严格大于冲突双方 → LWW 自然赢回主位，其余版本全部淘汰出
+    /// 裁决视图（oplog append-only，数据不丢，只是不再出现在视图里）。
+    ///
+    /// 写序 = 先主库后 oplog（见 [`super::resolve`] 模块文档）：主库失败
+    /// 即 Err（oplog 未动，重试安全）；oplog 失败可重试（重写主库幂等）。
+    /// 副本引用的身份尚未同步时主库写不了 → Err 且绝不记账（记 op 不写
+    /// 主库 = 静默分叉，下一轮同步补齐身份后再裁决）。
+    pub async fn resolve_conflict(
+        &self,
+        master: &EncryptionService,
+        item_id: Uuid,
+        adopt_op_id: Uuid,
+    ) -> Result<()> {
+        let view = item_view(self.sync_repo.item_ops(item_id).await?);
+        let Some(adopted) = view.conflicts.iter().find(|op| op.op_id == adopt_op_id) else {
+            // 副本不存在 = 已被裁决过（采纳任一版本后其余版本淘汰出视图）
+            // 或 op_id 打错——同一句话报给调用方。
+            return Err(PersonaError::NotFound(format!(
+                "conflict copy {adopt_op_id} not found for item {item_id} (already resolved?)"
+            ))
+            .into());
+        };
+        if adopted.kind != ItemKind::Credential {
+            return Err(PersonaError::InvalidInput(format!(
+                "conflict resolution only supports credential entries, got {:?}",
+                adopted.kind
+            ))
+            .into());
+        }
+        let (kind, op, payload) = (adopted.kind, adopted.op, adopted.payload.clone());
+
+        // 先主库后 oplog。
+        match op {
+            OpType::Put => {
+                let Some(payload) = payload.as_ref() else {
+                    return Err(PersonaError::InvalidInput(
+                        "cannot adopt a put copy without payload".to_string(),
+                    )
+                    .into());
+                };
+                let outcome = Materializer::new(self.db.clone())
+                    .materialize_put(
+                        &item_id,
+                        &payload.ciphertext,
+                        &payload.wrapped_item_key,
+                        master,
+                        &self.group_key,
+                    )
+                    .await?;
+                if let MaterializeOutcome::SkippedPendingIdentity { identity_id } = outcome {
+                    return Err(PersonaError::Validation(format!(
+                        "adopted copy references identity {identity_id} that is not synced yet; \
+                         resolve again after the next sync"
+                    ))
+                    .into());
+                }
+            }
+            OpType::Delete => {
+                CredentialRepository::new(self.db.clone())
+                    .delete(&item_id)
+                    .await?;
+            }
+        }
+
+        // 入账前防御性时钟推进：保证本机新 op 的 lamport 严格大于被采纳
+        // 副本。正常流程 pull 已 bump 过时钟（record 的 local+1 已够大）；
+        // 直连裁决（不经 run_cycle）时本机时钟可能仍停在副本同高，先 MAX
+        // 推进。放在主库写之后——前置校验失败（上方 Err 臂）零副作用。
+        let local = self.sync_repo.get_state().await?.local_lamport;
+        if local <= adopted.lamport {
+            self.sync_repo.bump_lamport(adopted.lamport + 1).await?;
+        }
+
+        // oplog 记账：本机新 lamport 的采纳 op 入 push 队列，随下轮推走。
+        self.engine
+            .record_local_change(item_id, kind, op, payload)
+            .await?;
+        Ok(())
     }
 }
 
@@ -462,5 +567,305 @@ mod tests {
             identity.key_pair.secret_bytes()
         )
         .is_err());
+    }
+
+    // ---- 冲突裁决（阶段 3c）----
+
+    use chrono::Utc as TestUtc;
+
+    fn snapshot(name: &str, identity_id: Uuid) -> SyncItemSnapshot {
+        SyncItemSnapshot {
+            identity_id,
+            name: name.to_string(),
+            credential_type: CredentialType::Password,
+            security_level: SecurityLevel::Medium,
+            url: None,
+            username: None,
+            notes: None,
+            tags: vec![],
+            metadata: Default::default(),
+            is_favorite: false,
+            is_active: true,
+            data: data(name),
+        }
+    }
+
+    fn conflict_put_op(
+        item_id: Uuid,
+        device_id: Uuid,
+        lamport: u64,
+        snap: &SyncItemSnapshot,
+        group: &GroupKey,
+    ) -> SyncOp {
+        let item_key = EncryptionService::generate_key();
+        SyncOp {
+            op_id: Uuid::new_v4(),
+            item_id,
+            kind: ItemKind::Credential,
+            op: OpType::Put,
+            lamport,
+            device_id,
+            timestamp: Some(TestUtc::now()),
+            payload: Some(SyncPayload {
+                ciphertext: snap.seal(&item_key).unwrap(),
+                wrapped_item_key: wrap_item_key_with_group(&item_key, group),
+            }),
+        }
+    }
+
+    fn conflict_delete_op(item_id: Uuid, device_id: Uuid, lamport: u64) -> SyncOp {
+        SyncOp {
+            op_id: Uuid::new_v4(),
+            item_id,
+            kind: ItemKind::Credential,
+            op: OpType::Delete,
+            lamport,
+            device_id,
+            timestamp: Some(TestUtc::now()),
+            payload: None,
+        }
+    }
+
+    /// 造一对真冲突（同 item、同 lamport、异设备），按全序返回
+    /// (主位 op, 副本 op)。
+    fn seeded_conflict(item_id: Uuid, group: &GroupKey, identity_id: Uuid) -> (SyncOp, SyncOp) {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (winner, loser) = if a > b { (a, b) } else { (b, a) };
+        let primary = conflict_put_op(
+            item_id,
+            winner,
+            5,
+            &snapshot("primary-name", identity_id),
+            group,
+        );
+        let copy = conflict_put_op(
+            item_id,
+            loser,
+            5,
+            &snapshot("copy-name", identity_id),
+            group,
+        );
+        (primary, copy)
+    }
+
+    fn assert_variant(err: anyhow::Error, ok: impl Fn(&PersonaError) -> bool) {
+        assert!(
+            err.downcast_ref::<PersonaError>().is_some_and(ok),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_conflicts_exposes_both_versions_and_count() {
+        let (db, identity, _master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, copy) = seeded_conflict(item, &group, identity.id);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group.clone());
+        let entries = session.list_conflicts().await.unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].item_id, item);
+        assert_eq!(
+            entries[0].primary.snapshot.as_ref().unwrap().name,
+            "primary-name"
+        );
+        assert!(!entries[0].primary.deleted);
+        assert_eq!(entries[0].copies.len(), 1);
+        assert_eq!(
+            entries[0].copies[0].snapshot.as_ref().unwrap().name,
+            "copy-name"
+        );
+        assert_eq!(session.conflict_item_count().await.unwrap(), 1);
+
+        // 无冲突条目（单版本）不进裁决视图
+        sync_repo
+            .record_remote_op(&conflict_put_op(
+                Uuid::new_v4(),
+                Uuid::new_v4(),
+                1,
+                &snapshot("lone", identity.id),
+                &group,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(session.list_conflicts().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn resolve_adopted_put_writes_row_and_wins_primary() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, copy) = seeded_conflict(item, &group, identity.id);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let local_device = Uuid::new_v4();
+        let (session, _) = session_for(&db, local_device, group);
+        session
+            .resolve_conflict(&master, item, copy.op_id)
+            .await
+            .unwrap();
+
+        // 主库行 = 被采纳副本的内容（含重包后可解的 CredentialData）
+        let cred_repo = CredentialRepository::new(db.clone());
+        let row = cred_repo.find_by_id(&item).await.unwrap().unwrap();
+        assert_eq!(row.name, "copy-name");
+        let plaintext = KeyHierarchy::new(&master)
+            .decrypt_with_wrapped_key(row.wrapped_item_key.as_ref().unwrap(), &row.encrypted_data)
+            .unwrap();
+        match CredentialData::from_bytes(&plaintext).unwrap() {
+            CredentialData::Password(p) => assert_eq!(p.password, "copy-name"),
+            other => panic!("expected password data, got {other:?}"),
+        }
+
+        // oplog：本机新 lamport 的采纳 op 赢回主位，冲突区清空
+        let view = item_view(sync_repo.item_ops(item).await.unwrap());
+        let new_primary = view.primary.unwrap();
+        assert_eq!(new_primary.device_id, local_device);
+        assert!(new_primary.lamport > 5);
+        assert!(view.conflicts.is_empty());
+
+        // 采纳 op 已入 push 队列且 payload 字节复用副本（设备无关）
+        let pending = sync_repo.pending_ops(500).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].payload, copy.payload);
+
+        // 裁决视图清空
+        assert!(session.list_conflicts().await.unwrap().is_empty());
+        assert_eq!(session.conflict_item_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_adopted_delete_removes_row_and_wins_primary() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let local_device = Uuid::new_v4();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (winner, loser) = if a > b { (a, b) } else { (b, a) };
+        let put = conflict_put_op(item, winner, 5, &snapshot("alive", identity.id), &group);
+        let del = conflict_delete_op(item, loser, 5);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&put).await.unwrap();
+        sync_repo.record_remote_op(&del).await.unwrap();
+
+        let (session, _) = session_for(&db, local_device, group.clone());
+        // 先物化主位 put（行存在），再采纳 delete 副本
+        Materializer::new(db.clone())
+            .materialize_all(&master, &group, local_device)
+            .await
+            .unwrap();
+        let cred_repo = CredentialRepository::new(db.clone());
+        assert!(cred_repo.find_by_id(&item).await.unwrap().is_some());
+
+        session
+            .resolve_conflict(&master, item, del.op_id)
+            .await
+            .unwrap();
+        assert!(cred_repo.find_by_id(&item).await.unwrap().is_none());
+        let view = item_view(sync_repo.item_ops(item).await.unwrap());
+        assert!(view.primary.unwrap().is_tombstone());
+        assert!(view.conflicts.is_empty());
+        assert_eq!(session.conflict_item_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_unknown_primary_and_stale_op_ids() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, copy) = seeded_conflict(item, &group, identity.id);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+
+        // 采纳主位（不是副本）与未知 op_id → NotFound
+        let err = session
+            .resolve_conflict(&master, item, primary.op_id)
+            .await
+            .unwrap_err();
+        assert_variant(err, |e| matches!(e, PersonaError::NotFound(_)));
+        let err = session
+            .resolve_conflict(&master, item, Uuid::new_v4())
+            .await
+            .unwrap_err();
+        assert_variant(err, |e| matches!(e, PersonaError::NotFound(_)));
+
+        // 裁决一次后：剩余版本淘汰出视图，再裁决同 item → NotFound
+        session
+            .resolve_conflict(&master, item, copy.op_id)
+            .await
+            .unwrap();
+        let err = session
+            .resolve_conflict(&master, item, primary.op_id)
+            .await
+            .unwrap_err();
+        assert_variant(err, |e| matches!(e, PersonaError::NotFound(_)));
+    }
+
+    /// 副本引用未同步身份：主库写不了 → Validation 错误，且 oplog/时钟/
+    /// 裁决视图零副作用（绝不记 op 不写主库 = 防静默分叉）。
+    #[tokio::test]
+    async fn resolve_with_pending_identity_errors_without_side_effects() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (winner, loser) = if a > b { (a, b) } else { (b, a) };
+        let primary = conflict_put_op(item, winner, 5, &snapshot("primary", identity.id), &group);
+        // 副本引用未知身份
+        let copy = conflict_put_op(
+            item,
+            loser,
+            5,
+            &snapshot("dangling", Uuid::new_v4()),
+            &group,
+        );
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+        let lamport_before = sync_repo.get_state().await.unwrap().local_lamport;
+
+        let err = session
+            .resolve_conflict(&master, item, copy.op_id)
+            .await
+            .unwrap_err();
+        assert_variant(err, |e| matches!(e, PersonaError::Validation(_)));
+
+        assert!(sync_repo.pending_ops(500).await.unwrap().is_empty());
+        assert_eq!(
+            sync_repo.get_state().await.unwrap().local_lamport,
+            lamport_before
+        );
+        assert_eq!(session.list_conflicts().await.unwrap().len(), 1);
+    }
+
+    /// run_cycle 报告的 conflicts 是待裁决条目数（真值），不是 3b 误用的
+    /// 「本机主位跳过计数」：灌入一条冲突后跑周期，报告 conflicts == 1。
+    #[tokio::test]
+    async fn run_cycle_reports_conflict_count_truth() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, copy) = seeded_conflict(item, &group, identity.id);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+        let report = session.run_cycle(&master).await.unwrap();
+        assert_eq!(report.conflicts, 1);
+        // 物化主位落库（远端内容），裁决等用户
+        assert_eq!(report.materialized, 1);
     }
 }

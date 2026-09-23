@@ -12,6 +12,7 @@
 //! - [`oplog`]：SyncOp 结构 + LWW/冲突双版本纯逻辑（DR-4）
 //! - [`engine`]：push/pull 周期编排 + Lamport 时钟 + travel 闸
 //! - [`materialize`]：pull 后把 oplog 主位落进主库（凭据行物化）
+//! - [`resolve`]：冲突裁决数据面（可展示版本 + 采纳入账，阶段 3c）
 //! - [`runtime`]：SyncSession 会话装配（open 拆信封/backfill 存量/run_cycle/
 //!   capture 产出）——宿主 sync_now 的一次性入口
 //!
@@ -28,5 +29,6 @@ pub mod materialize;
 pub mod oplog;
 #[cfg(feature = "remote-auth")]
 pub mod remote;
+pub mod resolve;
 pub mod runtime;
 pub mod snapshot;

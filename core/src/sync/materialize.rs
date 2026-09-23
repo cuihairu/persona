@@ -152,7 +152,9 @@ impl Materializer {
         }
     }
 
-    async fn materialize_put(
+    /// 物化一个 put 主位进主库（重包 item key 到本机主密钥）。公开给
+    /// 冲突裁决复用：采纳 put 副本走同一条落库路径（[`super::resolve`]）。
+    pub async fn materialize_put(
         &self,
         item_id: &Uuid,
         ciphertext: &[u8],
