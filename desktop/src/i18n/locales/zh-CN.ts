@@ -358,6 +358,7 @@ export default {
     mismatch: '两次输入的新密码不一致。',
     sameAsOld: '新密码必须与当前密码不同。',
     failed: '修改主密码失败',
+    travelActive: '旅行模式进行中——请先退出旅行模式，再修改主密码。',
   },
   identityTypes: {
     Personal: '个人',

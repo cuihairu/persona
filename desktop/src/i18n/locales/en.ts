@@ -366,6 +366,8 @@ export default {
     mismatch: 'New passwords do not match.',
     sameAsOld: 'New password must be different from the current password.',
     failed: 'Failed to change master password',
+    travelActive:
+      'Travel mode is active — exit travel mode before changing the master password.',
   },
   identityTypes: {
     Personal: 'Personal',

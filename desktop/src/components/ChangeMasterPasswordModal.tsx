@@ -85,6 +85,10 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
       const resp = await personaAPI.changeMasterPassword(oldPassword, newPassword, dbPath);
       if (resp.success) {
         onDone(newPassword);
+      } else if (resp.error_code === 'TRAVEL_MODE_ACTIVE') {
+        // 改密与 sidecar 中 wrapped key 不兼容：引导先退出旅行模式
+        setError(t('changePassword.travelActive'));
+        setIsSubmitting(false);
       } else {
         setError(resp.error || t('changePassword.failed'));
         setIsSubmitting(false);

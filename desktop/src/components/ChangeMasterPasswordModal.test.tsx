@@ -116,6 +116,28 @@ describe('components/ChangeMasterPasswordModal', () => {
     expect(screen.getByRole('button', { name: '修改密码' })).toBeEnabled();
   });
 
+  it('maps the TRAVEL_MODE_ACTIVE code to the exit-travel-mode hint', async () => {
+    mockChange.mockResolvedValue({
+      success: false,
+      error: 'Travel mode is active',
+      error_code: 'TRAVEL_MODE_ACTIVE',
+    });
+    renderModal();
+    fill('old-pw', 'new-pw', 'new-pw');
+    fireEvent.click(screen.getByRole('button', { name: '修改密码' }));
+
+    // 错误码驱动专用文案（引导先退出旅行模式），而不是透传后端原文
+    await waitFor(() => {
+      expect(screen.getByTestId('change-password-error')).toHaveTextContent(
+        '旅行模式进行中',
+      );
+    });
+    expect(onDone).not.toHaveBeenCalled();
+
+    // 失败后按钮恢复可用（退出旅行模式后可原地重试）
+    expect(screen.getByRole('button', { name: '修改密码' })).toBeEnabled();
+  });
+
   it('prefills the old password when initialOldPassword is given', () => {
     renderModal({ initialOldPassword: 'typed-old-pw' });
 
