@@ -606,4 +606,51 @@ mod tests {
             .unwrap();
         assert_eq!(again, report);
     }
+
+    /// 协议防御面：oplog 无该 item（调用方枚举与查询竞态）与
+    /// 「Put 无 payload」的不变量违反都归 NoPrimary，且后者绝不写库。
+    #[tokio::test]
+    async fn no_primary_paths_never_touch_main_store() {
+        let (_db, materializer, _identity_repo, group, _identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+        let other_device = Uuid::new_v4();
+
+        // 1) oplog 里没有这个 item 的任何 op。
+        let ghost = Uuid::new_v4();
+        let outcome = materializer
+            .materialize_item(&ghost, &master, &group, other_device)
+            .await
+            .unwrap();
+        assert_eq!(outcome, MaterializeOutcome::NoPrimary);
+
+        // 2) Put 不带 payload——fail-closed，不落半行。
+        let item = Uuid::new_v4();
+        let broken = SyncOp {
+            op_id: Uuid::new_v4(),
+            item_id: item,
+            kind: ItemKind::Credential,
+            op: OpType::Put,
+            lamport: 1,
+            device_id: other_device,
+            timestamp: Some(Utc::now()),
+            payload: None,
+        };
+        materializer
+            .sync_repo
+            .record_remote_op(&broken)
+            .await
+            .unwrap();
+
+        let outcome = materializer
+            .materialize_item(&item, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(outcome, MaterializeOutcome::NoPrimary);
+        assert!(materializer
+            .credential_repo
+            .find_by_id(&item)
+            .await
+            .unwrap()
+            .is_none());
+    }
 }
