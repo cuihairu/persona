@@ -523,9 +523,18 @@ Server & Sync (optional)
         item key 重包本机主密钥、tombstone 落地、真冲突败方留驻 oplog 等
         裁决 UI、身份未同步挂起下轮补齐、幂等可反复跑）；revealed item key
         变体（Zeroizing）
-  - [ ] 阶段 3 接线：desktop 设备管理页 + 冲突裁决 UI +
-        `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」节重写；group key
-        轮换（开放问题 2）
+  - [x] 阶段 3b 设备接入与会话装配（2026-09-23，批 3b-1..3b-3）：SyncAdminApi
+        设备/信封管理客户端（真 TCP 集成测试，409 透传/级联删除/幂等吊销）；
+        DeviceIdentity keyring 记录格式 + desktop 六命令（status/join/leave/
+        list/authorize/revoke——「有信封 = 已授权」fail-closed，join keyring
+        写失败回滚吊销不留半态）；设置页同步设备区块（join/leave/授权/吊销/
+        损坏引导，i18n 双语）；SyncSession 会话装配（open 拆本机信封 /
+        backfill_existing 存量幂等灌入 / run_cycle pull→materialize→push /
+        capture 产出）+ desktop sync_now（travel 闸采样、整轮成功才挂捕获缝、
+        lock 时 detach——group key 不跨锁存活）
+  - [ ] 阶段 3c/3d 接线：冲突裁决 UI（item_view conflicts 展示 + 采纳产生
+        新 lamport put）+ `STORAGE_AND_SYNC.md`「当前没有凭据级实时同步」节
+        重写 + 双设备演示脚本；group key 轮换（开放问题 2）
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

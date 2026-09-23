@@ -91,6 +91,37 @@ pub struct SyncDeviceView {
     pub this_device: bool,
 }
 
+/// `sync_now` 返回：一轮同步的计数汇总（字段与 core `SyncNowReport`
+/// 一一对应，供 UI 展示「拉取 N / 灌入 N / 冲突 N」）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncNowReport {
+    /// 新拉取落库的远端 op 条数。
+    pub pulled: usize,
+    /// 物化进主库的条目数（新行或更新）。
+    pub materialized: usize,
+    /// 冲突败方留驻 oplog 的条目数（数据不丢，待裁决）。
+    pub conflicts: usize,
+    /// 因身份未同步而挂起的条目数（下轮补齐）。
+    pub pending_identity: usize,
+    /// push 出去的本地 op 条数。
+    pub pushed: usize,
+    /// 本次灌入 oplog 的存量凭据条数（通常只在首次同步非零）。
+    pub backfilled: u64,
+}
+
+impl From<persona_core::sync::runtime::SyncNowReport> for SyncNowReport {
+    fn from(report: persona_core::sync::runtime::SyncNowReport) -> Self {
+        Self {
+            pulled: report.pulled,
+            materialized: report.materialized,
+            conflicts: report.conflicts,
+            pending_identity: report.pending_identity,
+            pushed: report.pushed,
+            backfilled: report.backfilled,
+        }
+    }
+}
+
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求
 #[derive(Debug, Clone, Serialize)]
 pub struct SshApprovalRequest {

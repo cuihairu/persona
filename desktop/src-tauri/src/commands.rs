@@ -239,6 +239,8 @@ pub async fn lock_service(
     let mut service_guard = state.service.lock().await;
     if let Some(service) = service_guard.as_mut() {
         service.lock();
+        // 捕获缝持 group key，不应跨锁存活；下次 sync_now 重新装配
+        service.attach_sync_capture(None).await;
         Ok(ApiResponse::success(true))
     } else {
         Ok(ApiResponse::error("Service not initialized".to_string()))
@@ -1302,11 +1304,11 @@ async fn local_device(state: &State<'_, AppState>, db_path: &str) -> LocalDevice
     }
 }
 
-/// settings.sync.server_url + keyring sync token 齐备时构造管理客户端。
-/// 任一缺失/环境失败返回用户可读消息（调用方转 `ApiResponse::error`）。
-async fn sync_admin_api_for(
+/// settings.sync.server_url + keyring sync token（sync_now 与管理命令
+/// 共用的环境取用；任一缺失/环境失败返回用户可读消息）。
+async fn sync_server_creds_for(
     state: &State<'_, AppState>,
-) -> std::result::Result<persona_core::sync::remote::SyncAdminApi, String> {
+) -> std::result::Result<(String, String), String> {
     let db_path = require_db_path(state)
         .await
         .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
@@ -1325,6 +1327,14 @@ async fn sync_admin_api_for(
         .map_err(|e| format!("OS keyring read failed: {e}"))?
         .filter(|t| !t.trim().is_empty())
         .ok_or_else(|| "Sync server token is not configured".to_string())?;
+    Ok((server_url, token))
+}
+
+/// settings.sync.server_url + keyring sync token 齐备时构造管理客户端。
+async fn sync_admin_api_for(
+    state: &State<'_, AppState>,
+) -> std::result::Result<persona_core::sync::remote::SyncAdminApi, String> {
+    let (server_url, token) = sync_server_creds_for(state).await?;
     persona_core::sync::remote::SyncAdminApi::new(&server_url, &token)
         .map_err(|e| format!("Invalid sync server configuration: {e}"))
 }
@@ -1682,6 +1692,108 @@ pub async fn sync_revoke(
         Ok(()) => Ok(ApiResponse::success(true)),
         Err(e) => Ok(ApiResponse::error(format!("Failed to revoke device: {e}"))),
     }
+}
+
+/// 立即同步（E2EE sync 阶段 3b 的宿主入口）：拆本机信封装配会话 →
+/// 存量灌入 → pull/materialize/push 周期 → 把捕获缝挂上 service（此后
+/// 本地写自动入 oplog）。协议/密码学/编排全在 core `SyncSession`；这里
+/// 只做宿主编排——门禁、keyring 身份、travel 闸采样、master 密钥借出。
+///
+/// 全程持 service guard：master 引用与 attach_sync_capture 都出自它，
+/// 途中锁上会直接编译期拒绝（master 借用未结束）。
+#[command]
+pub async fn sync_now(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncNowReport>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let identity = match local_device(&state, &db_path).await {
+        LocalDevice::Joined(identity) => identity,
+        LocalDevice::Corrupted => {
+            return Ok(ApiResponse::error(
+                "Stored device identity is corrupted; leave and re-join sync".to_string(),
+            ))
+        }
+        LocalDevice::NotJoined => {
+            return Ok(ApiResponse::error(
+                "This vault has not joined sync".to_string(),
+            ))
+        }
+    };
+    let (server_url, token) = match sync_server_creds_for(&state).await {
+        Ok(creds) => creds,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+
+    let service_guard = state.service.lock().await;
+    let service = match service_guard.as_ref() {
+        Some(service) => service,
+        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+    };
+    // travel 闸在装配前采样一次：cycle 是短过程，中途不变；travel 激活
+    // 期间 pull/push 由引擎拒绝（与捕获缝「不设闸」互补，见 engine 模块）
+    let travel_active = match service.travel_mode_active().await {
+        Ok(travel_active) => travel_active,
+        Err(e) => return Ok(ApiResponse::error(format!("Travel mode check failed: {e}"))),
+    };
+    let master = match service.get_master_encryption_service() {
+        Ok(master) => master,
+        Err(e) => return Ok(ApiResponse::error(e.to_string())),
+    };
+
+    let db = match Database::from_file(&db_path).await {
+        Ok(db) => db,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Database connection failed: {e}"
+            )))
+        }
+    };
+    if let Err(e) = db.migrate().await {
+        return Ok(ApiResponse::error(format!(
+            "Database migration failed: {e}"
+        )));
+    }
+
+    let session = match persona_core::sync::runtime::SyncSession::open(
+        &db,
+        &identity,
+        &server_url,
+        &token,
+        Box::new(move || travel_active),
+    )
+    .await
+    {
+        Ok(session) => session,
+        Err(e) => return Ok(ApiResponse::error(format!("Sync session failed: {e}"))),
+    };
+
+    let backfilled = match session.backfill_existing(master).await {
+        Ok(backfilled) => backfilled,
+        Err(e) => return Ok(ApiResponse::error(format!("Sync backfill failed: {e}"))),
+    };
+    let mut report = match session.run_cycle(master).await {
+        Ok(report) => report,
+        Err(e) => return Ok(ApiResponse::error(format!("Sync cycle failed: {e}"))),
+    };
+    report.backfilled = backfilled;
+
+    service
+        .attach_sync_capture(Some(
+            session.capture() as std::sync::Arc<dyn persona_core::sync::capture::SyncCapture>
+        ))
+        .await;
+
+    Ok(ApiResponse::success(SyncNowReport::from(report)))
 }
 
 /// 前端错误上报：production 构建里 ErrorBoundary / handleError 落本地

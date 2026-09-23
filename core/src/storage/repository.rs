@@ -258,6 +258,27 @@ impl CredentialRepository {
         Ok(credentials)
     }
 
+    /// 全表列举（sync backfill 用：主库存在但 oplog 缺席的凭据灌入 oplog）
+    pub async fn list_all(&self) -> Result<Vec<Credential>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, identity_id, name, credential_type, security_level, url, username,
+                   encrypted_data, wrapped_item_key, notes, tags, metadata, created_at, updated_at,
+                   last_accessed, is_active, is_favorite
+            FROM credentials ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(self.db.pool())
+        .await
+        .map_err(|e| PersonaError::Database(e.to_string()))?;
+
+        let mut credentials = Vec::new();
+        for row in rows {
+            credentials.push(self.row_to_credential(row)?);
+        }
+        Ok(credentials)
+    }
+
     /// Find credentials by type
     pub async fn find_by_type(&self, credential_type: &CredentialType) -> Result<Vec<Credential>> {
         let rows = sqlx::query(

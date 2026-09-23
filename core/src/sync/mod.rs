@@ -12,6 +12,8 @@
 //! - [`oplog`]：SyncOp 结构 + LWW/冲突双版本纯逻辑（DR-4）
 //! - [`engine`]：push/pull 周期编排 + Lamport 时钟 + travel 闸
 //! - [`materialize`]：pull 后把 oplog 主位落进主库（凭据行物化）
+//! - [`runtime`]：SyncSession 会话装配（open 拆信封/backfill 存量/run_cycle/
+//!   capture 产出）——宿主 sync_now 的一次性入口
 //!
 //! 本模块只做纯密码层与数据结构；本地持久化在 [`crate::storage::sync_repository`]。
 //! 设备私钥的持久化（OS keyring `persona-device` / 0600 文件 fallback）由宿主
@@ -26,4 +28,5 @@ pub mod materialize;
 pub mod oplog;
 #[cfg(feature = "remote-auth")]
 pub mod remote;
+pub mod runtime;
 pub mod snapshot;

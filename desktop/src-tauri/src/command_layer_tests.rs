@@ -7669,3 +7669,54 @@ async fn sync_list_authorize_revoke_require_membership() {
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("Malformed"));
 }
+
+#[tokio::test]
+async fn sync_now_gates_before_any_network_or_crypto() {
+    let app = mock_app();
+
+    // 未初始化 service → 拒绝
+    let resp = sync_now(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success, "must reject before init");
+    assert!(resp.error.unwrap().contains("not initialized"));
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入 → 拒绝（本地检查先于网络/密码学）
+    let resp = sync_now(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not joined"));
+
+    // 损坏身份记录 → 拒绝（不猜不带病运行）
+    state.device_store.set(&db_path, "{broken").unwrap();
+    let resp = sync_now(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("corrupted"));
+
+    // 已加入但服务器未配置 → 拒绝
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_now(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not configured"));
+
+    // 已配置但不可达：open 拉信封失败（网络错误冒泡，不留半态——
+    // capture 只在整轮周期成功后挂载）
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_now(state.clone()).await.unwrap();
+    assert!(!resp.success);
+
+    // 锁定后 → 拒绝（门禁在编排之前；lock 同时 detach 捕获缝）
+    let resp = lock_service(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_now(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("locked"));
+}

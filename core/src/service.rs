@@ -1877,11 +1877,11 @@ impl PersonaService {
         }
     }
 
-    /// 旅行模式是否激活。与 load_password_expiry_days 的 fail-open 相反：
-    /// 本方法服务于改密拦截（旅行模式下改密会让 sidecar 里的 wrapped key
-    /// 变砖），settings 读不出来时宁可拒绝改密也不冒险放行（fail-closed）。
-    #[cfg(feature = "backup")]
-    async fn travel_mode_active(&self) -> Result<bool> {
+    /// 旅行模式是否激活。消费方：改密拦截（旅行模式下改密会让 sidecar
+    /// 里的 wrapped key 变砖，settings 读不出来时宁可拒绝改密也不冒险
+    /// 放行，fail-closed）与 sync_now 的 travel 闸采样。只读 settings
+    /// 布尔，不依赖 travel 模块本体，故不挂 feature 门控。
+    pub async fn travel_mode_active(&self) -> Result<bool> {
         let workspaces = Repository::find_all(&self.workspace_repo).await?;
         Ok(workspaces
             .first()
@@ -3211,7 +3211,9 @@ impl PersonaService {
         Ok(())
     }
 
-    fn get_master_encryption_service(&self) -> Result<&EncryptionService> {
+    /// 主密钥加密服务（sync_now 等宿主编排需要：backfill/run_cycle 要
+    /// unwrap item key）。锁未解时 Err。
+    pub fn get_master_encryption_service(&self) -> Result<&EncryptionService> {
         self.master_encryption.as_ref().ok_or_else(|| {
             PersonaError::AuthenticationFailed("Service is locked".to_string()).into()
         })

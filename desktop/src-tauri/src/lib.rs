@@ -261,6 +261,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::sync_list_devices,
             commands::sync_authorize,
             commands::sync_revoke,
+            commands::sync_now,
             commands::update_identity,
             commands::delete_identity,
             commands::create_credential,
