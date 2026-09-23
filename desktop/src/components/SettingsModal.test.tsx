@@ -33,6 +33,13 @@ jest.mock('@/utils/api', () => ({
     connectTokenCreate: jest.fn(),
     connectTokenRevoke: jest.fn(),
     getIdentities: jest.fn(),
+    // E2EE sync 设备管理
+    syncDeviceStatus: jest.fn(),
+    syncJoin: jest.fn(),
+    syncLeave: jest.fn(),
+    syncListDevices: jest.fn(),
+    syncAuthorize: jest.fn(),
+    syncRevoke: jest.fn(),
   },
 }));
 
@@ -58,6 +65,12 @@ const mockReauthVerify = personaAPI.reauthVerify as jest.Mock;
 const mockConnectStatus = personaAPI.connectServerStatus as jest.Mock;
 const mockConnectList = personaAPI.connectTokenList as jest.Mock;
 const mockGetIdentities = personaAPI.getIdentities as jest.Mock;
+const mockSyncStatus = personaAPI.syncDeviceStatus as jest.Mock;
+const mockSyncJoin = personaAPI.syncJoin as jest.Mock;
+const mockSyncLeave = personaAPI.syncLeave as jest.Mock;
+const mockSyncList = personaAPI.syncListDevices as jest.Mock;
+const mockSyncAuthorize = personaAPI.syncAuthorize as jest.Mock;
+const mockSyncRevoke = personaAPI.syncRevoke as jest.Mock;
 
 const inactiveTravel = {
   success: true,
@@ -99,6 +112,11 @@ describe('components/SettingsModal', () => {
     mockConnectStatus.mockResolvedValue({ success: true, data: { running: false, port: null } });
     mockConnectList.mockResolvedValue({ success: true, data: [] });
     mockGetIdentities.mockResolvedValue({ success: true, data: [] });
+    // 默认未加入 E2EE sync（join 表单可见，不拉设备列表）
+    mockSyncStatus.mockResolvedValue({
+      success: true,
+      data: { joined: false, corrupted: false, device_id: null, device_name: null },
+    });
   });
 
   it('renders nothing when closed', () => {
@@ -1028,5 +1046,207 @@ describe('components/SettingsModal', () => {
     await waitFor(() => {
       expect(loadIdentities).toHaveBeenCalled();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // E2EE sync 设备区块（SyncDevicesSection）
+  // -------------------------------------------------------------------------
+
+  /** joined 状态的默认响应（本机名为 laptop） */
+  const joinedStatus = {
+    success: true,
+    data: { joined: true, corrupted: false, device_id: 'dev-self', device_name: 'laptop' },
+  };
+
+  /** 同步组两台设备：本机已授权 + phone 待授权 */
+  const twoDevices = {
+    success: true,
+    data: [
+      { id: 'dev-self', device_name: 'laptop', created_at: '2026-09-23T00:00:00Z', authorized: true, this_device: true },
+      { id: 'dev-phone', device_name: 'phone', created_at: '2026-09-23T01:00:00Z', authorized: false, this_device: false },
+    ],
+  };
+
+  it('shows the join form while not joined and skips the device list', async () => {
+    mockIdentityHook();
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('sync-device-name-input')).toBeInTheDocument();
+    expect(mockSyncList).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty device name without touching the backend', async () => {
+    mockIdentityHook();
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+
+    expect(mockSyncJoin).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith('请填写设备名称');
+  });
+
+  it('joins with the trimmed name and toasts the pending hint', async () => {
+    mockIdentityHook();
+    mockSyncJoin.mockResolvedValue({
+      success: true,
+      data: { device_id: 'dev-new', device_name: '我的笔记本', pending: true },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-device-name-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('sync-device-name-input'), {
+      target: { value: '  我的笔记本  ' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+
+    await waitFor(() => {
+      expect(mockSyncJoin).toHaveBeenCalledWith('我的笔记本');
+    });
+    expect(toast.success).toHaveBeenCalledWith('已登记——请在另一台已授权设备上授权本机');
+  });
+
+  it('renders the joined state with this-device and pending badges', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-devices-joined')).toBeInTheDocument();
+    });
+    expect(screen.getByText('已加入：laptop')).toBeInTheDocument();
+    // 设备列表在 status.joined 触发的二次 effect 里异步拉取
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-device-this-badge')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('sync-device-pending-badge')).toBeInTheDocument();
+    expect(mockSyncList).toHaveBeenCalled();
+
+    // 本机行无授权/吊销按钮；待授权的 phone 行有授权按钮
+    expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
+    expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
+    expect(screen.queryByTestId('sync-authorize-dev-self')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sync-revoke-dev-self')).not.toBeInTheDocument();
+
+    // leave 入口
+    expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
+  });
+
+  it('revokes a device after confirm and refreshes the list', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncRevoke.mockResolvedValue({ success: true, data: true });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-revoke-dev-phone'));
+    });
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockSyncRevoke).toHaveBeenCalledWith('dev-phone');
+    });
+    expect(toast.success).toHaveBeenCalledWith('设备已吊销');
+    confirmSpy.mockRestore();
+  });
+
+  it('keeps the device when the revoke confirm is dismissed', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-revoke-dev-phone'));
+    });
+
+    expect(mockSyncRevoke).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('authorizes a pending device through the authorize button', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncAuthorize.mockResolvedValue({ success: true, data: true });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-authorize-dev-phone'));
+    });
+
+    await waitFor(() => {
+      expect(mockSyncAuthorize).toHaveBeenCalledWith('dev-phone');
+    });
+    expect(toast.success).toHaveBeenCalledWith('已授权「phone」');
+  });
+
+  it('surfaces the corrupted warning and keeps the join form for re-join', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue({
+      success: true,
+      data: { joined: false, corrupted: true, device_id: null, device_name: null },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-devices-corrupted')).toBeInTheDocument();
+    });
+    // 损坏状态仍可重新 join（leave 清残留后再加入的路径）
+    expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
+  });
+
+  it('leaves sync after confirm and falls back to the join form', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncLeave.mockResolvedValue({ success: true, data: true });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-leave-button'));
+    });
+
+    await waitFor(() => {
+      expect(mockSyncLeave).toHaveBeenCalled();
+    });
+    expect(toast.success).toHaveBeenCalledWith('已离开同步');
+    // 状态切回 join 表单
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
+    });
+    confirmSpy.mockRestore();
   });
 });

@@ -10,6 +10,8 @@ import type {
   FeatureFlags,
   Identity,
   IdentityType,
+  SyncDeviceStatus,
+  SyncDeviceView,
   ThemePreference,
   TravelStatus,
 } from '@/types';
@@ -206,6 +208,268 @@ const SyncServerPane: React.FC = () => {
               className="btn-primary"
             >
               {saving ? t('settings.saving') : t('common.save')}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+/** E2EE sync 设备区块：状态行（joined / corrupted 三态）+ 加入/离开 +
+ *  设备列表（授权/吊销）。加入后需在另一台已授权设备上完成授权
+ *  （pending 提示）——本机 group key 信封由对方密封上传，本机无从自封。 */
+const SyncDevicesSection: React.FC = () => {
+  const { t } = useTranslation();
+  const [status, setStatus] = useState<SyncDeviceStatus | null>(null);
+  const [devices, setDevices] = useState<SyncDeviceView[]>([]);
+  const [deviceName, setDeviceName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  const refreshStatus = async (): Promise<SyncDeviceStatus | null> => {
+    try {
+      const resp = await personaAPI.syncDeviceStatus();
+      if (resp.success && resp.data) {
+        setStatus(resp.data);
+        setLoadFailed(false);
+        return resp.data;
+      }
+      setLoadFailed(true);
+    } catch {
+      setLoadFailed(true);
+    }
+    return null;
+  };
+
+  const refreshDevices = async (): Promise<void> => {
+    try {
+      const resp = await personaAPI.syncListDevices();
+      if (resp.success && resp.data) {
+        setDevices(resp.data);
+        setLoadFailed(false);
+      }
+    } catch {
+      // 列表拉取失败保持旧值（首次 = 空列表），不打断状态行展示
+    }
+  };
+
+  useEffect(() => {
+    void refreshStatus();
+  }, []);
+
+  // joined 才拉列表（未加入时命令会报「未加入」）
+  useEffect(() => {
+    if (status?.joined) void refreshDevices();
+  }, [status?.joined]);
+
+  const join = async (): Promise<void> => {
+    if (!deviceName.trim()) {
+      toast.error(t('settings.syncDevices.nameRequired'));
+      return;
+    }
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncJoin(deviceName.trim());
+      if (resp.success && resp.data) {
+        setDeviceName('');
+        toast.success(
+          resp.data.pending
+            ? t('settings.syncDevices.joinPending')
+            : t('settings.syncDevices.joinDone'),
+        );
+        await refreshStatus();
+        await refreshDevices();
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.joinFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.joinFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const leave = async (): Promise<void> => {
+    if (!window.confirm(t('settings.syncDevices.leaveConfirm'))) return;
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncLeave();
+      if (resp.success) {
+        setStatus({ joined: false, corrupted: false, device_id: null, device_name: null });
+        setDevices([]);
+        toast.success(t('settings.syncDevices.left'));
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.leaveFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.leaveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const authorize = async (device: SyncDeviceView): Promise<void> => {
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncAuthorize(device.id);
+      if (resp.success) {
+        toast.success(t('settings.syncDevices.authorized', { name: device.device_name }));
+        await refreshDevices();
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.authorizeFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.authorizeFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async (device: SyncDeviceView): Promise<void> => {
+    if (!window.confirm(t('settings.syncDevices.revokeConfirm', { name: device.device_name })))
+      return;
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncRevoke(device.id);
+      if (resp.success) {
+        toast.success(t('settings.syncDevices.revoked'));
+        await refreshDevices();
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.revokeFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.revokeFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div data-testid="sync-devices-section">
+      <div className="flex items-center justify-between gap-4 mb-2">
+        <div className="min-w-0">
+          <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100">
+            {t('settings.syncDevices.title')}
+          </h3>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            {t('settings.syncDevices.description')}
+          </p>
+        </div>
+      </div>
+
+      {loadFailed && (
+        <p className="mt-2 text-xs text-red-600 dark:text-red-400" data-testid="sync-devices-error">
+          {t('settings.syncDevices.loadFailed')}
+        </p>
+      )}
+
+      {status?.corrupted && (
+        <p
+          className="mt-2 text-xs text-red-600 dark:text-red-400"
+          data-testid="sync-devices-corrupted"
+        >
+          {t('settings.syncDevices.corrupted')}
+        </p>
+      )}
+
+      {status?.joined ? (
+        <div className="mt-3 space-y-3" data-testid="sync-devices-joined">
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <span className="text-gray-700 dark:text-gray-300">
+              {t('settings.syncDevices.joinedAs', { name: status.device_name ?? '' })}
+            </span>
+            <button
+              type="button"
+              data-testid="sync-leave-button"
+              onClick={leave}
+              disabled={busy}
+              className="btn-secondary"
+            >
+              {t('settings.syncDevices.leave')}
+            </button>
+          </div>
+
+          {devices.length > 0 && (
+            <ul className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 rounded-lg dark:border-gray-700">
+              {devices.map((device) => (
+                <li
+                  key={device.id}
+                  className="flex items-center justify-between gap-4 px-3 py-2"
+                  data-testid={`sync-device-row-${device.id}`}
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm text-gray-900 dark:text-gray-100 truncate">
+                      {device.device_name}
+                      {device.this_device && (
+                        <span
+                          className="ml-2 text-xs text-blue-600 dark:text-blue-400"
+                          data-testid="sync-device-this-badge"
+                        >
+                          {t('settings.syncDevices.thisDevice')}
+                        </span>
+                      )}
+                      {!device.authorized && (
+                        <span
+                          className="ml-2 text-xs text-amber-600 dark:text-amber-400"
+                          data-testid="sync-device-pending-badge"
+                        >
+                          {t('settings.syncDevices.pendingBadge')}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex-shrink-0 flex gap-2">
+                    {!device.authorized && !device.this_device && (
+                      <button
+                        type="button"
+                        data-testid={`sync-authorize-${device.id}`}
+                        onClick={() => authorize(device)}
+                        disabled={busy}
+                        className="btn-secondary text-xs"
+                      >
+                        {t('settings.syncDevices.authorize')}
+                      </button>
+                    )}
+                    {!device.this_device && (
+                      <button
+                        type="button"
+                        data-testid={`sync-revoke-${device.id}`}
+                        onClick={() => revoke(device)}
+                        disabled={busy}
+                        className="btn-secondary text-xs text-red-600 dark:text-red-400"
+                      >
+                        {t('settings.syncDevices.revoke')}
+                      </button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <div className="mt-3 space-y-3 border border-gray-200 rounded-lg p-4 dark:border-gray-700">
+          <label className="label mb-1 block" htmlFor="sync-device-name">
+            {t('settings.syncDevices.deviceNameLabel')}
+          </label>
+          <input
+            id="sync-device-name"
+            className="input"
+            data-testid="sync-device-name-input"
+            value={deviceName}
+            onChange={(e) => setDeviceName(e.target.value)}
+            placeholder={t('settings.syncDevices.deviceNamePlaceholder')}
+          />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              data-testid="sync-join-button"
+              onClick={join}
+              disabled={busy}
+              className="btn-primary"
+            >
+              {busy ? t('settings.saving') : t('settings.syncDevices.join')}
             </button>
           </div>
         </div>
@@ -714,6 +978,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <SyncServerPane />
+      </section>
+
+      <section className="mb-5">
+        <SyncDevicesSection />
       </section>
 
       <section className="mb-5">

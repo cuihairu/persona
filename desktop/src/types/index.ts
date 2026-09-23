@@ -98,6 +98,30 @@ export interface SyncConfig {
   server_token: string;
 }
 
+/** E2EE sync 设备管理（对应 Rust SyncDeviceStatus / SyncJoinOutcome / SyncDeviceView） */
+export interface SyncDeviceStatus {
+  joined: boolean;
+  /** keyring 有记录但解析失败——UI 引导重新 join */
+  corrupted: boolean;
+  device_id: string | null;
+  device_name: string | null;
+}
+
+export interface SyncJoinOutcome {
+  device_id: string;
+  device_name: string;
+  /** 已登记但尚未被授权（需在另一台已授权设备上授权） */
+  pending: boolean;
+}
+
+export interface SyncDeviceView {
+  id: string;
+  device_name: string;
+  created_at: string;
+  authorized: boolean;
+  this_device: boolean;
+}
+
 /** workspace 设置全量（对应 Rust WorkspaceSettings；由 settings 命令返回） */
 export interface WorkspaceSettings {
   encryption_enabled: boolean;

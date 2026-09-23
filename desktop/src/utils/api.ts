@@ -15,6 +15,9 @@ import type {
   InitRequest,
   FeatureFlags,
   SyncConfig,
+  SyncDeviceStatus,
+  SyncDeviceView,
+  SyncJoinOutcome,
   FaviconData,
   BiometricStatus,
   TravelStatus,
@@ -211,6 +214,36 @@ class PersonaAPI {
   /** OS keyring 里是否存有 sync token（免解锁只读；真值不经 IPC） */
   async syncTokenPresent(): Promise<ApiResponse<boolean>> {
     return invoke('sync_token_present');
+  }
+
+  /** E2EE sync 设备身份状态（纯本地 keyring，免解锁） */
+  async syncDeviceStatus(): Promise<ApiResponse<SyncDeviceStatus>> {
+    return invoke('sync_device_status');
+  }
+
+  /** 加入 E2EE 同步（生成设备密钥对并向服务器登记；失败不留半态） */
+  async syncJoin(deviceName: string): Promise<ApiResponse<SyncJoinOutcome>> {
+    return invoke('sync_join', { deviceName });
+  }
+
+  /** 离开同步（本地清理优先；服务器吊销尽力而为） */
+  async syncLeave(): Promise<ApiResponse<boolean>> {
+    return invoke('sync_leave');
+  }
+
+  /** 同步组设备列表（含授权状态与本机标记） */
+  async syncListDevices(): Promise<ApiResponse<SyncDeviceView[]>> {
+    return invoke('sync_list_devices');
+  }
+
+  /** 为目标设备授权（拆本机信封重封目标公钥；本机未授权 fail-closed） */
+  async syncAuthorize(targetDeviceId: string): Promise<ApiResponse<boolean>> {
+    return invoke('sync_authorize', { targetDeviceId });
+  }
+
+  /** 吊销设备（幂等；吊销自己走 syncLeave） */
+  async syncRevoke(targetDeviceId: string): Promise<ApiResponse<boolean>> {
+    return invoke('sync_revoke', { targetDeviceId });
   }
 
   /** biometric unlock 状态（免解锁只读；解锁屏 mount 即查，决定指纹按钮显隐） */
