@@ -5937,6 +5937,269 @@ mod tests {
         assert_eq!(expiring[0].credential_name, "JetBrains");
     }
 
+    /// 扫描规则面成片覆盖：ApiKey/BankCard 过期与临期、不可解析到期静默、
+    /// 弱口令复用组（ServerConfig.password 与 SshKey.passphrase 同源）、
+    /// inactive 跳过、解密失败凭据跳过且不中断整个扫描。
+    #[tokio::test]
+    async fn scan_health_covers_expiry_rules_and_skips_inactive_undecryptable() {
+        let (db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Watchtower Mixed".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let make_api_key = |expires_at: Option<chrono::DateTime<chrono::Utc>>| {
+            CredentialData::ApiKey(crate::models::credential::ApiKeyData {
+                api_key: "KEY".to_string(),
+                api_secret: None,
+                token: None,
+                permissions: vec![],
+                expires_at,
+            })
+        };
+        let make_bank_card = |expiry_date: &str| {
+            CredentialData::BankCard(crate::models::credential::BankCardData {
+                card_number: "4111 1111 1111 1111".to_string(),
+                cardholder_name: "Test User".to_string(),
+                expiry_date: expiry_date.to_string(),
+                cvv: "123".to_string(),
+                bank_name: "Test Bank".to_string(),
+                card_type: "visa".to_string(),
+            })
+        };
+
+        service
+            .create_credential(
+                identity.id,
+                "Old Key".to_string(),
+                CredentialType::ApiKey,
+                SecurityLevel::High,
+                &make_api_key(Some(chrono::Utc::now() - chrono::Duration::days(1))),
+            )
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "New Key".to_string(),
+                CredentialType::ApiKey,
+                SecurityLevel::High,
+                &make_api_key(Some(chrono::Utc::now() + chrono::Duration::days(5))),
+            )
+            .await
+            .unwrap();
+        // BankCard：过期（01/20）与不可解析（数据质量，静默跳过）各一张
+        service
+            .create_credential(
+                identity.id,
+                "Dead Card".to_string(),
+                CredentialType::BankCard,
+                SecurityLevel::High,
+                &make_bank_card("01/20"),
+            )
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "Weird Card".to_string(),
+                CredentialType::BankCard,
+                SecurityLevel::High,
+                &make_bank_card("lifetime"),
+            )
+            .await
+            .unwrap();
+        // 弱口令复用组：ServerConfig.password 与 SshKey.passphrase 同值
+        service
+            .create_credential(
+                identity.id,
+                "Box".to_string(),
+                CredentialType::ServerConfig,
+                SecurityLevel::High,
+                &CredentialData::ServerConfig(crate::models::credential::ServerConfigData {
+                    hostname: "box.local".to_string(),
+                    ip_address: None,
+                    port: 22,
+                    protocol: "ssh".to_string(),
+                    username: "root".to_string(),
+                    password: Some("123".to_string()),
+                    ssh_key_id: None,
+                    additional_config: Default::default(),
+                }),
+            )
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "Deploy Key".to_string(),
+                CredentialType::SshKey,
+                SecurityLevel::Critical,
+                &CredentialData::SshKey(crate::models::credential::SshKeyData {
+                    private_key: "-----BEGIN".to_string(),
+                    public_key: "ssh-ed25519 AAA".to_string(),
+                    key_type: "ed25519".to_string(),
+                    passphrase: Some("123".to_string()),
+                }),
+            )
+            .await
+            .unwrap();
+
+        // inactive：计入 total_credentials 但不产生 issue
+        let disabled =
+            seed_credential(&service, identity.id, "Disabled", CredentialType::Password).await;
+        let updated = sqlx::query("UPDATE credentials SET is_active = 0 WHERE id = ?")
+            .bind(disabled.id.to_string()) // sqlite 存 TEXT，Uuid 绑定不匹配
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(updated.rows_affected(), 1);
+        // 解密失败：encrypted_data 换垃圾字节 → warn + 跳过，扫描继续
+        let broken =
+            seed_credential(&service, identity.id, "Broken", CredentialType::Password).await;
+        let updated = sqlx::query("UPDATE credentials SET encrypted_data = ? WHERE id = ?")
+            .bind(vec![0u8, 1, 2, 3])
+            .bind(broken.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(updated.rows_affected(), 1);
+
+        let report = service
+            .scan_health(HealthScanConfig::default())
+            .await
+            .unwrap();
+
+        assert_eq!(report.total_credentials, 8);
+        let kinds_of = |name: &str| -> Vec<&HealthIssueKind> {
+            report
+                .issues
+                .iter()
+                .filter(|i| i.credential_name == name)
+                .map(|i| &i.kind)
+                .collect()
+        };
+        assert!(matches!(
+            kinds_of("Old Key")[..],
+            [HealthIssueKind::Expired]
+        ));
+        assert!(matches!(
+            kinds_of("New Key")[..],
+            [HealthIssueKind::ExpiringSoon { .. }]
+        ));
+        assert!(matches!(
+            kinds_of("Dead Card")[..],
+            [HealthIssueKind::Expired]
+        ));
+        assert!(
+            kinds_of("Weird Card").is_empty(),
+            "unparseable expiry is skipped, not an error"
+        );
+        for name in ["Box", "Deploy Key"] {
+            let kinds = kinds_of(name);
+            assert_eq!(kinds.len(), 2, "{name} must be weak and reused: {kinds:?}");
+            assert!(kinds
+                .iter()
+                .any(|k| matches!(k, HealthIssueKind::WeakPassword { .. })));
+            assert!(kinds
+                .iter()
+                .any(|k| matches!(k, HealthIssueKind::ReusedPassword { group_size: 2 })));
+        }
+        assert!(kinds_of("Disabled").is_empty(), "inactive is skipped");
+        assert!(kinds_of("Broken").is_empty(), "undecryptable is skipped");
+    }
+
+    // Breach 规则走 SHA-1 摘要缝：命中 corpus 报 BreachedPassword；checker
+    // 故障不致命（offline 规则的报告照常返回）。
+    struct FixedBreaches {
+        counts: HashMap<String, u64>,
+    }
+
+    #[async_trait::async_trait]
+    impl BreachChecker for FixedBreaches {
+        async fn breach_counts(&self, digests: &[String]) -> Result<HashMap<String, u64>> {
+            Ok(digests
+                .iter()
+                .map(|d| (d.clone(), self.counts.get(d).copied().unwrap_or(0)))
+                .collect())
+        }
+    }
+
+    struct DownChecker;
+
+    #[async_trait::async_trait]
+    impl BreachChecker for DownChecker {
+        async fn breach_counts(&self, _digests: &[String]) -> Result<HashMap<String, u64>> {
+            Err(anyhow::anyhow!("corpus unreachable"))
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_health_breach_rule_reports_and_tolerates_checker_failure() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Watchtower Breach".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let make_login = |password: &str| {
+            CredentialData::Password(PasswordCredentialData {
+                password: password.to_string(),
+                email: None,
+                security_questions: vec![],
+            })
+        };
+        for (name, password) in [
+            ("Pwned One", "pwned-everywhere"),
+            ("Pwned Two", "pwned-everywhere"),
+            ("Clean One", "unique-clean-secret"),
+        ] {
+            service
+                .create_credential(
+                    identity.id,
+                    name.to_string(),
+                    CredentialType::Password,
+                    SecurityLevel::Medium,
+                    &make_login(password),
+                )
+                .await
+                .unwrap();
+        }
+
+        let pwned_digest = crate::breach::sha1_hex_upper("pwned-everywhere");
+        let checker = FixedBreaches {
+            counts: [(pwned_digest.clone(), 3u64)].into_iter().collect(),
+        };
+        let report = service
+            .scan_health_with(
+                HealthScanConfig::default(),
+                Some(&checker as &dyn BreachChecker),
+            )
+            .await
+            .unwrap();
+        let breached: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| matches!(i.kind, HealthIssueKind::BreachedPassword { count: 3 }))
+            .collect();
+        assert_eq!(breached.len(), 2, "both holders of the pwned secret");
+        assert!(breached
+            .iter()
+            .all(|i| i.credential_name.starts_with("Pwned")));
+
+        // checker 故障：整份报告照常返回，只是没有 breach 类 issue
+        let report = service
+            .scan_health_with(
+                HealthScanConfig::default(),
+                Some(&DownChecker as &dyn BreachChecker),
+            )
+            .await
+            .unwrap();
+        assert!(report
+            .issues
+            .iter()
+            .all(|i| !matches!(i.kind, HealthIssueKind::BreachedPassword { .. })));
+    }
+
     #[tokio::test]
     async fn scan_health_flags_two_factor_available_until_covered() {
         let (_db, service) = unlocked_service().await;
