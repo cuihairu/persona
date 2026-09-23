@@ -6200,6 +6200,143 @@ mod tests {
             .all(|i| !matches!(i.kind, HealthIssueKind::BreachedPassword { .. })));
     }
 
+    /// delete_credential 双分支：存在的凭据返回 true 并写 CredentialDeleted
+    /// 审计；再删一次（已不存在）返回 false，不重复写审计。
+    #[tokio::test]
+    async fn delete_credential_true_then_false_with_audit() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Delete Audit".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "Doomed", CredentialType::Password).await;
+
+        assert!(service.delete_credential(&cred.id).await.unwrap());
+        assert!(!service.delete_credential(&cred.id).await.unwrap());
+
+        let logs = service
+            .query_audit_logs(AuditLogQuery::default())
+            .await
+            .unwrap();
+        let deleted = logs
+            .iter()
+            .filter(|l| l.action == AuditAction::CredentialDeleted)
+            .collect::<Vec<_>>();
+        assert_eq!(deleted.len(), 1, "audit written once, not for the miss");
+        assert_eq!(
+            deleted[0].resource_id.as_deref(),
+            Some(cred.id.to_string()).as_deref()
+        );
+        assert!(deleted[0].success);
+    }
+
+    /// stale 规则：updated_at 早于 stale_after_days 的凭据报 StaleUnchanged，
+    /// 天数取整到日。
+    #[tokio::test]
+    async fn scan_health_flags_stale_credentials_with_day_count() {
+        let (db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Watchtower Stale".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let stale = seed_credential(&service, identity.id, "Mossy", CredentialType::Password).await;
+        let fresh = seed_credential(&service, identity.id, "Fresh", CredentialType::Password).await;
+        let old = (chrono::Utc::now() - chrono::Duration::days(400)).to_rfc3339();
+        let updated = sqlx::query("UPDATE credentials SET updated_at = ? WHERE id = ?")
+            .bind(&old)
+            .bind(stale.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert_eq!(updated.rows_affected(), 1);
+
+        let report = service
+            .scan_health(HealthScanConfig::default())
+            .await
+            .unwrap();
+        let stale_issues: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| matches!(i.kind, HealthIssueKind::StaleUnchanged { .. }))
+            .collect();
+        assert_eq!(stale_issues.len(), 1);
+        assert_eq!(stale_issues[0].credential_name, "Mossy");
+        assert!(matches!(
+            stale_issues[0].kind,
+            HealthIssueKind::StaleUnchanged { days: 400 }
+        ));
+        let _ = fresh; // 新凭据不报 stale（隐含：上面只筛出一条）
+    }
+
+    /// 工具三件套：带选项的密码生成长度准确；盐 32 字节；SHA-256 摘要
+    /// 稳定且 32 字节。
+    #[tokio::test]
+    async fn password_options_salt_and_hash_helpers_behave() {
+        let (_db, service) = unlocked_service().await;
+        let pw = service
+            .generate_password_with_options(&PasswordGeneratorOptions {
+                length: 24,
+                include_symbols: false,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(pw.chars().count(), 24);
+        assert!(pw.chars().all(|c| c.is_ascii_alphanumeric()));
+
+        let salt = service.generate_salt();
+        assert_eq!(salt.len(), 32);
+
+        let hash = service.hash_data(b"persona");
+        assert_eq!(hash.len(), 32);
+        assert_eq!(hash, service.hash_data(b"persona"));
+        assert_ne!(hash, service.hash_data(b"persona2"));
+    }
+
+    /// 同步捕获缝：attach(Some) 后写凭据递 Put 给捕获实现；attach(None)
+    /// 后写路径静默跳过。捕获失败/未装配不阻断主操作由类型保证——
+    /// 这里验证的是装配 ↔ 捕获的接线本身。
+    #[tokio::test]
+    async fn attach_sync_capture_feeds_credential_puts_only_while_attached() {
+        use std::sync::Mutex;
+
+        struct RecordingCapture(std::sync::Arc<Mutex<Vec<String>>>);
+
+        #[async_trait::async_trait]
+        impl crate::sync::capture::SyncCapture for RecordingCapture {
+            async fn capture(
+                &self,
+                _item_id: Uuid,
+                kind: crate::sync::oplog::ItemKind,
+                op: crate::sync::oplog::OpType,
+                _ciphertext: Option<Vec<u8>>,
+                _item_key: Option<zeroize::Zeroizing<[u8; 32]>>,
+            ) {
+                self.0.lock().unwrap().push(format!("{kind:?}:{op:?}"));
+            }
+        }
+
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Capture Seam".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        service
+            .attach_sync_capture(Some(Arc::new(RecordingCapture(log.clone()))))
+            .await;
+
+        seed_credential(&service, identity.id, "Synced", CredentialType::Password).await;
+        assert_eq!(*log.lock().unwrap(), vec!["Credential:Put".to_string()]);
+
+        service.attach_sync_capture(None).await;
+        seed_credential(&service, identity.id, "Unsynced", CredentialType::Password).await;
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["Credential:Put".to_string()],
+            "detached capture must not observe further writes"
+        );
+    }
+
     #[tokio::test]
     async fn scan_health_flags_two_factor_available_until_covered() {
         let (_db, service) = unlocked_service().await;
