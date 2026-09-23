@@ -4151,9 +4151,9 @@ async fn wallet_commands_report_db_path_failures_loudly() {
     let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e
-            .starts_with("Database migration failed")
-            && e.contains("not a database")),
+        resp.error.as_deref().is_some_and(
+            |e| e.starts_with("Database migration failed") && e.contains("not a database")
+        ),
         "got: {:?}",
         resp.error
     );
@@ -4163,7 +4163,9 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a database")),
         "got: {:?}",
         resp.error
     );
@@ -4184,7 +4186,9 @@ async fn wallet_commands_report_db_path_failures_loudly() {
     .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a database")),
         "got: {:?}",
         resp.error
     );
@@ -4204,7 +4208,9 @@ async fn wallet_commands_report_db_path_failures_loudly() {
     .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a database")),
         "got: {:?}",
         resp.error
     );
@@ -4336,7 +4342,9 @@ async fn active_identity_commands_report_db_failures() {
     let resp = get_active_identity(state()).await.unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a database")),
         "got: {:?}",
         resp.error
     );
@@ -4346,7 +4354,9 @@ async fn active_identity_commands_report_db_failures() {
         .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a database")),
         "got: {:?}",
         resp.error
     );
@@ -4354,7 +4364,9 @@ async fn active_identity_commands_report_db_failures() {
     let resp = clear_active_identity(state()).await.unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not a database")),
         "got: {:?}",
         resp.error
     );
@@ -5588,7 +5600,9 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
     fn expect_junk_err<T>(resp: &ApiResponse<T>) {
         assert!(!resp.success);
         assert!(
-            resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+            resp.error
+                .as_deref()
+                .is_some_and(|e| e.contains("not a database")),
             "got: {:?}",
             resp.error
         );
@@ -5602,9 +5616,9 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
     .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e
-            .starts_with("Database migration failed")
-            && e.contains("not a database")),
+        resp.error.as_deref().is_some_and(
+            |e| e.starts_with("Database migration failed") && e.contains("not a database")
+        ),
         "got: {:?}",
         resp.error
     );
@@ -5643,9 +5657,9 @@ async fn ssh_key_listing_and_agent_stop_small_arms() {
     let resp = get_ssh_keys(app.state::<AppState>()).await.unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.as_deref().is_some_and(|e| e
-            .starts_with("Failed to load identities")
-            && e.contains("not a database")),
+        resp.error.as_deref().is_some_and(
+            |e| e.starts_with("Failed to load identities") && e.contains("not a database")
+        ),
         "got: {:?}",
         resp.error
     );

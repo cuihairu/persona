@@ -402,8 +402,9 @@ pub async fn set_active_identity(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let identity_id =
-        ok_or_error_response!(Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string()));
+    let identity_id = ok_or_error_response!(
+        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())
+    );
 
     let db_path = db_path_or_return!(state);
 
@@ -948,11 +949,13 @@ pub async fn biometric_enable(
             "Biometric authentication is not available on this device".to_string(),
         ));
     }
-    ok_or_error_response!(run_biometric_ceremony(
-        state.biometric_provider.clone(),
-        "Enable biometric unlock for Persona",
-    )
-    .await);
+    ok_or_error_response!(
+        run_biometric_ceremony(
+            state.biometric_provider.clone(),
+            "Enable biometric unlock for Persona",
+        )
+        .await
+    );
 
     // 3. 托管进 keyring（ceremony 已花掉：写失败给明确错误，不留半态；
     //    用户改用密码登录不受影响）
@@ -1023,24 +1026,24 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
             "Biometric authentication is not available on this device".to_string(),
         ));
     }
-    ok_or_error_response!(run_biometric_ceremony(
-        state.biometric_provider.clone(),
-        "Unlock Persona"
-    )
-    .await);
+    ok_or_error_response!(
+        run_biometric_ceremony(state.biometric_provider.clone(), "Unlock Persona").await
+    );
 
     // init_service 本尊复用：锁内全链路（auto-lock 桥、passkey 服务端、
     // sync emitter、biometric provider 注入）与密码解锁完全一致
     let biometric_store = state.biometric_store.clone();
-    let resp = ok_or_error_response!(init_service(
-        InitRequest {
-            master_password,
-            db_path: Some(db_path.clone()),
-        },
-        state,
-        app,
-    )
-    .await);
+    let resp = ok_or_error_response!(
+        init_service(
+            InitRequest {
+                master_password,
+                db_path: Some(db_path.clone()),
+            },
+            state,
+            app,
+        )
+        .await
+    );
 
     // 陈旧条目自愈（桌面外改密等场景）：取回的密码对这把锁已证明
     // 错误，条目必坏，当场删除——防止反复点指纹白白累计失败计数
@@ -2672,7 +2675,8 @@ pub async fn get_totp_code(
         "Failed to get credential data: {}"
     );
 
-    let data = ok_or_error_response!(credential_data.ok_or_else(|| "Credential not found".to_string()));
+    let data =
+        ok_or_error_response!(credential_data.ok_or_else(|| "Credential not found".to_string()));
     match data {
         CredentialData::TwoFactor(tf) => {
             // 协议逻辑统一下沉到 core（RFC 4226/6238），桌面端只做调用。
@@ -3194,9 +3198,8 @@ pub async fn wallet_list(
 
     let wallets = match identity_id {
         Some(identity_id) => {
-            let uuid = ok_or_error_response!(
-                Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())
-            );
+            let uuid = ok_or_error_response!(Uuid::from_str(&identity_id)
+                .map_err(|_| "Invalid identity UUID format".to_string()));
             ok_or_error_response!(repo.find_by_identity(&uuid).await)
         }
         None => ok_or_error_response!(repo.find_all().await),
@@ -3245,7 +3248,9 @@ pub async fn wallet_list_addresses(
 
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let uuid = ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
+    let uuid = ok_or_error_response!(
+        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())
+    );
     let wallet: CryptoWallet = match repo.find_by_id(&uuid).await.map_err(|e| e.to_string())? {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
@@ -3292,8 +3297,9 @@ pub async fn wallet_generate(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let identity_id =
-        ok_or_error_response!(Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string()));
+    let identity_id = ok_or_error_response!(
+        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())
+    );
     let network = ok_or_error_response!(parse_network(&request.network));
     let address_count = request.address_count.unwrap_or(5);
 
@@ -3303,9 +3309,11 @@ pub async fn wallet_generate(
         ));
     }
 
-    let mnemonic = ok_or_error_response!(persona_core::crypto::wallet_crypto::SecureMnemonic::generate(
-        persona_core::crypto::wallet_crypto::MnemonicWordCount::Words24,
-    ));
+    let mnemonic = ok_or_error_response!(
+        persona_core::crypto::wallet_crypto::SecureMnemonic::generate(
+            persona_core::crypto::wallet_crypto::MnemonicWordCount::Words24,
+        )
+    );
     let mnemonic_phrase = mnemonic.phrase();
 
     let derivation_path = match request.wallet_type.to_lowercase().as_str() {
@@ -3318,16 +3326,18 @@ pub async fn wallet_generate(
         }
     };
 
-    let wallet = ok_or_error_response!(persona_core::crypto::wallet_import_export::import_from_mnemonic(
-        identity_id,
-        request.name.clone(),
-        &mnemonic_phrase,
-        "",
-        network,
-        derivation_path,
-        address_count,
-        &request.password,
-    ));
+    let wallet = ok_or_error_response!(
+        persona_core::crypto::wallet_import_export::import_from_mnemonic(
+            identity_id,
+            request.name.clone(),
+            &mnemonic_phrase,
+            "",
+            network,
+            derivation_path,
+            address_count,
+            &request.password,
+        )
+    );
 
     let db_path = db_path_or_return!(state);
 
@@ -3367,8 +3377,9 @@ pub async fn wallet_import(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let identity_id =
-        ok_or_error_response!(Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string()));
+    let identity_id = ok_or_error_response!(
+        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())
+    );
     let wallet = match import_wallet_from_request(identity_id, &request) {
         Ok(wallet) => wallet,
         Err(error) => return Ok(ApiResponse::error(error)),
@@ -3400,8 +3411,9 @@ pub async fn wallet_add_address(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let wallet_id =
-        ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
+    let wallet_id = ok_or_error_response!(
+        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())
+    );
     if password.len() < 8 {
         return Ok(ApiResponse::error(
             "Wallet password must be at least 8 characters".to_string(),
@@ -3446,11 +3458,10 @@ pub async fn wallet_add_address(
         .map(|v| v + 1)
         .unwrap_or(0);
 
-    let encrypted_key: persona_core::crypto::wallet_encryption::EncryptedWalletKey =
-        ok_or_error_response_ctx!(
-            serde_json::from_slice(&wallet.encrypted_private_key),
-            "Invalid wallet key encoding: {}"
-        );
+    let encrypted_key: persona_core::crypto::wallet_encryption::EncryptedWalletKey = ok_or_error_response_ctx!(
+        serde_json::from_slice(&wallet.encrypted_private_key),
+        "Invalid wallet key encoding: {}"
+    );
     let master_key = ok_or_error_response!(
         persona_core::crypto::wallet_encryption::decrypt_master_key(&encrypted_key, &password)
     );
@@ -3460,11 +3471,13 @@ pub async fn wallet_add_address(
 
     let (address_string, address_type) = match wallet.network {
         BlockchainNetwork::Bitcoin => (
-            ok_or_error_response!(persona_core::crypto::address_generator::generate_bitcoin_address(
-                &child,
-                persona_core::crypto::address_generator::BitcoinAddressType::P2WPKH,
-                false,
-            )),
+            ok_or_error_response!(
+                persona_core::crypto::address_generator::generate_bitcoin_address(
+                    &child,
+                    persona_core::crypto::address_generator::BitcoinAddressType::P2WPKH,
+                    false,
+                )
+            ),
             persona_core::models::wallet::AddressType::P2WPKH,
         ),
         BlockchainNetwork::Ethereum
@@ -3528,8 +3541,9 @@ pub async fn wallet_delete(
     let db = open_db_or_return!(db_path);
 
     let repo = CryptoWalletRepository::new(Arc::new(db));
-    let wallet_id =
-        ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
+    let wallet_id = ok_or_error_response!(
+        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())
+    );
 
     let deleted = ok_or_error_response!(repo.delete(&wallet_id).await);
     if !deleted {
@@ -3562,7 +3576,8 @@ pub async fn wallet_export(
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
     let wallet_id =
-        ok_or_error_response!(Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
+        ok_or_error_response!(Uuid::from_str(&request.wallet_id)
+            .map_err(|_| "Invalid wallet UUID format".to_string()));
     let wallet = match ok_or_error_response!(repo.find_by_id(&wallet_id).await) {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
@@ -3641,8 +3656,9 @@ pub async fn wallet_create_transaction(
 ) -> std::result::Result<ApiResponse<serde_json::Value>, String> {
     use persona_core::models::wallet::TransactionRequest;
 
-    let wallet_id =
-        ok_or_error_response!(Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet_id".to_string()));
+    let wallet_id = ok_or_error_response!(
+        Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet_id".to_string())
+    );
     let db = wallet_db_or_return!(state);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
@@ -3695,7 +3711,9 @@ pub async fn wallet_pending_transactions(
     wallet_id: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<Vec<serde_json::Value>>, String> {
-    let wallet_id = ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet_id".to_string()));
+    let wallet_id = ok_or_error_response!(
+        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet_id".to_string())
+    );
     let db = wallet_db_or_return!(state);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
@@ -3718,9 +3736,9 @@ pub async fn wallet_sign_transaction(
     request: WalletSignTransactionRequest,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<serde_json::Value>, String> {
-    let request_id = ok_or_error_response!(
-        Uuid::from_str(&request.transaction_id).map_err(|_| "Invalid transaction_id".to_string())
-    );
+    let request_id =
+        ok_or_error_response!(Uuid::from_str(&request.transaction_id)
+            .map_err(|_| "Invalid transaction_id".to_string()));
     let db = wallet_db_or_return!(state);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
