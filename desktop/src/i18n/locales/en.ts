@@ -132,6 +132,28 @@ export default {
       revoked: 'Device revoked',
       revokeFailed: 'Failed to revoke device',
       loadFailed: 'Failed to load sync status',
+      syncNow: 'Sync now',
+      syncDone: 'Synced — pulled {{pulled}}, pushed {{pushed}}',
+      syncFailed: 'Sync failed',
+      conflictsFound:
+        '{{count}} item(s) were changed on multiple devices — pick which version to keep (all-or-nothing, no field merging).',
+      viewConflicts: 'Review conflicts',
+    },
+    syncConflicts: {
+      title: 'Sync conflicts',
+      description:
+        'Offline edits on multiple devices produced several versions of the same item. Adopting one copy retires the others.',
+      currentBadge: 'Current',
+      deletedBadge: 'Deleted',
+      differsBadge: 'Data differs',
+      deletedTitle: '(Deleted)',
+      versionMeta: 'Version {{lamport}} · {{time}}',
+      adopt: 'Keep this version',
+      resolved: 'Version applied',
+      resolveFailed: 'Failed to apply',
+      loadFailed: 'Failed to load conflicts',
+      loading: 'Loading…',
+      keepCurrent: 'Decide later',
     },
     security: {
       title: 'Master password',

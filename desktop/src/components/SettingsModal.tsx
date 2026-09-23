@@ -12,6 +12,7 @@ import type {
   IdentityType,
   SyncDeviceStatus,
   SyncDeviceView,
+  SyncNowReport,
   ThemePreference,
   TravelStatus,
 } from '@/types';
@@ -20,6 +21,7 @@ import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 import ReauthModal from './ReauthModal';
 import TravelPassphraseModal from './TravelPassphraseModal';
 import ConnectAutomationSection from './ConnectAutomationSection';
+import SyncConflictsModal from './SyncConflictsModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface SettingsModalProps {
@@ -226,6 +228,9 @@ const SyncDevicesSection: React.FC = () => {
   const [deviceName, setDeviceName] = useState('');
   const [busy, setBusy] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
+  // 最近一轮同步报告（conflicts > 0 时亮冲突入口）+ 裁决弹窗开关
+  const [lastReport, setLastReport] = useState<SyncNowReport | null>(null);
+  const [conflictsOpen, setConflictsOpen] = useState(false);
 
   const refreshStatus = async (): Promise<SyncDeviceStatus | null> => {
     try {
@@ -290,8 +295,31 @@ const SyncDevicesSection: React.FC = () => {
     }
   };
 
-  const leave = async (): Promise<void> => {
-    if (!window.confirm(t('settings.syncDevices.leaveConfirm'))) return;
+  /** 立即同步：跑一轮周期；conflicts > 0 时自动打开裁决弹窗 */
+  const syncNow = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncNow();
+      if (resp.success && resp.data) {
+        setLastReport(resp.data);
+        toast.success(
+          t('settings.syncDevices.syncDone', {
+            pulled: resp.data.pulled,
+            pushed: resp.data.pushed,
+          }),
+        );
+        if (resp.data.conflicts > 0) setConflictsOpen(true);
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.syncFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.syncFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const leave = async (): Promise<void> => {    if (!window.confirm(t('settings.syncDevices.leaveConfirm'))) return;
     setBusy(true);
     try {
       const resp = await personaAPI.syncLeave();
@@ -379,16 +407,47 @@ const SyncDevicesSection: React.FC = () => {
             <span className="text-gray-700 dark:text-gray-300">
               {t('settings.syncDevices.joinedAs', { name: status.device_name ?? '' })}
             </span>
-            <button
-              type="button"
-              data-testid="sync-leave-button"
-              onClick={leave}
-              disabled={busy}
-              className="btn-secondary"
-            >
-              {t('settings.syncDevices.leave')}
-            </button>
+            <div className="flex flex-shrink-0 gap-2">
+              <button
+                type="button"
+                data-testid="sync-now-button"
+                onClick={syncNow}
+                disabled={busy}
+                className="btn-primary"
+              >
+                {busy ? t('settings.saving') : t('settings.syncDevices.syncNow')}
+              </button>
+              <button
+                type="button"
+                data-testid="sync-leave-button"
+                onClick={leave}
+                disabled={busy}
+                className="btn-secondary"
+              >
+                {t('settings.syncDevices.leave')}
+              </button>
+            </div>
           </div>
+
+          {lastReport && lastReport.conflicts > 0 && (
+            <div
+              className="flex items-center justify-between gap-4 border border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10 rounded-lg px-3 py-2 text-sm"
+              data-testid="sync-conflicts-banner"
+            >
+              <span className="text-amber-700 dark:text-amber-400">
+                {t('settings.syncDevices.conflictsFound', { count: lastReport.conflicts })}
+              </span>
+              <button
+                type="button"
+                data-testid="sync-view-conflicts-button"
+                onClick={() => setConflictsOpen(true)}
+                disabled={busy}
+                className="btn-secondary text-xs"
+              >
+                {t('settings.syncDevices.viewConflicts')}
+              </button>
+            </div>
+          )}
 
           {devices.length > 0 && (
             <ul className="divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 rounded-lg dark:border-gray-700">
@@ -473,6 +532,10 @@ const SyncDevicesSection: React.FC = () => {
             </button>
           </div>
         </div>
+      )}
+
+      {conflictsOpen && (
+        <SyncConflictsModal onClose={() => setConflictsOpen(false)} />
       )}
     </div>
   );

@@ -40,6 +40,9 @@ jest.mock('@/utils/api', () => ({
     syncListDevices: jest.fn(),
     syncAuthorize: jest.fn(),
     syncRevoke: jest.fn(),
+    syncNow: jest.fn(),
+    syncConflictsList: jest.fn(),
+    syncConflictResolve: jest.fn(),
   },
 }));
 
@@ -71,6 +74,8 @@ const mockSyncLeave = personaAPI.syncLeave as jest.Mock;
 const mockSyncList = personaAPI.syncListDevices as jest.Mock;
 const mockSyncAuthorize = personaAPI.syncAuthorize as jest.Mock;
 const mockSyncRevoke = personaAPI.syncRevoke as jest.Mock;
+const mockSyncNow = personaAPI.syncNow as jest.Mock;
+const mockSyncConflictsList = personaAPI.syncConflictsList as jest.Mock;
 
 const inactiveTravel = {
   success: true,
@@ -1221,6 +1226,114 @@ describe('components/SettingsModal', () => {
     });
     // 损坏状态仍可重新 join（leave 清残留后再加入的路径）
     expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // 冲突裁决入口（阶段 3c：syncNow → conflicts>0 → banner + 裁决弹窗）
+  // -------------------------------------------------------------------------
+
+  /** 冲突裁决弹窗的数据面由 SyncConflictsModal.test.tsx 全覆盖；这里只验
+   *  SettingsModal 侧的接线：syncNow 报告 conflicts>0 时亮 banner 并自动
+   *  开窗，conflicts=0 时不出入口。 */
+  const conflictedList = {
+    success: true,
+    data: [
+      {
+        item_id: 'item-1',
+        primary: {
+          op_id: 'op-p',
+          device_id: 'dev-a',
+          lamport: 5,
+          timestamp: null,
+          deleted: false,
+          snapshot: {
+            identity_id: 'id-1',
+            name: 'GitHub',
+            credential_type: 'Password',
+            security_level: 'High',
+            url: null,
+            username: null,
+            notes: null,
+            tags: [],
+            metadata: {},
+            is_favorite: false,
+            is_active: true,
+            data: { credential_type: 'Password', data: { password: 'a' } },
+          },
+        },
+        copies: [
+          {
+            op_id: 'op-c',
+            device_id: 'dev-b',
+            lamport: 5,
+            timestamp: null,
+            deleted: false,
+            snapshot: null,
+          },
+        ],
+      },
+    ],
+  };
+
+  it('syncs now, shows the conflict banner and auto-opens the resolution modal', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue({ success: true, data: [] });
+    mockSyncNow.mockResolvedValue({
+      success: true,
+      data: { pulled: 2, materialized: 1, conflicts: 1, pending_identity: 0, pushed: 1, backfilled: 0 },
+    });
+    mockSyncConflictsList.mockResolvedValue(conflictedList);
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-now-button')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-now-button'));
+    });
+
+    await waitFor(() => {
+      expect(mockSyncNow).toHaveBeenCalled();
+    });
+    // conflicts>0：banner 亮起 + 裁决弹窗自动打开
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-conflicts-banner')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('sync-conflicts-banner')).toHaveTextContent(
+      '1 个条目存在并发修改的冲突版本',
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-conflicts-modal')).toBeInTheDocument();
+    });
+  });
+
+  it('hides the conflict entry point when the report has no conflicts', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue({ success: true, data: [] });
+    mockSyncNow.mockResolvedValue({
+      success: true,
+      data: { pulled: 1, materialized: 1, conflicts: 0, pending_identity: 0, pushed: 0, backfilled: 0 },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-now-button')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-now-button'));
+    });
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        '同步完成——拉取 1 条，推送 0 条',
+      );
+    });
+    expect(screen.queryByTestId('sync-conflicts-banner')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('sync-conflicts-modal')).not.toBeInTheDocument();
   });
 
   it('leaves sync after confirm and falls back to the join form', async () => {

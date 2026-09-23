@@ -122,6 +122,61 @@ export interface SyncDeviceView {
   this_device: boolean;
 }
 
+/** `sync_now` 返回：一轮同步的计数汇总（对应 Rust SyncNowReport） */
+export interface SyncNowReport {
+  /** 新拉取落库的远端 op 条数 */
+  pulled: number;
+  /** 物化进主库的条目数（新行或更新） */
+  materialized: number;
+  /** 当前待裁决的冲突条目数（>0 时打开冲突弹窗） */
+  conflicts: number;
+  /** 因身份未同步而挂起的条目数（下轮补齐） */
+  pending_identity: number;
+  /** push 出去的本地 op 条数 */
+  pushed: number;
+  /** 本次灌入 oplog 的存量凭据条数（通常只在首次同步非零） */
+  backfilled: number;
+}
+
+/** 同步快照明文（对应 Rust SyncItemSnapshot；冲突对比展示用，data 不展开） */
+export interface SyncItemSnapshotView {
+  identity_id: string;
+  name: string;
+  credential_type: string;
+  security_level: string;
+  url: string | null;
+  username: string | null;
+  notes: string | null;
+  tags: string[];
+  is_favorite: boolean;
+  is_active: boolean;
+  /** 凭据数据（Rust CredentialData 的 serde 形态；前端只做整体对比） */
+  data: unknown;
+}
+
+/** 冲突条目的单个版本（对应 Rust desktop SyncConflictVersion） */
+export interface SyncConflictVersion {
+  /** 采纳时传给 sync_conflict_resolve 的 op id */
+  op_id: string;
+  /** 产生该版本的设备 id（对比本机 device_id 标「本机」） */
+  device_id: string;
+  lamport: number;
+  /** 仅展示，不参与裁决排序（LWW 只看 lamport + device） */
+  timestamp: string | null;
+  /** tombstone 版本：采纳 = 删除该条目；此时无 snapshot */
+  deleted: boolean;
+  snapshot: SyncItemSnapshotView | null;
+}
+
+/** 一个条目的冲突视图（对应 Rust desktop SyncConflictEntry） */
+export interface SyncConflictEntry {
+  item_id: string;
+  /** 当前版本（LWW 主位——什么都不做就保留它） */
+  primary: SyncConflictVersion;
+  /** 待裁决副本（每份可采纳，采纳后其余版本淘汰） */
+  copies: SyncConflictVersion[];
+}
+
 /** workspace 设置全量（对应 Rust WorkspaceSettings；由 settings 命令返回） */
 export interface WorkspaceSettings {
   encryption_enabled: boolean;

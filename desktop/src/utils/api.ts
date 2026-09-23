@@ -15,9 +15,11 @@ import type {
   InitRequest,
   FeatureFlags,
   SyncConfig,
+  SyncConflictEntry,
   SyncDeviceStatus,
   SyncDeviceView,
   SyncJoinOutcome,
+  SyncNowReport,
   FaviconData,
   BiometricStatus,
   TravelStatus,
@@ -244,6 +246,21 @@ class PersonaAPI {
   /** 吊销设备（幂等；吊销自己走 syncLeave） */
   async syncRevoke(targetDeviceId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_revoke', { targetDeviceId });
+  }
+
+  /** 立即同步：存量灌入 → pull/materialize/push 周期，返回计数汇总 */
+  async syncNow(): Promise<ApiResponse<SyncNowReport>> {
+    return invoke('sync_now');
+  }
+
+  /** 全部待裁决冲突条目（主位 + 副本解密快照；只读） */
+  async syncConflictsList(): Promise<ApiResponse<SyncConflictEntry[]>> {
+    return invoke('sync_conflicts_list');
+  }
+
+  /** 冲突裁决：采纳一个副本（其余版本淘汰出裁决视图，数据不丢） */
+  async syncConflictResolve(itemId: string, adoptOpId: string): Promise<ApiResponse<boolean>> {
+    return invoke('sync_conflict_resolve', { itemId, adoptOpId });
   }
 
   /** biometric unlock 状态（免解锁只读；解锁屏 mount 即查，决定指纹按钮显隐） */
