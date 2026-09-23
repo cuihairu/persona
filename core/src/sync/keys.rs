@@ -124,6 +124,32 @@ mod tests {
         assert_ne!(a.as_bytes(), b.as_bytes());
     }
 
+    /// 密钥字节绝不进 Debug/日志输出。
+    #[test]
+    fn group_key_debug_never_leaks_bytes() {
+        let key = GroupKey::generate().unwrap();
+        assert_eq!(format!("{key:?}"), "GroupKey(<32 bytes>)");
+    }
+
+    #[test]
+    fn group_key_round_trips_through_bytes() {
+        let mut bytes = [0u8; 32];
+        rand::rng().fill(&mut bytes);
+        let key = GroupKey::from_bytes(bytes);
+        assert_eq!(key.as_bytes(), &bytes);
+    }
+
+    /// group key 解出的明文不是 32 字节 item key 时拒绝（协议不变量）。
+    #[test]
+    fn unwrap_item_key_rejects_wrong_plaintext_length() {
+        let group = GroupKey::generate().unwrap();
+        let cipher = crate::crypto::encryption::EncryptionService::new(group.as_bytes())
+            .encrypt(b"only 7")
+            .unwrap();
+        let err = unwrap_item_key_with_group(&cipher, &group).unwrap_err();
+        assert!(err.to_string().contains("wrong length"), "{err}");
+    }
+
     #[test]
     fn device_keypair_public_is_derived_from_secret() {
         let mut secret = [0u8; 32];

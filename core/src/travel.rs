@@ -1060,7 +1060,7 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("empty row"), "{err}");
 
-        // Bool 走 Int 通道落表
+        // Bool 走 Int 通道落表；非整数 float 走 Real 通道保真
         insert_rows(&mut conn, "probe", &row_with("flag", Value::Bool(true)))
             .await
             .unwrap();
@@ -1069,6 +1069,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(flag, 1);
+        insert_rows(&mut conn, "probe", &row_with("num", json!(24.805)))
+            .await
+            .unwrap();
+        let num: f64 = sqlx::query_scalar("SELECT num FROM probe WHERE num IS NOT NULL")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap();
+        assert!((num - 24.805).abs() < 1e-9, "{num}");
+    }
+
+    /// 「能解密但内容坏」的 sidecar 分路报错：gzip 流损坏报
+    /// decompression failed，gzip 但非 TravelPack JSON 报 not a valid
+    /// pack——都不与口令错误混淆。
+    #[test]
+    fn open_pack_distinguishes_decompression_from_deserialization_failures() {
+        let pw = "travel-pw";
+
+        // gzip magic 开头但内容损坏（CRC/deflate 层失败）
+        let mut corrupt = gzip_bytes(b"legit pack bytes".to_vec());
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xff;
+        let sealed = encrypt_bytes(&corrupt, pw, Some(fast_kdf())).unwrap();
+        let err = open_pack(&sealed, pw).unwrap_err();
+        assert!(err.to_string().contains("decompression failed"), "{err}");
+
+        let sealed =
+            encrypt_bytes(&gzip_bytes(b"{ not a pack".to_vec()), pw, Some(fast_kdf())).unwrap();
+        let err = open_pack(&sealed, pw).unwrap_err();
+        assert!(err.to_string().contains("not a valid pack"), "{err}");
     }
 
     #[tokio::test]

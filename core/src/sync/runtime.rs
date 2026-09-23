@@ -391,6 +391,62 @@ mod tests {
         assert_eq!(count, 1, "legacy 行跳过，modern 行灌入");
     }
 
+    /// backfill 对坏行逐条跳过不阻断：unwrap 失败、密文坏、明文非
+    /// CredentialData 三种损坏各一条，全部 skip（返回 0，远端零推送）。
+    #[tokio::test]
+    async fn backfill_skips_corrupt_credentials_one_by_one() {
+        let (db, identity, master) = seeded_db().await;
+        let cred_repo = CredentialRepository::new(db.clone());
+
+        // wrapped key 是垃圾字节 → item key unwrap 失败
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "bad-unwrap".to_string(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                vec![1, 2, 3],
+                Some(vec![9; 48]),
+            ))
+            .await
+            .unwrap();
+
+        // wrapped 合法但密文坏 → credential decrypt 失败
+        let item_key = EncryptionService::generate_key();
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "bad-ciphertext".to_string(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                vec![7; 64],
+                Some(master.encrypt(&item_key).unwrap()),
+            ))
+            .await
+            .unwrap();
+
+        // 可解密但明文不是 CredentialData → from_bytes 失败
+        let ciphertext = KeyHierarchy::new(&master)
+            .encrypt_with_item_key(&item_key, b"not credential data")
+            .unwrap();
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "bad-data".to_string(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                ciphertext,
+                Some(master.encrypt(&item_key).unwrap()),
+            ))
+            .await
+            .unwrap();
+
+        let (session, pushed_log) = session_for(&db, Uuid::new_v4(), GroupKey::generate().unwrap());
+        let count = session.backfill_existing(&master).await.unwrap();
+        assert_eq!(count, 0, "三条坏行全部跳过");
+        assert!(pushed_log.lock().unwrap().is_empty());
+    }
+
     // open 的密码学半步：坏信封 fail-closed
     #[cfg(feature = "remote-auth")]
     #[test]
