@@ -22,7 +22,7 @@ impl SecureMnemonic {
         let mut entropy = vec![0u8; word_count.entropy_bytes()];
         getrandom::fill(&mut entropy).expect("failed to generate random entropy");
         let mnemonic = Mnemonic::from_entropy(&entropy).map_err(|e| {
-            PersonaError::Cryptography(format!("Failed to generate mnemonic: {}", e))
+            PersonaError::CryptographicError(format!("Failed to generate mnemonic: {}", e))
         })?;
         Ok(Self { mnemonic })
     }
@@ -31,7 +31,7 @@ impl SecureMnemonic {
     pub fn from_phrase(phrase: &str) -> PersonaResult<Self> {
         let mnemonic = phrase
             .parse::<Mnemonic>()
-            .map_err(|e| PersonaError::Cryptography(format!("Invalid mnemonic: {}", e)))?;
+            .map_err(|e| PersonaError::CryptographicError(format!("Invalid mnemonic: {}", e)))?;
         Ok(Self { mnemonic })
     }
 
@@ -98,7 +98,7 @@ impl MasterKey {
     /// Create master key from seed
     pub fn from_seed(seed: &[u8]) -> PersonaResult<Self> {
         let xprv = XPrv::new(seed).map_err(|e| {
-            PersonaError::Cryptography(format!("Failed to derive master key: {}", e))
+            PersonaError::CryptographicError(format!("Failed to derive master key: {}", e))
         })?;
         Ok(Self { xprv })
     }
@@ -111,14 +111,15 @@ impl MasterKey {
 
     /// Derive child key at path
     pub fn derive_path(&self, path: &str) -> PersonaResult<DerivedKey> {
-        let derivation_path = DerivationPath::from_str(path)
-            .map_err(|e| PersonaError::Cryptography(format!("Invalid derivation path: {}", e)))?;
+        let derivation_path = DerivationPath::from_str(path).map_err(|e| {
+            PersonaError::CryptographicError(format!("Invalid derivation path: {}", e))
+        })?;
 
         let mut derived_key = self.xprv.clone();
         for child_number in derivation_path {
-            derived_key = derived_key
-                .derive_child(child_number)
-                .map_err(|e| PersonaError::Cryptography(format!("Derivation failed: {}", e)))?;
+            derived_key = derived_key.derive_child(child_number).map_err(|e| {
+                PersonaError::CryptographicError(format!("Derivation failed: {}", e))
+            })?;
         }
 
         Ok(DerivedKey { xprv: derived_key })
@@ -139,11 +140,12 @@ impl MasterKey {
 
     /// Import from bytes
     pub fn from_bytes(bytes: &[u8]) -> PersonaResult<Self> {
-        let encoded = str::from_utf8(bytes)
-            .map_err(|e| PersonaError::Cryptography(format!("Invalid key encoding: {}", e)))?;
+        let encoded = str::from_utf8(bytes).map_err(|e| {
+            PersonaError::CryptographicError(format!("Invalid key encoding: {}", e))
+        })?;
         let xprv = encoded
             .parse::<XPrv>()
-            .map_err(|e| PersonaError::Cryptography(format!("Invalid master key: {}", e)))?;
+            .map_err(|e| PersonaError::CryptographicError(format!("Invalid master key: {}", e)))?;
         Ok(Self { xprv })
     }
 }
@@ -168,8 +170,9 @@ impl DerivedKey {
     /// Get signing key for secp256k1
     pub fn to_signing_key(&self) -> PersonaResult<SigningKey> {
         let private_bytes = self.private_key_bytes();
-        SigningKey::from_bytes(&private_bytes.into())
-            .map_err(|e| PersonaError::Cryptography(format!("Failed to create signing key: {}", e)))
+        SigningKey::from_bytes(&private_bytes.into()).map_err(|e| {
+            PersonaError::CryptographicError(format!("Failed to create signing key: {}", e))
+        })
     }
 
     /// Get verifying key
@@ -180,17 +183,18 @@ impl DerivedKey {
     /// Derive child from this key
     pub fn derive_child(&self, index: u32, hardened: bool) -> PersonaResult<DerivedKey> {
         let child_number = if hardened {
-            ChildNumber::new(index, true)
-                .map_err(|e| PersonaError::Cryptography(format!("Invalid child index: {}", e)))?
+            ChildNumber::new(index, true).map_err(|e| {
+                PersonaError::CryptographicError(format!("Invalid child index: {}", e))
+            })?
         } else {
-            ChildNumber::new(index, false)
-                .map_err(|e| PersonaError::Cryptography(format!("Invalid child index: {}", e)))?
+            ChildNumber::new(index, false).map_err(|e| {
+                PersonaError::CryptographicError(format!("Invalid child index: {}", e))
+            })?
         };
 
-        let derived = self
-            .xprv
-            .derive_child(child_number)
-            .map_err(|e| PersonaError::Cryptography(format!("Child derivation failed: {}", e)))?;
+        let derived = self.xprv.derive_child(child_number).map_err(|e| {
+            PersonaError::CryptographicError(format!("Child derivation failed: {}", e))
+        })?;
 
         Ok(DerivedKey { xprv: derived })
     }
@@ -325,7 +329,7 @@ impl Ed25519Key {
     /// Derive the SLIP-0010 master node from a BIP39 seed.
     pub fn from_seed(seed: &[u8]) -> PersonaResult<Self> {
         let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(Self::ED25519_SEED_KEY)
-            .map_err(|e| PersonaError::Cryptography(format!("HMAC init failed: {}", e)))?;
+            .map_err(|e| PersonaError::CryptographicError(format!("HMAC init failed: {}", e)))?;
         mac.update(seed);
         let output = mac.finalize().into_bytes();
 
@@ -340,7 +344,7 @@ impl Ed25519Key {
     pub fn derive_child_hardened(&self, index: u32) -> PersonaResult<Self> {
         let hardened = index | 0x8000_0000;
         let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(&self.chain_code)
-            .map_err(|e| PersonaError::Cryptography(format!("HMAC init failed: {}", e)))?;
+            .map_err(|e| PersonaError::CryptographicError(format!("HMAC init failed: {}", e)))?;
         mac.update(&[0u8]); // ed25519 private-key derivation prefix
         mac.update(&self.key.to_bytes());
         mac.update(&hardened.to_be_bytes());
@@ -362,16 +366,16 @@ impl Ed25519Key {
         let mut current = self.clone();
         for component in trimmed.split('/').filter(|c| !c.is_empty()) {
             let Some(stripped) = component.strip_suffix('\'') else {
-                return Err(PersonaError::Cryptography(format!(
+                return Err(PersonaError::CryptographicError(format!(
                     "Ed25519 derivation requires hardened path components: {}",
                     component
                 )));
             };
             let index: u32 = stripped.parse().map_err(|_| {
-                PersonaError::Cryptography(format!("Invalid path index: {}", component))
+                PersonaError::CryptographicError(format!("Invalid path index: {}", component))
             })?;
             if index >= 0x8000_0000 {
-                return Err(PersonaError::Cryptography(format!(
+                return Err(PersonaError::CryptographicError(format!(
                     "Invalid hardened index: {}",
                     component
                 )));

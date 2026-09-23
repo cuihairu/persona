@@ -114,7 +114,7 @@ fn generate_p2tr_address(pubkey: &[u8; 33], testnet: bool) -> PersonaResult<Stri
 /// return the 32-byte x-only output key.
 pub fn tweak_pubkey_taproot(pubkey: &[u8; 33]) -> PersonaResult<[u8; 32]> {
     if pubkey[0] != 0x02 && pubkey[0] != 0x03 {
-        return Err(PersonaError::Cryptography(
+        return Err(PersonaError::CryptographicError(
             "Taproot tweak requires a compressed secp256k1 pubkey".to_string(),
         ));
     }
@@ -127,14 +127,17 @@ pub fn tweak_pubkey_taproot(pubkey: &[u8; 33]) -> PersonaResult<[u8; 32]> {
         k256::elliptic_curve::generic_array::GenericArray::from_slice(&tweak);
     let tweak_primitive = ScalarPrimitive::<k256::Secp256k1>::from_bytes(tweak_bytes)
         .into_option()
-        .ok_or_else(|| PersonaError::Cryptography("TapTweak out of range (t >= n)".to_string()))?;
+        .ok_or_else(|| {
+            PersonaError::CryptographicError("TapTweak out of range (t >= n)".to_string())
+        })?;
     let tweak_scalar = Scalar::from(tweak_primitive);
 
     // from_sec1_bytes recovers the full point (including y parity), but the
     // BIP-340 x-only internal key is interpreted as the even-y point, so an
     // odd-y (0x03) key must be negated before tweaking.
-    let internal_key = PublicKey::from_sec1_bytes(pubkey)
-        .map_err(|_| PersonaError::Cryptography("Invalid internal key for taproot".to_string()))?;
+    let internal_key = PublicKey::from_sec1_bytes(pubkey).map_err(|_| {
+        PersonaError::CryptographicError("Invalid internal key for taproot".to_string())
+    })?;
     let internal_point = {
         let p = ProjectivePoint::from(&internal_key);
         if pubkey[0] == 0x03 {
@@ -147,7 +150,7 @@ pub fn tweak_pubkey_taproot(pubkey: &[u8; 33]) -> PersonaResult<[u8; 32]> {
     let output_point = internal_point + ProjectivePoint::GENERATOR * tweak_scalar;
     let encoded = output_point.to_affine().to_encoded_point(false);
     let bytes: [u8; 65] = encoded.as_bytes().try_into().map_err(|_| {
-        PersonaError::Cryptography("Failed to encode tweaked taproot key".to_string())
+        PersonaError::CryptographicError("Failed to encode tweaked taproot key".to_string())
     })?;
 
     Ok(bytes[1..33].try_into().expect("65-byte uncompressed key"))
@@ -191,7 +194,7 @@ fn generate_ethereum_address_from_uncompressed_pubkey(
     uncompressed: &[u8],
 ) -> PersonaResult<String> {
     if uncompressed.len() != 65 || uncompressed[0] != 0x04 {
-        return Err(PersonaError::Cryptography(
+        return Err(PersonaError::CryptographicError(
             "Invalid uncompressed secp256k1 pubkey".to_string(),
         ));
     }
@@ -214,7 +217,7 @@ fn apply_eip55_checksum(address: &str) -> String {
 /// Generate Solana address (base58-encoded Ed25519 public key)
 pub fn generate_solana_address(pubkey_bytes: &[u8]) -> PersonaResult<String> {
     if pubkey_bytes.len() != 32 {
-        return Err(PersonaError::Cryptography(
+        return Err(PersonaError::CryptographicError(
             "Solana requires 32-byte Ed25519 public key".to_string(),
         ));
     }
@@ -246,8 +249,9 @@ pub fn base58_check_decode(encoded: &str) -> PersonaResult<Vec<u8>> {
 
 /// Uncompress secp256k1 public key
 fn uncompress_secp256k1_pubkey(compressed: &[u8; 33]) -> PersonaResult<Vec<u8>> {
-    let pubkey = PublicKey::from_sec1_bytes(compressed)
-        .map_err(|e| PersonaError::Cryptography(format!("Invalid compressed pubkey: {}", e)))?;
+    let pubkey = PublicKey::from_sec1_bytes(compressed).map_err(|e| {
+        PersonaError::CryptographicError(format!("Invalid compressed pubkey: {}", e))
+    })?;
 
     let uncompressed = pubkey.to_encoded_point(false);
     Ok(uncompressed.as_bytes().to_vec())

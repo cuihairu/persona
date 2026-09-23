@@ -125,15 +125,15 @@ pub fn import_from_mnemonic(
             gap_limit: 20,
         },
         serde_json::to_vec(&encrypted_key)
-            .map_err(|e| PersonaError::Cryptography(format!("Serialization error: {}", e)))?,
+            .map_err(|e| PersonaError::CryptographicError(format!("Serialization error: {}", e)))?,
     );
 
     wallet.derivation_path = Some(path.clone());
     wallet.extended_public_key = extended_public_key;
-    wallet.encrypted_mnemonic = Some(
-        serde_json::to_vec(&encrypted_mnemonic_data)
-            .map_err(|e| PersonaError::Cryptography(format!("Serialization error: {}", e)))?,
-    );
+    wallet.encrypted_mnemonic =
+        Some(serde_json::to_vec(&encrypted_mnemonic_data).map_err(|e| {
+            PersonaError::CryptographicError(format!("Serialization error: {}", e))
+        })?);
     wallet.addresses = addresses;
 
     Ok(wallet)
@@ -194,9 +194,10 @@ pub fn signing_key_for_address(
         ));
     }
 
-    let encrypted_key: EncryptedWalletKey =
-        serde_json::from_slice(&wallet.encrypted_private_key)
-            .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+    let encrypted_key: EncryptedWalletKey = serde_json::from_slice(&wallet.encrypted_private_key)
+        .map_err(|e| {
+        PersonaError::CryptographicError(format!("Deserialization error: {}", e))
+    })?;
 
     let stored_path = wallet
         .addresses
@@ -211,13 +212,13 @@ pub fn signing_key_for_address(
             .get(..32)
             .and_then(|s| s.try_into().ok())
             .ok_or_else(|| {
-                PersonaError::Cryptography("Invalid Solana key material length".to_string())
+                PersonaError::CryptographicError("Invalid Solana key material length".to_string())
             })?;
         let chain_code: [u8; 32] = root_material
             .get(32..64)
             .and_then(|c| c.try_into().ok())
             .ok_or_else(|| {
-                PersonaError::Cryptography("Invalid Solana key material length".to_string())
+                PersonaError::CryptographicError("Invalid Solana key material length".to_string())
             })?;
         let root = Ed25519Key::from_parts(secret, chain_code)?;
         let path = stored_path.ok_or_else(|| {
@@ -238,8 +239,9 @@ pub fn signing_key_for_address(
         }
         _ => {
             let private_key_bytes = decrypt_private_key(&encrypted_key, password)?;
-            let signing_key = SigningKey::from_slice(&private_key_bytes)
-                .map_err(|e| PersonaError::Cryptography(format!("Invalid private key: {}", e)))?;
+            let signing_key = SigningKey::from_slice(&private_key_bytes).map_err(|e| {
+                PersonaError::CryptographicError(format!("Invalid private key: {}", e))
+            })?;
             Ok(WalletSigningKey::Secp256k1(signing_key))
         }
     }
@@ -306,18 +308,20 @@ pub fn import_from_private_key(
         network,
         WalletType::SingleAddress,
         serde_json::to_vec(&encrypted_key)
-            .map_err(|e| PersonaError::Cryptography(format!("Serialization error: {}", e)))?,
+            .map_err(|e| PersonaError::CryptographicError(format!("Serialization error: {}", e)))?,
     );
 
     // Derive address from private key (secp256k1)
     let signing_key = k256::ecdsa::SigningKey::from_bytes(private_key_bytes.as_slice().into())
-        .map_err(|e| PersonaError::Cryptography(format!("Invalid secp256k1 private key: {}", e)))?;
+        .map_err(|e| {
+            PersonaError::CryptographicError(format!("Invalid secp256k1 private key: {}", e))
+        })?;
     let verifying_key = signing_key.verifying_key();
     let encoded = verifying_key.to_encoded_point(true);
     let compressed_bytes = encoded.as_bytes();
     let compressed: [u8; 33] = compressed_bytes
         .try_into()
-        .map_err(|_| PersonaError::Cryptography("Invalid compressed pubkey".to_string()))?;
+        .map_err(|_| PersonaError::CryptographicError("Invalid compressed pubkey".to_string()))?;
 
     let (address_string, address_type) = match wallet.network {
         BlockchainNetwork::Bitcoin => (
@@ -349,7 +353,7 @@ pub fn import_from_private_key(
             )
         }
         other => {
-            return Err(PersonaError::Cryptography(format!(
+            return Err(PersonaError::CryptographicError(format!(
                 "Address generation not implemented for {:?}",
                 other
             )))
@@ -408,7 +412,7 @@ pub fn export_mnemonic(wallet: &CryptoWallet, password: &str) -> PersonaResult<S
         .ok_or_else(|| PersonaError::InvalidInput("Wallet has no mnemonic".to_string()))?;
 
     let encrypted_mnemonic: EncryptedMnemonic = serde_json::from_slice(encrypted_mnemonic_bytes)
-        .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+        .map_err(|e| PersonaError::CryptographicError(format!("Deserialization error: {}", e)))?;
 
     decrypt_mnemonic(&encrypted_mnemonic, password)
 }
@@ -450,9 +454,10 @@ pub fn export_to_wif(wallet: &CryptoWallet, password: &str) -> PersonaResult<Str
         ));
     }
 
-    let encrypted_key: EncryptedWalletKey =
-        serde_json::from_slice(&wallet.encrypted_private_key)
-            .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+    let encrypted_key: EncryptedWalletKey = serde_json::from_slice(&wallet.encrypted_private_key)
+        .map_err(|e| {
+        PersonaError::CryptographicError(format!("Deserialization error: {}", e))
+    })?;
     let private_key_bytes = decrypt_private_key(&encrypted_key, password)?;
     let mut payload = Vec::with_capacity(38);
     payload.push(0x80);
@@ -511,7 +516,7 @@ pub fn export_to_json(
     }
 
     serde_json::to_string_pretty(&export)
-        .map_err(|e| PersonaError::Cryptography(format!("JSON serialization error: {}", e)))
+        .map_err(|e| PersonaError::CryptographicError(format!("JSON serialization error: {}", e)))
 }
 
 /// Import wallet from Persona JSON export
@@ -616,7 +621,7 @@ fn derive_addresses(
                 generate_ethereum_address_checksummed(&child_key)?
             }
             _ => {
-                return Err(PersonaError::Cryptography(format!(
+                return Err(PersonaError::CryptographicError(format!(
                     "Address generation not implemented for {:?}",
                     network
                 )))
@@ -674,9 +679,10 @@ fn export_private_keys(
         return Ok(HashMap::new());
     }
 
-    let encrypted_key: EncryptedWalletKey =
-        serde_json::from_slice(&wallet.encrypted_private_key)
-            .map_err(|e| PersonaError::Cryptography(format!("Deserialization error: {}", e)))?;
+    let encrypted_key: EncryptedWalletKey = serde_json::from_slice(&wallet.encrypted_private_key)
+        .map_err(|e| {
+        PersonaError::CryptographicError(format!("Deserialization error: {}", e))
+    })?;
 
     match wallet.wallet_type {
         WalletType::HierarchicalDeterministic { .. } => {

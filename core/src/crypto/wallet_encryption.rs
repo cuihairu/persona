@@ -73,8 +73,9 @@ pub fn encrypt_private_key(
     private_key: &[u8],
     password: &str,
 ) -> PersonaResult<EncryptedWalletKey> {
-    let encrypted_data = encrypt_data(private_key, password.as_bytes())
-        .map_err(|e| PersonaError::Cryptography(format!("Failed to encrypt private key: {}", e)))?;
+    let encrypted_data = encrypt_data(private_key, password.as_bytes()).map_err(|e| {
+        PersonaError::CryptographicError(format!("Failed to encrypt private key: {}", e))
+    })?;
 
     Ok(EncryptedWalletKey {
         version: 1,
@@ -90,7 +91,7 @@ pub fn decrypt_private_key(
     password: &str,
 ) -> PersonaResult<Vec<u8>> {
     if encrypted_key.version != 1 {
-        return Err(PersonaError::Cryptography(format!(
+        return Err(PersonaError::CryptographicError(format!(
             "Unsupported encryption version: {}",
             encrypted_key.version
         )));
@@ -102,15 +103,18 @@ pub fn decrypt_private_key(
         &encrypted_key.salt,
         &encrypted_key.nonce,
     )
-    .map_err(|e| PersonaError::Cryptography(format!("Failed to decrypt private key: {}", e)))?;
+    .map_err(|e| {
+        PersonaError::CryptographicError(format!("Failed to decrypt private key: {}", e))
+    })?;
 
     Ok(decrypted)
 }
 
 /// Encrypt mnemonic phrase with user password
 pub fn encrypt_mnemonic(mnemonic: &str, password: &str) -> PersonaResult<EncryptedMnemonic> {
-    let encrypted_data = encrypt_data(mnemonic.as_bytes(), password.as_bytes())
-        .map_err(|e| PersonaError::Cryptography(format!("Failed to encrypt mnemonic: {}", e)))?;
+    let encrypted_data = encrypt_data(mnemonic.as_bytes(), password.as_bytes()).map_err(|e| {
+        PersonaError::CryptographicError(format!("Failed to encrypt mnemonic: {}", e))
+    })?;
 
     Ok(EncryptedMnemonic {
         version: 1,
@@ -126,7 +130,7 @@ pub fn decrypt_mnemonic(
     password: &str,
 ) -> PersonaResult<String> {
     if encrypted_mnemonic.version != 1 {
-        return Err(PersonaError::Cryptography(format!(
+        return Err(PersonaError::CryptographicError(format!(
             "Unsupported encryption version: {}",
             encrypted_mnemonic.version
         )));
@@ -138,10 +142,10 @@ pub fn decrypt_mnemonic(
         &encrypted_mnemonic.salt,
         &encrypted_mnemonic.nonce,
     )
-    .map_err(|e| PersonaError::Cryptography(format!("Failed to decrypt mnemonic: {}", e)))?;
+    .map_err(|e| PersonaError::CryptographicError(format!("Failed to decrypt mnemonic: {}", e)))?;
 
     String::from_utf8(decrypted)
-        .map_err(|e| PersonaError::Cryptography(format!("Invalid UTF-8 in mnemonic: {}", e)))
+        .map_err(|e| PersonaError::CryptographicError(format!("Invalid UTF-8 in mnemonic: {}", e)))
 }
 
 /// Encrypt master key for storage
@@ -230,7 +234,7 @@ pub fn import_from_keystore(keystore_json: &str, _password: &str) -> PersonaResu
 
     // Simplified keystore decryption (production should use proper scrypt/pbkdf2)
     // This is a placeholder for the full implementation
-    Err(PersonaError::Cryptography(
+    Err(PersonaError::CryptographicError(
         "Keystore import not yet fully implemented".to_string(),
     ))
 }
@@ -243,7 +247,7 @@ pub fn export_to_keystore(
 ) -> PersonaResult<String> {
     // Simplified keystore export (production should use proper scrypt)
     // This is a placeholder for the full implementation
-    Err(PersonaError::Cryptography(
+    Err(PersonaError::CryptographicError(
         "Keystore export not yet fully implemented".to_string(),
     ))
 }

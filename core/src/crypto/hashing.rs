@@ -22,24 +22,28 @@ impl PasswordHasher {
     pub fn hash_password(&self, password: &str) -> PersonaResult<String> {
         let mut salt_bytes = [0u8; 16];
         getrandom::fill(&mut salt_bytes).expect("failed to generate random salt");
-        let salt = SaltString::encode_b64(&salt_bytes)
-            .map_err(|e| PersonaError::Crypto(format!("Failed to encode salt: {}", e)))?;
+        let salt = SaltString::encode_b64(&salt_bytes).map_err(|e| {
+            PersonaError::CryptographicError(format!("Failed to encode salt: {}", e))
+        })?;
         let hash = Argon2PasswordHasher::hash_password(&self.argon2, password.as_bytes(), &salt)
-            .map_err(|e| PersonaError::Crypto(format!("Hashing failed: {}", e)))?;
+            .map_err(|e| PersonaError::CryptographicError(format!("Hashing failed: {}", e)))?;
         Ok(hash.to_string())
     }
 
     /// Verify a password against a hash
     pub fn verify_password(&self, password: &str, hash: &str) -> PersonaResult<bool> {
         let parsed_hash = PasswordHash::new(hash)
-            .map_err(|e| PersonaError::Crypto(format!("Invalid hash format: {}", e)))?;
+            .map_err(|e| PersonaError::CryptographicError(format!("Invalid hash format: {}", e)))?;
         match self
             .argon2
             .verify_password(password.as_bytes(), &parsed_hash)
         {
             Ok(()) => Ok(true),
             Err(argon2::password_hash::Error::Password) => Ok(false),
-            Err(e) => Err(PersonaError::Crypto(format!("Verification failed: {}", e))),
+            Err(e) => Err(PersonaError::CryptographicError(format!(
+                "Verification failed: {}",
+                e
+            ))),
         }
     }
 }

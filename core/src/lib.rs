@@ -71,12 +71,6 @@ pub enum PersonaError {
     #[error("Cryptographic operation failed: {0}")]
     CryptographicError(String),
 
-    #[error("Cryptographic operation failed: {0}")]
-    Crypto(String),
-
-    #[error("Cryptographic operation failed: {0}")]
-    Cryptography(String),
-
     #[error("Storage operation failed: {0}")]
     StorageError(String),
 
@@ -135,6 +129,20 @@ impl From<std::io::Error> for PersonaError {
 mod tests {
     use super::*;
 
+    // 加密错误三胞胎（CryptographicError/Crypto/Cryptography，Display 完全
+    // 相同）已合并为单一 CryptographicError——构造点随合并机械重命名，这里
+    // 钉住合并后的契约：唯一变体 + Display 前缀 + 透传 thiserror Source 语义
+    // （无内层 source，链顶就是它自身）。
+    #[test]
+    fn crypto_error_is_a_single_variant_with_stable_display() {
+        let err = PersonaError::CryptographicError("gcm seal failed".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Cryptographic operation failed: gcm seal failed"
+        );
+        assert!(std::error::Error::source(&err).is_none());
+    }
+
     #[test]
     fn persona_error_display_matches_variants() {
         let cases = [
@@ -145,14 +153,6 @@ mod tests {
             (
                 PersonaError::CryptographicError("aes".into()),
                 "Cryptographic operation failed: aes",
-            ),
-            (
-                PersonaError::Crypto("gcm".into()),
-                "Cryptographic operation failed: gcm",
-            ),
-            (
-                PersonaError::Cryptography("kdf".into()),
-                "Cryptographic operation failed: kdf",
             ),
             (
                 PersonaError::StorageError("blob".into()),

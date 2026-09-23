@@ -830,7 +830,7 @@ fn recovery_id_for(
             }
         }
     }
-    Err(PersonaError::Cryptography(
+    Err(PersonaError::CryptographicError(
         "Failed to recover signer from Ethereum signature".to_string(),
     ))
 }
