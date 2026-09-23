@@ -695,7 +695,7 @@ Game Tokens (游戏令牌)
 --credential-type note --note`（互斥校验 --secret/--prompt-secret）；desktop
       创建表单 + 详情面板（正文走 per-item key 加密，区别于 credentials.notes 明文列）；
       存储层 credential_type 字符串往返补 SecureNote 臂（此前读回退化为 Custom）
-- [ ] B 批候选（按用户价值排序）：
+- [x] B 批候选（按用户价值排序）——全部子项 2026-09 落地完毕（2026-09-23 复核勾选）：
   - [x] item history / change-history（2026-09 落地）：core create/update/delete
         自动记录（快照与 diff 只含明文元数据，密文变化只记 `<encrypted>` 占位；
         无实质变化的 update 不记；记录失败 warn 不阻断主操作；version 递增）；
