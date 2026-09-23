@@ -218,13 +218,34 @@ pub async fn list_devices(State(state): State<AppState>) -> Response {
 }
 
 /// DELETE /sync/devices/:id：吊销设备（删登记与其信封）。幂等；被吊销
-/// 设备已知的 group key 不可追溯撤销（DR-3 诚实边界，轮换是 §11 远期项）。
+/// 设备已知的 group key 不可追溯撤销（DR-3 诚实边界——由「轮换组密钥」
+/// 闭环，已落地）。生命周期级联（2026-09 吊销闭环）：同名 SRP 登记
+/// （`auth_devices`，以设备名为键）一并删除，其已签发的短期令牌即刻
+/// 失效、未决握手丢弃——被吊销设备不能再用既有凭证继续认证/推送。
 pub async fn delete_device(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let device_id = match Uuid::parse_str(&id) {
         Ok(id) => id.to_string(),
         Err(_) => return StatusCode::NO_CONTENT.into_response(),
     };
+    // 同名 = 同设备：SRP 登记与 sync_devices 共用设备名命名。先查名再删
+    // （级联以名为键）；删行顺序安全敏感者先行——SRP 行 → 信封 → 登记，
+    // 中途失败可整体重试（幂等）。
+    let name =
+        match sqlx::query_scalar::<_, String>("SELECT device_name FROM sync_devices WHERE id = ?")
+            .bind(&device_id)
+            .fetch_optional(&state.pool)
+            .await
+        {
+            Ok(name) => name,
+            Err(error) => return ApiError::internal(error).into_response(),
+        };
     let result: Result<(), sqlx::Error> = async {
+        if let Some(name) = &name {
+            sqlx::query("DELETE FROM auth_devices WHERE device_name = ?")
+                .bind(name)
+                .execute(&state.pool)
+                .await?;
+        }
         sqlx::query("DELETE FROM sync_group_keys WHERE device_id = ?")
             .bind(&device_id)
             .execute(&state.pool)
@@ -236,6 +257,16 @@ pub async fn delete_device(State(state): State<AppState>, Path(id): Path<String>
         Ok(())
     }
     .await;
+    // DB 级联成功后清内存态：既有令牌即刻失效 + 未决握手丢弃（SRP 未
+    // 启用则无内存态可清）
+    if result.is_ok() {
+        if let (Some(name), Some(srp)) = (&name, state.srp.as_ref()) {
+            let evicted = srp.revoke_device(name);
+            if evicted > 0 {
+                tracing::info!(device = %name, evicted, "revoked SRP tokens on sync device deletion");
+            }
+        }
+    }
     match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => ApiError::internal(error).into_response(),
@@ -1521,5 +1552,82 @@ mod tests {
                 ("cred-two".to_string(), "two".to_string())
             ]
         );
+    }
+
+    // 设备吊销闭环（真 TCP）：同名 SRP 登记随同步设备吊销级联——既有
+    // 短期令牌**即刻**失效（不等 15 分钟 TTL），重新登录被拒（与未注册
+    // 同形 401）；吊销幂等。THREAT_MODEL「SRP 设备认证端点」已知限制
+    // 「auth_devices 无删除路径」由本路径关闭。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn revoked_sync_device_loses_srp_access_and_outstanding_tokens() {
+        use persona_core::auth::remote_http::HttpRemoteAuthProvider;
+        use persona_core::sync::remote::SyncAdminApi;
+
+        const TOKEN: &str = "sync-revoke-closure-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+
+        let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
+        let id = admin
+            .register_device("laptop", &[7u8; 32])
+            .await
+            .expect("register sync device");
+
+        // 同名 SRP 登记 + 登录拿短期令牌
+        let provider = HttpRemoteAuthProvider::new(base.clone()).unwrap();
+        provider
+            .register_device(TOKEN, "laptop", "pw-for-device")
+            .await
+            .expect("SRP enroll");
+        let outcome = provider
+            .begin_login("laptop")
+            .await
+            .unwrap()
+            .finish("pw-for-device")
+            .await
+            .expect("SRP login");
+
+        // 令牌可用：过 require_bearer 访问 sync 端点
+        let client = reqwest::Client::new();
+        let probe = client
+            .get(format!("{base}/api/v1/sync/devices"))
+            .bearer_auth(&outcome.token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(probe.status(), StatusCode::OK, "{probe:?}");
+
+        // 吊销同步设备：级联删 SRP 行 + 即吊内存令牌
+        admin.delete_device(id).await.expect("revoke");
+
+        // 既有令牌即刻 401（不等 TTL）
+        let probe = client
+            .get(format!("{base}/api/v1/sync/devices"))
+            .bearer_auth(&outcome.token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(probe.status(), StatusCode::UNAUTHORIZED, "{probe:?}");
+        // 重新 SRP 登录 401（登记行已删——challenge 与未注册同形 401，
+        // 登录链路任一步失败均算闭包成立）
+        let err = match provider.begin_login("laptop").await {
+            Ok(handle) => handle
+                .finish("pw-for-device")
+                .await
+                .err()
+                .map(|e| e.to_string()),
+            Err(e) => Some(e.to_string()),
+        };
+        let err = err.expect("login must fail after revocation");
+        assert!(err.contains("HTTP 401"), "{err}");
+        // 二次吊销幂等
+        admin.delete_device(id).await.expect("revoke twice");
+
+        task.abort();
     }
 }

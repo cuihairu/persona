@@ -556,6 +556,13 @@ Server & Sync (optional)
         + 前端用例；文档：STORAGE_AND_SYNC「轮换组密钥」节 +
         E2EE_SYNC_DESIGN DR-3/§11-2 写实 + THREAT_MODEL 前向安全口径
         （吊销 ≠ 轮换）
+  - [x] 设备吊销闭环（2026-09-23，关闭 THREAT_MODEL SRP 章两条已知
+        限制）：DELETE /sync/devices/:id 级联删除同名 `auth_devices` 行
+        （SRP 登记以设备名为键，同名 = 同设备；安全敏感行先行，幂等可
+        重试）+ `SrpAuthState::revoke_device` 即吊内存短期令牌与未决
+        握手（被吊销设备不能再用既有凭证认证/推送，不等 15 分钟 TTL）；
+        真 TCP 闭环测试（吊销后既有令牌 401 + 重新 SRP 登录 401 + 二次
+        吊销幂等）+ revoke_device 单测
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

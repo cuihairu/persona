@@ -201,6 +201,22 @@ impl SrpAuthState {
         map.get(token).map(|e| e.device_name.clone())
     }
 
+    /// 吊销一台设备的全部未到期短期令牌并丢弃其未决握手（设备生命周期
+    /// 闭环：同步设备被吊销时级联调用——既有令牌**即刻**失效，而非等
+    /// TTL 自然过期）。返回清除的令牌条数。
+    pub fn revoke_device(&self, device_name: &str) -> usize {
+        let mut tokens = self.tokens.write().expect("token lock");
+        let before = tokens.len();
+        tokens.retain(|_, e| e.device_name != device_name);
+        let removed = before - tokens.len();
+        drop(tokens);
+        self.challenges
+            .lock()
+            .expect("challenge lock")
+            .retain(|_, e| e.device_name != device_name);
+        removed
+    }
+
     /// 登录失败记账。
     pub(crate) fn register_failure(&self, device_name: &str) {
         let mut map = self.failures.lock().expect("failure lock");
@@ -332,6 +348,36 @@ mod tests {
         assert!(!constant_time_eq(b"token", b"tok"));
         assert!(!constant_time_eq(b"", b"token"));
         assert!(constant_time_eq(b"", b""));
+    }
+
+    // 吊销闭环（设备生命周期）：revoke_device 清掉该设备全部未到期令牌
+    // 与未决握手，其他设备令牌不受影响；重复吊销 no-op。
+    #[test]
+    fn revoke_device_evicts_tokens_and_challenges_for_that_device_only() {
+        use super::{SrpAuthState, SrpChallengeEntry};
+
+        let srp = SrpAuthState::new();
+        let a1 = srp.issue_token("laptop");
+        let a2 = srp.issue_token("laptop");
+        let b1 = srp.issue_token("phone");
+        srp.store_challenge(
+            "sess-a".to_string(),
+            SrpChallengeEntry {
+                device_name: "laptop".to_string(),
+                verifier: vec![0; 512],
+                b_priv: vec![1; 32],
+                client_public: vec![2; 32],
+                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(60),
+            },
+        );
+
+        assert_eq!(srp.revoke_device("laptop"), 2);
+        assert_eq!(srp.authenticate_token(&a1), None);
+        assert_eq!(srp.authenticate_token(&a2), None);
+        assert_eq!(srp.authenticate_token(&b1).as_deref(), Some("phone"));
+        assert!(srp.take_challenge("sess-a").is_none());
+        // 重复吊销 no-op
+        assert_eq!(srp.revoke_device("laptop"), 0);
     }
 
     #[test]
