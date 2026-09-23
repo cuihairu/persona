@@ -7,6 +7,7 @@
 //! - [`capture`]：service 写路径的同步捕获缝（trait + 装配层默认实现）
 //! - [`snapshot`]：oplog payload 密文的明文格式（元数据 + CredentialData 复合快照）
 //! - [`keys`]：group key / 设备密钥对的生成与类型
+//! - [`device`]：设备身份的 keyring/文件记录格式（宿主持久化共用）
 //! - [`envelope`]：`persona-dev-env-1` 信封密封与开启
 //! - [`oplog`]：SyncOp 结构 + LWW/冲突双版本纯逻辑（DR-4）
 //! - [`engine`]：push/pull 周期编排 + Lamport 时钟 + travel 闸
@@ -17,6 +18,7 @@
 //! 负责——core 不依赖 keyring。HTTP wire 层在 [`remote`]（cfg remote-auth）。
 
 pub mod capture;
+pub mod device;
 pub mod engine;
 pub mod envelope;
 pub mod keys;

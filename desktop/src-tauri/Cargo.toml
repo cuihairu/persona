@@ -14,7 +14,9 @@ name = "persona_desktop"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-persona-core = { path = "../../core" }
+# E2EE sync 宿主侧（HttpSyncRemote/SyncAdminApi/信封）；core default 不含——
+# CLI headless 同样按需开
+persona-core = { path = "../../core", features = ["remote-auth"] }
 persona-ssh-agent = { path = "../../agents/ssh-agent" }
 # Connect HTTP 端点（DR-1 A1 宿主内嵌；router/三防线在独立 crate 与 CLI 共用）
 persona-connect-server = { path = "../../connect-server" }

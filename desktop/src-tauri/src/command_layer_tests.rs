@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 /// Mock app with a fresh, uninitialized `AppState` and explicit backend
 /// parts（sync/biometric 两个 keyring 槽 + biometric provider）。各命令族
@@ -39,6 +40,9 @@ fn mock_app_with_parts(
         token_store,
         biometric_provider,
         biometric_store,
+        // E2EE sync 设备身份槽：默认内存 fake，sync 命令族测试直接从
+        // AppState 取 Arc 写入/断言条目
+        device_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
     });
     app
@@ -7477,4 +7481,191 @@ async fn report_frontend_error_never_fails_on_any_input_shape() {
     let long_stack = "x".repeat(50_000);
     let resp = report_frontend_error(long_message, Some(long_stack), None);
     assert!(resp.success);
+}
+
+// ---------------------------------------------------------------------------
+// E2EE sync 设备管理命令族：协议层在 core（SyncAdminApi 真 TCP 测试在
+// server），这里锁宿主编排——keyring 身份三态、门禁、失败不留半态。
+// 网络路径一律不可达服务器（http://127.0.0.1:1，同 set_sync_config 族口径）。
+// ---------------------------------------------------------------------------
+
+/// 直写 device_store 造一条合法本机身份（join 的网络路径测不了，身份
+/// 落 keyring 后的后续命令全靠它驱动）。
+async fn seed_device_identity(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    db_path: &str,
+) -> persona_core::sync::device::DeviceIdentity {
+    let identity = persona_core::sync::device::DeviceIdentity::generate("seeded-laptop").unwrap();
+    app.state::<AppState>()
+        .device_store
+        .set(db_path, &identity.to_stored_json())
+        .unwrap();
+    identity
+}
+
+#[tokio::test]
+async fn sync_device_status_tracks_keyring_record_lifecycle() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入：干净三无
+    let resp = sync_device_status(state.clone()).await.unwrap();
+    let status = resp.data.expect("status present");
+    assert!(!status.joined);
+    assert!(!status.corrupted);
+    assert_eq!(status.device_id, None);
+
+    // 手写合法记录 → joined + 身份可见
+    let identity = persona_core::sync::device::DeviceIdentity::generate("laptop").unwrap();
+    state
+        .device_store
+        .set(&db_path, &identity.to_stored_json())
+        .unwrap();
+    let resp = sync_device_status(state.clone()).await.unwrap();
+    let status = resp.data.expect("status present");
+    assert!(status.joined);
+    assert!(!status.corrupted);
+    assert_eq!(status.device_id, Some(identity.device_id.to_string()));
+    assert_eq!(status.device_name, Some("laptop".to_string()));
+
+    // 记录损坏（手改半截）→ corrupted 引导重新 join，不猜不带病运行
+    state.device_store.set(&db_path, "{\"device_id\":").unwrap();
+    let resp = sync_device_status(state.clone()).await.unwrap();
+    let status = resp.data.expect("status present");
+    assert!(!status.joined);
+    assert!(status.corrupted);
+}
+
+#[tokio::test]
+async fn sync_join_gates_and_never_leaves_partial_state_on_failure() {
+    let app = mock_app();
+
+    // 未初始化 service → 拒绝
+    let resp = sync_join("laptop".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success, "must reject before init");
+    assert!(resp.error.unwrap().contains("not initialized"));
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 服务器未配置 → 拒绝（业务失败，不 panic）
+    let resp = sync_join("laptop".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not configured"));
+
+    // 配置不可达服务器：登记失败 → error 且 keyring 不留半态
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 名字校验先于网络（省一轮注定失败的 HTTP）
+    let resp = sync_join("   ".to_string(), state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("1..=128"));
+    let overlong = "d".repeat(129);
+    let resp = sync_join(overlong, state.clone()).await.unwrap();
+    assert!(!resp.success);
+
+    let resp = sync_join("laptop".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success, "unreachable server must fail the join");
+    assert!(resp.error.unwrap().contains("registration"));
+    assert!(
+        state.device_store.get(&db_path).unwrap().is_none(),
+        "failed join must not leave a keyring record"
+    );
+
+    // 已加入（含损坏记录）→ 拒绝重复 join
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_join("laptop".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("already joined"));
+    state.device_store.set(&db_path, "{broken").unwrap();
+    let resp = sync_join("laptop".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("already joined"));
+}
+
+#[tokio::test]
+async fn sync_leave_clears_local_identity_even_when_server_unreachable() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入 → 拒绝
+    let resp = sync_leave(state.clone()).await.unwrap();
+    assert!(!resp.success);
+
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 服务器不可达：本地清理优先（吊销失败仅 warn），keyring 必须清干净
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_leave(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(state.device_store.get(&db_path).unwrap().is_none());
+
+    // 二次 leave → 已未加入
+    let resp = sync_leave(state.clone()).await.unwrap();
+    assert!(!resp.success);
+}
+
+#[tokio::test]
+async fn sync_list_authorize_revoke_require_membership() {
+    let app = mock_app();
+    let _db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入：三条管理命令一律拒绝（先于任何网络访问）
+    let resp = sync_list_devices(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    let resp = sync_authorize(Uuid::new_v4().to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    let resp = sync_revoke(Uuid::new_v4().to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+
+    // 加入后：目标 id 格式校验先于网络
+    // （身份种子只是为了过门禁；不可达服务器下格式错误先报）
+    let db_path = {
+        let guard = state.db_path.lock().await;
+        guard.clone().unwrap()
+    };
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_revoke("not-a-uuid".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Malformed"));
+    let resp = sync_authorize("not-a-uuid".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Malformed"));
 }

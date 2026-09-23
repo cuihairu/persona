@@ -17,6 +17,11 @@ pub const SYNC_SERVICE: &str = "persona-sync";
 /// service；条目存在与否 = biometric unlock 是否启用，单一真相源）
 pub const BIOMETRIC_SERVICE: &str = "persona-biometric";
 
+/// E2EE sync 设备身份条目的 keyring service 名（core/src/sync/mod.rs 文档
+/// 口径：设备私钥持久化由宿主负责）。值 = `DeviceIdentity::to_stored_json`，
+/// 键同 token_store = vault db_path（拷机后自然失效，需重新 join）。
+pub const DEVICE_SERVICE: &str = "persona-device";
+
 /// 同步服务器上报令牌的存取接口。
 ///
 /// 键为 vault db_path：一个 vault 一枚令牌，vault 文件拷到别的机器

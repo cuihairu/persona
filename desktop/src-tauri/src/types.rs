@@ -52,6 +52,43 @@ pub struct AppState {
     /// 启动（DR-4 默认关闭 = 不创建 listener）。槽位即真相源，start/stop
     /// 换槽防双 listener。
     pub connect_server: Mutex<Option<crate::connect_server::ConnectServerHandle>>,
+    /// E2EE sync 设备身份存储（生产 = OS keyring service `persona-device`，
+    /// 测试 = 内存 fake）。值 = `DeviceIdentity::to_stored_json`，键同
+    /// token_store = vault db_path。条目存在与否 = 本 vault 是否已加入
+    /// 同步（单一真相源，settings 不存开关）。
+    pub device_store: Arc<dyn crate::token_store::TokenStore>,
+}
+
+/// `sync_device_status` 返回：本机设备身份状态（纯本地 keyring，免解锁）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncDeviceStatus {
+    /// keyring 有可解析的设备身份。
+    pub joined: bool,
+    /// keyring 有记录但解析失败（损坏/被手改）——UI 提示重新 join（leave
+    /// 仍可清理，服务器侧残留可由其他设备 revoke）。
+    pub corrupted: bool,
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+}
+
+/// `sync_join` 返回：登记结果。`pending = true` 表示已登记但尚未被授权
+/// （group-keys 无本机信封），需在另一台已授权设备上执行授权。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncJoinOutcome {
+    pub device_id: String,
+    pub device_name: String,
+    pub pending: bool,
+}
+
+/// `sync_list_devices` 的单行视图：服务器登记行 + 授权状态 + 本机标记。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncDeviceView {
+    pub id: String,
+    pub device_name: String,
+    pub created_at: String,
+    /// group-keys 有该设备的信封（「有信封 = 已授权」，fail-closed）。
+    pub authorized: bool,
+    pub this_device: bool,
 }
 
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求

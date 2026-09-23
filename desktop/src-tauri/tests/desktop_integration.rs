@@ -35,6 +35,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         token_store: Arc::new(InMemoryTokenStore::default()),
         biometric_provider: Arc::new(persona_core::MockBiometricProvider::default()),
         biometric_store: Arc::new(InMemoryTokenStore::default()),
+        device_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
     });
     app

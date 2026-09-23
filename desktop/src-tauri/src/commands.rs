@@ -1260,6 +1260,430 @@ pub async fn sync_token_present(
     Ok(ApiResponse::success(present))
 }
 
+// ---- E2EE sync 设备管理（core SyncAdminApi 的 desktop 宿主层）----
+//
+// 职责切分：协议/密码学全在 core（SyncAdminApi + DeviceIdentity + 信封），
+// 这里只做宿主编排——keyring 身份读写、settings.sync 的 url/token 取用、
+// 错误映射。门禁沿用设置页语境：已解锁（status 免解锁，只泄露「是否加
+// 入」一位元数据，与 get_workspace_settings 暴露 sync.enabled 同级）。
+
+/// 本机设备身份（keyring → DeviceIdentity）的三态。
+enum LocalDevice {
+    NotJoined,
+    /// 记录存在但解析失败——不猜、不带病运行，UI 引导重新 join。
+    Corrupted,
+    Joined(persona_core::sync::device::DeviceIdentity),
+}
+
+async fn require_db_path(state: &State<'_, AppState>) -> Option<String> {
+    let guard = state.db_path.lock().await;
+    guard.clone()
+}
+
+/// 门禁：已解锁。`None` = 通过；`Some(消息)` = 未初始化/已锁定（调用方
+/// 转 `ApiResponse::error`——各 sync 命令的 data 类型不同，在此收口消息）。
+async fn require_unlocked(state: &State<'_, AppState>) -> Option<String> {
+    let guard = state.service.lock().await;
+    match guard.as_ref() {
+        None => Some("Service not initialized".to_string()),
+        Some(service) if service.is_unlocked() => None,
+        Some(_) => Some("Service is locked".to_string()),
+    }
+}
+
+async fn local_device(state: &State<'_, AppState>, db_path: &str) -> LocalDevice {
+    match state.device_store.get(db_path) {
+        Ok(Some(raw)) => match persona_core::sync::device::DeviceIdentity::from_stored_json(&raw) {
+            Ok(identity) => LocalDevice::Joined(identity),
+            Err(_) => LocalDevice::Corrupted,
+        },
+        Ok(None) => LocalDevice::NotJoined,
+        Err(_) => LocalDevice::NotJoined, // keyring 读失败视同未加入（join 会再报具体错误）
+    }
+}
+
+/// settings.sync.server_url + keyring sync token 齐备时构造管理客户端。
+/// 任一缺失/环境失败返回用户可读消息（调用方转 `ApiResponse::error`）。
+async fn sync_admin_api_for(
+    state: &State<'_, AppState>,
+) -> std::result::Result<persona_core::sync::remote::SyncAdminApi, String> {
+    let db_path = require_db_path(state)
+        .await
+        .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
+    // fresh vault 的 sync 段是 None——与 URL 空白同义：未配置服务器
+    let sync_config = match read_sync_config(state, &db_path).await {
+        Some(config) => config,
+        None => return Err("Sync server URL is not configured".to_string()),
+    };
+    let server_url = sync_config.server_url.trim().to_string();
+    if server_url.is_empty() {
+        return Err("Sync server URL is not configured".to_string());
+    }
+    let token = state
+        .token_store
+        .get(&db_path)
+        .map_err(|e| format!("OS keyring read failed: {e}"))?
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| "Sync server token is not configured".to_string())?;
+    persona_core::sync::remote::SyncAdminApi::new(&server_url, &token)
+        .map_err(|e| format!("Invalid sync server configuration: {e}"))
+}
+
+/// 只读：本 vault 是否已加入 E2EE 同步（纯本地 keyring，免解锁）。
+/// `corrupted = true` 表示有条目但解析失败——引导用户重新 join。
+#[command]
+pub async fn sync_device_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncDeviceStatus>, String> {
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let status = match local_device(&state, &db_path).await {
+        LocalDevice::NotJoined => SyncDeviceStatus {
+            joined: false,
+            corrupted: false,
+            device_id: None,
+            device_name: None,
+        },
+        LocalDevice::Corrupted => SyncDeviceStatus {
+            joined: false,
+            corrupted: true,
+            device_id: None,
+            device_name: None,
+        },
+        LocalDevice::Joined(identity) => SyncDeviceStatus {
+            joined: true,
+            corrupted: false,
+            device_id: Some(identity.device_id.to_string()),
+            device_name: Some(identity.device_name),
+        },
+    };
+    Ok(ApiResponse::success(status))
+}
+
+/// 加入 E2EE 同步：生成本机设备密钥对 → 向服务器登记 → keyring 落身份。
+/// keyring 写失败时尽力吊销刚登记的服务器记录（不留半态，fail-closed）。
+/// 门禁：已解锁；device_name 1..=128 字节（服务器限制）。
+#[command]
+pub async fn sync_join(
+    device_name: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncJoinOutcome>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let device_name = device_name.trim().to_string();
+    if device_name.is_empty() || device_name.len() > 128 {
+        return Ok(ApiResponse::error(
+            "Device name must be 1..=128 bytes".to_string(),
+        ));
+    }
+    match local_device(&state, &db_path).await {
+        LocalDevice::Joined(_) | LocalDevice::Corrupted => {
+            return Ok(ApiResponse::error(
+                "This vault already joined sync; leave first".to_string(),
+            ))
+        }
+        LocalDevice::NotJoined => {}
+    }
+    let api = match sync_admin_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let identity = match persona_core::sync::device::DeviceIdentity::generate(&device_name) {
+        Ok(identity) => identity,
+        Err(e) => return Ok(ApiResponse::error(format!("Key generation failed: {e}"))),
+    };
+    let device_id = match api
+        .register_device(&device_name, identity.key_pair.public_bytes())
+        .await
+    {
+        Ok(device_id) => device_id,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Server rejected device registration: {e}"
+            )))
+        }
+    };
+    let identity = identity.with_device_id(device_id);
+    if let Err(e) = state.device_store.set(&db_path, &identity.to_stored_json()) {
+        tracing::warn!(%e, "keyring write failed after registration; revoking the just-registered device");
+        if let Err(revoke_error) = api.delete_device(device_id).await {
+            tracing::error!(
+                %revoke_error,
+                device_id = %device_id,
+                "rollback revoke failed; a stray device record remains on the server"
+            );
+        }
+        return Ok(ApiResponse::error(format!(
+            "Cannot store device identity in OS keyring: {e}"
+        )));
+    }
+    // pending = group-keys 尚无本机信封；查询失败按「等授权」保守处理
+    // （fail-closed：授权状态宁可显示未授权）
+    let pending = match api.group_keys().await {
+        Ok(keys) => !keys.iter().any(|k| k.device_id == device_id),
+        Err(_) => true,
+    };
+    Ok(ApiResponse::success(SyncJoinOutcome {
+        device_id: device_id.to_string(),
+        device_name,
+        pending,
+    }))
+}
+
+/// 离开同步：尽力吊销服务器侧记录（不可达/未配置仅 warn——本地清理优先，
+/// 残留可由其他设备 revoke），然后无条件清 keyring 身份。私钥随条目删除
+/// 不可恢复；已同步进本库的数据仍可用（主库密文归主密码体系）。
+#[command]
+pub async fn sync_leave(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    match local_device(&state, &db_path).await {
+        LocalDevice::NotJoined => {
+            return Ok(ApiResponse::error(
+                "This vault has not joined sync".to_string(),
+            ))
+        }
+        LocalDevice::Joined(identity) => {
+            if let Ok(api) = sync_admin_api_for(&state).await {
+                if let Err(e) = api.delete_device(identity.device_id).await {
+                    // 服务器吊销失败不阻塞离开：本地清理优先，残留记录
+                    // 由其他设备 revoke（或管理员清理）
+                    tracing::warn!(%e, device_id = %identity.device_id, "server-side device revoke failed during leave; the record may remain");
+                }
+            } else {
+                tracing::warn!(
+                    "sync admin client unavailable during leave; skipping server-side revoke"
+                );
+            }
+        }
+        LocalDevice::Corrupted => {
+            tracing::warn!(
+                "corrupted device record during leave; clearing keyring without server-side revoke"
+            );
+        }
+    }
+    if let Err(e) = state.device_store.delete(&db_path) {
+        return Ok(ApiResponse::error(format!(
+            "Cannot remove device identity from OS keyring: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(true))
+}
+
+/// 列出同步组全部设备（含授权状态与本机标记）。要求已加入、已解锁。
+#[command]
+pub async fn sync_list_devices(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<SyncDeviceView>>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let identity = match local_device(&state, &db_path).await {
+        LocalDevice::Joined(identity) => identity,
+        LocalDevice::NotJoined | LocalDevice::Corrupted => {
+            return Ok(ApiResponse::error(
+                "This vault has not joined sync".to_string(),
+            ))
+        }
+    };
+    let api = match sync_admin_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let devices = match api.list_devices().await {
+        Ok(devices) => devices,
+        Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
+    };
+    let keys = match api.group_keys().await {
+        Ok(keys) => keys,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Failed to list group keys: {e}"
+            )))
+        }
+    };
+    let views = devices
+        .into_iter()
+        .map(|device| SyncDeviceView {
+            id: device.id.to_string(),
+            device_name: device.device_name,
+            created_at: device.created_at,
+            authorized: keys.iter().any(|k| k.device_id == device.id),
+            this_device: device.id == identity.device_id,
+        })
+        .collect();
+    Ok(ApiResponse::success(views))
+}
+
+/// 为目标设备授权：拆本机信封得 group key → 用目标公钥封新信封上传。
+/// 本机未授权（信封拆不开）fail-closed——未授权设备无法授权他人；
+/// 目标必须是已登记的其他设备。
+#[command]
+pub async fn sync_authorize(
+    target_device_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let identity = match local_device(&state, &db_path).await {
+        LocalDevice::Joined(identity) => identity,
+        LocalDevice::NotJoined | LocalDevice::Corrupted => {
+            return Ok(ApiResponse::error(
+                "This vault has not joined sync".to_string(),
+            ))
+        }
+    };
+    let target_id = match uuid::Uuid::parse_str(target_device_id.trim()) {
+        Ok(target_id) => target_id,
+        Err(_) => return Ok(ApiResponse::error("Malformed target device id".to_string())),
+    };
+    if target_id == identity.device_id {
+        return Ok(ApiResponse::error(
+            "This device is already authorized; use leave to remove it".to_string(),
+        ));
+    }
+    let api = match sync_admin_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let keys = match api.group_keys().await {
+        Ok(keys) => keys,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Failed to fetch group keys: {e}"
+            )))
+        }
+    };
+    // 本机信封拆不开 = 本机未授权（fail-closed），无法授权他人
+    let group_key_bytes = match keys.iter().find(|k| k.device_id == identity.device_id) {
+        Some(own) => {
+            match persona_core::sync::envelope::open_group_key(
+                &own.envelope,
+                identity.key_pair.secret_bytes(),
+            ) {
+                Ok(group_key) => group_key,
+                Err(_) => {
+                    return Ok(ApiResponse::error(
+                        "This device is not authorized yet; it cannot authorize others".to_string(),
+                    ))
+                }
+            }
+        }
+        None => {
+            return Ok(ApiResponse::error(
+                "This device is not authorized yet; it cannot authorize others".to_string(),
+            ))
+        }
+    };
+    let target = match api.list_devices().await {
+        Ok(devices) => match devices.into_iter().find(|d| d.id == target_id) {
+            Some(device) => device,
+            None => {
+                return Ok(ApiResponse::error(
+                    "Target device not found on the server".to_string(),
+                ))
+            }
+        },
+        Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
+    };
+    let envelope =
+        persona_core::sync::envelope::seal_group_key(&group_key_bytes, &target.public_key);
+    match api.put_group_key(target_id, &envelope).await {
+        Ok(()) => Ok(ApiResponse::success(true)),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Failed to upload group key: {e}"
+        ))),
+    }
+}
+
+/// 吊销设备（服务器侧删登记+信封，幂等）。吊销自己请走 sync_leave。
+/// 已知的 group key 不可追溯撤销（DR-3 诚实边界）——提示文案归前端。
+#[command]
+pub async fn sync_revoke(
+    target_device_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let identity = match local_device(&state, &db_path).await {
+        LocalDevice::Joined(identity) => identity,
+        LocalDevice::NotJoined | LocalDevice::Corrupted => {
+            return Ok(ApiResponse::error(
+                "This vault has not joined sync".to_string(),
+            ))
+        }
+    };
+    let target_id = match uuid::Uuid::parse_str(target_device_id.trim()) {
+        Ok(target_id) => target_id,
+        Err(_) => return Ok(ApiResponse::error("Malformed target device id".to_string())),
+    };
+    if target_id == identity.device_id {
+        return Ok(ApiResponse::error(
+            "Use leave to remove this device from sync".to_string(),
+        ));
+    }
+    let api = match sync_admin_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.delete_device(target_id).await {
+        Ok(()) => Ok(ApiResponse::success(true)),
+        Err(e) => Ok(ApiResponse::error(format!("Failed to revoke device: {e}"))),
+    }
+}
+
 /// 前端错误上报：production 构建里 ErrorBoundary / handleError 落本地
 /// 日志文件（setup 安装的脱敏 subscriber）。各字段截断防日志爆炸；上报
 /// 路径永不失败——错误已经发生，上报再报错只会制造二次噪声。

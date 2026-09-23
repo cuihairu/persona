@@ -197,6 +197,9 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             biometric_store: Arc::new(token_store::OsKeyringTokenStore::new(
                 token_store::BIOMETRIC_SERVICE,
             )),
+            device_store: Arc::new(token_store::OsKeyringTokenStore::new(
+                token_store::DEVICE_SERVICE,
+            )),
             connect_server: Mutex::new(None),
         })
         .setup(|app| {
@@ -252,6 +255,12 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::biometric_unlock,
             commands::set_sync_config,
             commands::sync_token_present,
+            commands::sync_device_status,
+            commands::sync_join,
+            commands::sync_leave,
+            commands::sync_list_devices,
+            commands::sync_authorize,
+            commands::sync_revoke,
             commands::update_identity,
             commands::delete_identity,
             commands::create_credential,
