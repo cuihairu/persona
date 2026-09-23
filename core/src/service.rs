@@ -6337,6 +6337,145 @@ mod tests {
         );
     }
 
+    /// apply_meta_snapshot 的整份校验语义：坏快照逐字段报 InvalidInput，
+    /// 且失败时凭据元数据一个字段都不落（不半套）。
+    #[test]
+    fn apply_meta_snapshot_validates_before_mutating() {
+        let mut cred = Credential::new(
+            Uuid::new_v4(),
+            "Original".to_string(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            b"ciphertext".to_vec(),
+            None,
+        );
+
+        fn apply(cred: &mut Credential, snapshot: &serde_json::Value) -> Result<()> {
+            PersonaService::apply_meta_snapshot(cred, snapshot)
+        }
+
+        // 非对象 / 缺 name / 缺 tags / tags 非字符串数组 / 缺布尔字段
+        assert!(apply(&mut cred, &serde_json::json!("nope"))
+            .unwrap_err()
+            .to_string()
+            .contains("not an object"));
+        assert!(apply(&mut cred, &serde_json::json!({}))
+            .unwrap_err()
+            .to_string()
+            .contains("missing field name"));
+        assert!(apply(
+            &mut cred,
+            &serde_json::json!({
+                "name": "Broken", "credential_type": "Password", "security_level": "High"
+            })
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("missing field tags"));
+        assert!(apply(
+            &mut cred,
+            &serde_json::json!({
+                "name": "Broken", "credential_type": "Password", "security_level": "High",
+                "tags": [7]
+            })
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("tag is not a string"));
+        assert!(apply(
+            &mut cred,
+            &serde_json::json!({
+                "name": "Broken", "credential_type": "Password", "security_level": "High",
+                "tags": []
+            })
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("missing field is_favorite"));
+        assert!(apply(
+            &mut cred,
+            &serde_json::json!({
+                "name": "Broken", "credential_type": "Password", "security_level": "High",
+                "tags": [], "is_favorite": true
+            })
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("missing field is_active"));
+        assert!(apply(
+            &mut cred,
+            &serde_json::json!({
+                "name": "Broken", "credential_type": "Password", "security_level": "extreme",
+                "tags": [], "is_favorite": true, "is_active": true
+            })
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("Unknown security level"));
+
+        // 全部失败后凭据未被半套
+        assert_eq!(cred.name, "Original");
+
+        // 合法快照：元数据全部落上，秘密外壳字段保持原样
+        apply(
+            &mut cred,
+            &serde_json::json!({
+                "name": "Restored", "credential_type": "ApiKey", "security_level": "Medium",
+                "username": "u", "url": "https://x", "notes": "n", "tags": ["a", "b"],
+                "is_favorite": true, "is_active": false
+            }),
+        )
+        .unwrap();
+        assert_eq!(cred.name, "Restored");
+        assert_eq!(cred.credential_type.to_string(), "ApiKey");
+        assert_eq!(cred.security_level.to_string(), "Medium");
+        assert_eq!(cred.username.as_deref(), Some("u"));
+        assert_eq!(cred.tags, vec!["a".to_string(), "b".to_string()]);
+        assert!(cred.is_favorite);
+        assert!(!cred.is_active);
+        assert_eq!(cred.encrypted_data, b"ciphertext".to_vec());
+    }
+
+    /// restore 命中「版本存在但无 new_state」的 Deleted 历史行 → 报
+    /// no restorable state，凭据本体不动。
+    #[tokio::test]
+    async fn restore_credential_version_rejects_tombstone_history() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Tombstone Restore".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "Target", CredentialType::Password).await;
+
+        // 记一条 Deleted 历史（new_state=None）；凭据本体仍在库中
+        service
+            .record_credential_history(ChangeType::Deleted, Some(&cred), None, None)
+            .await;
+        let history = service
+            .get_entity_history(EntityType::Credential, &cred.id)
+            .await
+            .unwrap();
+        let deleted_version = history
+            .iter()
+            .find(|h| h.change_type.to_string() == "deleted")
+            .expect("Deleted history row was recorded")
+            .version;
+
+        let err = service
+            .restore_credential_version(&cred.id, deleted_version)
+            .await
+            .expect_err("tombstone history has nothing to restore");
+        assert!(err.to_string().contains("no restorable state"));
+
+        let after = service
+            .credential_repo
+            .find_by_id(&cred.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.name, "Target", "failed restore must not mutate");
+    }
+
     #[tokio::test]
     async fn scan_health_flags_two_factor_available_until_covered() {
         let (_db, service) = unlocked_service().await;
