@@ -138,6 +138,12 @@ export default {
       conflictsFound:
         '{{count}} 个条目存在并发修改的冲突版本——请选择保留哪个（整体取舍，不做字段合并）。',
       viewConflicts: '查看冲突',
+      rotate: '轮换组密钥',
+      rotateConfirm:
+        '轮换同步组密钥？将为本机及全部已授权设备重封信封，并对所有凭据全量重包（换新密钥加密）。\n\n请先让所有保留设备各完成一次「立即同步」——轮换前未推送的本地改动将无法被新密钥解密。未裁决的冲突副本将被清出裁决视图（数据不丢，原始记录仍在）。',
+      rotateDone:
+        '轮换完成——重包 {{rewrapped}} 条，跳过 {{skipped}} 条，推送 {{pushed}} 条',
+      rotateFailed: '轮换失败',
     },
     syncConflicts: {
       title: '同步冲突',

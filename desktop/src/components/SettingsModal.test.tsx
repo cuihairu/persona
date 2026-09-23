@@ -41,6 +41,7 @@ jest.mock('@/utils/api', () => ({
     syncAuthorize: jest.fn(),
     syncRevoke: jest.fn(),
     syncNow: jest.fn(),
+    syncRotate: jest.fn(),
     syncConflictsList: jest.fn(),
     syncConflictResolve: jest.fn(),
   },
@@ -75,6 +76,7 @@ const mockSyncList = personaAPI.syncListDevices as jest.Mock;
 const mockSyncAuthorize = personaAPI.syncAuthorize as jest.Mock;
 const mockSyncRevoke = personaAPI.syncRevoke as jest.Mock;
 const mockSyncNow = personaAPI.syncNow as jest.Mock;
+const mockSyncRotate = personaAPI.syncRotate as jest.Mock;
 const mockSyncConflictsList = personaAPI.syncConflictsList as jest.Mock;
 
 const inactiveTravel = {
@@ -1188,6 +1190,54 @@ describe('components/SettingsModal', () => {
     });
 
     expect(mockSyncRevoke).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  // 轮换入口（阶段 3d）：确认后调 sync_rotate 并汇报计数；取消不调用。
+  // 完整轮换语义在 core runtime + server 真 TCP 测试覆盖。
+  it('rotates the group key after confirm and reports the counts', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncRotate.mockResolvedValue({
+      success: true,
+      data: { rewrapped: 2, skipped: 0, pushed: 4 },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-rotate-button'));
+    });
+
+    expect(confirmSpy).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockSyncRotate).toHaveBeenCalled();
+    });
+    expect(toast.success).toHaveBeenCalledWith('轮换完成——重包 2 条，跳过 0 条，推送 4 条');
+    confirmSpy.mockRestore();
+  });
+
+  it('skips rotation when the confirm is dismissed', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-rotate-button'));
+    });
+
+    expect(mockSyncRotate).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
 

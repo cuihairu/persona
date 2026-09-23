@@ -138,6 +138,12 @@ export default {
       conflictsFound:
         '{{count}} item(s) were changed on multiple devices — pick which version to keep (all-or-nothing, no field merging).',
       viewConflicts: 'Review conflicts',
+      rotate: 'Rotate group key',
+      rotateConfirm:
+        'Rotate the sync group key? The envelope will be re-sealed for this and every authorized device, and all credentials re-wrapped under the new key.\n\nHave every kept device run "Sync now" first — local changes not pushed before rotation cannot be decrypted with the new key. Unresolved conflict copies will be cleared from the resolution view (no data loss; the raw records remain).',
+      rotateDone:
+        'Rotated — re-wrapped {{rewrapped}}, skipped {{skipped}}, pushed {{pushed}}',
+      rotateFailed: 'Rotation failed',
     },
     syncConflicts: {
       title: 'Sync conflicts',

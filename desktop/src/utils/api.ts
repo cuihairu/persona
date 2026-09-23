@@ -20,6 +20,7 @@ import type {
   SyncDeviceView,
   SyncJoinOutcome,
   SyncNowReport,
+  SyncRotateReport,
   FaviconData,
   BiometricStatus,
   TravelStatus,
@@ -251,6 +252,11 @@ class PersonaAPI {
   /** 立即同步：存量灌入 → pull/materialize/push 周期，返回计数汇总 */
   async syncNow(): Promise<ApiResponse<SyncNowReport>> {
     return invoke('sync_now');
+  }
+
+  /** group key 轮换：换信封 + 全量重包（吊销设备真正闭环的安全操作） */
+  async syncRotate(): Promise<ApiResponse<SyncRotateReport>> {
+    return invoke('sync_rotate');
   }
 
   /** 全部待裁决冲突条目（主位 + 副本解密快照；只读） */

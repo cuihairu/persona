@@ -138,6 +138,16 @@ export interface SyncNowReport {
   backfilled: number;
 }
 
+/** `sync_rotate` 返回：一次 group key 轮换的计数汇总（对应 Rust SyncRotateReport） */
+export interface SyncRotateReport {
+  /** 以新组密钥重新入账的凭据条数 */
+  rewrapped: number;
+  /** 因 legacy/解密失败跳过的条数（轮换后仍只有旧组密文） */
+  skipped: number;
+  /** 轮换全程 push 出去的 op 总条数 */
+  pushed: number;
+}
+
 /** 同步快照明文（对应 Rust SyncItemSnapshot；冲突对比展示用，data 不展开） */
 export interface SyncItemSnapshotView {
   identity_id: string;

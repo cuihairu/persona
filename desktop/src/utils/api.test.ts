@@ -424,6 +424,10 @@ describe('utils/api command mapping coverage', () => {
     await personaAPI.syncNow();
     expect(mockInvoke).toHaveBeenCalledWith('sync_now');
 
+    // 组密钥轮换（3d）：无参
+    await personaAPI.syncRotate();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_rotate');
+
     await personaAPI.syncConflictsList();
     expect(mockInvoke).toHaveBeenCalledWith('sync_conflicts_list');
 

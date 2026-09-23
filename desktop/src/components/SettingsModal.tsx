@@ -319,6 +319,32 @@ const SyncDevicesSection: React.FC = () => {
     }
   };
 
+  /** group key 轮换（阶段 3d）：换信封 + 全量重包。诚实边界的确认文案
+   *  先于任何调用（与 leave/revoke 同 window.confirm 模式）。 */
+  const rotate = async (): Promise<void> => {
+    if (!window.confirm(t('settings.syncDevices.rotateConfirm'))) return;
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncRotate();
+      if (resp.success && resp.data) {
+        toast.success(
+          t('settings.syncDevices.rotateDone', {
+            rewrapped: resp.data.rewrapped,
+            skipped: resp.data.skipped,
+            pushed: resp.data.pushed,
+          }),
+        );
+        await refreshDevices();
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.rotateFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.rotateFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const leave = async (): Promise<void> => {    if (!window.confirm(t('settings.syncDevices.leaveConfirm'))) return;
     setBusy(true);
     try {
@@ -416,6 +442,15 @@ const SyncDevicesSection: React.FC = () => {
                 className="btn-primary"
               >
                 {busy ? t('settings.saving') : t('settings.syncDevices.syncNow')}
+              </button>
+              <button
+                type="button"
+                data-testid="sync-rotate-button"
+                onClick={rotate}
+                disabled={busy}
+                className="btn-secondary"
+              >
+                {t('settings.syncDevices.rotate')}
               </button>
               <button
                 type="button"
