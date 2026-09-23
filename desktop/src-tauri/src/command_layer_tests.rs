@@ -961,8 +961,9 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(resp, "Invalid wallet_id");
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid wallet_id"));
 
     let missing = uuid::Uuid::new_v4().to_string();
     let resp = wallet_create_transaction(
@@ -1027,8 +1028,9 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(resp, "Invalid transaction_id");
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid transaction_id"));
 
     let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
@@ -1042,9 +1044,9 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
     assert_eq!(resp.error.as_deref(), Some("Transaction not found"));
 
     // Wrong password fails key derivation without storing a signature.
-    // The sign command propagates signing failures with `?`, so the caller
-    // sees Err(String) rather than an ApiResponse error body.
-    let err = wallet_sign_transaction(
+    // Boundary discipline: the caller sees an ApiResponse error body,
+    // never an invoke-layer Err(String).
+    let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
             transaction_id: tx_id.clone(),
             password: "wrong-pass".to_string(),
@@ -1052,8 +1054,15 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert!(err.contains("Failed to derive signing key"), "got: {err}");
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Failed to derive signing key")),
+        "got: {:?}",
+        resp.error
+    );
 
     // Correct password: sign → local verify → raw assembly → stored.
     let resp = wallet_sign_transaction(
@@ -1086,7 +1095,7 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
     // deterministic signature and hash, which the store's
     // UNIQUE(transaction_hash) guard refuses to duplicate. That rejection is
     // the current dedup contract (prevents double-broadcast records).
-    let err = wallet_sign_transaction(
+    let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
             transaction_id: tx_id,
             password: "wallet-pass-123".to_string(),
@@ -1094,10 +1103,14 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
+    assert!(!resp.success);
     assert!(
-        err.contains("Failed to store signed transaction"),
-        "got: {err}"
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Failed to store signed transaction")),
+        "got: {:?}",
+        resp.error
     );
 }
 
@@ -1223,9 +1236,10 @@ async fn start_stop_ssh_agent_lifecycle() {
     let _guard = StateDirGuard::sandbox(&dir);
     let app = mock_app();
 
-    // Start before initialization: db path unknown. The command propagates
-    // this failure with `?`, so the caller sees Err(String).
-    let err = start_ssh_agent(
+    // Start before initialization: db path unknown. Boundary discipline:
+    // infrastructure failures come back as Ok(ApiResponse::error), never as
+    // an invoke-layer Err(String).
+    let resp = start_ssh_agent(
         StartAgentRequest {
             master_password: Some("correct-horse".to_string()),
         },
@@ -1233,10 +1247,11 @@ async fn start_stop_ssh_agent_lifecycle() {
         app.handle().clone(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
+    assert!(!resp.success);
     assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
     );
 
     init_service_ok(&app, "correct-horse").await;
@@ -1458,18 +1473,20 @@ async fn wallet_import_address_management_and_locked_gates() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data.unwrap().wallets.len(), 2);
 
-    // wallet_list propagates the bad UUID with `?`, so the caller sees Err(String).
-    let err = wallet_list(Some("not-a-uuid".to_string()), app.state::<AppState>())
+    // wallet_list 落 bad UUID 为 ApiResponse 错误，不再逃逸命令边界。
+    let resp = wallet_list(Some("not-a-uuid".to_string()), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(err, "Invalid identity UUID format");
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
 
     // 地址列表：非法 UUID / 未知钱包。
-    // Bad UUID propagates as Err(String) here as well.
-    let err = wallet_list_addresses("nope".to_string(), app.state::<AppState>())
+    // Bad UUID 同样落 ApiResponse。
+    let resp = wallet_list_addresses("nope".to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(err, "Invalid wallet UUID format");
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid wallet UUID format"));
 
     let resp = wallet_list_addresses(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
         .await
@@ -1494,15 +1511,22 @@ async fn wallet_import_address_management_and_locked_gates() {
         Some("Wallet password must be at least 8 characters")
     );
 
-    // Decrypt failure propagates with `?`, so the caller sees Err(String).
-    let err = wallet_add_address(
+    // Decrypt failure 落 ApiResponse 错误消息，不逃逸命令边界。
+    let resp = wallet_add_address(
         hd.id.clone(),
         "wrong-passphrase".to_string(),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert!(err.contains("Failed to decrypt private key"), "got: {err}");
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Failed to decrypt private key")),
+        "got: {:?}",
+        resp.error
+    );
 
     let resp = wallet_add_address(
         single.id.clone(),
@@ -2000,17 +2024,18 @@ async fn totp_and_credential_data_rejections() {
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    // get_totp_code：坏 UUID / 未知凭据 / 非 TOTP 凭据 —— 该命令用 `?`
-    // 传播为 Err(String)。
-    let err = get_totp_code("nope".to_string(), app.state::<AppState>())
+    // get_totp_code：坏 UUID / 未知凭据 —— 同纪律落 ApiResponse 错误。
+    let resp = get_totp_code("nope".to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(err, "Invalid UUID format");
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
 
-    let err = get_totp_code(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+    let resp = get_totp_code(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(err, "Credential not found");
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Credential not found"));
 
     let resp = get_totp_code(password_cred.id.clone(), app.state::<AppState>())
         .await
@@ -2120,14 +2145,17 @@ async fn get_totp_code_supports_game_token_provider() {
         cred.id
     };
 
-    // 绑定型 provider：命令层 Err 传播（与 TOTP 生成错误同路径），绝不返回码。
-    let err = get_totp_code(bound_cred_id.to_string(), app.state::<AppState>())
+    // 绑定型 provider：与 TOTP 生成错误同路径，落 ApiResponse 错误消息，绝不返回码。
+    let resp = get_totp_code(bound_cred_id.to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
+        .unwrap();
+    assert!(!resp.success);
     assert!(
-        err.contains("Unsupported game token provider"),
-        "unexpected error: {}",
-        err
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Unsupported game token provider")),
+        "unexpected error: {:?}",
+        resp.error
     );
 }
 
@@ -3182,7 +3210,7 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
     let pending = resp.data.expect("pending sol tx");
     let tx_id = pending["id"].as_str().expect("tx id").to_string();
 
-    let err = wallet_sign_transaction(
+    let resp = wallet_sign_transaction(
         WalletSignTransactionRequest {
             transaction_id: tx_id,
             password: "wallet-pass-123".to_string(),
@@ -3190,10 +3218,14 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
+    assert!(!resp.success);
     assert!(
-        err.contains("Failed to sign transaction"),
-        "solana sign must fail without raw_transaction_data: {err}"
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Failed to sign transaction")),
+        "solana sign must fail without raw_transaction_data: {:?}",
+        resp.error
     );
 }
 
@@ -4092,10 +4124,16 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some("/nonexistent-dir-for-persona-tests/bad.db".to_string());
     }
-    let err = wallet_list(None, app.state::<AppState>())
-        .await
-        .unwrap_err();
-    assert!(err.starts_with("Database connection failed"), "got: {err}");
+    // 连接失败：基础设施错误走 Ok(ApiResponse::error)，不逃出命令边界。
+    let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Database connection failed")),
+        "got: {:?}",
+        resp.error
+    );
 
     // 垃圾文件：from_file 的 connect 能打开任意可读文件，migrate 执行时
     // 才撞上 (code: 26) file is not a database → "Database migration failed"。
@@ -4110,20 +4148,27 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         *state.db_path.lock().await = Some(junk_path.clone());
     }
 
-    let err = wallet_list(None, app.state::<AppState>())
-        .await
-        .unwrap_err();
+    let resp = wallet_list(None, app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
     assert!(
-        err.starts_with("Database migration failed") && err.contains("not a database"),
-        "got: {err}"
+        resp.error.as_deref().is_some_and(|e| e
+            .starts_with("Database migration failed")
+            && e.contains("not a database")),
+        "got: {:?}",
+        resp.error
     );
 
-    let err = wallet_list_addresses(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
+    let resp = wallet_list_addresses(uuid::Uuid::new_v4().to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        "got: {:?}",
+        resp.error
+    );
 
-    let err = wallet_import(
+    let resp = wallet_import(
         identity_id.clone(),
         WalletImportRequest {
             name: "w".to_string(),
@@ -4136,10 +4181,15 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        "got: {:?}",
+        resp.error
+    );
 
-    let err = wallet_generate(
+    let resp = wallet_generate(
         identity_id,
         WalletGenerateRequest {
             name: "g".to_string(),
@@ -4151,8 +4201,13 @@ async fn wallet_commands_report_db_path_failures_loudly() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        "got: {:?}",
+        resp.error
+    );
 }
 
 /// PERSONA_AGENT_STATE_DIR 未设置时 agent_state_dir 回落 ~/.persona。
@@ -4277,24 +4332,47 @@ async fn active_identity_commands_report_db_failures() {
         *state.db_path.lock().await = Some(junk.to_string_lossy().to_string());
     }
 
-    let err = get_active_identity(state()).await.unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+    // 基础设施失败一律 Ok(ApiResponse::error)：success=false + error 落消息。
+    let resp = get_active_identity(state()).await.unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        "got: {:?}",
+        resp.error
+    );
 
-    let err = set_active_identity(uuid::Uuid::new_v4().to_string(), state())
+    let resp = set_active_identity(uuid::Uuid::new_v4().to_string(), state())
         .await
-        .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        "got: {:?}",
+        resp.error
+    );
 
-    let err = clear_active_identity(state()).await.unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+    let resp = clear_active_identity(state()).await.unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+        "got: {:?}",
+        resp.error
+    );
 
     // 不存在目录：from_file 的 connect 直接失败。
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some("/nonexistent-dir-for-persona-tests/x.db".to_string());
     }
-    let err = get_active_identity(state()).await.unwrap_err();
-    assert!(err.starts_with("Database connection failed"), "got: {err}");
+    let resp = get_active_identity(state()).await.unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Database connection failed")),
+        "got: {:?}",
+        resp.error
+    );
 }
 
 /// 删除当前活跃的 identity 时，workspace 的 active_identity_id 指针被清空。
@@ -4502,14 +4580,15 @@ async fn wallet_pending_transactions_round_trip_and_missing_db() {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = None;
     }
-    let err = wallet_pending_transactions(wallet.wallet_id.clone(), app.state::<AppState>())
+    let resp = wallet_pending_transactions(wallet.wallet_id.clone(), app.state::<AppState>())
         .await
-        .unwrap_err();
+        .unwrap();
+    assert!(!resp.success);
     assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
     );
-    let err = wallet_create_transaction(
+    let resp = wallet_create_transaction(
         WalletCreateTransactionRequest {
             wallet_id: wallet.wallet_id,
             to_address: "0x2222222222222222222222222222222222222222".to_string(),
@@ -4524,10 +4603,11 @@ async fn wallet_pending_transactions_round_trip_and_missing_db() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
+    assert!(!resp.success);
     assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
     );
 }
 
@@ -4730,13 +4810,15 @@ async fn credential_commands_surface_db_errors_from_garbage_vault() {
         resp.error
     );
 
-    // totp 走 Result<_, String>：错误直接上抛，绕过 ApiResponse。
-    let err = get_totp_code(bogus.clone(), state.clone())
-        .await
-        .unwrap_err();
+    // totp 与其他命令同纪律：基础设施错误落 Ok(ApiResponse::error)。
+    let resp = get_totp_code(bogus.clone(), state.clone()).await.unwrap();
+    assert!(!resp.success);
     assert!(
-        err.contains("file is not a database"),
-        "expected sqlite error, got: {err}"
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("file is not a database")),
+        "expected sqlite error, got: {:?}",
+        resp.error
     );
 
     let resp = reveal_credential_secret(
@@ -5286,33 +5368,36 @@ async fn active_identity_precondition_matrix() {
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
 
-    // 已解锁：UUID 解析在 db_path 检查之前，非法 UUID 走自己的 Err 臂。
+    // 已解锁：UUID 解析在 db_path 检查之前，非法 UUID 走自己的错误臂。
     let (app, identity_id) = app_with_identity().await;
-    let err = set_active_identity("bad-uuid".to_string(), app.state::<AppState>())
+    let resp = set_active_identity("bad-uuid".to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(err, "Invalid identity UUID format");
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
 
-    // db_path 缺失：set/clear 都上抛同一句 Err。
+    // db_path 缺失：set/clear 都落同一句 ApiResponse 错误。
     let original_db_path = {
         let state = app.state::<AppState>();
         let path = state.db_path.lock().await.clone();
         *state.db_path.lock().await = None;
         path.expect("init_service_ok set a db path")
     };
-    let err = set_active_identity(identity_id.clone(), app.state::<AppState>())
+    let resp = set_active_identity(identity_id.clone(), app.state::<AppState>())
         .await
-        .unwrap_err();
+        .unwrap();
+    assert!(!resp.success);
     assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
     );
-    let err = clear_active_identity(app.state::<AppState>())
+    let resp = clear_active_identity(app.state::<AppState>())
         .await
-        .unwrap_err();
+        .unwrap();
+    assert!(!resp.success);
     assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
     );
 
     // 恢复路径后 clear 走完整成功链（ensure_workspace → 清指针 → 落库）。
@@ -5379,22 +5464,24 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         .await
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
-    let err = wallet_create_transaction(
+    let resp = wallet_create_transaction(
         create_request(&uuid::Uuid::new_v4().to_string()),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(err, "Service not initialized");
-    let err = wallet_sign_transaction(
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+    let resp = wallet_sign_transaction(
         sign_request(&uuid::Uuid::new_v4().to_string()),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(err, "Service not initialized");
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
 
-    // 场景 B：锁定。同型消息，wallet_db 路径也是 Err。
+    // 场景 B：锁定。同型消息，wallet_db 路径的锁定语义带码落 ApiResponse。
     let (app, _identity_id) = app_with_identity().await;
     lock_service(app.state::<AppState>()).await.unwrap();
     let resp = wallet_add_address(
@@ -5413,20 +5500,24 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         .await
         .unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service is locked"));
-    let err = wallet_create_transaction(
+    let resp = wallet_create_transaction(
         create_request(&uuid::Uuid::new_v4().to_string()),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(err, "Service is locked");
-    let err = wallet_sign_transaction(
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
+    let resp = wallet_sign_transaction(
         sign_request(&uuid::Uuid::new_v4().to_string()),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(err, "Service is locked");
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    assert_eq!(resp.error_code.as_deref(), Some("SERVICE_LOCKED"));
 
     // 场景 C/D：已解锁。短密码专属臂、db_path 缺失、垃圾库 migrate 失败。
     let (app, _identity_id) = app_with_identity().await;
@@ -5444,10 +5535,11 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         Some("Wallet password must be at least 8 characters")
     );
     // delete 的 UUID 解析在 db_path 之后——用非法 UUID 顺带钉住顺序。
-    let err = wallet_delete("bad-uuid".to_string(), app.state::<AppState>())
+    let resp = wallet_delete("bad-uuid".to_string(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(err, "Invalid wallet UUID format");
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid wallet UUID format"));
 
     let dir = tempfile::tempdir().unwrap();
     let junk = dir.path().join("junk.db");
@@ -5460,71 +5552,78 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
         *state.db_path.lock().await = None;
     }
     let wallet_uuid = uuid::Uuid::new_v4().to_string();
-    let err = wallet_add_address(
+    fn expect_db_path_err<T>(resp: &ApiResponse<T>) {
+        assert!(!resp.success);
+        assert_eq!(
+            resp.error.as_deref(),
+            Some("Database path unavailable. Initialize the service first.")
+        );
+    }
+    let resp = wallet_add_address(
         wallet_uuid.clone(),
         "wallet-pass-123".to_string(),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
-    );
-    let err = wallet_delete(wallet_uuid.clone(), app.state::<AppState>())
+    .unwrap();
+    expect_db_path_err(&resp);
+    let resp = wallet_delete(wallet_uuid.clone(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
-    );
-    let err = wallet_export(export_request(), app.state::<AppState>())
+        .unwrap();
+    expect_db_path_err(&resp);
+    let resp = wallet_export(export_request(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
-    );
-    let err = wallet_sign_transaction(sign_request(&wallet_uuid), app.state::<AppState>())
+        .unwrap();
+    expect_db_path_err(&resp);
+    let resp = wallet_sign_transaction(sign_request(&wallet_uuid), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert_eq!(
-        err,
-        "Database path unavailable. Initialize the service first."
-    );
+        .unwrap();
+    expect_db_path_err(&resp);
 
     // 垃圾库：migrate 才撞 not a database。
     {
         let state = app.state::<AppState>();
         *state.db_path.lock().await = Some(junk_path);
     }
-    let err = wallet_add_address(
+    fn expect_junk_err<T>(resp: &ApiResponse<T>) {
+        assert!(!resp.success);
+        assert!(
+            resp.error.as_deref().is_some_and(|e| e.contains("not a database")),
+            "got: {:?}",
+            resp.error
+        );
+    }
+    let resp = wallet_add_address(
         wallet_uuid.clone(),
         "wallet-pass-123".to_string(),
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
+    .unwrap();
+    assert!(!resp.success);
     assert!(
-        err.starts_with("Database migration failed") && err.contains("not a database"),
-        "got: {err}"
+        resp.error.as_deref().is_some_and(|e| e
+            .starts_with("Database migration failed")
+            && e.contains("not a database")),
+        "got: {:?}",
+        resp.error
     );
-    let err = wallet_delete(wallet_uuid.clone(), app.state::<AppState>())
+    let resp = wallet_delete(wallet_uuid.clone(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
-    let err = wallet_export(export_request(), app.state::<AppState>())
+        .unwrap();
+    expect_junk_err(&resp);
+    let resp = wallet_export(export_request(), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
-    let err = wallet_sign_transaction(sign_request(&wallet_uuid), app.state::<AppState>())
+        .unwrap();
+    expect_junk_err(&resp);
+    let resp = wallet_sign_transaction(sign_request(&wallet_uuid), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
-    let err = wallet_create_transaction(create_request(&wallet_uuid), app.state::<AppState>())
+        .unwrap();
+    expect_junk_err(&resp);
+    let resp = wallet_create_transaction(create_request(&wallet_uuid), app.state::<AppState>())
         .await
-        .unwrap_err();
-    assert!(err.contains("not a database"), "got: {err}");
+        .unwrap();
+    expect_junk_err(&resp);
 }
 
 /// get_ssh_keys 的未初始化/死库臂与 stop_ssh_agent 的空转臂（无 agent 可停
@@ -5539,12 +5638,16 @@ async fn ssh_key_listing_and_agent_stop_small_arms() {
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(resp.data, Some(true));
 
-    // 已解锁但 DB 是垃圾文件：get_identities 的 repo 错误上抛。
+    // 已解锁但 DB 是垃圾文件：get_identities 的 repo 错误落 ApiResponse。
     let app = app_with_garbage_db_service().await;
-    let err = get_ssh_keys(app.state::<AppState>()).await.unwrap_err();
+    let resp = get_ssh_keys(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
     assert!(
-        err.starts_with("Failed to load identities") && err.contains("not a database"),
-        "got: {err}"
+        resp.error.as_deref().is_some_and(|e| e
+            .starts_with("Failed to load identities")
+            && e.contains("not a database")),
+        "got: {:?}",
+        resp.error
     );
 }
 
@@ -5611,7 +5714,7 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
     let (app, identity_id) = app_with_identity().await;
 
     // wallet_generate：非法 identity_id 在任何 db 操作前拦下。
-    let err = wallet_generate(
+    let resp = wallet_generate(
         "bad-uuid".to_string(),
         WalletGenerateRequest {
             name: "g".to_string(),
@@ -5623,8 +5726,9 @@ async fn wallet_address_labels_and_passkey_create_base64_gates() {
         app.state::<AppState>(),
     )
     .await
-    .unwrap_err();
-    assert_eq!(err, "Invalid identity UUID format");
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid identity UUID format"));
 
     // 手工插一个七种地址类型齐全的钱包，驱动命令内联 match 全臂。
     let db_path = {
@@ -7156,15 +7260,16 @@ async fn biometric_enable_ceremony_failure_writes_nothing() {
     let app = mock_app_with_biometric(mock_provider(true, true), store.clone());
     let db_path = init_service_ok(&app, "correct-horse").await;
 
-    // ceremony 失败走 Err(String) 通道（非 ApiResponse），零写入
-    let result = biometric_enable(
+    // ceremony 失败在命令边界转 Ok(ApiResponse::error)（不逃逸），零写入
+    let resp = biometric_enable(
         BiometricEnableRequest {
             master_password: "correct-horse".to_string(),
         },
         app.state::<AppState>(),
     )
-    .await;
-    assert!(result.is_err());
+    .await
+    .unwrap();
+    assert!(!resp.success, "ceremony failure must surface an error");
     assert_eq!(store.get(&db_path).unwrap(), None);
 }
 

@@ -218,6 +218,17 @@ impl<T> ApiResponse<T> {
             error_code: Some(error_code),
         }
     }
+
+    /// code 为 None 时等价 [`Self::error`]，有码时等价 [`Self::error_with_code`]。
+    /// 供边界收敛点使用：错误有时可映射错误码、有时只能透传消息。
+    pub fn error_maybe_coded(error_code: Option<String>, message: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(message),
+            error_code,
+        }
+    }
 }
 
 /// Initialization request

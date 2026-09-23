@@ -16,6 +16,106 @@ use tauri::{command, Emitter, State};
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
+// 命令边界错误纪律（与 get_workspace_settings 早期手写 match 同语义）：
+// 基础设施失败不逃出 #[command] 边界，一律 `return Ok(ApiResponse::error(..))`
+// ——前端 `catch(e) => String(e)` 只该收到 ApiResponse 的 error/error_code，
+// 不该收到 invoke 层的裸 String。宏内 `return` 就地从命令函数返回，不跨边界。
+// 内部 helper（如 ensure_workspace_for_path / wallet_db）裸签名
+// `Result<T, String>` 不跨边界，合法保留。
+
+/// `state.db_path` 缺失 → Ok(ApiResponse::error)，否则解出 String。
+macro_rules! db_path_or_return {
+    ($state:expr) => {{
+        let guard = $state.db_path.lock().await;
+        match guard.clone() {
+            Some(p) => p,
+            None => {
+                return Ok(ApiResponse::error(
+                    "Database path unavailable. Initialize the service first.".to_string(),
+                ))
+            }
+        }
+    }};
+}
+
+/// 打开 vault（from_file + migrate）；连接/迁移失败 → Ok(ApiResponse::error)。
+macro_rules! open_db_or_return {
+    ($db_path:expr) => {{
+        let db = match Database::from_file(&$db_path).await {
+            Ok(db) => db,
+            Err(e) => {
+                return Ok(ApiResponse::error(format!(
+                    "Database connection failed: {}",
+                    e
+                )))
+            }
+        };
+        if let Err(e) = db.migrate().await {
+            return Ok(ApiResponse::error(format!(
+                "Database migration failed: {}",
+                e
+            )));
+        }
+        db
+    }};
+}
+
+/// ensure_workspace_for_path 失败 → Ok(ApiResponse::error)。
+macro_rules! workspace_or_return {
+    ($db:expr, $workspace_path:expr) => {
+        match ensure_workspace_for_path(&$db, &$workspace_path).await {
+            Ok(ws) => ws,
+            Err(e) => {
+                return Ok(ApiResponse::error(format!(
+                    "Failed to access workspace metadata: {}",
+                    e
+                )))
+            }
+        }
+    };
+}
+
+/// Result<T, E: Display> → T；Err → Ok(ApiResponse::error(e.to_string()))。
+/// 适合 Err 已是 String（map_err(|_| "...".to_string())、ok_or_else）或
+/// 语义就是原始错误文本的调用点。
+macro_rules! ok_or_error_response {
+    ($expr:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => return Ok(ApiResponse::error(e.to_string())),
+        }
+    };
+}
+
+/// 同 [`ok_or_error_response`]，但用格式串保留语义前缀：
+/// `ok_or_error_response_ctx!(repo.find().await, "Failed to load X: {}")`。
+macro_rules! ok_or_error_response_ctx {
+    ($expr:expr, $fmt:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => return Ok(ApiResponse::error(format!($fmt, e))),
+        }
+    };
+}
+
+/// wallet_db 的命令边界形态："Service is locked" 映射 SERVICE_LOCKED
+/// 码（前端回解锁屏），"Service not initialized" 无码透传。
+macro_rules! wallet_db_or_return {
+    ($state:expr) => {
+        match wallet_db(&$state).await {
+            Ok(db) => db,
+            Err(msg) => {
+                let code = if msg == "Service is locked" {
+                    Some(crate::error::CODE_SERVICE_LOCKED.to_string())
+                } else {
+                    None
+                };
+                return Ok(ApiResponse::error_maybe_coded(code, msg));
+            }
+        }
+    };
+}
+
 pub(crate) fn workspace_path_for_db_path(db_path: &str) -> String {
     Path::new(db_path)
         .parent()
@@ -276,15 +376,10 @@ pub async fn get_active_identity(
         }
     };
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
-    let ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let ws = workspace_or_return!(db, workspace_path);
     Ok(ApiResponse::success(
         ws.active_identity_id.map(|id| id.to_string()),
     ))
@@ -308,27 +403,17 @@ pub async fn set_active_identity(
     }
 
     let identity_id =
-        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
+        ok_or_error_response!(Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string()));
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
-    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let mut ws = workspace_or_return!(db, workspace_path);
     ws.switch_identity(identity_id);
-    repo.update(&ws).await.map_err(|e| e.to_string())?;
+    ok_or_error_response!(repo.update(&ws).await);
 
     Ok(ApiResponse::success(true))
 }
@@ -349,25 +434,15 @@ pub async fn clear_active_identity(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
-    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let mut ws = workspace_or_return!(db, workspace_path);
     ws.clear_active_identity();
-    repo.update(&ws).await.map_err(|e| e.to_string())?;
+    ok_or_error_response!(repo.update(&ws).await);
 
     Ok(ApiResponse::success(true))
 }
@@ -391,15 +466,10 @@ pub async fn get_workspace_settings(
         }
     };
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
-    let ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let ws = workspace_or_return!(db, workspace_path);
     Ok(ApiResponse::success(ws.settings))
 }
 
@@ -412,25 +482,16 @@ pub async fn change_master_password(
 ) -> std::result::Result<ApiResponse<bool>, String> {
     let db_path = match request.db_path {
         Some(p) => p,
-        None => {
-            let guard = state.db_path.lock().await;
-            guard.clone().ok_or_else(|| {
-                "Database path unavailable. Initialize the service first.".to_string()
-            })?
-        }
+        None => db_path_or_return!(state),
     };
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
-    let mut service = PersonaService::new(db)
-        .await
-        .map_err(|e| format!("Failed to create service: {}", e))?;
-    if !service.has_users().await.map_err(|e| e.to_string())? {
+    let mut service = ok_or_error_response_ctx!(
+        PersonaService::new(db).await,
+        "Failed to create service: {}"
+    );
+    if !ok_or_error_response!(service.has_users().await) {
         return Ok(ApiResponse::error("Workspace not initialized".to_string()));
     }
 
@@ -665,23 +726,13 @@ pub async fn set_feature_flags<R: tauri::Runtime>(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
-    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let mut ws = workspace_or_return!(db, workspace_path);
     let prev = ws.settings.features;
     ws.settings.features = FeatureFlags {
         ssh_agent,
@@ -690,7 +741,7 @@ pub async fn set_feature_flags<R: tauri::Runtime>(
         fetch_favicons,
     };
     ws.touch();
-    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    let updated = ok_or_error_response!(repo.update(&ws).await);
 
     if prev.passkeys && !passkeys {
         stop_passkey_server(&state).await;
@@ -729,26 +780,16 @@ pub async fn set_locale(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
-    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let mut ws = workspace_or_return!(db, workspace_path);
     ws.settings.locale = Some(locale);
     ws.touch();
-    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    let updated = ok_or_error_response!(repo.update(&ws).await);
     Ok(ApiResponse::success(updated.settings))
 }
 
@@ -776,26 +817,16 @@ pub async fn set_password_expiry(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
-    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let mut ws = workspace_or_return!(db, workspace_path);
     ws.settings.password_expiry_days = days;
     ws.touch();
-    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    let updated = ok_or_error_response!(repo.update(&ws).await);
     Ok(ApiResponse::success(updated.settings))
 }
 
@@ -886,18 +917,13 @@ pub async fn biometric_enable(
             None => return Ok(ApiResponse::error("Service not initialized".to_string())),
         }
     }
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
     // 1. 验主密码（走活服务，继承失败计数 / AccountLocked 语义；语义同
     //    reauth_verify——错误码原样映射；authenticate_user 需 &mut）
     {
         let mut guard = state.service.lock().await;
-        let service = guard.as_mut().ok_or("Service not initialized")?;
+        let service = ok_or_error_response!(guard.as_mut().ok_or("Service not initialized"));
         match service.authenticate_user(&request.master_password).await {
             Ok(persona_core::AuthResult::Success) => {}
             Ok(persona_core::AuthResult::AccountLocked) => {
@@ -922,11 +948,11 @@ pub async fn biometric_enable(
             "Biometric authentication is not available on this device".to_string(),
         ));
     }
-    run_biometric_ceremony(
+    ok_or_error_response!(run_biometric_ceremony(
         state.biometric_provider.clone(),
         "Enable biometric unlock for Persona",
     )
-    .await?;
+    .await);
 
     // 3. 托管进 keyring（ceremony 已花掉：写失败给明确错误，不留半态；
     //    用户改用密码登录不受影响）
@@ -954,12 +980,7 @@ pub async fn biometric_enable(
 pub async fn biometric_disable(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<BiometricStatusResponse>, String> {
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
     if let Err(e) = state.biometric_store.delete(&db_path) {
         return Ok(ApiResponse::error(format!(
             "OS keyring delete failed: {}",
@@ -1002,12 +1023,16 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
             "Biometric authentication is not available on this device".to_string(),
         ));
     }
-    run_biometric_ceremony(state.biometric_provider.clone(), "Unlock Persona").await?;
+    ok_or_error_response!(run_biometric_ceremony(
+        state.biometric_provider.clone(),
+        "Unlock Persona"
+    )
+    .await);
 
     // init_service 本尊复用：锁内全链路（auto-lock 桥、passkey 服务端、
     // sync emitter、biometric provider 注入）与密码解锁完全一致
     let biometric_store = state.biometric_store.clone();
-    let resp = init_service(
+    let resp = ok_or_error_response!(init_service(
         InitRequest {
             master_password,
             db_path: Some(db_path.clone()),
@@ -1015,7 +1040,7 @@ pub async fn biometric_unlock<R: tauri::Runtime>(
         state,
         app,
     )
-    .await?;
+    .await);
 
     // 陈旧条目自愈（桌面外改密等场景）：取回的密码对这把锁已证明
     // 错误，条目必坏，当场删除——防止反复点指纹白白累计失败计数
@@ -1177,23 +1202,13 @@ pub async fn set_sync_config(
         ));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let workspace_path = workspace_path_for_db_path(&db_path);
     let repo = WorkspaceRepository::new(db.clone());
-    let mut ws = ensure_workspace_for_path(&db, &workspace_path).await?;
+    let mut ws = workspace_or_return!(db, workspace_path);
 
     // token 编排先于 DB 写：keyring 失败直接拒绝保存，不留半套配置
     let trimmed_token = server_token.trim();
@@ -1228,7 +1243,7 @@ pub async fn set_sync_config(
         server_token: String::new(),
     });
     ws.touch();
-    let updated = repo.update(&ws).await.map_err(|e| e.to_string())?;
+    let updated = ok_or_error_response!(repo.update(&ws).await);
     let settings = updated.settings;
 
     attach_sync_emitter(&state).await;
@@ -2645,22 +2660,26 @@ pub async fn get_totp_code(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<TotpCodeResponse>, String> {
     let service_guard = state.service.lock().await;
-    let service = service_guard
+    let service = ok_or_error_response!(service_guard
         .as_ref()
-        .ok_or_else(|| "Service not initialized".to_string())?;
+        .ok_or_else(|| "Service not initialized".to_string()));
 
-    let uuid = Uuid::from_str(&credential_id).map_err(|_| "Invalid UUID format".to_string())?;
-    let credential_data = service
-        .get_credential_data(&uuid)
-        .await
-        .map_err(|e| format!("Failed to get credential data: {}", e))?;
+    let uuid = ok_or_error_response!(
+        Uuid::from_str(&credential_id).map_err(|_| "Invalid UUID format".to_string())
+    );
+    let credential_data = ok_or_error_response_ctx!(
+        service.get_credential_data(&uuid).await,
+        "Failed to get credential data: {}"
+    );
 
-    let data = credential_data.ok_or_else(|| "Credential not found".to_string())?;
+    let data = ok_or_error_response!(credential_data.ok_or_else(|| "Credential not found".to_string()));
     match data {
         CredentialData::TwoFactor(tf) => {
             // 协议逻辑统一下沉到 core（RFC 4226/6238），桌面端只做调用。
-            let generated = persona_core::crypto::totp::totp_now(&tf)
-                .map_err(|e| format!("Failed to generate TOTP code: {}", e))?;
+            let generated = ok_or_error_response_ctx!(
+                persona_core::crypto::totp::totp_now(&tf),
+                "Failed to generate TOTP code: {}"
+            );
 
             Ok(ApiResponse::success(TotpCodeResponse {
                 code: generated.code,
@@ -2675,8 +2694,10 @@ pub async fn get_totp_code(
         // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
         // provider 在此报错而不是生成错误码）
         CredentialData::GameToken(gt) => {
-            let generated = persona_core::crypto::game_token::generate_game_token_code_now(&gt)
-                .map_err(|e| format!("Failed to generate game token code: {}", e))?;
+            let generated = ok_or_error_response_ctx!(
+                persona_core::crypto::game_token::generate_game_token_code_now(&gt),
+                "Failed to generate game token code: {}"
+            );
 
             Ok(ApiResponse::success(TotpCodeResponse {
                 code: generated.code,
@@ -2957,12 +2978,7 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
     state: State<'_, AppState>,
     app: tauri::AppHandle<R>,
 ) -> std::result::Result<ApiResponse<SshAgentStatus>, String> {
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
     let already_running = state
         .agent_handle
@@ -3110,10 +3126,10 @@ pub async fn get_ssh_keys(
             Some(service) => service,
             None => return Ok(ApiResponse::error("Service not initialized".to_string())),
         };
-        service
-            .get_identities()
-            .await
-            .map_err(|e| format!("Failed to load identities: {}", e))?
+        ok_or_error_response_ctx!(
+            service.get_identities().await,
+            "Failed to load identities: {}"
+        )
     };
     let mut identity_map: HashMap<Uuid, String> = HashMap::new();
     for identity in &identities {
@@ -3128,10 +3144,10 @@ pub async fn get_ssh_keys(
                 Some(service) => service,
                 None => return Ok(ApiResponse::error("Service not initialized".to_string())),
             };
-            service
-                .get_credentials_for_identity(&identity.id)
-                .await
-                .map_err(|e| format!("Failed to load credentials: {}", e))?
+            ok_or_error_response_ctx!(
+                service.get_credentials_for_identity(&identity.id).await,
+                "Failed to load credentials: {}"
+            )
         };
         for credential in creds {
             if credential.credential_type == CredentialType::SshKey {
@@ -3170,31 +3186,20 @@ pub async fn wallet_list(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
     let wallets = match identity_id {
         Some(identity_id) => {
-            let uuid = Uuid::from_str(&identity_id)
-                .map_err(|_| "Invalid identity UUID format".to_string())?;
-            repo.find_by_identity(&uuid)
-                .await
-                .map_err(|e| e.to_string())?
+            let uuid = ok_or_error_response!(
+                Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())
+            );
+            ok_or_error_response!(repo.find_by_identity(&uuid).await)
         }
-        None => repo.find_all().await.map_err(|e| e.to_string())?,
+        None => ok_or_error_response!(repo.find_all().await),
     };
 
     let serializable = wallets
@@ -3234,23 +3239,13 @@ pub async fn wallet_list_addresses(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let uuid = Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+    let uuid = ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
     let wallet: CryptoWallet = match repo.find_by_id(&uuid).await.map_err(|e| e.to_string())? {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
@@ -3298,8 +3293,8 @@ pub async fn wallet_generate(
     }
 
     let identity_id =
-        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
-    let network = parse_network(&request.network)?;
+        ok_or_error_response!(Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string()));
+    let network = ok_or_error_response!(parse_network(&request.network));
     let address_count = request.address_count.unwrap_or(5);
 
     if request.password.len() < 8 {
@@ -3308,10 +3303,9 @@ pub async fn wallet_generate(
         ));
     }
 
-    let mnemonic = persona_core::crypto::wallet_crypto::SecureMnemonic::generate(
+    let mnemonic = ok_or_error_response!(persona_core::crypto::wallet_crypto::SecureMnemonic::generate(
         persona_core::crypto::wallet_crypto::MnemonicWordCount::Words24,
-    )
-    .map_err(|e| e.to_string())?;
+    ));
     let mnemonic_phrase = mnemonic.phrase();
 
     let derivation_path = match request.wallet_type.to_lowercase().as_str() {
@@ -3324,7 +3318,7 @@ pub async fn wallet_generate(
         }
     };
 
-    let wallet = persona_core::crypto::wallet_import_export::import_from_mnemonic(
+    let wallet = ok_or_error_response!(persona_core::crypto::wallet_import_export::import_from_mnemonic(
         identity_id,
         request.name.clone(),
         &mnemonic_phrase,
@@ -3333,25 +3327,14 @@ pub async fn wallet_generate(
         derivation_path,
         address_count,
         &request.password,
-    )
-    .map_err(|e| e.to_string())?;
+    ));
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let created = repo.create(&wallet).await.map_err(|e| e.to_string())?;
+    let created = ok_or_error_response!(repo.create(&wallet).await);
     let first_address = created
         .addresses
         .first()
@@ -3385,28 +3368,18 @@ pub async fn wallet_import(
     }
 
     let identity_id =
-        Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string())?;
+        ok_or_error_response!(Uuid::from_str(&identity_id).map_err(|_| "Invalid identity UUID format".to_string()));
     let wallet = match import_wallet_from_request(identity_id, &request) {
         Ok(wallet) => wallet,
         Err(error) => return Ok(ApiResponse::error(error)),
     };
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let created = repo.create(&wallet).await.map_err(|e| e.to_string())?;
+    let created = ok_or_error_response!(repo.create(&wallet).await);
     Ok(ApiResponse::success(serialize_wallet_summary(&created)))
 }
 
@@ -3428,33 +3401,19 @@ pub async fn wallet_add_address(
     }
 
     let wallet_id =
-        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+        ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
     if password.len() < 8 {
         return Ok(ApiResponse::error(
             "Wallet password must be at least 8 characters".to_string(),
         ));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let wallet: CryptoWallet = match repo
-        .find_by_id(&wallet_id)
-        .await
-        .map_err(|e| e.to_string())?
-    {
+    let wallet: CryptoWallet = match ok_or_error_response!(repo.find_by_id(&wallet_id).await) {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
     };
@@ -3488,27 +3447,24 @@ pub async fn wallet_add_address(
         .unwrap_or(0);
 
     let encrypted_key: persona_core::crypto::wallet_encryption::EncryptedWalletKey =
-        serde_json::from_slice(&wallet.encrypted_private_key)
-            .map_err(|e| format!("Invalid wallet key encoding: {}", e))?;
-    let master_key =
+        ok_or_error_response_ctx!(
+            serde_json::from_slice(&wallet.encrypted_private_key),
+            "Invalid wallet key encoding: {}"
+        );
+    let master_key = ok_or_error_response!(
         persona_core::crypto::wallet_encryption::decrypt_master_key(&encrypted_key, &password)
-            .map_err(|e| e.to_string())?;
+    );
 
-    let parent = master_key
-        .derive_path(&derivation_path)
-        .map_err(|e| e.to_string())?;
-    let child = parent
-        .derive_child(next_index, false)
-        .map_err(|e| e.to_string())?;
+    let parent = ok_or_error_response!(master_key.derive_path(&derivation_path));
+    let child = ok_or_error_response!(parent.derive_child(next_index, false));
 
     let (address_string, address_type) = match wallet.network {
         BlockchainNetwork::Bitcoin => (
-            persona_core::crypto::address_generator::generate_bitcoin_address(
+            ok_or_error_response!(persona_core::crypto::address_generator::generate_bitcoin_address(
                 &child,
                 persona_core::crypto::address_generator::BitcoinAddressType::P2WPKH,
                 false,
-            )
-            .map_err(|e| e.to_string())?,
+            )),
             persona_core::models::wallet::AddressType::P2WPKH,
         ),
         BlockchainNetwork::Ethereum
@@ -3516,8 +3472,11 @@ pub async fn wallet_add_address(
         | BlockchainNetwork::Arbitrum
         | BlockchainNetwork::Optimism
         | BlockchainNetwork::BinanceSmartChain => (
-            persona_core::crypto::address_generator::generate_ethereum_address_checksummed(&child)
-                .map_err(|e| e.to_string())?,
+            ok_or_error_response!(
+                persona_core::crypto::address_generator::generate_ethereum_address_checksummed(
+                    &child
+                )
+            ),
             persona_core::models::wallet::AddressType::Ethereum,
         ),
         other => {
@@ -3540,10 +3499,8 @@ pub async fn wallet_add_address(
         created_at: chrono::Utc::now(),
     };
 
-    repo.add_address(&wallet_id, &wallet_address)
-        .await
-        .map_err(|e| e.to_string())?;
-    repo.touch(&wallet_id).await.map_err(|e| e.to_string())?;
+    ok_or_error_response!(repo.add_address(&wallet_id, &wallet_address).await);
+    ok_or_error_response!(repo.touch(&wallet_id).await);
 
     Ok(ApiResponse::success(serialize_wallet_address(
         wallet_address,
@@ -3566,25 +3523,15 @@ pub async fn wallet_delete(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let repo = CryptoWalletRepository::new(Arc::new(db));
     let wallet_id =
-        Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
+        ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
 
-    let deleted = repo.delete(&wallet_id).await.map_err(|e| e.to_string())?;
+    let deleted = ok_or_error_response!(repo.delete(&wallet_id).await);
     if !deleted {
         return Ok(ApiResponse::error("Wallet not found".to_string()));
     }
@@ -3608,29 +3555,15 @@ pub async fn wallet_export(
         return Ok(ApiResponse::error("Service is locked".to_string()));
     }
 
-    let db_path = {
-        let guard = state.db_path.lock().await;
-        guard
-            .clone()
-            .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?
-    };
+    let db_path = db_path_or_return!(state);
 
-    let db = Database::from_file(&db_path)
-        .await
-        .map_err(|e| format!("Database connection failed: {}", e))?;
-    db.migrate()
-        .await
-        .map_err(|e| format!("Database migration failed: {}", e))?;
+    let db = open_db_or_return!(db_path);
 
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
     let wallet_id =
-        Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet UUID format".to_string())?;
-    let wallet = match repo
-        .find_by_id(&wallet_id)
-        .await
-        .map_err(|e| e.to_string())?
-    {
+        ok_or_error_response!(Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet UUID format".to_string()));
+    let wallet = match ok_or_error_response!(repo.find_by_id(&wallet_id).await) {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
     };
@@ -3682,6 +3615,8 @@ async fn wallet_db(state: &State<'_, AppState>) -> std::result::Result<Database,
         return Err("Service is locked".to_string());
     }
 
+    // helper 内部：Err(String) 不跨命令边界，走手写样板（宏会往
+    // ApiResponse 边界 return，类型在这里不成立）。
     let db_path = {
         let guard = state.db_path.lock().await;
         guard
@@ -3707,24 +3642,20 @@ pub async fn wallet_create_transaction(
     use persona_core::models::wallet::TransactionRequest;
 
     let wallet_id =
-        Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet_id".to_string())?;
-    let db = wallet_db(&state).await?;
+        ok_or_error_response!(Uuid::from_str(&request.wallet_id).map_err(|_| "Invalid wallet_id".to_string()));
+    let db = wallet_db_or_return!(state);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let wallet = match repo
-        .find_by_id(&wallet_id)
-        .await
-        .map_err(|e| e.to_string())?
-    {
+    let wallet = match ok_or_error_response!(repo.find_by_id(&wallet_id).await) {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
     };
 
-    let from_address = wallet
+    let from_address = ok_or_error_response!(wallet
         .addresses
         .first()
         .map(|a| a.address.clone())
-        .ok_or_else(|| "Wallet has no addresses".to_string())?;
+        .ok_or_else(|| "Wallet has no addresses".to_string()));
 
     let transaction = TransactionRequest {
         id: Uuid::new_v4(),
@@ -3747,12 +3678,14 @@ pub async fn wallet_create_transaction(
         metadata: HashMap::new(),
     };
 
-    let created = repo
-        .create_transaction_request(&transaction)
-        .await
-        .map_err(|e| format!("Failed to create transaction: {}", e))?;
-    let value = serde_json::to_value(&created)
-        .map_err(|e| format!("Failed to serialize transaction: {}", e))?;
+    let created = ok_or_error_response_ctx!(
+        repo.create_transaction_request(&transaction).await,
+        "Failed to create transaction: {}"
+    );
+    let value = ok_or_error_response_ctx!(
+        serde_json::to_value(&created),
+        "Failed to serialize transaction: {}"
+    );
     Ok(ApiResponse::success(value))
 }
 
@@ -3762,19 +3695,19 @@ pub async fn wallet_pending_transactions(
     wallet_id: String,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<Vec<serde_json::Value>>, String> {
-    let wallet_id = Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet_id".to_string())?;
-    let db = wallet_db(&state).await?;
+    let wallet_id = ok_or_error_response!(Uuid::from_str(&wallet_id).map_err(|_| "Invalid wallet_id".to_string()));
+    let db = wallet_db_or_return!(state);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let requests = repo
-        .get_pending_requests(&wallet_id)
-        .await
-        .map_err(|e| format!("Failed to list pending transactions: {}", e))?;
-    requests
+    let requests = ok_or_error_response_ctx!(
+        repo.get_pending_requests(&wallet_id).await,
+        "Failed to list pending transactions: {}"
+    );
+    let values = ok_or_error_response!(requests
         .into_iter()
         .map(|r| serde_json::to_value(&r).map_err(|e| e.to_string()))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map(ApiResponse::success)
+        .collect::<std::result::Result<Vec<_>, _>>());
+    Ok(ApiResponse::success(values))
 }
 
 /// Sign a pending transaction (derive key → sign → verify → persist).
@@ -3785,32 +3718,35 @@ pub async fn wallet_sign_transaction(
     request: WalletSignTransactionRequest,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<serde_json::Value>, String> {
-    let request_id = Uuid::from_str(&request.transaction_id)
-        .map_err(|_| "Invalid transaction_id".to_string())?;
-    let db = wallet_db(&state).await?;
+    let request_id = ok_or_error_response!(
+        Uuid::from_str(&request.transaction_id).map_err(|_| "Invalid transaction_id".to_string())
+    );
+    let db = wallet_db_or_return!(state);
     let repo = CryptoWalletRepository::new(Arc::new(db));
 
-    let transaction = match repo
-        .get_request_by_id(&request_id)
-        .await
-        .map_err(|e| format!("Failed to load transaction: {}", e))?
-    {
+    let transaction = match ok_or_error_response_ctx!(
+        repo.get_request_by_id(&request_id).await,
+        "Failed to load transaction: {}"
+    ) {
         Some(tx) => tx,
         None => return Ok(ApiResponse::error("Transaction not found".to_string())),
     };
 
-    let wallet = match repo
-        .find_by_id(&transaction.wallet_id)
-        .await
-        .map_err(|e| format!("Failed to load wallet: {}", e))?
-    {
+    let wallet = match ok_or_error_response_ctx!(
+        repo.find_by_id(&transaction.wallet_id).await,
+        "Failed to load wallet: {}"
+    ) {
         Some(wallet) => wallet,
         None => return Ok(ApiResponse::error("Wallet not found".to_string())),
     };
 
-    let signed = sign_wallet_transaction(&repo, &wallet, &transaction, &request.password).await?;
-    let value = serde_json::to_value(&signed)
-        .map_err(|e| format!("Failed to serialize signed transaction: {}", e))?;
+    let signed = ok_or_error_response!(
+        sign_wallet_transaction(&repo, &wallet, &transaction, &request.password).await
+    );
+    let value = ok_or_error_response_ctx!(
+        serde_json::to_value(&signed),
+        "Failed to serialize signed transaction: {}"
+    );
     Ok(ApiResponse::success(value))
 }
 
