@@ -34,6 +34,11 @@ pub fn map_persona_error(err: &anyhow::Error) -> (Option<String>, String) {
                 {
                     return (Some(CODE_SERVICE_LOCKED.to_string()), pe.to_string());
                 }
+                // Connect 自动化数据面的锁定语义（core 503 口径）——变体
+                // 直映射，不依赖 "Vault is locked" 文本。
+                PersonaError::VaultLocked(_) => {
+                    return (Some(CODE_SERVICE_LOCKED.to_string()), pe.to_string());
+                }
                 _ => {}
             }
         }
@@ -69,6 +74,17 @@ mod tests {
             PersonaError::AuthenticationFailed("Service is locked".into()).into();
         let (code, _) = map_persona_error(&err);
         assert_eq!(code.as_deref(), Some(CODE_SERVICE_LOCKED));
+    }
+
+    #[test]
+    fn vault_locked_variant_maps_to_service_locked_by_type() {
+        // "Vault is locked" 不落入任何文本回退——变体直映射必须生效，
+        // 且隔着一层 context 也能沿链翻出。
+        let err = anyhow::Error::from(PersonaError::VaultLocked("data plane".into()))
+            .context("connect request failed");
+        let (code, msg) = map_persona_error(&err);
+        assert_eq!(code.as_deref(), Some(CODE_SERVICE_LOCKED));
+        assert!(msg.contains("Vault is locked"));
     }
 
     #[test]
