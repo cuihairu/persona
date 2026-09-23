@@ -122,6 +122,54 @@ impl From<persona_core::sync::runtime::SyncNowReport> for SyncNowReport {
     }
 }
 
+/// `sync_conflicts_list` 的单个版本视图：冲突条目的主位或副本
+/// （字段与 core `resolve::ConflictVersion` 一一对应）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncConflictVersion {
+    /// 采纳时传给 `sync_conflict_resolve` 的 op id。
+    pub op_id: String,
+    /// 产生该版本的设备（前端据此标「本机/其他设备」）。
+    pub device_id: String,
+    pub lamport: u64,
+    /// 仅展示，不参与裁决排序（LWW 只看 lamport + device）。
+    pub timestamp: Option<String>,
+    /// tombstone 版本：采纳 = 删除该条目；此时 `snapshot` 为空。
+    pub deleted: bool,
+    /// put 版本的解密快照（解锁会话内的明文，前端做版本对比）。
+    pub snapshot: Option<persona_core::sync::snapshot::SyncItemSnapshot>,
+}
+
+/// `sync_conflicts_list` 的单条：一个条目的冲突视图（主位 + 待裁决副本）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncConflictEntry {
+    pub item_id: String,
+    pub primary: SyncConflictVersion,
+    pub copies: Vec<SyncConflictVersion>,
+}
+
+impl From<persona_core::sync::resolve::ConflictVersion> for SyncConflictVersion {
+    fn from(version: persona_core::sync::resolve::ConflictVersion) -> Self {
+        Self {
+            op_id: version.op_id.to_string(),
+            device_id: version.device_id.to_string(),
+            lamport: version.lamport,
+            timestamp: version.timestamp.map(|ts| ts.to_rfc3339()),
+            deleted: version.deleted,
+            snapshot: version.snapshot,
+        }
+    }
+}
+
+impl From<persona_core::sync::resolve::ConflictEntry> for SyncConflictEntry {
+    fn from(entry: persona_core::sync::resolve::ConflictEntry) -> Self {
+        Self {
+            item_id: entry.item_id.to_string(),
+            primary: entry.primary.into(),
+            copies: entry.copies.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 /// `persona://ssh-approval` 事件负载：一条待审批的 SSH 签名请求
 #[derive(Debug, Clone, Serialize)]
 pub struct SshApprovalRequest {

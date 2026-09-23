@@ -7839,3 +7839,94 @@ async fn sync_now_gates_before_any_network_or_crypto() {
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("locked"));
 }
+
+/// 冲突命令族（阶段 3c）与 sync_now 同门禁——共用 open_sync_session：
+/// 未初始化/未加入/未配置/锁定各态先于任何网络或密码学访问被拒；
+/// resolve 的参数格式校验先于会话装配（Malformed 不触网）。裁决的完整
+/// 语义（采纳/淘汰/幂等面）在 core resolve + runtime 测试覆盖，宿主层
+/// 只验门禁与参数面。
+#[tokio::test]
+async fn sync_conflict_commands_share_sync_now_gates() {
+    let app = mock_app();
+
+    // 未初始化 service → 拒绝
+    let resp = sync_conflicts_list(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success, "must reject before init");
+    assert!(resp.error.unwrap().contains("not initialized"));
+    let resp = sync_conflict_resolve(
+        Uuid::new_v4().to_string(),
+        Uuid::new_v4().to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not initialized"));
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入 → 拒绝（本地检查先于网络/密码学）
+    let resp = sync_conflicts_list(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not joined"));
+    let resp = sync_conflict_resolve(
+        Uuid::new_v4().to_string(),
+        Uuid::new_v4().to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not joined"));
+
+    // 参数格式校验先于会话装配（Malformed 不触网——此时服务器未配置，
+    // 若顺序错误会报 not configured 而非 Malformed）
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_conflict_resolve(
+        "not-a-uuid".to_string(),
+        Uuid::new_v4().to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Malformed"));
+    let resp = sync_conflict_resolve(
+        Uuid::new_v4().to_string(),
+        "not-a-uuid".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Malformed"));
+
+    // 已加入已配置但服务器不可达：open 拉信封失败 → 拒绝（无半态）
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_conflicts_list(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    let resp = sync_conflict_resolve(
+        Uuid::new_v4().to_string(),
+        Uuid::new_v4().to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+
+    // 锁定后 → 拒绝
+    let resp = lock_service(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_conflicts_list(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("locked"));
+}

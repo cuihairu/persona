@@ -1712,77 +1712,56 @@ pub async fn sync_revoke(
     }
 }
 
-/// 立即同步（E2EE sync 阶段 3b 的宿主入口）：拆本机信封装配会话 →
-/// 存量灌入 → pull/materialize/push 周期 → 把捕获缝挂上 service（此后
-/// 本地写自动入 oplog）。协议/密码学/编排全在 core `SyncSession`；这里
-/// 只做宿主编排——门禁、keyring 身份、travel 闸采样、master 密钥借出。
+/// sync 命令族共用的门禁 + 会话装配（sync_now / sync_conflicts_list /
+/// sync_conflict_resolve 同序，阶段 3c 起抽公共 helper）：解锁检查 →
+/// db_path → 本机设备身份 → 服务器凭据 → 打开数据库并 migrate → travel
+/// 闸采样 → 拆本机信封装配会话。任一步失败返回 `Err(用户可读消息)`，
+/// 命令体在边界转 `Ok(ApiResponse::error(...))`（不逃逸）。
 ///
-/// 全程持 service guard：master 引用与 attach_sync_capture 都出自它，
-/// 途中锁上会直接编译期拒绝（master 借用未结束）。
-#[command]
-pub async fn sync_now(
-    state: State<'_, AppState>,
-) -> std::result::Result<ApiResponse<SyncNowReport>, String> {
-    if let Some(message) = require_unlocked(&state).await {
-        return Ok(ApiResponse::error(message));
+/// master 密钥不在此取——它是挂 service guard 的借用，须留在命令体内
+/// 与后续 service 调用同锁段；这里只在 travel 采样时短暂持锁（采样值
+/// Copy，与会话生命周期无关）。
+async fn open_sync_session(
+    state: &State<'_, AppState>,
+) -> std::result::Result<
+    persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>,
+    String,
+> {
+    if let Some(message) = require_unlocked(state).await {
+        return Err(message);
     }
-    let db_path = match require_db_path(&state).await {
-        Some(db_path) => db_path,
-        None => {
-            return Ok(ApiResponse::error(
-                "Database path unavailable. Initialize the service first.".to_string(),
-            ))
-        }
-    };
-    let identity = match local_device(&state, &db_path).await {
+    let db_path = require_db_path(state)
+        .await
+        .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
+    let identity = match local_device(state, &db_path).await {
         LocalDevice::Joined(identity) => identity,
         LocalDevice::Corrupted => {
-            return Ok(ApiResponse::error(
-                "Stored device identity is corrupted; leave and re-join sync".to_string(),
-            ))
+            return Err("Stored device identity is corrupted; leave and re-join sync".to_string())
         }
-        LocalDevice::NotJoined => {
-            return Ok(ApiResponse::error(
-                "This vault has not joined sync".to_string(),
-            ))
-        }
+        LocalDevice::NotJoined => return Err("This vault has not joined sync".to_string()),
     };
-    let (server_url, token) = match sync_server_creds_for(&state).await {
-        Ok(creds) => creds,
-        Err(message) => return Ok(ApiResponse::error(message)),
-    };
+    let (server_url, token) = sync_server_creds_for(state).await?;
+
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| format!("Database connection failed: {e}"))?;
+    db.migrate()
+        .await
+        .map_err(|e| format!("Database migration failed: {e}"))?;
 
     let service_guard = state.service.lock().await;
-    let service = match service_guard.as_ref() {
-        Some(service) => service,
-        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
-    };
+    let service = service_guard
+        .as_ref()
+        .ok_or_else(|| "Service not initialized".to_string())?;
     // travel 闸在装配前采样一次：cycle 是短过程，中途不变；travel 激活
     // 期间 pull/push 由引擎拒绝（与捕获缝「不设闸」互补，见 engine 模块）
-    let travel_active = match service.travel_mode_active().await {
-        Ok(travel_active) => travel_active,
-        Err(e) => return Ok(ApiResponse::error(format!("Travel mode check failed: {e}"))),
-    };
-    let master = match service.get_master_encryption_service() {
-        Ok(master) => master,
-        Err(e) => return Ok(ApiResponse::error(e.to_string())),
-    };
+    let travel_active = service
+        .travel_mode_active()
+        .await
+        .map_err(|e| format!("Travel mode check failed: {e}"))?;
+    drop(service_guard);
 
-    let db = match Database::from_file(&db_path).await {
-        Ok(db) => db,
-        Err(e) => {
-            return Ok(ApiResponse::error(format!(
-                "Database connection failed: {e}"
-            )))
-        }
-    };
-    if let Err(e) = db.migrate().await {
-        return Ok(ApiResponse::error(format!(
-            "Database migration failed: {e}"
-        )));
-    }
-
-    let session = match persona_core::sync::runtime::SyncSession::open(
+    persona_core::sync::runtime::SyncSession::open(
         &db,
         &identity,
         &server_url,
@@ -1790,9 +1769,45 @@ pub async fn sync_now(
         Box::new(move || travel_active),
     )
     .await
-    {
+    .map_err(|e| format!("Sync session failed: {e}"))
+}
+
+/// 锁定检查后借出 master 密钥；失败转 `Ok(ApiResponse::error(...))` 返回。
+/// 须在命令体内调用（借用挂 service guard，不跨函数边界）。
+macro_rules! sync_master_or_return {
+    ($service_guard:expr) => {{
+        let service = match $service_guard.as_ref() {
+            Some(service) => service,
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        };
+        match service.get_master_encryption_service() {
+            Ok(master) => master,
+            Err(e) => return Ok(ApiResponse::error(e.to_string())),
+        }
+    }};
+}
+
+/// 立即同步（E2EE sync 阶段 3b 的宿主入口）：拆本机信封装配会话 →
+/// 存量灌入 → pull/materialize/push 周期 → 把捕获缝挂上 service（此后
+/// 本地写自动入 oplog）。协议/密码学/编排全在 core `SyncSession`；这里
+/// 只做宿主编排——门禁走 `open_sync_session`，master 借出与捕获缝挂载
+/// 在本命令的锁段内。
+#[command]
+pub async fn sync_now(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncNowReport>, String> {
+    let session = match open_sync_session(&state).await {
         Ok(session) => session,
-        Err(e) => return Ok(ApiResponse::error(format!("Sync session failed: {e}"))),
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let service_guard = state.service.lock().await;
+    let service = match service_guard.as_ref() {
+        Some(service) => service,
+        None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+    };
+    let master = match service.get_master_encryption_service() {
+        Ok(master) => master,
+        Err(e) => return Ok(ApiResponse::error(e.to_string())),
     };
 
     let backfilled = match session.backfill_existing(master).await {
@@ -1812,6 +1827,63 @@ pub async fn sync_now(
         .await;
 
     Ok(ApiResponse::success(SyncNowReport::from(report)))
+}
+
+/// 冲突裁决列表（E2EE sync 阶段 3c）：全部待裁决条目（主位 + 副本的
+/// 解密快照）。只读，不改任何状态；损坏副本的条目整条跳过（留驻
+/// oplog，不阻塞其余展示）。
+#[command]
+pub async fn sync_conflicts_list(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<SyncConflictEntry>>, String> {
+    let session = match open_sync_session(&state).await {
+        Ok(session) => session,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    // 不借 master：list 的解密走 group key（会话装配时拆信封得），只
+    // 要求解锁门禁；与 resolve（需 master 重包 item key）不同。
+
+    match session.list_conflicts().await {
+        Ok(entries) => Ok(ApiResponse::success(
+            entries.into_iter().map(SyncConflictEntry::from).collect(),
+        )),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Failed to list sync conflicts: {e}"
+        ))),
+    }
+}
+
+/// 冲突裁决（E2EE sync 阶段 3c）：采纳一个副本——先按副本内容写主库
+/// （put 复用其 payload 字节 / delete 删行），再以本机新 lamport 重新
+/// 入账，其余版本淘汰出裁决视图。重复采纳已裁决的 op_id 返回错误
+/// （NotFound，已在视图外）。
+#[command]
+pub async fn sync_conflict_resolve(
+    item_id: String,
+    adopt_op_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let item = match uuid::Uuid::parse_str(item_id.trim()) {
+        Ok(item) => item,
+        Err(_) => return Ok(ApiResponse::error("Malformed item id".to_string())),
+    };
+    let adopt = match uuid::Uuid::parse_str(adopt_op_id.trim()) {
+        Ok(adopt) => adopt,
+        Err(_) => return Ok(ApiResponse::error("Malformed conflict op id".to_string())),
+    };
+    let session = match open_sync_session(&state).await {
+        Ok(session) => session,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let service_guard = state.service.lock().await;
+    let master = sync_master_or_return!(service_guard);
+
+    match session.resolve_conflict(master, item, adopt).await {
+        Ok(()) => Ok(ApiResponse::success(true)),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Failed to resolve conflict: {e}"
+        ))),
+    }
 }
 
 /// 前端错误上报：production 构建里 ErrorBoundary / handleError 落本地
