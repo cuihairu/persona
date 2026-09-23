@@ -169,4 +169,35 @@ describe('components/SyncConflictsModal', () => {
     });
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it('handles a thrown list load as a failure and keeps the modal open', async () => {
+    mockList.mockRejectedValue(new Error('network down'));
+    renderModal();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-conflicts-error')).toHaveTextContent('冲突列表加载失败');
+    });
+    // 异常路径不自动关窗
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('keeps the list when resolution throws and surfaces the failure', async () => {
+    mockResolve.mockRejectedValue(new Error('invoke crashed'));
+    renderModal();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-conflict-adopt-op-c')).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId('sync-conflict-adopt-op-c'));
+
+    await waitFor(() => {
+      expect(mockResolve).toHaveBeenCalledWith('item-1', 'op-c');
+    });
+    // 抛异常同样不刷新不关窗
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-conflict-entry-item-1')).toBeInTheDocument();
+    });
+    expect(mockList).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });

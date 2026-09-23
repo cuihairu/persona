@@ -399,4 +399,38 @@ describe('utils/api command mapping coverage', () => {
 
     await expect(personaAPI.lockService()).rejects.toThrow('bridge down');
   });
+
+  it('E2EE sync device and conflict methods map to tauri invokes', async () => {
+    // 设备管理（3b）：status/join/leave/list 无参或单词参数
+    await personaAPI.syncDeviceStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_device_status');
+
+    await personaAPI.syncJoin('laptop');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_join', { deviceName: 'laptop' });
+
+    await personaAPI.syncLeave();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_leave');
+
+    await personaAPI.syncListDevices();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_list_devices');
+
+    await personaAPI.syncAuthorize('d-2');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_authorize', { targetDeviceId: 'd-2' });
+
+    await personaAPI.syncRevoke('d-2');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_revoke', { targetDeviceId: 'd-2' });
+
+    // 同步周期与冲突裁决（3c）：sync_now 无参，裁决带 itemId + adoptOpId
+    await personaAPI.syncNow();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_now');
+
+    await personaAPI.syncConflictsList();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_conflicts_list');
+
+    await personaAPI.syncConflictResolve('item-1', 'op-9');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_conflict_resolve', {
+      itemId: 'item-1',
+      adoptOpId: 'op-9',
+    });
+  });
 });
