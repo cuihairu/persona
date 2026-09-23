@@ -1296,4 +1296,230 @@ mod tests {
 
         task.abort();
     }
+
+    // group key 轮换全流程（真 TCP，阶段 3d）：A 自举建组并授权 B → A
+    // rotate（换信封 + 全量重包）→ 信封集仍恰好覆盖两台授权设备、全部拆出
+    // **新** key；随后 B 与后入组的 C 各自开会话拉全量——重包 op 全部可读
+    // 物化（旧 key 批次按「严格旧版本」忽略，当前态由重包 op 补齐）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn rotate_group_key_swaps_envelopes_and_new_devices_read_rewrapped_ops() {
+        use persona_core::crypto::encryption::EncryptionService;
+        use persona_core::crypto::key_hierarchy::KeyHierarchy;
+        use persona_core::models::credential::{
+            Credential, CredentialData, CredentialType, PasswordCredentialData, SecurityLevel,
+        };
+        use persona_core::models::identity::{Identity, IdentityType};
+        use persona_core::storage::repository::IdentityRepository;
+        use persona_core::storage::{CredentialRepository, Database, Repository};
+        use persona_core::sync::device::DeviceIdentity;
+        use persona_core::sync::envelope::{open_group_key, seal_group_key};
+        use persona_core::sync::remote::SyncAdminApi;
+        use persona_core::sync::runtime::SyncSession;
+
+        const TOKEN: &str = "sync-rotate-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+        let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
+
+        // A 自举建组；授权 B（旧组密钥信封）。登记后 with_device_id 回填
+        // 服务器分配的 UUID（与桌面版 sync_join 同序）。
+        let dev_a = DeviceIdentity::generate("rotator-a").unwrap();
+        let id_a = admin
+            .register_device("rotator-a", dev_a.key_pair.public_bytes())
+            .await
+            .expect("register A");
+        let dev_a = dev_a.with_device_id(id_a);
+        assert!(admin
+            .bootstrap_group_if_empty(id_a, dev_a.key_pair.public_bytes())
+            .await
+            .expect("bootstrap A"));
+        let group_old = open_group_key(
+            &admin.group_keys().await.unwrap()[0].envelope,
+            dev_a.key_pair.secret_bytes(),
+        )
+        .expect("A opens own envelope");
+
+        let dev_b = DeviceIdentity::generate("member-b").unwrap();
+        let id_b = admin
+            .register_device("member-b", dev_b.key_pair.public_bytes())
+            .await
+            .expect("register B");
+        let dev_b = dev_b.with_device_id(id_b);
+        admin
+            .put_group_key(
+                id_b,
+                &seal_group_key(&group_old, dev_b.key_pair.public_bytes()),
+            )
+            .await
+            .expect("authorize B");
+
+        // A 的本地库：两条凭据 + 真会话（HttpSyncRemote）
+        let db_a = Database::in_memory().await.unwrap();
+        db_a.migrate().await.unwrap();
+        let owner = Identity::new("seed".to_string(), IdentityType::Personal);
+        IdentityRepository::new(db_a.clone())
+            .create(&owner)
+            .await
+            .unwrap();
+        let master_a = EncryptionService::new(&EncryptionService::generate_key());
+        let cred_repo = CredentialRepository::new(db_a.clone());
+        for (name, secret) in [("cred-one", "one"), ("cred-two", "two")] {
+            let item_key = EncryptionService::generate_key();
+            let wrapped = master_a.encrypt(&item_key).unwrap();
+            let plaintext = CredentialData::Password(PasswordCredentialData {
+                password: secret.to_string(),
+                email: None,
+                security_questions: vec![],
+            })
+            .to_bytes()
+            .unwrap();
+            let ciphertext = KeyHierarchy::new(&master_a)
+                .encrypt_with_item_key(&item_key, &plaintext)
+                .unwrap();
+            cred_repo
+                .create(&Credential::new(
+                    owner.id,
+                    name.to_string(),
+                    CredentialType::Password,
+                    SecurityLevel::High,
+                    ciphertext,
+                    Some(wrapped),
+                ))
+                .await
+                .unwrap();
+        }
+
+        let session_a = SyncSession::open(&db_a, &dev_a, &base, TOKEN, Box::new(|| false))
+            .await
+            .expect("session A");
+        assert_eq!(session_a.backfill_existing(&master_a).await.unwrap(), 2);
+
+        // 轮换：前置 drain（旧 key 批次 2 条）+ 重包（2 条）+ 再 drain
+        let report = session_a.rotate_group_key(&master_a, &admin).await.unwrap();
+        assert_eq!((report.rewrapped, report.skipped), (2, 0));
+        assert_eq!(report.pushed, 4);
+
+        // 信封集：仍恰好两台授权设备，且都拆出**新** key（≠旧 key）
+        let keys = admin.group_keys().await.unwrap();
+        assert_eq!(keys.len(), 2);
+        let group_new = open_group_key(
+            &keys.iter().find(|k| k.device_id == id_a).unwrap().envelope,
+            dev_a.key_pair.secret_bytes(),
+        )
+        .expect("A opens rotated envelope");
+        let group_new_b = open_group_key(
+            &keys.iter().find(|k| k.device_id == id_b).unwrap().envelope,
+            dev_b.key_pair.secret_bytes(),
+        )
+        .expect("B opens rotated envelope");
+        assert_eq!(group_new, group_new_b);
+        assert_ne!(group_new, group_old);
+
+        // B（会话开在轮换后 → 只持新 key）拉全量：重包 op 全部物化
+        let (db_b, master_b) = member_db(owner.id).await;
+        let session_b = SyncSession::open(&db_b, &dev_b, &base, TOKEN, Box::new(|| false))
+            .await
+            .expect("session B");
+        let report_b = session_b.run_cycle(&master_b).await.unwrap();
+        assert_eq!(report_b.pulled, 4);
+        assert_eq!(report_b.materialized, 2);
+        assert_eq!(report_b.conflicts, 0);
+        assert_eq!(report_b.pending_identity, 0);
+        assert_stored_credentials(&db_b, &master_b).await;
+
+        // 后入组的 C：授权拿到新 key，拉全量同样全部可读
+        let dev_c = DeviceIdentity::generate("late-c").unwrap();
+        let id_c = admin
+            .register_device("late-c", dev_c.key_pair.public_bytes())
+            .await
+            .expect("register C");
+        let dev_c = dev_c.with_device_id(id_c);
+        admin
+            .put_group_key(
+                id_c,
+                &seal_group_key(&group_new, dev_c.key_pair.public_bytes()),
+            )
+            .await
+            .expect("authorize C");
+        let (db_c, master_c) = member_db(owner.id).await;
+        let session_c = SyncSession::open(&db_c, &dev_c, &base, TOKEN, Box::new(|| false))
+            .await
+            .expect("session C");
+        let report_c = session_c.run_cycle(&master_c).await.unwrap();
+        assert_eq!(report_c.pulled, 4);
+        assert_eq!(report_c.materialized, 2);
+        assert_stored_credentials(&db_c, &master_c).await;
+
+        task.abort();
+    }
+
+    /// 成员设备的本地库：同 id 身份行（身份不经 oplog 同步，测试直接对齐）
+    /// + 独立主密钥。
+    async fn member_db(
+        identity_id: Uuid,
+    ) -> (
+        persona_core::storage::Database,
+        persona_core::crypto::encryption::EncryptionService,
+    ) {
+        use persona_core::crypto::encryption::EncryptionService;
+        use persona_core::models::identity::{Identity, IdentityType};
+        use persona_core::storage::repository::IdentityRepository;
+        use persona_core::storage::{Database, Repository};
+
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut owner = Identity::new("seed".to_string(), IdentityType::Personal);
+        owner.id = identity_id;
+        IdentityRepository::new(db.clone())
+            .create(&owner)
+            .await
+            .unwrap();
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+        (db, master)
+    }
+
+    /// 断言库中两条凭据名称与密码和 A 侧种子一致（经本机 master 读回）。
+    async fn assert_stored_credentials(
+        db: &persona_core::storage::Database,
+        master: &persona_core::crypto::encryption::EncryptionService,
+    ) {
+        use persona_core::crypto::key_hierarchy::KeyHierarchy;
+        use persona_core::models::credential::CredentialData;
+        use persona_core::storage::CredentialRepository;
+
+        let creds = CredentialRepository::new(db.clone())
+            .list_all()
+            .await
+            .unwrap();
+        assert_eq!(creds.len(), 2);
+        let hierarchy = KeyHierarchy::new(master);
+        let mut found: Vec<(String, String)> = creds
+            .iter()
+            .map(|cred| {
+                let plaintext = hierarchy
+                    .decrypt_with_wrapped_key(
+                        cred.wrapped_item_key.as_deref().expect("wrapped item key"),
+                        &cred.encrypted_data,
+                    )
+                    .expect("decrypt with local master");
+                match CredentialData::from_bytes(&plaintext).unwrap() {
+                    CredentialData::Password(p) => (cred.name.clone(), p.password),
+                    other => panic!("unexpected credential data: {other:?}"),
+                }
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                ("cred-one".to_string(), "one".to_string()),
+                ("cred-two".to_string(), "two".to_string())
+            ]
+        );
+    }
 }

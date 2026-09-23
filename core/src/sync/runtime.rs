@@ -59,6 +59,19 @@ pub struct SyncSession<R: SyncRemote> {
     device_id: Uuid,
 }
 
+/// 一次 group key 轮换的汇总。轮换 = 换信封 + 全量重包（E2EE_SYNC_DESIGN
+/// DR-3「安全轮换」、§11 开放问题 2 的 v1 答案）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SyncRotateReport {
+    /// 以新组密钥重新入账的凭据条数（每条一个新 lamport 的 put）。
+    pub rewrapped: u64,
+    /// 主库凭据中因 legacy（无 wrapped item key）/解密失败跳过的条数——
+    /// 这些条目轮换后仍只有旧组密文，对只有新信封的设备不可见。
+    pub skipped: u64,
+    /// 轮换全程（前置清队列 + 重包批次）push 出去的 op 总条数。
+    pub pushed: u64,
+}
+
 #[cfg(feature = "remote-auth")]
 impl SyncSession<super::remote::HttpSyncRemote> {
     /// 装配会话：从服务器取全部信封，拆出本机的那份得 group key。
@@ -209,6 +222,157 @@ impl<R: SyncRemote> SyncSession<R> {
             self.engine.clone(),
             self.group_key.clone(),
         ))
+    }
+
+    /// 全量重包：主库每条凭据以新组密钥重新密封快照 + 重包 item key，
+    /// 各记一个新 lamport 的 put（LWW 使其成为主位）。与 backfill 同型
+    /// 路径但**不跳过已入队条目**——轮换要求全部现存凭据换新密文。
+    /// 返回（重包数，跳过数）。
+    pub async fn rewrap_all(
+        &self,
+        master: &EncryptionService,
+        new_group: &GroupKey,
+    ) -> Result<(u64, u64)> {
+        let cred_repo = CredentialRepository::new(self.db.clone());
+        let all = cred_repo.list_all().await?;
+        let hierarchy = KeyHierarchy::new(master);
+        let mut rewrapped: u64 = 0;
+        let mut skipped: u64 = 0;
+        for credential in all {
+            let Some(wrapped) = credential.wrapped_item_key.as_ref() else {
+                tracing::warn!(
+                    credential_id = %credential.id,
+                    "legacy credential without wrapped item key; rewrap skipped"
+                );
+                skipped += 1;
+                continue;
+            };
+            // 失败逐条跳过（坏行不阻断整批），与捕获缝的容错口径一致
+            let item_key = match hierarchy.unwrap_item_key(wrapped) {
+                Ok(item_key) => item_key,
+                Err(e) => {
+                    tracing::warn!(credential_id = %credential.id, error = %e, "item key unwrap failed; rewrap skipped");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let plaintext = match hierarchy
+                .decrypt_with_wrapped_key(wrapped, &credential.encrypted_data)
+            {
+                Ok(plaintext) => plaintext,
+                Err(e) => {
+                    tracing::warn!(credential_id = %credential.id, error = %e, "credential decrypt failed; rewrap skipped");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let data = match CredentialData::from_bytes(&plaintext) {
+                Ok(data) => data,
+                Err(e) => {
+                    tracing::warn!(credential_id = %credential.id, error = %e, "malformed credential data; rewrap skipped");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let sealed = match SyncItemSnapshot::from_credential(&credential, &data).seal(&item_key)
+            {
+                Ok(sealed) => sealed,
+                Err(e) => {
+                    tracing::warn!(credential_id = %credential.id, error = %e, "snapshot seal failed; rewrap skipped");
+                    skipped += 1;
+                    continue;
+                }
+            };
+            let payload = SyncPayload {
+                ciphertext: sealed,
+                wrapped_item_key: wrap_item_key_with_group(&item_key, new_group),
+            };
+            match self
+                .engine
+                .record_local_change(
+                    credential.id,
+                    ItemKind::Credential,
+                    OpType::Put,
+                    Some(payload),
+                )
+                .await
+            {
+                Ok(_) => rewrapped += 1,
+                Err(e) => {
+                    tracing::warn!(credential_id = %credential.id, error = %e, "oplog record failed; rewrap skipped");
+                    skipped += 1;
+                }
+            }
+        }
+        Ok((rewrapped, skipped))
+    }
+
+    /// 把本地 push 队列推空（push_cycle 单轮 ≤500 条，循环到推不动为
+    /// 止）。返回总推送条数。
+    #[cfg(feature = "remote-auth")]
+    async fn drain_push_queue(&self) -> Result<u64> {
+        let mut total: u64 = 0;
+        loop {
+            let report = self.engine.push_cycle().await?;
+            total += report.pushed as u64;
+            if report.pushed == 0 {
+                return Ok(total);
+            }
+        }
+    }
+
+    /// group key 轮换（DR-3「安全轮换」，吊销设备真正闭环的 v1）：
+    ///
+    /// 1. 先把本机 pending 全部推走——旧组密文在换 key 前上线，仍持有
+    ///    旧 key 的保留设备还来得及拉取；
+    /// 2. 生成新 group key，为**每个已授权设备**（含本机）重封信封上传
+    ///    （put_group_key 幂等 upsert；被吊销设备无信封自然跳过）；
+    /// 3. [`Self::rewrap_all`] 全量重包 + 推空队列。
+    ///
+    /// 换 key 后各设备**零客户端改动**：`SyncSession::open` 每次拆本机
+    /// 信封，下次同步天然拿到新 key；轮换者的本会话继续持有旧 key（不
+    /// 回写），宿主用完即弃即可。旧组密文留驻服务器 oplog，只有新信封
+    /// 的设备拆不开、按既有容错跳过——当前态由重包 op 完整补齐。
+    ///
+    /// 诚实边界（UI/文档须如实提示）：(a) 窗口内其他设备**尚未推送**的
+    /// 本地改动仍以旧 key 入账，轮换者与新设备拆不开会按容错跳过——
+    /// 轮换前应让所有保留设备各完成一次「立即同步」；(b) 未裁决的冲突
+    /// 副本随重包 op 成为主位而清出裁决视图（主库当前态为准，oplog
+    /// append-only 原始记录仍在）；(c) 并发轮换（两台同时做）无仲裁，
+    /// 表现为互相拆不开对方的重包 op，需人工在一侧重走。
+    #[cfg(feature = "remote-auth")]
+    pub async fn rotate_group_key(
+        &self,
+        master: &EncryptionService,
+        admin: &super::remote::SyncAdminApi,
+    ) -> Result<SyncRotateReport> {
+        // 1. 旧组密文先上线（此时其他保留设备的旧 key 仍有效）
+        let pushed_before = self.drain_push_queue().await?;
+
+        // 2. 已授权设备集 = 有信封的设备；生成新 key 并逐设备重封上传
+        let devices = admin.list_devices().await?;
+        let keys = admin.group_keys().await?;
+        let authorized: std::collections::HashSet<Uuid> =
+            keys.iter().map(|k| k.device_id).collect();
+        let new_group = GroupKey::generate()?;
+        for device in &devices {
+            if !authorized.contains(&device.id) {
+                continue;
+            }
+            let envelope =
+                super::envelope::seal_group_key(new_group.as_bytes(), &device.public_key);
+            admin.put_group_key(device.id, &envelope).await?;
+        }
+
+        // 3. 全量重包入账 + 推空
+        let (rewrapped, skipped) = self.rewrap_all(master, &new_group).await?;
+        let pushed_after = self.drain_push_queue().await?;
+
+        Ok(SyncRotateReport {
+            rewrapped,
+            skipped,
+            pushed: pushed_before + pushed_after,
+        })
     }
 
     /// 冲突裁决视图（阶段 3c）：全部待裁决条目（主位 + 副本的解密快照）。
@@ -419,6 +583,83 @@ mod tests {
             device_id,
         };
         (session, pushed_log)
+    }
+
+    // 轮换核心（重包半边）：rewrap_all 把主库全部凭据以新组密钥重新
+    // 入账——新 op 的 item key 信封只有新组密钥拆得开、快照开封内容
+    // 与原凭据一致、lamport 严格递增（LWW 使其成为新主位）。
+    #[tokio::test]
+    async fn rewrap_all_reseals_every_credential_with_new_group_key() {
+        let (db, identity, master) = seeded_db().await;
+        let cred_repo = CredentialRepository::new(db.clone());
+        store_credential(&cred_repo, identity.id, "cred-one", &master, "one").await;
+        store_credential(&cred_repo, identity.id, "cred-two", &master, "two").await;
+
+        let old_group = GroupKey::generate().unwrap();
+        let (session, pushed_log) = session_for(&db, Uuid::new_v4(), old_group.clone());
+        assert_eq!(session.backfill_existing(&master).await.unwrap(), 2);
+
+        let new_group = GroupKey::generate().unwrap();
+        let (rewrapped, skipped) = session.rewrap_all(&master, &new_group).await.unwrap();
+        assert_eq!((rewrapped, skipped), (2, 0));
+
+        // drain 后远端共收 4 条：backfill 2 条（旧 key 封）+ 重包 2 条（新 key 封）
+        let drained = session.drain_push_queue().await.unwrap();
+        assert_eq!(drained, 4);
+        let pushed = pushed_log.lock().unwrap();
+        assert_eq!(pushed.len(), 4);
+        assert_eq!(pushed.len(), 4);
+        let (older, newer) = pushed.split_at(2);
+        // 新批次 lamport 严格大于旧批次（全序递增）
+        assert!(newer.iter().all(|op| op.lamport > older[0].lamport));
+
+        for op in newer {
+            let payload = op.payload.as_ref().unwrap();
+            // 只有新组密钥拆得开 item key 信封
+            let item_key = crate::sync::keys::unwrap_item_key_with_group(
+                &payload.wrapped_item_key,
+                &new_group,
+            )
+            .unwrap();
+            let snapshot = SyncItemSnapshot::open(&payload.ciphertext, &item_key).unwrap();
+            let expected = if snapshot.name == "cred-one" {
+                "one"
+            } else {
+                "two"
+            };
+            let opened = match &snapshot.data {
+                CredentialData::Password(p) => p.password.clone(),
+                #[allow(unreachable_patterns)]
+                _ => String::new(),
+            };
+            assert_eq!(opened, expected);
+            // 旧组密钥拆不开新批次（前向边界：被吊销设备持旧 key 读不到）
+            assert!(crate::sync::keys::unwrap_item_key_with_group(
+                &payload.wrapped_item_key,
+                &old_group
+            )
+            .is_err());
+        }
+    }
+
+    // 轮换的 admin 侧失败必须零副作用：时钟不推进、pending 无新增——
+    // 失败发生在信封重封之前，本地 oplog 未被触碰。
+    #[tokio::test]
+    async fn rotate_with_failing_admin_leaves_no_side_effects() {
+        let (db, _identity, master) = seeded_db().await;
+        let (session, pushed_log) = session_for(&db, Uuid::new_v4(), GroupKey::generate().unwrap());
+        let admin = crate::sync::remote::SyncAdminApi::new("http://127.0.0.1:1", "t").unwrap();
+        let lamport_before = session.sync_repo.get_state().await.unwrap().local_lamport;
+
+        let err = session
+            .rotate_group_key(&master, &admin)
+            .await
+            .expect_err("unreachable admin must fail");
+        let _ = err;
+
+        assert!(pushed_log.lock().unwrap().is_empty());
+        let lamport_after = session.sync_repo.get_state().await.unwrap().local_lamport;
+        assert_eq!(lamport_after, lamport_before);
     }
 
     // 会话编排核心：backfill 幂等（首次灌入 N 条，再跑 0 条）+ run_cycle
