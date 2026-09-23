@@ -193,41 +193,6 @@ impl PersonaService {
         false
     }
 
-    /// Authenticate user and unlock service
-    pub async fn authenticate(
-        &mut self,
-        user_id: Uuid,
-        password: &str,
-        salt: &[u8],
-    ) -> Result<AuthResult> {
-        // For now, simplified authentication - in a real implementation,
-        // you would load UserAuth from database
-        let mut user_auth = UserAuth::new(user_id);
-        let auth_result = self
-            .auth_service
-            .authenticate_password(&mut user_auth, password)?;
-
-        if auth_result == AuthResult::Success {
-            self.unlock(password, salt)?;
-            self.current_user = Some(user_id);
-            self.touch_activity();
-
-            // Create and register session for auto-lock management
-            let session = Session::new(user_id.to_string(), self.auto_lock_timeout);
-            let session_id = session.id.clone();
-            *self.current_session_id.write().await = Some(session_id.clone());
-
-            // Add session to auto-lock manager
-            self.auto_lock_manager
-                .add_session(session)
-                .await
-                .map_err(|e| anyhow::anyhow!(e))?;
-            self.auto_lock_manager.set_current_user(user_id).await;
-        }
-
-        Ok(auth_result)
-    }
-
     /// Replace the remote authentication provider (e.g., use the server implementation).
     pub fn set_remote_auth_provider(&mut self, provider: Arc<dyn RemoteAuthProvider>) {
         self.remote_auth_provider = provider;
@@ -4372,22 +4337,6 @@ mod tests {
         assert_eq!(
             service.authenticate_user("master-pin").await.unwrap(),
             AuthResult::AccountLocked
-        );
-    }
-
-    #[tokio::test]
-    async fn test_authenticate_memory_user_is_rejected_and_session_surface() {
-        let (_db, mut service) = unlocked_service().await;
-
-        // `authenticate` builds an in-memory UserAuth without a stored hash,
-        // so no password can verify — the failure path must not panic.
-        let salt = service.generate_salt();
-        assert_eq!(
-            service
-                .authenticate(Uuid::new_v4(), "whatever", &salt)
-                .await
-                .unwrap(),
-            AuthResult::InvalidCredentials
         );
     }
 
