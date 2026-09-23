@@ -1834,6 +1834,38 @@ pub async fn sync_now(
     Ok(ApiResponse::success(SyncNowReport::from(report)))
 }
 
+/// group key 轮换（E2EE sync 阶段 3d）：换信封 + 全量重包——吊销设备
+/// 真正闭环的安全操作。核心流程在 core `SyncSession::rotate_group_key`；
+/// 这里只做宿主编排。诚实边界（前端确认弹窗须如实提示，见 core 文档）：
+/// 轮换前各保留设备应先「立即同步」；未裁决冲突副本随重包清出裁决视图；
+/// 并发轮换无仲裁。
+#[command]
+pub async fn sync_rotate(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncRotateReport>, String> {
+    let session = match open_sync_session(&state).await {
+        Ok(session) => session,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let (server_url, token) = match sync_server_creds_for(&state).await {
+        Ok(creds) => creds,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let admin = match persona_core::sync::remote::SyncAdminApi::new(&server_url, &token) {
+        Ok(admin) => admin,
+        Err(e) => return Ok(ApiResponse::error(format!("Sync admin unavailable: {e}"))),
+    };
+    let service_guard = state.service.lock().await;
+    let master = sync_master_or_return!(service_guard);
+
+    match session.rotate_group_key(master, &admin).await {
+        Ok(report) => Ok(ApiResponse::success(SyncRotateReport::from(report))),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Group key rotation failed: {e}"
+        ))),
+    }
+}
+
 /// 冲突裁决列表（E2EE sync 阶段 3c）：全部待裁决条目（主位 + 副本的
 /// 解密快照）。只读，不改任何状态；损坏副本的条目整条跳过（留驻
 /// oplog，不阻塞其余展示）。

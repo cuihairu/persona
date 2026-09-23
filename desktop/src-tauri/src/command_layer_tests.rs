@@ -7930,3 +7930,57 @@ async fn sync_conflict_commands_share_sync_now_gates() {
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("locked"));
 }
+
+/// 轮换命令（阶段 3d）与 sync_now 同门禁——共用 open_sync_session：
+/// 未初始化/未加入/损坏/未配置/不可达/锁定各态先于任何网络或密码学访问
+/// 被拒。轮换的完整语义（换信封/重包/边界）在 core runtime + server 真
+/// TCP 测试覆盖，宿主层只验门禁与编排。
+#[tokio::test]
+async fn sync_rotate_gates_before_any_network_or_crypto() {
+    let app = mock_app();
+
+    // 未初始化 service → 拒绝
+    let resp = sync_rotate(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success, "must reject before init");
+    assert!(resp.error.unwrap().contains("not initialized"));
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入 → 拒绝（本地检查先于网络/密码学）
+    let resp = sync_rotate(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not joined"));
+
+    // 损坏身份记录 → 拒绝
+    state.device_store.set(&db_path, "{broken").unwrap();
+    let resp = sync_rotate(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("corrupted"));
+
+    // 已加入但服务器未配置 → 拒绝
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_rotate(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not configured"));
+
+    // 已配置但不可达：open 拉信封失败 → 拒绝（无半态）
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_rotate(state.clone()).await.unwrap();
+    assert!(!resp.success);
+
+    // 锁定后 → 拒绝
+    let resp = lock_service(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_rotate(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("locked"));
+}

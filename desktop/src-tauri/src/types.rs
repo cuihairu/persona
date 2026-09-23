@@ -122,6 +122,29 @@ impl From<persona_core::sync::runtime::SyncNowReport> for SyncNowReport {
     }
 }
 
+/// `sync_rotate` 返回：一次 group key 轮换的计数汇总（字段与 core
+/// `SyncRotateReport` 一一对应，供 UI 展示「重包 N / 跳过 N / 推送 N」）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncRotateReport {
+    /// 以新组密钥重新入账的凭据条数。
+    pub rewrapped: u64,
+    /// 因 legacy（无 wrapped item key）/解密失败跳过的条数——轮换后仍只有
+    /// 旧组密文，对只有新信封的设备不可见。
+    pub skipped: u64,
+    /// 轮换全程（前置清队列 + 重包批次）push 出去的 op 总条数。
+    pub pushed: u64,
+}
+
+impl From<persona_core::sync::runtime::SyncRotateReport> for SyncRotateReport {
+    fn from(report: persona_core::sync::runtime::SyncRotateReport) -> Self {
+        Self {
+            rewrapped: report.rewrapped,
+            skipped: report.skipped,
+            pushed: report.pushed,
+        }
+    }
+}
+
 /// `sync_conflicts_list` 的单个版本视图：冲突条目的主位或副本
 /// （字段与 core `resolve::ConflictVersion` 一一对应）。
 #[derive(Debug, Clone, Serialize)]
