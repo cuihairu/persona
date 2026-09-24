@@ -415,7 +415,9 @@ impl<R: SyncRemote> SyncSession<R> {
     /// 另一台设备已抢先轮换时返回
     /// [`PersonaError::ConcurrentConflict`] fail-closed 中止——此时本机
     /// 未写任何信封、未重包，重新同步后重试即可；begin 之后本机崩溃则
-    /// 信封族停留混合态，重试即重跑（幂等面不变）。
+    /// 信封族停留混合态，重试即重跑（幂等面不变；混合态自愈语义由
+    /// server 真 TCP 集成测试 `crashed_mid_rotation_retry_rewrites_
+    /// envelopes_and_converges` 锁定——残留信封被 upsert 覆盖，全组收敛）。
     #[cfg(feature = "remote-auth")]
     pub async fn rotate_group_key(
         &self,

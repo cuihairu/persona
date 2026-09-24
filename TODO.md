@@ -607,6 +607,16 @@ Server & Sync (optional)
         THREAT_MODEL（防意外并发不防恶意；顺带补上保留策略批漏改的
         oplog 无界措辞）+ STORAGE_AND_SYNC 轮换节并发提示。诚实边界
         不变：只防诚实客户端意外并发，不防恶意绕过 begin 直接写信封
+  - [x] 轮换崩溃续跑测试钉住（2026-09-24，开放问题 2 全部收口——
+        §11-2 最后一条「仍开放」关闭）：server 真 TCP 集成测试
+        `crashed_mid_rotation_retry_rewrites_envelopes_and_converges`
+        ——模拟 begin 抢到互斥后只写一台信封即崩溃（信封族混合态：
+        A 拆得崩溃轮 key、B 仍是旧信封），重启后完整
+        rotate_group_key 重读 epoch 重跑：残留信封被重试轮新信封
+        upsert 覆盖（信封行不膨胀、既非旧 key 也非崩溃轮 key）、
+        epoch 累计两轮 begin（=2）、B 拉全量重包 op 全部物化收敛。
+        文档：E2EE_SYNC_DESIGN §11-2 崩溃续跑写实 + runtime.rs doc
+        测试锚定
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

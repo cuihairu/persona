@@ -1852,6 +1852,191 @@ mod tests {
         task.abort();
     }
 
+    /// 轮换中途崩溃 → 重试即重跑自愈（E2EE_SYNC_DESIGN §11-2 收口）：
+    /// 模拟「begin 抢到互斥 + 只给一台设备写了新信封就崩溃」——信封族
+    /// 停留混合态（A 拆得崩溃轮 key、B 仍是旧信封）。重启后完整
+    /// rotate_group_key 重读 epoch 重跑：崩溃轮残留信封被重试轮新信封
+    /// 覆盖（信封行不膨胀）、epoch 累计两轮 begin、全组（B 拉全量）收敛
+    /// 可解——崩溃轮重包不存在（未发生），残留只影响信封，被 upsert
+    /// 幂等覆盖即自愈。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn crashed_mid_rotation_retry_rewrites_envelopes_and_converges() {
+        use persona_core::crypto::encryption::EncryptionService;
+        use persona_core::crypto::key_hierarchy::KeyHierarchy;
+        use persona_core::models::credential::{
+            Credential, CredentialData, CredentialType, PasswordCredentialData, SecurityLevel,
+        };
+        use persona_core::models::identity::{Identity, IdentityType};
+        use persona_core::storage::repository::IdentityRepository;
+        use persona_core::storage::{CredentialRepository, Database, Repository};
+        use persona_core::sync::device::DeviceIdentity;
+        use persona_core::sync::envelope::{open_group_key, seal_group_key};
+        use persona_core::sync::keys::GroupKey;
+        use persona_core::sync::remote::SyncAdminApi;
+        use persona_core::sync::runtime::SyncSession;
+
+        const TOKEN: &str = "sync-rotate-crash-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+        let admin = SyncAdminApi::new(&base, TOKEN).unwrap();
+
+        // A 自举建组 + 授权 B（与既有 rotate 全流程测试同构）
+        let dev_a = DeviceIdentity::generate("crashy-a").unwrap();
+        let id_a = admin
+            .register_device("crashy-a", dev_a.key_pair.public_bytes())
+            .await
+            .unwrap();
+        let dev_a = dev_a.with_device_id(id_a);
+        assert!(admin
+            .bootstrap_group_if_empty(id_a, dev_a.key_pair.public_bytes())
+            .await
+            .unwrap());
+        let group_old = open_group_key(
+            &admin.group_keys().await.unwrap()[0].envelope,
+            dev_a.key_pair.secret_bytes(),
+        )
+        .unwrap();
+
+        let dev_b = DeviceIdentity::generate("survivor-b").unwrap();
+        let id_b = admin
+            .register_device("survivor-b", dev_b.key_pair.public_bytes())
+            .await
+            .unwrap();
+        let dev_b = dev_b.with_device_id(id_b);
+        admin
+            .put_group_key(
+                id_b,
+                &seal_group_key(&group_old, dev_b.key_pair.public_bytes()),
+            )
+            .await
+            .unwrap();
+
+        // A 的本地库：两条凭据 + backfill 入账
+        let db_a = Database::in_memory().await.unwrap();
+        db_a.migrate().await.unwrap();
+        let owner = Identity::new("seed".to_string(), IdentityType::Personal);
+        IdentityRepository::new(db_a.clone())
+            .create(&owner)
+            .await
+            .unwrap();
+        let master_a = EncryptionService::new(&EncryptionService::generate_key());
+        let cred_repo = CredentialRepository::new(db_a.clone());
+        for (name, secret) in [("cred-one", "one"), ("cred-two", "two")] {
+            let item_key = EncryptionService::generate_key();
+            let wrapped = master_a.encrypt(&item_key).unwrap();
+            let plaintext = CredentialData::Password(PasswordCredentialData {
+                password: secret.to_string(),
+                email: None,
+                security_questions: vec![],
+            })
+            .to_bytes()
+            .unwrap();
+            let ciphertext = KeyHierarchy::new(&master_a)
+                .encrypt_with_item_key(&item_key, &plaintext)
+                .unwrap();
+            cred_repo
+                .create(&Credential::new(
+                    owner.id,
+                    name.to_string(),
+                    CredentialType::Password,
+                    SecurityLevel::High,
+                    ciphertext,
+                    Some(wrapped),
+                ))
+                .await
+                .unwrap();
+        }
+        let session_a = SyncSession::open(&db_a, &dev_a, &base, TOKEN, Box::new(|| false))
+            .await
+            .unwrap();
+        assert_eq!(session_a.backfill_existing(&master_a).await.unwrap(), 2);
+
+        // ---- 模拟崩溃半程：begin 抢到互斥，只给 A 写新信封就「崩溃」----
+        let (keys, epoch) = admin.group_keys_with_epoch().await.unwrap();
+        assert_eq!(epoch, 0);
+        let authorized: std::collections::HashSet<Uuid> =
+            keys.iter().map(|k| k.device_id).collect();
+        assert_eq!(authorized.len(), 2);
+        admin.begin_group_rotation(epoch).await.unwrap();
+        let crashed_key = GroupKey::generate().unwrap();
+        admin
+            .put_group_key(
+                id_a,
+                &seal_group_key(crashed_key.as_bytes(), dev_a.key_pair.public_bytes()),
+            )
+            .await
+            .unwrap();
+        // 混合态显形：A 的信封已换崩溃轮 key，B 的信封仍是旧 key
+        assert_ne!(
+            open_group_key(
+                &admin
+                    .group_keys()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .find(|k| k.device_id == id_a)
+                    .unwrap()
+                    .envelope,
+                dev_a.key_pair.secret_bytes()
+            )
+            .unwrap(),
+            group_old
+        );
+
+        // ---- 重启后重试：完整 rotate_group_key 重跑自愈 ----
+        let report = session_a.rotate_group_key(&master_a, &admin).await.unwrap();
+        assert_eq!((report.rewrapped, report.skipped), (2, 0));
+        assert_eq!(report.pushed, 4);
+
+        // 信封行不膨胀（仍恰好两台授权设备）；两台拆出的都是重试轮 key
+        // ——既非旧 key，也非崩溃轮 key（残留信封被 upsert 覆盖）
+        let keys_after = admin.group_keys().await.unwrap();
+        assert_eq!(keys_after.len(), 2);
+        let retried_key_a = open_group_key(
+            &keys_after
+                .iter()
+                .find(|k| k.device_id == id_a)
+                .unwrap()
+                .envelope,
+            dev_a.key_pair.secret_bytes(),
+        )
+        .unwrap();
+        let retried_key_b = open_group_key(
+            &keys_after
+                .iter()
+                .find(|k| k.device_id == id_b)
+                .unwrap()
+                .envelope,
+            dev_b.key_pair.secret_bytes(),
+        )
+        .unwrap();
+        assert_eq!(retried_key_a, retried_key_b);
+        assert_ne!(retried_key_a, group_old);
+        assert_ne!(retried_key_a, *crashed_key.as_bytes());
+
+        // epoch 累计两轮 begin（崩溃半程 +1、重试 +1）
+        let (_, epoch_after) = admin.group_keys_with_epoch().await.unwrap();
+        assert_eq!(epoch_after, 2);
+
+        // 全组收敛：B 新开会话（拆得重试轮 key）拉全量，重包 op 全部物化
+        let (db_b, master_b) = member_db(owner.id).await;
+        let session_b = SyncSession::open(&db_b, &dev_b, &base, TOKEN, Box::new(|| false))
+            .await
+            .unwrap();
+        let report_b = session_b.run_cycle(&master_b).await.unwrap();
+        assert_eq!(report_b.pulled, 4);
+        assert_eq!(report_b.materialized, 2);
+        assert_eq!(report_b.conflicts, 0);
+        assert_stored_credentials(&db_b, &master_b).await;
+
+        task.abort();
+    }
+
     /// 成员设备的本地库：同 id 身份行（身份不经 oplog 同步，测试直接对齐）
     /// + 独立主密钥。
     async fn member_db(
