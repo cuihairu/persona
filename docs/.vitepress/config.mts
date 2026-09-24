@@ -11,6 +11,7 @@ const sidebar = [
     text: "项目概述",
     items: [
       { text: "项目简介", link: "/overview/introduction" },
+      { text: "核心功能", link: "/overview/features" },
       { text: "技术架构", link: "/overview/architecture" },
       { text: "安全特性", link: "/overview/security" },
     ],
