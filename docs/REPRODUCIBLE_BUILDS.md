@@ -13,14 +13,14 @@
 
 方法：同一源码树连续两次 `tauri build --bundles deb`（第二次前 `touch src-tauri/src/main.rs` 强制重编主 crate + 重链），逐层对比产物。
 
-| 层 | 结果 |
-| --- | --- |
-| 前端 `dist/`（tsc + vite build） | 两次**逐字节一致**（4 个文件，内容哈希命名，无时间戳） |
-| 二进制 `target/release/persona-desktop` | 两次**逐字节一致**（46,447,992 字节；由归一化 deb 哈希一致传递证明，见下） |
-| deb 内 `debian-binary` ar 成员 | 两次一致（固定 `2.0`） |
+| 层                                      | 结果                                                                                                                         |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 前端 `dist/`（tsc + vite build）        | 两次**逐字节一致**（4 个文件，内容哈希命名，无时间戳）                                                                       |
+| 二进制 `target/release/persona-desktop` | 两次**逐字节一致**（46,447,992 字节；由归一化 deb 哈希一致传递证明，见下）                                                   |
+| deb 内 `debian-binary` ar 成员          | 两次一致（固定 `2.0`）                                                                                                       |
 | deb 内 `control.tar.gz` / `data.tar.gz` | 两次**不一致**——差异仅两项：tar 条目 **mtime = 构建时刻**、tar 条目**属主 = 构建用户**；条目顺序、路径、大小、权限位全部一致 |
-| gzip 头（两层 tar.gz） | 两次一致：bundler 已把 gzip mtime 置 0、OS 字节 0xff（tauri-bundler 2.x 用 flate2，无时间痕迹） |
-| raw deb 整包 | `d777883b…` vs `3fd1d15f…`（**不可复现**，唯一来源即上两行 tar 层差异） |
+| gzip 头（两层 tar.gz）                  | 两次一致：bundler 已把 gzip mtime 置 0、OS 字节 0xff（tauri-bundler 2.x 用 flate2，无时间痕迹）                              |
+| raw deb 整包                            | `d777883b…` vs `3fd1d15f…`（**不可复现**，唯一来源即上两行 tar 层差异）                                                      |
 
 结论：不可复现性**全部集中在 deb 打包层的 tar mtime 与属主**，编译与前端产物本身已确定。
 
