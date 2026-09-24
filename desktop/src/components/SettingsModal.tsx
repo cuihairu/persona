@@ -335,6 +335,10 @@ const SyncDevicesSection: React.FC = () => {
           }),
         );
         await refreshDevices();
+      } else if (resp.error_code === 'CONCURRENT_CONFLICT') {
+        // 并发轮换被 epoch 乐观锁拦下（另一台设备已抢先）——本地状态
+        // 无损（未写信封未重包），提示重试即可
+        toast.error(t('settings.syncDevices.rotateConcurrentConflict'));
       } else {
         toast.error(resp.error || t('settings.syncDevices.rotateFailed'));
       }

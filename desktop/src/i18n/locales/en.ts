@@ -144,6 +144,8 @@ export default {
       rotateDone:
         'Rotated — re-wrapped {{rewrapped}}, skipped {{skipped}}, pushed {{pushed}}',
       rotateFailed: 'Rotation failed',
+      rotateConcurrentConflict:
+        'Another device just rotated the group key — your data is unaffected, please retry.',
     },
     syncConflicts: {
       title: 'Sync conflicts',

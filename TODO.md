@@ -617,6 +617,10 @@ Server & Sync (optional)
         epoch 累计两轮 begin（=2）、B 拉全量重包 op 全部物化收敛。
         文档：E2EE_SYNC_DESIGN §11-2 崩溃续跑写实 + runtime.rs doc
         测试锚定
+  - [x] 前端 CONCURRENT_CONFLICT 消费闭环（2026-09-24）：SettingsModal
+        轮换失败分支识别 error_code 显示针对性重试提示（zh-CN/en 双语
+        rotateConcurrentConflict），不再笼统「轮换失败」；jest 用例 +
+        全量 498 绿
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

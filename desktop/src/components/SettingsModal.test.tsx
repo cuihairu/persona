@@ -1241,6 +1241,37 @@ describe('components/SettingsModal', () => {
     confirmSpy.mockRestore();
   });
 
+  // 并发轮换互斥（epoch 乐观锁）：后到者拿 CONCURRENT_CONFLICT 码，
+  // 显示针对性重试提示而非笼统「轮换失败」。
+  it('shows a retry hint when rotation hits a concurrent conflict', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncRotate.mockResolvedValue({
+      success: false,
+      error: 'Group key rotation failed: Concurrent operation conflict: ...',
+      error_code: 'CONCURRENT_CONFLICT',
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-rotate-button'));
+    });
+
+    await waitFor(() => {
+      expect(mockSyncRotate).toHaveBeenCalled();
+    });
+    expect(toast.error).toHaveBeenCalledWith(
+      '另一台设备刚刚完成了组密钥轮换——你的数据未受影响，请重试轮换。',
+    );
+    confirmSpy.mockRestore();
+  });
+
   it('authorizes a pending device through the authorize button', async () => {
     mockIdentityHook();
     mockSyncStatus.mockResolvedValue(joinedStatus);

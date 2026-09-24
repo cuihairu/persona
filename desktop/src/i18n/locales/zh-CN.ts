@@ -144,6 +144,8 @@ export default {
       rotateDone:
         '轮换完成——重包 {{rewrapped}} 条，跳过 {{skipped}} 条，推送 {{pushed}} 条',
       rotateFailed: '轮换失败',
+      rotateConcurrentConflict:
+        '另一台设备刚刚完成了组密钥轮换——你的数据未受影响，请重试轮换。',
     },
     syncConflicts: {
       title: '同步冲突',
