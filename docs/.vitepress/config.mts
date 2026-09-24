@@ -17,6 +17,13 @@ const sidebar = [
     ],
   },
   {
+    text: "API 文档",
+    items: [
+      { text: "认证 API", link: "/api/authentication" },
+      { text: "同步 API", link: "/api/sync" },
+    ],
+  },
+  {
     text: "用户手册",
     items: [{ text: "快速开始", link: "/user/quick-start" }],
   },
@@ -67,6 +74,7 @@ export default defineConfig({
     nav: [
       { text: "指南", link: "/overview/introduction" },
       { text: "开发", link: "/development/structure" },
+      { text: "API", link: "/api/sync" },
       {
         text: "工程文档",
         link: "https://github.com/cuihairu/persona/tree/main/docs",
