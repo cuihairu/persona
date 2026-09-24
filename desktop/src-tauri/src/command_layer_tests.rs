@@ -834,6 +834,7 @@ async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
                 "https://example.com",
                 assertion_client_data,
                 true,
+                "extension",
             )
             .await
             .unwrap();

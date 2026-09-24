@@ -976,6 +976,7 @@ async fn handle_request(
                     &parsed.origin,
                     &client_data_json,
                     parsed.user_verification,
+                    "extension",
                 )
                 .await
                 .map_err(|e| {

@@ -1458,6 +1458,7 @@ impl PersonaService {
         origin: &str,
         client_data_json: &[u8],
         user_verification: bool,
+        via: &str,
     ) -> Result<PasskeyAssertion> {
         self.ensure_sensitive_operation_allowed().await?;
         self.touch_activity();
@@ -1481,13 +1482,14 @@ impl PersonaService {
         updated.last_used_at = Some(chrono::Utc::now());
         self.passkey_repo.update(&updated).await?;
 
-        self.log_audit(
+        self.log_audit_with_metadata(
             AuditAction::PasskeyAsserted,
             ResourceType::Passkey,
             true,
             Some(passkey.id),
             Some(passkey.identity_id),
             None,
+            Some(("via", via.to_string())),
         )
         .await;
         self.update_sensitive_auto_lock_activity().await?;
@@ -3193,10 +3195,38 @@ impl PersonaService {
         identity_id: Option<Uuid>,
         error: Option<String>,
     ) {
+        self.log_audit_with_metadata(
+            action,
+            resource_type,
+            success,
+            identity_or_cred,
+            identity_id,
+            error,
+            None,
+        )
+        .await;
+    }
+
+    /// Same as [`Self::log_audit`] plus one free-form metadata pair (see
+    /// [`AuditLog::with_metadata`]); used e.g. to distinguish which trust
+    /// path performed a passkey assertion (`via=extension` / `os_provider`).
+    async fn log_audit_with_metadata(
+        &self,
+        action: AuditAction,
+        resource_type: ResourceType,
+        success: bool,
+        identity_or_cred: Option<Uuid>,
+        identity_id: Option<Uuid>,
+        error: Option<String>,
+        metadata: Option<(&'static str, String)>,
+    ) {
         let action_kind = action.clone();
         let mut log = AuditLog::new(action, resource_type, success)
             .with_user_id(self.current_user.map(|u| u.to_string()))
             .with_error_message(error);
+        if let Some((key, value)) = metadata {
+            log = log.with_metadata(key.to_string(), value);
+        }
         if let Some(id) = identity_or_cred {
             // Always store the raw resource identifier so deletion events can still be recorded
             // without violating foreign key constraints.
@@ -3719,7 +3749,13 @@ mod tests {
         let get_client_data =
             br#"{"type":"webauthn.get","challenge":"YXNzZXJ0aW9u","origin":"https://example.com"}"#;
         let assertion = service
-            .passkey_assertion(&passkey.id, "https://example.com", get_client_data, true)
+            .passkey_assertion(
+                &passkey.id,
+                "https://example.com",
+                get_client_data,
+                true,
+                "extension",
+            )
             .await
             .unwrap();
         assert_eq!(assertion.credential_id, passkey.credential_id);
@@ -3804,7 +3840,13 @@ mod tests {
         // ---- assertion: origin must match the passkey's rp_id ----
         let get_client_data = br#"{"type":"webauthn.get","challenge":"YXNzZXJ0aW9u","origin":"https://evil.example"}"#;
         let err = service
-            .passkey_assertion(&passkey.id, "https://evil.example", get_client_data, true)
+            .passkey_assertion(
+                &passkey.id,
+                "https://evil.example",
+                get_client_data,
+                true,
+                "extension",
+            )
             .await
             .expect_err("mismatched origin must be rejected");
         assert!(err.to_string().contains("does not match rp_id"));
