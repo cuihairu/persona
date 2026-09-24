@@ -116,10 +116,34 @@ scripts/build-repro.sh [输出.deb]   # 缺省仓库根 Persona_0.1.0_amd64.deb
 
 5. **真跨机验证未做**：重映射 + 钉版后跨机器产物**应当**一致，但本基线
    只在一台机器上实测；严格结论需钉死构建容器（同一 glibc/链接器）后
-   跨机复验。
+   跨机复验。（CI 发布面的容器浮动已于 2026-09-24 收口，见「容器钉死」；
+   跨机复验所需的 deb 构建容器定义仍开放——需 webkit2gtk 全家桶 +
+   rustup 工具链，收口 = 提供钉 digest 的 `Dockerfile.repro` +
+   `build-repro.sh` 容器模式 + 第二台机器复验。）
 
 ## 依赖输入固定现状
 
 - `Cargo.lock` ×2（根 workspace + desktop/src-tauri）已入库；
 - `pnpm-lock.yaml` 已入库；tauri-cli 2.11.4 / vite 8.3.0 由锁文件固定；
-- 图标、polkit policy 等静态资源入库（无生成物）。
+- 图标、polkit policy 等静态资源入库（无生成物）；
+- **容器钉死（2026-09-24）**：`docker/Dockerfile.server` 两个 FROM 按
+  digest 钉死（CI 发布面浮动收口）——
+  - `rust:1-bookworm@sha256:93ce27a8…`
+  - `debian:bookworm-slim@sha256:3783cc01…`
+
+  钉的是**系统层**（glibc/链接器/预装工具随上游重建漂移的部分）；cargo
+  实际版本不受影响——builder 里 rustup 读仓库内 `rust-toolchain.toml`
+  （钉 1.97.0），工具链升级与容器 digest 解耦。注意 digest 钉死后
+  runtime 层的 apt 包同样冻结在镜像时点，安全补丁随 digest 升级进入。
+
+  升级方法（重新查 multi-arch index digest，改 Dockerfile 后 CI Docker
+  job 即验证）：
+
+  ```bash
+  # 以 rust:1-bookworm 为例；debian 换 scope 与 tag 即可
+  token=$(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/rust:pull' | jq -r .token)
+  curl -sI -H "Authorization: Bearer $token" \
+    -H "Accept: application/vnd.oci.image.index.v1+json" \
+    https://registry-1.docker.io/v2/library/rust/manifests/1-bookworm |
+    grep -i docker-content-digest
+  ```

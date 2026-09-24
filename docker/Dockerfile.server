@@ -1,5 +1,14 @@
 # ---- Stage 1: Build ----
-FROM rust:1-bookworm AS builder
+# 基础镜像按 digest 钉死（2026-09-24，可复现性收口）：浮动 tag 的系统层
+# （glibc/链接器/预装工具）随上游重建漂移。cargo 实际版本不受此影响
+# （rustup 读仓库内 rust-toolchain.toml 钉 1.97.0）；digest 钉的是系统层。
+# 升级方法（重新查 index digest，docs/REPRODUCIBLE_BUILDS.md「容器钉死」节）：
+#   token=$(curl -s 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/rust:pull' | jq -r .token)
+#   curl -sI -H "Authorization: Bearer $token" \
+#     -H "Accept: application/vnd.oci.image.index.v1+json" \
+#     https://registry-1.docker.io/v2/library/rust/manifests/1-bookworm |
+#     grep -i docker-content-digest
+FROM rust:1-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e AS builder
 
 RUN apt-get update && apt-get install -y \
     pkg-config \
@@ -15,7 +24,10 @@ COPY . .
 RUN cargo build --release -p persona-server
 
 # ---- Stage 2: Runtime ----
-FROM debian:bookworm-slim AS runtime
+# digest 钉死同 builder（2026-09-24）；digest 查询同上（scope 用
+# repository:library/debian:pull、manifests/bookworm-slim）。注意钉死后
+# runtime 层的 apt 包也冻结在镜像时点，安全补丁随 digest 升级进入。
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251 AS runtime
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
