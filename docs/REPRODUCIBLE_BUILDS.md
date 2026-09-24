@@ -9,7 +9,7 @@
 
 - 对象：`tauri build --bundles deb` 产出的 `desktop/src-tauri/target/release/bundle/deb/Persona_0.1.0_amd64.deb`（内嵌 46MB 主程序 + 桌面/图标/polkit 资源）。
 - 口径：**同机复现**（同一台机器、同一工具链、同一源码树，仅时间不同）实测通过；跨机器一致性有证据（路径重映射 + 钉版）但未跨机实测。
-- AppImage / rpm / dmg / Windows 安装器不在本基线内（bundler 各格式归一化程度未测）。
+- AppImage 已实测（内容可复现、字节级不可复现，见「剩余差距」4）；rpm / dmg / Windows 安装器未测。
 
 ## 实测基线（2026-09-24）
 
@@ -88,8 +88,16 @@ scripts/build-repro.sh [输出.deb]   # 缺省仓库根 Persona_0.1.0_amd64.deb
 3. **上游 bundler 不归一**：tar mtime/属主由 tauri-bundler 写入，仓库侧以
    `normalize-deb.sh` 后处理兜底；上游若提供 `SOURCE_DATE_EPOCH` 支持，脚本
    可退化为校验器。
-4. **其他打包格式未测**：AppImage/rpm/dmg 的归一化程度未知，需要时按同
-   方法（两次构建 + 逐层解包对比）另测。
+4. **AppImage：内容可复现、字节级不可复现**（2026-09-24 A/B 实测）：两次
+   纯打包轮 `tauri build --bundles appimage`，unsquashfs 逐层解包对比——
+   文件内容**逐字节一致**（含 linuxdeploy 部署进包的 GTK3/webkit2gtk 依赖
+   库），差异仅 **846 条 inode mtime**（= 构建时刻）；并链式传导为整包
+   差异：inode mtime → squashfs 字节不同 → 运行时 ELF 的 `.digest_md5`
+   段（appimagetool 打包时算的 squashfs MD5，ELF 偏移 0xe3900 的 16 字节）
+   随之不同。归一需 `mksquashfs -all-time/-mkfs-fixed-time` 重打包并重算
+   digest 段，或上游 appimagetool 支持 `SOURCE_DATE_EPOCH`（AppImageKit
+   长期未合）——**未做仓库侧 hack**，deb 仍是主交付可复现产物。rpm/dmg
+   仍未测。
 5. **真跨机验证未做**：重映射 + 钉版后跨机器产物**应当**一致，但本基线
    只在一台机器上实测；严格结论需钉死构建容器（同一 glibc/链接器）后
    跨机复验。
