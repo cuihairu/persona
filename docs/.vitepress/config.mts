@@ -36,7 +36,10 @@ const sidebar = [
   },
   {
     text: "开发指南",
-    items: [{ text: "项目结构", link: "/development/structure" }],
+    items: [
+      { text: "环境搭建", link: "/development/setup" },
+      { text: "项目结构", link: "/development/structure" },
+    ],
   },
 ];
 
