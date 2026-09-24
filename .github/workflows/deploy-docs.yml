@@ -1,0 +1,66 @@
+name: Deploy VitePress to GitHub Pages
+
+# docs/ 变更 → 构建 VitePress 站点 → 部署到 GitHub Pages 项目站
+# https://cuihairu.github.io/persona/。死链校验与 prettier 自动格式化
+# 在 docs.yml（两 workflow 由同一 push 并行触发；其自动提交带 [skip ci]
+# 不会递归触发本文件）。形态对照 cuihairu/hello-game 的 deploy-docs.yml
+# （upload-pages-artifact + deploy-pages 双 job）。
+#
+# 前置：仓库 Pages 已开启且 build_type=workflow（settings → pages），
+# 本文件即其部署来源。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # config lastUpdated: true 需要完整 git 历史
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      # docs/ 是独立 npm 安装（非 pnpm workspace 成员），口径同 docs.yml
+      - name: Install dependencies
+        working-directory: docs
+        run: npm ci
+
+      - name: Build with VitePress
+        working-directory: docs
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
