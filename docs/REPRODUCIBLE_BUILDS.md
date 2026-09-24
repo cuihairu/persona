@@ -1,12 +1,14 @@
 # 可复现构建（Reproducible Builds）
 
-状态：**deb 产物同机逐字节可复现**（2026-09-24 基线实测）；跨机器复现
-有已知差距（见下文「剩余差距」）。本文记录测量方法、实测数据与复验命令。
+状态：**deb 产物同机逐字节可复现**（2026-09-24 基线实测）；工具链已钉版
+（1.97.0）、构建机路径已重映射（`scripts/build-repro.sh`），跨机器产物
+应当一致但**真跨机复验未做**（见「剩余差距」）。本文记录测量方法、实测
+数据与复验命令。
 
 ## 范围
 
 - 对象：`tauri build --bundles deb` 产出的 `desktop/src-tauri/target/release/bundle/deb/Persona_0.1.0_amd64.deb`（内嵌 46MB 主程序 + 桌面/图标/polkit 资源）。
-- 口径：**同机复现**（同一台机器、同一工具链、同一源码树，仅时间不同）。跨机器/跨环境复现为差距项，不是本基线的验收标准。
+- 口径：**同机复现**（同一台机器、同一工具链、同一源码树，仅时间不同）实测通过；跨机器一致性有证据（路径重映射 + 钉版）但未跨机实测。
 - AppImage / rpm / dmg / Windows 安装器不在本基线内（bundler 各格式归一化程度未测）。
 
 ## 实测基线（2026-09-24）
@@ -55,22 +57,42 @@ scripts/normalize-deb.sh <deb2> /tmp/n2.deb
 sha256sum /tmp/n1.deb /tmp/n2.deb            # 规范化后：预期相同
 ```
 
+## 一键可复现构建：`scripts/build-repro.sh`
+
+把上述两步（重映射 + 构建 + 归一）收敛成一条命令：
+
+```bash
+scripts/build-repro.sh [输出.deb]   # 缺省仓库根 Persona_0.1.0_amd64.deb
+```
+
+- `RUSTFLAGS="--remap-path-prefix=$HOME=/repro-home"`：panic location 等
+  不再携带真实用户路径（实测 `/home/<user>` ×1006 → **0**，registry 绝对
+  路径 ×916 全部变为 `/repro-home` 前缀）——同工具链下跨机器编译产物趋
+  于一致。opt-in：只作用于本脚本进程，日常 `cargo build` 不受影响。
+- `SOURCE_DATE_EPOCH` 锚定当前 HEAD 提交时刻（非 git 环境退化 0）。
+- 内部调用 `normalize-deb.sh` 归一 tar 层。
+
+实测（2026-09-24，钉版工具链 1.97.0）：首轮与强制重编重链轮相隔约
+10 分钟，归一 deb 哈希同为
+`2cf482056afe1de58c89b96261b0c0f1dfd8e0708e8141f29658bc8fa347f7b9`。
+
 ## 剩余差距（写实）
 
-1. **跨机器路径嵌入**：二进制内嵌构建环境绝对路径——`/home/<user>` ×1006、
-   `~/.cargo/registry` 绝对路径 ×916（`strings` 实测）。来源是 panic location
-   / 调试路径：本仓库 panic 路径为相对形式（`src/...`），**registry 依赖
-   crate 的 panic 路径是绝对路径**，随构建机 `$HOME` 变化。缓解：构建时设
-   `RUSTFLAGS="--remap-path-prefix=$HOME=/repro-home"`（属构建环境决策，
-   未入仓——入仓需评估对所有开发者/CI 构建行为的影响）。
-2. **工具链未固定**：本机 rustc 1.97.0，CI 全部 `dtolnay/rust-toolchain@stable`
-   漂浮。锁定需加 `rust-toolchain.toml`（根 + desktop/src-tauri 双 workspace
-   各一），会改变所有开发者与 CI 的工具链选择、影响 rust-cache 键——单独立项。
+1. ~~跨机器路径嵌入~~ **已收口**（2026-09-24）：`scripts/build-repro.sh`
+   以 `--remap-path-prefix` 重映射 `$HOME`，实测二进制内 `/home/<user>`
+   计数 1006 → 0、registry 路径全部变为常量前缀。
+2. ~~工具链未固定~~ **已收口**（2026-09-24）：根仓 `rust-toolchain.toml`
+   钉 1.97.0（rustup 向上查找，双 workspace 同受覆盖）+ CI 五处
+   `dtolnay/rust-toolchain@1.97.0`（版本 ref 官方支持）；升级 = 两处
+   一起改。
 3. **上游 bundler 不归一**：tar mtime/属主由 tauri-bundler 写入，仓库侧以
    `normalize-deb.sh` 后处理兜底；上游若提供 `SOURCE_DATE_EPOCH` 支持，脚本
    可退化为校验器。
 4. **其他打包格式未测**：AppImage/rpm/dmg 的归一化程度未知，需要时按同
    方法（两次构建 + 逐层解包对比）另测。
+5. **真跨机验证未做**：重映射 + 钉版后跨机器产物**应当**一致，但本基线
+   只在一台机器上实测；严格结论需钉死构建容器（同一 glibc/链接器）后
+   跨机复验。
 
 ## 依赖输入固定现状
 

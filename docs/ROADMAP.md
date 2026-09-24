@@ -24,7 +24,7 @@ Milestone 4 – 1Password Parity (current focus)
 - [x] Desktop: auto-lock end-to-end (backend event → countdown banner → enforced lock clears in-memory master key even if the frontend is gone)
 - [x] Browser: polished TOTP autofill UX (chained fill after login, stale-code refetch, remaining-seconds notices, multi-candidate picker — 2026-09)
 - [ ] SSH agent: real-host E2E test (`ssh -T git@github.com`); Windows-specific testing and optimization
-- [x] Reproducible builds (2026-09-24 baseline: deb reproducible bit-for-bit on the same machine via `scripts/normalize-deb.sh`; cross-machine gaps documented in `docs/REPRODUCIBLE_BUILDS.md`)
+- [x] Reproducible builds (2026-09-24: deb reproducible bit-for-bit on the same machine; toolchain pinned at 1.97.0 via `rust-toolchain.toml` + CI; `$HOME` remapped via `scripts/build-repro.sh`; remaining gaps in `docs/REPRODUCIBLE_BUILDS.md`)
 
 Milestone 5 – Wallet Graduation (deferred until Milestone 4; experimental today)
 Existing experimental base: BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana derivation and signing on audited crates (rust-bitcoin, alloy, bech32), CLI wallet flows, official test vectors as regression harness.
