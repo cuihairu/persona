@@ -10,8 +10,8 @@ hero:
     alt: Persona logo
   actions:
     - theme: brand
-      text: 项目简介
-      link: /overview/introduction
+      text: 快速开始
+      link: /user/quick-start
     - theme: alt
       text: 查看架构
       link: /overview/architecture
@@ -33,6 +33,7 @@ features:
 
 ## 从这里开始
 
+- [快速开始](/user/quick-start) 构建桌面应用或 CLI，创建你的第一个加密密码库。
 - [项目简介](/overview/introduction) 了解 Persona 的问题边界和设计理念。
 - [技术架构](/overview/architecture) 看分层结构与端到端加密同步的设计。
 - [安全设计](/design/security) 密钥层级、威胁模型与安全边界。

@@ -16,6 +16,10 @@ const sidebar = [
     ],
   },
   {
+    text: "用户手册",
+    items: [{ text: "快速开始", link: "/user/quick-start" }],
+  },
+  {
     text: "需求分析",
     items: [
       { text: "场景分析", link: "/analysis/scenarios" },
