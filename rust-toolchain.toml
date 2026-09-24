@@ -1,0 +1,8 @@
+# 工具链固定（Reproducible builds 跨机复现的前提，docs/REPRODUCIBLE_BUILDS.md
+# 「剩余差距」第 2 条）。CI 侧同步钉死在 .github/workflows/* 的
+# dtolnay/rust-toolchain@<同版本>；升级 = 两处一起改，新编译器带来的新 lint
+# / 行为变化显式过一遍再进。
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

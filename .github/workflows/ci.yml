@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - name: Cache cargo
@@ -54,7 +54,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: clippy
       - name: Cache cargo
@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
       - name: Install cargo-audit
@@ -105,7 +105,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       # --- Desktop Rust (src-tauri is its own workspace, invisible to the
       # `rust` job's --workspace runs) ---
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
       - name: Install Tauri system dependencies
