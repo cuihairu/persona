@@ -410,8 +410,12 @@ impl<R: SyncRemote> SyncSession<R> {
     /// 本地改动仍以旧 key 入账，轮换者与新设备拆不开会按容错跳过——
     /// 轮换前应让所有保留设备各完成一次「立即同步」；(b) 未裁决的冲突
     /// 副本随重包 op 成为主位而清出裁决视图（主库当前态为准，oplog
-    /// append-only 原始记录仍在）；(c) 并发轮换（两台同时做）无仲裁，
-    /// 表现为互相拆不开对方的重包 op，需人工在一侧重走。
+    /// append-only 原始记录仍在）；(c) 并发轮换以 epoch 乐观锁互斥
+    /// （2026-09-24）：本机读基线代数后 `begin_group_rotation` CAS 抢占，
+    /// 另一台设备已抢先轮换时返回
+    /// [`PersonaError::ConcurrentConflict`] fail-closed 中止——此时本机
+    /// 未写任何信封、未重包，重新同步后重试即可；begin 之后本机崩溃则
+    /// 信封族停留混合态，重试即重跑（幂等面不变）。
     #[cfg(feature = "remote-auth")]
     pub async fn rotate_group_key(
         &self,
@@ -421,11 +425,14 @@ impl<R: SyncRemote> SyncSession<R> {
         // 1. 旧组密文先上线（此时其他保留设备的旧 key 仍有效）
         let pushed_before = self.drain_push_queue().await?;
 
-        // 2. 已授权设备集 = 有信封的设备；生成新 key 并逐设备重封上传
+        // 2. 已授权设备集 = 有信封的设备；生成新 key 并逐设备重封上传。
+        //    写信封族前先抢轮换互斥（epoch CAS）：读到的基线若已被并发
+        //    轮换者推进，409/ConcurrentConflict 在此干净中止。
         let devices = admin.list_devices().await?;
-        let keys = admin.group_keys().await?;
+        let (keys, epoch) = admin.group_keys_with_epoch().await?;
         let authorized: std::collections::HashSet<Uuid> =
             keys.iter().map(|k| k.device_id).collect();
+        admin.begin_group_rotation(epoch).await?;
         let new_group = GroupKey::generate()?;
         for device in &devices {
             if !authorized.contains(&device.id) {

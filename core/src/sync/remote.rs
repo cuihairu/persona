@@ -340,6 +340,18 @@ struct WireGroupKeyEntry {
 #[derive(Debug, serde::Deserialize)]
 struct WireGroupKeys {
     keys: Vec<WireGroupKeyEntry>,
+    #[serde(default)]
+    epoch: u64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct WireRotateBegin {
+    if_epoch: u64,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct WireRotateBeginResponse {
+    epoch: u64,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -453,6 +465,13 @@ impl SyncAdminApi {
     /// 取全部设备信封。调用方只认自己 device_id 的那条；未授权设备拿到
     /// 别人的信封也拆不开（fail-closed）。
     pub async fn group_keys(&self) -> Result<Vec<SyncGroupKeyEntry>> {
+        Ok(self.group_keys_with_epoch().await?.0)
+    }
+
+    /// [`Self::group_keys`] + 全组轮换代数（rotate-begin 乐观锁的基线）。
+    /// 老服务器无 epoch 字段时 serde default 到 0——与「从未轮换过」一致，
+    /// begin 时若服务器实际有表则自然 409 提示重读，方向安全。
+    pub async fn group_keys_with_epoch(&self) -> Result<(Vec<SyncGroupKeyEntry>, u64)> {
         let resp = self
             .http
             .request(reqwest::Method::GET, "/group-keys")
@@ -479,7 +498,35 @@ impl SyncAdminApi {
                 created_at: wire.created_at,
             });
         }
-        Ok(keys)
+        Ok((keys, body.epoch))
+    }
+
+    /// 轮换互斥点（E2EE_SYNC_DESIGN §11 开放问题 2）：epoch 乐观锁抢占。
+    /// 返回抢占后的新代数；另一台设备已并发轮换时 409 →
+    /// [`PersonaError::ConcurrentConflict`]（调用方 fail-closed 中止，
+    /// 未写任何信封、未重包，重读状态后可重试）。
+    pub async fn begin_group_rotation(&self, if_epoch: u64) -> Result<u64> {
+        let resp = self
+            .http
+            .request(reqwest::Method::POST, "/group-key/rotate-begin")
+            .json(&WireRotateBegin { if_epoch })
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync rotate begin failed: {e}")))?;
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            return Err(PersonaError::ConcurrentConflict(
+                "group key rotation lost the race: another device rotated concurrently; \
+                 re-sync and retry"
+                    .to_string(),
+            )
+            .into());
+        }
+        let resp = SyncHttp::ensure_success(resp, "rotate begin").await?;
+        let body: WireRotateBeginResponse = resp
+            .json()
+            .await
+            .map_err(|_| PersonaError::Io("malformed rotate begin response".to_string()))?;
+        Ok(body.epoch)
     }
 
     /// 首设备自举（空组建组）：服务器上尚无任何 group key 信封时，本机生成

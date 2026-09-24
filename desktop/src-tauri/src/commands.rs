@@ -1838,7 +1838,8 @@ pub async fn sync_now(
 /// 真正闭环的安全操作。核心流程在 core `SyncSession::rotate_group_key`；
 /// 这里只做宿主编排。诚实边界（前端确认弹窗须如实提示，见 core 文档）：
 /// 轮换前各保留设备应先「立即同步」；未裁决冲突副本随重包清出裁决视图；
-/// 并发轮换无仲裁。
+/// 并发轮换以 epoch 乐观锁互斥（2026-09-24）——后到者得
+/// CONCURRENT_CONFLICT 错误码，重读状态后可重试。
 #[command]
 pub async fn sync_rotate(
     state: State<'_, AppState>,
@@ -1860,9 +1861,20 @@ pub async fn sync_rotate(
 
     match session.rotate_group_key(master, &admin).await {
         Ok(report) => Ok(ApiResponse::success(SyncRotateReport::from(report))),
-        Err(e) => Ok(ApiResponse::error(format!(
-            "Group key rotation failed: {e}"
-        ))),
+        Err(e) => {
+            // 并发轮换 409 经 PersonaError::ConcurrentConflict 翻出
+            // CONCURRENT_CONFLICT 码（前端可识别分流），其余无专用码
+            let (code, msg) = map_persona_error(&e);
+            match code {
+                Some(code) => Ok(ApiResponse::error_with_code(
+                    code,
+                    format!("Group key rotation failed: {msg}"),
+                )),
+                None => Ok(ApiResponse::error(format!(
+                    "Group key rotation failed: {msg}"
+                ))),
+            }
+        }
     }
 }
 

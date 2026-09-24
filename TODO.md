@@ -591,6 +591,22 @@ Server & Sync (optional)
         4 用例（窗口内外/重推重建/0 禁用 ×2 表）+ metrics 渲染断言；
         文档：E2EE_SYNC_DESIGN §11-3 两端收口 + STORAGE_AND_SYNC
         部署 env 表两行
+  - [x] 并发轮换 epoch 乐观锁（2026-09-24，开放问题 2 收口——「并发轮换
+        无仲裁」边界关闭）：0006 迁移 `sync_group_epoch` 单行表 +
+        `POST /sync/group-key/rotate-begin`（事务内 CAS：epoch == if_epoch
+        才 +1 并 commit，未命中 409——显式 commit 纪律，事务 drop 即回滚）
+        + GroupKeysResponse.epoch 随基线下发（serde default 0 兼容老服务
+        器）；core `PersonaError::ConcurrentConflict` 变体 +
+        `begin_group_rotation(if_epoch)`（409 → ConcurrentConflict）+
+        `rotate_group_key` 先抢互斥点后写信封族（后到者未写信封未重包、
+        干净中止）；desktop `CONCURRENT_CONFLICT` 错误码（map_persona_error
+        变体直映射 + sync_rotate 命令接入 map_persona_error 透传）+ 前端
+        ApiErrorCode 联合类型补位。测试：server rotate-begin CAS/陈旧
+        409/epoch 暴露 + 真 TCP 双 admin 并发互斥（B 拿旧基线 409 → 重读
+        重试成功）；文档：E2EE_SYNC_DESIGN §11-2 收口写实 + DR-3 +
+        THREAT_MODEL（防意外并发不防恶意；顺带补上保留策略批漏改的
+        oplog 无界措辞）+ STORAGE_AND_SYNC 轮换节并发提示。诚实边界
+        不变：只防诚实客户端意外并发，不防恶意绕过 begin 直接写信封
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

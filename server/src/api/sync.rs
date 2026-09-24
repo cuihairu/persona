@@ -133,6 +133,22 @@ struct GroupKeyEntry {
 #[derive(Debug, Serialize)]
 struct GroupKeysResponse {
     keys: Vec<GroupKeyEntry>,
+    /// 全组轮换代数（rotate-begin 乐观锁的基线；0006 迁移）。
+    epoch: u64,
+}
+
+/// POST /sync/group-key/rotate-begin 请求：if_epoch = 客户端最近读到的
+/// 代数。服务器 CAS（epoch = if_epoch 才允许 +1）——两台设备并发轮换时
+/// 后到者 409 fail-closed 中止，不再覆盖先到者的信封族。
+#[derive(Debug, Deserialize)]
+pub struct RotateBeginRequest {
+    if_epoch: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RotateBeginResponse {
+    /// 抢占成功后的当前代数（= if_epoch + 1）。
+    epoch: u64,
 }
 
 // ---- /sync/devices ----
@@ -291,6 +307,15 @@ pub async fn get_group_keys(State(state): State<AppState>) -> Response {
         Ok(rows) => rows,
         Err(error) => return ApiError::internal(error).into_response(),
     };
+    let epoch: i64 = match sqlx::query_scalar(
+        "SELECT COALESCE((SELECT epoch FROM sync_group_epoch WHERE id = 1), 0)",
+    )
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(epoch) => epoch,
+        Err(error) => return ApiError::internal(error).into_response(),
+    };
     let keys = rows
         .iter()
         .filter_map(|row| {
@@ -302,7 +327,61 @@ pub async fn get_group_keys(State(state): State<AppState>) -> Response {
             })
         })
         .collect();
-    (Json(GroupKeysResponse { keys })).into_response()
+    (Json(GroupKeysResponse {
+        keys,
+        epoch: epoch.max(0) as u64,
+    }))
+    .into_response()
+}
+
+/// POST /sync/group-key/rotate-begin：轮换互斥点（§11 开放问题 2）。
+/// 乐观锁抢占：epoch 与 if_epoch 相等才 +1（成功 = 获得写信封族的互斥
+/// 窗口）；不相等 = 另一台设备已并发轮换，409 让后到者干净中止（未写
+/// 任何信封、未重包）。epoch 单调递增不复位——重试方重读 group-keys
+/// 拿新基线再来。begin 之后若轮换者崩溃，信封族停留在新旧混合态：与
+/// 既有「轮换中途崩溃」边界一致，重试即重跑（幂等面 = 信封 upsert +
+/// 重包以主库为准）。
+pub async fn rotate_begin(
+    State(state): State<AppState>,
+    // 设备名未参与 CAS（互斥对象是全组而非单设备）；持 Extension 保持与
+    // 其他写端点一致的中间件形态（require_bearer 已认证）。
+    Extension(_device): Extension<DeviceName>,
+    Json(request): Json<RotateBeginRequest>,
+) -> Response {
+    let result: Result<Option<u64>, String> = async {
+        let mut tx = state.pool.begin().await.map_err(|e| e.to_string())?;
+        // 事务内读当前代数并 CAS：命中才 +1
+        let current: i64 = sqlx::query_scalar(
+            "SELECT COALESCE((SELECT epoch FROM sync_group_epoch WHERE id = 1), 0)",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| e.to_string())?;
+        if current.max(0) as u64 != request.if_epoch {
+            return Ok(None);
+        }
+        sqlx::query("UPDATE sync_group_epoch SET epoch = epoch + 1 WHERE id = 1")
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| e.to_string())?;
+        let next = (current + 1).max(0) as u64;
+        // 显式 commit：事务 drop 即回滚，漏掉等于互斥形同虚设
+        tx.commit().await.map_err(|e| e.to_string())?;
+        Ok(Some(next))
+    }
+    .await;
+    match result {
+        Ok(Some(epoch)) => (Json(RotateBeginResponse { epoch })).into_response(),
+        Ok(None) => ApiError::conflict(format!(
+            "concurrent group key rotation detected: epoch is no longer {}; re-read group-keys and retry",
+            request.if_epoch
+        ))
+        .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "rotate begin failed");
+            ApiError::internal("rotate begin failed").into_response()
+        }
+    }
 }
 
 /// PUT /sync/group-keys：上传/更新某设备的信封（授权动作 = 既有设备为
@@ -712,6 +791,110 @@ mod tests {
                 "wrapped_item_key": b64(&[1u8; 32]),
             }
         })
+    }
+
+    // ---- 并发轮换互斥（§11 开放问题 2：epoch 乐观锁）----
+
+    #[tokio::test]
+    async fn rotate_begin_cas_mutex_and_epoch_exposure() {
+        let router = router().await;
+
+        // 初始 epoch = 0，group-keys 响应携带基线
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/group-keys")).await;
+        assert_eq!(body["epoch"], 0);
+
+        // CAS 命中：0 → 1
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/group-key/rotate-begin",
+                &json!({"if_epoch": 0}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["epoch"], 1);
+
+        // 陈旧基线重放 → 409 fail-closed（后到者干净中止）
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/group-key/rotate-begin",
+                &json!({"if_epoch": 0}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+        // 重读新基线后可再抢（重试路径）：1 → 2
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/group-key/rotate-begin",
+                &json!({"if_epoch": 1}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["epoch"], 2);
+
+        // group-keys 反映最新代数
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/group-keys")).await;
+        assert_eq!(body["epoch"], 2);
+    }
+
+    /// 两台设备并发轮换：先到者抢到互斥窗口，后到者拿陈旧基线 begin 得
+    /// ConcurrentConflict（core 侧 409 映射）；重读新基线后可完成重试。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_rotation_second_device_fails_closed() {
+        use persona_core::sync::device::DeviceIdentity;
+        use persona_core::sync::remote::SyncAdminApi;
+
+        const TOKEN: &str = "sync-rotate-race-token";
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.ok();
+        });
+        let base = format!("http://{addr}");
+        let admin_a = SyncAdminApi::new(&base, TOKEN).unwrap();
+        let admin_b = SyncAdminApi::new(&base, TOKEN).unwrap();
+
+        // A 自举建组（epoch 仍 0）
+        let dev_a = DeviceIdentity::generate("racer-a").unwrap();
+        let id_a = admin_a
+            .register_device("racer-a", dev_a.key_pair.public_bytes())
+            .await
+            .unwrap();
+        assert!(admin_a
+            .bootstrap_group_if_empty(id_a, dev_a.key_pair.public_bytes())
+            .await
+            .unwrap());
+
+        // 两台各自读到同一基线
+        let (_, baseline_b) = admin_b.group_keys_with_epoch().await.unwrap();
+        assert_eq!(baseline_b, 0);
+
+        // A 抢到互斥（0 → 1）；B 拿陈旧基线 begin → ConcurrentConflict
+        let won = admin_a.begin_group_rotation(baseline_b).await.unwrap();
+        assert_eq!(won, 1);
+        let err = admin_b.begin_group_rotation(baseline_b).await.unwrap_err();
+        assert!(
+            err.downcast_ref::<persona_core::PersonaError>()
+                .is_some_and(|e| matches!(e, persona_core::PersonaError::ConcurrentConflict(_))),
+            "unexpected error: {err}"
+        );
+
+        // B 重读新基线 → 重试成功（1 → 2）
+        let (_, fresh) = admin_b.group_keys_with_epoch().await.unwrap();
+        assert_eq!(fresh, 1);
+        assert_eq!(admin_b.begin_group_rotation(fresh).await.unwrap(), 2);
+
+        task.abort();
     }
 
     // ---- server 侧 oplog 保留策略（§11 开放问题 3 收口）----

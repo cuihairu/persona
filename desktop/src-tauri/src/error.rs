@@ -14,6 +14,9 @@ pub const CODE_BIOMETRIC_RESET: &str = "BIOMETRIC_RESET";
 /// 错误码：旅行模式进行中（改密等与 sidecar 中 wrapped key 不兼容的
 /// 操作被拒；前端应提示先退出旅行模式）
 pub const CODE_TRAVEL_MODE_ACTIVE: &str = "TRAVEL_MODE_ACTIVE";
+/// 错误码：并发互斥操作冲突（group key 轮换的 epoch 乐观锁未命中，另一台
+/// 设备已抢先轮换；前端应提示同步状态已更新、稍后重试轮换）
+pub const CODE_CONCURRENT_CONFLICT: &str = "CONCURRENT_CONFLICT";
 
 /// 将任意 service 错误映射为 `(error_code, message)`。
 ///
@@ -28,6 +31,9 @@ pub fn map_persona_error(err: &anyhow::Error) -> (Option<String>, String) {
                 }
                 PersonaError::TravelModeActive(_) => {
                     return (Some(CODE_TRAVEL_MODE_ACTIVE.to_string()), pe.to_string());
+                }
+                PersonaError::ConcurrentConflict(_) => {
+                    return (Some(CODE_CONCURRENT_CONFLICT.to_string()), pe.to_string());
                 }
                 PersonaError::AuthenticationFailed(msg)
                     if msg.contains("locked") || msg.contains("Service is locked") =>
@@ -113,5 +119,18 @@ mod tests {
         let (code, msg) = map_persona_error(&err);
         assert_eq!(code.as_deref(), Some(CODE_TRAVEL_MODE_ACTIVE));
         assert!(msg.contains("Travel mode is active"));
+    }
+
+    #[test]
+    fn concurrent_conflict_maps_to_code_even_wrapped() {
+        // 轮换并发互斥：rotate_group_key 经 begin_group_rotation 的 409
+        // 映射进 anyhow，中途隔 context 也必须翻出 CONCURRENT_CONFLICT
+        let err = anyhow::Error::from(PersonaError::ConcurrentConflict(
+            "concurrent group key rotation detected".to_string(),
+        ))
+        .context("sync_rotate failed");
+        let (code, msg) = map_persona_error(&err);
+        assert_eq!(code.as_deref(), Some(CODE_CONCURRENT_CONFLICT));
+        assert!(msg.contains("Concurrent operation conflict"));
     }
 }

@@ -6,13 +6,16 @@
  * BIOMETRIC_RESET：biometric 托管条目不存在或已失效自删 → 解锁屏隐藏
  * 指纹按钮、提示改用主密码登录。
  * TRAVEL_MODE_ACTIVE：旅行模式进行中，改密等不兼容操作被拒 → 提示先退出。
+ * CONCURRENT_CONFLICT：并发互斥操作冲突（组密钥轮换的 epoch 乐观锁未命中，
+ * 另一台设备已抢先轮换）→ 提示同步状态已更新，请重试轮换。
  */
 export type ApiErrorCode =
   | 'REAUTH_REQUIRED'
   | 'SERVICE_LOCKED'
   | 'PASSWORD_CHANGE_REQUIRED'
   | 'BIOMETRIC_RESET'
-  | 'TRAVEL_MODE_ACTIVE';
+  | 'TRAVEL_MODE_ACTIVE'
+  | 'CONCURRENT_CONFLICT';
 
 export interface ApiResponse<T> {
   success: boolean;

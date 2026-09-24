@@ -20,6 +20,7 @@ pub use sync::{
     delete_device as sync_delete_device, get_group_keys as sync_get_group_keys,
     list_devices as sync_list_devices, pull as sync_pull, push as sync_push,
     put_group_key as sync_put_group_key, register_device as sync_register_device,
+    rotate_begin as sync_rotate_begin,
 };
 
 /// 请求体上限（线上字节）。带 Content-Length 的请求由

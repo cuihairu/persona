@@ -104,6 +104,11 @@ pub enum PersonaError {
     /// （CONNECT_AUTOMATION_DESIGN DR-4：解锁即恢复，token 不扣限额）。
     #[error("Vault is locked: {0}")]
     VaultLocked(String),
+
+    /// 并发互斥操作冲突：group key 轮换的 epoch 乐观锁未命中（另一台
+    /// 设备已抢先轮换）。客户端应重读状态后重试（E2EE_SYNC_DESIGN §11-2）。
+    #[error("Concurrent operation conflict: {0}")]
+    ConcurrentConflict(String),
 }
 
 // Implement From conversions for common error types
