@@ -1,0 +1,49 @@
+# 跨机可复现 deb 构建容器（docs/REPRODUCIBLE_BUILDS.md「剩余差距」5 的
+# 容器半边）：`scripts/build-repro.sh --docker` 的标准执行环境——同一容器
+# 定义下，不同宿主机器（glibc/链接器/系统库不同）得到同一构建环境，容器
+# 内 $HOME 恒为 /root，RUSTFLAGS 重映射目标也恒定。
+#
+# 基础镜像按 digest 钉死（升级方法见 REPRODUCIBLE_BUILDS「容器钉死」节）。
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
+
+# tauri v2 Linux 构建依赖（官方清单）——normalize-deb.sh 所需的 ar/tar/
+# gzip/dpkg-deb 已随 build-essential 与 debian 基础包就位。git 必装：
+# build-repro.sh 以 git log 锚定 SOURCE_DATE_EPOCH（debian slim 无 git，
+# 缺失会让锚定静默退化为 0）。
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        file \
+        git \
+        libwebkit2gtk-4.1-dev \
+        libgtk-3-dev \
+        libayatana-appindicator3-dev \
+        librsvg2-dev \
+        libxdo-dev \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# node 24（前端构建；与 CI setup-node 同大版本）：从官方镜像 COPY 免第三
+# 方 apt 源。pnpm 由 corepack 按 package.json 的 packageManager 字段固定
+# （pnpm@10.22.0）；COREPACK_HOME 挪到 /usr/local 使 prepare 下载的 pnpm
+# 本体留在镜像层内——容器 run（--rm 每次全新）离线可用。
+COPY --from=node:24-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 /usr/local /usr/local
+ENV COREPACK_HOME=/usr/local/corepack
+# node 镜像的 yarn shim 指向未随 COPY 带来的 /opt/yarn*（broken symlink），
+# corepack enable 全量 enable 时对它 realpath 会炸——删掉且只 enable pnpm。
+RUN rm -f /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && corepack enable pnpm \
+    && corepack prepare pnpm@10.22.0 --activate
+
+# rustup 启动器 + 仓库钉定的工具链（rust-toolchain.toml：1.97.0 minimal +
+# clippy/rustfmt，与 CI dtolnay/rust-toolchain 同版）。工具链升级 = 改
+# toolchain file + 重建本镜像（两处一起改）。
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none \
+    && rustup toolchain install 1.97.0 --profile minimal --component clippy --component rustfmt
+
+WORKDIR /repo

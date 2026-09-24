@@ -1,34 +1,13 @@
-# Version control
-.git
-.github
-.gitignore
-.gitattributes
-
-# Rust build artifacts (but keep Cargo.lock for reproducible builds)
-**/target
-
-# Node.js
-node_modules
-pnpm-lock.yaml
-pnpm-workspace.yaml
-package.json
-
-# Documentation (not needed in container)
-docs
-website
-*.md
-!docker/README.md
-
-# Desktop and browser (not needed in server image)
-desktop
-browser
-
-# Dev configs
-.spec-workflow
-.vscode
-.claude
-.deny.toml
-Makefile
-scripts
-LICENSE
-PROJECT_STATUS_AUDIT_2026-07-15.md
+# build context 收窄：Dockerfile.{server,repro} 都不从 context COPY 源码
+#（server COPY . . 是例外——见下行白名单注释），排除构建产物/缓存/版本库，
+# 避免 GB 级 target 与历史进 context。
+# 注意：Dockerfile.server 的 `COPY . .` 需要源码在 context 内——本文件只
+# 排除产物与缓存，不动源码与 .git（server 构建含 rust-toolchain.toml，
+# repro 的 .git 经挂载使用、context 内不需要但保留无害）。
+target/
+desktop/src-tauri/target/
+desktop/node_modules/
+node_modules/
+.pnpm-store/
+Persona_*.deb
+*.deb

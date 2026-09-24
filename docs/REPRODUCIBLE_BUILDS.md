@@ -77,6 +77,52 @@ scripts/build-repro.sh [输出.deb]   # 缺省仓库根 Persona_0.1.0_amd64.deb
 10 分钟，归一 deb 哈希同为
 `2cf482056afe1de58c89b96261b0c0f1dfd8e0708e8141f29658bc8fa347f7b9`。
 
+## 构建容器：`docker/Dockerfile.repro` + `--docker` 模式（2026-09-24）
+
+跨机可复现的正式口径：不同宿主机器（glibc/链接器/系统库不同——本基线
+宿主 Ubuntu 26.04 即实例）在**同一容器内**执行构建。容器内 `$HOME` 恒为
+`/root`，`RUSTFLAGS` 重映射目标随之跨宿主恒定。
+
+```bash
+scripts/build-repro.sh --docker                       # 产物写仓库根
+PERSONA_REPRO_RUNTIME=podman scripts/build-repro.sh --docker   # podman 亦可
+```
+
+- 容器内容：`debian:bookworm-slim`（digest 钉死，与 Dockerfile.server 同
+  基座）+ tauri v2 官方 Linux 依赖 + node 24（`COPY --from` 官方镜像，与
+  CI setup-node 同大版本）+ corepack 固定 pnpm 10.22.0（`COREPACK_HOME`
+  在镜像层内，容器 run 离线可用）+ rustup 1.97.0（与 `rust-toolchain.toml`
+  同版，升级 = 改 toolchain file + 重建镜像）。
+- **独立 `CARGO_TARGET_DIR=/tmp/repro-target` 是正确性前提**：容器与宿主
+  glibc 不同而 cargo 增量指纹不区分工具链环境，误复用宿主 `target/` 会把
+  异构缓存编进产物。容器构建因此总是全量（首编译约 15–25 分钟）。
+- 依赖安装：容器内 `pnpm install --frozen-lockfile`（宿主已装的
+  `node_modules` 挂载复用——同为 linux-x64，二进制兼容；纯净环境全量装）。
+- 镜像重建：`docker build -f docker/Dockerfile.repro -t persona-repro .`；
+  基础镜像升级同「容器钉死」节的 digest 查询方法。
+
+### 容器内实测（2026-09-24）
+
+三轮全量构建（`--docker` 模式，容器内 cargo 全量 9m40s–12m12s/轮）：
+
+| 轮次       | 配置                        | 归一产物 sha256（前 8 位）          |
+| ---------- | --------------------------- | ----------------------------------- |
+| R1         | 镜像初版（无 git）          | `211cc36a…`                         |
+| R2         | 镜像 + git（终验）          | `000a5265…`                         |
+| R3         | 同 R2（复验，独立 cargo 缓存） | `000a5265…`（**与 R2 逐字节一致**） |
+
+- R1 暴露的缺陷与修复：debian slim 无 git，`build-repro.sh` 的
+  `SOURCE_DATE_EPOCH` HEAD 锚定静默退化为 0——git 已加入镜像必装清单
+  （锚定恢复后哈希从 `211cc36a…` 变为 `000a5265…`，属预期：tar mtime
+  锚点不同）。
+- R2 == R3：同一容器定义、相隔约 30 分钟的两次独立全量构建（容器
+  `--rm` 每次 cargo 缓存清零）逐字节同哈希——**容器内同机复现通过**。
+- 与宿主路径产物（`2cf48205…`，SOURCE_DATE_EPOCH 同为 HEAD 但构建环境
+  不同）哈希不同，符合预期——**跨机可比对的口径 = 容器内构建**。
+- 剩余半步：「不同物理机 × 同一容器」复验（两台机器各跑一次
+  `--docker`，`sha256sum` 对比应为 `000a5265…` 口径——同 HEAD 前提下
+  epoch 相同、产物应一致），需第二台机器执行。
+
 ## 剩余差距（写实）
 
 1. ~~跨机器路径嵌入~~ **已收口**（2026-09-24）：`scripts/build-repro.sh`
@@ -114,12 +160,11 @@ scripts/build-repro.sh [输出.deb]   # 缺省仓库根 Persona_0.1.0_amd64.deb
    `SOURCE_DATE_EPOCH`；仓库侧未做 header 重写 hack。dmg 在 Linux 无法
    构建，未测。
 
-5. **真跨机验证未做**：重映射 + 钉版后跨机器产物**应当**一致，但本基线
-   只在一台机器上实测；严格结论需钉死构建容器（同一 glibc/链接器）后
-   跨机复验。（CI 发布面的容器浮动已于 2026-09-24 收口，见「容器钉死」；
-   跨机复验所需的 deb 构建容器定义仍开放——需 webkit2gtk 全家桶 +
-   rustup 工具链，收口 = 提供钉 digest 的 `Dockerfile.repro` +
-   `build-repro.sh` 容器模式 + 第二台机器复验。）
+5. **真跨机验证未做（仅剩此半步）**：重映射 + 钉版 + 构建容器已全部就位，
+   **容器内同机复现已实测通过**（2026-09-24，R2/R3 两轮独立全量构建逐字
+   节同哈希 `000a5265…`，见「容器内实测」）。收口动作 = 第二台机器各跑
+   一次 `scripts/build-repro.sh --docker`，`sha256sum` 对比（同 HEAD 前提
+   下应与 `000a5265…` 一致——SOURCE_DATE_EPOCH 由 git 锚定同一提交）。
 
 ## 依赖输入固定现状
 

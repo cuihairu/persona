@@ -58,3 +58,7 @@ docs/.vitepress/cache/
 
 # Tauri v2 auto-generated capability schemas (regenerated on build)
 desktop/src-tauri/gen/schemas/
+
+# 可复现构建容器产物（scripts/build-repro.sh --docker 输出到仓库根）
+/Persona_*.deb
+/.pnpm-store/
