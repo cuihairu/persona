@@ -99,7 +99,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "payload": {
     "extension_id": "abcdefghijklmnopabcdefghijklmnop",
     "extension_version": "1.0.0",
-    "protocol_version": 2,
+    "protocol_version": 3,
     "client_instance_id": "uuid-v4"
   }
 }
@@ -113,6 +113,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "ok": true,
   "payload": {
     "server_version": "0.1.0",
+    "protocol_version": 3,
     "capabilities": [
       "status",
       "pairing_request",
@@ -123,7 +124,9 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
       "copy",
       "passkey_list",
       "passkey_create",
-      "passkey_assert"
+      "passkey_assert",
+      "passkey_credential_provider_list",
+      "passkey_credential_provider_assert"
     ],
     "pairing_required": true,
     "paired": false,
@@ -134,6 +137,8 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 > 备注：当已经完成配对时，`pairing_required=false` 且会返回 `session_id`（短期会话，默认 24h）。
+> 服务器回自身支持的 `protocol_version`（当前 3）；声明旧版本的扩展对不认识的新消息
+> 会得到 `unknown_type`，向后兼容。
 
 ### 2. pairing_request - 申请配对码
 
@@ -544,6 +549,40 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 
 > 签名对象为 `authenticatorData ‖ SHA-256(clientDataJSON)`，签名算法 ES256，输出 DER 编码。
 
+### 12. passkey_credential_provider_list - Provider 侧 Passkey 枚举
+
+OS passkey provider（Phase 4：macOS AuthenticationServices / Windows Hello 插件）
+的数据源消息：枚举本 origin 可用的 passkey 供系统选择 UI 展示。语义与校验链
+与 `passkey_list`（§9）完全一致（origin↔rp_id 校验 + user gesture + HMAC），
+仅消息名与审计口径不同。
+
+**请求：**
+
+```json
+{
+  "type": "passkey_credential_provider_list",
+  "origin": "https://example.com",
+  "user_gesture": true,
+  "payload": { "rp_id": "example.com" }
+}
+```
+
+**响应：** `passkey_credential_provider_list_response`，payload 形状同 §9
+（`{items, rp_id}`，非敏感摘要，不含 key material）。
+
+### 13. passkey_credential_provider_assert - Provider 代断言
+
+OS provider 已在系统 UI 完成用户点选后代为执行断言。信任链与
+`passkey_assert`（§11）完全一致：user gesture + 桌面审批闸门（op 名透传为
+`passkey_credential_provider_assert`，弹窗 UI 可辨识来源）+ core 侧
+origin↔rp_id 校验 + 敏感操作门禁。差异仅审计：`passkey_asserted` 事件携带
+`via=os_provider` 元数据（扩展路径为 `via=extension`），provider 断言可独立追溯。
+
+**请求 / 响应：** 形状同 §11；响应类型为
+`passkey_credential_provider_assert_response`。
+
+> v2 扩展对这两个新消息会得到 `unknown_type`（向后兼容）。
+
 ## 安全机制
 
 ### Origin 绑定
@@ -607,8 +646,8 @@ user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PA
 
 拒绝时 bridge 对该请求返回错误 `passkey request denied by desktop approval (<reason>)`。
 
-此协议是本地实现细节，不占用桥接协议版本号（`protocol_version` 保持 2；v3 的方向
-见 `CLIENT_COMMUNICATION_ARCHITECTURE.md`）。
+此协议是本地实现细节，不占用桥接协议版本号（`protocol_version` 由 hello
+响应承载，当前 3；下一版方向见 `CLIENT_COMMUNICATION_ARCHITECTURE.md`）。
 
 ### 会话管理（可选）
 

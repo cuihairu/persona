@@ -124,9 +124,13 @@ fn parse_query(line: &str) -> Result<BridgeApprovalQuery, ApprovalDecision> {
     if query.v != 1 {
         return Err(ApprovalDecision::deny("unsupported"));
     }
-    // passkey_list is not gated (non-sensitive): a query for it here is
-    // a protocol misuse, answered as unsupported rather than approved.
-    if query.op != "passkey_create" && query.op != "passkey_assert" {
+    // passkey_list（含 provider 变体）不放行：枚举非敏感，出现在这里是
+    // 协议误用，按 unsupported 拒绝而非批准。provider 代断言与扩展断言
+    // 同闸门——op 名透传给弹窗，用户可辨识来源（P4.4）。
+    if query.op != "passkey_create"
+        && query.op != "passkey_assert"
+        && query.op != "passkey_credential_provider_assert"
+    {
         return Err(ApprovalDecision::deny("unsupported"));
     }
     Ok(query)
@@ -470,6 +474,15 @@ mod tests {
         // passkey_list is not gated — a query for it is a protocol misuse.
         assert_eq!(
             parse_query(r#"{"v":1,"op":"passkey_list","origin":"https://x"}"#),
+            Err(ApprovalDecision::deny("unsupported"))
+        );
+        // Provider 代断言与扩展断言同闸门（P4.1）；provider 枚举同 list 不放行。
+        assert!(parse_query(
+            r#"{"v":1,"op":"passkey_credential_provider_assert","origin":"https://github.com","item_id":"abc"}"#
+        )
+        .is_ok());
+        assert_eq!(
+            parse_query(r#"{"v":1,"op":"passkey_credential_provider_list","origin":"https://x"}"#),
             Err(ApprovalDecision::deny("unsupported"))
         );
     }

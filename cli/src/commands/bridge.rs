@@ -394,8 +394,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "protocol_version": 2,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert"],
+                "protocol_version": 3,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -787,45 +787,21 @@ async fn handle_request(
             require_authenticated_session(state_dir, &req)?;
             let parsed: PasskeyListPayload =
                 serde_json::from_value(req.payload).context("invalid payload for passkey_list")?;
-
-            if gesture_required() && !parsed.user_gesture {
-                warn!(origin = %parsed.origin, "passkey_list rejected: user_gesture required");
-                return Err(anyhow!(
-                    "user_gesture_required: passkey enumeration requires user action"
-                ));
-            }
-
-            let rp_id = match &parsed.rp_id {
-                Some(rp_id) => {
-                    validate_origin_matches_rp_id(&parsed.origin, rp_id).map_err(|_| {
-                        anyhow!("passkey_rp_mismatch: rp_id does not match request origin")
-                    })?;
-                    rp_id.clone()
-                }
-                None => origin_to_host(&parsed.origin)?,
-            };
-
-            let (service, _) = open_unlocked_service(db_path).await?;
-            let passkeys = service.list_passkeys_by_rp(&rp_id).await?;
-            let mut items = Vec::with_capacity(passkeys.len());
-            for pk in passkeys {
-                let identity_name = service.get_identity(&pk.identity_id).await?.map(|i| i.name);
-                items.push(PasskeyListItem {
-                    id: pk.id.to_string(),
-                    rp_id: pk.rp_id,
-                    user_name: pk.user_name,
-                    user_display_name: pk.user_display_name,
-                    identity_name,
-                    created_at: pk.created_at.timestamp(),
-                });
-            }
-            debug!(event = "bridge_passkey_list", rp_id = %rp_id, count = items.len());
-
-            Ok(ok(
+            run_passkey_list(db_path, req.request_id, parsed, "passkey_list").await
+        }
+        // OS passkey provider 数据源（P4.1）：与 passkey_list 同语义同校验链，
+        // 差异仅在消息名与审计/日志的来源口径。
+        "passkey_credential_provider_list" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: PasskeyListPayload = serde_json::from_value(req.payload)
+                .context("invalid payload for passkey_credential_provider_list")?;
+            run_passkey_list(
+                db_path,
                 req.request_id,
-                "passkey_list_response",
-                serde_json::json!({ "items": items, "rp_id": rp_id }),
-            ))
+                parsed,
+                "passkey_credential_provider_list",
+            )
+            .await
         }
         "passkey_create" => {
             require_authenticated_session(state_dir, &req)?;
@@ -913,103 +889,30 @@ async fn handle_request(
             require_authenticated_session(state_dir, &req)?;
             let parsed: PasskeyAssertPayload = serde_json::from_value(req.payload)
                 .context("invalid payload for passkey_assert")?;
-
-            if gesture_required() && !parsed.user_gesture {
-                warn!(origin = %parsed.origin, "passkey_assert rejected: user_gesture required");
-                return Err(anyhow!(
-                    "user_gesture_required: passkey assertions require an explicit selection click"
-                ));
-            }
-
-            // Second consent line: a running desktop must approve before
-            // anything is signed. rp_id/user_name live on the stored item;
-            // the desktop dialog shows origin + item id.
-            match desktop_approval_gate(
-                "passkey_assert",
-                None,
-                &parsed.origin,
-                None,
-                Some(&parsed.item_id),
-            )
-            .await?
-            {
-                #[cfg(unix)]
-                DesktopApproval::Approved => {}
-                #[cfg(unix)]
-                DesktopApproval::Denied(reason) => {
-                    warn!(origin = %parsed.origin, %reason, "passkey_assert denied by desktop");
-                    return Err(anyhow!(
-                        "passkey_desktop_denied: assertion rejected by desktop approval ({reason})"
-                    ));
-                }
-                DesktopApproval::Unavailable => {}
-            }
-
-            let item_id = uuid::Uuid::parse_str(&parsed.item_id)
-                .map_err(|e| anyhow!("invalid_request: item_id uuid: {e}"))?;
-            let client_data_json = URL_SAFE_NO_PAD
-                .decode(parsed.client_data_json_b64.as_bytes())
-                .context("invalid_request: client_data_json_b64 must be base64url")?;
-
-            let (service, active_identity_id) = open_unlocked_service(db_path).await?;
-
-            // Preflight the item so error codes stay precise; the assertion
-            // re-validates origin↔rp_id inside core regardless.
-            let item = service
-                .get_passkey(&item_id)
-                .await?
-                .ok_or_else(|| anyhow!("passkey_item_not_found"))?;
-            if let Some(active) = active_identity_id {
-                if item.identity_id != active {
-                    return Err(anyhow!(
-                        "wrong_identity: switch active identity to use this passkey"
-                    ));
-                }
-            }
-            validate_origin_matches_rp_id(&parsed.origin, &item.rp_id).map_err(|_| {
-                anyhow!("passkey_rp_mismatch: origin does not match the passkey's rp_id")
-            })?;
-
-            let assertion = service
-                .passkey_assertion(
-                    &item_id,
-                    &parsed.origin,
-                    &client_data_json,
-                    parsed.user_verification,
-                    "extension",
-                )
-                .await
-                .map_err(|e| {
-                    let not_found = e
-                        .downcast_ref::<PersonaError>()
-                        .is_some_and(|pe| matches!(pe, PersonaError::NotFound(_)));
-                    if not_found {
-                        anyhow!("passkey_item_not_found")
-                    } else {
-                        anyhow!("passkey_assert_failed: {e}")
-                    }
-                })?;
-
-            info!(
-                event = "bridge_passkey_assert",
-                rp_id = %item.rp_id,
-                origin = %parsed.origin,
-                item_id = %item.id,
-                user_gesture = parsed.user_gesture,
-                "passkey assertion signed via bridge"
-            );
-
-            Ok(ok(
+            run_passkey_assert(
+                db_path,
                 req.request_id,
-                "passkey_assert_response",
-                serde_json::to_value(PasskeyAssertResponse {
-                    item_id: item.id.to_string(),
-                    credential_id_b64: URL_SAFE_NO_PAD.encode(&assertion.credential_id),
-                    authenticator_data_b64: URL_SAFE_NO_PAD.encode(&assertion.authenticator_data),
-                    signature_der_b64: URL_SAFE_NO_PAD.encode(&assertion.signature_der),
-                    user_handle_b64: URL_SAFE_NO_PAD.encode(&assertion.user_handle),
-                })?,
-            ))
+                parsed,
+                "passkey_assert",
+                "extension",
+            )
+            .await
+        }
+        // OS passkey provider 代断言（P4.1/P4.4）：同一信任链（gesture + 桌面
+        // 审批 + core origin↔rp_id + 敏感操作门禁），审计 via=os_provider 区分
+        // provider 来源；桌面审批弹窗 op 名透传，UI 可辨识。
+        "passkey_credential_provider_assert" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: PasskeyAssertPayload = serde_json::from_value(req.payload)
+                .context("invalid payload for passkey_credential_provider_assert")?;
+            run_passkey_assert(
+                db_path,
+                req.request_id,
+                parsed,
+                "passkey_credential_provider_assert",
+                "os_provider",
+            )
+            .await
         }
         other => Ok(err(
             req.request_id,
@@ -1017,6 +920,162 @@ async fn handle_request(
             format!("unknown_type: {other}"),
         )),
     }
+}
+
+/// Shared body of `passkey_list` and `passkey_credential_provider_list`:
+/// identical semantics and validation chain, differing only in the message
+/// kind used for logs and the response type.
+async fn run_passkey_list(
+    db_path: &Path,
+    request_id: Option<String>,
+    parsed: PasskeyListPayload,
+    kind: &str,
+) -> Result<BridgeResponse<serde_json::Value>> {
+    if gesture_required() && !parsed.user_gesture {
+        warn!(origin = %parsed.origin, "{kind} rejected: user_gesture required");
+        return Err(anyhow!(
+            "user_gesture_required: passkey enumeration requires user action"
+        ));
+    }
+
+    let rp_id = match &parsed.rp_id {
+        Some(rp_id) => {
+            validate_origin_matches_rp_id(&parsed.origin, rp_id)
+                .map_err(|_| anyhow!("passkey_rp_mismatch: rp_id does not match request origin"))?;
+            rp_id.clone()
+        }
+        None => origin_to_host(&parsed.origin)?,
+    };
+
+    let (service, _) = open_unlocked_service(db_path).await?;
+    let passkeys = service.list_passkeys_by_rp(&rp_id).await?;
+    let mut items = Vec::with_capacity(passkeys.len());
+    for pk in passkeys {
+        let identity_name = service.get_identity(&pk.identity_id).await?.map(|i| i.name);
+        items.push(PasskeyListItem {
+            id: pk.id.to_string(),
+            rp_id: pk.rp_id,
+            user_name: pk.user_name,
+            user_display_name: pk.user_display_name,
+            identity_name,
+            created_at: pk.created_at.timestamp(),
+        });
+    }
+    debug!(event = "bridge_passkey_list", kind, rp_id = %rp_id, count = items.len());
+
+    Ok(ok(
+        request_id,
+        &format!("{kind}_response"),
+        serde_json::json!({ "items": items, "rp_id": rp_id }),
+    ))
+}
+
+/// Shared body of `passkey_assert` and `passkey_credential_provider_assert`.
+/// `gate_op` names the desktop-approval operation shown in the confirmation
+/// dialog; `via` lands in the audit metadata so the trust path
+/// (browser extension vs OS passkey provider) stays distinguishable.
+async fn run_passkey_assert(
+    db_path: &Path,
+    request_id: Option<String>,
+    parsed: PasskeyAssertPayload,
+    gate_op: &'static str,
+    via: &'static str,
+) -> Result<BridgeResponse<serde_json::Value>> {
+    let kind = if via == "os_provider" {
+        "passkey_credential_provider_assert"
+    } else {
+        "passkey_assert"
+    };
+
+    if gesture_required() && !parsed.user_gesture {
+        warn!(origin = %parsed.origin, "{kind} rejected: user_gesture required");
+        return Err(anyhow!(
+            "user_gesture_required: passkey assertions require an explicit selection click"
+        ));
+    }
+
+    // Second consent line: a running desktop must approve before
+    // anything is signed. rp_id/user_name live on the stored item;
+    // the desktop dialog shows origin + item id.
+    match desktop_approval_gate(gate_op, None, &parsed.origin, None, Some(&parsed.item_id)).await? {
+        #[cfg(unix)]
+        DesktopApproval::Approved => {}
+        #[cfg(unix)]
+        DesktopApproval::Denied(reason) => {
+            warn!(origin = %parsed.origin, %reason, "{kind} denied by desktop");
+            return Err(anyhow!(
+                "passkey_desktop_denied: assertion rejected by desktop approval ({reason})"
+            ));
+        }
+        DesktopApproval::Unavailable => {}
+    }
+
+    let item_id = uuid::Uuid::parse_str(&parsed.item_id)
+        .map_err(|e| anyhow!("invalid_request: item_id uuid: {e}"))?;
+    let client_data_json = URL_SAFE_NO_PAD
+        .decode(parsed.client_data_json_b64.as_bytes())
+        .context("invalid_request: client_data_json_b64 must be base64url")?;
+
+    let (service, active_identity_id) = open_unlocked_service(db_path).await?;
+
+    // Preflight the item so error codes stay precise; the assertion
+    // re-validates origin↔rp_id inside core regardless.
+    let item = service
+        .get_passkey(&item_id)
+        .await?
+        .ok_or_else(|| anyhow!("passkey_item_not_found"))?;
+    if let Some(active) = active_identity_id {
+        if item.identity_id != active {
+            return Err(anyhow!(
+                "wrong_identity: switch active identity to use this passkey"
+            ));
+        }
+    }
+    validate_origin_matches_rp_id(&parsed.origin, &item.rp_id)
+        .map_err(|_| anyhow!("passkey_rp_mismatch: origin does not match the passkey's rp_id"))?;
+
+    let assertion = service
+        .passkey_assertion(
+            &item_id,
+            &parsed.origin,
+            &client_data_json,
+            parsed.user_verification,
+            via,
+        )
+        .await
+        .map_err(|e| {
+            let not_found = e
+                .downcast_ref::<PersonaError>()
+                .is_some_and(|pe| matches!(pe, PersonaError::NotFound(_)));
+            if not_found {
+                anyhow!("passkey_item_not_found")
+            } else {
+                anyhow!("passkey_assert_failed: {e}")
+            }
+        })?;
+
+    info!(
+        event = "bridge_passkey_assert",
+        kind,
+        via,
+        rp_id = %item.rp_id,
+        origin = %parsed.origin,
+        item_id = %item.id,
+        user_gesture = parsed.user_gesture,
+        "passkey assertion signed via bridge"
+    );
+
+    Ok(ok(
+        request_id,
+        &format!("{kind}_response"),
+        serde_json::to_value(PasskeyAssertResponse {
+            item_id: item.id.to_string(),
+            credential_id_b64: URL_SAFE_NO_PAD.encode(&assertion.credential_id),
+            authenticator_data_b64: URL_SAFE_NO_PAD.encode(&assertion.authenticator_data),
+            signature_der_b64: URL_SAFE_NO_PAD.encode(&assertion.signature_der),
+            user_handle_b64: URL_SAFE_NO_PAD.encode(&assertion.user_handle),
+        })?,
+    ))
 }
 
 fn ok<T: Serialize>(request_id: Option<String>, kind: &str, payload: T) -> BridgeResponse<T> {
@@ -2109,7 +2168,9 @@ pub(crate) mod tests {
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
 
-        // ---- hello: protocol v2 advertises the passkey capabilities ----
+        // ---- hello: request declaring v2 still gets the v3 capability set
+        // (server reports its own protocol_version; old extensions stay
+        // compatible by receiving unknown_type for new messages) ----
         let resp = handle_request(
             &db_path,
             &state_dir,
@@ -2127,8 +2188,14 @@ pub(crate) mod tests {
         .unwrap();
         assert!(resp.ok, "hello must succeed: {:?}", resp.error);
         let payload = resp.payload.unwrap();
-        assert_eq!(payload["protocol_version"], 2);
-        for capability in ["passkey_list", "passkey_create", "passkey_assert"] {
+        assert_eq!(payload["protocol_version"], 3);
+        for capability in [
+            "passkey_list",
+            "passkey_create",
+            "passkey_assert",
+            "passkey_credential_provider_list",
+            "passkey_credential_provider_assert",
+        ] {
             assert!(
                 payload["capabilities"]
                     .as_array()
@@ -2366,6 +2433,103 @@ pub(crate) mod tests {
             &signature,
         )
         .expect("bridge assertion must verify against the stored public key");
+
+        // ---- passkey_credential_provider_list: same data, provider framing ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_credential_provider_list",
+                serde_json::json!({ "origin": "https://example.com", "user_gesture": true }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "provider list must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "passkey_credential_provider_list_response");
+        let provider_items = resp.payload.unwrap()["items"].as_array().unwrap().clone();
+        assert_eq!(
+            provider_items.len(),
+            2,
+            "same RP enumeration as passkey_list"
+        );
+        assert!(
+            provider_items[0].get("credential_id").is_none(),
+            "no key material"
+        );
+
+        // ---- provider list: rp_id that doesn't match the origin ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_credential_provider_list",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "rp_id": "evil.com"
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_rp_mismatch"));
+
+        // ---- provider list: missing gesture ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_credential_provider_list",
+                serde_json::json!({ "origin": "https://example.com" }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("user_gesture_required"));
+
+        // ---- passkey_credential_provider_assert: provider trust path, same
+        // product (desktop approval Unavailable in tests), audit via=os_provider ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_credential_provider_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": item_id,
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "provider assert must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "passkey_credential_provider_assert_response");
+        let payload = resp.payload.unwrap();
+        assert_eq!(
+            payload["item_id"], item_id,
+            "provider path signs the same stored credential"
+        );
+
+        // ---- provider assert: unknown item ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "passkey_credential_provider_assert",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "user_gesture": true,
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "client_data_json_b64": URL_SAFE_NO_PAD.encode(&get_client_data),
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("passkey_item_not_found"));
 
         // ---- passkey_list: explicit rp_id that matches the origin ----
         let resp = handle_request(
@@ -3666,7 +3830,7 @@ pub(crate) mod tests {
         assert_eq!(payload["paired"], false);
         assert!(payload["session_id"].is_null());
         assert!(payload["session_expires_at_ms"].is_null());
-        assert_eq!(payload["protocol_version"], 2);
+        assert_eq!(payload["protocol_version"], 3);
         assert!(payload["server_version"].is_string());
         let caps = payload["capabilities"].as_array().unwrap();
         for capability in [

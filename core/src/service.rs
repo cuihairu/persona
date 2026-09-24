@@ -3210,6 +3210,7 @@ impl PersonaService {
     /// Same as [`Self::log_audit`] plus one free-form metadata pair (see
     /// [`AuditLog::with_metadata`]); used e.g. to distinguish which trust
     /// path performed a passkey assertion (`via=extension` / `os_provider`).
+    #[allow(clippy::too_many_arguments)]
     async fn log_audit_with_metadata(
         &self,
         action: AuditAction,
@@ -3711,7 +3712,7 @@ mod tests {
         let db = Database::in_memory().await.unwrap();
         db.migrate().await.unwrap();
 
-        let mut service = PersonaService::new(db).await.unwrap();
+        let mut service = PersonaService::new(db.clone()).await.unwrap();
         let salt = service.generate_salt();
         service.unlock("test_password", &salt).unwrap();
 
@@ -3763,6 +3764,19 @@ mod tests {
 
         let reloaded = service.get_passkey(&passkey.id).await.unwrap().unwrap();
         assert!(reloaded.last_used_at.is_some());
+
+        // 审计抽查：断言事件携带 via 来源元数据（P4.4 的 core 半边）。
+        let audit_repo = AuditLogRepository::new(db);
+        let asserted = audit_repo
+            .find_by_action(&AuditAction::PasskeyAsserted)
+            .await
+            .unwrap();
+        assert_eq!(asserted.len(), 1, "exactly one assertion audited");
+        assert_eq!(
+            asserted[0].metadata.get("via").map(String::as_str),
+            Some("extension"),
+            "audit must record the assertion trust path"
+        );
 
         assert!(service.delete_passkey(&passkey.id).await.unwrap());
         assert!(!service.delete_passkey(&passkey.id).await.unwrap());

@@ -660,13 +660,17 @@ Browser & Autofill (future)
         Login/API Credential/SSH Key 映射、TOTP 拆独立凭据、未映射类别跳过并报告；
         真实 .1pux 导出待人工验收
   - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation
-        ——2026-09-22 细化为可执行计划（`docs/PASSKEYS_DESIGN.md` §13.1）：
+        ——2026-09-22 细化为可执行计划（`docs/BRIDGE_PROTOCOL.md` §13.1）：
         二者是同一工作流（原生 passkey 选择 UI 出 Persona 条目 = 向 OS 注册
         凭据提供方，JS 拦截 conditional 会破坏原生回退，设计已排除）。
         P4.1 桥接 provider 消息族 → P4.2 macOS ASAuthorization 扩展 →
         P4.3 Windows passkey 插件 → P4.4 UV/审计对齐 → P4.5 CXF 跟踪。
-        **阻塞：需 macOS/Windows 真机与签名环境**，本机（Linux）不可编译验证，
-        不写不可测平台代码。1PUX 导入已提前落地（上条）
+        P4.1 + P4.4 已落地（2026-09-24）：`passkey_credential_provider_list/assert`
+        消息族 + protocol_version 3（旧扩展 unknown_type 向后兼容）、provider
+        代断言同信任链（gesture + 桌面审批同闸门 + origin↔rp_id + 敏感操作门禁）、
+        审计 `passkey_asserted` 携带 `via=extension|os_provider` 元数据。
+        剩余 P4.2/P4.3 **阻塞：需 macOS/Windows 真机与签名环境**，本机（Linux）
+        不可编译验证，不写不可测平台代码。1PUX 导入已提前落地（上条）
 - [x] Phishing protections; identity-based context switching
 
 Game Tokens (游戏令牌)
