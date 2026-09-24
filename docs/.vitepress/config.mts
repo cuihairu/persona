@@ -2,12 +2,15 @@ import { defineConfig } from "vitepress";
 
 const base = process.env.VITEPRESS_BASE ?? "/persona/";
 
+// 侧边栏只挂有实内容的页面：占位白页（仅一行标题）已删除，板块有稳定
+// 内容后再挂回——空板块不如不挂。根目录 docs/*.md 工程文档（E2EE 同步
+// 设计、威胁模型、可复现构建等）经 GitHub 链接在 nav「路线图」同款方式
+// 可达，不在此重复。
 const sidebar = [
   {
     text: "项目概述",
     items: [
       { text: "项目简介", link: "/overview/introduction" },
-      { text: "核心功能", link: "/overview/features" },
       { text: "技术架构", link: "/overview/architecture" },
       { text: "安全特性", link: "/overview/security" },
     ],
@@ -17,60 +20,18 @@ const sidebar = [
     items: [
       { text: "场景分析", link: "/analysis/scenarios" },
       { text: "安全需求", link: "/analysis/security-requirements" },
-      { text: "用户需求", link: "/analysis/user-requirements" },
-      { text: "技术需求", link: "/analysis/technical-requirements" },
     ],
   },
   {
     text: "系统设计",
     items: [
       { text: "整体架构", link: "/design/architecture" },
-      { text: "数据模型", link: "/design/data-model" },
-      { text: "API 设计", link: "/design/api" },
       { text: "安全设计", link: "/design/security" },
-      { text: "UI/UX 设计", link: "/design/ui-ux" },
     ],
   },
   {
     text: "开发指南",
-    items: [
-      { text: "环境搭建", link: "/development/setup" },
-      { text: "项目结构", link: "/development/structure" },
-      { text: "编码规范", link: "/development/coding-standards" },
-      { text: "测试指南", link: "/development/testing" },
-      { text: "部署指南", link: "/development/deployment" },
-    ],
-  },
-  {
-    text: "API 文档",
-    items: [
-      { text: "认证 API", link: "/api/authentication" },
-      { text: "身份管理 API", link: "/api/identity" },
-      { text: "数据同步 API", link: "/api/sync" },
-      { text: "安全 API", link: "/api/security" },
-    ],
-  },
-  {
-    text: "用户手册",
-    items: [
-      { text: "快速开始", link: "/user/quick-start" },
-      { text: "桌面应用", link: "/user/desktop" },
-      { text: "移动应用", link: "/user/mobile" },
-      { text: "常见问题", link: "/user/faq" },
-      { text: "故障排除", link: "/user/troubleshooting" },
-    ],
-  },
-  {
-    text: "贡献指南",
-    items: [
-      { text: "如何贡献", link: "/contributing/how-to-contribute" },
-      { text: "代码审查", link: "/contributing/code-review" },
-      { text: "发布流程", link: "/contributing/release-process" },
-    ],
-  },
-  {
-    text: "附录",
-    items: [{ text: "附录", link: "/appendix/" }],
+    items: [{ text: "项目结构", link: "/development/structure" }],
   },
 ];
 
@@ -97,8 +58,11 @@ export default defineConfig({
     siteTitle: "Persona 数钥",
     nav: [
       { text: "指南", link: "/overview/introduction" },
-      { text: "开发", link: "/development/setup" },
-      { text: "API", link: "/api/authentication" },
+      { text: "开发", link: "/development/structure" },
+      {
+        text: "工程文档",
+        link: "https://github.com/cuihairu/persona/tree/main/docs",
+      },
       {
         text: "路线图",
         link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",

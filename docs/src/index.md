@@ -10,8 +10,8 @@ hero:
     alt: Persona logo
   actions:
     - theme: brand
-      text: 快速开始
-      link: /user/quick-start
+      text: 项目简介
+      link: /overview/introduction
     - theme: alt
       text: 查看架构
       link: /overview/architecture
@@ -34,6 +34,7 @@ features:
 ## 从这里开始
 
 - [项目简介](/overview/introduction) 了解 Persona 的问题边界和设计理念。
-- [快速开始](/user/quick-start) 跟随用户路径上手核心功能。
-- [开发环境](/development/setup) 配置本地开发与构建流程。
-- [API 文档](/api/authentication) 查看认证、身份、同步和安全接口。
+- [技术架构](/overview/architecture) 看分层结构与端到端加密同步的设计。
+- [安全设计](/design/security) 密钥层级、威胁模型与安全边界。
+- [项目结构](/development/structure) 配置本地开发与浏览 monorepo 布局。
+- [工程文档](https://github.com/cuihairu/persona/tree/main/docs) E2EE 同步设计、威胁模型、可复现构建等深度文档。
