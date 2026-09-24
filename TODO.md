@@ -509,7 +509,9 @@ Server & Sync (optional)
   - [x] 阶段 4 文档收口（2026-09-22）：STORAGE_AND_SYNC「本机自动化
         （Connect API）」节（两步上手 + curl 示例 + 诚实边界）+ 根 README
         Getting Started connect 示例 + GAP 条目收口
-- [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
+- [x] End-to-end encrypted sync (key envelopes, conflict resolution)（2026-09-24
+      全部子项收口：阶段 2/3a–3d + 吊销闭环 + 双端 GC/保留策略 + 并发轮换
+      乐观锁 + 崩溃续跑钉住 + 前端并发冲突消费；开放问题 2/3 均已关闭）
   - [x] 阶段 2 核心（2026-09-22，批 1–4）：device envelope（DR-1，X25519
         `persona-dev-env-1` 信封）+ group key 层级；oplog 结构 + LWW/冲突双
         版本纯逻辑（DR-4，`item_view` 推导冲突区）；本地同步存储（014 迁移：
