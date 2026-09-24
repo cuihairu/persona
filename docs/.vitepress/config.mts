@@ -27,6 +27,7 @@ const sidebar = [
     text: "用户手册",
     items: [
       { text: "快速开始", link: "/user/quick-start" },
+      { text: "桌面应用", link: "/user/desktop" },
       { text: "常见问题", link: "/user/faq" },
       { text: "故障排除", link: "/user/troubleshooting" },
     ],
