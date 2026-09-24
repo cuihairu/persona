@@ -8,16 +8,16 @@ Persona Server 的端到端加密同步轨道：服务器**只中继密文**—�
 
 ## 端点
 
-| 方法 | 路径                              | 用途                                       |
-| ---- | --------------------------------- | ------------------------------------------ |
-| POST | `/api/v1/sync/devices`            | 登记本设备（设备信封上传）                 |
-| GET  | `/api/v1/sync/devices`            | 列出同步组设备                             |
-| DELETE | `/api/v1/sync/devices/:id`      | 吊销设备（级联删信封与同名 SRP 登记，幂等） |
-| GET  | `/api/v1/sync/group-keys`         | 取组密钥信封族（随 epoch 基线下发）        |
-| PUT  | `/api/v1/sync/group-keys`         | 写组密钥信封（轮换时为每台设备重封）       |
-| POST | `/api/v1/sync/group-key/rotate-begin` | 轮换互斥点：epoch CAS，抢占失败 409    |
-| POST | `/api/v1/sync/oplog`              | 推送密文操作日志（幂等，重复推不膨胀）     |
-| GET  | `/api/v1/sync/oplog`              | 拉取操作日志（游标分页，非空页恒返回游标） |
+| 方法   | 路径                                  | 用途                                        |
+| ------ | ------------------------------------- | ------------------------------------------- |
+| POST   | `/api/v1/sync/devices`                | 登记本设备（设备信封上传）                  |
+| GET    | `/api/v1/sync/devices`                | 列出同步组设备                              |
+| DELETE | `/api/v1/sync/devices/:id`            | 吊销设备（级联删信封与同名 SRP 登记，幂等） |
+| GET    | `/api/v1/sync/group-keys`             | 取组密钥信封族（随 epoch 基线下发）         |
+| PUT    | `/api/v1/sync/group-keys`             | 写组密钥信封（轮换时为每台设备重封）        |
+| POST   | `/api/v1/sync/group-key/rotate-begin` | 轮换互斥点：epoch CAS，抢占失败 409         |
+| POST   | `/api/v1/sync/oplog`                  | 推送密文操作日志（幂等，重复推不膨胀）      |
+| GET    | `/api/v1/sync/oplog`                  | 拉取操作日志（游标分页，非空页恒返回游标）  |
 
 ## 关键语义
 

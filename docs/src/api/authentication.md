@@ -17,11 +17,11 @@ Persona Server 的设备认证轨道：基于 SRP（Secure Remote Password）的
 
 ## 端点
 
-| 方法 | 路径                        | 认证         | 用途                                       |
-| ---- | --------------------------- | ------------ | ------------------------------------------ |
-| POST | `/api/v1/auth/register`     | 需既有 Bearer | 登记/覆盖本设备的 SRP 盐与 verifier（引导链） |
-| POST | `/api/v1/auth/challenge`    | 免           | 发起 SRP 挑战                              |
-| POST | `/api/v1/auth/verify`       | 免           | 提交 SRP 证明，换取短期 Bearer 令牌        |
+| 方法 | 路径                     | 认证          | 用途                                          |
+| ---- | ------------------------ | ------------- | --------------------------------------------- |
+| POST | `/api/v1/auth/register`  | 需既有 Bearer | 登记/覆盖本设备的 SRP 盐与 verifier（引导链） |
+| POST | `/api/v1/auth/challenge` | 免            | 发起 SRP 挑战                                 |
+| POST | `/api/v1/auth/verify`    | 免            | 提交 SRP 证明，换取短期 Bearer 令牌           |
 
 `challenge` / `verify` 免认证——它们本身就是换取令牌的登录步骤；
 `register` 走 Bearer 保护（新设备由已认证会话引导接入）。
