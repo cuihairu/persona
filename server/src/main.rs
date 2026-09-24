@@ -75,13 +75,32 @@ async fn main() {
                 .expect("PERSONA_SERVER_BACKUP_MAX_VERSIONS must be a non-negative integer")
         })
         .unwrap_or(0);
+    // 保留策略（0 = 不清理 = 默认）：oplog 窗口须 ≥ 最慢设备离线周期
+    // （E2EE_SYNC_DESIGN §11-3）；events 窗口按 SIEM 摘取周期定。
+    let oplog_retention_days: u32 = std::env::var("PERSONA_SERVER_OPS_RETENTION_DAYS")
+        .ok()
+        .map(|value| {
+            value
+                .parse()
+                .expect("PERSONA_SERVER_OPS_RETENTION_DAYS must be a non-negative integer")
+        })
+        .unwrap_or(0);
+    let events_retention_days: u32 = std::env::var("PERSONA_SERVER_EVENTS_RETENTION_DAYS")
+        .ok()
+        .map(|value| {
+            value
+                .parse()
+                .expect("PERSONA_SERVER_EVENTS_RETENTION_DAYS must be a non-negative integer")
+        })
+        .unwrap_or(0);
 
     let app_state = AppState::new(
         pool,
         auth,
         Arc::new(Metrics::new(chrono::Utc::now().timestamp())),
     )
-    .with_backup_settings(backup_dir, backup_max_versions);
+    .with_backup_settings(backup_dir, backup_max_versions)
+    .with_retention_settings(oplog_retention_days, events_retention_days);
 
     // Configurable bind address (0.0.0.0 for containers, 127.0.0.1 for local dev)
     let host = std::env::var("PERSONA_SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".into());

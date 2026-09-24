@@ -20,6 +20,11 @@ services:
       PERSONA_SERVER_BACKUP_DIR: /data/backups
       # 保留版本数上限（0=不限，超出删最旧；全局跨设备）
       PERSONA_SERVER_BACKUP_MAX_VERSIONS: "${PERSONA_SERVER_BACKUP_MAX_VERSIONS:-0}"
+      # oplog 保留天数（0=不清理，默认）。开窗 = 放弃向「离线超过窗口」
+      # 设备补发历史的责任：窗口须 ≥ 最慢设备的离线周期
+      PERSONA_SERVER_OPS_RETENTION_DAYS: "${PERSONA_SERVER_OPS_RETENTION_DAYS:-0}"
+      # 审计事件副本保留天数（0=不清理，默认）。按 SIEM 摘取周期定
+      PERSONA_SERVER_EVENTS_RETENTION_DAYS: "${PERSONA_SERVER_EVENTS_RETENTION_DAYS:-0}"
     volumes:
       - persona-server-data:/data
     healthcheck:

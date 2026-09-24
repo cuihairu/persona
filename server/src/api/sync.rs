@@ -21,6 +21,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -453,6 +454,42 @@ fn parse_uuid(raw: &str) -> Result<Uuid, String> {
     Uuid::parse_str(raw).map_err(|_| "must be a UUID".to_string())
 }
 
+/// server 侧 oplog 保留策略（E2EE_SYNC_DESIGN §11 开放问题 3 收口）：
+/// 按 received_at 滚动删除超过保留窗口的中继行，0 = 不清理（默认，
+/// 保持纯中继现状）。窗口语义 = 放弃向「离线超过窗口」的设备补发历史
+/// 的责任：游标重置重拉会拿到缩水子集（LWW 对子集仍收敛，缺失部分靠
+/// 各端本地事实源与重推幂等补齐——客户端 push 队列持底稿，重推同 op_id
+/// 经 INSERT OR IGNORE 原样重建）。清理失败仅告警：增长治理不是中继
+/// 正确性的前置条件。
+async fn enforce_oplog_retention(state: &AppState) {
+    let days = state.oplog_retention_days;
+    if days == 0 {
+        return;
+    }
+    let cutoff = (Utc::now()
+        - chrono::Duration::try_days(i64::from(days)).expect("retention days always fits"))
+    .to_rfc3339_opts(SecondsFormat::Millis, true);
+    match sqlx::query("DELETE FROM sync_oplog WHERE received_at < ?")
+        .bind(&cutoff)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(done) => {
+            let removed = done.rows_affected();
+            if removed > 0 {
+                state.metrics.add_sync_ops_pruned(removed);
+                tracing::info!(
+                    event = "oplog_retention",
+                    removed,
+                    days,
+                    "pruned relayed ops"
+                );
+            }
+        }
+        Err(error) => tracing::warn!(%error, "oplog retention skipped"),
+    }
+}
+
 /// POST /sync/oplog：push 本地新 oplog 段。按 op_id 幂等（INSERT OR
 /// IGNORE）；按到达顺序追加，不排序、不裁决。
 pub async fn push(
@@ -521,6 +558,7 @@ pub async fn push(
         }
     }
     let duplicates = request.ops.len() as u64 - accepted;
+    enforce_oplog_retention(&state).await;
     (Json(PushResponse {
         accepted,
         duplicates,
@@ -612,8 +650,9 @@ pub async fn pull(State(state): State<AppState>, Query(params): Query<PullQuery>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{request, send, setup};
+    use crate::test_support::{request, send, setup, setup_with_retention};
     use axum::http::StatusCode;
+    use chrono::Utc;
     use serde_json::{json, Value};
 
     const TOKEN: &str = "sync-test-token";
@@ -673,6 +712,147 @@ mod tests {
                 "wrapped_item_key": b64(&[1u8; 32]),
             }
         })
+    }
+
+    // ---- server 侧 oplog 保留策略（§11 开放问题 3 收口）----
+
+    #[tokio::test]
+    async fn oplog_retention_prunes_over_window_and_repush_rebuilds() {
+        let (router, state) = setup_with_retention(Some(TOKEN), 30, 0).await;
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4();
+        let old_op = put_op_json(
+            &Uuid::new_v4().to_string(),
+            &item.to_string(),
+            1,
+            &device,
+            &[1u8; 8],
+        );
+        let fresh_op = put_op_json(
+            &Uuid::new_v4().to_string(),
+            &item.to_string(),
+            2,
+            &device,
+            &[2u8; 8],
+        );
+
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [old_op, fresh_op]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["accepted"], 2);
+
+        // 第一条回拨到窗口外
+        let stale_received_at = (Utc::now() - chrono::Duration::try_days(31).unwrap())
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
+        sqlx::query("UPDATE sync_oplog SET received_at = ? WHERE lamport = 1")
+            .bind(&stale_received_at)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+
+        // 再 push（触发清理路径）：fresh 重推 = duplicates，不新增
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [fresh_op]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["accepted"], 0);
+        assert_eq!(body["duplicates"], 1);
+
+        // pull 只剩窗口内的 fresh
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/oplog")).await;
+        let ops = body["ops"].as_array().unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0]["lamport"], 2);
+        assert!(state
+            .metrics
+            .render()
+            .contains("persona_sync_ops_pruned_total 1"));
+
+        // 协同语义：被清的 op 重推 → op_id 幂等重建（游标重置重拉不丢底稿）
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [old_op]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["accepted"], 1);
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/oplog")).await;
+        assert_eq!(body["ops"].as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn oplog_retention_zero_keeps_everything() {
+        let (router, state) = setup_with_retention(Some(TOKEN), 0, 0).await;
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4();
+        let op = put_op_json(
+            &Uuid::new_v4().to_string(),
+            &item.to_string(),
+            1,
+            &device,
+            &[1u8; 8],
+        );
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [op]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(body["accepted"], 1, "{status}");
+
+        // 回拨到很远再 push 触发清理路径：0 = 不清理，行仍在
+        sqlx::query("UPDATE sync_oplog SET received_at = '2000-01-01T00:00:00.000Z'")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let (_, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [put_op_json(
+                    &Uuid::new_v4().to_string(),
+                    &item.to_string(),
+                    2,
+                    &device,
+                    &[2u8; 8],
+                )]})
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(body["accepted"], 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sync_oplog")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap(),
+            2
+        );
+        assert!(state
+            .metrics
+            .render()
+            .contains("persona_sync_ops_pruned_total 0"));
     }
 
     #[tokio::test]

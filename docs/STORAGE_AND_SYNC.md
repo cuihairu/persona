@@ -92,6 +92,8 @@ Unlock」一节的固有暴露说明）。
 | `PERSONA_SERVER_TOKEN`               | —                     | legacy 单令牌（视为 "default" 设备）；建议迁移到 TOKENS      |
 | `PERSONA_SERVER_BACKUP_DIR`          | `<DB 目录>/backups`   | 备份密文存放目录                                             |
 | `PERSONA_SERVER_BACKUP_MAX_VERSIONS` | `0`（不限）           | 每设备保留版本数上限，超限删最旧                             |
+| `PERSONA_SERVER_OPS_RETENTION_DAYS`  | `0`（不清理）         | 同步中继日志保留天数。开窗 = 放弃向「离线超过窗口」的设备补发历史的责任，**须 ≥ 最慢设备的离线周期** |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理）       | 审计事件副本保留天数，按你的 SIEM 摘取周期定                 |
 
 **fail-closed**：`TOKENS`/`TOKEN` 都没配时 `/api/v1` 整体禁用（不是裸奔）。
 

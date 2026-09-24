@@ -32,8 +32,10 @@ struct Counters {
     events_ingested: u64,
     events_duplicates: u64,
     events_rejected: u64,
+    events_pruned: u64,
     backups_created: u64,
     backups_deleted: u64,
+    sync_ops_pruned: u64,
 }
 
 pub struct Metrics {
@@ -81,6 +83,14 @@ impl Metrics {
 
     pub fn add_backups_deleted(&self, n: u64) {
         self.lock().backups_deleted += n;
+    }
+
+    pub fn add_events_pruned(&self, n: u64) {
+        self.lock().events_pruned += n;
+    }
+
+    pub fn add_sync_ops_pruned(&self, n: u64) {
+        self.lock().sync_ops_pruned += n;
     }
 
     pub fn uptime_seconds(&self) -> f64 {
@@ -134,6 +144,16 @@ impl Metrics {
                 "persona_backups_deleted_total",
                 counters.backups_deleted,
                 "Total encrypted vault backups removed.",
+            ),
+            (
+                "persona_events_pruned_total",
+                counters.events_pruned,
+                "Total audit events removed by retention policy.",
+            ),
+            (
+                "persona_sync_ops_pruned_total",
+                counters.sync_ops_pruned,
+                "Total sync oplog entries removed by retention policy.",
             ),
         ] {
             out.push_str(&format!(
@@ -253,8 +273,10 @@ mod tests {
         assert!(text.contains("persona_events_rejected_total 1"));
         assert!(text.contains("persona_backups_created_total 0"));
         assert!(text.contains("persona_backups_deleted_total 0"));
+        assert!(text.contains("persona_events_pruned_total 0"));
+        assert!(text.contains("persona_sync_ops_pruned_total 0"));
         assert!(text.contains("process_start_time_seconds 1758182400"));
         assert!(text.contains("process_uptime_seconds"));
-        assert_eq!(text.matches("# TYPE ").count(), 8);
+        assert_eq!(text.matches("# TYPE ").count(), 10);
     }
 }

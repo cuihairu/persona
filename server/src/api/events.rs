@@ -93,6 +93,7 @@ pub async fn ingest(
         Ok((accepted, duplicates)) => {
             state.metrics.add_events_ingested(accepted);
             state.metrics.add_events_duplicates(duplicates);
+            enforce_events_retention(&state).await;
             (
                 StatusCode::ACCEPTED,
                 Json(IngestResponse {
@@ -103,6 +104,39 @@ pub async fn ingest(
                 .into_response()
         }
         Err(error) => ApiError::internal(error).into_response(),
+    }
+}
+
+/// 审计事件副本保留策略（TODO「已知限制：无保留策略」follow-up）：
+/// 按 received_at_ms 滚动删除超过窗口的行（走 idx_audit_events_order
+/// 索引），0 = 不清理（默认）。事件是审计副本而非事实源，清理窗口由
+/// 部署方按自己的 SIEM 摘取周期定。失败仅告警。
+async fn enforce_events_retention(state: &AppState) {
+    let days = state.events_retention_days;
+    if days == 0 {
+        return;
+    }
+    let cutoff_ms = (Utc::now()
+        - chrono::Duration::try_days(i64::from(days)).expect("retention days always fits"))
+    .timestamp_millis();
+    match sqlx::query("DELETE FROM audit_events WHERE received_at_ms < ?")
+        .bind(cutoff_ms)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(done) => {
+            let removed = done.rows_affected();
+            if removed > 0 {
+                state.metrics.add_events_pruned(removed);
+                tracing::info!(
+                    event = "events_retention",
+                    removed,
+                    days,
+                    "pruned audit events"
+                );
+            }
+        }
+        Err(error) => tracing::warn!(%error, "events retention skipped"),
     }
 }
 
@@ -427,7 +461,7 @@ fn internal_from(error: sqlx::Error) -> ApiError {
 mod endpoint_tests {
     use crate::test_support::*;
 
-    use chrono::DateTime;
+    use chrono::{DateTime, Utc};
     use sqlx::Row;
     use tower::ServiceExt as _;
 
@@ -462,6 +496,61 @@ mod endpoint_tests {
     }
 
     // ---- ingest ----
+
+    #[tokio::test]
+    async fn events_retention_prunes_over_window_only() {
+        let (router, app_state) = setup_with_retention(Some(TOKEN), 0, 90).await;
+        let body = format!(r#"{{"events":[{}]}}"#, event_json("e-old", "login"));
+        let (status, _) = send(router.clone(), post_events(&body, Some(TOKEN))).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+
+        // 回拨到窗口外
+        let stale_ms = (Utc::now() - chrono::Duration::try_days(91).unwrap()).timestamp_millis();
+        sqlx::query("UPDATE audit_events SET received_at_ms = ?")
+            .bind(stale_ms)
+            .execute(&app_state.pool)
+            .await
+            .unwrap();
+
+        // 再 ingest 一条（触发清理路径）：旧行被清、新行存活
+        let body = format!(r#"{{"events":[{}]}}"#, event_json("e-fresh", "logout"));
+        let (status, json) = send(router.clone(), post_events(&body, Some(TOKEN))).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+        assert_eq!(json["accepted"], 1);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_events")
+            .fetch_one(&app_state.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(app_state
+            .metrics
+            .render()
+            .contains("persona_events_pruned_total 1"));
+    }
+
+    #[tokio::test]
+    async fn events_retention_zero_keeps_everything() {
+        let (router, app_state) = setup_with_retention(Some(TOKEN), 0, 0).await;
+        let body = format!(r#"{{"events":[{}]}}"#, event_json("e-ancient", "login"));
+        let (status, _) = send(router.clone(), post_events(&body, Some(TOKEN))).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+        sqlx::query("UPDATE audit_events SET received_at_ms = 946684800000")
+            .execute(&app_state.pool)
+            .await
+            .unwrap();
+        let body = format!(r#"{{"events":[{}]}}"#, event_json("e-new", "logout"));
+        let (status, _) = send(router.clone(), post_events(&body, Some(TOKEN))).await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM audit_events")
+            .fetch_one(&app_state.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+        assert!(app_state
+            .metrics
+            .render()
+            .contains("persona_events_pruned_total 0"));
+    }
 
     #[tokio::test]
     async fn ingest_valid_batch_returns_202_with_accepted_count() {

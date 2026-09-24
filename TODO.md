@@ -366,11 +366,11 @@ Server & Sync (optional)
       start_time/uptime，免认证，fallback 404 计 "unmatched"）；1fb23003
       compose 令牌强制注入（:? 缺失拒绝启动）+ 命名卷持久化。THREAT_MODEL
       同 commit 登记（仅摘要/元数据、不宣称防篡改/防抵赖）。
-      已知限制：无保留策略（DB 无界增长）、无速率限制、单共享 token 无
+      已知限制：无速率限制、单共享 token 无
       per-client 身份、ip/user_agent 客户端自报、client_timestamp 取信
       客户端时钟、permissive CORS、405 不计入 metrics。
       follow-up：SRP
-      设备认证（替代单令牌）、保留策略/TTL、ConnectInfo 采真实来源 IP
+      设备认证（替代单令牌）、ConnectInfo 采真实来源 IP
       （gzip 已由 0d48d953 落地，见上报 wire 层 gzip 条）。手工验收：带
       token 起服 → POST 事件（202）→ 重复
       client_event_id（duplicates 计数）→ GET 翻页 → /metrics 观察 →
@@ -578,9 +578,19 @@ Server & Sync (optional)
         副本集无需 GC 特判。测试：谓词矩阵 3 用例（保护集存活 + 视图
         不变 / tombstone 窗口与缺 timestamp / 裁决闭环败方可清）+
         sync_repository pending/delete 用例；文档：E2EE_SYNC_DESIGN
-        §11-3 写实（server 侧保留策略仍开放，与「已知限制：无保留
-        策略」的保留策略/TTL follow-up 合并）+ STORAGE_AND_SYNC
+        §11-3 写实（server 侧保留策略另批，见下条）+ STORAGE_AND_SYNC
         操作日志自动瘦身边界
+  - [x] server 侧保留策略（2026-09-24，开放问题 3 收口）：oplog/events
+        双 env（`PERSONA_SERVER_OPS_RETENTION_DAYS` /
+        `PERSONA_SERVER_EVENTS_RETENTION_DAYS`，0 = 不清理 = 默认纯中继
+        现状）；push/ingest 写路径滚动执行（失败仅告警不打断写入）+
+        0005 迁移（sync_oplog received_at 索引）+ metrics
+        `persona_{sync_ops,events}_pruned_total`；oplog 窗口语义写实
+        （放弃向离线超窗设备补发历史，窗口 ≥ 最慢设备离线周期；重推
+        INSERT OR IGNORE 幂等重建协同）+ compose 部署示例。测试：谓词
+        4 用例（窗口内外/重推重建/0 禁用 ×2 表）+ metrics 渲染断言；
+        文档：E2EE_SYNC_DESIGN §11-3 两端收口 + STORAGE_AND_SYNC
+        部署 env 表两行
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=

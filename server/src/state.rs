@@ -33,6 +33,13 @@ pub struct AppState {
     /// 备份上传字节上限（生产恒 [`MAX_BACKUP_BYTES`]；测试调小以覆盖
     /// 流式中断路径，256 MiB 的真实上限不适合逐测试生成）。
     pub max_backup_bytes: usize,
+    /// sync oplog 保留天数（按 received_at 滚动清理）；0 = 不清理
+    /// （PERSONA_SERVER_OPS_RETENTION_DAYS）。默认 0 保持纯中继语义——
+    /// 清理意味着放弃向「离线超过窗口」设备补发历史的责任，须显式开启。
+    pub oplog_retention_days: u32,
+    /// 审计事件副本保留天数（按 received_at_ms 滚动清理）；0 = 不清理
+    /// （PERSONA_SERVER_EVENTS_RETENTION_DAYS）。
+    pub events_retention_days: u32,
     /// uptime 起点（单调时钟）。
     pub started_at: Instant,
     /// `process_start_time_seconds` 用（Unix 秒）。
@@ -56,6 +63,8 @@ impl AppState {
             backup_dir: PathBuf::from("./backups"),
             backup_max_versions: 0,
             max_backup_bytes: MAX_BACKUP_BYTES,
+            oplog_retention_days: 0,
+            events_retention_days: 0,
             started_at: Instant::now(),
             start_time_unix,
         }
@@ -65,6 +74,13 @@ impl AppState {
     pub fn with_backup_settings(mut self, dir: PathBuf, max_versions: usize) -> Self {
         self.backup_dir = dir;
         self.backup_max_versions = max_versions;
+        self
+    }
+
+    /// 覆盖 oplog/events 保留天数（main 从 env 读入；0 = 不清理）。
+    pub fn with_retention_settings(mut self, oplog_days: u32, events_days: u32) -> Self {
+        self.oplog_retention_days = oplog_days;
+        self.events_retention_days = events_days;
         self
     }
 }

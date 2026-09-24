@@ -245,9 +245,15 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
    `default_tombstone_retention`；timestamp 缺失保守不清）的主位墓碑。裁决
    采纳以更大 lamport 重新入账，败方自动落出副本集、无需 GC 特判；被清 op
    在游标重置重拉时按 op_id 幂等重建，视图不变（谓词矩阵见 runtime 测试）。
-   **仍开放**：server 侧 oplog/events 保留策略（`/sync/oplog` 全量中继同样
-   无限增长，保留窗口需与客户端重放语义协同）——与 TODO「已知限制：无
-   保留策略」的保留策略/TTL follow-up 合并，另行一批。
+   ——**server 半边同日落地**（2026-09-24）：
+   `PERSONA_SERVER_OPS_RETENTION_DAYS` / `PERSONA_SERVER_EVENTS_RETENTION_DAYS`
+   （0 = 不清理，默认保持纯中继现状；push/ingest 写路径滚动执行，
+   `persona_{sync_ops,events}_pruned_total` 计数）。oplog 窗口语义 =
+   放弃向「离线超过窗口」的设备补发历史的责任：游标重置重拉拿到缩水
+   子集（LWW 对子集仍收敛），缺失部分靠各端本地事实源 + 重推幂等重建
+   （INSERT OR IGNORE 原样回填）补齐——**窗口须 ≥ 最慢设备的离线周期**；
+   events 窗口按部署方 SIEM 摘取周期定。**开放问题 3 至此两端收口**，
+   剩余为运维参数调优而非机制缺口。
 4. **附件同步**：v2 议题——文件体走 oplog（信封化分块）还是保持备份通道，等
    v1 落地后按真实需求定。
 5. **OPAQUE 升级路径**（DR-2）：`opaque-ke` 4.x/RFC 9807 成熟度已足够，若同步

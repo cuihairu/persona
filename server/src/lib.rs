@@ -170,6 +170,19 @@ pub(crate) mod test_support {
         (build_router(app_state.clone()), app_state)
     }
 
+    /// 保留策略测试装配：`PERSONA_SERVER_*_RETENTION_DAYS` 的测试替身
+    /// （0 = 不清理）。
+    pub(crate) async fn setup_with_retention(
+        token: Option<&str>,
+        oplog_days: u32,
+        events_days: u32,
+    ) -> (Router, AppState) {
+        let app_state = state::test_state(token)
+            .await
+            .with_retention_settings(oplog_days, events_days);
+        (build_router(app_state.clone()), app_state)
+    }
+
     /// 备份端点测试装配：多设备令牌 spec + tempdir 备份目录 + 可调小
     /// 的字节上限（256 MiB 真实上限不适合逐测试生成）。TempDir 由调用
     /// 方持有（Router 只存路径，目录被 drop 即清空）。
