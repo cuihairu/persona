@@ -588,6 +588,8 @@ mod tests {
     // 轮换核心（重包半边）：rewrap_all 把主库全部凭据以新组密钥重新
     // 入账——新 op 的 item key 信封只有新组密钥拆得开、快照开封内容
     // 与原凭据一致、lamport 严格递增（LWW 使其成为新主位）。
+    // drain_push_queue 只在 remote-auth feature 下存在，测试同 gate。
+    #[cfg(feature = "remote-auth")]
     #[tokio::test]
     async fn rewrap_all_reseals_every_credential_with_new_group_key() {
         let (db, identity, master) = seeded_db().await;
@@ -644,6 +646,8 @@ mod tests {
 
     // 轮换的 admin 侧失败必须零副作用：时钟不推进、pending 无新增——
     // 失败发生在信封重封之前，本地 oplog 未被触碰。
+    // rotate_group_key/SyncAdminApi 只在 remote-auth feature 下存在，同 gate。
+    #[cfg(feature = "remote-auth")]
     #[tokio::test]
     async fn rotate_with_failing_admin_leaves_no_side_effects() {
         let (db, _identity, master) = seeded_db().await;
