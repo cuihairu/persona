@@ -72,10 +72,15 @@ SSH Agent (developer focus)
 - [x] CLI commands: `persona ssh import|generate|list|list-all|export-pub|add-to-agent|start-agent|stop-agent|agent-status|run|remove`
 - [x] Complete README documentation with usage examples
 - [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
-      手工验收步骤（需用户 GitHub 账号，本机无凭据不可代跑；2026-09-22 落步骤）：
-      ① `persona ssh generate --name github-e2e`（或 import 既有私钥）→
-      `persona ssh export-pub --id <id>` 公钥添加到 GitHub → Settings → SSH keys
-      ② `persona ssh add-to-agent --id <id>` → `persona ssh start-agent` →
+      引导脚本（2026-09-24）：`PERSONA_E2E_IDENTITY=<身份名> scripts/e2e-ssh-github.sh`
+      ——生成/复用密钥、打印公钥等用户贴 GitHub、装载 agent、真连判定
+      `successfully authenticated`；负向用例仍走下面 ④ 手工。
+      手工验收步骤（需用户 GitHub 账号，本机无凭据不可代跑；2026-09-22 落步骤、
+      2026-09-24 按 CLI 实际语法修正 ①②）：
+      ① `persona ssh generate --identity <身份名> --name github-e2e`（或 import
+      既有私钥）→ `persona ssh export-pub --id <id>` 公钥添加到 GitHub →
+      Settings → SSH keys
+      ② `persona ssh add-to-agent --identity <身份名>`（自动拉起 agent）→
       `persona ssh agent-status` 显示 running 且 `persona ssh list-all` 见密钥
       ③ `persona ssh run --host github.com -- ssh -T git@github.com`
       预期：TTY 确认「Allow SSH signature for host 'github.com'? [y/N]」→ y →
