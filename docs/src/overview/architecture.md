@@ -1,6 +1,6 @@
 # 技术架构
 
-Persona 采用“加密核心 + 多入口客户端 + 可选服务端”的分层架构，所有敏感操作都由本地 Rust 核心库完成。CLI、桌面端、SSH Agent 共享同一套模型/服务/存储，最大化复用能力，同时保留为未来 server/sync 扩展的接口。
+Persona 采用“加密核心 + 多入口客户端 + 可选服务端”的分层架构，所有敏感操作都由本地 Rust 核心库完成。CLI、桌面端、SSH Agent 共享同一套模型/服务/存储，最大化复用能力；可选服务端承担事件收集、自动化 API 与端到端加密同步中继。
 
 ## 架构总览
 
@@ -26,7 +26,7 @@ flowchart TB
 
     subgraph Server["可选服务端 (Axum)"]
         API["事件 & 自动化 API"]
-        Sync["同步/通知 (未来)"]
+        Sync["E2EE 同步中继/备份保管"]
     end
 
     CLI -->|Rust crate 直连| Services
@@ -50,7 +50,7 @@ flowchart TB
 - **CLI**：命令行入口，直接依赖 core crate，负责工作区初始化、解锁、交互式输入以及自动化脚本场景。
 - **Desktop**：Tauri shell 暴露 Rust 命令给 React UI，重用核心解锁逻辑；负责 UI 状态、通知、快捷操作。
 - **SSH Agent**：长期驻留进程，通过 Unix socket 暴露 OpenSSH Agent 协议。所有密钥加载/签名都回调 core 服务，继承统一策略、日志与速率限制。
-- **Server（可选）**：Axum + sqlx，负责事件收集、自动化 API、未来的端到端加密同步。Server 只接触密文或事件摘要，不会解密用户数据。
+- **Server（可选）**：Axum + sqlx，负责事件收集、自动化 API、端到端加密同步中继（密文操作日志、设备信封保管、组密钥轮换互斥）。Server 只接触密文或事件摘要，不会解密用户数据。
 
 ## 数据流与安全机制
 
