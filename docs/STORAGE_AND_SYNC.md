@@ -83,17 +83,17 @@ Unlock」一节的固有暴露说明）。
 
 `persona-server` crate（axum），全部配置走环境变量：
 
-| 变量                                 | 默认                  | 说明                                                         |
-| ------------------------------------ | --------------------- | ------------------------------------------------------------ |
-| `PERSONA_SERVER_HOST`                | `0.0.0.0`             | 监听地址（本机试玩用 `127.0.0.1`）                           |
-| `PERSONA_SERVER_PORT`                | `3000`                | 监听端口                                                     |
-| `PERSONA_SERVER_DB`                  | `./persona-server.db` | 服务器自己的元数据库                                         |
-| `PERSONA_SERVER_TOKENS`              | —                     | **多设备令牌**：`"laptop:tok1,phone:tok2"`；非法格式启动即错 |
-| `PERSONA_SERVER_TOKEN`               | —                     | legacy 单令牌（视为 "default" 设备）；建议迁移到 TOKENS      |
-| `PERSONA_SERVER_BACKUP_DIR`          | `<DB 目录>/backups`   | 备份密文存放目录                                             |
-| `PERSONA_SERVER_BACKUP_MAX_VERSIONS` | `0`（不限）           | 每设备保留版本数上限，超限删最旧                             |
-| `PERSONA_SERVER_OPS_RETENTION_DAYS`  | `0`（不清理）         | 同步中继日志保留天数。开窗 = 放弃向「离线超过窗口」的设备补发历史的责任，**须 ≥ 最慢设备的离线周期** |
-| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理）       | 审计事件副本保留天数，按你的 SIEM 摘取周期定                 |
+| 变量                                   | 默认                  | 说明                                                                                                 |
+| -------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `PERSONA_SERVER_HOST`                  | `0.0.0.0`             | 监听地址（本机试玩用 `127.0.0.1`）                                                                   |
+| `PERSONA_SERVER_PORT`                  | `3000`                | 监听端口                                                                                             |
+| `PERSONA_SERVER_DB`                    | `./persona-server.db` | 服务器自己的元数据库                                                                                 |
+| `PERSONA_SERVER_TOKENS`                | —                     | **多设备令牌**：`"laptop:tok1,phone:tok2"`；非法格式启动即错                                         |
+| `PERSONA_SERVER_TOKEN`                 | —                     | legacy 单令牌（视为 "default" 设备）；建议迁移到 TOKENS                                              |
+| `PERSONA_SERVER_BACKUP_DIR`            | `<DB 目录>/backups`   | 备份密文存放目录                                                                                     |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0`（不限）           | 每设备保留版本数上限，超限删最旧                                                                     |
+| `PERSONA_SERVER_OPS_RETENTION_DAYS`    | `0`（不清理）         | 同步中继日志保留天数。开窗 = 放弃向「离线超过窗口」的设备补发历史的责任，**须 ≥ 最慢设备的离线周期** |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理）         | 审计事件副本保留天数，按你的 SIEM 摘取周期定                                                         |
 
 **fail-closed**：`TOKENS`/`TOKEN` 都没配时 `/api/v1` 整体禁用（不是裸奔）。
 

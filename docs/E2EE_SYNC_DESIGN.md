@@ -244,11 +244,11 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
    可清集 = acked 的旧版本 + ack 且超过 tombstone 保留窗口（默认 30 天，
    `default_tombstone_retention`；timestamp 缺失保守不清）的主位墓碑。裁决
    采纳以更大 lamport 重新入账，败方自动落出副本集、无需 GC 特判；被清 op
-   在游标重置重拉时按 op_id 幂等重建，视图不变（谓词矩阵见 runtime 测试）。
+   在游标重置重拉时按 op*id 幂等重建，视图不变（谓词矩阵见 runtime 测试）。
    ——**server 半边同日落地**（2026-09-24）：
    `PERSONA_SERVER_OPS_RETENTION_DAYS` / `PERSONA_SERVER_EVENTS_RETENTION_DAYS`
    （0 = 不清理，默认保持纯中继现状；push/ingest 写路径滚动执行，
-   `persona_{sync_ops,events}_pruned_total` 计数）。oplog 窗口语义 =
+   `persona*{sync_ops,events}\_pruned_total` 计数）。oplog 窗口语义 =
    放弃向「离线超过窗口」的设备补发历史的责任：游标重置重拉拿到缩水
    子集（LWW 对子集仍收敛），缺失部分靠各端本地事实源 + 重推幂等重建
    （INSERT OR IGNORE 原样回填）补齐——**窗口须 ≥ 最慢设备的离线周期**；
