@@ -9,7 +9,8 @@
 
 - 对象：`tauri build --bundles deb` 产出的 `desktop/src-tauri/target/release/bundle/deb/Persona_0.1.0_amd64.deb`（内嵌 46MB 主程序 + 桌面/图标/polkit 资源）。
 - 口径：**同机复现**（同一台机器、同一工具链、同一源码树，仅时间不同）实测通过；跨机器一致性有证据（路径重映射 + 钉版）但未跨机实测。
-- AppImage 已实测（内容可复现、字节级不可复现，见「剩余差距」4）；rpm / dmg / Windows 安装器未测。
+- AppImage / rpm 已实测（内容可复现、字节级不可复现，见「剩余差距」4）；
+  dmg 在 Linux 上无法构建（macOS 专属工具链）、Windows NSIS 安装器未测。
 
 ## 实测基线（2026-09-24）
 
@@ -96,8 +97,22 @@ scripts/build-repro.sh [输出.deb]   # 缺省仓库根 Persona_0.1.0_amd64.deb
    段（appimagetool 打包时算的 squashfs MD5，ELF 偏移 0xe3900 的 16 字节）
    随之不同。归一需 `mksquashfs -all-time/-mkfs-fixed-time` 重打包并重算
    digest 段，或上游 appimagetool 支持 `SOURCE_DATE_EPOCH`（AppImageKit
-   长期未合）——**未做仓库侧 hack**，deb 仍是主交付可复现产物。rpm/dmg
-   仍未测。
+   长期未合）——**未做仓库侧 hack**，deb 仍是主交付可复现产物。
+
+   **rpm：内容可复现、字节级不可复现**（2026-09-24 A/B 实测，方法同上）：
+   两次纯打包轮 `tauri build --bundles rpm`，整包对比仅 **64 字节差异、
+   全部集中在头部区**——
+
+   | 差异源                          | 位置（tag）                            | 实测                                                        |
+   | ------------------------------- | -------------------------------------- | ----------------------------------------------------------- |
+   | 签名 header 的 SHA256 hex 串    | sig tag 273（64 字符 ASCII）           | 56/64 字符不同（哈希对象是主 header，随下列时间戳链式变化） |
+   | 主 header `BUILDTIME`           | tag 1006（INT32）                      | 两轮相差 403s，2 字节不同                                   |
+   | 主 header `FILEMTIMES`          | tag 1034（INT32×5）                    | 前 2 条 = 打包时刻（随轮次变）；后 3 条 = 静态资源 mtime 不变 |
+
+   **payload 逐字节一致**（除上述 64 字节外整包 cmp 相同）。与 AppImage
+   同理：差异全部派生自构建时刻，归一需上游 rpm 写头尊重
+   `SOURCE_DATE_EPOCH`；仓库侧未做 header 重写 hack。dmg 在 Linux 无法
+   构建，未测。
 5. **真跨机验证未做**：重映射 + 钉版后跨机器产物**应当**一致，但本基线
    只在一台机器上实测；严格结论需钉死构建容器（同一 glibc/链接器）后
    跨机复验。
