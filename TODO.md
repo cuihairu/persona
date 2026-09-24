@@ -23,6 +23,20 @@ Monorepo & Tooling
 - [x] Makefile targets for build/test/lint across all packages
 - [x] 文档：整理统一客户端通信架构（CLI/桌面/浏览器/Agent 依赖同一个本地服务/IPC 协议）
 - [x] 文档：说明本地服务 IPC 优先使用 Unix Socket（含 Windows 支持，必要时回退 Named Pipe）
+- [x] 文档站（VitePress，https://cuihairu.github.io/persona/）：2026-09-24
+      从「无法访问」收口到 6 板块 15 页全实内容——根因是 Pages 开着
+      build_type=workflow 但从没有 workflow 部署过（docs.yml 只做构建
+      校验，CI 全绿造成正常错觉），补 `deploy-docs.yml`（对照
+      cuihairu/hello-game 先例：upload-pages-artifact@v5 +
+      deploy-pages@v5，commit 96579872）；随后内容面七批：删 26 个空壳
+      占位页与 mdBook 残留、侧边栏如实收窄（71918d9e）→ 快速开始
+      （fb6857cb）→ 核心功能（cb006772）→ 环境搭建（8f8f1560，版本
+      口径按仓库钉定纠正 README 过时要求）→ 既有页时点一致性核查
+      （ab8b6205，删 TPM/Secure Enclave 过度宣称、同步/附件滞后表述
+      对齐已实现）→ API 文档两页写实（7b1502af，端点速查形态，无对应
+      实现的占位板块不挂）→ FAQ + 故障排除（75222555）。纪律：每页
+      以代码/工程文档核实，不编造 UI 细节；无对应实现的板块保持不挂；
+      板块有稳定内容再挂回
 
 Security & Auth
 
