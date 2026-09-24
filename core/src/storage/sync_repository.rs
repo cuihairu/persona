@@ -191,6 +191,52 @@ impl SyncRepository {
         Ok(())
     }
 
+    /// push 队列中尚未 ack 的 op 集合——GC 的保护集（未推出去的改动绝不
+    /// 清理）。remote 来的行恒为 acked，无需按 origin 再过滤。
+    pub async fn pending_op_ids(&self) -> Result<HashSet<Uuid>> {
+        let rows: Vec<String> =
+            sqlx::query_scalar("SELECT op_id FROM sync_oplog WHERE push_state = 'pending'")
+                .fetch_all(self.db.pool())
+                .await
+                .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|s| Uuid::parse_str(&s).ok())
+            .collect())
+    }
+
+    /// 批量删除 oplog 行（GC 专用；只删调用方按安全谓词选出的 op_id）。
+    /// 分块进事务，返回实际删除行数。
+    pub async fn delete_ops(&self, op_ids: &[Uuid]) -> Result<u64> {
+        if op_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut tx = self
+            .db
+            .pool()
+            .begin()
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        let mut removed = 0u64;
+        for chunk in op_ids.chunks(64) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!("DELETE FROM sync_oplog WHERE op_id IN ({placeholders})");
+            let mut query = sqlx::query(&sql);
+            for id in chunk {
+                query = query.bind(id.to_string());
+            }
+            let result = query
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| PersonaError::Database(e.to_string()))?;
+            removed += result.rows_affected();
+        }
+        tx.commit()
+            .await
+            .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(removed)
+    }
+
     /// 某 item 的全部 op（供 [`crate::sync::oplog::item_view`] 推导主位/副本）。
     pub async fn item_ops(&self, item_id: Uuid) -> Result<Vec<SyncOp>> {
         let rows = sqlx::query(
@@ -382,5 +428,38 @@ mod tests {
         assert_eq!(ops.len(), 1);
         assert!(ops[0].is_tombstone());
         assert_eq!(ops[0].payload, None);
+    }
+
+    #[tokio::test]
+    async fn pending_op_ids_and_delete_ops_support_gc() {
+        let repo = SyncRepository::new(db().await);
+        let local = put_op(1, 1);
+        let remote = put_op(2, 2);
+        repo.append_local_op(&local).await.unwrap(); // pending
+        repo.record_remote_op(&remote).await.unwrap(); // 恒 acked
+
+        // 保护集只含 push 队列未 ack 的行（remote 行不需要 origin 过滤）
+        let pending = repo.pending_op_ids().await.unwrap();
+        assert_eq!(pending, HashSet::from([local.op_id]));
+
+        repo.mark_acked(&[local.op_id]).await.unwrap();
+        assert!(repo.pending_op_ids().await.unwrap().is_empty());
+
+        // 批量删除：空集零查询直接返回 0；跨块计数准确；行真消失
+        assert_eq!(repo.delete_ops(&[]).await.unwrap(), 0);
+        let mut many: Vec<Uuid> = Vec::new();
+        for _ in 0..70 {
+            let op = put_op(3, 3);
+            repo.append_local_op(&op).await.unwrap();
+            repo.mark_acked(&[op.op_id]).await.unwrap();
+            many.push(op.op_id);
+        }
+        many.push(local.op_id);
+        many.push(remote.op_id);
+        let removed = repo.delete_ops(&many).await.unwrap();
+        assert_eq!(removed as usize, many.len());
+        for id in &many {
+            assert!(!repo.has_op(*id).await.unwrap());
+        }
     }
 }

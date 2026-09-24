@@ -72,6 +72,19 @@ pub struct SyncRotateReport {
     pub pushed: u64,
 }
 
+/// 一轮 oplog 清理的汇总（[`SyncSession::gc_oplog`]）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GcReport {
+    /// 清理的 oplog 行数（已消费的历史版本 + 过保留窗口的 tombstone）。
+    pub removed_ops: u64,
+}
+
+/// GC 默认的 tombstone 保留窗口：主位 tombstone 在 ack 后保留这么久才清，
+/// 给慢设备/游标重置留重放余地。chrono 的 Duration 无 const 构造，走函数。
+pub fn default_tombstone_retention() -> chrono::Duration {
+    chrono::Duration::try_days(30).expect("30 days always fits in chrono::Duration")
+}
+
 #[cfg(feature = "remote-auth")]
 impl SyncSession<super::remote::HttpSyncRemote> {
     /// 装配会话：从服务器取全部信封，拆出本机的那份得 group key。
@@ -203,6 +216,11 @@ impl<R: SyncRemote> SyncSession<R> {
             .materialize_all(master, &self.group_key, self.device_id)
             .await?;
         let push = self.engine.push_cycle().await?;
+        // 机会主义清理已消费的 oplog 历史（§11 开放问题 3 客户端半边）；
+        // 失败不阻断同步——增长治理不是同步正确性的前置条件。
+        if let Err(e) = self.gc_oplog(default_tombstone_retention()).await {
+            tracing::warn!(error = %e, "oplog gc skipped");
+        }
         Ok(SyncNowReport {
             pulled: pull.applied,
             materialized: materialize.written,
@@ -212,6 +230,60 @@ impl<R: SyncRemote> SyncSession<R> {
             pending_identity: materialize.pending_identity.len(),
             pushed: push.pushed,
             backfilled: 0,
+        })
+    }
+
+    /// oplog 增长治理（E2EE_SYNC_DESIGN §11 开放问题 3 的客户端半边）。
+    /// 本地 oplog 是 append-only 密文日志，长期使用无界增长；本方法按保守
+    /// 谓词只清「再无消费方」的历史版本：
+    ///
+    /// - **保护集**：push 队列未 ack 的本地 op（推数窗口，动了就丢改动）；
+    ///   未裁决冲突副本（`item_view` 推导的 conflicts——裁决采纳后其余版本
+    ///   以更大 lamport 赢回主位，败方自动落出副本集，下一轮 GC 可清）；
+    ///   主位 put（活条目的视图锚，永不清理）。
+    /// - **可清集**：acked 且既非主位也非副本的旧版本；以及 ack 且超过
+    ///   `tombstone_retention` 的主位 tombstone（条目已删，仅留重放余地；
+    ///   timestamp 缺失视为不清——无法证明足够老）。
+    ///
+    /// 被清 op 若因游标重置被重拉，按 op_id 幂等 upsert 重建，收敛不受影响；
+    /// 主库零触碰（GC 只作用于 oplog）。
+    pub async fn gc_oplog(&self, tombstone_retention: chrono::Duration) -> Result<GcReport> {
+        let pending = self.sync_repo.pending_op_ids().await?;
+        let now = chrono::Utc::now();
+        let mut to_remove = Vec::new();
+        for item_id in self.sync_repo.item_ids().await? {
+            let ops = self.sync_repo.item_ops(item_id).await?;
+            let view = item_view(ops.clone());
+            let Some(primary) = &view.primary else {
+                continue;
+            };
+            for op in &ops {
+                if pending.contains(&op.op_id) {
+                    continue;
+                }
+                if op.op_id == primary.op_id {
+                    // 主位：仅「超过保留窗口的 tombstone」可清。
+                    if primary.is_tombstone() {
+                        if let Some(ts) = primary.timestamp {
+                            if now - ts > tombstone_retention {
+                                to_remove.push(op.op_id);
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if view.conflicts.iter().any(|c| c.op_id == op.op_id) {
+                    continue;
+                }
+                to_remove.push(op.op_id);
+            }
+        }
+        let removed = self.sync_repo.delete_ops(&to_remove).await?;
+        if removed > 0 {
+            tracing::info!(event = "oplog_gc", removed, "pruned consumed oplog history");
+        }
+        Ok(GcReport {
+            removed_ops: removed,
         })
     }
 
@@ -898,6 +970,183 @@ mod tests {
             err.downcast_ref::<PersonaError>().is_some_and(ok),
             "unexpected error: {err}"
         );
+    }
+
+    // ---- oplog GC（E2EE_SYNC_DESIGN §11 开放问题 3 的客户端半边）----
+    // 谓词矩阵：pending 保护 / acked 旧版本可清 / 真冲突副本保护 /
+    // 主位 put 永不清理 / tombstone 保留窗口（timestamp None 保守不清）。
+
+    fn retention_days(days: i64) -> chrono::Duration {
+        chrono::Duration::try_days(days).unwrap()
+    }
+
+    #[tokio::test]
+    async fn gc_prunes_consumed_versions_and_keeps_protection_set() {
+        let (db, identity, _master) = seeded_db().await;
+        let group = GroupKey::generate().unwrap();
+        let sync_repo = SyncRepository::new(db.clone());
+
+        // 已收敛条目：v1 旧版本（acked）+ v2 主位（acked）→ 只清 v1
+        let lived = Uuid::new_v4();
+        let v1 = conflict_put_op(
+            lived,
+            Uuid::new_v4(),
+            1,
+            &snapshot("lived-v1", identity.id),
+            &group,
+        );
+        let v2 = conflict_put_op(
+            lived,
+            Uuid::new_v4(),
+            2,
+            &snapshot("lived-v2", identity.id),
+            &group,
+        );
+        sync_repo.record_remote_op(&v1).await.unwrap();
+        sync_repo.record_remote_op(&v2).await.unwrap();
+
+        // 真冲突条目：同 lamport 异设备 → 副本未裁决，双双保护
+        let conflicted = Uuid::new_v4();
+        let (p, c) = seeded_conflict(conflicted, &group, identity.id);
+        sync_repo.record_remote_op(&p).await.unwrap();
+        sync_repo.record_remote_op(&c).await.unwrap();
+
+        // 未 ack 条目：本机主位 pending 保护；同 item 的 acked 旧版本可清
+        let pending_item = Uuid::new_v4();
+        let stale = conflict_put_op(
+            pending_item,
+            Uuid::new_v4(),
+            1,
+            &snapshot("pend-v1", identity.id),
+            &group,
+        );
+        let fresh = conflict_put_op(
+            pending_item,
+            Uuid::new_v4(),
+            2,
+            &snapshot("pend-v2", identity.id),
+            &group,
+        );
+        sync_repo.record_remote_op(&stale).await.unwrap();
+        sync_repo.append_local_op(&fresh).await.unwrap();
+
+        let primary_of = |ops: &[SyncOp]| item_view(ops.to_vec()).primary.unwrap().op_id;
+        let before_lived = primary_of(&sync_repo.item_ops(lived).await.unwrap());
+        let before_conflict = item_view(sync_repo.item_ops(conflicted).await.unwrap());
+        let before_pending = primary_of(&sync_repo.item_ops(pending_item).await.unwrap());
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+        let report = session
+            .gc_oplog(default_tombstone_retention())
+            .await
+            .unwrap();
+        assert_eq!(report.removed_ops, 2);
+        assert!(!sync_repo.has_op(v1.op_id).await.unwrap());
+        assert!(!sync_repo.has_op(stale.op_id).await.unwrap());
+
+        // 保护集全数存活
+        for kept in [v2.op_id, p.op_id, c.op_id, fresh.op_id] {
+            assert!(sync_repo.has_op(kept).await.unwrap());
+        }
+
+        // GC 前后主位/副本视图逐字节不变（被清的都是推导上不可见的版本）
+        let after_lived = primary_of(&sync_repo.item_ops(lived).await.unwrap());
+        assert_eq!(after_lived, before_lived);
+        let after_conflict = item_view(sync_repo.item_ops(conflicted).await.unwrap());
+        assert_eq!(
+            after_conflict.primary.as_ref().map(|o| o.op_id),
+            before_conflict.primary.as_ref().map(|o| o.op_id)
+        );
+        assert_eq!(after_conflict.conflicts.len(), 1);
+        let after_pending = primary_of(&sync_repo.item_ops(pending_item).await.unwrap());
+        assert_eq!(after_pending, before_pending);
+    }
+
+    #[tokio::test]
+    async fn gc_tombstone_window_and_missing_timestamp() {
+        let (db, _identity, _master) = seeded_db().await;
+        let group = GroupKey::generate().unwrap();
+        let sync_repo = SyncRepository::new(db.clone());
+        let now = TestUtc::now();
+
+        // 过窗 acked 墓碑 → 清；窗内 / 无 timestamp（保守）→ 不清；
+        // 过窗但仍在 push 队列 → pending 保护优先，不清
+        let mut expired = conflict_delete_op(Uuid::new_v4(), Uuid::new_v4(), 5);
+        expired.timestamp = Some(now - retention_days(31));
+        let mut in_window = conflict_delete_op(Uuid::new_v4(), Uuid::new_v4(), 5);
+        in_window.timestamp = Some(now);
+        let mut no_timestamp = conflict_delete_op(Uuid::new_v4(), Uuid::new_v4(), 5);
+        no_timestamp.timestamp = None;
+        let mut expired_pending = conflict_delete_op(Uuid::new_v4(), Uuid::new_v4(), 5);
+        expired_pending.timestamp = Some(now - retention_days(31));
+
+        for op in [&expired, &in_window, &no_timestamp] {
+            sync_repo.record_remote_op(op).await.unwrap();
+        }
+        sync_repo.append_local_op(&expired_pending).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+        let report = session.gc_oplog(retention_days(30)).await.unwrap();
+        assert_eq!(report.removed_ops, 1);
+        assert!(!sync_repo.has_op(expired.op_id).await.unwrap());
+        for kept in [in_window.op_id, no_timestamp.op_id, expired_pending.op_id] {
+            assert!(sync_repo.has_op(kept).await.unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn gc_after_resolve_prunes_losing_copies_once_acked() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, copy) = seeded_conflict(item, &group, identity.id);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let local_device = Uuid::new_v4();
+        let (session, _) = session_for(&db, local_device, group.clone());
+        session
+            .resolve_conflict(&master, item, copy.op_id)
+            .await
+            .unwrap();
+
+        // 裁决采纳即以更大 lamport 重新入账：败方在采纳那一刻就落出副本集
+        // （可清），与采纳 op 是否已推出去无关；pending 保护的只有采纳
+        // op 自身。清理后重放安全：败方重拉回来 lamport 落后，不影响视图。
+        let report = session
+            .gc_oplog(default_tombstone_retention())
+            .await
+            .unwrap();
+        assert_eq!(report.removed_ops, 2);
+        let rest = sync_repo.item_ops(item).await.unwrap();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].op_id, pending_after_resolve(&sync_repo, item).await);
+
+        // ack 后再跑一轮：队列空，无可清
+        let pending = sync_repo.pending_ops(100).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        sync_repo.mark_acked(&[pending[0].op_id]).await.unwrap();
+        let report = session
+            .gc_oplog(default_tombstone_retention())
+            .await
+            .unwrap();
+        assert_eq!(report.removed_ops, 0);
+
+        // 视图收敛到被采纳副本，冲突区清空
+        let view = item_view(sync_repo.item_ops(item).await.unwrap());
+        let new_primary = view.primary.unwrap();
+        assert_eq!(new_primary.op_id, pending[0].op_id);
+        assert_eq!(new_primary.device_id, local_device);
+        assert!(view.conflicts.is_empty());
+    }
+
+    /// 裁决采纳后 push 队列里那条采纳 op 的 op_id（断言辅助）。
+    async fn pending_after_resolve(sync_repo: &SyncRepository, item: Uuid) -> Uuid {
+        let pending = sync_repo.pending_ops(100).await.unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].item_id, item);
+        pending[0].op_id
     }
 
     #[tokio::test]

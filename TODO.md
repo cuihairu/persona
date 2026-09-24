@@ -568,6 +568,19 @@ Server & Sync (optional)
         握手（被吊销设备不能再用既有凭证认证/推送，不等 15 分钟 TTL）；
         真 TCP 闭环测试（吊销后既有令牌 401 + 重新 SRP 登录 401 + 二次
         吊销幂等）+ revoke_device 单测
+  - [x] oplog 本地 GC（2026-09-24，关闭开放问题 3 客户端半边）：
+        `SyncSession::gc_oplog`（run_cycle 尾部自动运行，失败仅告警不打断
+        同步）+ `default_tombstone_retention`（30 天）+ SyncRepository
+        `pending_op_ids`/`delete_ops`（分块事务批量删）。谓词：保护集 =
+        push 未 ack / 未裁决冲突副本 / 主位 put（永不清理）；可清集 =
+        acked 旧版本 + ack 且过 tombstone 保留窗的主位墓碑（timestamp
+        缺失保守不清）；裁决采纳以更大 lamport 重新入账、败方自动落出
+        副本集无需 GC 特判。测试：谓词矩阵 3 用例（保护集存活 + 视图
+        不变 / tombstone 窗口与缺 timestamp / 裁决闭环败方可清）+
+        sync_repository pending/delete 用例；文档：E2EE_SYNC_DESIGN
+        §11-3 写实（server 侧保留策略仍开放，与「已知限制：无保留
+        策略」的保留策略/TTL follow-up 合并）+ STORAGE_AND_SYNC
+        操作日志自动瘦身边界
 - [ ] SCIM/SSO bridging (future)
 - [x] 文档：用户可选的存储/同步模式（2026-09-22 落地 `docs/STORAGE_AND_SYNC.md`
       用户指南）：三模式总览（纯本地默认零外联 / 自托管 Persona Server=
