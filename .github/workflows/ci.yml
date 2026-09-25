@@ -52,6 +52,7 @@ jobs:
   rust-windows:
     name: Rust (Windows build/test)
     runs-on: windows-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.97.0
@@ -67,8 +68,23 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: build
         run: cargo build --workspace --all-features
-      - name: test
-        run: cargo test --workspace --all-features
+      # Tests are split per crate so a hang is attributable: the flat
+      # `cargo test --workspace` hung on Windows three times with no log
+      # visibility (BlobNotFound while running), and the split makes the
+      # stuck step name the offending crate. The final workspace step
+      # preserves the original whole-workspace verification.
+      - name: test core
+        run: cargo test -p persona-core --all-features --no-fail-fast
+      - name: test server + connect-server
+        run: cargo test -p persona-server -p persona-connect-server --all-features --no-fail-fast
+      - name: test cli
+        run: cargo test -p persona-cli --all-features --no-fail-fast
+      - name: test ssh-agent
+        run: cargo test -p persona-ssh-agent --all-features --no-fail-fast
+      - name: test mobile
+        run: cargo test -p persona-mobile --all-features --no-fail-fast
+      - name: test workspace
+        run: cargo test --workspace --all-features --no-fail-fast
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
