@@ -247,6 +247,73 @@ async fn daemon_survives_parent_pipe_death_after_socket_line() {
     let _ = child.wait();
 }
 
+/// Policy rate limiting, end to end: with `PERSONA_AGENT_MIN_INTERVAL_MS` set
+/// on the real binary, the first signature is served and the immediate second
+/// one is denied with failure (5). This proves `PolicyEnforcer::from_env` is
+/// wired into the daemon's sign path, not only unit-tested in `policy.rs`.
+#[tokio::test]
+async fn daemon_rate_limits_rapid_signatures_via_env_policy() {
+    const ENV_VARS: &[&str] = &[
+        "PERSONA_AGENT_SOCKET_PATH",
+        "PERSONA_AGENT_STATE_DIR",
+        "PERSONA_AGENT_TEST_KEY_SEED",
+        "PERSONA_AGENT_TEST_KEY_COMMENT",
+        "PERSONA_AGENT_MIN_INTERVAL_MS",
+        "PERSONA_DB_PATH",
+    ];
+    let _env = EnvGuard::acquire(ENV_VARS);
+
+    let dirs = tempfile::tempdir().expect("temp dir for socket + state");
+    let socket_path = dirs.path().join("ratelimit.sock");
+    env::set_var("PERSONA_AGENT_SOCKET_PATH", &socket_path);
+    env::set_var("PERSONA_AGENT_STATE_DIR", dirs.path().join("state"));
+    let seed = [0x48u8; 32];
+    env::set_var("PERSONA_AGENT_TEST_KEY_SEED", BASE64.encode(seed));
+    env::set_var("PERSONA_AGENT_TEST_KEY_COMMENT", "ratelimit-test-key");
+    env::set_var("PERSONA_AGENT_MIN_INTERVAL_MS", "60000");
+    // The test-key override short-circuits before the db is ever touched.
+    env::remove_var("PERSONA_DB_PATH");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_persona-ssh-agent"))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn persona-ssh-agent binary");
+
+    // Consume stdout until the socket line; the pipe stays live for the rest
+    // of the test (pipe death is the orphan test's scenario).
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = std::io::BufRead::read_line(&mut stdout, &mut line).expect("read agent stdout");
+        assert!(n > 0, "agent stdout closed before SSH_AUTH_SOCK line");
+        if line.starts_with("SSH_AUTH_SOCK=") {
+            break;
+        }
+    }
+
+    let mut client = connect_with_retry(&socket_path).await;
+    let (key_blob, _) = request_identities(&mut client).await;
+    let signing = SigningKey::from_bytes(&seed);
+    let expected_blob = encode_ssh_ed25519_public(&signing.verifying_key().to_bytes());
+    assert_eq!(key_blob, expected_blob, "test key served");
+
+    // First signature: served.
+    let resp = send_sign_request(&mut client, &key_blob, b"first within window").await;
+    assert_eq!(resp.first().copied(), Some(14), "first signature served");
+
+    // The immediate second signature lands inside the min interval: denied.
+    let resp = send_sign_request(&mut client, &key_blob, b"second within window").await;
+    assert_eq!(
+        resp.first().copied(),
+        Some(5),
+        "second signature inside the min interval must be denied"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 async fn connect_with_retry(path: &Path) -> UnixStream {
     for _ in 0..100 {
         if let Ok(stream) = UnixStream::connect(path).await {

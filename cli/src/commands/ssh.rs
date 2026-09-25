@@ -549,14 +549,21 @@ async fn agent_status(_config: &crate::config::CliConfig) -> Result<()> {
         println!("{} {}", "PID:".yellow(), pid.trim().cyan());
         running = true;
     }
-    // Try to query agent identities
-    if let Ok(sock) = std::env::var("SSH_AUTH_SOCK") {
-        if let Ok(count) = query_agent_identities(&sock).await {
-            println!("{} {}", "Agent keys:".yellow(), count.to_string().cyan());
-        }
-    } else if sock_file.exists() {
-        let sock = std::fs::read_to_string(&sock_file).unwrap_or_default();
-        if let Ok(count) = query_agent_identities(sock.trim()).await {
+    // Query the key count from the same agent the Socket line describes —
+    // the state file's socket. SSH_AUTH_SOCK is only a fallback for when no
+    // state file exists yet: in a desktop session it usually points at the
+    // system ssh-agent, and key counts from that mixed two agents into one
+    // status report.
+    let query_target = if sock_file.exists() {
+        std::fs::read_to_string(&sock_file)
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    } else {
+        std::env::var("SSH_AUTH_SOCK").unwrap_or_default()
+    };
+    if !query_target.is_empty() {
+        if let Ok(count) = query_agent_identities(&query_target).await {
             println!("{} {}", "Agent keys:".yellow(), count.to_string().cyan());
         }
     }
@@ -1884,31 +1891,52 @@ mod tests {
             .await
             .expect("status with files works");
 
-        // A reachable agent answers the identity query.
+        // A reachable agent answers the identity query — via the state file's
+        // socket even while SSH_AUTH_SOCK points elsewhere (e.g. the system
+        // agent): one status report must describe one agent.
         let listener = UnixListener::bind(dir.path().join("query.sock")).unwrap();
         let server = tokio::spawn(serve_one_identity_query(listener, 3));
+        let stray_listener = UnixListener::bind(dir.path().join("stray.sock")).unwrap();
         let _env_sock = EnvVarGuard::set(
             "SSH_AUTH_SOCK",
-            dir.path().join("query.sock").to_string_lossy().to_string(),
+            dir.path().join("stray.sock").to_string_lossy().to_string(),
         );
-        agent_status(&config)
-            .await
-            .expect("status with a live agent works");
-        server.await.unwrap();
-
-        // With SSH_AUTH_SOCK unset, the stored socket file is consulted.
-        let _no_env_sock = EnvVarGuard::remove("SSH_AUTH_SOCK");
-        let listener2 = UnixListener::bind(dir.path().join("query2.sock")).unwrap();
-        let server2 = tokio::spawn(serve_one_identity_query(listener2, 1));
         std::fs::write(
             dir.path().join("ssh-agent.sock"),
-            dir.path().join("query2.sock").to_string_lossy().to_string(),
+            dir.path().join("query.sock").to_string_lossy().to_string(),
         )
         .unwrap();
         agent_status(&config)
             .await
-            .expect("status via the stored socket file works");
-        server2.await.unwrap();
+            .expect("status with a live agent works");
+        server.await.unwrap();
+        // The env-pointed agent was never consulted.
+        let stray_hit = tokio::time::timeout(
+            std::time::Duration::from_millis(150),
+            stray_listener.accept(),
+        )
+        .await;
+        assert!(
+            stray_hit.is_err(),
+            "SSH_AUTH_SOCK must not be queried while a state file exists"
+        );
+        drop(stray_listener);
+
+        // With no state file, the SSH_AUTH_SOCK socket is the fallback source.
+        std::fs::remove_file(dir.path().join("ssh-agent.sock")).unwrap();
+        let fallback_listener = UnixListener::bind(dir.path().join("fallback.sock")).unwrap();
+        let _env_sock_fallback = EnvVarGuard::set(
+            "SSH_AUTH_SOCK",
+            dir.path()
+                .join("fallback.sock")
+                .to_string_lossy()
+                .to_string(),
+        );
+        let fallback_server = tokio::spawn(serve_one_identity_query(fallback_listener, 1));
+        agent_status(&config)
+            .await
+            .expect("status falls back to the env socket");
+        fallback_server.await.unwrap();
     }
 
     #[cfg(unix)]

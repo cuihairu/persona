@@ -108,11 +108,14 @@ SSH Agent (developer focus)
       ③ `persona ssh run --host github.com -- ssh -T git@github.com`
       预期：TTY 确认「Allow SSH signature for host 'github.com'? [y/N]」→ y →
       GitHub 返回「Hi <user>! You've successfully authenticated...」
-- [ ] SSH E2E 负向用例与 Windows（正向 2026-09-25 已过，两项遗留）：
-      ④ 确认拒 n → sign refused；`PERSONA_AGENT_REQUIRE_CONFIRM=true`、
-      `PERSONA_AGENT_MIN_INTERVAL_MS` 限速生效；`audit_log` 落 `ssh_sign` 行；
-      顺带修 `agent-status` 键数查询优先走 `SSH_AUTH_SOCK` 环境变量导致与
-      Socket/PID 行混显两个 agent 的显示错位
+- [x] SSH E2E 负向用例收口（正向 2026-09-25 已过；④ 2026-09-25 盘点+补齐）：
+      确认拒 n → sign refused 已有覆盖（daemon_test deny→failure(5) +
+      tty/stdin 解析单测）；`REQUIRE_CONFIRM=true`/`MIN_INTERVAL_MS` env 解析
+      已有单测（policy.rs）；`MIN_INTERVAL_MS` 限速新增 daemon 子进程集成用例
+      （首签放行、窗口内二签 failure(5)，验 from_env→check_signature 全链）；
+      `audit_log` 落 `ssh_sign` 行已有两个单测；`agent-status` 混显已修——键数
+      查询改为状态文件 socket 优先、`SSH_AUTH_SOCK` 仅作无状态文件时的回退，
+      测试改写并加「env agent 不被查询」回归断言
       ⑤ Windows named-pipe 同流程 → 与下条 Windows-specific testing 合并执行
 - [ ] Windows-specific testing and optimization
 
