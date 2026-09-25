@@ -344,7 +344,7 @@ async fn start_agent(
     print_export: bool,
     ui: &dyn crate::utils::prompt::PromptUi,
 ) -> Result<()> {
-    use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
     println!("{}", "Starting persona-ssh-agent...".cyan().bold());
     let db_path = config.get_database_path();
@@ -399,38 +399,14 @@ async fn start_agent(
             println!("{}", "Run the following in your shell:".dimmed());
             print_sock_export(sock_value);
         }
+        // The daemon prints the socket line before loading keys, so it can
+        // still die right after (e.g. a stale binary rejected by a newer db
+        // migration). Poll briefly: a dead daemon must surface as an error,
+        // not as the success message printed above.
+        ensure_agent_alive(&mut child).await?;
     } else {
-        // The child closed stdout without a socket line. try_wait can
-        // transiently report None for a child that already exited (it is
-        // not reaped yet), which would misread an early crash as a healthy
-        // agent — so poll briefly before concluding the agent is alive.
-        let mut status = None;
-        for _ in 0..20 {
-            match child.try_wait()? {
-                Some(exit) => {
-                    status = Some(exit);
-                    break;
-                }
-                None => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
-            }
-        }
-        if let Some(status) = status {
-            let mut stderr_output = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                let _ = stderr.read_to_string(&mut stderr_output).await;
-            }
-            if !status.success() {
-                let stderr_output = stderr_output.trim();
-                if stderr_output.is_empty() {
-                    anyhow::bail!("persona-ssh-agent exited early with status {}", status);
-                }
-                anyhow::bail!(
-                    "persona-ssh-agent exited early with status {}: {}",
-                    status,
-                    stderr_output
-                );
-            }
-        }
+        // The child closed stdout without a socket line.
+        ensure_agent_alive(&mut child).await?;
         println!(
             "{}",
             "Could not detect SSH_AUTH_SOCK from agent output.".yellow()
@@ -438,6 +414,45 @@ async fn start_agent(
     }
 
     Ok(())
+}
+
+/// Poll the freshly spawned agent briefly: a daemon that already exited
+/// (stale binary, db migration failure, broken vault) must surface as an
+/// error instead of a reported-successful start. `try_wait` can transiently
+/// report None for a child that already exited but is not reaped yet, hence
+/// the bounded loop rather than a single check.
+async fn ensure_agent_alive(child: &mut tokio::process::Child) -> Result<()> {
+    use tokio::io::AsyncReadExt;
+
+    let mut status = None;
+    for _ in 0..20 {
+        match child.try_wait()? {
+            Some(exit) => {
+                status = Some(exit);
+                break;
+            }
+            None => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
+        }
+    }
+    let Some(status) = status else {
+        return Ok(());
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let mut stderr_output = String::new();
+    if let Some(mut stderr) = child.stderr.take() {
+        let _ = stderr.read_to_string(&mut stderr_output).await;
+    }
+    let stderr_output = stderr_output.trim();
+    if stderr_output.is_empty() {
+        anyhow::bail!("persona-ssh-agent exited early with status {}", status);
+    }
+    anyhow::bail!(
+        "persona-ssh-agent exited early with status {}: {}",
+        status,
+        stderr_output
+    );
 }
 
 fn resolve_agent_binary() -> Result<PathBuf> {

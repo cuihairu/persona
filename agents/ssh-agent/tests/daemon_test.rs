@@ -20,23 +20,34 @@ use std::{
     env,
     io::Cursor,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
 use tokio::net::UnixStream;
 
 /// Environment variables this test binary touches; cleared on drop so a
 /// failing assertion cannot leak them into anything that runs afterwards.
+///
+/// The guard also holds a process-wide lock for its whole lifetime: these
+/// tests share one environment, and a second test replacing the variables
+/// mid-run would silently redirect the first one's daemon to the wrong
+/// socket path (observed as a 5 s connect timeout and a panic).
 struct EnvGuard {
     vars: &'static [&'static str],
+    _lock: MutexGuard<'static, ()>,
 }
+
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 impl EnvGuard {
     fn acquire(vars: &'static [&'static str]) -> Self {
+        let lock = ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         for name in vars {
             env::remove_var(name);
         }
-        Self { vars }
+        Self { vars, _lock: lock }
     }
 }
 
@@ -162,6 +173,78 @@ async fn daemon_serves_clients_and_gates_signatures_behind_approval() {
     assert_eq!(pid, std::process::id().to_string());
 
     daemon.abort();
+}
+
+/// Spawns the real agent binary exactly like `persona ssh add-to-agent`
+/// does (piped stdout), then closes the parent-side pipe ends right after
+/// consuming the SSH_AUTH_SOCK line — simulating the parent CLI exiting.
+/// A connection-level `warn!` must not kill the daemon: with the default
+/// SIGPIPE disposition the first stdout write after the parent's exit
+/// terminated it silently.
+#[tokio::test]
+async fn daemon_survives_parent_pipe_death_after_socket_line() {
+    const ENV_VARS: &[&str] = &[
+        "PERSONA_AGENT_SOCKET_PATH",
+        "PERSONA_AGENT_STATE_DIR",
+        "PERSONA_AGENT_TEST_KEY_SEED",
+        "PERSONA_AGENT_TEST_KEY_COMMENT",
+        "PERSONA_DB_PATH",
+    ];
+    let _env = EnvGuard::acquire(ENV_VARS);
+
+    let dirs = tempfile::tempdir().expect("temp dir for socket + state");
+    let socket_path = dirs.path().join("orphan.sock");
+    env::set_var("PERSONA_AGENT_SOCKET_PATH", &socket_path);
+    env::set_var("PERSONA_AGENT_STATE_DIR", dirs.path().join("state"));
+    let seed = [0x24u8; 32];
+    env::set_var("PERSONA_AGENT_TEST_KEY_SEED", BASE64.encode(seed));
+    env::set_var("PERSONA_AGENT_TEST_KEY_COMMENT", "orphan-test-key");
+    // The test-key override short-circuits before the db is ever touched;
+    // prove the daemon needs none.
+    env::remove_var("PERSONA_DB_PATH");
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_persona-ssh-agent"))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn persona-ssh-agent binary");
+
+    // Consume stdout until the socket line, then orphan the pipe: the child
+    // keeps the write ends while every read end is gone.
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = std::io::BufRead::read_line(&mut stdout, &mut line).expect("read agent stdout");
+        assert!(n > 0, "agent stdout closed before SSH_AUTH_SOCK line");
+        if line.starts_with("SSH_AUTH_SOCK=") {
+            break;
+        }
+    }
+    drop(stdout);
+    drop(child.stderr.take());
+
+    // Unsupported message type: the handler warns (a stdout write) before
+    // answering failure (5). Against the dead pipe this is the SIGPIPE trip.
+    let mut first = connect_with_retry(&socket_path).await;
+    let resp = send_request(&mut first, &[0x7fu8]).await;
+    assert_eq!(
+        resp.first().copied(),
+        Some(5),
+        "failure answer after orphaned stdout"
+    );
+    drop(first);
+
+    // The daemon must still serve a fresh client afterwards.
+    let mut second = connect_with_retry(&socket_path).await;
+    let (key_blob, comment) = request_identities(&mut second).await;
+    let signing = SigningKey::from_bytes(&seed);
+    let expected_blob = encode_ssh_ed25519_public(&signing.verifying_key().to_bytes());
+    assert_eq!(key_blob, expected_blob, "test key still served");
+    assert_eq!(comment, "orphan-test-key");
+
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 async fn connect_with_retry(path: &Path) -> UnixStream {

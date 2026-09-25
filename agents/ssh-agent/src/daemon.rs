@@ -49,6 +49,7 @@ pub async fn run_agent_with_hooks(
 ) -> Result<()> {
     RedactedLoggerBuilder::new(Level::INFO)
         .include_target(false)
+        .with_writer(|| Box::new(AgentLogSink))
         .init()?;
 
     let socket_path = default_agent_path();
@@ -63,6 +64,22 @@ pub async fn run_agent_with_hooks(
         endpoint = socket_path.display().to_string();
     }
     info!("persona-ssh-agent listening at {}", endpoint);
+
+    // The parent that consumes the SSH_AUTH_SOCK line (e.g. `persona ssh
+    // add-to-agent`) usually exits right after reading it, closing its ends
+    // of both piped std streams. Every later stdout write then hits a broken
+    // pipe; with the default SIGPIPE disposition that kills the daemon, so
+    // the signal must be ignored. Ignoring alone is not enough: tracing
+    // would then report the swallowed write error on stderr — and a failed
+    // stderr write makes `eprintln!` panic, taking the connection task down.
+    // `AgentLogSink` below drops broken-pipe output before tracing ever sees
+    // an error. Windows has no SIGPIPE; the sink alone covers it there.
+    #[cfg(unix)]
+    // SAFETY: a plain signal-disposition call, no memory touched.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
+
     println!("SSH_AUTH_SOCK={}", endpoint);
 
     // Write state files
@@ -102,6 +119,28 @@ pub async fn run_agent_with_hooks(
                 warn!("Connection error: {}", e);
             }
         });
+    }
+}
+
+/// Best-effort stdout sink for daemon logging.
+///
+/// A daemon whose parent (e.g. `persona ssh add-to-agent`) has exited owns
+/// no live reader for its stdout; writes fail there forever. Surfacing those
+/// errors would make tracing-subscriber report them on stderr — and `eprintln!`
+/// panics when stderr fails too, killing the connection task. So the sink
+/// attempts the write and drops the event on any error; a foreground run
+/// with a live terminal is unaffected.
+struct AgentLogSink;
+
+impl std::io::Write for AgentLogSink {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stdout().write_all(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stdout().flush();
+        Ok(())
     }
 }
 
