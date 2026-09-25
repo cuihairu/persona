@@ -85,12 +85,21 @@ SSH Agent (developer focus)
 - [x] E2E tests for agent request_identities and GitHub connection
 - [x] CLI commands: `persona ssh import|generate|list|list-all|export-pub|add-to-agent|start-agent|stop-agent|agent-status|run|remove`
 - [x] Complete README documentation with usage examples
-- [ ] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
+- [x] Full E2E test: manual testing with real `ssh -T git@github.com` (requires user setup)
+      真机正向验收通过（2026-09-25，用户贴公钥协助）：一次性隔离工作区
+      （`PERSONA_WORKSPACE_PATH=/tmp/persona-e2e`）→ ① generate → export-pub
+      上 GitHub → ② add-to-agent 拉起 daemon（提示输 agent 主密码，空=不设）
+      → ③ `persona ssh run --host github.com -- ssh -T git@github.com` 返回
+      「Hi cuihairu! You've successfully authenticated」。③ 的 TTY 确认提示
+      未出现（known host 未触发审批路径）；审计链核实 login +
+      credential_decrypted 落库。验收过程发现并修复两个缺陷：daemon 父进程
+      退出后写日志撞 SIGPIPE 静默死亡（忽略信号 + 日志 sink 写失败即弃）、
+      `add-to-agent` 不探测 daemon 早期退出（补 200ms 存活轮询）——回归测试
+      `daemon_survives_parent_pipe_death_after_socket_line` 钉住。
       引导脚本（2026-09-24）：`PERSONA_E2E_IDENTITY=<身份名> scripts/e2e-ssh-github.sh`
       ——生成/复用密钥、打印公钥等用户贴 GitHub、装载 agent、真连判定
-      `successfully authenticated`；负向用例仍走下面 ④ 手工。
-      手工验收步骤（需用户 GitHub 账号，本机无凭据不可代跑；2026-09-22 落步骤、
-      2026-09-24 按 CLI 实际语法修正 ①②）：
+      `successfully authenticated`。
+      手工验收步骤（2026-09-22 落步骤、2026-09-24 按 CLI 实际语法修正 ①②）：
       ① `persona ssh generate --identity <身份名> --name github-e2e`（或 import
       既有私钥）→ `persona ssh export-pub --id <id>` 公钥添加到 GitHub →
       Settings → SSH keys
@@ -99,8 +108,11 @@ SSH Agent (developer focus)
       ③ `persona ssh run --host github.com -- ssh -T git@github.com`
       预期：TTY 确认「Allow SSH signature for host 'github.com'? [y/N]」→ y →
       GitHub 返回「Hi <user>! You've successfully authenticated...」
-      ④ 负向用例：确认拒 n → sign refused；`PERSONA_AGENT_REQUIRE_CONFIRM=true`、
-      `PERSONA_AGENT_MIN_INTERVAL_MS` 限速生效；`audit_log` 落 `ssh_sign` 行
+- [ ] SSH E2E 负向用例与 Windows（正向 2026-09-25 已过，两项遗留）：
+      ④ 确认拒 n → sign refused；`PERSONA_AGENT_REQUIRE_CONFIRM=true`、
+      `PERSONA_AGENT_MIN_INTERVAL_MS` 限速生效；`audit_log` 落 `ssh_sign` 行；
+      顺带修 `agent-status` 键数查询优先走 `SSH_AUTH_SOCK` 环境变量导致与
+      Socket/PID 行混显两个 agent 的显示错位
       ⑤ Windows named-pipe 同流程 → 与下条 Windows-specific testing 合并执行
 - [ ] Windows-specific testing and optimization
 
