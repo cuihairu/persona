@@ -1,6 +1,6 @@
 # 生物识别解锁设计（调用系统功能解锁 vault）
 
-状态：2026-09-26 设计定稿 + 架构落地；macOS 硬件绑定路线**待真机 spike**（§6）。
+状态：2026-09-26 设计定稿 + 架构落地；macOS 硬件绑定路线**待真机 spike**（§5.2）。
 本文是 `docs/THREAT_MODEL.md`「Biometric Unlock」章的展开设计稿。
 
 ## 0. 需求原点
@@ -16,11 +16,11 @@ OS keyring + OS 认证弹框做门禁**。本设计是它的升级：把"弹框�
 
 | 平台    | API                                                                                                                    | 绑定强度               | 本轮状态                                    |
 | ------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------- |
-| iOS     | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（无 Flutter 宿主，§8）                 |
+| iOS     | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（无 Flutter 宿主，§7.2）               |
 | Android | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（同上）                                |
-| macOS   | Secure Enclave P-256 + ECIES（路线 B，§6）                                                                             | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层  |
-| Windows | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | 规划中（§7）；当前保持 Windows Hello 门禁层 |
-| Linux   | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.3 诚实局限）                   |
+| macOS   | Secure Enclave P-256 + ECIES（路线 B'，§5.2）                                                                          | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层  |
+| Windows | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | 规划中（§6）；当前保持 Windows Hello 门禁层 |
+| Linux   | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.1 诚实局限）                   |
 
 绑定强度三档（`BiometricWrapCapability`，core 定义、三端共用）：
 
@@ -96,7 +96,7 @@ BIOWRAP1 | u8 platform_tag | 32B enrollment_fp | u32le payload_len | payload
   biometryCurrentSet 的平台可存常量占位）。解包时 core 再比对一次，
   不匹配 → `EnrollmentChanged`——即使平台层漏拦（纵深防御第二道）。
 - `payload`：平台私有密文。core 不解释 payload，密钥流只经过
-  `wrap_key`/`unwrap_key` 两个 trait 方法，中间值用 `Zeroizing` 包裹。
+  `wrap_payload`/`unwrap_payload` 两个 trait 方法，中间值用 `Zeroizing` 包裹。
 
 ### 3.4 回退链（不可死锁）
 
@@ -125,13 +125,13 @@ core（平台无关）
   auth/biometric_wrap.rs
     BiometricWrapCapability / BiometricWrapError
     trait BiometricKeyWrapper { capability / is_available / enrollment_fingerprint
-                                / wrap_key / unwrap_key / delete_wrap }
+                                / wrap_payload / unwrap_payload / delete_wrap_payload }
     包裹信封编解码 + MockKeyWrapper（测试与 CI 用）
   service.rs::authenticate_with_master_key()   ← 密钥解锁原语（锁户/会话/审计对齐）
 
 desktop（宿主装配）
   biometric.rs           既有 OsBiometricProvider（门禁层，SSH agent 共用）
-  biometric/macos_se.rs  Secure Enclave 路线 B 实现（cfg macos；spike 门控）
+  biometric/macos_se.rs  Secure Enclave 路线 B' 实现（cfg macos；spike 门控）
   commands.rs            biometric_enable/_unlock 按capability 分流；
                          wrap blob 走 keyring[persona-biometric-wrap]；
                          biometric_wrap_spike 开发命令（真机跑探针）
@@ -194,18 +194,20 @@ macOS 保持门禁层，路线 A 留给"有 Developer ID 证书时"再评。
 密码回退）+ keyring 主密码托管。macos_se.rs 已入库，
 生产路径未被默认启用——不留半成品在 unlock 主链路上。
 
-编译验证：macos_se.rs 是 `cfg(target_os = "macos")` 代码，**Linux CI
-（`ci.yml` 的 desktop job，ubuntu-latest）根本不编译它**；`objc2`
-crate 在非 Apple target 上连 `cargo check` 都直接拒绝（compile_error），
-本地 Linux 同样无法做编译验证。唯一的编译门是 `desktop-build`
-工作流的 macos job（macos-latest runner 上 `tauri build` 全量编译）。
-API 形状已按 objc2-security 0.3.2 的 generated 绑定逐项核对
-（`SecKey::new_random_key` / `public_key` / `encrypted_data` /
-`decrypted_data` 方法签名、`SecItemCopyMatching`/`SecItemDelete` 为
-crate 根自由函数、`CFDictionary::<CFType, CFType>::from_slices` +
-`as_opaque()` 传参、`CFBoolean::new(true)`、`SecAccessControl::with_flags`、
-ECIES 常量 `...SHA256AESGCM`），但在 macOS runner 变绿之前，
-本文件状态为"已核对、待编译验证"，不是"已验证"。
+编译验证：macos_se.rs 是 `cfg(target_os = "macos")` 代码，Linux CI
+（`ci.yml` 的 desktop job，ubuntu-latest）根本不编译它；`objc2`
+crate 在非 Apple **host** target 上连 `cargo check` 都直接拒绝。
+但交叉 check 可以：`cargo check --target aarch64-apple-darwin --lib`
+在 Linux 上可用——`cargo check` 不链接，把 cc-rs 要编译的
+ObjC 异常辅助文件用退出 0 的空编译器桩掉
+（`CC_aarch64_apple_darwin=true cargo check --target …`）即可让
+rustc 全量 type-check 本模块。**2026-09-26 该验证已跑通（check +
+clippy `-D warnings` 双绿）**，并当场抓出三处真实错误修复：
+CF 类型须走直接依赖 `objc2-core-foundation`（objc2-foundation 不在
+根上重导出）、`kSec…` extern static 读取需逐处 `unsafe`、
+`SecItemCopyMatching` out 参数是 `*mut *const CFType`。
+最终链接与运行时行为仍只在 `desktop-build` 的 macOS job
+（macos-latest runner 上 `tauri build`）与真机 spike 上验证。
 
 ## 6. Windows（规划，下一期）
 
@@ -257,8 +259,8 @@ fprintd D-Bus（net.reactivated.Fprint）直调是 polkit 的备选（少一层
 - [x] desktop：capability 分流的 enable/unlock/disable/status +
       wrap blob keyring 隔离（`persona-biometric-wrap`）+ 改密联动删 blob + 命令层 7 用例（enable 落密文/blob 互斥/unlock 闭环/注册集漂移/
       用户取消/blob 损坏/改密失效/spike 非 macOS 报 Unsupported）
-- [x] desktop：macos_se.rs（路线 B'，spike 门控；编译验证状态见 §5.3，
-      API 形状已按 generated 绑定逐项核对）+ `biometric_wrap_spike` 命令
+- [x] desktop：macos_se.rs（路线 B'，spike 门控；**编译验证已过**——
+      Linux 交叉 check/clippy，见 §5.3）+ `biometric_wrap_spike` 命令
 - [x] desktop：状态面暴露 wrap 档位（hardware-bound / os-gate），
       EnrollmentChanged 自动降级 + `BIOMETRIC_RESET` / `BIOMETRIC_CANCELLED`
       前端分流（解锁屏 RESET 隐藏按钮、CANCEL 静默保留；设置页档位行）
