@@ -4364,6 +4364,9 @@ fn agent_state_dir_falls_back_to_home_when_env_unset() {
 
 /// agent key-count 协议：服务端 accept 后立即断开 → 客户端读响应
 /// 长度时命中 EOF，返回 Err 而非挂死。
+// Unix domain socket 专用路径——与上面的 protocol_matrix 同门禁（缺这条
+// 会让 desktop-build windows job 首次编译 test profile 时失败，2026-09-26）
+#[cfg(unix)]
 #[test]
 fn query_agent_key_count_fails_on_dead_socket() {
     use std::os::unix::net::UnixListener;
