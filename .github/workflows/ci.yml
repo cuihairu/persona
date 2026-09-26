@@ -68,23 +68,36 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: build
         run: cargo build --workspace --all-features
-      # Tests are split per crate so a hang is attributable: the flat
-      # `cargo test --workspace` hung on Windows three times with no log
-      # visibility (BlobNotFound while running), and the split makes the
-      # stuck step name the offending crate. The final workspace step
-      # preserves the original whole-workspace verification.
-      - name: test core
-        run: cargo test -p persona-core --all-features --no-fail-fast
-      - name: test server + connect-server
-        run: cargo test -p persona-server -p persona-connect-server --all-features --no-fail-fast
-      - name: test cli
-        run: cargo test -p persona-cli --all-features --no-fail-fast
-      - name: test ssh-agent
-        run: cargo test -p persona-ssh-agent --all-features --no-fail-fast
-      - name: test mobile
-        run: cargo test -p persona-mobile --all-features --no-fail-fast
-      - name: test workspace
-        run: cargo test --workspace --all-features --no-fail-fast
+      # 归因探针：直接跑 persona --version。此前 ci 集成测试（18 个全是
+      # assert_cmd 起子进程）在 windows runner 上零输出挂死到 120 分钟
+      # job 超时（run 36263457552：单测 358/359 全过后集成二进制零完成）。
+      # 这个探针把「二进制启动即挂」与「个别测试挂」区分开：30 秒不退
+      # 即失败并指认二进制层面，不再烧整个 job。
+      - name: probe persona binary starts
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "target\debug\persona.exe" -ArgumentList "--version" -PassThru -NoNewWindow -RedirectStandardOutput probe-out.txt -RedirectStandardError probe-err.txt
+          if ($p.WaitForExit(30000)) {
+            Get-Content probe-out.txt, probe-err.txt
+            Write-Host "PROBE: persona --version exited with code $($p.ExitCode)"
+          } else {
+            Stop-Process -Id $p.Id -Force
+            Get-Content probe-out.txt, probe-err.txt -ErrorAction SilentlyContinue
+            Write-Host "::error::PROBE: persona --version hung for 30s - binary-level startup hang, not a per-test issue"
+            exit 1
+          }
+      # cargo test 的测试二进制一旦有测试挂死，整个二进制（连同日志与后
+      # 续 crate）一起陪葬。nextest 每个测试独立进程 + 慢测试强杀
+      # （.config/nextest.toml：60s 标记、240s 终止），挂死测试会带名字
+      # 报出来，其余测试照常完成。
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: test (nextest, per-test timeout)
+        run: cargo nextest run --workspace --all-features --profile ci
+      # nextest 不跑 doctest，单独补齐与 cargo test 等价的覆盖面
+      - name: test doc
+        run: cargo test --workspace --all-features --doc --no-fail-fast
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 

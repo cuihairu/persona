@@ -1,0 +1,6 @@
+# cargo-nextest 配置。CI（.github/workflows/ci.yml 的 Windows job）用
+# `--profile ci` 跑：每个测试独立进程，超过 60s 标记慢、240s 强杀——
+# 挂死测试以失败形式带名字浮出，不再拖死整个测试二进制。
+[profile.ci]
+failure-output = "immediate-final"
+slow-timeout = { period = "60s", terminate-after = 4 }
