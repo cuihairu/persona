@@ -113,6 +113,10 @@ jobs:
         if: runner.os != 'Linux'
         working-directory: desktop/src-tauri
         shell: bash
+        # 非门禁：探针 ok 位、乃至 runner 环境根本跑不起测试二进制（Windows
+        # runner 实测 0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND——Tauri 测试
+        # 二进制的原生 loader 依赖，见设计文档 §6.3），都不该挡打包。
+        continue-on-error: true
         run: cargo test --lib spike_probes_print_report -- --ignored --nocapture
 
   release:

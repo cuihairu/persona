@@ -313,6 +313,15 @@ tauri-build 的资源编译走 embed-resource，会找 `llvm-rc`，同样以
 clippy `-D warnings` 双绿。运行时行为只在 `desktop-build` 的 Windows job
 与真机 spike 上验证。
 
+**GitHub runner 实测（2026-09-26，desktop-build）**：test profile 在
+Windows runner 上**二进制无法启动**——`0xc0000139
+STATUS_ENTRYPOINT_NOT_FOUND`（Tauri 测试二进制的原生 loader 依赖在
+runner 环境缺导出；本仓库此前从未在 Windows 编译过 test profile）。故
+Passport KSP 的运行时行为 **runner 上拿不到**，探针只在真机/常规
+Windows 会话可行（或以 `biometric_tpm_spike` 命令在
+`PERSONA_BIOMETRIC_TPM_SPIKE=1` 的应用里调）。CI 的探针步骤因此标
+`continue-on-error`（编译期信号仍在，运行期结论只以真机为准）。
+
 次选路线（WebAuthn 平台认证器）**仍未实现**，设计意图保留在 §6 原始
 方案里：make credential（UV required）→ 解锁时 get assertion（硬件弹
 Hello）→ 以 credential 绑定性门禁 DPAPI 包裹层。它弱于 Passport Key
@@ -397,8 +406,10 @@ Flutter/Rust FFI 中转**：生物识别与密钥存储是深度平台特性，�
 - [ ] macOS 真机 spike（§5.2 探针 1/1b/2a/2b/3/4/5 + 手动删指纹对照；
       runner VM 实测见 §5.3——无 SE，探针 1 即 errSecAuthFailed，不构成
       SE 行为证据）→ 结论回填本文 §5.2 与 THREAT_MODEL
-- [ ] Windows 真机 spike（§6.3 探针 1/2/3/4/4b/5a/5b/6/7 + 手动删指纹对照）
-      → 结论回填本文 §6 与 THREAT_MODEL（含 §6.2 差距是否如登记成立）
+- [ ] Windows 真机 spike（§6.3 探针 1/2/3/4/4b/5a/5b/6/7 + 手动删指纹对照；
+      runner 实测见 §6.3 末——测试二进制 0xc0000139 无法启动，运行期
+      结论只能来自真机）→ 结论回填本文 §6 与 THREAT_MODEL
+      （含 §6.2 差距是否如登记成立）
 - [ ] Windows 次选路线（WebAuthn 平台认证器）——**押后**：弱于 Passport
       Key 且无 §6.2 之外的额外收益，先看首选路线真机结论
 - [ ] iOS/Android/HarmonyOS 原生应用（iOS Swift/SwiftUI + Android Kotlin + HarmonyOS ArkTS，含平台生物识别解锁；不经 Flutter/FFI 中转——§7.2 技术决策）
