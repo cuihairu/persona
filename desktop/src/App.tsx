@@ -6,6 +6,7 @@ import i18n, { normalizeLocale } from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useGlobalShortcut } from '@/hooks/useGlobalShortcut';
 import { useAutoLockEvents } from '@/hooks/useAutoLockEvents';
+import { useQuickAccessBridge } from '@/hooks/useQuickAccessBridge';
 import { useSshApprovals } from '@/hooks/useSshApprovals';
 import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
 import { useTheme } from '@/hooks/useTheme';
@@ -117,6 +118,9 @@ const App: React.FC = () => {
 
   // Auto-lock 事件流：lock_pending 倒计时横幅 + locked 回解锁屏（hook 内处理）
   const { pendingSeconds } = useAutoLockEvents(isUnlocked);
+
+  // Quick Access 浮窗的跨窗跳转（浮窗 → 主窗口切身份 + 选中条目）
+  useQuickAccessBridge();
 
   // SSH 签名审批队列：内嵌 agent 请求确认时弹窗（Allow/Deny）
   const { pending: pendingApproval, pendingCount, respond } = useSshApprovals(isUnlocked);

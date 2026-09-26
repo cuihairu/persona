@@ -298,6 +298,7 @@ async fn init_service_inner<R: tauri::Runtime>(
                                 register_auto_lock_bridge(&state, &app).await;
                                 maybe_start_passkey_server(&db_path, &state, &app).await;
                                 attach_sync_emitter(&state).await;
+                                apply_quick_access(&state, &app, &db_path).await;
                                 Ok(ApiResponse::success(true))
                             }
                             Err(e) => Ok(ApiResponse::error(format!(
@@ -318,6 +319,7 @@ async fn init_service_inner<R: tauri::Runtime>(
                                 register_auto_lock_bridge(&state, &app).await;
                                 maybe_start_passkey_server(&db_path, &state, &app).await;
                                 attach_sync_emitter(&state).await;
+                                apply_quick_access(&state, &app, &db_path).await;
                                 Ok(ApiResponse::success(true))
                             }
                             Ok(persona_core::AuthResult::InvalidCredentials) => {
@@ -348,6 +350,7 @@ async fn init_service_inner<R: tauri::Runtime>(
                                     register_auto_lock_bridge(&state, &app).await;
                                     maybe_start_passkey_server(&db_path, &state, &app).await;
                                     attach_sync_emitter(&state).await;
+                                    apply_quick_access(&state, &app, &db_path).await;
                                     Ok(ApiResponse::success(true))
                                 }
                                 persona_core::AuthResult::InvalidCredentials => {
@@ -397,6 +400,35 @@ pub async fn lock_service(
         Ok(ApiResponse::success(true))
     } else {
         Ok(ApiResponse::error("Service not initialized".to_string()))
+    }
+}
+
+/// 解锁成功后按 DB 真值重放 Quick Access 全局热键（开关 + 绑定）。
+///
+/// 每次解锁都重放而不是"与上次一致就跳过"：绑定可能被另一端改过
+/// （CLI 手改 settings JSON / 换了台机器同步来的 vault），重放的代价是
+/// 一次 unregister_all + 一次 register，换来的是任何改法都在下次解锁
+/// 收敛。**读 settings 失败只 warn**——全局热键是增强功能，绝不阻断解锁。
+async fn apply_quick_access<R: tauri::Runtime>(
+    state: &State<'_, AppState>,
+    app: &tauri::AppHandle<R>,
+    db_path: &str,
+) {
+    let db = match Database::from_file(db_path).await {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!("quick access: open vault failed: {}", e);
+            return;
+        }
+    };
+    if let Err(e) = db.migrate().await {
+        tracing::warn!("quick access: vault migrate failed: {}", e);
+        return;
+    }
+    let workspace_path = workspace_path_for_db_path(db_path);
+    match ensure_workspace_for_path(&db, &workspace_path).await {
+        Ok(ws) => crate::quick_access::apply_from_settings(app, &state.quick_access, &ws.settings),
+        Err(e) => tracing::warn!("quick access: workspace metadata unavailable: {}", e),
     }
 }
 
@@ -899,6 +931,139 @@ pub async fn set_password_expiry(
 }
 
 // ---------------------------------------------------------------------------
+// Quick Access（OS 级全局热键 + 浮窗，对标矩阵 #22）
+// ---------------------------------------------------------------------------
+
+/// 读 Quick Access 状态面（**免解锁**：绑定与开关在 workspace settings 里，
+/// 锁定后浮窗/设置页仍要如实显示"热键到底生效没有"）。
+///
+/// 运行态取自 `AppState.quick_access`（真实抢注结果），配置侧取自 DB——
+/// 两者不一致正是要暴露给人看的事：抢注失败时 configured 有值而 registered
+/// 为空，UI 据此显示"未生效 + 原因"。
+#[command]
+pub async fn quick_access_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<crate::quick_access::QuickAccessStatus>, String> {
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let ws = workspace_or_return!(db, workspace_path);
+
+    let runtime = state
+        .quick_access
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(ApiResponse::success(runtime.snapshot(&ws.settings)))
+}
+
+/// 设置 Quick Access 开关与绑定：解锁门禁 → 校验语法 → 落库 → 重注册。
+///
+/// 写入要过解锁门禁（同 `set_locale` / `set_feature_flags` / `set_password_expiry`）：
+/// 读（status）免解锁是给锁屏/设置页看"热键到底生效没有"用的，改配置
+/// 不该在锁定态发生。
+///
+/// 落库在前是刻意的：重注册成功但落库失败会留下"内存里热键变了、DB 里
+/// 没变"的漂移（下次解锁又被 DB 拉回去，用户以为改绑失败）。抢注失败
+/// **不算命令失败**——绑定已持久化，返回体里带 `error` 让设置页如实显示
+/// （Wayland 无 portal / 被别的应用占用是常态，不是错误流）。
+#[command]
+pub async fn quick_access_set<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    enabled: bool,
+    accelerator: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<crate::quick_access::QuickAccessStatus>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    // 语法校验先行：非法串不落库（否则下次解锁还在反复失败）
+    let normalized = match accelerator.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            let normalized = crate::quick_access::normalize_accelerator(raw);
+            if let Err(err) = crate::quick_access::parse_accelerator(&normalized) {
+                return Ok(ApiResponse::error(err));
+            }
+            Some(normalized)
+        }
+        // 空串 = 恢复平台默认绑定（存 None，不把默认值钉进 DB）
+        _ => None,
+    };
+
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = workspace_or_return!(db, workspace_path);
+    ws.settings.quick_access_enabled = enabled;
+    ws.settings.quick_access_hotkey = normalized.clone();
+    ws.touch();
+    ok_or_error_response!(repo.update(&ws).await);
+
+    let status = crate::quick_access::apply_explicit(
+        &app,
+        &state.quick_access,
+        enabled,
+        normalized.as_deref(),
+    );
+    Ok(ApiResponse::success(status))
+}
+
+/// 从托盘菜单/设置页直接拉起浮窗（不依赖全局热键——热键被占用时它仍是入口）
+#[command]
+pub async fn quick_access_open<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    crate::quick_access::open(&app);
+    Ok(ApiResponse::success(true))
+}
+
+/// 浮窗里"在 Persona 中打开"：定向通知主窗口切身份 + 选中条目，并把主
+/// 窗口拉到前台。两个窗口各有独立 JS store，跨窗跳转只能走事件（载荷
+/// 见 `quick_access::OpenCredentialPayload`）
+#[command]
+pub async fn quick_access_open_credential<R: tauri::Runtime>(
+    request: QuickAccessOpenCredentialRequest,
+    app: tauri::AppHandle<R>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    // UUID 形态先过一遍：主窗口拿到非法 id 只会静默不选中，白跑一趟
+    if Uuid::from_str(&request.identity_id).is_err()
+        || Uuid::from_str(&request.credential_id).is_err()
+    {
+        return Ok(ApiResponse::error("Invalid UUID format".to_string()));
+    }
+    let delivered = crate::quick_access::open_credential_in_main(
+        &app,
+        &request.identity_id,
+        &request.credential_id,
+    );
+    if delivered {
+        Ok(ApiResponse::success(true))
+    } else {
+        Ok(ApiResponse::error("Main window unavailable".to_string()))
+    }
+}
+
+/// 把主窗口拉到前台（浮窗锁定态的"去解锁"出口）
+#[command]
+pub async fn focus_main_window<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if crate::quick_access::focus_main_window(&app) {
+        Ok(ApiResponse::success(true))
+    } else {
+        Ok(ApiResponse::error("Main window unavailable".to_string()))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Biometric unlock（OS 认证弹框 + OS keychain 托管主密码）
 // ---------------------------------------------------------------------------
 
@@ -1168,15 +1333,8 @@ pub async fn biometric_wrap_spike(
         let steps = tauri::async_runtime::spawn_blocking(crate::biometric::macos_se::run_spike)
             .await
             .map_err(|e| format!("biometric spike task failed: {}", e))?;
-        Ok(ApiResponse::success(
-            steps
-                .into_iter()
-                .map(|s| BiometricSpikeStep {
-                    name: s.name.to_string(),
-                    ok: s.ok,
-                    detail: s.detail,
-                })
-                .collect(),
+        Ok(spike_response(
+            steps.into_iter().map(|s| (s.name, s.ok, s.detail)),
         ))
     }
     #[cfg(not(target_os = "macos"))]
@@ -1185,6 +1343,51 @@ pub async fn biometric_wrap_spike(
             "biometric hardware spike is only available on macOS".to_string(),
         ))
     }
+}
+
+/// Passport KSP 探针（Windows 真机专用，设计文档 §6.1）。
+///
+/// 与 macOS 的 `biometric_wrap_spike` 同款：跑 `windows_tpm::run_spike`
+/// 的全部探针并逐项回报 HRESULT/结论——在真机上以
+/// `PERSONA_BIOMETRIC_TPM_SPIKE=1` 启动应用后调本命令，把输出贴回设计
+/// 文档 §6.1。探针只碰自家包裹密钥，不接生产 unlock 链。非 Windows 直接
+/// 报 Unsupported（探针本身是 NCrypt 调用，无跨平台含义）。
+#[command]
+pub async fn biometric_tpm_spike(
+) -> std::result::Result<ApiResponse<Vec<BiometricSpikeStep>>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let steps = tauri::async_runtime::spawn_blocking(crate::biometric::windows_tpm::run_spike)
+            .await
+            .map_err(|e| format!("biometric tpm spike task failed: {}", e))?;
+        Ok(spike_response(
+            steps.into_iter().map(|s| (s.name, s.ok, s.detail)),
+        ))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(ApiResponse::error(
+            "biometric hardware spike is only available on Windows".to_string(),
+        ))
+    }
+}
+
+/// 平台 spike 步骤 → 命令返回体（macOS SE 与 Windows TPM 两个探针共用；
+/// 仅这两个平台调用，其余平台 cfg 掉免得 dead_code 警告）
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn spike_response(
+    steps: impl IntoIterator<Item = (&'static str, bool, String)>,
+) -> ApiResponse<Vec<BiometricSpikeStep>> {
+    ApiResponse::success(
+        steps
+            .into_iter()
+            .map(|(name, ok, detail)| BiometricSpikeStep {
+                name: name.to_string(),
+                ok,
+                detail,
+            })
+            .collect(),
+    )
 }
 
 /// 硬件绑定路径：解包裹 blob（SE/TPM 在解密那一刻强制生物识别）→ 以

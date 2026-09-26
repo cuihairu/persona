@@ -417,6 +417,39 @@ Desktop (Tauri v2 + React)
       jest GeneratorPanel 7 用例 + api.test invoke 参数断言。
       对标矩阵与优先级更新见 docs/FEATURE_GAP_ANALYSIS.md（下一个
       最高价值项：OS 级全局热键/Quick Access）
+- [x] Quick Access 全局热键 + 检索浮窗（1Password 对标矩阵 #22，
+      2026-09-26 落地）：此前只有应用内 ⌘K 检索与托盘图标，任意应用中
+      唤不出一致的产品面。本轮补齐四层——
+      ① **注册层**（`desktop/src-tauri/src/quick_access.rs`）：进程级抢注
+         一个加速键（tauri global-shortcut；平台默认 ⌘⇧Space /
+         Ctrl+Shift+Space，可改绑可关）。绑定与开关的**持久化真值**在
+         workspace settings（新增 `quick_access_enabled` /
+         `quick_access_hotkey`，旧 JSON 缺键回退"开 + 平台默认"），解锁
+         成功后由 `commands::apply_quick_access` 从 DB 重放——任何一端
+         的改绑（含 CLI 手改 JSON）都在下次解锁收敛。前端不参与决定
+         抢注什么键。抢注失败/插件装载失败**如实上报**（设置页把
+         configured 与 registered 分开显示 + 原文原因），两个刻意的
+         fail-open 设计：插件在 `setup` 里运行时装载（不进
+         `Builder::plugin` 链——它 setup 失败会让整个 app 起不来）、
+         浮窗不存在直接短路（也避开 mock runtime 上 register 阻塞）。
+      ② **浮窗层**：tauri.conf.json 第二个窗口（无边框、置顶、不进任务栏、
+         初始隐藏），热键 toggle；失焦自收尾、CloseRequested 转 hide
+         （避免常驻浮窗被真关掉后唤不回来）；托盘加常驻入口（热键被占用
+         时仍是出路）。
+      ③ **前端层**：`main.tsx` 按窗口标签分流到 `QuickAccessPanel`
+         （浮窗不挂主界面的侧栏/审批弹窗/auto-lock 监控那套副作用）；
+         跨身份检索 + ↑↓/Enter（复制主密字段）/⌘U 用户名/⌘T TOTP/
+         ⌘O 回主窗口打开（走 `useQuickAccessBridge` 跨窗事件，主窗口
+         切身份 + 注入选中）/Esc 收。锁定态**只提示去主窗口解锁**，
+         刻意不在小窗里复刻解锁流。
+      ④ **设置页**：开关 + 改绑 + 恢复默认 + 生效状态行（"生效中 /
+         未生效 + 原因"）+ 立即打开；托盘新增 Quick Access 项。
+      测试：quick_access 单测 10 例（绑定串解析/归一化/状态面三种错误
+      优先级/线格式 snake_case 锁定）+ 命令层 7 例（未初始化拒绝/写要过
+      解锁门禁而读免解锁/默认档+运行态/改绑落库与非法串不落库/关开关清
+      运行态/恢复默认存 None/跨窗 UUID 校验）+ jest 22 例（面板 9、
+      设置区 9、跨窗桥 4）。威胁登记见 THREAT_MODEL.md「Quick Access」。
+      遗留（下一轮）：#20 通用格式导入 → #23 Windows/macOS 实机验收。
 
 Server & Sync (optional)
 
@@ -944,8 +977,28 @@ remove-attachment`（附件目录约定 `<db dir>/attachments`，desktop/CLI
         探针命令（spike 门控，未真机验证前生产链默认不启用）；前端设置页档位
         行（hardware-bound/os-gate）+ 解锁屏 RESET/CANCEL 分流。包裹层单测
         行/分支 100%（cargo llvm-cov），服务层 6 用例，桌面命令层 7 用例。
-        待真机：macOS spike 五项（§5.2）、Windows Passport Key、iOS/Android
-        （等 Flutter 宿主）。Linux 定格 OsGateOnly（无硬件封装，诚实局限）
+        待真机：macOS spike（§5.2）、Windows spike（§6.3）、iOS/Android
+        （移动端：iOS/Android/HarmonyOS 原生开发，不经 FFI 中转）。Linux 定格 OsGateOnly（无硬件封装，诚实局限）
+  - [x] biometric Windows 硬件绑定包裹层（2026-09-26 落地，设计见
+        `docs/biometric-unlock-design.md` §6）：Passport KSP 路线
+        （`desktop/src-tauri/src/biometric/windows_tpm.rs`，cfg windows）——
+        `MS_KEY_STORAGE_PROVIDER` 下 RSA-2048 用户密钥，属性钉死
+        `NCRYPT_KEY_USAGE_PROPERTY=ALLOW_DECRYPT`（不授签名权）+
+        `NCRYPT_UI_POLICY_PROPERTY=UI_PROTECT_KEY_FLAG` **带
+        `NCRYPT_PERSIST_FLAG` 落盘**（不持久化则重启后解包裹不再弹 Hello，
+        是静默的安全降级）；包裹走 `NCryptEncrypt`（公钥方向无提示）、
+        解包裹走 `NCryptDecrypt`（私钥方向此刻弹 Hello）。spike 门控
+        （`PERSONA_BIOMETRIC_TPM_SPIKE=1`，生产主链路默认不启用）+ 
+        `biometric_tpm_spike` 命令（探针 1/2/3/4/4b/5a/5b/6/7）。
+        两处刻意设计/差异登记在案：① 解包裹只 open 不自动建钥（密钥不存在
+        → `WrapInvalid` → 自动删 blob 回主密码），不像 macOS 那样先建孤儿
+        密钥再失败；② **注册集漂移（T2）在 Windows 无平台语义**——换指纹
+        不让旧密钥失效，`enrollment_fingerprint()` 只能返回占位，第二道
+        防线也是空的；残余风险与缓解据实写进设计文档 §6.2，不含糊。
+        编译验证：Linux 交叉 `cargo check --target x86_64-pc-windows-msvc`
+        （cc-rs 用 `CC=…=true` + 工具链 `llvm-ar` 桩掉，check 不链接）已过。
+        待真机：spike 七项 + 手动删指纹对照。次选路线（WebAuthn 平台
+        认证器）押后——弱于 Passport Key 且无额外收益
   - [x] Travel Mode（vault 级可见性开关，2026-09-22 落地）：按 identity 粒度
         "从本设备移除"——enter 把被标记身份全部数据（含附件密文文件字节 +
         change_history）打包 PERSENC1（独立 travel 口令）为 travel.persenc

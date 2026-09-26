@@ -110,6 +110,25 @@ pub struct WorkspaceSettings {
     /// 口令）；enter 写入、exit 清空
     #[serde(default)]
     pub travel_entered_at: Option<String>,
+
+    /// Quick Access（OS 级全局热键唤出的浮窗，对标 1Password Quick
+    /// Access）是否启用。关 = 桌面端不注册任何全局热键、托盘入口仍在。
+    /// 旧 JSON 缺键时回退 true：全局热键属"装了就能用"的主航道能力，
+    /// 不因升级前的 JSON 形状而静默失效
+    #[serde(default = "default_true")]
+    pub quick_access_enabled: bool,
+
+    /// Quick Access 全局热键的加速键串（tauri global-shortcut 语法，如
+    /// `"CommandOrControl+Shift+Space"`）。None = 由桌面端按平台取默认
+    /// 绑定——core 是平台无关层，不内置具体键位
+    #[serde(default)]
+    pub quick_access_hotkey: Option<String>,
+}
+
+/// serde 默认值辅助：bool 字段的"缺键回退 true"（默认实现是 false，
+/// 直接 `#[serde(default)]` 会把旧 JSON 读成关）
+fn default_true() -> bool {
+    true
 }
 
 impl Default for WorkspaceSettings {
@@ -127,6 +146,8 @@ impl Default for WorkspaceSettings {
             locale: None,
             travel_mode: false,
             travel_entered_at: None,
+            quick_access_enabled: true,
+            quick_access_hotkey: None,
         }
     }
 }
@@ -270,6 +291,28 @@ mod tests {
         // 旅行模式字段（013 批次）同样缺键回退
         assert!(!settings.travel_mode);
         assert_eq!(settings.travel_entered_at, None);
+        // Quick Access（014 批次）：enabled 缺键回退 true（不是默认的 false），
+        // hotkey 缺键回退 None = 桌面端按平台取默认绑定
+        assert!(settings.quick_access_enabled);
+        assert_eq!(settings.quick_access_hotkey, None);
+    }
+
+    #[test]
+    fn test_quick_access_hotkey_round_trip() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        // 默认：开 + 用平台默认绑定
+        assert!(ws.settings.quick_access_enabled);
+        assert!(ws.settings.quick_access_hotkey.is_none());
+
+        ws.settings.quick_access_enabled = false;
+        ws.settings.quick_access_hotkey = Some("CommandOrControl+Shift+Space".to_string());
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert!(!restored.settings.quick_access_enabled);
+        assert_eq!(
+            restored.settings.quick_access_hotkey.as_deref(),
+            Some("CommandOrControl+Shift+Space")
+        );
     }
 
     #[test]

@@ -21,6 +21,7 @@ import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 import ReauthModal from './ReauthModal';
 import TravelPassphraseModal from './TravelPassphraseModal';
 import ConnectAutomationSection from './ConnectAutomationSection';
+import QuickAccessSection from './QuickAccessSection';
 import SyncConflictsModal from './SyncConflictsModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
@@ -1083,6 +1084,10 @@ const GeneralPane: React.FC<{
           <option value="zh-CN">简体中文</option>
           <option value="en">English</option>
         </select>
+      </section>
+
+      <section className="mb-5">
+        <QuickAccessSection />
       </section>
 
       <section className="mb-5">

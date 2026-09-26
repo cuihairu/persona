@@ -70,6 +70,9 @@ fn mock_app_with_wrap_parts(
         // AppState 取 Arc 写入/断言条目
         device_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
+        // Quick Access 运行态：测试里没有 OS 全局热键可抢注，默认空态
+        // （quick_access_* 命令测试直接读写这个槽位断言语义）
+        quick_access: std::sync::Mutex::new(crate::quick_access::QuickAccessRuntime::default()),
     });
     app
 }
@@ -7943,6 +7946,252 @@ async fn biometric_wrap_spike_unsupported_off_macos() {
         assert!(!resp.success);
         assert!(resp.error.unwrap().contains("only available on macOS"));
     }
+}
+
+/// TPM spike 命令在非 Windows 上报 Unsupported（探针是 NCrypt 调用）。
+#[tokio::test]
+async fn biometric_tpm_spike_unsupported_off_windows() {
+    let resp = biometric_tpm_spike().await.unwrap();
+    #[cfg(target_os = "windows")]
+    assert!(resp.success);
+    #[cfg(not(target_os = "windows"))]
+    {
+        assert!(!resp.success);
+        assert!(resp.error.unwrap().contains("only available on Windows"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quick Access（全局热键绑定：落库真值 + 抢注失败如实上报）
+// ---------------------------------------------------------------------------
+
+/// 未初始化的库：status 走"缺 db_path"错误，不 panic
+#[tokio::test]
+async fn quick_access_status_requires_initialized_service() {
+    let app = mock_app();
+    let resp = quick_access_status(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp
+        .error
+        .as_deref()
+        .is_some_and(|e| e.contains("Database path unavailable")));
+}
+
+/// 写配置要过解锁门禁（同 set_locale / set_feature_flags）；读状态免解锁
+#[tokio::test]
+async fn quick_access_set_requires_unlocked_service() {
+    let app = mock_app();
+
+    let resp = quick_access_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+K".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    init_service_ok(&app, "master-pw-123").await;
+
+    // 锁上：读仍然可以（设置页要显示"热键到底生效没有"），写拒绝
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = quick_access_status(app.state::<AppState>()).await.unwrap();
+    assert!(
+        resp.success,
+        "status must work while locked: {:?}",
+        resp.error
+    );
+
+    let resp = quick_access_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+K".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+
+    // 锁定态的写入不得落库
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.data.expect("settings").quick_access_hotkey.is_none());
+}
+
+/// 默认档：开关开、绑定落到平台默认值；测试环境（mock context）没有
+/// quick-access 浮窗，抢注必然失败 → registered 为空且带原因（这就是
+/// 设置页要显示的面）
+#[tokio::test]
+async fn quick_access_status_reports_defaults_and_missing_registration() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    let resp = quick_access_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(status.enabled);
+    assert_eq!(
+        status.configured_accelerator,
+        crate::quick_access::default_accelerator()
+    );
+    assert!(status.registered_accelerator.is_none());
+    assert!(status.error.is_some(), "未生效必须带原因，不能静默");
+
+    // 运行态确实被记下了（解锁时的 apply_quick_access 走的是同一条路径）
+    let state = app.state::<AppState>();
+    let runtime = state.quick_access.lock().unwrap();
+    assert!(runtime.registered.is_none());
+    assert!(runtime.last_error.is_some());
+}
+
+/// 改绑落库并回读（DB 是真值源）；非法加速键**不落库**
+#[tokio::test]
+async fn quick_access_set_persists_binding_and_rejects_invalid() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    let resp = quick_access_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+K".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert_eq!(status.configured_accelerator, "Control+Alt+K");
+
+    // 落库回读
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.data.expect("settings").quick_access_hotkey.as_deref(),
+        Some("Control+Alt+K")
+    );
+
+    // 非法串：命令失败且 DB 不动
+    let resp = quick_access_set(
+        app.handle().clone(),
+        true,
+        Some("Ctrl+".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.data.expect("settings").quick_access_hotkey.as_deref(),
+        Some("Control+Alt+K"),
+        "非法加速键不得覆盖已落库的绑定"
+    );
+}
+
+/// 关开关 + 空串恢复默认：hotkey 存回 None（不把默认值钉进 DB）
+#[tokio::test]
+async fn quick_access_set_disable_and_reset_default() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    quick_access_set(
+        app.handle().clone(),
+        false,
+        Some("Control+Alt+K".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let resp = quick_access_set(
+        app.handle().clone(),
+        true,
+        Some("   ".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(status.enabled);
+    assert_eq!(
+        status.configured_accelerator,
+        crate::quick_access::default_accelerator()
+    );
+
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    let settings = resp.data.expect("settings");
+    assert!(settings.quick_access_enabled);
+    assert!(settings.quick_access_hotkey.is_none());
+}
+
+/// 关开关后运行态不得残留"已注册"（否则 UI 会显示一个其实已失效的绑定）
+#[tokio::test]
+async fn quick_access_set_disable_clears_registered_state() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    // 先手工置一个"曾抢注成功"的运行态，模拟改绑前的进程内状态
+    {
+        let state = app.state::<AppState>();
+        let mut runtime = state.quick_access.lock().unwrap();
+        runtime.registered = Some("Control+Alt+K".to_string());
+    }
+
+    let resp = quick_access_set(
+        app.handle().clone(),
+        false,
+        Some("Control+Alt+K".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(!status.enabled);
+    assert!(status.registered_accelerator.is_none());
+
+    let state = app.state::<AppState>();
+    let runtime = state.quick_access.lock().unwrap();
+    assert!(runtime.registered.is_none());
+}
+
+/// 跨窗跳转的入参校验：非法 UUID 直接拒（主窗口拿到非法 id 只会静默不选中）
+#[tokio::test]
+async fn quick_access_open_credential_rejects_invalid_uuid() {
+    let app = mock_app();
+    let resp = quick_access_open_credential(
+        QuickAccessOpenCredentialRequest {
+            identity_id: "not-a-uuid".to_string(),
+            credential_id: uuid::Uuid::new_v4().to_string(),
+        },
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Invalid UUID format"));
+
+    // 主窗口不存在（mock context 无窗口）→ 明确报错，不静默
+    let resp = quick_access_open_credential(
+        QuickAccessOpenCredentialRequest {
+            identity_id: uuid::Uuid::new_v4().to_string(),
+            credential_id: uuid::Uuid::new_v4().to_string(),
+        },
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Main window unavailable"));
 }
 
 #[tokio::test]

@@ -66,6 +66,11 @@ pub struct AppState {
     /// token_store = vault db_path。条目存在与否 = 本 vault 是否已加入
     /// 同步（单一真相源，settings 不存开关）。
     pub device_store: Arc<dyn crate::token_store::TokenStore>,
+    /// Quick Access 全局热键的进程内运行态（实际抢注结果 + 失败原因）。
+    /// 绑定与开关的持久化真值在 workspace settings，本字段只反映"这一
+    /// 进程里 OS 抢注成功没有"——见 `quick_access` 模块注释。用 std Mutex
+    /// （同 ssh_approvals 槽位）：锁内只做字段读写，从不跨 await。
+    pub quick_access: std::sync::Mutex<crate::quick_access::QuickAccessRuntime>,
 }
 
 /// `sync_device_status` 返回：本机设备身份状态（纯本地 keyring，免解锁）。
@@ -1163,6 +1168,14 @@ pub struct SecretRevealResponse {
 #[derive(Debug, Deserialize)]
 pub struct ReauthRequest {
     pub master_password: String,
+}
+
+/// Quick Access 浮窗"在 Persona 中打开"：跨窗跳转的两个 id（UUID 形态，
+/// 后端会再校验一次——前端校验只是提前反馈）
+#[derive(Debug, Deserialize)]
+pub struct QuickAccessOpenCredentialRequest {
+    pub identity_id: String,
+    pub credential_id: String,
 }
 
 // ---------------------------------------------------------------------------

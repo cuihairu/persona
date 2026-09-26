@@ -656,6 +656,9 @@ export const usePersonaService = () => {
     initializeService,
     unlockWithBiometric,
     lockService,
+    /** 重新探一次后端解锁态（Quick Access 浮窗每次被唤起都要问一遍：两个
+     *  窗口各有独立 store，主窗口那边解锁/锁定本窗口不会自动知道） */
+    checkServiceStatus,
     loadIdentities,
     createIdentity,
     updateIdentity,

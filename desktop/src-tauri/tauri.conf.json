@@ -13,6 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
+        "label": "main",
         "fullscreen": false,
         "resizable": true,
         "title": "Persona",
@@ -24,6 +25,20 @@
         "decorations": true,
         "alwaysOnTop": false,
         "skipTaskbar": false
+      },
+      {
+        "label": "quick-access",
+        "fullscreen": false,
+        "resizable": false,
+        "title": "Persona Quick Access",
+        "width": 620,
+        "height": 460,
+        "center": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": true
       }
     ],
     "security": {

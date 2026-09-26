@@ -210,6 +210,28 @@ export interface WorkspaceSettings {
   locale: string | null;
   /** 可选同步服务器配置（旧 JSON 缺键时为 null） */
   sync: SyncConfig | null;
+  /** Quick Access 全局热键是否启用（默认 true，旧 JSON 缺键时为 true） */
+  quick_access_enabled: boolean;
+  /** Quick Access 全局热键绑定串；null = 用桌面端平台默认绑定 */
+  quick_access_hotkey: string | null;
+}
+
+/**
+ * Quick Access 状态面（对应 Rust quick_access::QuickAccessStatus）。
+ * configured（DB 真值）与 registered（真实抢注结果）分开：抢注失败时
+ * 前者有值、后者为 null，UI 据此显示"未生效 + 原因"
+ */
+export interface QuickAccessStatus {
+  enabled: boolean;
+  configured_accelerator: string;
+  registered_accelerator: string | null;
+  error: string | null;
+}
+
+/** persona://quick-access-open-credential 事件载荷（浮窗 → 主窗口跨窗跳转） */
+export interface QuickAccessOpenCredential {
+  identity_id: string;
+  credential_id: string;
 }
 
 /** 已缓存的站点图标（对应 Rust SerializableFavicon；data 为 base64 图像字节） */

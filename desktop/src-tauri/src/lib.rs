@@ -19,6 +19,7 @@ mod error;
 #[cfg(test)]
 mod packaging_tests;
 pub mod passkey_bridge;
+pub mod quick_access;
 #[cfg(test)]
 mod test_support;
 pub mod token_store;
@@ -55,9 +56,10 @@ fn display_session_available() -> bool {
 /// 构建系统托盘与菜单（需显示会话；关窗驻留时的常驻入口）。
 fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {
     let open_item = MenuItem::with_id(app, "open", "Open Persona", true, None::<&str>)?;
+    let quick_item = MenuItem::with_id(app, "quick-access", "Quick Access", true, None::<&str>)?;
     let lock_item = MenuItem::with_id(app, "lock", "Lock", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let tray_menu = Menu::with_items(app, &[&open_item, &lock_item, &quit_item])?;
+    let tray_menu = Menu::with_items(app, &[&open_item, &quick_item, &lock_item, &quit_item])?;
 
     TrayIconBuilder::with_id("persona-tray")
         .icon(
@@ -82,7 +84,12 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
         })
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => show_main_window(app),
+            // Quick Access 浮窗：热键被占用/未注册时，托盘仍是入口
+            "quick-access" => quick_access::open(app),
             "lock" => {
+                // 收起 Quick Access 浮窗：锁户后浮窗里的检索结果不该继续
+                // 留在屏幕上（数据已在内存，但暴露面不该多留）
+                quick_access::close(app);
                 // 走事件链（Locked → persona://auto-lock → 前端回解锁屏），
                 // 再兜底清内存主密钥（与回调同一动作，幂等）
                 let service = app.state::<AppState>().service.clone();
@@ -182,6 +189,11 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        // OS 级全局热键插件**不在**这里挂：它的 setup 建平台热键管理器，
+        // headless Linux 会失败并让整个 build 失败。改为 setup 里运行时装
+        // 载（quick_access::install_plugin），失败只记录状态。抢注绑定也
+        // 不在这里做——真值在 workspace settings，等解锁后由
+        // `commands::apply_quick_access` 按 DB 下发
         .manage(AppState {
             service: Arc::new(Mutex::new(None)),
             db_path: Mutex::new(None),
@@ -207,10 +219,19 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
                 token_store::DEVICE_SERVICE,
             )),
             connect_server: Mutex::new(None),
+            quick_access: std::sync::Mutex::new(quick_access::QuickAccessRuntime::default()),
         })
         .setup(|app| {
             // 日志先行：后续所有 tracing 事件（含托盘降级提示）都有落点
             init_desktop_logging(app);
+            // 全局热键插件运行时装载（失败不阻断启动，原因存进运行态供
+            // 设置页显示——见 quick_access 模块注释）
+            if let Err(e) = quick_access::install_plugin(app.handle()) {
+                tracing::warn!("global shortcut plugin unavailable: {}", e);
+                let state = app.state::<AppState>();
+                let mut runtime = state.quick_access.lock().unwrap_or_else(|p| p.into_inner());
+                runtime.install_error = Some(e);
+            }
             // 系统托盘：关窗后审批弹窗仍可送达，托盘是常驻入口。
             // 无显示会话（CI/容器/ssh-only）下 muda 菜单会直接 panic，
             // 跳过托盘降级运行 —— 审批链路不依赖托盘存活。
@@ -225,6 +246,20 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             // 关闭主窗口 = 隐藏到托盘（passkey/SSH 审批照常工作）；托盘 Quit 才退出
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            // Quick Access 浮窗：失焦即自收尾（1Password 同款行为——浮窗是
+            // "瞬时取用"面，焦点回到别的应用还杵在屏幕中央就是遮挡）。
+            // CloseRequested 同样转 hide 而不是真关：浮窗是常驻的（初始
+            // visible:false，热键/托盘随时唤起），被 Alt+F4 / cmd-W 真关掉
+            // 就再也唤不回来了
+            if window.label() == quick_access::WINDOW_LABEL {
+                if let tauri::WindowEvent::Focused(false) = event {
+                    let _ = window.hide();
+                }
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -244,6 +279,11 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::set_feature_flags,
             commands::set_password_expiry,
             commands::set_locale,
+            commands::quick_access_status,
+            commands::quick_access_set,
+            commands::quick_access_open,
+            commands::quick_access_open_credential,
+            commands::focus_main_window,
             commands::change_master_password,
             commands::connect_server_start,
             commands::connect_server_stop,
@@ -260,6 +300,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::biometric_disable,
             commands::biometric_unlock,
             commands::biometric_wrap_spike,
+            commands::biometric_tpm_spike,
             commands::set_sync_config,
             commands::sync_token_present,
             commands::sync_device_status,

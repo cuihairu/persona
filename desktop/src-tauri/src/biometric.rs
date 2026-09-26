@@ -66,6 +66,9 @@ mod windows_hello;
 #[cfg(target_os = "windows")]
 use windows_hello as os;
 
+#[cfg(target_os = "windows")]
+pub mod windows_tpm;
+
 #[cfg(target_os = "linux")]
 mod polkit;
 #[cfg(target_os = "linux")]
@@ -194,11 +197,19 @@ impl persona_core::BiometricKeyWrapper for GateOnlyKeyWrapper {
 
 /// 装配当前平台的密钥包裹器。macOS 在 `PERSONA_BIOMETRIC_SE_SPIKE=1`
 /// 时返回 Secure Enclave 路线 B' 实现（真机 spike 用，见设计文档 §5），
-/// 其余一律门禁档桩——生产 unlock 主链路不含未经真机验证的路径。
+/// Windows 在 `PERSONA_BIOMETRIC_TPM_SPIKE=1` 时返回 Passport KSP 实现
+/// （同上，§6）；其余一律门禁档桩——生产 unlock 主链路不含未经真机验证
+/// 的路径。
 pub fn key_wrapper() -> Arc<dyn persona_core::BiometricKeyWrapper> {
     #[cfg(target_os = "macos")]
     {
         if let Some(wrapper) = macos_se::spike_wrapper_if_enabled() {
+            return Arc::new(wrapper);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(wrapper) = windows_tpm::spike_wrapper_if_enabled() {
             return Arc::new(wrapper);
         }
     }

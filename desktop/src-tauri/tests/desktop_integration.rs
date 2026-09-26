@@ -39,6 +39,7 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         biometric_wrap_store: Arc::new(InMemoryTokenStore::default()),
         device_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
+        quick_access: StdMutex::new(persona_desktop::quick_access::QuickAccessRuntime::default()),
     });
     app
 }

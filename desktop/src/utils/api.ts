@@ -31,6 +31,7 @@ import type {
   ConnectTokenView,
   ConnectTokenCreatedView,
   WorkspaceSettings,
+  QuickAccessStatus,
   SshAgentStatus,
   SshAgentKey,
   WalletListResponse,
@@ -552,6 +553,46 @@ class PersonaAPI {
 
   async reauthVerify(masterPassword: string): Promise<ApiResponse<boolean>> {
     return invoke('reauth_verify', { request: { master_password: masterPassword } });
+  }
+
+  // -------------------------------------------------------------------------
+  // Quick Access（OS 级全局热键 + 浮窗）
+  // -------------------------------------------------------------------------
+
+  /** 读状态面（免解锁）：configured = DB 真值，registered = 真实抢注结果 */
+  async quickAccessStatus(): Promise<ApiResponse<QuickAccessStatus>> {
+    return invoke('quick_access_status');
+  }
+
+  /**
+   * 改开关/绑定。accelerator 传 null/空串 = 恢复平台默认绑定。
+   * 返回体带 `error` 表示绑定已落库但 OS 抢注失败（设置页如实显示）
+   */
+  async quickAccessSet(
+    enabled: boolean,
+    accelerator: string | null,
+  ): Promise<ApiResponse<QuickAccessStatus>> {
+    return invoke('quick_access_set', { enabled, accelerator });
+  }
+
+  /** 拉起浮窗（托盘/设置页入口；热键被占用时的兜底） */
+  async quickAccessOpen(): Promise<ApiResponse<boolean>> {
+    return invoke('quick_access_open');
+  }
+
+  /** 浮窗 → 主窗口跨窗跳转（切身份 + 选中条目 + 主窗口前置） */
+  async quickAccessOpenCredential(
+    identityId: string,
+    credentialId: string,
+  ): Promise<ApiResponse<boolean>> {
+    return invoke('quick_access_open_credential', {
+      request: { identity_id: identityId, credential_id: credentialId },
+    });
+  }
+
+  /** 主窗口拉到前台（浮窗锁定态的"去解锁"出口） */
+  async focusMainWindow(): Promise<ApiResponse<boolean>> {
+    return invoke('focus_main_window');
   }
 
   // -------------------------------------------------------------------------
