@@ -12,6 +12,7 @@ import { usePasskeyApprovals } from '@/hooks/usePasskeyApprovals';
 import { useTheme } from '@/hooks/useTheme';
 import { personaAPI } from '@/utils/api';
 import { copyToClipboardWithToast } from '@/utils/clipboard';
+import { checkForUpdate, isUpdateCheckEnabled } from '@/utils/updateCheck';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import UnlockScreen from '@/components/UnlockScreen';
 import { CreateIdentityModal } from '@/components/IdentitySwitcher';
@@ -140,6 +141,24 @@ const App: React.FC = () => {
       personaAPI.stopAutoLockMonitoring().catch(() => {});
     }
   }, [isUnlocked]);
+
+  // 启动时按构建渠道检查一次版本更新（设置里可关；dev 构建不比对）。
+  // i18n.t 在回调时取当前语言，语言切换不重查。
+  useEffect(() => {
+    if (!isUpdateCheckEnabled()) return;
+    void checkForUpdate()
+      .then((outcome) => {
+        if (outcome.status === 'update-available') {
+          toast(
+            i18n.t('settings.updateCheck.availableToast', {
+              version: outcome.latestVersion ?? '',
+            }),
+            { duration: 8000, className: TOAST_OPTIONS.className },
+          );
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // 解锁后拉取 workspace 功能开关；锁定时回到默认（全关）。
   // 读取失败静默保持默认：解锁流程不因设置读取中断。

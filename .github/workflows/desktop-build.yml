@@ -87,9 +87,23 @@ jobs:
         shell: bash
         run: pnpm install --frozen-lockfile --filter persona-desktop...
 
+      # 更新检测渠道元信息（desktop/src/utils/updateCheck.ts 经 vite define 读入）：
+      # 每日构建 = nightly，比对 desktop-build workflow 最近成功 run；release 渠道
+      # 由未来的发版流水线注入 VITE_UPDATE_CHANNEL=release
+      - name: Record build metadata (update-check channel)
+        shell: bash
+        run: |
+          echo "VITE_UPDATE_CHANNEL=nightly" >> "$GITHUB_ENV"
+          echo "VITE_BUILD_SHA=${{ github.sha }}" >> "$GITHUB_ENV"
+          echo "VITE_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Build bundles
         working-directory: desktop
         shell: bash
+        env:
+          VITE_UPDATE_CHANNEL: ${{ env.VITE_UPDATE_CHANNEL }}
+          VITE_BUILD_SHA: ${{ env.VITE_BUILD_SHA }}
+          VITE_BUILD_TIME: ${{ env.VITE_BUILD_TIME }}
         run: pnpm exec tauri build --bundles ${{ matrix.bundles }}
 
       - name: Upload bundle artifacts

@@ -22,6 +22,7 @@ import ReauthModal from './ReauthModal';
 import TravelPassphraseModal from './TravelPassphraseModal';
 import ConnectAutomationSection from './ConnectAutomationSection';
 import QuickAccessSection from './QuickAccessSection';
+import UpdateCheckSection from './UpdateCheckSection';
 import SyncConflictsModal from './SyncConflictsModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
@@ -1088,6 +1089,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <QuickAccessSection />
+      </section>
+
+      <section className="mb-5">
+        <UpdateCheckSection />
       </section>
 
       <section className="mb-5">
