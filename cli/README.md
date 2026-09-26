@@ -4,12 +4,12 @@ A powerful command-line interface for managing digital identities in the Persona
 
 ## Features
 
-- 🆔 **Identity Management**: Create, edit, and remove digital identities
-- 🔄 **Quick Switching**: Switch between identities seamlessly
-- 📊 **Data Export/Import**: Backup and restore identity data
-- 🔒 **Security**: Encrypted storage and secure operations
-- 🎨 **Beautiful UI**: Colorful and intuitive command-line interface
-- ⚡ **Fast**: Optimized for performance and responsiveness
+- [**Identity Management**: Create, edit, and remove digital identities]
+- [**Quick Switching**: Switch between identities seamlessly]
+- [**Data Export/Import**: Backup and restore identity data]
+- [**Security**: Encrypted storage and secure operations]
+- [**Beautiful UI**: Colorful and intuitive command-line interface]
+- [**Fast**: Optimized for performance and responsiveness]
 
 ## Installation
 
@@ -205,11 +205,11 @@ The CLI supports various identity types:
 
 ## Security Features
 
-- 🔐 **Encryption**: All sensitive data is encrypted at rest
-- 🔑 **Access Control**: Role-based permissions and access control
-- 🛡️ **Secure Storage**: Protected configuration and data files
-- 📝 **Audit Trail**: Comprehensive logging of all operations
-- 🔒 **Session Management**: Automatic session timeout and cleanup
+- [**Encryption**: All sensitive data is encrypted at rest]
+- [**Access Control**: Role-based permissions and access control]
+- [**Secure Storage**: Protected configuration and data files]
+- [**Audit Trail**: Comprehensive logging of all operations]
+- [**Session Management**: Automatic session timeout and cleanup]
 
 ## Output Formats
 
@@ -290,7 +290,7 @@ This project is licensed under the MIT License - see the [LICENSE](../LICENSE) f
 
 ## Support
 
-- 📖 **Documentation**: [Full documentation](https://persona-docs.example.com)
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/your-org/persona/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/your-org/persona/discussions)
-- 📧 **Email**: support@persona.example.com
+- [**Documentation**: [Full documentation](https://persona-docs.example.com)]
+- [**Bug Reports**: [GitHub Issues](https://github.com/your-org/persona/issues)]
+- [**Discussions**: [GitHub Discussions](https://github.com/your-org/persona/discussions)]
+- [**Email**: support@persona.example.com]

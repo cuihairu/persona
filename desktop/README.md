@@ -4,19 +4,19 @@ A secure, cross-platform digital identity management application built with Taur
 
 ## Features
 
-### 🔐 Core Security
+### Core Security
 - **End-to-end encryption** using AES-256-GCM
 - **Master password** protection with Argon2 hashing
 - **Zero-knowledge architecture** - no plaintext data stored
 - **Memory safety** with automatic sensitive data cleanup
 
-### 👤 Identity Management
+### Identity Management
 - **Multiple digital identities** (Personal, Work, Social, Financial, Gaming)
 - **One-click identity switching**
 - **Organized credential storage** by identity
 - **Rich metadata** support (tags, notes, custom attributes)
 
-### 🔑 Credential Types
+### Credential Types
 - **Passwords** with security questions
 - **Cryptocurrency wallets** with mnemonic phrases
 - **SSH keys** with passphrase support
@@ -26,7 +26,7 @@ A secure, cross-platform digital identity management application built with Taur
 - **Digital certificates** and tokens
 - **Two-factor authentication** codes
 
-### 🎯 User Experience
+### User Experience
 - **Beautiful, modern UI** with Tailwind CSS
 - **Fast search** across all credentials
 - **Password generator** with customizable rules

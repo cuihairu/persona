@@ -19,7 +19,7 @@ pkcheck --action-id com.persona.desktop.biometric-unlock --process $$; echo "exi
 
 期望：弹框，通过后 `exit=0`；取消则 `exit=2`（授权被拒）。
 
-## 1. 正路径：enable → 指纹解锁
+## 1. 正路径：enable [指纹解锁]
 
 ```bash
 cd desktop && pnpm tauri dev

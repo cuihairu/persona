@@ -10,21 +10,21 @@
 
 Manage your digital selves. Switch identity material with confidence.
 
-## 🎯 Project Overview
+## Project Overview
 
 Persona is a local-first, zero-knowledge manager for one person operating multiple digital selves. Each identity is a distinct key-and-credential context used in a different environment, such as work, personal browsing, infrastructure access, or automation.
 
 The product focuses on identity-scoped credentials and developer workflows: passwords, API keys, TOTP, SSH keys, browser autofill, and active identity switching. Wallet material fits the same conceptual model, but is currently a deferred priority rather than part of the main product track.
 
 ### Key Features
-- 🔐 Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata
-- 🔑 Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access
-- 🌐 Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults
-- 🗄️ Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)
-- 🧾 Audit log: critical operations and signing events (with digest)
-- 🛡️ Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks
+- [Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata]
+- [Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access]
+- [Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults]
+- [Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)]
+- [Audit log: critical operations and signing events (with digest)]
+- [Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks]
 
-## 🏗️ Architecture
+## Architecture
 
 ### Monorepo Layout
 ```
@@ -47,7 +47,7 @@ persona/
 - Desktop: Tauri + React + TypeScript (prototype)
 - Server: Rust + Axum (optional)
 
-## 🔒 Security Highlights
+## Security Highlights
 
 - **Zero-knowledge architecture** – servers never see plaintext user data
 - **End-to-end encryption** – AES-256-GCM plus Argon2id-based key derivation
@@ -55,7 +55,7 @@ persona/
 - **Signed audit trail** – SSH signatures are logged with sha256 digest and context metadata
 - **Policy controls** – the SSH agent can enforce rate limits, interactive confirmations, and optional `known_hosts` validation
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Requirements
 - Rust 1.75+
@@ -219,7 +219,7 @@ persona ssh agent-status
 persona ssh stop-agent
 ```
 
-## 📖 Documentation
+## Documentation
 
 - [ONEPASSWORD_FEATURES](./docs/ONEPASSWORD_FEATURES.md) – reference checklist for 1Password parity
 - [FEATURE_GAP_ANALYSIS](./docs/FEATURE_GAP_ANALYSIS.md) – Persona vs. 1Password comparison
@@ -243,7 +243,7 @@ persona ssh stop-agent
 - [Threat Model](./docs/THREAT_MODEL.md) – security boundary and periodic review checklist
 - [Supply Chain Security](./docs/SUPPLY_CHAIN_SECURITY.md) – dependency security checks
 
-## 🛣️ Roadmap
+## Roadmap
 
 Priority policy: the password-manager track targets 1Password parity first; wallet work stays experimental and deferred until that foundation is proven (wallet security requirements are higher and get a dedicated design pass).
 
@@ -258,18 +258,18 @@ Priority policy: the password-manager track targets 1Password parity first; wall
 - [ ] Optional sync/automation service with a local-first design
 - [ ] Wallet graduation: design doc, signing confirmations, PSBT, keystore JSON (after parity)
 
-## 🤝 Contributing
+## Contributing
 
 - Read [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) for Conventional Commits and PR expectations.
 - Fork the repo and create a feature branch (for example, `git checkout -b feat/cli-edit`).
 - Follow [Conventional Commits](https://www.conventionalcommits.org) when writing PR/commit titles, e.g. `feat(cli): add credential filters`.
 - Push your branch and open a Pull Request. Make sure `make lint-all` and `make test-all` both pass.
 
-## 📄 License
+## License
 
 This project is released under the MIT License. See [LICENSE](LICENSE) for details.
 
-## 🔗 Links
+## Links
 
 - [Issue tracker](https://github.com/cuihairu/persona/issues)
 
