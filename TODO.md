@@ -930,6 +930,22 @@ remove-attachment`（附件目录约定 `<db dir>/attachments`，desktop/CLI
         `scripts/verify-biometric-linux.md` 实机脚本）；威胁登记见
         THREAT_MODEL.md「Biometric Unlock」（同用户恶意进程可读 keyring 为固有
         暴露，Windows Credential Manager 无 ACL）
+  - [x] biometric 硬件绑定包裹层（2026-09-26 落地，设计见
+        `docs/biometric-unlock-design.md`）：门禁层之上的升级——主密钥被平台
+        硬件密钥加密包裹（core `auth/biometric_wrap.rs`：`BiometricKeyWrapper`
+        trait + BIOWRAP1 信封 + enrollment 指纹二次比对 + Mock 后端），keyring
+        只落打不开的密文（独立 `persona-biometric-wrap` service，与密码条目
+        互斥、硬件链优先）；解密那一刻硬件弹生物识别。core
+        `authenticate_with_master_key` 与密码路径逐项对齐（锁户/强制改密/
+        失败计数/session/审计）；桌面 capability 分流 enable/unlock/disable/
+        status + `wrap_tier` 暴露 + `BIOMETRIC_CANCELLED` 静默回退 +
+        EnrollmentChanged/WrapInvalid/Platform 自动删 blob 回主密码 + 改密
+        联动删 blob；macOS Secure Enclave 路线 B' 实现 + `biometric_wrap_spike`
+        探针命令（spike 门控，未真机验证前生产链默认不启用）；前端设置页档位
+        行（hardware-bound/os-gate）+ 解锁屏 RESET/CANCEL 分流。包裹层单测
+        行/分支 100%（cargo llvm-cov），服务层 6 用例，桌面命令层 7 用例。
+        待真机：macOS spike 五项（§5.2）、Windows Passport Key、iOS/Android
+        （等 Flutter 宿主）。Linux 定格 OsGateOnly（无硬件封装，诚实局限）
   - [x] Travel Mode（vault 级可见性开关，2026-09-22 落地）：按 identity 粒度
         "从本设备移除"——enter 把被标记身份全部数据（含附件密文文件字节 +
         change_history）打包 PERSENC1（独立 travel 口令）为 travel.persenc

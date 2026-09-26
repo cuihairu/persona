@@ -247,6 +247,16 @@ macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
   （收紧操作从宽）。
 - **SSH agent 联动**：agent 的 require_biometric 策略默认拒绝 + 显式注入
   OS provider（消除内置 Mock 静默放行面）。
+- **硬件绑定包裹层（2026-09-26，`docs/biometric-unlock-design.md`）**：
+  门禁层之上的升级档——keyring 新增 `persona-biometric-wrap` service，
+  存的是被平台硬件密钥包裹的**密文 blob**（BIOWRAP1 信封），与门禁层
+  密码条目互斥。T1（同用户恶意进程读 keyring）在此档下只能拿到打不开
+  的密文：解密必须过硬件认证（SE/TPM/Keystore），私钥永不导出。
+  剩余威胁面：enrollment 漂移（换指纹）→ 解包失败即自动删 blob 回主密码
+  （core 信封指纹二次比对纵深防御）；改密后旧 blob 包的是 stale key，
+  桌面改密联动当场删除；`BIOMETRIC_CANCELLED` 不删 blob（取消≠失败）。
+  Linux 定格门禁档（无硬件封装），macOS 硬件档待真机 spike 验证前默认
+  不启用——未验证的路径不在生产 unlock 链上。
 
 ## Connect 本机自动化端点（`127.0.0.1` HTTP，2026-09，secrets automation）
 
