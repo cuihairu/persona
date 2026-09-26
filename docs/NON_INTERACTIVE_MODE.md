@@ -414,10 +414,10 @@ chmod 600 ~/.persona/identities.db
 **Solution:** Provide all required arguments via command-line flags.
 
 ```bash
-# ❌ Missing arguments
+# Fails — missing arguments
 persona add
 
-# ✅ All arguments provided
+# Passes — all arguments provided
 persona add --name "User" --email "user@example.com" --yes
 ```
 

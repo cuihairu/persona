@@ -4,7 +4,7 @@
 
 Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安全地存储在 Persona 加密保险库中,并提供企业级的策略控制和生物识别认证。
 
-## ✅ 已实现功能
+## 已实现功能
 
 ### 1. SSH Agent 协议支持
 
@@ -16,7 +16,7 @@ Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安
   - `SSH_AGENT_FAILURE` (5): 失败响应
 
 - **加密算法支持**:
-  - ✅ ed25519 (签名/验证)
+  - ed25519 (签名/验证)
   - 使用 `ed25519-dalek` 库实现
 
 ### 2. 跨平台传输层
@@ -234,7 +234,7 @@ max_connections_per_hour = 20
 - `test_read_ssh_string_function`: SSH 字符串读取
 - `test_identities_answer_format`: SSH_AGENT_IDENTITIES_ANSWER 消息格式
 
-**总计**: 13个测试 ✅ 全部通过
+**总计**: 13 个测试全部通过
 
 ### 10. 环境变量配置
 
@@ -478,7 +478,7 @@ cargo check -p persona-ssh-agent
 
 ### 2025-11-21 - v0.1.0 初始实现
 
-✅ **完成功能**:
+**完成功能**:
 
 - SSH Agent 协议子集(request_identities, sign_request)
 - ed25519 密钥支持
@@ -488,7 +488,7 @@ cargo check -p persona-ssh-agent
 - 速率限制和审计日志
 - 13个单元测试和E2E测试
 
-🔧 **技术栈**:
+**技术栈**:
 
 - Rust 2021
 - Tokio (异步运行时)
@@ -496,7 +496,7 @@ cargo check -p persona-ssh-agent
 - TOML (配置)
 - SQLx (数据库)
 
-📦 **依赖**:
+**依赖**:
 
 - `persona-core`: 核心库
 - `tokio`: 异步运行时

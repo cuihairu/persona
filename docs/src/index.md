@@ -20,14 +20,11 @@ hero:
       link: https://github.com/cuihairu/persona
 
 features:
-  - icon: 🔐
-    title: 本地优先与零知识
+  - title: 本地优先与零知识
     details: 敏感身份材料在本地加密，服务器只处理密文和同步元数据。
-  - icon: 🎭
-    title: 多分身上下文
+  - title: 多分身上下文
     details: 将工作、个人、开发、SSH、浏览器等身份材料按场景隔离和切换。
-  - icon: ⚙️
-    title: 跨端统一边界
+  - title: 跨端统一边界
     details: CLI、桌面端、浏览器扩展和 SSH Agent 共用同一套本地服务与策略。
 ---
 
