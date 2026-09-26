@@ -283,6 +283,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::delete_attachment,
             commands::search_credentials,
             commands::generate_password,
+            commands::generate_password_advanced,
             commands::get_statistics,
             commands::toggle_credential_favorite,
             commands::fetch_credential_favicon,

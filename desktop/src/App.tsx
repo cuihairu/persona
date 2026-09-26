@@ -23,6 +23,7 @@ import SshAgentPanel from '@/components/SshAgentPanel';
 import WalletPanel from '@/components/WalletPanel';
 import WatchtowerPanel from '@/components/WatchtowerPanel';
 import PasskeyPanel from '@/components/PasskeyPanel';
+import GeneratorPanel from '@/components/GeneratorPanel';
 import SettingsModal from '@/components/SettingsModal';
 import QuickSearch from '@/components/QuickSearch';
 import Sidebar, { NAV_ITEMS } from '@/components/Sidebar';
@@ -93,6 +94,9 @@ const App: React.FC = () => {
 
   // ⌘, 开/关设置 modal
   useGlobalShortcut(',', () => setShowSettings((v) => !v), isUnlocked);
+
+  // ⌘G 呼出密码生成器（主航道视图；生成是纯计算，无需选中身份）
+  useGlobalShortcut('g', () => setCurrentView('generator'), isUnlocked);
 
   // ⌘E 复制当前选中凭据的用户名（按键时现读 store，不订阅、无陈旧闭包）
   const handleCopyUsername = () => {
@@ -257,6 +261,7 @@ const App: React.FC = () => {
                 {currentView === 'wallets' && <WalletPanel />}
                 {currentView === 'watchtower' && <WatchtowerPanel />}
                 {currentView === 'passkeys' && <PasskeyPanel />}
+                {currentView === 'generator' && <GeneratorPanel />}
               </div>
             </main>
           </div>

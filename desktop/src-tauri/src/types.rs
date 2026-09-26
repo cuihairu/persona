@@ -318,6 +318,16 @@ pub struct ChangeMasterPasswordRequest {
     pub db_path: Option<String>,
 }
 
+/// `generate_password_advanced` 的结果：候选口令 + 供 UI 展示的熵值估计
+/// 与字符池大小（显示参考而非安全承诺；字符集与 core 生成器同源）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedPasswords {
+    pub passwords: Vec<String>,
+    pub entropy_bits: f64,
+    pub pool_size: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct StartAgentRequest {
     pub master_password: Option<String>,

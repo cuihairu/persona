@@ -786,3 +786,11 @@ export interface ConnectTokenCreatedView {
   token: string;
   info: ConnectTokenView;
 }
+
+/** `generate_password_advanced` 响应：候选口令 + 供展示的熵值估计与字符池
+ * 大小（显示参考而非安全承诺；与 core 生成器字符集同源）。 */
+export interface GeneratedPasswords {
+  passwords: string[];
+  entropy_bits: number;
+  pool_size: number;
+}

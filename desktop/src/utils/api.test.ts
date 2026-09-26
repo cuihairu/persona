@@ -181,6 +181,25 @@ describe('utils/api command mapping coverage', () => {
     await personaAPI.generatePassword(20, false);
     expect(mockInvoke).toHaveBeenCalledWith('generate_password', { length: 20, include_symbols: false });
 
+    await personaAPI.generatePasswordAdvanced({
+      length: 24,
+      include_lowercase: true,
+      include_uppercase: true,
+      include_numbers: true,
+      include_symbols: false,
+      pronounceable: true,
+      count: 3,
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('generate_password_advanced', {
+      length: 24,
+      include_lowercase: true,
+      include_uppercase: true,
+      include_numbers: true,
+      include_symbols: false,
+      pronounceable: true,
+      count: 3,
+    });
+
     await personaAPI.getStatistics();
     expect(mockInvoke).toHaveBeenCalledWith('get_statistics');
 

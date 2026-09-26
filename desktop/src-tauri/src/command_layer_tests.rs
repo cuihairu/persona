@@ -475,6 +475,86 @@ async fn generate_password_and_statistics_serve_values() {
     assert!(stats.is_object(), "statistics is a JSON object: {stats}");
 }
 
+#[tokio::test]
+async fn generate_password_advanced_works_without_unlocked_service() {
+    // 纯计算命令：不建 app、不解锁，直接调用即应出数（Quick Access/锁屏
+    // 场景的前置条件）。
+    let resp = generate_password_advanced(16, true, true, true, true, false, 3)
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.expect("passwords returned");
+    assert_eq!(data.passwords.len(), 3);
+    assert!(data.passwords.iter().all(|p| p.len() == 16));
+    // 26 + 26 + 10 + 24 = 86；熵 = log2(86) × 16
+    assert_eq!(data.pool_size, 86);
+    let expected = 86f64.log2() * 16.0;
+    assert!((data.entropy_bits - expected).abs() < 1e-9);
+
+    // 选项收敛：只留数字集，池 = 10，字符全来自数字集
+    let resp = generate_password_advanced(12, false, false, true, false, false, 1)
+        .await
+        .unwrap();
+    let data = resp.data.unwrap();
+    assert_eq!(data.pool_size, 10);
+    assert!(data
+        .passwords
+        .iter()
+        .all(|p| p.chars().all(|c| c.is_ascii_digit())));
+}
+
+#[tokio::test]
+async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
+    // 可发音（仅小写）：辅音 21 / 元音 5 交替；长度 20 → 10×log2(21)+10×log2(5)
+    let resp = generate_password_advanced(20, true, false, false, false, true, 1)
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.unwrap();
+    let expected = 10.0 * 21f64.log2() + 10.0 * 5f64.log2();
+    assert!((data.entropy_bits - expected).abs() < 1e-9);
+    assert_eq!(data.pool_size, 21);
+
+    // count / length 夹取：0 → 1 条、下限 4；上限防滥用
+    let resp = generate_password_advanced(0, true, true, true, true, false, 0)
+        .await
+        .unwrap();
+    let data = resp.data.unwrap();
+    assert_eq!(data.passwords.len(), 1);
+    assert_eq!(data.passwords[0].len(), 4);
+
+    let resp = generate_password_advanced(10_000, true, true, true, true, false, 99)
+        .await
+        .unwrap();
+    let data = resp.data.unwrap();
+    assert_eq!(data.passwords.len(), 10);
+    assert_eq!(data.passwords[0].len(), 256);
+}
+
+#[tokio::test]
+async fn generate_password_advanced_surfaces_validation_errors() {
+    // 无字符集 / 可发音无字母：core 校验错误透传，不 panic 不静默
+    let resp = generate_password_advanced(16, false, false, false, false, false, 1)
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.unwrap().contains("At least one character set"),
+        "unexpected error"
+    );
+
+    let resp = generate_password_advanced(16, false, false, true, true, true, 1)
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .unwrap()
+            .contains("Pronounceable passwords require lowercase and/or uppercase"),
+        "unexpected error"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 第二批：credential / wallet / reveal / export / passkey
 // ---------------------------------------------------------------------------

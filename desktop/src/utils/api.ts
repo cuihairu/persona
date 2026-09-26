@@ -13,6 +13,7 @@ import type {
   UpdateCredentialDataRequest,
   Statistics,
   InitRequest,
+  GeneratedPasswords,
   FeatureFlags,
   SyncConfig,
   SyncConflictEntry,
@@ -362,6 +363,19 @@ class PersonaAPI {
 
   async generatePassword(length: number, includeSymbols: boolean): Promise<ApiResponse<string>> {
     return invoke('generate_password', { length, include_symbols: includeSymbols });
+  }
+
+  /** 完整选项生成器（Generator 面板用；纯计算，无需解锁） */
+  async generatePasswordAdvanced(options: {
+    length: number;
+    include_lowercase: boolean;
+    include_uppercase: boolean;
+    include_numbers: boolean;
+    include_symbols: boolean;
+    pronounceable: boolean;
+    count: number;
+  }): Promise<ApiResponse<GeneratedPasswords>> {
+    return invoke('generate_password_advanced', options);
   }
 
   async getStatistics(): Promise<ApiResponse<Statistics>> {

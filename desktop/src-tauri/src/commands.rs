@@ -2880,6 +2880,103 @@ pub async fn generate_password(
     }
 }
 
+/// Generate passwords with full generator options (desktop Generator panel).
+///
+/// 纯计算（`core::PasswordGenerator`），不触碰库与主密钥——无需解锁即可
+/// 调用（后续 Quick Access/锁屏场景可直接复用）。length 夹取到 4..=256、
+/// count 夹取到 1..=10（滑杆 UI 天然受限，这里兜底防滥用）；选项组合
+/// 非法（无字符集/可发音无字母）透传 core 的校验错误。
+#[command]
+pub async fn generate_password_advanced(
+    length: usize,
+    include_lowercase: bool,
+    include_uppercase: bool,
+    include_numbers: bool,
+    include_symbols: bool,
+    pronounceable: bool,
+    count: usize,
+) -> std::result::Result<ApiResponse<GeneratedPasswords>, String> {
+    use persona_core::password::{PasswordGenerator, PasswordGeneratorOptions};
+
+    let options = PasswordGeneratorOptions {
+        length: length.clamp(4, 256),
+        include_lowercase,
+        include_uppercase,
+        include_numbers,
+        include_symbols,
+        pronounceable,
+    };
+    let count = count.clamp(1, 10);
+
+    let mut passwords = Vec::with_capacity(count);
+    for _ in 0..count {
+        match PasswordGenerator::generate(&options) {
+            Ok(password) => passwords.push(password),
+            Err(e) => return Ok(ApiResponse::error(e.to_string())),
+        }
+    }
+
+    let (entropy_bits, pool_size) = estimate_generator_entropy(&options);
+    Ok(ApiResponse::success(GeneratedPasswords {
+        passwords,
+        entropy_bits,
+        pool_size,
+    }))
+}
+
+/// 生成器熵值估计（仅显示参考）：
+/// - 随机模式：`log2(字符池) × 长度`（core 保证每个启用集至少出一字符，
+///   这里按均匀采样近似，差一位 shuffle 熵，忽略）；
+/// - 可发音模式：与 core 的辅音/元音交替算法同构，按位累加 `log2(当前位池)`
+///   （数字/符号的注入替换不增熵，保守忽略）。
+fn estimate_generator_entropy(
+    options: &persona_core::password::PasswordGeneratorOptions,
+) -> (f64, usize) {
+    if options.pronounceable {
+        // 辅音池 21、元音池 5；大小写同开时各翻倍（与 core 常量一致）
+        let letter_sets = options.include_lowercase as usize + options.include_uppercase as usize;
+        let consonants = 21 * letter_sets;
+        let vowels = 5 * letter_sets;
+        if consonants + vowels == 0 {
+            return (0.0, 0);
+        }
+        let mut bits = 0.0;
+        let mut max_pool = 0;
+        let mut use_consonant = true;
+        for _ in 0..options.length {
+            let pool = if use_consonant && consonants > 0 {
+                consonants
+            } else if vowels > 0 {
+                vowels
+            } else {
+                consonants
+            };
+            bits += (pool as f64).log2();
+            max_pool = max_pool.max(pool);
+            use_consonant = !use_consonant;
+        }
+        (bits, max_pool)
+    } else {
+        let mut pool = 0;
+        if options.include_lowercase {
+            pool += 26;
+        }
+        if options.include_uppercase {
+            pool += 26;
+        }
+        if options.include_numbers {
+            pool += 10;
+        }
+        if options.include_symbols {
+            pool += 24;
+        }
+        if pool == 0 {
+            return (0.0, 0);
+        }
+        ((pool as f64).log2() * options.length as f64, pool)
+    }
+}
+
 /// Get service statistics
 #[command]
 pub async fn get_statistics(

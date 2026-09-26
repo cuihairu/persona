@@ -13,7 +13,14 @@ import { getCredentialIcon } from './credentialDisplay';
 import type { FeatureFlags, SidebarFilter } from '@/types';
 import { clsx } from 'clsx';
 
-export type ViewId = 'credentials' | 'statistics' | 'sshAgent' | 'wallets' | 'watchtower' | 'passkeys';
+export type ViewId =
+  | 'credentials'
+  | 'statistics'
+  | 'sshAgent'
+  | 'wallets'
+  | 'watchtower'
+  | 'passkeys'
+  | 'generator';
 
 interface NavItem {
   id: ViewId;
@@ -30,6 +37,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'wallets', label: 'nav.wallets', flag: 'wallet' },
   { id: 'watchtower', label: 'nav.watchtower' },
   { id: 'passkeys', label: 'nav.passkeys', flag: 'passkeys' },
+  { id: 'generator', label: 'nav.generator' },
 ];
 
 interface SidebarProps {

@@ -58,6 +58,7 @@ describe('components/Sidebar', () => {
     expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '生成器' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'SSH Agent' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '通行密钥' })).not.toBeInTheDocument();
@@ -73,6 +74,7 @@ describe('components/Sidebar', () => {
     expect(screen.getByTestId('nav-wallets')).toBeInTheDocument();
     expect(screen.getByTestId('nav-watchtower')).toBeInTheDocument();
     expect(screen.getByTestId('nav-passkeys')).toBeInTheDocument();
+    expect(screen.getByTestId('nav-generator')).toBeInTheDocument();
   });
 
   it('marks the active view and reports navigation clicks', () => {

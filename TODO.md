@@ -400,6 +400,23 @@ Desktop (Tauri v2 + React)
       测试：desktop/src-tauri/src/packaging_tests.rs 断言 installMode/
       template/三处定制不被回退；NSIS 行为层需 Windows 机器按
       docs/WINDOWS_INSTALLER.md §5 清单验收（Linux 上无法编译 NSIS）
+- [x] 桌面独立密码生成器（1Password 对标矩阵 #9，2026-09-25 落地）：
+      此前桌面端只有新建凭据弹窗里的生成按钮（长度+符号两档、需解锁）。
+      本轮补齐：① 后端新命令 generate_password_advanced——直调 core
+      PasswordGenerator 全选项（长度/四字符集/可发音/多候选），纯计算
+      不触碰库与主密钥、无需解锁（后续 Quick Access 可直接复用）；
+      length 夹取 4..=256、count 夹取 1..=10，core 校验错误透传；
+      附带熵值估计（随机模式 log2(池)×长度；可发音模式与 core 辅音/
+      元音交替算法同构按位累加，数字/符号注入保守不计）与字符池大小。
+      ② 前端 GeneratorPanel 主航道视图（侧栏恒可见 + ⌘G 呼出）：长度
+      滑杆（4-64）、四字符集 + 可发音开关（非法组合提前禁用按钮并
+      提示）、候选数量 1/3/5/10、熵值计量条（五档配色 + 比特数 + 池
+      大小）、候选列表逐条复制（30 秒自动清剪贴板）；zh-CN/en 双语。
+      ③ 保留旧 generate_password（CreateCredentialModal 继续用）。
+      测试：Rust 命令层 3 组（无解锁可用/熵值与夹取/校验错误透传）+
+      jest GeneratorPanel 7 用例 + api.test invoke 参数断言。
+      对标矩阵与优先级更新见 docs/FEATURE_GAP_ANALYSIS.md（下一个
+      最高价值项：OS 级全局热键/Quick Access）
 
 Server & Sync (optional)
 
