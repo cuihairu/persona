@@ -52,6 +52,8 @@ jobs:
             os: macos-latest
             bundles: dmg
     runs-on: ${{ matrix.os }}
+    # spike 探针在无硬件的 VM 上按设计会"如实失败"，但绝不允许它挂死 job
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -101,6 +103,17 @@ jobs:
             desktop/src-tauri/target/release/bundle/**/*.exe
             desktop/src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: error
+
+      # 生物识别硬件包裹 spike（docs/biometric-unlock-design.md §5.2/§6.1）。
+      # runner 是 VM：macos 无 Secure Enclave / Touch ID，windows 通常无已
+      # 注册的 Hello——探针会如实失败并把 OSStatus/HRESULT 打进日志，这份
+      # 真实输出就是本步骤的产出（人工回填设计文档）；非门禁，探针 ok 位
+      # 不影响 job 结论。--nocapture 让 SPIKE 行进日志。
+      - name: Biometric spike probes (VM — record real capability, not a gate)
+        if: runner.os != 'Linux'
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: cargo test --lib spike_probes_print_report -- --ignored --nocapture
 
   release:
     name: publish

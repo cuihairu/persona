@@ -414,3 +414,29 @@ impl BiometricKeyWrapper for SeKeyWrapper {
         delete_se_key()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真机/CI 探针入口：`cargo test --lib spike_probes_print_report
+    /// -- --ignored --nocapture`。探针结果本身就是数据（GitHub runner 是
+    /// VM，无 Secure Enclave / Touch ID，各步会如实失败并把 OSStatus 打进
+    /// 日志——这正是 desktop-build macos job 跑它的目的：把真实输出回填
+    /// 设计文档 §5.2），断言只保证"能出报告"，不对 ok 位做门禁——门禁
+    /// 语义在 spike 输出的人工判读，不在测试。
+    #[test]
+    #[ignore = "需要真实 macOS 环境（Secure Enclave / Touch ID）；desktop-build macos job 按计划跑"]
+    fn spike_probes_print_report() {
+        let steps = run_spike();
+        assert!(!steps.is_empty(), "spike 必须产出探针报告");
+        for s in steps {
+            println!(
+                "SPIKE [{}] {} — {}",
+                if s.ok { "PASS" } else { "FAIL" },
+                s.name,
+                s.detail
+            );
+        }
+    }
+}

@@ -576,3 +576,29 @@ pub fn run_spike() -> Vec<SpikeStep> {
 
     steps
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 真机/CI 探针入口：`cargo test --lib spike_probes_print_report
+    /// -- --ignored --nocapture`。GitHub runner 的 Windows VM 通常没有
+    /// 已注册的 Windows Hello / vTPM 认证态，各步会如实失败并把 HRESULT
+    /// 打进日志（desktop-build windows job 跑它就是为了记录这份真实输出，
+    /// 回填设计文档 §6.1）；探针 7 自带删除，不在 runner 上留持久密钥。
+    /// 断言只保证"能出报告"，ok 位的人工判读在 spike 输出侧。
+    #[test]
+    #[ignore = "需要真实 Windows 环境（Windows Hello / Passport KSP）；desktop-build windows job 按计划跑"]
+    fn spike_probes_print_report() {
+        let steps = run_spike();
+        assert!(!steps.is_empty(), "spike 必须产出探针报告");
+        for s in steps {
+            println!(
+                "SPIKE [{}] {} — {}",
+                if s.ok { "PASS" } else { "FAIL" },
+                s.name,
+                s.detail
+            );
+        }
+    }
+}
