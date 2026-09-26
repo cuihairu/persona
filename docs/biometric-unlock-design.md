@@ -14,13 +14,13 @@ OS keyring + OS 认证弹框做门禁**。本设计是它的升级：把"弹框�
 
 ## 1. 平台支持矩阵
 
-| 平台 | API | 绑定强度 | 本轮状态 |
-|---|---|---|---|
-| iOS | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`) | 硬件绑定 | 未接（无 Flutter 宿主，§8） |
-| Android | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定 | 未接（同上） |
-| macOS | Secure Enclave P-256 + ECIES（路线 B，§6） | 硬件绑定 | **spike 工具已备，待真机**；当前保持门禁层 |
-| Windows | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语 | 硬件绑定（TPM） | 规划中（§7）；当前保持 Windows Hello 门禁层 |
-| Linux | polkit `auth_self`（现状）或 fprintd D-Bus 直调 | **仅门禁，无硬件封装** | 现状保持（§7.3 诚实局限） |
+| 平台    | API                                                                                                                    | 绑定强度               | 本轮状态                                    |
+| ------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------- |
+| iOS     | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（无 Flutter 宿主，§8）                 |
+| Android | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（同上）                                |
+| macOS   | Secure Enclave P-256 + ECIES（路线 B，§6）                                                                             | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层  |
+| Windows | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | 规划中（§7）；当前保持 Windows Hello 门禁层 |
+| Linux   | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.3 诚实局限）                   |
 
 绑定强度三档（`BiometricWrapCapability`，core 定义、三端共用）：
 
@@ -107,11 +107,11 @@ BIOWRAP1 | u8 platform_tag | 32B enrollment_fp | u32le payload_len | payload
 
 core 侧的失效自动降级：
 
-| 解包错误 | 桌面行为 |
-|---|---|
-| `UserCancelled` | 静默回到解锁屏，指纹按钮保留 |
+| 解包错误                                         | 桌面行为                                                                                               |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `UserCancelled`                                  | 静默回到解锁屏，指纹按钮保留                                                                           |
 | `EnrollmentChanged` / `WrapInvalid` / `Platform` | **自动删除包裹 blob** + 返回 `BIOMETRIC_RESET` 码 → 前端提示"生物解锁已重置，请用主密码解锁后重新启用" |
-| 锁户（5 次失败） | 与密码路径同语义：`AccountLocked`，生物识别也不放行 |
+| 锁户（5 次失败）                                 | 与密码路径同语义：`AccountLocked`，生物识别也不放行                                                    |
 
 `authenticate_with_master_key` 与 `authenticate_user` 的语义对齐：
 失败计数复位、session 创建、`touch_sensitive`、审计 Login——只有
@@ -153,11 +153,11 @@ ad-hoc 签名（Tauri dev/未配证书的 build）下创建/读取会失败
 
 ### 5.2 三条候选路线
 
-| 路线 | 机制 | 持久性 | 证书需求 | 风险 |
-|---|---|---|---|---|
-| A | DP keychain 通用密码 + SecAccessControl(biometryCurrentSet) | 重启存活 | Developer ID + entitlement | ad-hoc 下 -34018（已知） |
-| B | **非永久** SE 密钥（`SecKeyCreateRandomKey` + `kSecAttrTokenIDSecureEnclave` + `kSecAttrIsPermanent: false`）+ ECIES | ⚠️ 进程退出私钥即销毁 | 无 | 密钥不可重建，重启后 blob 变砖 |
-| B' | **永久** SE 密钥（同上但 `IsPermanent: true` + AccessControl） | 重启存活（keychain 存 SE 引用） | 待 spike | 创建是否也吃 -34018 未知 |
+| 路线 | 机制                                                                                                                 | 持久性                          | 证书需求                   | 风险                           |
+| ---- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------- | ------------------------------ |
+| A    | DP keychain 通用密码 + SecAccessControl(biometryCurrentSet)                                                          | 重启存活                        | Developer ID + entitlement | ad-hoc 下 -34018（已知）       |
+| B    | **非永久** SE 密钥（`SecKeyCreateRandomKey` + `kSecAttrTokenIDSecureEnclave` + `kSecAttrIsPermanent: false`）+ ECIES | ⚠️ 进程退出私钥即销毁           | 无                         | 密钥不可重建，重启后 blob 变砖 |
+| B'   | **永久** SE 密钥（同上但 `IsPermanent: true` + AccessControl）                                                       | 重启存活（keychain 存 SE 引用） | 待 spike                   | 创建是否也吃 -34018 未知       |
 
 **调研结论（2026-09-26，本地无 Mac 无法实机验证）**：路线 B 字面
 方案（非永久密钥）的私钥**不随进程存活**——SE 的持久化只在
@@ -171,15 +171,15 @@ ad-hoc 签名（Tauri dev/未配证书的 build）下创建/读取会失败
 `biometric_wrap_spike` 命令，逐项回报 OSStatus）。探针与设计条目的
 对应关系（探针名即命令返回的 `name`）：
 
-| 设计条目 | 探针名 | 说明 |
-|---|---|---|
-| 1. B' 密钥创建 | `1. SecKeyCreateRandomKey (SE, permanent, biometryCurrentSet)` | 永久 SE 密钥 + `.privateKeyUsage \| .biometryCurrentSet` AccessControl → 记录 OSStatus（若 -34018 则 B' 也被签名挡住） |
-| 1b. 创建后可查 | `1b. find_key after create` | 同进程内 keychain 引用立即可见 |
-| 2. ECIES roundtrip | `2a. SecKeyCreateEncryptedData` / `2b. SecKeyCreateDecryptedData` | B'/B：公钥包裹（无提示）→ 私钥解裹（弹生物识别）；算法为 `kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM`（objc2-security 0.3 仅导出 AESGCM 一族，早年 `...AEAD` 已不导出——同为 SE 内 ECDH+HKDF+AES-GCM） |
-| 3. 持久性 | `3. find_key (persistence probe)` | **重启进程后再跑一次 spike**，本步仍 found = keychain 引用跨重启存活 |
-| 4. 删指纹对照（手动） | （无自动探针） | 跑一次 spike → 在系统设置删一条指纹 → 再跑一次：第 2b 步必须失败才算 `biometryCurrentSet` 生效 |
-| 5. 基线 | `4. access control create (baseline, no keychain write)` | 仅构造 AccessControl（构造本身不吃 entitlement；真正的 -34018 若存在，出现在第 1 步的 key 创建） |
-| 6. 删除幂等 | `5. SecItemDelete (wrap key, idempotent)` | 禁用/失效自愈共用的删除路径（含 `errSecItemNotFound` 幂等） |
+| 设计条目              | 探针名                                                            | 说明                                                                                                                                                                                                                         |
+| --------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. B' 密钥创建        | `1. SecKeyCreateRandomKey (SE, permanent, biometryCurrentSet)`    | 永久 SE 密钥 + `.privateKeyUsage \| .biometryCurrentSet` AccessControl → 记录 OSStatus（若 -34018 则 B' 也被签名挡住）                                                                                                       |
+| 1b. 创建后可查        | `1b. find_key after create`                                       | 同进程内 keychain 引用立即可见                                                                                                                                                                                               |
+| 2. ECIES roundtrip    | `2a. SecKeyCreateEncryptedData` / `2b. SecKeyCreateDecryptedData` | B'/B：公钥包裹（无提示）→ 私钥解裹（弹生物识别）；算法为 `kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM`（objc2-security 0.3 仅导出 AESGCM 一族，早年 `...AEAD` 已不导出——同为 SE 内 ECDH+HKDF+AES-GCM） |
+| 3. 持久性             | `3. find_key (persistence probe)`                                 | **重启进程后再跑一次 spike**，本步仍 found = keychain 引用跨重启存活                                                                                                                                                         |
+| 4. 删指纹对照（手动） | （无自动探针）                                                    | 跑一次 spike → 在系统设置删一条指纹 → 再跑一次：第 2b 步必须失败才算 `biometryCurrentSet` 生效                                                                                                                               |
+| 5. 基线               | `4. access control create (baseline, no keychain write)`          | 仅构造 AccessControl（构造本身不吃 entitlement；真正的 -34018 若存在，出现在第 1 步的 key 创建）                                                                                                                             |
+| 6. 删除幂等           | `5. SecItemDelete (wrap key, idempotent)`                         | 禁用/失效自愈共用的删除路径（含 `errSecItemNotFound` 幂等）                                                                                                                                                                  |
 
 对照组 A（DP keychain 通用密码 + SecAccessControl）未做自动探针：
 ad-hoc 下 -34018 是已知基线（§5.1），且本设计不走路线 A（无证书）。
@@ -255,8 +255,7 @@ fprintd D-Bus（net.reactivated.Fprint）直调是 polkit 的备选（少一层
       强制改密旗标与密码路径对齐）+ `derive_master_key_for_wrap` +
       `unlock_with_master_key`
 - [x] desktop：capability 分流的 enable/unlock/disable/status +
-      wrap blob keyring 隔离（`persona-biometric-wrap`）+ 改密联动删 blob
-      + 命令层 7 用例（enable 落密文/blob 互斥/unlock 闭环/注册集漂移/
+      wrap blob keyring 隔离（`persona-biometric-wrap`）+ 改密联动删 blob + 命令层 7 用例（enable 落密文/blob 互斥/unlock 闭环/注册集漂移/
       用户取消/blob 损坏/改密失效/spike 非 macOS 报 Unsupported）
 - [x] desktop：macos_se.rs（路线 B'，spike 门控；编译验证状态见 §5.3，
       API 形状已按 generated 绑定逐项核对）+ `biometric_wrap_spike` 命令
