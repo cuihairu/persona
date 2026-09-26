@@ -380,6 +380,26 @@ Desktop (Tauri v2 + React)
       NSIS exe/WiX msi（7.7/10.6MB）、aarch64 dmg（9.7MB）；三轮踩坑已修：
       pnpm 版本与 packageManager 冲突、passkey 桥 Windows cfg 分流、
       dist glob 递归 + 空产物防御
+- [x] Windows 安装器标准升级流程（2026-09-25 落地，详见 docs/WINDOWS_INSTALLER.md）：
+      根因：tauri.conf.json 此前无 bundle.windows 段——installMode 默认
+      currentUser 只查 HKCU（旧 per-machine 安装检测不到，重装页不出现，
+      新旧并排安装留下旧文件/快捷方式/注册表残留）；CI 同时发
+      NSIS(per-user)+MSI(per-machine) 互不清理造成混装；NSIS /S 静默安装
+      跳过自定义页面完全不卸旧版；交互升级时旧卸载器以全 UI 运行非静默。
+      改动：① installMode=both（首装可选 per-user/per-machine 并记忆，
+      升级沿用旧安装上下文，检测覆盖 HKCU+HKLM）；② 自定义模板
+      nsis/installer.nsi（基线 tauri-cli-v2.11.4，三处「Persona 定制」
+      注释标记）——升级路径给旧卸载器追加 /S 实现默认静默卸载（重装页
+      "卸载后安装"默认勾选保持基线行为；静默无确认页 →"删除应用数据"
+      恒未勾 → %APPDATA%\persona 库文件与配置保留，卸载器本身只会清
+      %APPDATA%\com.persona.desktop 缓存类目录）；③ /S 全静默安装补齐
+      同样的旧版卸载（EarlyChecks → UninstallPreviousSilent：SHCTX 的
+      NSIS 卸载键 + HKLM WiX/msi 枚举后 msiexec /x /quiet /norestart，
+      失败 fail-closed 中止安装）；④ desktop-build.yml Windows matrix
+      只发 NSIS（停发 MSI，杜绝混装源；NSIS 对旧 MSI 安装有迁移卸载）。
+      测试：desktop/src-tauri/src/packaging_tests.rs 断言 installMode/
+      template/三处定制不被回退；NSIS 行为层需 Windows 机器按
+      docs/WINDOWS_INSTALLER.md §5 清单验收（Linux 上无法编译 NSIS）
 
 Server & Sync (optional)
 

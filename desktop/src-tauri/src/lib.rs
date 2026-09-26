@@ -16,6 +16,8 @@ pub mod commands;
 // 这里 re-export 保持 `crate::connect_server::*` 引用路径不变。
 pub use persona_connect_server as connect_server;
 mod error;
+#[cfg(test)]
+mod packaging_tests;
 pub mod passkey_bridge;
 #[cfg(test)]
 mod test_support;

@@ -1,5 +1,10 @@
 # Desktop multi-platform packaging: Linux (deb/rpm/AppImage), Windows
-# (NSIS/MSI), macOS (dmg).
+# (NSIS), macOS (dmg).
+#
+# Windows 只发 NSIS 一种安装器（2026-09-25 起）：同时发 MSI 会造成
+# nsis(per-user)/msi(per-machine) 混装与卸载残留（msiexec 升级只认
+# UpgradeCode，不会清 NSIS 安装）。NSIS 安装器对旧 msi 安装有迁移
+# 卸载逻辑，反之没有。详见 docs/WINDOWS_INSTALLER.md。
 #
 # Three entry points:
 #   - push tag v*        → official GitHub Release with generated notes
@@ -42,7 +47,7 @@ jobs:
             bundles: deb,rpm,appimage
           - name: windows
             os: windows-latest
-            bundles: nsis,msi
+            bundles: nsis
           - name: macos
             os: macos-latest
             bundles: dmg
@@ -94,7 +99,6 @@ jobs:
             desktop/src-tauri/target/release/bundle/**/*.rpm
             desktop/src-tauri/target/release/bundle/**/*.AppImage
             desktop/src-tauri/target/release/bundle/**/*.exe
-            desktop/src-tauri/target/release/bundle/**/*.msi
             desktop/src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: error
 

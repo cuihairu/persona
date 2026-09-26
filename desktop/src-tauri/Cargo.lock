@@ -4666,6 +4666,7 @@ dependencies = [
  "ed25519-dalek",
  "glob-match",
  "hex",
+ "libc",
  "persona-core",
  "ring",
  "serde",

@@ -48,6 +48,12 @@
           "/usr/share/polkit-1/actions/com.persona.desktop.biometric-unlock.policy": "polkit/com.persona.desktop.biometric-unlock.policy"
         }
       }
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "template": "nsis/installer.nsi"
+      }
     }
   }
 }
