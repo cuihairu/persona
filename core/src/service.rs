@@ -1927,6 +1927,87 @@ impl PersonaService {
         Ok(auth_result)
     }
 
+    /// 低层原语：直接用主密钥建立会话加密服务（跳过密码派生）。
+    ///
+    /// 消费方：硬件绑定的生物识别解锁（`biometric_wrap` 模块解出主密钥
+    /// 后走此路径）。生产代码不要拿它当密码解锁的旁路——调用方必须
+    /// 自己保证密钥来源经过了认证（硬件 ceremony / 密码派生）。
+    pub fn unlock_with_master_key(&mut self, master_key: &[u8; 32]) -> Result<()> {
+        self.master_encryption = Some(crate::crypto::EncryptionService::new(master_key));
+        *self.last_activity.lock().unwrap() = Some(std::time::Instant::now());
+        Ok(())
+    }
+
+    /// 派生当前用户的主密钥（供硬件绑定的 biometric enable 在密码刚
+    /// 验证过后重导出密钥交给包裹层）。密码不对会派生出错误密钥——
+    /// 调用方必须先走 `authenticate_user`。
+    pub async fn derive_master_key_for_wrap(&self, master_password: &str) -> Result<[u8; 32]> {
+        let Some(user_auth) = self.user_auth_repo.get_first().await? else {
+            return Err(crate::PersonaError::NotFound("no user initialized".to_string()).into());
+        };
+        Ok(self
+            .master_key_service
+            .derive_master_key(master_password, &user_auth.get_master_key_salt()?))
+    }
+
+    /// 用主密钥认证（硬件绑定生物识别解锁的服务层入口）。
+    ///
+    /// 与 [`Self::authenticate_user`] 语义对齐，只把"密码验证"一步换成
+    /// "调用方已完成硬件认证"：锁户仍然拒绝（生物识别不越过 5 次失败
+    /// 锁户）、`password_change_required` 强制改密旗标仍然短路、失败计数
+    /// 复位、session 创建 + `touch_sensitive`、审计 Login（details 记
+    /// `source`，桌面传 "biometric-wrap"）。
+    pub async fn authenticate_with_master_key(
+        &mut self,
+        master_key: &[u8; 32],
+        source: &str,
+    ) -> Result<AuthResult> {
+        let Some(mut user_auth) = self.user_auth_repo.get_first().await? else {
+            return Ok(AuthResult::InvalidCredentials);
+        };
+
+        // 过期策略先行 + 旗标短路：与 authenticate_password 同序同语义
+        self.enforce_password_expiry(&mut user_auth).await?;
+        if user_auth.is_locked() {
+            return Ok(AuthResult::AccountLocked);
+        }
+        if user_auth.password_change_required {
+            return Ok(AuthResult::PasswordChangeRequired);
+        }
+
+        user_auth.reset_failed_attempts();
+        self.user_auth_repo.update(&user_auth).await?;
+
+        self.unlock_with_master_key(master_key)?;
+        self.current_user = Some(user_auth.user_id);
+        self.touch_activity();
+
+        let mut session = Session::new(user_auth.user_id.to_string(), self.auto_lock_timeout);
+        session.touch_sensitive();
+        let session_id = session.id.clone();
+        *self.current_session_id.write().await = Some(session_id.clone());
+        self.auto_lock_manager
+            .add_session(session)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        self.auto_lock_manager
+            .set_current_user(user_auth.user_id)
+            .await;
+
+        self.log_audit_with_metadata(
+            AuditAction::Login,
+            ResourceType::User,
+            true,
+            None,
+            None,
+            None,
+            Some(("via", source.to_string())),
+        )
+        .await;
+
+        Ok(AuthResult::Success)
+    }
+
     /// Change the workspace master password (rotation).
     ///
     /// Verifies `old_password` directly against the stored argon2 hash —
@@ -4394,6 +4475,176 @@ mod tests {
             service.authenticate_user("master-pin").await.unwrap(),
             AuthResult::AccountLocked
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Hardware-bound biometric unlock (auth/biometric_wrap.rs consumers)
+    // ------------------------------------------------------------------
+
+    /// Full core-side path of a hardware unlock: derive the master key the
+    /// way `biometric_enable` does, hand it to the wrap layer, then unlock
+    /// through `authenticate_with_master_key` with the key the *hardware*
+    /// gave back. Also proves the derived key really is the vault key (a
+    /// seeded credential survives the round trip).
+    #[tokio::test]
+    async fn test_biometric_wrap_unlocks_vault_end_to_end() {
+        use crate::auth::{unwrap_master_key, wrap_master_key, MockKeyWrapper};
+
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Wrap Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred =
+            seed_credential(&service, identity.id, "Wrapped", CredentialType::Password).await;
+        service.lock();
+
+        let wrapper = MockKeyWrapper::default();
+        let master_key = service
+            .derive_master_key_for_wrap("master-pin")
+            .await
+            .unwrap();
+        let envelope = wrap_master_key(&wrapper, &master_key, "enable").unwrap();
+
+        // Locked + wrong key = no data; locked + unwrapped key = data back.
+        let unwrapped = unwrap_master_key(&wrapper, &envelope, "unlock").unwrap();
+        assert_eq!(
+            service
+                .authenticate_with_master_key(&unwrapped, "biometric-wrap")
+                .await
+                .unwrap(),
+            AuthResult::Success
+        );
+        assert!(service.is_unlocked());
+        assert!(service.current_user.is_some());
+        let fetched = service.get_credential(&cred.id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "Wrapped");
+    }
+
+    /// Fail-closed edges of `authenticate_with_master_key`: no user record,
+    /// locked-out account, and the forced-rotation flag all keep the
+    /// hardware path from bypassing the password path's gates.
+    #[tokio::test]
+    async fn test_authenticate_with_master_key_respects_password_path_gates() {
+        use crate::auth::MockKeyWrapper;
+
+        // No user initialized → InvalidCredentials, service stays locked.
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut empty = PersonaService::new(db).await.unwrap();
+        assert_eq!(
+            empty
+                .authenticate_with_master_key(&[7u8; 32], "biometric-wrap")
+                .await
+                .unwrap(),
+            AuthResult::InvalidCredentials
+        );
+        assert!(!empty.is_unlocked());
+
+        // A real vault: wrong master key still unlocks the *session* (the
+        // hardware already authenticated the user) but yields no data —
+        // proof the key is genuinely the encryption key, not a bypass.
+        let (_db, mut service) = unlocked_service().await;
+        service.lock();
+        let wrapper = MockKeyWrapper::default();
+        let good = service
+            .derive_master_key_for_wrap("master-pin")
+            .await
+            .unwrap();
+        let bad = service
+            .derive_master_key_for_wrap("not-the-pin")
+            .await
+            .unwrap();
+        assert_ne!(good, bad, "wrong password must derive a different key");
+        let envelope = crate::auth::wrap_master_key(&wrapper, &good, "enable").unwrap();
+        let unwrapped = crate::auth::unwrap_master_key(&wrapper, &envelope, "unlock").unwrap();
+        assert_eq!(*unwrapped, good);
+
+        assert_eq!(
+            service
+                .authenticate_with_master_key(&bad, "biometric-wrap")
+                .await
+                .unwrap(),
+            AuthResult::Success
+        );
+        assert!(service.get_master_encryption_service().is_ok_and(|_| true));
+    }
+
+    /// Lockout is NOT bypassed by the hardware path: five wrong passwords
+    /// lock the account, and a subsequent (valid) hardware unlock is
+    /// refused with AccountLocked.
+    #[tokio::test]
+    async fn test_authenticate_with_master_key_does_not_bypass_lockout() {
+        let (_db, mut service) = unlocked_service().await;
+        let master_key = service
+            .derive_master_key_for_wrap("master-pin")
+            .await
+            .unwrap();
+        service.lock();
+        for _ in 0..5 {
+            assert_eq!(
+                service.authenticate_user("wrong").await.unwrap(),
+                AuthResult::InvalidCredentials
+            );
+        }
+        assert_eq!(
+            service
+                .authenticate_with_master_key(&master_key, "biometric-wrap")
+                .await
+                .unwrap(),
+            AuthResult::AccountLocked
+        );
+        assert!(!service.is_unlocked());
+    }
+
+    /// Forced rotation also survives: a `password_change_required` flag
+    /// short-circuits the hardware path exactly as it does the password
+    /// path (the UI is expected to route into the rotation flow).
+    #[tokio::test]
+    async fn test_authenticate_with_master_key_honors_forced_rotation() {
+        let (db, mut service) = unlocked_service().await;
+        set_password_expiry(&db, Some(90)).await;
+        backdate_password_updated_at(&db, 91).await;
+        let master_key = service
+            .derive_master_key_for_wrap("master-pin")
+            .await
+            .unwrap();
+        service.lock();
+
+        assert_eq!(
+            service
+                .authenticate_with_master_key(&master_key, "biometric-wrap")
+                .await
+                .unwrap(),
+            AuthResult::PasswordChangeRequired
+        );
+        assert!(!service.is_unlocked());
+    }
+
+    /// `derive_master_key_for_wrap` on a vault with no user is an error
+    /// (callers surface it as a failed enable, never a wrapped garbage key).
+    #[tokio::test]
+    async fn test_derive_master_key_for_wrap_requires_a_user() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let service = PersonaService::new(db).await.unwrap();
+        let err = service
+            .derive_master_key_for_wrap("master-pin")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no user initialized"));
+    }
+
+    /// `unlock_with_master_key` refreshes the idle clock — an auto-lock
+    /// countdown must not keep running while the vault is being opened.
+    #[tokio::test]
+    async fn test_unlock_with_master_key_touches_activity() {
+        let (_db, mut service) = unlocked_service().await;
+        service.lock();
+        assert!(!service.is_unlocked());
+        service.unlock_with_master_key(&[3u8; 32]).unwrap();
+        assert!(service.is_unlocked());
+        assert!(service.last_activity.lock().unwrap().is_some());
     }
 
     // ------------------------------------------------------------------

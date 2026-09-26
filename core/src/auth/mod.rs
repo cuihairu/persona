@@ -3,6 +3,7 @@ pub mod auto_lock;
 pub mod auto_lock_cached;
 pub mod auto_lock_dashboard;
 pub mod biometric;
+pub mod biometric_wrap;
 pub mod permissions;
 pub mod remote;
 #[cfg(feature = "remote-auth")]
@@ -14,6 +15,7 @@ pub mod srp;
 pub use authentication::*;
 pub use auto_lock::*;
 pub use biometric::*;
+pub use biometric_wrap::*;
 pub use permissions::*;
 pub use remote::*;
 pub use session::*;
