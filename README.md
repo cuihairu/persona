@@ -1,5 +1,9 @@
 # Persona - Local-First Identity Material Manager
 
+<p align="center">
+  <img src="docs/branding/logo.svg" width="180" alt="Persona logo" />
+</p>
+
 [![CI](https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI)](https://github.com/cuihairu/persona/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/persona)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)

@@ -2,7 +2,7 @@
 
 路径总览
 
-- docs/branding/logo.svg 主 Logo（矢量，圆环 + 钥匙形）
+- docs/branding/logo.svg 主 Logo（矢量，取景框 + 人像，2026-09-26 由用户图标替换）
 - docs/branding/wordmark-horizontal.svg 横排文字标（Persona 数钥）
 - docs/branding/color-palette.md 颜色规范与使用建议
 - docs/branding/brand-guidelines.md 品牌使用说明（字号、留白、对比度）
@@ -15,4 +15,7 @@
 
 注意
 
-- 当前为轻量占位版设计，用于开发阶段的统一视觉；正式发布前可替换为专业视觉方案，但路径建议保持不变以兼容引用。
+- 2026-09-26 起主 Logo 为用户提供的取景框 + 人像图标（#99A9BF），
+  同步替换 `docs/src/public/persona-logo.svg`（文档站 favicon / 导航 /
+  首页 hero 图共用该路径）；正式发布前可再替换为专业视觉方案，
+  但路径建议保持不变以兼容引用。
