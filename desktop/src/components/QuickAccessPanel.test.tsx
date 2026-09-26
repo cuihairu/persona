@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import QuickAccessPanel from './QuickAccessPanel';
 import { personaAPI } from '@/utils/api';
 import { usePersonaService } from '@/hooks/usePersonaService';
@@ -18,15 +18,32 @@ jest.mock('@/utils/clipboard', () => ({
   copyToClipboardWithToast: jest.fn(),
 }));
 
+// hide/listen 用具名 mock：用例要直接驱动事件回调与断言 hide 调用
+const mockHide = jest.fn().mockResolvedValue(undefined);
+const mockListen = jest.fn().mockResolvedValue(() => {});
+
 jest.mock('@tauri-apps/api/window', () => ({
-  getCurrentWindow: () => ({ hide: jest.fn().mockResolvedValue(undefined) }),
+  getCurrentWindow: () => ({ hide: () => mockHide() }),
 }));
 
 jest.mock('@tauri-apps/api/event', () => ({
-  listen: jest.fn().mockResolvedValue(() => {}),
+  listen: (event: string, handler: (payload?: unknown) => void) => mockListen(event, handler),
 }));
 
 jest.mock('@/hooks/usePersonaService');
+// useReauth 一并接管：真实 hook 的 requestReauth 只有 ReauthModal 提交/取消才
+// resolve，而弹框在本文件被 mock 成 null——不接管 REAUTH 用例会挂死
+const mockRequestReauth = jest.fn();
+jest.mock('@/hooks/useReauth', () => ({
+  useReauth: () => ({
+    isOpen: false,
+    error: null,
+    isVerifying: false,
+    requestReauth: mockRequestReauth,
+    submit: () => {},
+    cancel: () => {},
+  }),
+}));
 jest.mock('@/components/ReauthModal', () => () => null);
 jest.mock('@/components/FaviconImg', () => () => null);
 
@@ -36,6 +53,13 @@ const mockReveal = personaAPI.revealCredentialSecret as jest.Mock;
 const mockTotp = personaAPI.getTotpCode as jest.Mock;
 const mockOpenCred = personaAPI.quickAccessOpenCredential as jest.Mock;
 const mockFocusMain = personaAPI.focusMainWindow as jest.Mock;
+
+/** 取组件挂载时注册的指定事件回调（mockListen.mock.calls 由 beforeEach 清空） */
+const listenerFor = (event: string): (() => void) => {
+  const call = mockListen.mock.calls.find(([name]) => name === event);
+  if (!call) throw new Error(`listener not registered: ${event}`);
+  return call[1] as () => void;
+};
 
 const identity = (id: string, name: string): Identity =>
   ({
@@ -230,5 +254,191 @@ describe('components/QuickAccessPanel', () => {
     await waitFor(() => {
       expect(screen.getByTestId('quick-access-results')).toHaveTextContent('zzz');
     });
+  });
+
+  it('Escape hides the floating window', () => {
+    setup();
+    render(<QuickAccessPanel />);
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'Escape' });
+
+    expect(mockHide).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-lock event hides the window immediately', async () => {
+    setup();
+    render(<QuickAccessPanel />);
+
+    act(() => {
+      listenerFor('persona://auto-lock')();
+    });
+
+    await waitFor(() => expect(mockHide).toHaveBeenCalledTimes(1));
+  });
+
+  it('opened event clears the query and re-checks the unlock state', async () => {
+    setup();
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(2));
+
+    const check = mockService().checkServiceStatus as jest.Mock;
+    act(() => {
+      listenerFor('persona://quick-access-opened')();
+    });
+
+    expect(screen.getByTestId('quick-access-input')).toHaveValue('');
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('quick-access-item')).not.toBeInTheDocument();
+  });
+
+  it('⌘U copies the username of the active row', async () => {
+    setup([credential({})]);
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'u', metaKey: true });
+
+    await waitFor(() => expect(mockCopy).toHaveBeenCalledWith('octocat', '用户名'));
+  });
+
+  it('Enter with neither a secret field nor a username surfaces an error instead of copying', async () => {
+    setup([credential({ credential_type: 'SecureNote', username: undefined })]);
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'Enter' });
+
+    expect(mockReveal).not.toHaveBeenCalled();
+    expect(mockCopy).not.toHaveBeenCalled();
+  });
+
+  it('⌘T surfaces the TOTP failure instead of copying', async () => {
+    setup([credential({})]);
+    mockTotp.mockResolvedValue({ success: false, error: '未配置 TOTP' });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 't', ctrlKey: true });
+
+    await waitFor(() => expect(mockTotp).toHaveBeenCalled());
+    expect(mockCopy).not.toHaveBeenCalled();
+  });
+
+  it('⌘O surfaces the open failure', async () => {
+    setup([credential({})]);
+    mockOpenCred.mockResolvedValue({ success: false, error: '打开失败' });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'o', metaKey: true });
+
+    await waitFor(() => expect(mockOpenCred).toHaveBeenCalled());
+  });
+
+  it('ArrowUp wraps to the last row', async () => {
+    setup();
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(2));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'ArrowUp' });
+
+    expect(screen.getAllByTestId('quick-access-item')[1]).toHaveAttribute('data-active', 'true');
+  });
+
+  it('hover and click set the active row; double-click copies its primary secret', async () => {
+    setup();
+    mockReveal.mockResolvedValue({ success: true, data: { field: 'password', value: 's3cret2' } });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(2));
+
+    const items = screen.getAllByTestId('quick-access-item');
+    fireEvent.mouseEnter(items[1]);
+    expect(items[1]).toHaveAttribute('data-active', 'true');
+
+    fireEvent.click(items[1]);
+    fireEvent.doubleClick(items[1]);
+
+    await waitFor(() => expect(mockReveal).toHaveBeenCalledWith('c2', 'password'));
+    expect(mockCopy).toHaveBeenCalledWith('s3cret2', '密码');
+  });
+
+  it.each([
+    ['ApiKey', 'api_key'],
+    ['SshKey', 'ssh_private_key'],
+    ['CryptoWallet', 'wallet_private_key'],
+  ])('Enter copies the %s primary secret field', async (type, field) => {
+    setup([credential({ credential_type: type })]);
+    mockReveal.mockResolvedValue({ success: true, data: { field, value: 'topsecret' } });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'Enter' });
+
+    await waitFor(() => expect(mockReveal).toHaveBeenCalledWith('c1', field));
+    expect(mockCopy).toHaveBeenCalledWith('topsecret', '密码');
+  });
+
+  it('REAUTH_REQUIRED re-verifies and retries the reveal', async () => {
+    setup([credential({})]);
+    mockReveal
+      .mockResolvedValueOnce({ success: false, error_code: 'REAUTH_REQUIRED', error: '需要重新验证' })
+      .mockResolvedValueOnce({ success: true, data: { field: 'password', value: 's3cret' } });
+    mockRequestReauth.mockResolvedValueOnce(true);
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'Enter' });
+
+    await waitFor(() => expect(mockReveal).toHaveBeenCalledTimes(2));
+    expect(mockRequestReauth).toHaveBeenCalledTimes(1);
+    expect(mockCopy).toHaveBeenCalledWith('s3cret', '密码');
+  });
+
+  it('declined re-verification leaves the secret unrevealed', async () => {
+    setup([credential({})]);
+    mockReveal.mockResolvedValue({ success: false, error_code: 'REAUTH_REQUIRED', error: '需要重新验证' });
+    mockRequestReauth.mockResolvedValueOnce(false);
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'Enter' });
+
+    await waitFor(() => expect(mockRequestReauth).toHaveBeenCalledTimes(1));
+    expect(mockReveal).toHaveBeenCalledTimes(1);
+    expect(mockCopy).not.toHaveBeenCalled();
+  });
+
+  it('SERVICE_LOCKED surfaces the lock hint instead of copying', async () => {
+    setup([credential({})]);
+    mockReveal.mockResolvedValue({ success: false, error_code: 'SERVICE_LOCKED', error: '服务已锁定' });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'Enter' });
+
+    await waitFor(() => expect(mockReveal).toHaveBeenCalled());
+    expect(mockCopy).not.toHaveBeenCalled();
   });
 });
