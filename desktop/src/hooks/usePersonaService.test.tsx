@@ -942,6 +942,35 @@ describe('hooks/usePersonaService', () => {
     );
   });
 
+  it('unlockWithBiometric keeps BIOMETRIC_CANCELLED silent (cancel is not a failure)', async () => {
+    jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
+      success: true,
+      data: false,
+      error: undefined,
+    });
+    jest.spyOn(personaAPI, 'biometricUnlock').mockResolvedValueOnce({
+      success: false,
+      data: undefined,
+      error: 'Biometric prompt cancelled',
+      error_code: 'BIOMETRIC_CANCELLED',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+
+    let resp: any;
+    await act(async () => {
+      resp = await result.current.unlockWithBiometric();
+    });
+
+    // 取消 ≠ 失败：错误码原样透传（解锁屏据此静默回原状态、保留指纹
+    // 按钮），但全局 error 不被置位、不弹任何提示（入口 clearError 后
+    // 保持 null）
+    expect(resp.success).toBe(false);
+    expect(resp.error_code).toBe('BIOMETRIC_CANCELLED');
+    expect(useAppStore.getState().isUnlocked).toBe(false);
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
   it('unlockWithBiometric flags PASSWORD_CHANGE_REQUIRED instead of toasting an error', async () => {
     jest.spyOn(personaAPI, 'isServiceUnlocked').mockResolvedValue({
       success: true,
