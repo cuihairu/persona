@@ -218,6 +218,14 @@ CF 类型须走直接依赖 `objc2-core-foundation`（objc2-foundation 不在
 最终链接与运行时行为仍只在 `desktop-build` 的 macOS job
 （macos-latest runner 上 `tauri build`）与真机 spike 上验证。
 
+**GitHub runner 探针实测（2026-09-26，desktop-build）**：macos-latest 是
+无 Secure Enclave 的 VM，`spike_probes_print_report`（`cargo test --lib
+-- --ignored --nocapture`）的探针 1 即失败：`SecKeyCreateRandomKey
+(route B'): os_status=-25293`（`errSecAuthFailed`——SE 密钥创建需要 SE
+硬件与签名 entitlement，两者 runner 都没有）。这份输出证明的是「真实
+Apple 工具链下编译/链接成立、探针通路工作」；**SE 行为本身仍只以真机
+spike 为准**，生产 unlock 链路默认不含 B' 的决定不变。
+
 ## 6. Windows：Passport KSP（实现已入库，待真机 spike）
 
 路线选择不变：**首选 NCrypt `Microsoft Passport Key Storage Provider`**
@@ -383,8 +391,12 @@ Flutter/Rust FFI 中转**：生物识别与密钥存储是深度平台特性，�
 - [x] desktop：状态面暴露 wrap 档位（hardware-bound / os-gate），
       EnrollmentChanged 自动降级 + `BIOMETRIC_RESET` / `BIOMETRIC_CANCELLED`
       前端分流（解锁屏 RESET 隐藏按钮、CANCEL 静默保留；设置页档位行）
-- [ ] macOS 真机 spike（§5.2 探针 1/1b/2a/2b/3/4/5 + 手动删指纹对照）
-      → 结论回填本文 §5.2 与 THREAT_MODEL
+- [x] spike 探针接入 CI（desktop-build macos/windows job 的
+      `spike_probes_print_report`，`--ignored --nocapture`；VM 上如实失败
+      即产出，macOS 实测见 §5.3）
+- [ ] macOS 真机 spike（§5.2 探针 1/1b/2a/2b/3/4/5 + 手动删指纹对照；
+      runner VM 实测见 §5.3——无 SE，探针 1 即 errSecAuthFailed，不构成
+      SE 行为证据）→ 结论回填本文 §5.2 与 THREAT_MODEL
 - [ ] Windows 真机 spike（§6.3 探针 1/2/3/4/4b/5a/5b/6/7 + 手动删指纹对照）
       → 结论回填本文 §6 与 THREAT_MODEL（含 §6.2 差距是否如登记成立）
 - [ ] Windows 次选路线（WebAuthn 平台认证器）——**押后**：弱于 Passport

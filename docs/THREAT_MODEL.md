@@ -256,7 +256,11 @@ macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
   （core 信封指纹二次比对纵深防御）；改密后旧 blob 包的是 stale key，
   桌面改密联动当场删除；`BIOMETRIC_CANCELLED` 不删 blob（取消≠失败）。
   Linux 定格门禁档（无硬件封装），macOS/Windows 硬件档待真机 spike 验证前
-  默认不启用——未验证的路径不在生产 unlock 链上。
+  默认不启用——未验证的路径不在生产 unlock 链上。CI 侧实测
+  （2026-09-26，desktop-build macos runner）：VM 无 Secure Enclave，
+  spike 探针 1 即失败（`os_status=-25293` `errSecAuthFailed`，无签名
+  entitlement）——坐实「runner 输出不构成 SE 行为证据」，真机 spike
+  仍另行待办。
 - **Windows 注册集漂移无平台语义（2026-09-26，接受）**：macOS 的
   `biometryCurrentSet` 会在换指纹后让旧 SE 密钥永久失效；**Windows 没有
   对应机制**——`NCRYPT_UI_PROTECT_KEY_FLAG` 只强制"每次私钥使用都要用户
