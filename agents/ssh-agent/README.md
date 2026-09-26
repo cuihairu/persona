@@ -4,14 +4,14 @@ Enterprise-grade SSH Agent implementation with advanced policy enforcement, biom
 
 ## Features
 
-- [**SSH Agent Protocol**: Full implementation of SSH Agent protocol (request_identities, sign_request)]
-- [**ed25519 Support**: Secure ed25519 key generation, storage, and signing]
-- [**Cross-Platform**: Unix sockets (macOS/Linux) and Named Pipes (Windows)]
-- [**Policy Enforcement**: TOML-based configuration for per-key, per-host, and global policies]
-- [**Biometric Authentication**: Touch ID (macOS), Windows Hello, and Linux Secret Service]
-- [**Rate Limiting**: Multi-layered rate limiting (global, per-key, per-host)]
-- [**Audit Logging**: Complete audit trail of all signing operations]
-- [**Known Hosts Verification**: Optional known_hosts checking with confirmation prompts]
+- **SSH Agent Protocol**: Full implementation of SSH Agent protocol (request_identities, sign_request)
+- **ed25519 Support**: Secure ed25519 key generation, storage, and signing
+- **Cross-Platform**: Unix sockets (macOS/Linux) and Named Pipes (Windows)
+- **Policy Enforcement**: TOML-based configuration for per-key, per-host, and global policies
+- **Biometric Authentication**: Touch ID (macOS), Windows Hello, and Linux Secret Service
+- **Rate Limiting**: Multi-layered rate limiting (global, per-key, per-host)
+- **Audit Logging**: Complete audit trail of all signing operations
+- **Known Hosts Verification**: Optional known_hosts checking with confirmation prompts
 
 ## Quick Start
 

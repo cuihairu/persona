@@ -98,7 +98,7 @@ npm run tauri:build
 │         API Translation Layer       │
 ├─────────────────────────────────────┤
 │      Persona Core Library           │
-│   🔒 All Crypto Operations Here     │
+│   All Crypto Operations Here     │
 ├─────────────────────────────────────┤
 │      Encrypted SQLite Database      │
 │       No Plaintext Data Stored      │

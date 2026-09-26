@@ -17,12 +17,12 @@ Persona is a local-first, zero-knowledge manager for one person operating multip
 The product focuses on identity-scoped credentials and developer workflows: passwords, API keys, TOTP, SSH keys, browser autofill, and active identity switching. Wallet material fits the same conceptual model, but is currently a deferred priority rather than part of the main product track.
 
 ### Key Features
-- [Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata]
-- [Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access]
-- [Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults]
-- [Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)]
-- [Audit log: critical operations and signing events (with digest)]
-- [Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks]
+- Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata
+- Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access
+- Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults
+- Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)
+- Audit log: critical operations and signing events (with digest)
+- Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks
 
 ## Architecture
 
