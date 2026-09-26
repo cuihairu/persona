@@ -255,8 +255,48 @@ macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
   剩余威胁面：enrollment 漂移（换指纹）→ 解包失败即自动删 blob 回主密码
   （core 信封指纹二次比对纵深防御）；改密后旧 blob 包的是 stale key，
   桌面改密联动当场删除；`BIOMETRIC_CANCELLED` 不删 blob（取消≠失败）。
-  Linux 定格门禁档（无硬件封装），macOS 硬件档待真机 spike 验证前默认
-  不启用——未验证的路径不在生产 unlock 链上。
+  Linux 定格门禁档（无硬件封装），macOS/Windows 硬件档待真机 spike 验证前
+  默认不启用——未验证的路径不在生产 unlock 链上。
+- **Windows 注册集漂移无平台语义（2026-09-26，接受）**：macOS 的
+  `biometryCurrentSet` 会在换指纹后让旧 SE 密钥永久失效；**Windows 没有
+  对应机制**——`NCRYPT_UI_PROTECT_KEY_FLAG` 只强制"每次私钥使用都要用户
+  验证"，换一枚已注册的新指纹验证，旧包裹照样解开。因此
+  `enrollment_fingerprint()` 在 Windows 只能返回占位值，core 的第二道
+  比对也是空的。残余风险：本机登录态被攻破后，攻击者若能完成**一次**
+  Windows Hello 验证（已注册过任一指纹或 PIN）即可解开旧包裹——
+  "换指纹即失效"的反胁迫性质在 Windows 上不成立。缓解：主密码兜底 +
+  keyring 里只有打不开的密文。设计稿 `docs/biometric-unlock-design.md`
+  §6.2 有完整登记。
+
+## Quick Access（OS 级全局热键 + 检索浮窗，2026-09，对标 #22）
+
+进程级抢注一个全局热键，任意应用中唤出无边框置顶浮窗做跨身份检索与
+取件（复制主密文 / 用户名 / TOTP，或把条目送回主窗口打开）。它在
+**暴露面上等价于「把已解锁的检索与复制能力搬到一个不用先点 Persona 图标
+的位置」**，新增威胁面：
+
+- **可见面扩大（固有，接受）**：热键唤起不再需要先聚焦 Persona 窗口，
+  条目名/用户名的检索结果会在浮窗里直接呈现给任何旁观者（肩窥面）。
+  缓解：浮窗失焦即自收尾（不驻留）、Esc 即收、锁户时立刻隐藏、锁定态
+  根本不检索。与 1Password Quick Access 同边界。
+- **解锁态门禁不变**：浮窗的检索/复制全部经已解锁的 `PersonaService`，
+  命令层与主窗口同一套门禁（`SERVICE_LOCKED` 直接拒、敏感字段走
+  `reveal_credential_secret` 的 reauth 门禁 + 审计）。**锁定态不复制任何
+  东西**——浮窗只提示去主窗口解锁（刻意不在 620×460 的小窗里复刻解锁
+  流，理由见 `quick_access.rs` 模块注释）。
+- **剪贴板**：复用既有 `copyWithAutoClear`（30s 自动清空），与凭据列表/
+  生成器同一条路径，不新增剪贴板暴露时长。
+- **热键抢注不是提权面**：绑定串存在 workspace settings（明文，无密钥），
+  抢注失败/被占用只影响可用性。设置页把「配置」与「实际生效」分开显示，
+  **失败不静默**（含后端原文原因）。
+- **插件装载 fail-open 到「不可用」而非崩溃**：global-shortcut 插件在
+  `setup` 里运行时装载（不进 `Builder::plugin` 链）——它的 setup 在
+  headless Linux / 无 XWayland 的 Wayland 上会失败，走 Builder 链会让整个
+  app 构建失败。一个可选增强项的缺失绝不能让密码管理器起不来；失败原因
+  记入运行态并在设置页显示。
+- **不宣称**：热键无法区分「用户按的」与「同用户恶意进程模拟的输入事件」，
+  这与 OS 快捷键同边界；浮窗不做浏览器自动填充（填充归浏览器扩展），
+  故不引入「按键即向任意页面交付凭据」的路径。
 
 ## Connect 本机自动化端点（`127.0.0.1` HTTP，2026-09，secrets automation）
 

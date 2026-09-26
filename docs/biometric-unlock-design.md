@@ -1,6 +1,7 @@
 # 生物识别解锁设计（调用系统功能解锁 vault）
 
-状态：2026-09-26 设计定稿 + 架构落地；macOS 硬件绑定路线**待真机 spike**（§5.2）。
+状态：2026-09-26 设计定稿 + 架构落地；macOS（§5.2）与 Windows（§6.3）
+硬件绑定路线均**已实现、待真机 spike**。
 本文是 `docs/THREAT_MODEL.md`「Biometric Unlock」章的展开设计稿。
 
 ## 0. 需求原点
@@ -14,13 +15,14 @@ OS keyring + OS 认证弹框做门禁**。本设计是它的升级：把"弹框�
 
 ## 1. 平台支持矩阵
 
-| 平台    | API                                                                                                                    | 绑定强度               | 本轮状态                                    |
-| ------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------- |
-| iOS     | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（无 Flutter 宿主，§7.2）               |
-| Android | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（同上）                                |
-| macOS   | Secure Enclave P-256 + ECIES（路线 B'，§5.2）                                                                          | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层  |
-| Windows | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | 规划中（§6）；当前保持 Windows Hello 门禁层 |
-| Linux   | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.1 诚实局限）                   |
+| 平台      | API                                                                                                                    | 绑定强度               | 本轮状态                                                        |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------- |
+| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（原生 App 规划，§7.2）                                     |
+| Android   | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（原生 App 规划，§7.2）                                     |
+| HarmonyOS | ArkTS `@ohos.userIAM.userAuth` + HUKS 通用密钥库（密钥属性绑定用户认证）                                               | 硬件绑定               | 未接（原生 App 规划，§7.2；API 语义待真机核实）                 |
+| macOS     | Secure Enclave P-256 + ECIES（路线 B'，§5.2）                                                                          | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层                      |
+| Windows   | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | **spike 工具已备，待真机**（§6）；当前保持 Windows Hello 门禁层 |
+| Linux     | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.1 诚实局限）                                       |
 
 绑定强度三档（`BiometricWrapCapability`，core 定义、三端共用）：
 
@@ -43,6 +45,8 @@ OS keyring + OS 认证弹框做门禁**。本设计是它的升级：把"弹框�
 - **T2 生物注册集漂移**：新指纹不应解锁旧包裹。用平台
   `biometryCurrentSet` / `setInvalidatedByBiometricEnrollment` 语义 +
   core 包裹信封里的 enrollment 指纹双保险（§3.2）。
+  **Windows 无对应平台语义——这条防护在 Windows 上不成立**（接受，
+  残余风险与缓解见 §6.2）。
 - **T3 暴力试探**：失败计数/锁户在 core `UserAuth` 层，硬件绑定路径
   **不绕过锁户**（见 §3.4）。
 
@@ -91,7 +95,10 @@ BIOWRAP1 | u8 platform_tag | 32B enrollment_fp | u32le payload_len | payload
 ```
 
 - `platform_tag`：1 = macOS SecureEnclave，2 = Windows TPM/Passport，
-  3 = Linux（保留），0 = 测试 mock。解包时 tag 不匹配 → `WrapInvalid`。
+  3 = Linux（保留），0 = 测试 mock；4 = iOS Secure Enclave（CryptoKit）、
+  5 = Android Keystore、6 = HarmonyOS HUKS（**保留值**——移动端原生
+  App 若复用 BIOWRAP1 信封时启用，core 侧 `from_u8` 当前不认识这些
+  值，属预期）。解包时 tag 不匹配 → `WrapInvalid`。
 - `enrollment_fp`：启用时刻的生物注册集指纹（平台提供；硬件已强制
   biometryCurrentSet 的平台可存常量占位）。解包时 core 再比对一次，
   不匹配 → `EnrollmentChanged`——即使平台层漏拦（纵深防御第二道）。
@@ -132,9 +139,11 @@ core（平台无关）
 desktop（宿主装配）
   biometric.rs           既有 OsBiometricProvider（门禁层，SSH agent 共用）
   biometric/macos_se.rs  Secure Enclave 路线 B' 实现（cfg macos；spike 门控）
+  biometric/windows_tpm.rs  Passport KSP 路线（cfg windows；spike 门控，§6）
   commands.rs            biometric_enable/_unlock 按capability 分流；
                          wrap blob 走 keyring[persona-biometric-wrap]；
-                         biometric_wrap_spike 开发命令（真机跑探针）
+                         biometric_wrap_spike / biometric_tpm_spike 开发
+                         命令（真机跑探针）
 ```
 
 选择规则（`biometric_enable`）：provider `capability()` 为
@@ -209,15 +218,99 @@ CF 类型须走直接依赖 `objc2-core-foundation`（objc2-foundation 不在
 最终链接与运行时行为仍只在 `desktop-build` 的 macOS job
 （macos-latest runner 上 `tauri build`）与真机 spike 上验证。
 
-## 6. Windows（规划，下一期）
+## 6. Windows：Passport KSP（实现已入库，待真机 spike）
 
-- 首选：NCrypt `Microsoft Passport Key Storage Provider`（TPM 保护、
-  按 Hello 策略强制认证）——真硬件绑定，等价 macOS 路线 B'。
-- 次选：WebAuthn 平台认证器（Windows Hello）+ `core/src/crypto/passkey.rs`
-  ES256 原语：make credential（UV required）→ 解锁时 get assertion
-  （硬件弹 Hello）→ 以 credential 绑定性门禁 DPAPI 包裹层。
-  弱于 Passport Key：assertion 只证明"持证 + 用户在场"，包裹密钥本体
-  仍要 DPAPI/TPM 另外保一层。
+路线选择不变：**首选 NCrypt `Microsoft Passport Key Storage Provider`**
+（TPM 保护私钥、按 Hello 策略强制认证），次选 WebAuthn 平台认证器。首选
+已实现为 `desktop/src-tauri/src/biometric/windows_tpm.rs`，**spike 门控**
+（`PERSONA_BIOMETRIC_TPM_SPIKE=1` 才装配），生产 unlock 主链路默认仍走
+Windows Hello 门禁层——真机行为未验证前不切换默认。
+
+### 6.1 实现要点
+
+打开 `MS_KEY_STORAGE_PROVIDER`，在其下建 2048 位 RSA 用户密钥，钉死
+三个属性：
+
+| 属性                        | 值                           | 为什么                                                                                    |
+| --------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------- |
+| `NCRYPT_KEY_USAGE_PROPERTY` | `NCRYPT_ALLOW_DECRYPT_FLAG`  | 只开私钥的「解密」方向（= 包裹/解包裹），不授予签名权                                     |
+| `NCRYPT_UI_POLICY_PROPERTY` | `NCRYPT_UI_PROTECT_KEY_FLAG` | 私钥每次使用都须经 Windows Hello 用户验证才由 TPM 放行                                    |
+| ↑ 的 `dwFlags`              | **`NCRYPT_PERSIST_FLAG`**    | policy 必须随密钥落盘，否则只在本进程有效——重启后解包裹**不再弹 Hello**，是静默的安全降级 |
+| `NCRYPT_LENGTH_PROPERTY`    | 2048                         | 解包裹是用户可感知路径，密钥长度换延迟                                                    |
+
+包裹 = `NCryptEncrypt`（RSA 公钥方向，**无提示**）；解包裹 =
+`NCryptDecrypt`（私钥方向，**Hello 在此刻弹**）。密钥不存在时
+`NCryptOpenKey` 的两种"没有"（`NTE_BAD_KEYSET` / `ERROR_NOT_FOUND`）
+才允许自动重建；其余错误一律上抛，不掩盖真实故障。
+
+**与 macOS B' 的一处刻意差异**：解包裹路径**只** `NCryptOpenKey`、不
+自动建钥。macOS 那边解包裹也走 `generate_or_find`，密钥不存在时会先建
+一把新密钥再在 ECIES 上失败——留下没人用的孤儿密钥，还把「blob 来自
+别的机器 / 用户清过 Passport 密钥」这个真实故障伪装成一次解密错误。
+Windows 侧不存在即 `WrapInvalid`，宿主的处置（自动删 blob 回主密码，
+§3.4）语义正好。
+
+### 6.2 能力差：注册集漂移（T2）在 Windows 拿不到平台级强制
+
+**这一条是本路线与 macOS B' 的实质差距，文档与代码注释都据实登记。**
+
+Apple 的 `biometryCurrentSet` 会在换指纹后让旧 SE 密钥**永久失效**。
+Windows 没有对应 API：`NCRYPT_UI_PROTECT_KEY_FLAG` 强制的是「每次使用
+都要用户验证」，而**换一个已注册的新指纹去验证，旧密钥照样放行**。
+因此 `TpmKeyWrapper::enrollment_fingerprint()` 只能返回固定占位
+（全零）——core 的第二道比对在这里没有可比的真值。与 macOS 的占位同形
+但性质不同：
+
+| 平台    | 占位返回    | 占位背后的真实保障                                     |
+| ------- | ----------- | ------------------------------------------------------ |
+| macOS   | `[0u8; 32]` | 平台层 `biometryCurrentSet` 已强制，占位只是第二道防线 |
+| Windows | `[0u8; 32]` | **平台层不管**，占位背后没有保障，第二道防线也是空的   |
+
+残余风险（诚实写明）：拿到本机登录态的攻击者若能完成**一次** Hello
+验证（已注册过任一指纹或 PIN），就能解开旧包裹——「换指纹即失效」这个
+反胁迫性质在 Windows 上不成立。缓解是主密码兜底 + 包裹 blob 本身在
+keyring 里只是密文（同用户进程读走也打不开，除非它能让 Hello 通过）。
+这是**接受**的差距而非待修 bug：想要「换注册集即失效」只能等 Windows
+侧出现等价 API（WebAuthn 路线同样没有该语义）。
+
+### 6.3 spike 探针（真机，`PERSONA_BIOMETRIC_TPM_SPIKE=1` 启动后调
+
+`biometric_tpm_spike` 命令，逐项回报 HRESULT）
+
+| 设计条目                | 探针名                                                        | 说明                                                                                     |
+| ----------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 1. KSP 可开             | `1. NCryptOpenStorageProvider (Microsoft Passport KSP)`       | 打不开 = 本机没有 Passport KSP，后面全部无意义                                           |
+| 2. 算法能力             | `2. NCryptIsAlgSupported (RSA, NCRYPT_ALLOW_DECRYPT_FLAG)`    | provider 是否支持私钥解密方向                                                            |
+| 3. 前置条件             | `3. Windows Hello availability (UserConsentVerifier)`         | 无 PIN/指纹注册时后续 `NCRYPT_UI_PROTECT_KEY_FLAG` 能否落盘存疑                          |
+| 4. 建钥 + policy 持久化 | `4. NCryptCreatePersistedKey (RSA-2048, UI policy persisted)` | 记录 HRESULT（真机才知道 `NCRYPT_PERSIST_FLAG` 组合是否被接受）                          |
+| 4b. 建后可查            | `4b. NCryptOpenKey after create`                              | 同进程内 keychain 引用立即可见                                                           |
+| 5. roundtrip            | `5a. NCryptEncrypt` / `5b. NCryptDecrypt`                     | 5a 走公钥方向**必须无提示**；5b 走私钥方向**必须弹 Hello**（这一步是整个路线的成立前提） |
+| 6. 持久性               | `6. NCryptOpenKey (persistence probe)`                        | **重启进程后再跑一次 spike**，本步仍 found = 密钥跨重启存活、policy 也跨重启生效         |
+| 7. 删除幂等             | `7. NCryptDeleteKey (idempotent, called twice)`               | 禁用/失效自愈共用的删除路径，连删两次都必须 Ok（不存在 = 成功）                          |
+
+**手动对照**（无自动探针）：跑一次 spike → 在系统设置**删一条指纹** →
+再跑一次：第 5b 步必须仍能成功（Windows 不像 macOS 会因删指纹而失效，
+这正是 §6.2 的差距），第 3 步应仍 available。
+
+编译验证：与 §5.3 同款思路——`x86_64-pc-windows-msvc` 目标在 Linux 上
+可 `cargo check`（不链接），把 cc-rs 要的 C 工具链桩掉即可让 rustc 全量
+type-check 本模块。比 macOS 侧多两步（实测配方，2026-09-26 跑通）：
+`CC_x86_64_pc_windows_msvc=true` 照旧；归档器不能用 `llvm-ar`（本机没有，
+且 cc-rs 对 MSVC 目标传的是 `-out:<lib>` 形式参数）——用一个小脚本桩
+`AR_x86_64_pc_windows_msvc`，解析 `-out:` 参数并 touch 出该文件；另外
+tauri-build 的资源编译走 embed-resource，会找 `llvm-rc`，同样以
+「解析 `/fo` 参数并 touch 输出、退出 0」的桩放进 PATH。**该验证当场抓出
+两处真实错误**（`NCryptDeleteKey` 的 dwflags 在 windows-rs 0.61 里是
+`u32` 而非 `NCRYPT_FLAGS`；`Drop` 里未使用的 `Result`），修复后 check +
+clippy `-D warnings` 双绿。运行时行为只在 `desktop-build` 的 Windows job
+与真机 spike 上验证。
+
+次选路线（WebAuthn 平台认证器）**仍未实现**，设计意图保留在 §6 原始
+方案里：make credential（UV required）→ 解锁时 get assertion（硬件弹
+Hello）→ 以 credential 绑定性门禁 DPAPI 包裹层。它弱于 Passport Key
+（assertion 只证明"持证 + 用户在场"，包裹密钥本体仍要 DPAPI/TPM 另外
+保一层），且同样没有 §6.2 的注册集漂移语义。
+
 - `UserConsentVerifier`（布尔确认）只配当**门禁层**现状使用。
 - **明确非目标**：不能也不应替代 Windows 登录验证——凭据提供程序是
   LogonUI 加载的 COM 组件，第三方无法顶替；我们做的是"解锁 Persona
@@ -231,21 +324,44 @@ polkit `auth_self` 门禁（手写 CheckAuthorization，规避 CVE-2026-78422）
 **无硬件密钥封装**：无 SE/StrongBox/TPM 的统一应用层 API；TPM2.0 直驱
 （tss-esapi）在桌面发行版碎片化严重，不做默认依赖。keyring 为
 secret service（GNOME Keyring/KWallet），条目可被同会话进程读取。
-结论：Linux 定格在 OsGateOnly 档，文档不宣称硬件绑定。
-fprintd D-Bus（net.reactivated.Fprint）直调是 polkit 的备选（少一层
+结论：Linux 定格在 OsGateOnly 档，文档不宣称硬件绑定
+（`biometric.rs` 的 Linux 分支即 OsGateOnly 桩 wrapper，
+wrap/unwrap 一律 `Unsupported`，enable/unlock 据此走门禁层）。
+fprintd D-Bus 直调（system bus `net.reactivated.fprint`，对象
+`/net/reactivated/fprint/device`）是 polkit 的备选（少一层
 策略依赖），收益只是少装 polkit，暂不做。
 
-### 7.2 iOS / Android（路线图，等 Flutter 宿主）
+### 7.2 iOS / Android / HarmonyOS（路线图：**原生开发**）
 
-- iOS：CryptoKit `SecureEnclave.P256` + `.biometryCurrentSet` AccessControl，
-  `dataRepresentation` 落 app 自管文件（不经 keychain，避开 entitlement），
-  LAContext 只做 UI 提示。persona-mobile 已有 FFI 包络，宿主落地后
-  按本设计的 trait 直接实现第四个后端。
-- Android：Keystore `setUserAuthenticationRequired(true)` +
+技术决策（用户定音，2026-09-26）：移动端三端各自用**平台原生技术**
+开发——iOS Swift/SwiftUI、Android Kotlin/Jetpack Compose、
+HarmonyOS ArkTS/ArkUI（HarmonyOS NEXT 不兼容 Android APK，只能原生；
+旧版 Harmony 亦按原生路线对齐，不做 APK 兼容依赖）。**不经
+Flutter/Rust FFI 中转**：生物识别与密钥存储是深度平台特性，原生 API
+才能拿到完整语义（`biometryCurrentSet`、`setInvalidatedByBiometricEnrollment`），
+中转层只会损耗语义并扩大攻击面。本设计的 trait 契约（capability 分档、
+信封格式、回退链语义）作为三端原生实现的规格依据，而非代码依赖：
+
+- iOS（Swift）：CryptoKit `SecureEnclave.P256` + `.biometryCurrentSet`
+  AccessControl，`dataRepresentation` 落 app 自管文件（不经 keychain，
+  避开 entitlement），LAContext 只做 UI 提示——与本文件 §5 的路线 B'
+  同构，只是宿主语言换成 Swift 后可直接用 CryptoKit 的
+  `dataRepresentation`（§5.1 提到的"Security.framework C 接口拿不到
+  等价物"的限制对 Swift 不存在）。
+- Android（Kotlin）：Keystore `setUserAuthenticationRequired(true)` +
   `setInvalidatedByBiometricEnrollment(true)`（API 24/28 语义），
-  BiometricPrompt 触发 gate；包裹 blob 走 FFI 传回 Rust 侧存 keyring。
-- 两端的 FFI 包络（`{"ok":…,"data"|"error":…}`）已在
-  persona-mobile 就绪，缺口只有 Flutter 宿主工程本身。
+  BiometricPrompt 触发 gate；包裹 blob 由 Kotlin 侧直接落
+  EncryptedSharedPreferences/Keystore。
+- HarmonyOS（ArkTS）：`@ohos.userIAM.userAuth` 发起生物识别
+  （指纹/面部，SYSTEM_PIN 回退），密钥包裹走 HUKS
+  （`@ohos.security.huks`）——生成硬件保护密钥并以用户认证类
+  tag（AuthAccess/UserAuthType 等）要求"使用密钥须先过生物识别"，
+  注册集变化的失效语义以真机核实为准（HUKS 各 API 版本行为有差异，
+  落地前先 spike：记录 challenge 流程、失效粒度、是否支持
+  EquivalentX/SecureEnclave 级硬件隔离）。包裹 blob 由 ArkTS 侧落
+  HUKS/本地加密存储。
+- 三端的端到端加密同步协议（信封格式、密钥派生参数）在原生侧按协议
+  规格实现，跨端互通以协议一致性为准。
 
 ## 8. 本轮落地清单（2026-09-26）
 
@@ -261,10 +377,16 @@ fprintd D-Bus（net.reactivated.Fprint）直调是 polkit 的备选（少一层
       用户取消/blob 损坏/改密失效/spike 非 macOS 报 Unsupported）
 - [x] desktop：macos_se.rs（路线 B'，spike 门控；**编译验证已过**——
       Linux 交叉 check/clippy，见 §5.3）+ `biometric_wrap_spike` 命令
+- [x] desktop：windows_tpm.rs（Passport KSP 首选路线，spike 门控；
+      **编译验证已过**——Linux 交叉 check，见 §6.3 末）+
+      `biometric_tpm_spike` 命令（探针 1/2/3/4/4b/5a/5b/6/7）
 - [x] desktop：状态面暴露 wrap 档位（hardware-bound / os-gate），
       EnrollmentChanged 自动降级 + `BIOMETRIC_RESET` / `BIOMETRIC_CANCELLED`
       前端分流（解锁屏 RESET 隐藏按钮、CANCEL 静默保留；设置页档位行）
 - [ ] macOS 真机 spike（§5.2 探针 1/1b/2a/2b/3/4/5 + 手动删指纹对照）
       → 结论回填本文 §5.2 与 THREAT_MODEL
-- [ ] Windows Passport Key / WebAuthn 实现（§6）
-- [ ] iOS/Android：等 Flutter 宿主（§7.2）
+- [ ] Windows 真机 spike（§6.3 探针 1/2/3/4/4b/5a/5b/6/7 + 手动删指纹对照）
+      → 结论回填本文 §6 与 THREAT_MODEL（含 §6.2 差距是否如登记成立）
+- [ ] Windows 次选路线（WebAuthn 平台认证器）——**押后**：弱于 Passport
+      Key 且无 §6.2 之外的额外收益，先看首选路线真机结论
+- [ ] iOS/Android/HarmonyOS 原生应用（iOS Swift/SwiftUI + Android Kotlin + HarmonyOS ArkTS，含平台生物识别解锁；不经 Flutter/FFI 中转——§7.2 技术决策）
