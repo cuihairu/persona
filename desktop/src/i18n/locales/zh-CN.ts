@@ -184,6 +184,8 @@ export default {
       biometricEnabled: '指纹解锁已开启',
       biometricDisabled: '指纹解锁已关闭',
       biometricOperationFailed: '指纹解锁设置失败',
+      biometricHardwareBound: '硬件绑定：vault 密钥由平台硬件密钥包裹——解密时必须通过生物识别',
+      biometricOsGate: '仅系统门禁：主密码托管在系统钥匙串（本平台无硬件密钥包裹）',
     },
     travel: {
       title: '旅行模式',

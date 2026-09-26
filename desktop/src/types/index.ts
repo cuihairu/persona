@@ -5,6 +5,8 @@
  * PASSWORD_CHANGE_REQUIRED：主密码按策略需轮换 → 前端弹强制改密弹窗。
  * BIOMETRIC_RESET：biometric 托管条目不存在或已失效自删 → 解锁屏隐藏
  * 指纹按钮、提示改用主密码登录。
+ * BIOMETRIC_CANCELLED：用户在生物识别弹框点了取消 → 静默回解锁屏，指纹
+ * 按钮保留，不弹错误提示（设计文档 §3.4）。
  * TRAVEL_MODE_ACTIVE：旅行模式进行中，改密等不兼容操作被拒 → 提示先退出。
  * CONCURRENT_CONFLICT：并发互斥操作冲突（组密钥轮换的 epoch 乐观锁未命中，
  * 另一台设备已抢先轮换）→ 提示同步状态已更新，请重试轮换。
@@ -14,6 +16,7 @@ export type ApiErrorCode =
   | 'SERVICE_LOCKED'
   | 'PASSWORD_CHANGE_REQUIRED'
   | 'BIOMETRIC_RESET'
+  | 'BIOMETRIC_CANCELLED'
   | 'TRAVEL_MODE_ACTIVE'
   | 'CONCURRENT_CONFLICT';
 
@@ -25,11 +28,13 @@ export interface ApiResponse<T> {
 }
 
 /** biometric unlock 状态（对应 Rust BiometricStatusResponse；enabled 只表示
- * "本 vault 配置过生物解锁"这一位元数据，托管的主密码真值永不出 keyring） */
+ * "本 vault 配置过生物解锁"这一位元数据，托管的主密码真值永不出 keyring；
+ * wrap_tier 为后端三档包裹档位："hardware-bound" / "os-gate" / "unsupported"） */
 export interface BiometricStatus {
   available: boolean;
   enabled: boolean;
   platform: string;
+  wrap_tier: string;
 }
 
 /** persona://auto-lock 事件的载荷（与 Rust 侧 SerializableAutoLockEvent 对应） */

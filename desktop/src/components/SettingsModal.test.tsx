@@ -783,6 +783,51 @@ describe('components/SettingsModal', () => {
     expect(screen.getByTestId('biometric-toggle')).toHaveAttribute('aria-checked', 'false');
   });
 
+  it('shows the hardware-bound tier line after enabling on a hardware platform', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: false, platform: 'touch-id', wrap_tier: 'hardware-bound' },
+    });
+    mockBiometricEnable.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: true, platform: 'touch-id', wrap_tier: 'hardware-bound' },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    const toggle = await screen.findByTestId('biometric-toggle');
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+
+    const modal = screen.getByTestId('reauth-modal');
+    fireEvent.change(modal.querySelector('input') as HTMLInputElement, {
+      target: { value: 'master-pw' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+
+    // 启用后显示硬件绑定档位行（密钥被硬件包裹，非密码托管）
+    await waitFor(() => {
+      expect(screen.getByTestId('biometric-tier')).toHaveTextContent('硬件绑定');
+    });
+  });
+
+  it('shows the os-gate tier line on platforms without hardware wrapping', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: true, platform: 'linux-polkit', wrap_tier: 'os-gate' },
+    });
+
+    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('biometric-tier')).toHaveTextContent('仅系统门禁');
+    });
+  });
+
   it('disables biometric without a password prompt', async () => {
     mockIdentityHook();
     mockBiometricStatus.mockResolvedValue({

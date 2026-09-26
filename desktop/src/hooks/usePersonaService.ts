@@ -127,6 +127,9 @@ export const usePersonaService = () => {
       } else if (response.error_code === 'BIOMETRIC_RESET') {
         // 托管条目不存在/已自删：本地化提示（后端消息为英文），解锁屏随后刷 status
         setError(t('svc.biometricReset'));
+      } else if (response.error_code === 'BIOMETRIC_CANCELLED') {
+        // 用户主动取消弹框：包裹仍有效，静默回解锁屏（入口已 clearError，
+        // 指纹按钮保留）——刻意不 setError，取消不是失败（设计文档 §3.4）
       } else {
         setError(response.error || t('svc.initFailed'));
       }

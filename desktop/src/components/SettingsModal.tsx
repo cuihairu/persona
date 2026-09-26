@@ -892,6 +892,13 @@ const SecurityPane: React.FC<{
                 ? t('settings.security.biometricUnavailable')
                 : t('settings.security.biometricHint')}
             </p>
+            {biometric?.enabled && (
+              <p className="text-xs text-gray-500 dark:text-gray-400" data-testid="biometric-tier">
+                {biometric.wrap_tier === 'hardware-bound'
+                  ? t('settings.security.biometricHardwareBound')
+                  : t('settings.security.biometricOsGate')}
+              </p>
+            )}
           </div>
           <button
             type="button"

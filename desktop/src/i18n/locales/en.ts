@@ -185,6 +185,10 @@ export default {
       biometricEnabled: 'Biometric unlock enabled',
       biometricDisabled: 'Biometric unlock disabled',
       biometricOperationFailed: 'Failed to change biometric unlock',
+      biometricHardwareBound:
+        'Hardware-bound: the vault key is wrapped by a platform hardware key — decrypting it requires biometrics',
+      biometricOsGate:
+        'System-gate only: the master password is held in the OS keychain (no hardware key wrapping on this platform)',
     },
     travel: {
       title: 'Travel mode',
