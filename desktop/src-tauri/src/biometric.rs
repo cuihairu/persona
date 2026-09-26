@@ -15,7 +15,9 @@
 //! 非 三大桌面平台一律不可用，前端隐藏指纹入口。
 
 use persona_core::{BiometricAuthResult, BiometricPlatform, BiometricPrompt, BiometricProvider};
+use std::sync::Arc;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
 /// 一次系统认证弹窗的最长等待（超时 = 用户放弃，视为失败）
 const CEREMONY_TIMEOUT: Duration = Duration::from_secs(120);
@@ -55,6 +57,9 @@ where
 mod macos;
 #[cfg(target_os = "macos")]
 use macos as os;
+
+#[cfg(target_os = "macos")]
+pub mod macos_se;
 
 #[cfg(target_os = "windows")]
 mod windows_hello;
@@ -119,6 +124,85 @@ impl BiometricProvider for OsBiometricProvider {
 /// "linux-polkit" / "unsupported"）
 pub fn platform_name() -> &'static str {
     os::platform_name()
+}
+
+// ---------------------------------------------------------------------------
+// 硬件绑定包裹层（biometric_wrap trait 的宿主侧装配）
+// ---------------------------------------------------------------------------
+
+/// 门禁档桩：capability OsGateOnly → `wrap_master_key`/`unwrap_master_key`
+/// 显式 Unsupported，enable/unlock 命令据此走历史门禁层（keyring 密码
+/// 托管）路径。Linux 恒定此档（无硬件封装，设计文档 §7.1）；Windows 在
+/// Passport Key 落地前同此；macOS 无 spike 环境变量时也落此档。
+pub struct GateOnlyKeyWrapper;
+
+impl persona_core::BiometricKeyWrapper for GateOnlyKeyWrapper {
+    fn capability(&self) -> persona_core::BiometricWrapCapability {
+        persona_core::BiometricWrapCapability::OsGateOnly
+    }
+
+    fn is_available(&self) -> bool {
+        // 门禁档的可用性由 biometric_provider 单独探测；包裹层永远
+        // "不可用"——两个概念，这里 fail-closed。
+        false
+    }
+
+    fn platform(&self) -> persona_core::WrapPlatform {
+        #[cfg(target_os = "macos")]
+        {
+            persona_core::WrapPlatform::MacSecureEnclave
+        }
+        #[cfg(target_os = "windows")]
+        {
+            persona_core::WrapPlatform::WindowsTpm
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            persona_core::WrapPlatform::Linux
+        }
+    }
+
+    fn enrollment_fingerprint(
+        &self,
+    ) -> std::result::Result<[u8; 32], persona_core::BiometricWrapError> {
+        Err(persona_core::BiometricWrapError::Unsupported)
+    }
+
+    fn wrap_payload(
+        &self,
+        _master_key: &[u8; 32],
+        _prompt: &str,
+    ) -> std::result::Result<Vec<u8>, persona_core::BiometricWrapError> {
+        Err(persona_core::BiometricWrapError::Unsupported)
+    }
+
+    fn unwrap_payload(
+        &self,
+        _payload: &[u8],
+        _prompt: &str,
+    ) -> std::result::Result<Zeroizing<[u8; 32]>, persona_core::BiometricWrapError> {
+        Err(persona_core::BiometricWrapError::Unsupported)
+    }
+
+    fn delete_wrap_payload(
+        &self,
+        _payload: &[u8],
+    ) -> std::result::Result<(), persona_core::BiometricWrapError> {
+        Err(persona_core::BiometricWrapError::Unsupported)
+    }
+}
+
+/// 装配当前平台的密钥包裹器。macOS 在 `PERSONA_BIOMETRIC_SE_SPIKE=1`
+/// 时返回 Secure Enclave 路线 B' 实现（真机 spike 用，见设计文档 §5），
+/// 其余一律门禁档桩——生产 unlock 主链路不含未经真机验证的路径。
+pub fn key_wrapper() -> Arc<dyn persona_core::BiometricKeyWrapper> {
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(wrapper) = macos_se::spike_wrapper_if_enabled() {
+            return Arc::new(wrapper);
+        }
+    }
+    Arc::new(GateOnlyKeyWrapper)
 }
 
 #[cfg(test)]

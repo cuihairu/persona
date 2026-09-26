@@ -43,11 +43,20 @@ pub struct AppState {
     /// init_service 建服务后把它注入 PersonaService（SSH agent 的
     /// require_biometric 策略同一份）。
     pub biometric_provider: Arc<dyn BiometricProvider>,
+    /// 硬件绑定的密钥包裹器（`biometric_wrap` 模块 trait）。生产装配按
+    /// 平台选择：macOS 上 PERSONA_BIOMETRIC_SE_SPIKE=1 时为 Secure
+    /// Enclave 路线 B' 实现，其余平台/默认为 gate-only 桩（capability
+    /// OsGateOnly → enable 恒走门禁层密码托管，行为与历史版本一致）。
+    pub biometric_wrapper: Arc<dyn persona_core::BiometricKeyWrapper>,
     /// biometric 托管主密码的 keyring 存储（service "persona-biometric"、
     /// 键 = vault db_path）。条目存在与否 = biometric unlock 是否启用
     /// （单一真相源，settings 不存开关——vault 文件拷机后 keyring 无
     /// 条目，功能自然回到未启用）。
     pub biometric_store: Arc<dyn crate::token_store::TokenStore>,
+    /// 硬件绑定包裹 blob 的 keyring 存储（service
+    /// "persona-biometric-wrap"）。与 biometric_store 一样只存密文：
+    /// blob 是被平台硬件密钥包裹的主密钥，同用户进程读到了也打不开。
+    pub biometric_wrap_store: Arc<dyn crate::token_store::TokenStore>,
     /// Connect 本机自动化 listener 句柄（端口 + 关停通道）；None = 未
     /// 启动（DR-4 默认关闭 = 不创建 listener）。槽位即真相源，start/stop
     /// 换槽防双 listener。
@@ -237,9 +246,14 @@ pub struct BiometricStatusResponse {
     pub enabled: bool,
     /// 平台名（"touch-id" / "windows-hello" / "linux-polkit" / "unsupported"）
     pub platform: String,
+    /// 包裹档位（biometric_wrap 模块三档，设计文档 §1）：
+    /// "hardware-bound"（本 vault 的包裹 blob 存在且解链走硬件）/
+    /// "os-gate"（门禁层密码托管）/ "unsupported"（平台无硬件绑定层）
+    pub wrap_tier: String,
 }
 
-/// 启用 biometric unlock：主密码经 OS 认证弹框确认后托管进 keyring
+/// 启用 biometric unlock：主密码经 OS 认证弹框确认后托管（硬件绑定档
+/// 走密钥包裹 blob，门禁档走 keyring 密码托管——分流见 biometric_enable）
 #[derive(Debug, Deserialize)]
 pub struct BiometricEnableRequest {
     pub master_password: String,
@@ -250,6 +264,15 @@ pub struct BiometricEnableRequest {
 #[derive(Debug, Deserialize)]
 pub struct BiometricUnlockRequest {
     pub db_path: Option<String>,
+}
+
+/// Secure Enclave spike 探针单步输出（`biometric_wrap_spike` 命令返回；
+/// 设计文档 §5.2）。真机跑完把 `detail` 里的 OSStatus 贴回设计文档。
+#[derive(Debug, Clone, Serialize)]
+pub struct BiometricSpikeStep {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
 }
 
 /// Response structure for API calls

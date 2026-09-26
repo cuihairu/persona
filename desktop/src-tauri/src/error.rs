@@ -11,6 +11,9 @@ pub const CODE_PASSWORD_CHANGE_REQUIRED: &str = "PASSWORD_CHANGE_REQUIRED";
 /// 错误码：biometric 托管条目已失效并被删除（未配置/陈旧自删，前端应
 /// 刷新 status 隐藏指纹按钮、提示改用主密码登录）
 pub const CODE_BIOMETRIC_RESET: &str = "BIOMETRIC_RESET";
+/// 错误码：用户在生物识别弹框点了取消（包裹未被删除，前端应静默回到
+/// 解锁屏并保留指纹按钮——不是失败，不要弹错误提示；设计文档 §3.4）
+pub const CODE_BIOMETRIC_CANCELLED: &str = "BIOMETRIC_CANCELLED";
 /// 错误码：旅行模式进行中（改密等与 sidecar 中 wrapped key 不兼容的
 /// 操作被拒；前端应提示先退出旅行模式）
 pub const CODE_TRAVEL_MODE_ACTIVE: &str = "TRAVEL_MODE_ACTIVE";

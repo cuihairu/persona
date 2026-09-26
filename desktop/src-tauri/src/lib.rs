@@ -199,6 +199,10 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             biometric_store: Arc::new(token_store::OsKeyringTokenStore::new(
                 token_store::BIOMETRIC_SERVICE,
             )),
+            biometric_wrapper: biometric::key_wrapper(),
+            biometric_wrap_store: Arc::new(token_store::OsKeyringTokenStore::new(
+                token_store::BIOMETRIC_WRAP_SERVICE,
+            )),
             device_store: Arc::new(token_store::OsKeyringTokenStore::new(
                 token_store::DEVICE_SERVICE,
             )),
@@ -255,6 +259,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::biometric_enable,
             commands::biometric_disable,
             commands::biometric_unlock,
+            commands::biometric_wrap_spike,
             commands::set_sync_config,
             commands::sync_token_present,
             commands::sync_device_status,

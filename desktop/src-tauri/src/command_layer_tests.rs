@@ -17,13 +17,36 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 /// Mock app with a fresh, uninitialized `AppState` and explicit backend
-/// parts（sync/biometric 两个 keyring 槽 + biometric provider）。各命令族
-/// 测试按需注入 fake；默认组合见 [`mock_app_with_token_store`] /
-/// [`mock_app_with_biometric`]。
+/// parts（sync/biometric 两个 keyring 槽 + biometric provider + 包裹层
+/// wrapper/存储）。各命令族测试按需注入 fake；默认组合见
+/// [`mock_app_with_token_store`] / [`mock_app_with_biometric`] /
+/// [`mock_app_with_biometric_wrap`]。
 fn mock_app_with_parts(
     token_store: Arc<dyn TokenStore>,
     biometric_provider: Arc<dyn persona_core::BiometricProvider>,
     biometric_store: Arc<dyn TokenStore>,
+) -> tauri::App<tauri::test::MockRuntime> {
+    mock_app_with_wrap_parts(
+        token_store,
+        biometric_provider,
+        biometric_store,
+        // 默认门禁档桩（= CI/headless 的生产装配：Linux/Windows 无硬件
+        // 包裹层，macOS 未开 spike 门控）——门禁层行为测试保持原样
+        Arc::new(crate::biometric::GateOnlyKeyWrapper),
+        Arc::new(InMemoryTokenStore::default()),
+    )
+}
+
+/// [`mock_app_with_parts`] + 包裹层（`biometric_wrapper` /
+/// `biometric_wrap_store`）注入。硬件绑定路径的命令测试用
+/// `MockKeyWrapper` 驱动（`rotate_enrollment` / `set_fail` /
+/// `set_user_cancelled` 覆盖回退链分支），blob 落内存 store 便于断言。
+fn mock_app_with_wrap_parts(
+    token_store: Arc<dyn TokenStore>,
+    biometric_provider: Arc<dyn persona_core::BiometricProvider>,
+    biometric_store: Arc<dyn TokenStore>,
+    biometric_wrapper: Arc<dyn persona_core::BiometricKeyWrapper>,
+    biometric_wrap_store: Arc<dyn TokenStore>,
 ) -> tauri::App<tauri::test::MockRuntime> {
     let app = tauri::test::mock_app();
     app.manage(AppState {
@@ -40,6 +63,9 @@ fn mock_app_with_parts(
         token_store,
         biometric_provider,
         biometric_store,
+        // 包裹层：门禁档桩 / HardwareBound wrapper 由调用方决定
+        biometric_wrapper,
+        biometric_wrap_store,
         // E2EE sync 设备身份槽：默认内存 fake，sync 命令族测试直接从
         // AppState 取 Arc 写入/断言条目
         device_store: Arc::new(InMemoryTokenStore::default()),
@@ -73,6 +99,31 @@ fn mock_app_with_biometric(
         biometric_provider,
         biometric_store,
     )
+}
+
+/// Mock app with an injected hardware-bound wrap layer
+/// （`MockKeyWrapper` + 内存 blob 存储）：`biometric_enable` /
+/// `biometric_unlock` 在这个 app 上走密钥包裹链而非门禁层密码托管链。
+fn mock_app_with_biometric_wrap(
+    wrapper: Arc<dyn persona_core::BiometricKeyWrapper>,
+    wrap_store: Arc<dyn TokenStore>,
+) -> tauri::App<tauri::test::MockRuntime> {
+    mock_app_with_wrap_parts(
+        Arc::new(InMemoryTokenStore::default()),
+        Arc::new(persona_core::MockBiometricProvider::default()),
+        Arc::new(InMemoryTokenStore::default()),
+        wrapper,
+        wrap_store,
+    )
+}
+
+/// 测试内解 base64 blob（断言"落盘的是密文信封"用；生产路径的编解码
+/// 在 commands.rs，测试只读不写）。
+fn base64_decode(blob: &str) -> Vec<u8> {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD
+        .decode(blob)
+        .expect("wrap blob must be valid base64")
 }
 
 /// Mock app with a fresh, uninitialized `AppState`.
@@ -7636,6 +7687,262 @@ async fn biometric_enable_keyring_write_failure_reports_and_leaves_no_half_state
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("keyring write failed"));
     assert_eq!(inner.get("any").unwrap(), None);
+}
+
+// ---------------------------------------------------------------------------
+// 硬件绑定包裹链（`mock_app_with_biometric_wrap`：MockKeyWrapper 报
+// HardwareBound，enable/unlock 走密钥包裹而非门禁层密码托管）
+// ---------------------------------------------------------------------------
+
+/// 包裹链 enable：keyring 落的是密文 blob（门禁层密码条目不落盘），
+/// status 报 hardware-bound。
+#[tokio::test]
+async fn biometric_wrap_enable_stores_ciphertext_blob() {
+    let gate_store = Arc::new(InMemoryTokenStore::default());
+    let wrap_store = Arc::new(InMemoryTokenStore::default());
+    let app = mock_app_with_wrap_parts(
+        Arc::new(InMemoryTokenStore::default()),
+        mock_provider(true, false),
+        gate_store.clone(),
+        Arc::new(persona_core::MockKeyWrapper::default()),
+        wrap_store.clone(),
+    );
+    let db_path = init_service_ok(&app, "correct-horse").await;
+
+    let resp = biometric_enable(
+        BiometricEnableRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.unwrap();
+    assert!(status.available && status.enabled);
+    assert_eq!(status.wrap_tier, "hardware-bound");
+
+    // blob 是密文：base64 可解、magic 为 BIOWRAP1、且绝不能是明文密码
+    let blob = wrap_store.get(&db_path).unwrap().expect("wrap blob stored");
+    assert_ne!(blob, "correct-horse");
+    let raw = base64_decode(&blob);
+    assert_eq!(&raw[..8], b"BIOWRAP1");
+    // 门禁层密码条目不落盘（两类互斥）
+    assert_eq!(gate_store.get(&db_path).unwrap(), None);
+}
+
+/// 包裹链 unlock 全闭环：enable → lock → unlock，服务恢复且数据可读。
+#[tokio::test]
+async fn biometric_wrap_unlock_round_trip() {
+    let wrap_store = Arc::new(InMemoryTokenStore::default());
+    let wrapper = Arc::new(persona_core::MockKeyWrapper::default());
+    let app = mock_app_with_biometric_wrap(wrapper, wrap_store);
+    init_service_ok(&app, "correct-horse").await;
+
+    let resp = biometric_enable(
+        BiometricEnableRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    let resp = biometric_unlock(
+        BiometricUnlockRequest { db_path: None },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(true));
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(true));
+}
+
+/// 注册集漂移（换指纹）：unlock 报 BIOMETRIC_RESET、blob 当场删除，
+///
+/// 主密码登录不受影响。
+#[tokio::test]
+async fn biometric_wrap_enrollment_change_resets_to_master_password() {
+    let wrap_store = Arc::new(InMemoryTokenStore::default());
+    let wrapper = Arc::new(persona_core::MockKeyWrapper::default());
+    let app = mock_app_with_biometric_wrap(wrapper.clone(), wrap_store.clone());
+    let db_path = init_service_ok(&app, "correct-horse").await;
+
+    let resp = biometric_enable(
+        BiometricEnableRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 用户在系统侧换了指纹
+    wrapper.rotate_enrollment();
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    let resp = biometric_unlock(
+        BiometricUnlockRequest { db_path: None },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some(crate::error::CODE_BIOMETRIC_RESET)
+    );
+    // blob 当场删除（旧包裹永不再试），服务仍锁定
+    assert_eq!(wrap_store.get(&db_path).unwrap(), None);
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(false));
+
+    // 回退链终态：主密码照常登录
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(db_path),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+}
+
+/// 用户在系统弹框点取消：报 BIOMETRIC_CANCELLED、blob 保留、仍锁定
+/// （取消不是失败，不删包裹不提示错误）。
+#[tokio::test]
+async fn biometric_wrap_user_cancel_keeps_blob() {
+    let wrap_store = Arc::new(InMemoryTokenStore::default());
+    let wrapper = Arc::new(persona_core::MockKeyWrapper::default());
+    let app = mock_app_with_biometric_wrap(wrapper.clone(), wrap_store.clone());
+    let db_path = init_service_ok(&app, "correct-horse").await;
+
+    let resp = biometric_enable(
+        BiometricEnableRequest {
+            master_password: "correct-horse".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    wrapper.set_user_cancelled(true);
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    let resp = biometric_unlock(
+        BiometricUnlockRequest { db_path: None },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some(crate::error::CODE_BIOMETRIC_CANCELLED)
+    );
+    // 包裹仍有效（下次还能解），服务仍锁定
+    assert!(wrap_store.get(&db_path).unwrap().is_some());
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(false));
+}
+
+/// blob 被改写（非 base64 / 信封损坏）：报 BIOMETRIC_RESET 并自删，
+///
+/// 不累计失败计数、不锁户。
+#[tokio::test]
+async fn biometric_wrap_corrupted_blob_resets() {
+    for corrupt in ["!!!not-base64!!!", "QUJDRA=="] {
+        let wrap_store = Arc::new(InMemoryTokenStore::default());
+        let app = mock_app_with_biometric_wrap(
+            Arc::new(persona_core::MockKeyWrapper::default()),
+            wrap_store.clone(),
+        );
+        let db_path = init_service_ok(&app, "correct-horse").await;
+        // 伪造条目：第一种连 base64 都不是，第二种是合法 base64 但非信封
+        wrap_store.set(&db_path, corrupt).unwrap();
+        lock_service(app.state::<AppState>()).await.unwrap();
+
+        let resp = biometric_unlock(
+            BiometricUnlockRequest { db_path: None },
+            app.state::<AppState>(),
+            app.handle().clone(),
+        )
+        .await
+        .unwrap();
+        assert!(!resp.success, "corrupt blob {corrupt:?} must fail");
+        assert_eq!(
+            resp.error_code.as_deref(),
+            Some(crate::error::CODE_BIOMETRIC_RESET),
+            "corrupt blob {corrupt:?}"
+        );
+        assert_eq!(wrap_store.get(&db_path).unwrap(), None);
+    }
+}
+
+/// 改密后包裹 blob 失效：旧 blob 解出的是 stale key，改密联动必须删
+/// blob（用户重新启用），status 回到未启用。
+#[tokio::test]
+async fn biometric_wrap_invalidated_on_password_change() {
+    let wrap_store = Arc::new(InMemoryTokenStore::default());
+    let app = mock_app_with_biometric_wrap(
+        Arc::new(persona_core::MockKeyWrapper::default()),
+        wrap_store.clone(),
+    );
+    let db_path = init_service_ok(&app, "old-password").await;
+
+    let resp = biometric_enable(
+        BiometricEnableRequest {
+            master_password: "old-password".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(wrap_store.get(&db_path).unwrap().is_some());
+
+    let resp = change_master_password(
+        crate::types::ChangeMasterPasswordRequest {
+            old_password: "old-password".to_string(),
+            new_password: "new-password".to_string(),
+            db_path: Some(db_path.clone()),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    // blob 已删：status 回到未启用，前端隐藏指纹按钮
+    assert_eq!(wrap_store.get(&db_path).unwrap(), None);
+    let resp = biometric_status(None, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.data.unwrap().enabled);
+}
+
+/// spike 命令在 Linux 上报 Unsupported（探针是 Security.framework 调用）。
+#[tokio::test]
+async fn biometric_wrap_spike_unsupported_off_macos() {
+    let resp = biometric_wrap_spike().await.unwrap();
+    #[cfg(target_os = "macos")]
+    assert!(resp.success);
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert!(!resp.success);
+        assert!(resp.error.unwrap().contains("only available on macOS"));
+    }
 }
 
 #[tokio::test]

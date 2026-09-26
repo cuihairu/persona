@@ -34,6 +34,9 @@ tracing = "0.1"
 dirs = "5.0"
 byteorder = "1.5"
 base64 = "0.22"
+# 主密钥包裹层中间值用 Zeroizing 清零（与 core 同版本；desktop 独立
+# workspace，不能用 .workspace 继承——同 axum 先例）
+zeroize = { version = "1.8", features = ["derive"] }
 hex = "0.4"
 sha2 = "0.10"
 chrono = { version = "0.4", features = ["serde"] }
@@ -55,6 +58,14 @@ block2 = "0.6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSError"] }
 objc2-local-authentication = { version = "0.3", features = ["block2"] }
+# Secure Enclave 路线 B'（biometric/macos_se.rs）：SE 密钥生成 + ECIES。
+# 仅 macOS 编译；真机行为见 docs/biometric-unlock-design.md §5 spike。
+objc2-security = { version = "0.3", features = [
+  "SecAccessControl",
+  "SecBase",
+  "SecItem",
+  "SecKey",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = ["Security_Credentials_UI", "Foundation"] }
