@@ -24,7 +24,9 @@
 //! `cargo check` 都跑不过）；**运行时**行为以真机 spike 输出为准
 //! （§5.2 的探针未跑过，结论待回填）。
 
-use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFString, CFType};
+// CF 基础类型走直接依赖 objc2-core-foundation（objc2-foundation 不在
+// 根上重导出它们）。
+use objc2_core_foundation::{CFBoolean, CFData, CFDictionary, CFRetained, CFType};
 use objc2_security::{
     kSecAttrAccessControl, kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly, kSecAttrApplicationTag,
     kSecAttrIsPermanent, kSecAttrKeySizeInBits, kSecAttrKeyType, kSecAttrKeyTypeECSECPrimeRandom,
@@ -45,8 +47,13 @@ const KEY_TAG: &[u8] = b"persona.vault-wrap.v1";
 
 /// ECIES 算法：cofactor + 变长 IV + X9.63 KDF + SHA-256 + AES-GCM
 /// （1Password/age 系的 SE 包裹同款算法族）
+///
+/// 本文件里所有 `unsafe { kSec… }` 静态读取的统一 SAFETY 前提：这些
+/// extern static 是 Security.framework 导出的进程级常量（指向不可变
+/// CFString 的引用），框架保证其有效性与永生——读取本身按 Rust 规则
+/// 需 unsafe，值语义无风险。
 fn ecies_algorithm() -> &'static SecKeyAlgorithm {
-    kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM
+    unsafe { kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM }
 }
 
 pub fn spike_enabled() -> bool {
@@ -88,7 +95,8 @@ fn is_user_cancelled(context: &str) -> bool {
 /// AccessControl：私钥操作必须经生物识别（当前注册集）或系统密码回退
 fn access_control() -> std::result::Result<CFRetained<SecAccessControl>, BiometricWrapError> {
     let mut err: *mut objc2_core_foundation::CFError = std::ptr::null_mut();
-    let protection: &CFType = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly;
+    // SAFETY: 框架常量静态（统一前提见 ecies_algorithm 文档）
+    let protection: &CFType = unsafe { kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly };
     let flags = SecAccessControlCreateFlags::PrivateKeyUsage
         | SecAccessControlCreateFlags::BiometryCurrentSet;
     // SAFETY: 两个入参都是框架常量/位标志，out 错误指针由本函数持有
@@ -99,19 +107,22 @@ fn access_control() -> std::result::Result<CFRetained<SecAccessControl>, Biometr
 /// 找已存在的包裹密钥；没有就 None
 fn find_key() -> Option<CFRetained<SecKey>> {
     let tag = CFData::from_bytes(KEY_TAG);
-    let query = CFDictionary::<CFType, CFType>::from_slices(
-        &[
-            kSecClass.as_ref(),
-            kSecAttrApplicationTag.as_ref(),
-            kSecReturnRef.as_ref(),
-        ],
-        &[
-            kSecClassKey.as_ref(),
-            tag.as_ref(),
-            CFBoolean::new(true).as_ref(),
-        ],
-    );
-    let mut found: *mut CFType = std::ptr::null_mut();
+    // SAFETY: 读框架常量静态构造查询字典（统一前提见 ecies_algorithm 文档）
+    let query = unsafe {
+        CFDictionary::<CFType, CFType>::from_slices(
+            &[
+                kSecClass.as_ref(),
+                kSecAttrApplicationTag.as_ref(),
+                kSecReturnRef.as_ref(),
+            ],
+            &[
+                kSecClassKey.as_ref(),
+                tag.as_ref(),
+                CFBoolean::new(true).as_ref(),
+            ],
+        )
+    };
+    let mut found: *const CFType = std::ptr::null_mut();
     // SAFETY: query 是合法字典；found 由本函数持有并在 Ok 后转移所有权
     let status = unsafe { SecItemCopyMatching(query.as_opaque(), &mut found) };
     if status == 0 && !found.is_null() {
@@ -131,24 +142,27 @@ fn generate_or_find_key() -> std::result::Result<CFRetained<SecKey>, BiometricWr
     let acl = access_control()?;
     let tag = CFData::from_bytes(KEY_TAG);
     let key_size = objc2_core_foundation::CFNumber::new_i32(256);
-    let parameters = CFDictionary::<CFType, CFType>::from_slices(
-        &[
-            kSecAttrKeyType.as_ref(),
-            kSecAttrKeySizeInBits.as_ref(),
-            kSecAttrTokenID.as_ref(),
-            kSecAttrIsPermanent.as_ref(),
-            kSecAttrAccessControl.as_ref(),
-            kSecAttrApplicationTag.as_ref(),
-        ],
-        &[
-            kSecAttrKeyTypeECSECPrimeRandom.as_ref(),
-            key_size.as_ref(),
-            kSecAttrTokenIDSecureEnclave.as_ref(),
-            CFBoolean::new(true).as_ref(),
-            acl.as_ref(),
-            tag.as_ref(),
-        ],
-    );
+    // SAFETY: 读框架常量静态构造参数字典（统一前提见 ecies_algorithm 文档）
+    let parameters = unsafe {
+        CFDictionary::<CFType, CFType>::from_slices(
+            &[
+                kSecAttrKeyType.as_ref(),
+                kSecAttrKeySizeInBits.as_ref(),
+                kSecAttrTokenID.as_ref(),
+                kSecAttrIsPermanent.as_ref(),
+                kSecAttrAccessControl.as_ref(),
+                kSecAttrApplicationTag.as_ref(),
+            ],
+            &[
+                kSecAttrKeyTypeECSECPrimeRandom.as_ref(),
+                key_size.as_ref(),
+                kSecAttrTokenIDSecureEnclave.as_ref(),
+                CFBoolean::new(true).as_ref(),
+                acl.as_ref(),
+                tag.as_ref(),
+            ],
+        )
+    };
     let mut err: *mut objc2_core_foundation::CFError = std::ptr::null_mut();
     // SAFETY: parameters 合法；err 由本函数持有
     let key = unsafe { SecKey::new_random_key(parameters.as_opaque(), &mut err) };
@@ -291,7 +305,10 @@ pub fn run_spike() -> Vec<SpikeStep> {
     steps.push(access_control_probe());
 
     // 6. 删除路径（禁用 / 失效自愈都走它；幂等）
-    let delete_status = delete_se_key().unwrap_or_else(|e| e.to_string());
+    let delete_status = match delete_se_key() {
+        Ok(()) => String::new(),
+        Err(e) => e.to_string(),
+    };
     steps.push(SpikeStep {
         name: "5. SecItemDelete (wrap key, idempotent)",
         ok: delete_status.is_empty(),
@@ -328,10 +345,13 @@ fn access_control_probe() -> SpikeStep {
 /// 删除 keychain 里的 SE 包裹密钥（幂等：不存在也算成功）
 fn delete_se_key() -> std::result::Result<(), BiometricWrapError> {
     let tag = CFData::from_bytes(KEY_TAG);
-    let query = CFDictionary::<CFType, CFType>::from_slices(
-        &[kSecClass.as_ref(), kSecAttrApplicationTag.as_ref()],
-        &[kSecClassKey.as_ref(), tag.as_ref()],
-    );
+    // SAFETY: 读框架常量静态构造查询字典（统一前提见 ecies_algorithm 文档）
+    let query = unsafe {
+        CFDictionary::<CFType, CFType>::from_slices(
+            &[kSecClass.as_ref(), kSecAttrApplicationTag.as_ref()],
+            &[kSecClassKey.as_ref(), tag.as_ref()],
+        )
+    };
     // SAFETY: query 合法
     let status = unsafe { SecItemDelete(query.as_opaque()) };
     if status == 0 || status == ERR_SEC_ITEM_NOT_FOUND {
@@ -393,11 +413,4 @@ impl BiometricKeyWrapper for SeKeyWrapper {
     fn delete_wrap_payload(&self, _payload: &[u8]) -> std::result::Result<(), BiometricWrapError> {
         delete_se_key()
     }
-}
-
-// CFString 静态量在本 crate 的使用形状校验（编译期，无运行时）
-#[allow(dead_code)]
-fn _const_shapes() {
-    let _: &CFString = kSecClass;
-    let _: &CFType = kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly;
 }

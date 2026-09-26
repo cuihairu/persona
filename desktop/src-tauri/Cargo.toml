@@ -66,6 +66,15 @@ objc2-security = { version = "0.3", features = [
   "SecItem",
   "SecKey",
 ] }
+# CF 基础类型（CFBoolean/CFData/CFDictionary/CFError/CFNumber；CFType/
+# CFRetained 无条件可用）——走直接依赖而非 objc2-foundation 重导出
+objc2-core-foundation = { version = "0.3", features = [
+  "CFData",
+  "CFDictionary",
+  "CFError",
+  "CFNumber",
+  "CFString",
+] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = ["Security_Credentials_UI", "Foundation"] }
