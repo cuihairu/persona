@@ -29,7 +29,7 @@ use tempfile::tempdir;
 ///
 /// unix-only because its only remaining callers are (see the gating note on
 /// `test_ssh_start_agent_resolves_local_binary_without_path_entry`).
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn ensure_agent_binary() -> Result<()> {
     let binary_name = if cfg!(windows) {
         "persona-ssh-agent.exe"
@@ -521,7 +521,7 @@ fn test_ssh_generate_export_remove_roundtrip() -> Result<()> {
 /// daemon start itself on Windows, which needs a real machine (the Windows
 /// runner is a VM; docs/biometric-unlock-design.md §6.3 already records native
 /// test binaries failing to load there).
-#[cfg(unix)]
+#[cfg(not(windows))]
 #[test]
 fn test_ssh_start_agent_resolves_local_binary_without_path_entry() -> Result<()> {
     let workspace_dir = tempdir()?;

@@ -414,7 +414,14 @@ async fn start_agent(
     {
         Ok(sock_line) => sock_line,
         Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
-            let _ = child.kill().await;
+            // `Child::kill().await` reaps the child, and reaping a Windows
+            // process that still has pending I/O never completes — awaiting it
+            // here would trade the daemon's silence for a fresh permanent hang
+            // in the CLI, i.e. exactly the failure the deadline exists to stop.
+            // Signal without reaping (`start_kill` returns immediately) and let
+            // the caller see the timeout; the agent's own pid file is what
+            // `stop-agent` uses for cleanup.
+            let _ = child.start_kill();
             anyhow::bail!(
                 "persona-ssh-agent did not report SSH_AUTH_SOCK within {}s (is it stuck binding its socket?)",
                 AGENT_STARTUP_TIMEOUT.as_secs()
@@ -2051,6 +2058,46 @@ mod tests {
         let _bin = EnvVarGuard::remove("PERSONA_SSH_AGENT_BIN");
         let resolved = resolve_agent_binary().unwrap();
         assert!(resolved.ends_with(agent_binary_name()));
+    }
+
+    #[test]
+    fn find_agent_binary_near_walks_exe_dir_then_deps_then_parent() {
+        // The candidate order is the whole point of PATH-independent
+        // resolution: cargo drops the agent beside the persona binary, `deps`
+        // covers alternate layouts, and the parent covers target-rooted
+        // installs. Pure filesystem walk — no process, no daemon — so every
+        // platform (Windows included) covers the fallback order.
+        let root = TempDir::new().unwrap();
+        let exe_dir = root.path().join("debug");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        let exe = exe_dir.join("persona");
+        let parent_planted = root.path().join("agent");
+
+        // Nothing planted anywhere: no hit rather than a wrong guess.
+        assert!(find_agent_binary_near(&exe, "agent").is_none());
+
+        // Parent dir alone.
+        std::fs::write(&parent_planted, b"").unwrap();
+        assert_eq!(
+            find_agent_binary_near(&exe, "agent"),
+            Some(parent_planted.clone())
+        );
+        std::fs::remove_file(&parent_planted).unwrap();
+
+        // `deps` outranks the parent dir.
+        let deps_planted = exe_dir.join("deps").join("agent");
+        std::fs::create_dir_all(exe_dir.join("deps")).unwrap();
+        std::fs::write(&deps_planted, b"").unwrap();
+        std::fs::write(&parent_planted, b"").unwrap();
+        assert_eq!(
+            find_agent_binary_near(&exe, "agent"),
+            Some(deps_planted.clone())
+        );
+
+        // And the exe dir outranks `deps` — the layout cargo actually produces.
+        let exe_planted = exe_dir.join("agent");
+        std::fs::write(&exe_planted, b"").unwrap();
+        assert_eq!(find_agent_binary_near(&exe, "agent"), Some(exe_planted));
     }
 
     #[tokio::test]
