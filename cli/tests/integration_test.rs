@@ -490,8 +490,12 @@ fn test_ssh_start_agent_resolves_local_binary_without_path_entry() -> Result<()>
         .collect::<Vec<_>>()
         .join(":");
 
+    // --all-features 必须与 CI 的前置构建（cargo build --workspace
+    // --all-features）feature 指纹一致，否则这里会触发整棵依赖树冷重编——
+    // Windows runner 上远超 nextest 的 240s 单测试预算（run 36272736560
+    // 实测：该测试被击杀时还在 Compiling persona-core/sqlx/...）。
     let build_status = StdCommand::new("cargo")
-        .args(["build", "-p", "persona-ssh-agent"])
+        .args(["build", "-p", "persona-ssh-agent", "--all-features"])
         .status()?;
     assert!(build_status.success(), "failed to build persona-ssh-agent");
 
@@ -557,8 +561,12 @@ fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
         .assert()
         .success();
 
+    // --all-features 必须与 CI 的前置构建（cargo build --workspace
+    // --all-features）feature 指纹一致，否则这里会触发整棵依赖树冷重编——
+    // Windows runner 上远超 nextest 的 240s 单测试预算（run 36272736560
+    // 实测：该测试被击杀时还在 Compiling persona-core/sqlx/...）。
     let build_status = StdCommand::new("cargo")
-        .args(["build", "-p", "persona-ssh-agent"])
+        .args(["build", "-p", "persona-ssh-agent", "--all-features"])
         .status()?;
     assert!(build_status.success(), "failed to build persona-ssh-agent");
 

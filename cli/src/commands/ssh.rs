@@ -339,6 +339,25 @@ fn encode_ssh_ed25519_public(pubkey: &[u8; 32], comment: Option<&str>) -> String
     }
 }
 
+/// 等待 daemon 打出 SSH_AUTH_SOCK= 的上限。正常在 spawn 后毫秒级完成；
+/// 超窗仍无 socket 行按「daemon 挂起」处理（kill + 报错），绝不让 CLI
+/// 永久阻塞——无上限时 daemon 沉默（如 socket 绑定卡住）会拖死调用方。
+const AGENT_STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// 以 `deadline` 为上限等待 future，超时折算成 `TimedOut` 的 io::Error。
+async fn with_startup_deadline<T>(
+    deadline: std::time::Duration,
+    fut: impl std::future::Future<Output = std::io::Result<T>>,
+) -> std::io::Result<T> {
+    match tokio::time::timeout(deadline, fut).await {
+        Ok(result) => result,
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "persona-ssh-agent did not report SSH_AUTH_SOCK in time",
+        )),
+    }
+}
+
 async fn start_agent(
     config: &crate::config::CliConfig,
     print_export: bool,
@@ -377,17 +396,32 @@ async fn start_agent(
     let mut child = cmd.spawn().context("Failed to start persona-ssh-agent")?;
     let stdout = child.stdout.take().context("No stdout from agent")?;
     let mut reader = BufReader::new(stdout).lines();
-    let mut sock_line = None;
-    for _ in 0..8 {
-        let Some(line) = reader.next_line().await? else {
-            break;
-        };
-        if line.starts_with("SSH_AUTH_SOCK=") {
-            sock_line = Some(line);
-            break;
+    let sock_line = match with_startup_deadline(AGENT_STARTUP_TIMEOUT, async {
+        let mut sock_line = None;
+        for _ in 0..8 {
+            let Some(line) = reader.next_line().await? else {
+                break;
+            };
+            if line.starts_with("SSH_AUTH_SOCK=") {
+                sock_line = Some(line);
+                break;
+            }
+            println!("{}", line);
         }
-        println!("{}", line);
-    }
+        Ok(sock_line)
+    })
+    .await
+    {
+        Ok(sock_line) => sock_line,
+        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
+            let _ = child.kill().await;
+            anyhow::bail!(
+                "persona-ssh-agent did not report SSH_AUTH_SOCK within {}s (is it stuck binding its socket?)",
+                AGENT_STARTUP_TIMEOUT.as_secs()
+            );
+        }
+        Err(err) => return Err(err.into()),
+    };
     if let Some(sock) = sock_line {
         let sock_value = sock
             .split_once('=')
@@ -2017,6 +2051,27 @@ mod tests {
         let _bin = EnvVarGuard::remove("PERSONA_SSH_AGENT_BIN");
         let resolved = resolve_agent_binary().unwrap();
         assert!(resolved.ends_with(agent_binary_name()));
+    }
+
+    #[tokio::test]
+    async fn startup_deadline_converts_silence_to_timeout_error() {
+        // A daemon that stays silent must surface as a TimedOut error once
+        // the deadline lapses, not hang the caller forever.
+        let err = with_startup_deadline(
+            std::time::Duration::from_millis(50),
+            std::future::pending::<std::io::Result<()>>(),
+        )
+        .await
+        .expect_err("a silent agent must surface as a timeout");
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test]
+    async fn startup_deadline_passes_through_completed_result() {
+        let value = with_startup_deadline(std::time::Duration::from_secs(30), async { Ok(7) })
+            .await
+            .expect("completed futures pass through untouched");
+        assert_eq!(value, 7);
     }
 
     #[cfg(unix)]
