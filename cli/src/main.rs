@@ -115,7 +115,7 @@ enum Commands {
 /// binary is covered by the integration tests, so the body is exempt from
 /// coverage measurement.
 async fn main() -> Result<()> {
-    let args = maybe_inject_bridge_subcommand(std::env::args_os().collect());
+    let args = maybe_inject_argv0_subcommand(std::env::args_os().collect());
     let cli = Cli::parse_from(args);
 
     // Initialize logging
@@ -179,23 +179,29 @@ async fn main() -> Result<()> {
     result
 }
 
-fn maybe_inject_bridge_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
-    if args.len() != 1 {
-        return args;
-    }
-
+fn maybe_inject_argv0_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
     let Some(exe) = args
         .first()
         .and_then(|s| s.to_str())
         .and_then(|p| Path::new(p).file_stem().and_then(|s| s.to_str()))
+        .map(str::to_owned)
     else {
         return args;
     };
 
     // Native Messaging hosts are launched with no args; allow installing a copy of the
     // binary as `persona-bridge(.exe)` that defaults to `persona bridge`.
-    if exe.eq_ignore_ascii_case("persona-bridge") {
+    if args.len() == 1 && exe.eq_ignore_ascii_case("persona-bridge") {
         args.push(OsString::from("bridge"));
+        return args;
+    }
+
+    // git invokes gpg.ssh.program with the ssh-keygen `-Y` CLI shape
+    // (`-Y sign -n git -f <key> <file>`); a copy/symlink of the binary named
+    // `persona-ssh-sign(.exe)` gets `ssh gpg-sign` inserted after argv[0].
+    if exe.eq_ignore_ascii_case("persona-ssh-sign") {
+        args.insert(1, OsString::from("gpg-sign"));
+        args.insert(1, OsString::from("ssh"));
     }
 
     args
@@ -235,34 +241,89 @@ mod tests {
     #[test]
     fn bridge_injection_happens_only_for_bridge_named_single_arg() {
         // argv[0] == "persona-bridge" -> inject the bridge subcommand.
-        let injected = maybe_inject_bridge_subcommand(args(&["persona-bridge"]));
+        let injected = maybe_inject_argv0_subcommand(args(&["persona-bridge"]));
         assert_eq!(injected, args(&["persona-bridge", "bridge"]));
 
         // An installed copy under a bin directory resolves via file_stem.
-        let injected = maybe_inject_bridge_subcommand(args(&["/usr/local/bin/persona-bridge"]));
+        let injected = maybe_inject_argv0_subcommand(args(&["/usr/local/bin/persona-bridge"]));
         assert_eq!(injected, args(&["/usr/local/bin/persona-bridge", "bridge"]));
 
         // Matching on the executable name ignores ASCII case.
-        let injected = maybe_inject_bridge_subcommand(args(&["PERSONA-BRIDGE.EXE"]));
+        let injected = maybe_inject_argv0_subcommand(args(&["PERSONA-BRIDGE.EXE"]));
         assert_eq!(injected, args(&["PERSONA-BRIDGE.EXE", "bridge"]));
 
         // The regular binary and any multi-arg invocation stay untouched.
-        let untouched = maybe_inject_bridge_subcommand(args(&["persona"]));
+        let untouched = maybe_inject_argv0_subcommand(args(&["persona"]));
         assert_eq!(untouched, args(&["persona"]));
 
-        let untouched = maybe_inject_bridge_subcommand(args(&["persona", "list"]));
+        let untouched = maybe_inject_argv0_subcommand(args(&["persona", "list"]));
         assert_eq!(untouched, args(&["persona", "list"]));
+    }
+
+    #[test]
+    fn ssh_sign_injection_matches_the_git_calling_shape() {
+        // git 调用形状：-Y sign -n git -f <key> <file> → 插入 ssh gpg-sign
+        let injected = maybe_inject_argv0_subcommand(args(&[
+            "persona-ssh-sign",
+            "-Y",
+            "sign",
+            "-n",
+            "git",
+            "-f",
+            "KEY",
+            "MSG",
+        ]));
+        assert_eq!(
+            injected,
+            args(&[
+                "persona-ssh-sign",
+                "ssh",
+                "gpg-sign",
+                "-Y",
+                "sign",
+                "-n",
+                "git",
+                "-f",
+                "KEY",
+                "MSG",
+            ])
+        );
+
+        // 装在 bin 目录 / Windows 大小写同样命中
+        let injected =
+            maybe_inject_argv0_subcommand(args(&["/usr/local/bin/persona-ssh-sign", "-Y", "sign"]));
+        assert_eq!(
+            injected,
+            args(&[
+                "/usr/local/bin/persona-ssh-sign",
+                "ssh",
+                "gpg-sign",
+                "-Y",
+                "sign"
+            ])
+        );
+        let injected = maybe_inject_argv0_subcommand(args(&["PERSONA-SSH-SIGN.EXE", "-Y", "sign"]));
+        assert_eq!(
+            injected,
+            args(&["PERSONA-SSH-SIGN.EXE", "ssh", "gpg-sign", "-Y", "sign"])
+        );
+
+        // 常规 persona 二进制与无关名字不受影响
+        let untouched = maybe_inject_argv0_subcommand(args(&["persona", "ssh", "list"]));
+        assert_eq!(untouched, args(&["persona", "ssh", "list"]));
+        let untouched = maybe_inject_argv0_subcommand(args(&["persona-ssh-agent", "-h"]));
+        assert_eq!(untouched, args(&["persona-ssh-agent", "-h"]));
     }
 
     #[test]
     fn bridge_injection_ignores_non_utf8_and_pathless_names() {
         // An argv[0] that is not valid UTF-8 cannot be matched; args pass through.
-        let untouched = maybe_inject_bridge_subcommand(args(&["persona-bridgé"]));
+        let untouched = maybe_inject_argv0_subcommand(args(&["persona-bridgé"]));
         assert_eq!(untouched, args(&["persona-bridgé"]));
 
         // A name without a recognizable file stem (e.g. trailing slash on the
         // root) also passes through untouched.
-        let untouched = maybe_inject_bridge_subcommand(args(&["/"]));
+        let untouched = maybe_inject_argv0_subcommand(args(&["/"]));
         assert_eq!(untouched, args(&["/"]));
     }
 
@@ -272,7 +333,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
 
         let raw = OsString::from_vec(vec![0xff, 0xfe, 0x2e]);
-        let untouched = maybe_inject_bridge_subcommand(vec![raw]);
+        let untouched = maybe_inject_argv0_subcommand(vec![raw]);
         assert_eq!(untouched.len(), 1);
     }
 

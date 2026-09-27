@@ -101,6 +101,26 @@ pub enum SshSubcommand {
     },
     /// Stop persona-ssh-agent
     StopAgent,
+    /// Sign a file with a vault SSH key (SSHSIG, `ssh-keygen -Y sign` wire
+    /// format) — powers git commit signing via the `persona-ssh-sign` shim
+    /// (see main.rs); can also be used directly
+    GpgSign {
+        /// Operation mode; only "sign" is supported
+        #[arg(short = 'Y')]
+        mode: String,
+        /// Signature namespace (git uses "git"; binds the signature to one protocol)
+        #[arg(short = 'n', default_value = "git")]
+        namespace: String,
+        /// Key spec: credential UUID, an "ssh-ed25519 <b64>" public key line,
+        /// or a path to a file containing one. Defaults to the only vault key.
+        #[arg(short = 'f')]
+        key: Option<String>,
+        /// File to sign
+        file: String,
+        /// Signature output path (defaults to <file>.sig, like ssh-keygen -Y sign)
+        #[arg(short = 'o')]
+        output: Option<String>,
+    },
 }
 
 pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result<()> {
@@ -138,6 +158,13 @@ pub(crate) async fn execute_with(
         SshSubcommand::ExportPub { id } => export_pubkey(id, config, ui).await,
         SshSubcommand::StopAgent => stop_agent(),
         SshSubcommand::Run { host, command } => run_with_host(&host, command, config).await,
+        SshSubcommand::GpgSign {
+            mode,
+            namespace,
+            key,
+            file,
+            output,
+        } => gpg_sign(&mode, &namespace, key, &file, output, config, ui).await,
     }
 }
 
@@ -844,6 +871,139 @@ async fn export_pubkey(
     } else {
         anyhow::bail!("Credential not found");
     }
+}
+
+/// 从保险库收集全部可用作签名的 SSH key：(seed, 公钥行, 凭据 id)。
+/// 解不开（已锁定/损坏）的凭据跳过——不能拿来签的东西不该中断签名流程，
+/// 但如果全军覆没，resolve_signing_key 会以空列表报错。
+async fn vault_ssh_keys(service: &PersonaService) -> Result<Vec<([u8; 32], String, Uuid)>> {
+    let mut keys = Vec::new();
+    for identity in service.get_identities().await? {
+        let creds = service.get_credentials_for_identity(&identity.id).await?;
+        for cred in creds {
+            if !matches!(cred.credential_type, CredentialType::SshKey) {
+                continue;
+            }
+            let (seed, public_line) = match service.get_credential_data(&cred.id).await? {
+                Some(CredentialData::SshKey(ssh)) => match decode_seed(&ssh) {
+                    Ok(seed) => (seed, ssh.public_key),
+                    Err(err) => {
+                        eprintln!("{} Skipping SSH key {}: {}", "!".yellow(), cred.id, err);
+                        continue;
+                    }
+                },
+                _ => continue,
+            };
+            keys.push((seed, public_line, cred.id));
+        }
+    }
+    Ok(keys)
+}
+
+/// SshKeyData.private_key 是 base64 的 32 字节 ed25519 seed（与
+/// agents/ssh-agent 同一约定）。
+fn decode_seed(ssh: &SshKeyData) -> Result<[u8; 32]> {
+    let raw = BASE64
+        .decode(ssh.private_key.trim().as_bytes())
+        .context("SSH key private material is not valid base64")?;
+    if raw.len() != 32 {
+        anyhow::bail!("SSH key seed must be 32 bytes, got {}", raw.len());
+    }
+    let mut seed = [0u8; 32];
+    seed.copy_from_slice(&raw);
+    Ok(seed)
+}
+
+/// authorized_keys 行里的 key blob（第二个空白分隔字段）。
+fn public_key_blob(line: &str) -> Option<&str> {
+    line.split_whitespace().nth(1)
+}
+
+/// 解析 `-f` keyspec 到可签名的 seed。四种形态：
+/// `persona:ssh:<uuid>` / 裸凭据 UUID（git 的 user.signingkey 推荐）、
+/// `ssh-ed25519 <b64>` 公钥行字面量、含公钥行的文件路径；
+/// 缺省时要求保险库恰好有一把 SSH key。
+async fn resolve_signing_key(
+    service: &PersonaService,
+    spec: Option<&str>,
+) -> Result<([u8; 32], String, Uuid)> {
+    let mut keys = vault_ssh_keys(service).await?;
+    if keys.is_empty() {
+        anyhow::bail!("No SSH keys in the vault; run `persona ssh generate` first");
+    }
+    let spec = match spec {
+        None => {
+            return if keys.len() == 1 {
+                Ok(keys.remove(0))
+            } else {
+                anyhow::bail!(
+                    "{} SSH keys in the vault; pick one with -f <credential-id> \
+                     (or set git's user.signingkey)",
+                    keys.len()
+                );
+            };
+        }
+        Some(spec) => spec.trim(),
+    };
+    let uuid_text = spec.strip_prefix("persona:ssh:").unwrap_or(spec);
+    if let Ok(id) = Uuid::parse_str(uuid_text) {
+        return keys
+            .into_iter()
+            .find(|(_, _, cred_id)| *cred_id == id)
+            .ok_or_else(|| anyhow::anyhow!("Credential {id} is not an SSH key in this vault"));
+    }
+    // 公钥行字面量或文件路径（git 允许 user.signingkey 是 .pub 文件）
+    let line = match std::fs::read_to_string(spec) {
+        Ok(text) => text,
+        Err(_) => spec.to_string(),
+    };
+    let mut tokens = line.split_whitespace();
+    match tokens.next() {
+        Some("ssh-ed25519") => {}
+        _ => anyhow::bail!(
+            "Key spec is neither a credential UUID, nor a readable key file, \
+             nor an ssh-ed25519 public key line"
+        ),
+    }
+    let blob = tokens.next().context("Public key line has no key blob")?;
+    keys.into_iter()
+        .find(|(_, public_line, _)| public_key_blob(public_line) == Some(blob))
+        .ok_or_else(|| {
+            anyhow::anyhow!("No vault SSH key matches this public key; import or generate it first")
+        })
+}
+
+/// `-Y sign`：读文件 → SSHSIG 签名 → 装甲写盘。输出与
+/// `ssh-keygen -Y sign -n <namespace>` 逐字节兼容（ed25519 确定性签名），
+/// 因此可以直接充当 git `gpg.format=ssh` 的签名器（persona-ssh-sign shim）。
+async fn gpg_sign(
+    mode: &str,
+    namespace: &str,
+    key: Option<String>,
+    file: &str,
+    output: Option<String>,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    if mode != "sign" {
+        anyhow::bail!("Only `-Y sign` is supported (got -Y {})", mode);
+    }
+    let message = std::fs::read(file).with_context(|| format!("Cannot read {file}"))?;
+    let service = ensure_service(config, ui).await?;
+    let (seed, public_line, cred_id) = resolve_signing_key(&service, key.as_deref()).await?;
+    let blob = persona_core::crypto::sshsig::sign(&seed, namespace, &message);
+    // 落盘前自验：签名数学上成立，且内嵌公钥就是选中的那把 vault key
+    let embedded = persona_core::crypto::sshsig::verify(&blob, namespace, &message)
+        .context("Just-created signature failed self-verification")?;
+    if BASE64.encode(&embedded) != public_key_blob(&public_line).unwrap_or_default() {
+        anyhow::bail!("Signature embeds an unexpected public key");
+    }
+    let out_path = output.unwrap_or_else(|| format!("{file}.sig"));
+    std::fs::write(&out_path, persona_core::crypto::sshsig::armor(&blob))
+        .with_context(|| format!("Cannot write {out_path}"))?;
+    println!("{} Signed {} -> {}", "✓".green(), file, out_path);
+    println!("  Key: {} ({})", public_line, cred_id);
+    Ok(())
 }
 
 fn stop_agent() -> Result<()> {
@@ -2360,5 +2520,257 @@ mod tests {
         let resolved = resolve_agent_binary().unwrap();
         std::fs::remove_file(&planted).unwrap();
         assert_eq!(resolved, planted);
+    }
+
+    // ------------------------------------------------------------------
+    // gpg-sign: SSHSIG signing for git commits.
+    // ------------------------------------------------------------------
+
+    /// 真 ssh-keygen 参照向量（与 core/src/crypto/sshsig.rs 同一份：ed25519
+    /// 确定性签名 ⇒ 我们输出正确 ⇔ 与 `ssh-keygen -Y sign` 逐字节一致）。
+    const REF_SEED: [u8; 32] = [
+        0x59, 0xd9, 0x98, 0xd6, 0xdb, 0x19, 0xcc, 0x8f, 0x7f, 0xe2, 0x45, 0xfa, 0x8a, 0x04, 0xe6,
+        0x10, 0xd8, 0x84, 0x5d, 0xff, 0x80, 0xdb, 0xec, 0x8d, 0xfc, 0x88, 0x15, 0xe1, 0x8e, 0xa0,
+        0x83, 0x8d,
+    ];
+    const REF_PUBLIC_LINE: &str =
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICaLEB5wGG3c9s7atvxL3FnUPZ+Gwqp/YOsLfQqzJeNg";
+    const REF_MESSAGE: &[u8] = b"hello persona\nsecond line\n";
+    const REF_ARMOR: &str = concat!(
+        "-----BEGIN SSH SIGNATURE-----\n",
+        "U1NIU0lHAAAAAQAAADMAAAALc3NoLWVkMjU1MTkAAAAgJosQHnAYbdz2ztq2/EvcWdQ9n4\n",
+        "bCqn9g6wt9CrMl42AAAAADZ2l0AAAAAAAAAAZzaGE1MTIAAABTAAAAC3NzaC1lZDI1NTE5\n",
+        "AAAAQJt/PJ1nuI6ToAzsanR3MLYqM2qiVC5IWESIGbXh6o4hiHoB8ng7N1/2nUDiqAq55b\n",
+        "nM36bAlsZrid+A5TX5agU=\n",
+        "-----END SSH SIGNATURE-----\n",
+    );
+
+    /// 把参照 seed 导入 alice 名下，返回新凭据 id。
+    async fn import_reference_key(config: &CliConfig, identity: &str) -> Uuid {
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Import {
+                identity: identity.to_string(),
+                name: Some("signing-key".to_string()),
+                seed_base64: Some(BASE64.encode(REF_SEED)),
+                seed_hex: None,
+            }),
+            config,
+            &ui,
+        )
+        .await
+        .expect("reference seed imports");
+        alice_credentials(config, "master-pin")
+            .await
+            .into_iter()
+            .find(|(_, t)| matches!(t, CredentialType::SshKey))
+            .map(|(id, _)| id)
+            .expect("imported ssh key is in the vault")
+    }
+
+    async fn gpg_sign_via_dispatch(
+        config: &CliConfig,
+        key: Option<String>,
+        file: &std::path::Path,
+        output: Option<String>,
+    ) -> anyhow::Result<()> {
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::GpgSign {
+                mode: "sign".to_string(),
+                namespace: "git".to_string(),
+                key,
+                file: file.to_string_lossy().into_owned(),
+                output,
+            }),
+            config,
+            &ui,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn gpg_sign_output_is_byte_identical_to_ssh_keygen() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        let msg = dir.path().join("commit-msg");
+        std::fs::write(&msg, REF_MESSAGE).unwrap();
+
+        // 默认 -f（保险库唯一 key）+ 默认输出 <file>.sig —— 与 git 调用形状一致
+        let cred = import_reference_key(&config, "alice").await;
+        gpg_sign_via_dispatch(&config, None, &msg, None)
+            .await
+            .expect("signing with the only vault key works");
+        let sig = std::fs::read(dir.path().join("commit-msg.sig")).unwrap();
+        assert_eq!(
+            String::from_utf8(sig).unwrap(),
+            REF_ARMOR,
+            "must match ssh-keygen -Y sign byte-for-byte"
+        );
+
+        // keyspec = 凭据 UUID → 同样逐字节
+        gpg_sign_via_dispatch(
+            &config,
+            Some(cred.to_string()),
+            &msg,
+            Some(
+                dir.path()
+                    .join("by-uuid.sig")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        )
+        .await
+        .expect("signing by credential uuid works");
+
+        // keyspec = 公钥行字面量 / .pub 文件路径
+        let pub_file = dir.path().join("ref.pub");
+        std::fs::write(&pub_file, format!("{REF_PUBLIC_LINE} comment\n")).unwrap();
+        for spec in [
+            REF_PUBLIC_LINE.to_string(),
+            format!("persona:ssh:{cred}"),
+            pub_file.to_string_lossy().into_owned(),
+        ] {
+            gpg_sign_via_dispatch(
+                &config,
+                Some(spec),
+                &msg,
+                Some(
+                    dir.path()
+                        .join("by-line.sig")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            )
+            .await
+            .expect("keyspec resolves to the reference key");
+        }
+        // 非默认 namespace 的产物应当能被 core 的 verify 验过
+        let ns_msg = dir.path().join("ns-file");
+        std::fs::write(&ns_msg, b"payload").unwrap();
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::GpgSign {
+                mode: "sign".to_string(),
+                namespace: "file".to_string(),
+                key: Some(cred.to_string()),
+                file: ns_msg.to_string_lossy().into_owned(),
+                output: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("non-git namespace signs");
+        let blob = persona_core::crypto::sshsig::disarmor(
+            &std::fs::read_to_string(dir.path().join("ns-file.sig")).unwrap(),
+        )
+        .unwrap();
+        persona_core::crypto::sshsig::verify(&blob, "file", b"payload")
+            .expect("namespace-bound signature verifies");
+    }
+
+    #[tokio::test]
+    async fn gpg_sign_rejects_bad_mode_keyspec_and_inputs() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+        import_reference_key(&config, "alice").await;
+        let msg = dir.path().join("commit-msg");
+        std::fs::write(&msg, REF_MESSAGE).unwrap();
+
+        // -Y 只支持 sign（git 不会传别的，但保持与 ssh-keygen 的差异明确）
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::GpgSign {
+                mode: "verify".to_string(),
+                namespace: "git".to_string(),
+                key: None,
+                file: msg.to_string_lossy().into_owned(),
+                output: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("non-sign mode must fail");
+        assert!(err.to_string().contains("Only `-Y sign`"));
+
+        // 待签文件不存在
+        let err = gpg_sign_via_dispatch(&config, None, &dir.path().join("missing"), None)
+            .await
+            .expect_err("missing file must fail");
+        assert!(err.to_string().contains("Cannot read"));
+
+        // 保险库里有两把 key 且未给 -f
+        import_reference_key(&config, "bob").await;
+        let err = gpg_sign_via_dispatch(&config, None, &msg, None)
+            .await
+            .expect_err("ambiguous vault must fail");
+        assert!(err.to_string().contains("pick one with -f"), "{err}");
+
+        // 未知的凭据 UUID
+        let err = gpg_sign_via_dispatch(&config, Some(Uuid::new_v4().to_string()), &msg, None)
+            .await
+            .expect_err("unknown uuid must fail");
+        assert!(err.to_string().contains("not an SSH key"), "{err}");
+
+        // 非 ssh-ed25519 的公钥行
+        let err = gpg_sign_via_dispatch(
+            &config,
+            Some("ssh-rsa AAAAB3NzaC1yc2E".to_string()),
+            &msg,
+            None,
+        )
+        .await
+        .expect_err("rsa keyspec must fail");
+        assert!(err
+            .to_string()
+            .contains("neither a credential UUID, nor a readable key file"));
+
+        // 匹配不到任何 vault key 的 ed25519 公钥行
+        let err = gpg_sign_via_dispatch(
+            &config,
+            Some(format!("ssh-ed25519 {}", BASE64.encode([3u8; 51]))),
+            &msg,
+            None,
+        )
+        .await
+        .expect_err("foreign key must fail");
+        assert!(
+            err.to_string().contains("No vault SSH key matches"),
+            "{err}"
+        );
+
+        // 空保险库（所有 identity 的 key 全删）且未给 -f
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        service.authenticate_user("master-pin").await.unwrap();
+        for identity in service.get_identities().await.unwrap() {
+            for cred in service
+                .get_credentials_for_identity(&identity.id)
+                .await
+                .unwrap()
+            {
+                if matches!(cred.credential_type, CredentialType::SshKey) {
+                    service.delete_credential(&cred.id).await.unwrap();
+                }
+            }
+        }
+        let err = gpg_sign_via_dispatch(&config, None, &msg, None)
+            .await
+            .expect_err("empty vault must fail");
+        assert!(
+            err.to_string().contains("No SSH keys in the vault"),
+            "{err}"
+        );
     }
 }
