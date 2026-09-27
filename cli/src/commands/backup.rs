@@ -297,6 +297,8 @@ mod tests {
     use crate::utils::prompt::scripted::ScriptedUi;
     use persona_core::models::{Identity, IdentityType};
     use persona_core::storage::repository::{IdentityRepository, Repository};
+    use std::io::{BufRead, Read, Write};
+    use std::sync::{Arc, Mutex};
 
     /// 进程 env 单槽（PERSONA_* 全局名空间）：与 bridge/switch/ssh/travel
     /// 的 env 测试共用 bridge 测试的全局锁串行。
@@ -474,6 +476,656 @@ mod tests {
         let mut bak = db_path.clone();
         bak.set_extension("bak");
         assert!(!bak.exists(), "no .bak on failed restore");
+    }
+
+    // ------------------------------------------------------------------
+    // 服务器侧分支（push/list/pull/restore-from-id/delete）。
+    //
+    // 这些代码的有趣路径全在「请求长什么样」与「响应怎么被解释、落盘、
+    // 换库」上，本地没有可替身的对象，所以起一个 loopback 上的极简
+    // HTTP/1.1 桩服务（与 cli/tests/integration_test.rs 的事件上报测试
+    // 同一惯例）：每个响应都带 `Connection: close`，reqwest 读完即断，
+    // 不等 keep-alive → 逐请求串行、结果确定。
+    // ------------------------------------------------------------------
+
+    /// 桩响应：(状态码, 附加响应头, 响应体)。
+    type StubReply = (u16, Vec<(&'static str, String)>, Vec<u8>);
+    type StubHandler = dyn Fn(&str, &str, &[u8]) -> StubReply + Send + Sync;
+
+    /// 桩服务器收到的一条请求（body 全留：要断言推上去的确实是密文）。
+    struct Served {
+        method: String,
+        path: String,
+        auth: Option<String>,
+        body: Vec<u8>,
+    }
+
+    /// 环境变量 RAII：断言失败 panic 时也会清理，不留残留污染同进程里
+    /// 其他读 `PERSONA_*` 的测试。
+    struct TempEnv {
+        key: &'static str,
+    }
+
+    impl TempEnv {
+        fn set(key: &'static str, value: &str) -> Self {
+            std::env::set_var(key, value);
+            Self { key }
+        }
+    }
+
+    impl Drop for TempEnv {
+        fn drop(&mut self) {
+            std::env::remove_var(self.key);
+        }
+    }
+
+    /// 把客户端指向桩（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN`）。
+    fn server_env(addr: std::net::SocketAddr) -> (TempEnv, TempEnv) {
+        (
+            TempEnv::set("PERSONA_SERVER_URL", &format!("http://{addr}")),
+            TempEnv::set("PERSONA_SERVER_TOKEN", "test-token"),
+        )
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        hex::encode(Sha256::digest(bytes))
+    }
+
+    fn json_response(status: u16, value: &serde_json::Value) -> StubReply {
+        (
+            status,
+            vec![("Content-Type", "application/json".to_owned())],
+            value.to_string().into_bytes(),
+        )
+    }
+
+    /// 起桩：逐条 accept（测试内按序发请求），回 `handler` 的罐头响应，
+    /// 并把每条请求记进返回的共享日志。线程随测试进程结束回收。
+    fn spawn_stub(handler: Box<StubHandler>) -> (std::net::SocketAddr, Arc<Mutex<Vec<Served>>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let log: Arc<Mutex<Vec<Served>>> = Arc::new(Mutex::new(Vec::new()));
+        let served_log = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = std::io::BufReader::new(stream);
+                let Ok((method, path, headers, body)) = read_request(&mut reader) else {
+                    continue;
+                };
+                let auth = headers.iter().find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("authorization")
+                        .then(|| value.trim().to_owned())
+                });
+                served_log.lock().unwrap().push(Served {
+                    method: method.clone(),
+                    path: path.clone(),
+                    auth,
+                    body: body.clone(),
+                });
+                let (status, extra, reply) = handler(&method, &path, &body);
+                let mut stream = reader.into_inner();
+                let _ = stream.write_all(&stub_http(status, &extra, &reply));
+                let _ = stream.flush();
+            }
+        });
+        (addr, log)
+    }
+
+    fn read_request<R: std::io::Read>(
+        reader: &mut std::io::BufReader<R>,
+    ) -> std::io::Result<(String, String, Vec<String>, Vec<u8>)> {
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line)?;
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or_default().to_owned();
+        let path = parts.next().unwrap_or_default().to_owned();
+        let mut headers = Vec::new();
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line)? == 0 {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+            }
+            let line = line.trim_end();
+            if line.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().unwrap_or(0);
+                }
+            }
+            headers.push(line.to_owned());
+        }
+        let mut body = vec![0u8; content_length];
+        if content_length > 0 {
+            reader.read_exact(&mut body)?;
+        }
+        Ok((method, path, headers, body))
+    }
+
+    fn stub_http(status: u16, extra: &[(&'static str, String)], body: &[u8]) -> Vec<u8> {
+        let reason = match status {
+            200 => "OK",
+            201 => "Created",
+            404 => "Not Found",
+            500 => "Internal Server Error",
+            _ => "Response",
+        };
+        let mut head = format!(
+            "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in extra {
+            head.push_str(name);
+            head.push_str(": ");
+            head.push_str(value);
+            head.push_str("\r\n");
+        }
+        let mut out = head.into_bytes();
+        out.extend_from_slice(b"\r\n");
+        out.extend_from_slice(body);
+        out
+    }
+
+    async fn vault_ready(dir: &tempfile::TempDir) -> CliConfig {
+        let config = config_for(dir);
+        let db = seeded_db(&config.get_database_path()).await;
+        db.close().await;
+        config
+    }
+
+    fn push_args() -> BackupArgs {
+        BackupArgs {
+            command: BackupCommand::Push {
+                passphrase_env: Some("PERSONA_BACKUP_TEST_PW".to_owned()),
+            },
+        }
+    }
+
+    fn list_args(limit: u32, cursor: Option<&str>) -> BackupArgs {
+        BackupArgs {
+            command: BackupCommand::List {
+                limit,
+                cursor: cursor.map(ToOwned::to_owned),
+            },
+        }
+    }
+
+    fn pull_args(id: &str, out: PathBuf) -> BackupArgs {
+        BackupArgs {
+            command: BackupCommand::Pull {
+                id: id.to_owned(),
+                out,
+            },
+        }
+    }
+
+    fn restore_args(id: Option<&str>, file: Option<PathBuf>) -> BackupArgs {
+        BackupArgs {
+            command: BackupCommand::Restore {
+                id: id.map(ToOwned::to_owned),
+                file,
+                passphrase_env: None,
+                yes: false,
+            },
+        }
+    }
+
+    fn delete_args(id: &str, yes: bool) -> BackupArgs {
+        BackupArgs {
+            command: BackupCommand::Delete {
+                id: id.to_owned(),
+                yes,
+            },
+        }
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn push_uploads_a_decryptable_snapshot_and_reports_the_verdict() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = vault_ready(&dir).await;
+
+        let meta = serde_json::json!({
+            "id": "b1",
+            "device_name": "tester",
+            "size_bytes": 4096,
+            "sha256": "a".repeat(64),
+            "created_at": "2026-09-27T00:00:00Z",
+            "deduplicated": false,
+        });
+        let (addr, log) = spawn_stub(Box::new(move |method, path, _body| {
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/api/v1/backups");
+            json_response(201, &meta)
+        }));
+        let (_url, _token) = server_env(addr);
+        let _pw = TempEnv::set("PERSONA_BACKUP_TEST_PW", "backup-pass");
+        execute_with(push_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+
+        let served = log.lock().unwrap();
+        assert_eq!(served.len(), 1, "push 只该发一个请求");
+        assert_eq!(served[0].auth.as_deref(), Some("Bearer test-token"));
+        let pushed = served[0].body.clone();
+        drop(served);
+        assert!(
+            !pushed.starts_with(b"SQLite format 3"),
+            "推上去的必须是密文，不是明文快照"
+        );
+        // 承诺的语义是「服务器上的东西能用同一口令恢复」：真解一次。
+        let staged = dir.path().join("verify.db");
+        restore_backup_bytes(&pushed, "backup-pass", &staged).unwrap();
+        assert_eq!(identity_count(&staged).await, 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn push_reports_unchanged_when_server_deduplicates() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = vault_ready(&dir).await;
+
+        let meta = serde_json::json!({
+            "id": "b0",
+            "device_name": "tester",
+            "size_bytes": 4096,
+            "sha256": "b".repeat(64),
+            "created_at": "2026-09-26T00:00:00Z",
+            "deduplicated": true,
+        });
+        let (addr, log) = spawn_stub(Box::new(move |_, _, _| json_response(200, &meta)));
+        let (_url, _token) = server_env(addr);
+        let _pw = TempEnv::set("PERSONA_BACKUP_TEST_PW", "backup-pass");
+        execute_with(push_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        assert_eq!(log.lock().unwrap().len(), 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn push_surfaces_the_server_error_message_and_status() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = vault_ready(&dir).await;
+
+        let (addr, log) = spawn_stub(Box::new(|_, _, _| {
+            json_response(
+                500,
+                &serde_json::json!({"error": {"code": "storage_full", "message": "disk full"}}),
+            )
+        }));
+        let (_url, _token) = server_env(addr);
+        let _pw = TempEnv::set("PERSONA_BACKUP_TEST_PW", "backup-pass");
+        let text = execute_with(push_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("push backup failed"), "unexpected: {text}");
+        assert!(
+            text.contains("disk full"),
+            "服务器的 message 要透出来: {text}"
+        );
+        assert!(text.contains("500"), "状态码要透出来: {text}");
+        assert_eq!(log.lock().unwrap().len(), 1);
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn list_renders_rows_and_passes_limit_cursor_through() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+
+        // 三页：有行+有游标 → 空页 → 有行无游标（三次打印三种形态）
+        let pages = [
+            serde_json::json!({
+                "backups": [
+                    {"id":"b2","device_name":"laptop","size_bytes":2048,
+                     "sha256":"c".repeat(64),"created_at":"2026-09-26T10:00:00Z"},
+                    {"id":"b1","device_name":"phone","size_bytes":1024,
+                     "sha256":"d".repeat(64),"created_at":"2026-09-25T10:00:00Z"}
+                ],
+                "next_cursor": "cur-2"
+            }),
+            serde_json::json!({"backups": [], "next_cursor": null}),
+            serde_json::json!({
+                "backups": [
+                    {"id":"b3","device_name":"laptop","size_bytes":3072,
+                     "sha256":"e".repeat(64),"created_at":"2026-09-27T10:00:00Z"}
+                ],
+                "next_cursor": null
+            }),
+        ];
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tick = Arc::clone(&counter);
+        let (addr, log) = spawn_stub(Box::new(move |method, path, _| {
+            assert_eq!(method, "GET");
+            assert_eq!(path.split('?').next(), Some("/api/v1/backups"));
+            let index = tick.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // 只有第二次调用带游标，且必须是服务器上一页给的那个值（原样回传）
+            if index == 1 {
+                assert!(path.contains("cursor=cur-2"), "游标必须回传: {path}");
+            } else {
+                assert!(
+                    !path.contains("cursor="),
+                    "不带游标的请求不该有 cursor=: {path}"
+                );
+            }
+            json_response(200, &pages[index.min(2)])
+        }));
+        let (_url, _token) = server_env(addr);
+
+        execute_with(list_args(20, None), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        execute_with(list_args(2, Some("cur-2")), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        execute_with(list_args(20, None), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let served = log.lock().unwrap();
+        assert!(served[0].path.contains("limit=20"), "{}", served[0].path);
+        assert!(served[1].path.contains("limit=2"), "{}", served[1].path);
+        assert!(
+            served[1].path.contains("cursor=cur-2"),
+            "{:#?}",
+            served[1].path
+        );
+        assert!(!served[0].path.contains("cursor="), "首页不该有游标");
+        assert!(served
+            .iter()
+            .all(|r| r.auth.as_deref() == Some("Bearer test-token")));
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn list_reports_the_empty_page_without_error() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+        let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
+            json_response(
+                200,
+                &serde_json::json!({"backups": [], "next_cursor": null}),
+            )
+        }));
+        let (_url, _token) = server_env(addr);
+        execute_with(list_args(20, None), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn pull_writes_verified_bytes_and_refuses_a_mismatch() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+        let source = seeded_db(&dir.path().join("source.db")).await;
+        let blob = create_backup_bytes(source.pool(), "backup-pass", None)
+            .await
+            .unwrap();
+        let digest = sha256_hex(&blob.bytes);
+        source.close().await;
+
+        // ① ETag 与字节一致 → 落盘内容必须与服务器给的完全相同
+        let bytes = blob.bytes.clone();
+        let etag = format!("\"{digest}\"");
+        let first_etag = etag.clone();
+        let (addr, _log) = spawn_stub(Box::new(move |method, path, _| {
+            assert_eq!(method, "GET");
+            assert_eq!(path, "/api/v1/backups/b1");
+            (200, vec![("ETag", first_etag.clone())], bytes.clone())
+        }));
+        let (_url, _token) = server_env(addr);
+        let out = dir.path().join("vault.persenc");
+        execute_with(pull_args("b1", out.clone()), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&out).unwrap(), blob.bytes);
+
+        // ② ETag 对不上 → 完整性校验报错，且绝不留半个文件
+        let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
+            (
+                200,
+                vec![("ETag", "\"deadbeef\"".to_owned())],
+                b"tampered".to_vec(),
+            )
+        }));
+        let _url2 = TempEnv::set("PERSONA_SERVER_URL", &format!("http://{addr}"));
+        let bad = dir.path().join("tampered.persenc");
+        let text = execute_with(pull_args("b1", bad.clone()), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            text.contains("integrity check failed"),
+            "unexpected: {text}"
+        );
+        assert!(!bad.exists(), "校验失败不该落盘");
+
+        // ③ 校验通过但写文件失败 → 错误必须点名「写」而不是「下载」
+        let bytes2 = blob.bytes.clone();
+        let etag2 = etag.clone();
+        let (addr, _log) = spawn_stub(Box::new(move |_, _, _| {
+            (200, vec![("ETag", etag2.clone())], bytes2.clone())
+        }));
+        let _url3 = TempEnv::set("PERSONA_SERVER_URL", &format!("http://{addr}"));
+        let nowhere = dir.path().join("no-such-dir").join("vault.persenc");
+        let text = execute_with(pull_args("b1", nowhere), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("failed to write"), "unexpected: {text}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn pull_without_an_etag_header_is_an_error() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+        let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
+            (
+                200,
+                vec![("Content-Type", "application/octet-stream".to_owned())],
+                b"snapshot".to_vec(),
+            )
+        }));
+        let (_url, _token) = server_env(addr);
+        let out = dir.path().join("no-etag.persenc");
+        let text = execute_with(pull_args("b1", out.clone()), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            text.contains("did not return an ETag"),
+            "unexpected: {text}"
+        );
+        assert!(!out.exists(), "拿不到摘要就不该写文件");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn restore_from_server_id_downloads_swaps_and_keeps_bak() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+        let db_path = config.get_database_path();
+
+        // 备份出自只有 1 个 identity 的库；现网库继续长到 2 个
+        let source = seeded_db(&dir.path().join("source.db")).await;
+        let blob = create_backup_bytes(source.pool(), "backup-pass", None)
+            .await
+            .unwrap();
+        let digest = sha256_hex(&blob.bytes);
+        source.close().await;
+        let live = seeded_db(&db_path).await;
+        let repo = IdentityRepository::new(live.clone());
+        repo.create(&Identity::new(
+            "After Backup".to_owned(),
+            IdentityType::Personal,
+        ))
+        .await
+        .unwrap();
+        live.close().await;
+        assert_eq!(identity_count(&db_path).await, 2);
+
+        let bytes = blob.bytes.clone();
+        let etag = format!("\"{digest}\"");
+        let (addr, log) = spawn_stub(Box::new(move |method, path, _| {
+            assert_eq!(method, "GET");
+            assert_eq!(path, "/api/v1/backups/b9");
+            (200, vec![("ETag", etag.clone())], bytes.clone())
+        }));
+        let (_url, _token) = server_env(addr);
+
+        let ui = ScriptedUi::new().confirm(true).password("backup-pass");
+        execute_with(restore_args(Some("b9"), None), &config, &ui)
+            .await
+            .unwrap();
+        assert!(ui.exhausted(), "确认与口令提示都应被消费");
+        assert_eq!(log.lock().unwrap().len(), 1, "restore 只下载一次");
+
+        assert_eq!(identity_count(&db_path).await, 1, "库回到备份时刻");
+        let bak = db_path.with_extension("bak");
+        assert_eq!(identity_count(&bak).await, 2, "覆盖前的状态留在 .bak");
+        let staged = db_path.with_extension("restore.tmp");
+        assert!(!staged.exists(), "暂存文件必须被 rename 走");
+    }
+
+    #[tokio::test]
+    async fn restore_requires_exactly_one_source() {
+        // 两个来源都给 / 都不给：在碰 env、碰磁盘之前就 bail，故无需
+        // env_guard 也无需桩服务器。
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+
+        let both = restore_args(Some("b1"), Some(dir.path().join("x.persenc")));
+        let text = execute_with(both, &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("not both"), "unexpected: {text}");
+
+        let neither = restore_args(None, None);
+        let text = execute_with(neither, &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            text.contains("pass a backup id or --file"),
+            "unexpected: {text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_from_a_missing_file_names_the_read_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+        let missing = dir.path().join("gone.persenc");
+        let text = execute_with(
+            restore_args(None, Some(missing)),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(text.contains("failed to read"), "unexpected: {text}");
+    }
+
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn delete_cancels_locally_and_reports_the_server_verdict() {
+        let _guard = env_guard();
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+
+        // ① 取消：确认门在构造客户端之前，一个字节都不该出网
+        let (addr, log) = spawn_stub(Box::new(|_, _, _| {
+            json_response(200, &serde_json::json!({}))
+        }));
+        let (_url, _token) = server_env(addr);
+        let ui = ScriptedUi::new().confirm(false);
+        execute_with(delete_args("b1", false), &config, &ui)
+            .await
+            .unwrap();
+        assert!(ui.exhausted());
+        assert!(log.lock().unwrap().is_empty(), "取消后不得打到服务器");
+
+        // ② --yes → DELETE 到位、带 Bearer
+        execute_with(delete_args("b1", true), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        {
+            let served = log.lock().unwrap();
+            assert_eq!(served.len(), 1);
+            assert_eq!(served[0].method, "DELETE");
+            assert_eq!(served[0].path, "/api/v1/backups/b1");
+            assert_eq!(served[0].auth.as_deref(), Some("Bearer test-token"));
+        }
+
+        // ③ 404 视为幂等成功（已删过的版本）
+        let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
+            json_response(
+                404,
+                &serde_json::json!({"error": {"code": "not_found", "message": "no such backup"}}),
+            )
+        }));
+        let _url2 = TempEnv::set("PERSONA_SERVER_URL", &format!("http://{addr}"));
+        execute_with(delete_args("b1", true), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+
+        // ④ 其他状态码 → 报错带服务器的 message
+        let (addr, _log) = spawn_stub(Box::new(|_, _, _| {
+            json_response(
+                500,
+                &serde_json::json!({"error": {"code": "db", "message": "readonly"}}),
+            )
+        }));
+        let _url3 = TempEnv::set("PERSONA_SERVER_URL", &format!("http://{addr}"));
+        let text = execute_with(delete_args("b1", true), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(text.contains("delete backup failed"), "unexpected: {text}");
+        assert!(text.contains("readonly"), "unexpected: {text}");
+    }
+
+    #[test]
+    fn blank_payload_passphrase_env_still_prompts() {
+        let _guard = env_guard();
+        // 已设但全空白：视同没设，必须走交互（否则拿空串当口令）
+        let _payload = TempEnv::set("PERSONA_PAYLOAD_PASSPHRASE", "   ");
+        let ui = ScriptedUi::new().password("typed-after-blank");
+        let got = resolve_passphrase(None, "backup", &ui, false).unwrap();
+        assert_eq!(got, "typed-after-blank");
+        assert!(ui.exhausted());
+    }
+
+    #[test]
+    fn client_from_env_rejects_blank_values_and_accepts_a_complete_pair() {
+        let _guard = env_guard();
+        let _blank = TempEnv::set("PERSONA_SERVER_URL", "  ");
+        let _token = TempEnv::set("PERSONA_SERVER_TOKEN", "tok");
+        assert!(
+            client_from_env().is_err(),
+            "空白 URL 视同缺失（fail-closed）"
+        );
+        let _url = TempEnv::set("PERSONA_SERVER_URL", "http://127.0.0.1:9/");
+        assert!(client_from_env().is_ok(), "两个都非空才构造客户端");
     }
 
     #[tokio::test]

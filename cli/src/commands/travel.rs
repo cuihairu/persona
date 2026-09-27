@@ -361,7 +361,7 @@ fn resolve_passphrase(env_var: Option<&str>, ui: &dyn PromptUi, confirm: bool) -
 mod tests {
     use super::*;
     use crate::utils::prompt::scripted::ScriptedUi;
-    use persona_core::models::{IdentityType, Workspace};
+    use persona_core::models::{Identity, IdentityType, Workspace};
     use persona_core::storage::WorkspaceRepository;
 
     /// 进程 env 是单槽：凡 set/remove `PERSONA_*` 的测试都必须与读它的
@@ -656,5 +656,250 @@ mod tests {
             err.to_string().contains("no identities are marked"),
             "{err}"
         );
+    }
+
+    /// 未初始化主密码体系的库：直建 workspace + identity，不走
+    /// `initialize_user` → `has_users()` 为 false，mark 走 repo 直连分叉。
+    async fn seeded_workspace_without_users() -> (tempfile::TempDir, CliConfig) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        WorkspaceRepository::new(db.clone())
+            .create(&Workspace::new(
+                dir.path().to_path_buf(),
+                "test".to_string(),
+            ))
+            .await
+            .unwrap();
+        IdentityRepository::new(db.clone())
+            .create(&Identity::new("anon".to_owned(), IdentityType::Personal))
+            .await
+            .unwrap();
+        db.close().await;
+        (dir, config)
+    }
+
+    fn status_args() -> TravelArgs {
+        TravelArgs {
+            command: TravelCommand::Status,
+        }
+    }
+
+    fn mark_args(name: &str) -> TravelArgs {
+        TravelArgs {
+            command: TravelCommand::Mark {
+                name: name.to_string(),
+            },
+        }
+    }
+
+    /// 走 env 口令 + 跳过确认的 enter（要求测试已设 `PERSONA_TRAVEL_TEST_PW`）。
+    fn enter_args() -> TravelArgs {
+        TravelArgs {
+            command: TravelCommand::Enter {
+                passphrase_env: Some("PERSONA_TRAVEL_TEST_PW".to_string()),
+                yes: true,
+            },
+        }
+    }
+
+    /// 未建主密码体系时 mark 也要能标（首次使用前就可能想标记），且必须补
+    /// 审计——这是 set_marked 里与 service 分叉平行的手工路径。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn mark_on_an_uninitialized_vault_updates_the_row_and_audits() {
+        let _guard = env_guard();
+        // 不设 PERSONA_MASTER_PASSWORD：若实现误走解锁分叉，无 env 无提示
+        // 队列的 ScriptedUi 会直接 panic（比断言更早暴露错误分叉）。
+        let (_dir, config) = seeded_workspace_without_users().await;
+
+        execute_with(mark_args("anon"), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        assert!(identity_marked(&config, "anon").await);
+
+        let audit_count = || async {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(1) FROM audit_logs WHERE action = 'travel_mark_changed'",
+            )
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+            db.close().await;
+            count
+        };
+        assert_eq!(audit_count().await, 1, "repo 分叉也要补审计");
+
+        let args = TravelArgs {
+            command: TravelCommand::Unmark {
+                name: "anon".to_string(),
+            },
+        };
+        execute_with(args, &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        assert!(!identity_marked(&config, "anon").await);
+        assert_eq!(audit_count().await, 2, "mark 与 unmark 各补一条审计");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn mark_with_a_wrong_master_password_is_rejected() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "not-the-pin");
+        let (_dir, config) = seeded_workspace().await;
+        let err = execute_with(mark_args("work"), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Authentication failed"), "{err}");
+        assert!(
+            !identity_marked(&config, "work").await,
+            "认证失败不得改旗标"
+        );
+    }
+
+    /// status 的四种世界状态（inactive / 残留 sidecar / ACTIVE / 旗标在而
+    /// 容器没了）各走一遍渲染；分支条件用 core 的 travel_status 钉死，
+    /// stdout 不进断言（单元测试捕不到，行为由状态断言背书）。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn status_walks_inactive_leftover_active_and_inconsistent_states() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let _tp = EnvVar::set("PERSONA_TRAVEL_TEST_PW", "travel-secret");
+        let (_dir, config) = seeded_workspace().await;
+        let db_path = config.get_database_path();
+        let sidecar = persona_core::travel::sidecar_path(&db_path);
+
+        async fn flags(config: &CliConfig) -> persona_core::travel::TravelStatus {
+            // PersonaService 没有 Debug：init_service 失败时手动 panic 带出错误
+            let service =
+                match crate::commands::service::init_service(config, &ScriptedUi::new()).await {
+                    Ok(service) => service,
+                    Err(err) => panic!("init_service failed: {err}"),
+                };
+            service
+                .travel_status(&config.get_database_path())
+                .await
+                .into_anyhow()
+                .unwrap()
+        }
+
+        // ① inactive、无 sidecar、无标记
+        execute_with(status_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        assert!(!flags(&config).await.active);
+
+        // ② inactive 但残留 sidecar（手造一个）：警告分支
+        std::fs::write(&sidecar, b"leftover").unwrap();
+        execute_with(status_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        let status = flags(&config).await;
+        assert!(!status.active && status.sidecar_exists);
+
+        // ③ 标记两个身份（marked_names 必须排序输出）
+        let service =
+            match crate::commands::service::init_service(&config, &ScriptedUi::new()).await {
+                Ok(service) => service,
+                Err(err) => panic!("init_service failed: {err}"),
+            };
+        service
+            .create_identity("alpha".to_string(), IdentityType::Work)
+            .await
+            .unwrap();
+        execute_with(mark_args("work"), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        execute_with(mark_args("alpha"), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        // 挂着标记时的 status（清单有内容、随包提示两个分支都走到）
+        execute_with(status_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            marked_names(&config).await.unwrap(),
+            vec!["alpha".to_string(), "work".to_string()],
+            "标记清单必须排序"
+        );
+
+        // ④ 残留 sidecar 挡路时 enter 必须拒绝：那是上一包的容器，覆盖=丢数据
+        let err = execute_with(enter_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("travel sidecar already exists"),
+            "unexpected: {err}"
+        );
+
+        // ⑤ 清掉残留 → enter → ACTIVE
+        std::fs::remove_file(&sidecar).unwrap();
+        execute_with(enter_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        execute_with(status_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        let status = flags(&config).await;
+        assert!(status.active && !status.inconsistent);
+        assert!(status.entered_at.is_some(), "enter 要记录进入时刻");
+        assert!(
+            marked_names(&config).await.unwrap().is_empty(),
+            "行已随包移走"
+        );
+
+        // ⑥ 手删 sidecar：旗标仍在而容器没了 → inconsistent（数据已丢，
+        // 必须诚实呈现而不是假装可恢复）
+        std::fs::remove_file(&sidecar).unwrap();
+        execute_with(status_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        let status = flags(&config).await;
+        assert!(status.active && status.inconsistent);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn exit_without_a_sidecar_names_where_it_should_be() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+        let args = TravelArgs {
+            command: TravelCommand::Exit {
+                passphrase_env: Some("PERSONA_TRAVEL_TEST_PW".to_string()),
+            },
+        };
+        let err = execute_with(args, &config, &ScriptedUi::new())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("no travel sidecar"), "{err}");
+    }
+
+    /// `PERSONA_PAYLOAD_PASSPHRASE` 命中即返回、不碰提示；空白视同未设。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn travel_passphrase_falls_back_to_payload_env() {
+        let _guard = env_guard();
+        let _pp = EnvVar::set("PERSONA_PAYLOAD_PASSPHRASE", "payload-pw");
+        let ui = ScriptedUi::new();
+        assert_eq!(resolve_passphrase(None, &ui, false).unwrap(), "payload-pw");
+        assert!(ui.exhausted(), "payload env 命中就别碰提示");
+
+        let _blank = EnvVar::set("PERSONA_PAYLOAD_PASSPHRASE", "   ");
+        let ui = ScriptedUi::new().password("typed-after-blank");
+        assert_eq!(
+            resolve_passphrase(None, &ui, false).unwrap(),
+            "typed-after-blank"
+        );
+        assert!(ui.exhausted());
     }
 }
