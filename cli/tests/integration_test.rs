@@ -1,14 +1,68 @@
-use anyhow::Result;
+//! CLI integration tests
+//!
+//! These tests verify that the CLI commands work correctly
+//! and integrate properly with the persona-core library.
+
+use anyhow::{Context, Result};
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+use std::path::Path;
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
 
-/// CLI integration tests
+/// Make sure `persona-ssh-agent` sits next to the `persona` binary under test
+/// (where the CLI's own resolution looks for it), building it only if missing.
 ///
-/// These tests verify that the CLI commands work correctly
-/// and integrate properly with the persona-core library.
+/// Why this never compiles in CI: the workflow's pre-build step
+/// (`cargo build --workspace --all-features`) already emits the agent binary
+/// into the same target dir, so the lookup hits. When a test does have to
+/// build, note that it is *not* interchangeable with that pre-build — cargo
+/// unifies dependency features per selection set, so `-p persona-ssh-agent`
+/// resolves a different feature union than `--workspace` and recompiles the
+/// whole tree from scratch (even `syn`/`hashbrown` get fresh fingerprints).
+/// On the Windows runner that blows past nextest's 240s per-test budget: run
+/// 36282993614 killed the test at 240.069s while it was still at "Compiling
+/// serde_core/windows-sys/ring/rustls" — and that run already passed
+/// `--all-features`, which proves the flag alone is not the fix. Only skipping
+/// the build is. Hence: prefer the prebuilt binary, always.
+fn ensure_agent_binary() -> Result<()> {
+    let binary_name = if cfg!(windows) {
+        "persona-ssh-agent.exe"
+    } else {
+        "persona-ssh-agent"
+    };
+    let bin_dir = Path::new(env!("CARGO_BIN_EXE_persona"))
+        .parent()
+        .context("persona test binary has no parent directory")?;
+
+    // Mirror `find_agent_binary_near` in cli/src/commands/ssh.rs candidate
+    // for candidate. A narrower list here would report "missing" for a binary
+    // the CLI resolves just fine, and pay for it with the cold compile below.
+    let parent_dir = bin_dir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| bin_dir.to_path_buf());
+    let candidates = [
+        bin_dir.join(binary_name),
+        bin_dir.join("deps").join(binary_name),
+        parent_dir.join(binary_name),
+        parent_dir.join("deps").join(binary_name),
+    ];
+    if candidates.iter().any(|candidate| candidate.is_file()) {
+        return Ok(());
+    }
+
+    let build_status = StdCommand::new("cargo")
+        .args(["build", "-p", "persona-ssh-agent", "--all-features"])
+        .status()?;
+    assert!(
+        build_status.success(),
+        "failed to build persona-ssh-agent (binary absent from {})",
+        bin_dir.display()
+    );
+    Ok(())
+}
 
 #[test]
 fn test_cli_help() -> Result<()> {
@@ -483,21 +537,23 @@ fn test_ssh_start_agent_resolves_local_binary_without_path_entry() -> Result<()>
         .assert()
         .success();
 
-    let original_path = std::env::var("PATH").unwrap_or_default();
-    let filtered_path = original_path
-        .split(':')
-        .filter(|entry| !entry.contains("/Users/cui/Workspaces/persona/target"))
-        .collect::<Vec<_>>()
-        .join(":");
+    ensure_agent_binary()?;
 
-    // --all-features 必须与 CI 的前置构建（cargo build --workspace
-    // --all-features）feature 指纹一致，否则这里会触发整棵依赖树冷重编——
-    // Windows runner 上远超 nextest 的 240s 单测试预算（run 36272736560
-    // 实测：该测试被击杀时还在 Compiling persona-core/sqlx/...）。
-    let build_status = StdCommand::new("cargo")
-        .args(["build", "-p", "persona-ssh-agent", "--all-features"])
-        .status()?;
-    assert!(build_status.success(), "failed to build persona-ssh-agent");
+    // Strip any target dir from PATH so the CLI can only find the agent next
+    // to its own executable. Done with split_paths/join_paths rather than
+    // splitting on ':' — on Windows the separator is ';' and drive letters
+    // contain ':', so a manual split is a silent no-op there and the test
+    // would pass without exercising the fallback it is named for.
+    let original_path = std::env::var_os("PATH").unwrap_or_default();
+    let target_dir = Path::new(env!("CARGO_BIN_EXE_persona"))
+        .parent()
+        .context("persona test binary has no parent directory")?
+        .to_path_buf();
+    let path_without_target_dir = std::env::split_paths(&original_path)
+        .filter(|entry| !entry.starts_with(&target_dir))
+        .collect::<Vec<_>>();
+    let filtered_path =
+        std::env::join_paths(path_without_target_dir).context("joining filtered PATH entries")?;
 
     Command::cargo_bin("persona")?
         .env("PATH", filtered_path)
@@ -561,14 +617,7 @@ fn test_ssh_run_injects_agent_socket_from_state_dir() -> Result<()> {
         .assert()
         .success();
 
-    // --all-features 必须与 CI 的前置构建（cargo build --workspace
-    // --all-features）feature 指纹一致，否则这里会触发整棵依赖树冷重编——
-    // Windows runner 上远超 nextest 的 240s 单测试预算（run 36272736560
-    // 实测：该测试被击杀时还在 Compiling persona-core/sqlx/...）。
-    let build_status = StdCommand::new("cargo")
-        .args(["build", "-p", "persona-ssh-agent", "--all-features"])
-        .status()?;
-    assert!(build_status.success(), "failed to build persona-ssh-agent");
+    ensure_agent_binary()?;
 
     Command::cargo_bin("persona")?
         .env_remove("SSH_AUTH_SOCK")
