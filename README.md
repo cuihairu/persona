@@ -156,6 +156,14 @@ persona totp setup --identity alice --secret <base32-secret> --issuer Battle.net
 # inside the vendor's app, so codes must be generated there
 persona totp setup-game-token --identity alice --provider tencent_security --account qq_123456 --url https://gamesafe.qq.com
 
+# Passkeys (WebAuthn, software authenticator): ES256/P-256 keys sealed under
+# the per-item key hierarchy; credential IDs are unique across the vault
+persona passkey create --identity alice --rp github.com --user alice@example.com
+persona passkey list --identity alice
+persona passkey show <UUID>
+persona passkey self-test --id <UUID>   # local register + assert round trip
+persona passkey remove --id <UUID>
+
 # Password generator with custom sets
 persona password generate --length 32 --set lowercase --set uppercase --set digits --set symbols
 persona password generate --pronounceable --length 18 --set lowercase --set uppercase

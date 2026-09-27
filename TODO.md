@@ -823,6 +823,15 @@ Browser & Autofill (future)
         PersonaService create/list/show/delete/assertion/self-test/export、审计事件、
         `persona passkey …` CLI、JSON 导出含私钥（export_allowed 门禁）、
         webauthn-rs RP 全流程回归 + 单测）
+  - 注（2026-09-27 按设计稿全量复核 M1/M2）：唯一真实缺口是 §5 的
+    credential_id 唯一性——010 建成 UNIQUE(identity_id, credential_id)，设计
+    要求"同一库内不重复"；016 迁移重建 passkeys 表收紧为 UNIQUE(credential_id)
+    （FK 叶子表、行数据原样迁移）+ 仓库测试断言跨身份重复被拒。
+    其余对齐：模型字段/KeyHierarchy 包裹/CLI 五命令/export_allowed 导出门禁/
+    五类审计事件/webauthn-rs RP 回归（注册+断言+错 origin 拒绝）均已在。
+    遗留备查（超出 M1/M2 范围）：EntityType 无 Passkey 变体，条目历史
+    （§5"字段变更进历史"）待 passkey 编辑/轮换操作面出现时一并接线；
+    README 补 passkey CLI 示例。
   - [x] P2: 浏览器桥接 v2（passkey_list/create/assert 三消息 + protocol_version 2、扩展 MAIN-world
         WebAuthn 拦截 + 选择/确认 UI + 回退原生、conditional mediation/cross-origin iframe 不拦截、
         桥接层 origin↔rp_id 校验与 user gesture 强制、协议文档/README 增补）
