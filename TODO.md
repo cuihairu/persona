@@ -1073,6 +1073,21 @@ Quality & Security
       **纠错记账**：上一轮巡检记的「connect-server 759 行、src 内 0 个测试函数」是错的——
       grep 只数了 `#[test]`，漏了 `#[tokio::test]`；它原本就有 8 个用例。找缺口请用
       `#[*test]` 一类模式或直接看覆盖率，别数单次字面匹配。
+- [x] 覆盖率轮次·cli backup + travel（2026-09-27，同 CI 口径 llvm-cov，b4b3a0d）：
+      `cli/src/commands/backup.rs` 行覆盖 **74.06% → 97.17%**（函数 78.12% → 94.32%、
+      用例 6 → 20），`cli/src/commands/travel.rs` 行覆盖 **79.58% → 93.93%**（函数
+      68.52% → 79.45%、用例 6 → 11）；全仓 TOTAL 行 95.88% → **96.23%**。基线里的两个
+      最低模块都过 90% 线。做法：backup 的服务器侧分支用 loopback HTTP/1.1 桩
+      （沿 `cli/tests/integration_test.rs` 事件上报惯例）驱动，push 断言「推上去的
+      字节确实能用同口令解密还原」；travel 补 status 四态与未初始化库的 mark repo
+      直连分叉。剩余未覆行与原因：两文件各有 `execute()` 终端 wrapper（只被
+      `main()` 调，测试进程不可达——与 CI 把 main.rs/terminal_ui.rs 列入
+      ignore-regex 同因，这是函数覆盖残留的主项）；travel.rs:138 的
+      `ACTIVE` 无时间戳分支 enter 总会写 `travel_entered_at`，只有手改 settings
+      才出现（按设计不伪造）；travel.rs:259 是 `ui.confirm(...)?` 表达式尾行碎片，
+      区域覆盖已含。本轮补测还暴露并钉住一个真实门禁：**sidecar 已存在时
+      `travel enter` 硬拒**（不覆盖上一包的容器）。env 置值在 backup 测试里补了
+      RAII 守卫（TempEnv），与 travel 既有 EnvVar 同惯例。
 - [ ] connect-server 两处小硬面（本轮补测暴露，**当前行为已用测试钉住，未改**）：
       ① `Host` 解析对省略端口的 IPv6 字面量（`[::1]`）会按最后一个 `:` 切 → 剩 `[:` →
       421 fail-closed，与白名单里写着 `::1` 的意图不符（方向安全，但 IPv6 宿主将来内嵌
