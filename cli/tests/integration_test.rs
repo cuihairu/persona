@@ -3,20 +3,11 @@
 //! These tests verify that the CLI commands work correctly
 //! and integrate properly with the persona-core library.
 
-// `Context`, `Path` and `StdCommand` are only reached from the non-Windows
-// items gated below (agent binary lookup, PATH stripping, the fallback
-// `cargo build`), so on Windows they are unused imports — and the Windows
-// clippy step runs with `-D warnings`. Keep the cfgs in lockstep with those
-// items; adding a new caller means dropping the matching gate here.
-#[cfg(not(windows))]
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
-#[cfg(not(windows))]
 use std::path::Path;
-#[cfg(not(windows))]
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
 
@@ -38,7 +29,6 @@ use tempfile::tempdir;
 ///
 /// unix-only because its only remaining callers are (see the gating note on
 /// `test_ssh_start_agent_resolves_local_binary_without_path_entry`).
-#[cfg(not(windows))]
 fn ensure_agent_binary() -> Result<()> {
     let binary_name = if cfg!(windows) {
         "persona-ssh-agent.exe"
@@ -530,7 +520,6 @@ fn test_ssh_generate_export_remove_roundtrip() -> Result<()> {
 /// daemon start itself on Windows, which needs a real machine (the Windows
 /// runner is a VM; docs/biometric-unlock-design.md §6.3 already records native
 /// test binaries failing to load there).
-#[cfg(not(windows))]
 #[test]
 fn test_ssh_start_agent_resolves_local_binary_without_path_entry() -> Result<()> {
     let workspace_dir = tempdir()?;
