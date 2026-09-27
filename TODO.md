@@ -117,6 +117,28 @@ SSH Agent (developer focus)
       查询改为状态文件 socket 优先、`SSH_AUTH_SOCK` 仅作无状态文件时的回退，
       测试改写并加「env agent 不被查询」回归断言
       ⑤ Windows named-pipe 同流程 → 与下条 Windows-specific testing 合并执行
+- [x] git commit 签名（SSHSIG，2026-09-27，472a865）：core `crypto::sshsig`
+      按 PROTOCOL.sshsig 实现 sign/verify + 装甲——ed25519 确定性签名与真
+      `ssh-keygen -Y sign` 逐字节一致（真向量钉进测试，wire string 长度前缀
+      修过 3 处后对齐）；verify 强制 namespace 绑定；CLI `ssh gpg-sign`
+      （-Y/-n/-f/-o 形状对齐 ssh-keygen，keyspec 支持凭据 UUID /
+      `persona:ssh:<uuid>` / 公钥行字面量 / .pub 文件，落盘前自验）；argv[0]
+      shim `persona-ssh-sign`（拷贝/软链 → git `gpg.ssh.program` 直接可用，
+      与 persona-bridge 同一注入机制，main.rs 测试钉调用形状）。git 侧配置：
+      `git config gpg.format ssh` + `gpg.ssh.program <persona-ssh-sign 路径>`
+      + `user.signingkey <公钥行或 persona:ssh:<uuid>>`。测试 core 6 + cli
+      gpg-sign 2 + 注入 1，全仓 1598 绿后提交。
+- [x] authorized_keys 分发（2026-09-27，85accd3）：`persona ssh authorize`
+      ——add（幂等 grep -qxF）/remove（按 blob 字段删，awk 原文件重写保
+      inode/权限）/list/--dry-run/--port/--remote-path；信任模型边界 =
+      传输交给用户自己的 ssh（`PERSONA_SSH_BINARY` 可覆盖），会话期间挂
+      agent-target-host 走 host 策略，私钥不出库，不做 SSH 客户端协议实现；
+      远端脚本 POSIX sh（默认 `"$HOME/.ssh/authorized_keys"` 远端展开、
+      自定义路径单引号转义、blob 内嵌 awk 前校验 base64 字符集）；CLI 侧
+      审计落库对齐 agent 通道：`ssh_sign`（via=gpg-sign+namespace+sha256+
+      输出路径）/`ssh_authorize`（host+action）。测试 +4（假 ssh 桩真脚本
+      round-trip：add 幂等/list 只读/remove 幂等 + 审计计数），全仓 1602 绿
+      后提交。
 - [ ] Windows-specific testing and optimization
 
 Wallet Material (experimental — deferred until 1Password parity; see priority policy above)

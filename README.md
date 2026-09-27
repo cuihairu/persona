@@ -218,6 +218,18 @@ export PERSONA_AGENT_CONFIRM_ON_UNKNOWN=1       # Ask before unknown hosts
 # Status and shutdown
 persona ssh agent-status
 persona ssh stop-agent
+
+# git commit signing (SSHSIG): install a copy of the binary named
+# persona-ssh-sign, then point git at it
+cp "$(command -v persona)" ~/.local/bin/persona-ssh-sign
+git config gpg.format ssh
+git config gpg.ssh.program ~/.local/bin/persona-ssh-sign
+git config user.signingkey "persona:ssh:<credential-uuid>"
+git commit -S   # signed with the vault key
+
+# Distribute a vault public key to a host's authorized_keys (idempotent;
+# --dry-run previews, --list reads, --remove revokes)
+persona ssh authorize --identity work --host deploy@prod-1.example.com
 ```
 
 ## Documentation

@@ -400,6 +400,58 @@ export PERSONA_AGENT_TARGET_HOST=dev-server.company.com
 ssh user@dev-server.company.com
 ```
 
+### 5. git commit 签名（SSHSIG）
+
+Persona 的 vault SSH key 可以直接给 git commit 签名（`ssh-keygen -Y sign`
+兼容的 SSHSIG 格式）。把 CLI 的一份拷贝/软链命名为 `persona-ssh-sign`，
+git 会把它当作签名器调用：
+
+```bash
+# ① 安装 shim（与 persona-bridge 同一 argv[0] 注入机制）
+cp target/debug/persona ~/.local/bin/persona-ssh-sign     # 或 ln -s
+
+# ② git 配置（keyspec 推荐用 vault 凭据 UUID）
+git config gpg.format ssh
+git config gpg.ssh.program ~/.local/bin/persona-ssh-sign
+git config user.signingkey "persona:ssh:<credential-uuid>"   # 或 ssh-ed25519 AAAA… 公钥行
+
+# ③ 签名提交（身份名下只有一把 key 时 -f 可省略）
+git commit -S
+
+# 也可以直接用（与 ssh-keygen -Y sign 同参）
+persona ssh gpg-sign -Y sign -n git -f <uuid|公钥行|文件> <文件> [-o 输出]
+
+# 验证侧照常：gpg.ssh.allowedSignersFile + git log --show-signature
+```
+
+说明：ed25519 是确定性签名，输出与 `ssh-keygen -Y sign` 逐字节一致；
+每次签名在审计日志落一条 `ssh_sign`（via=gpg-sign + namespace + sha256
+摘要）。加密保险库时 git 每次签名会走主密码解锁（非交互场景用
+`PERSONA_MASTER_PASSWORD`）。
+
+### 6. 公钥分发（authorized_keys 管理）
+
+```bash
+# 把身份名下的公钥加到目标机（幂等，重复执行不会写重复行）
+persona ssh authorize --identity work --host deploy@prod-1.example.com
+
+# 预览实际执行的 ssh 调用（不连网）
+persona ssh authorize --identity work --host deploy@prod-1.example.com --dry-run
+
+# 远端查看 / 撤销
+persona ssh authorize --identity work --host deploy@prod-1.example.com --list
+persona ssh authorize --identity work --host deploy@prod-1.example.com --remove
+
+# 指定端口 / 远端路径
+persona ssh authorize --identity work --host deploy@prod-1 --port 2222 \
+  --remote-path /etc/ssh/authorized_keys/work
+```
+
+信任模型：传输与认证使用你自己的 `ssh` 二进制（可用 `PERSONA_SSH_BINARY`
+覆盖），会话期间 agent 的 host 策略照常生效；私钥不出库。add 幂等、
+remove 只删除本工具写入的行（按 key blob 字段匹配）、`--list` 只读。
+每次操作落审计 `ssh_authorize`（host + action）。
+
 ## 性能特性
 
 - **异步处理**: 基于 Tokio 的完全异步 I/O
