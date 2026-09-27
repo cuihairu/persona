@@ -1,12 +1,13 @@
-# Persona - Local-First Identity Material Manager
-
-<p align="center">
+<div align="center">
   <img src="docs/branding/logo.svg" width="180" alt="Persona logo" />
-</p>
-
-[![CI](https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI)](https://github.com/cuihairu/persona/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg)](https://codecov.io/gh/cuihairu/persona)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+  <h1>Persona</h1>
+  <p><strong>Local-First Identity Material Manager</strong></p>
+  <p>
+    <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /></a>
+    <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a>
+    <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+  </p>
+</div>
 
 Manage your digital selves. Switch identity material with confidence.
 
