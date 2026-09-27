@@ -1,8 +1,8 @@
 # Persona 项目最终交付总结
 
 **交付日期**: 2026-09-27  
-**最后提交**: 08adac5 (fix(cli): Windows CI 挂死根因双修复)  
-**CI 状态**: 全部通过（除 Dependabot 既有失败外）
+**最后提交**: e940f62 (fix(cli): 门禁后 import 同步——Windows clippy -D warnings 转绿)  
+**CI 状态**: 🟢 **全绿** — run 36290209357 五个 job 全部 success（含此前三次红过的 `Rust (Windows build/test)`）；另有一条与本项目无关的 Dependabot 既有失败
 
 ---
 
@@ -34,8 +34,8 @@
 
 | 测试套件 | 结果 | 备注 |
 |----------|------|------|
-| **Rust workspace (Linux)** | ✅ 1543 passed / 0 failed | `cargo test --workspace --all-features` + clippy + fmt |
-| **Rust (Windows CI)** | ✅ 全绿 | nextest + probe + 修复后的集成测试 |
+| **Rust workspace (Linux)** | ✅ 全过 / 0 failed | `cargo test --workspace --all-features` + clippy + fmt |
+| **Rust (Windows CI)** | ✅ 全绿 | nextest 1520 passed / 1 skipped / 0 failed（525s）+ 探针 exit 0 + doc-test + clippy |
 | **Desktop (Jest + coverage)** | ✅ 567 passed / 567 total | Functions 90.62% (≥90% 门槛)，Lines 92.26% |
 | **docs (VitePress 构建)** | ✅ 绿 | 独立安装 `--ignore-workspace`，esbuild 0.21.5 隔离 |
 | **Chromium Extension** | ✅ 构建通过 | CI web job 通过 |
@@ -57,14 +57,18 @@
 - **设置持久化**: localStorage `persona.updateCheck.enabled` / `.lastChecked`，默认开启，可关闭
 - **启动自检**: App.tsx `useEffect` 启动后台检查，toast 提醒有新版
 
-### 4.3 Windows CI 挂死根治 (1e96bbb + 08adac5)
+### 4.3 Windows CI 挂死根治 (1e96bbb → e940f62)
+
+四次 CI 迭代、三层归因，最终 run 36290209357 全绿：
+
 | 层面 | 措施 | 效果 |
 |------|------|------|
-| **二进制启动探针** | `Start-Process target\debug\persona.exe --version` + 30s 超时 | 区分「二进制挂」vs「测试挂」，实测 SUCCESS |
+| **二进制启动探针** | `Start-Process target\debug\persona.exe --version` + 30s 超时 | 区分「二进制挂」vs「测试挂」，实测 exit 0 |
 | **单测进程隔离** | `cargo-nextest` + `.config/nextest.toml` (60s/240s) | 挂死测试带名字报出，其余继续 |
 | **集成测试内嵌构建** | `ensure_agent_binary()` 复用 CI 前置构建的 agent 产物（命中即跳过编译）；测试内不再无条件 `cargo build` | 根治冷重编超时。**实测 `--all-features` 补 flag 无效**（run 36282993614 带 flag 仍 240s 被杀）：cargo 按 selection set 统一 feature，`-p persona-ssh-agent` 与 `--workspace` 的 feature 并集不同，照样整树冷重编——只有跳过构建才有效 |
 | **start-agent 集成测试** | `test_ssh_start_agent_resolves_local_binary_without_path_entry` 加 `#[cfg(not(windows))]` | run 36286060261 实测：跳过构建后 Windows 上仍**零输出**挂死 240s，VM 上无法归因（设计文档 §6.3 已记 Windows 原生测试二进制问题）。daemon 启动端到端由 Linux `cargo llvm-cov` 每次推送全量覆盖；Windows 侧 PATH 无关的二进制解析由新增单测 `find_agent_binary_near_walks_exe_dir_then_deps_then_parent` 覆盖 |
 | **start_agent 读行** | `tokio::time::timeout(30s)` + `child.start_kill()` | daemon 沉默时 CLI 报错退出，非永久挂。kill 用 `start_kill()` 而非 `kill().await`——后者要 reap，reap 带 pending I/O 的 Windows 进程永不返回，等于换个位置再挂 |
+| **门禁连带 import** | 三条只被门禁 item 使用的 import 同步 `#[cfg(not(windows))]`（e940f62） | 门禁生效后 nextest 已 1519/1519 全绿，红在随后的 clippy `-D warnings` 报 unused import；Linux 侧永远看不到（那边 import 有用），本地用 `sed` 成 `cfg(any())` 模拟验证 |
 
 ### 4.4 覆盖率门禁修复 (a2c1d52)
 - `QuickAccessPanel.tsx` 68.88% → 95.55% (functions)  
@@ -94,6 +98,8 @@
 4. **jest.mock 惰性转发**: 工厂里引用外层 mock 函数要 `() => mockFn()` 而非直接 `mockFn`，避免 TDZ
 5. **Windows 子进程读输出必须套 deadline**: `tokio::time::timeout` + `start_kill()`（不要 `kill().await`，reap 带 pending I/O 的进程在 Windows 上永不返回），否则 daemon 沉默 = 永久挂
 6. **后台 gh run watch 会被 OOM 杀**: 改前台 `sleep N && gh run view` 一次性轮询
+7. **跨平台 cfg 门禁要连带门禁 import**: 只被门禁 item 使用的 import 会让 Windows clippy `-D warnings` 红，Linux 侧永远看不到；本地验证办法是把 `cfg(not(windows))` 临时 `sed` 成 `cfg(any())` 再 clippy（`--target x86_64-pc-windows-msvc` 走不通，ring/sqlite 的 cc 要 MSVC `lib.exe`）
+8. **后台 cargo test 会与残留进程抢同一日志**: 早前会话遗留的测试进程能把新日志搅成不可信；开跑前 `ps` 清干净，一次只留一个
 
 ---
 
