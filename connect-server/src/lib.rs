@@ -460,11 +460,14 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{Request as HttpRequest, StatusCode};
-    use persona_core::connect::{ConnectTokenScope, ConnectVerb};
+    use persona_core::connect::{ConnectItemType, ConnectTokenScope, ConnectVerb};
     use persona_core::models::{
         CredentialData, CredentialType, IdentityType, PasswordCredentialData, SecurityLevel,
+        SshKeyData, TwoFactorData,
     };
     use persona_core::storage::Database;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpStream;
     use tower::ServiceExt;
 
     struct Fixture {
@@ -472,10 +475,12 @@ mod tests {
         state: ConnectServerState,
         token: String,
         token_row_id: Uuid,
+        identity_id: Uuid,
         cred_id: Uuid,
         /// unlock 用的盐（重新解锁恢复会话用——lock() 清内存密钥）。
         salt: [u8; 32],
-        _db: Database,
+        /// 连接池句柄：限额/DB 故障路径要能主动 `close()` 掉池子。
+        db: Database,
     }
 
     async fn fixture() -> Fixture {
@@ -511,7 +516,6 @@ mod tests {
             .create_connect_token("test token".to_string(), scope)
             .await
             .unwrap();
-        let _ = identity;
 
         // service 本体（含内存主密钥）移入共享槽位：数据面经 router 走，
         // 管理动作（吊销/锁定/解锁）经 state.service 槽位直调。
@@ -522,36 +526,158 @@ mod tests {
             state,
             token,
             token_row_id: row.id,
+            identity_id: identity.id,
             cred_id: cred.id,
             salt,
-            _db: db,
+            db,
         }
     }
 
+    /// 读权限 scope 构造器。`identities`/`item_types` 传空 = 全部（语义见
+    /// core `ConnectTokenScope`）。
+    fn read_scope(identities: Vec<Uuid>, item_types: Vec<ConnectItemType>) -> ConnectTokenScope {
+        ConnectTokenScope {
+            identities,
+            item_types,
+            verbs: vec![ConnectVerb::Read],
+        }
+    }
+
+    /// 同一 service 上再签一个 token：共用 router 与限额表，但按 row.id
+    /// 分列计数——用来验「限额是 per-token 而非全局」。
+    async fn mint_token(fx: &Fixture, label: &str, token_scope: ConnectTokenScope) -> String {
+        let guard = fx.state.service.lock().await;
+        guard
+            .as_ref()
+            .unwrap()
+            .create_connect_token(label.to_string(), token_scope)
+            .await
+            .unwrap()
+            .0
+    }
+
+    async fn add_identity(fx: &Fixture, name: &str) -> Uuid {
+        let guard = fx.state.service.lock().await;
+        guard
+            .as_ref()
+            .unwrap()
+            .create_identity(name.to_string(), IdentityType::Personal)
+            .await
+            .unwrap()
+            .id
+    }
+
+    async fn add_credential(
+        fx: &Fixture,
+        identity_id: Uuid,
+        name: &str,
+        credential_type: CredentialType,
+        data: CredentialData,
+    ) -> Uuid {
+        let guard = fx.state.service.lock().await;
+        guard
+            .as_ref()
+            .unwrap()
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                credential_type,
+                SecurityLevel::High,
+                &data,
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    fn password_data() -> CredentialData {
+        CredentialData::Password(PasswordCredentialData {
+            password: "pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        })
+    }
+
+    fn totp_data() -> CredentialData {
+        CredentialData::TwoFactor(TwoFactorData {
+            secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+            issuer: "ACME".to_string(),
+            account_name: "a@b.c".to_string(),
+            algorithm: "SHA1".to_string(),
+            digits: 6,
+            period: 30,
+        })
+    }
+
+    /// 带默认 loopback `Host` 的便捷调用：只关心状态码 + 包络 JSON。
     async fn send(
         router: Router,
         method: &str,
         path: &str,
         headers: &[(&str, String)],
     ) -> (StatusCode, serde_json::Value) {
-        let mut builder = HttpRequest::builder()
-            .method(method)
-            .uri(path)
-            .header("host", "127.0.0.1:17000");
+        let mut with_host: Vec<(&str, String)> = Vec::with_capacity(headers.len() + 1);
+        with_host.push(("host", "127.0.0.1:17000".to_string()));
+        with_host.extend_from_slice(headers);
+        let (status, _, json) = send_capture(router, method, path, &with_host).await;
+        (status, json)
+    }
+
+    /// 全保真调用：保留响应头，并容忍**非** JSON 正文（axum 自带的
+    /// 400/405 拒绝不走本 crate 的 `{"ok":…}` 包络，解析失败折成 Null）。
+    /// `headers` 不自动补 Host——缺 Host 本身就是被测路径。
+    async fn send_capture(
+        router: Router,
+        method: &str,
+        path: &str,
+        headers: &[(&str, String)],
+    ) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
+        let mut builder = HttpRequest::builder().method(method).uri(path);
         for (k, v) in headers {
             builder = builder.header(*k, v);
         }
         let req = builder.body(Body::empty()).unwrap();
         let response = router.oneshot(req).await.unwrap();
         let status = response.status();
+        let headers = response.headers().clone();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
-        (status, serde_json::from_slice(&body).unwrap())
+        (
+            status,
+            headers,
+            serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    /// 真 TCP 上发一条 HTTP/1.1 请求并读回全部响应文本（`Connection: close`
+    /// 保证服务端发完即关，`read_to_end` 不会挂）。用于驱动
+    /// [`start_connect_server`] 起的 listener，验证防线不只存在于 oneshot。
+    async fn http_over_tcp(port: u16, method: &str, path: &str, host: &str, extra: &str) -> String {
+        let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{extra}\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf))
+            .await
+            .expect("listener 未在 5s 内应答")
+            .unwrap();
+        String::from_utf8(buf).expect("响应非 UTF-8")
     }
 
     fn auth_header(token: &str) -> [(&'static str, String); 1] {
         [("authorization", format!("Bearer {token}"))]
+    }
+
+    /// `send_capture` 不补 Host，需要 Host + Bearer 的用例走这个（数组元组
+    /// 手拼会撞上 `auth_header` 返回的定长数组类型）。
+    fn host_and_auth(token: &str) -> Vec<(&'static str, String)> {
+        vec![
+            ("host", "127.0.0.1:17000".to_string()),
+            ("authorization", format!("Bearer {token}")),
+        ]
     }
 
     #[tokio::test]
@@ -755,5 +881,1042 @@ mod tests {
         }
         let (status, _) = send(fx.router, "GET", "/api/v1/connect/items", &auth).await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    // -------------------------------------------------------------------
+    // 防线顺序与响应卫生
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn every_response_carries_no_store_and_json_content_type() {
+        let fx = fixture().await;
+        // 成功、数据面、以及**错误**响应都必须带 no-store：TOTP 码/字段明文
+        // 一旦进了中间缓存就不该再指望 2xx 那侧记得带头。
+        // 只覆盖**我们生成的**响应。提取器拒绝/路由未命中走 axum 默认响应
+        // （无包络、无 no-store），形状在
+        // `unknown_routes_...`/`query_and_path_filters_...` 里单独钉住。
+        let missing = Uuid::new_v4().to_string();
+        // 第三元 = 是否带合法 token（不带即 401，也是我们的包络）。
+        type Case = (&'static str, String, bool);
+        let cases: Vec<Case> = vec![
+            ("GET", "/api/v1/connect/health".to_string(), false),
+            ("GET", "/api/v1/connect/items".to_string(), true),
+            ("GET", "/api/v1/connect/items".to_string(), false),
+            ("GET", format!("/api/v1/connect/items/{missing}"), true),
+            (
+                "POST",
+                format!("/api/v1/connect/items/{missing}/totp"),
+                true,
+            ),
+        ];
+        for (method, path, with_auth) in cases {
+            let mut all: Vec<(&str, String)> = vec![("host", "127.0.0.1:17000".to_string())];
+            if with_auth {
+                all.extend(auth_header(&fx.token));
+            }
+            let (status, resp_headers, _) =
+                send_capture(fx.router.clone(), method, &path, &all).await;
+            let cache = resp_headers
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            assert_eq!(cache, "no-store", "{method} {path} → {status} 缺 no-store");
+            let ctype = resp_headers
+                .get(header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default();
+            assert!(
+                ctype.starts_with("application/json"),
+                "{method} {path} → {status} content-type 应为 JSON，实为 {ctype:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_host_header_is_421_even_for_health() {
+        let fx = fixture().await;
+        // health 免认证，但不免 Host 白名单——防线 1 在所有例外之前。
+        // send_capture 不补 Host → 这条请求根本没有 Host 头。
+        let (status, _, body) =
+            send_capture(fx.router.clone(), "GET", "/api/v1/connect/health", &[]).await;
+        assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+        assert_eq!(body["error"]["code"], "bad_host");
+    }
+
+    #[tokio::test]
+    async fn lookalike_hosts_are_421_and_never_treated_as_loopback() {
+        let fx = fixture().await;
+        // 全部带合法 token：证明拒绝来自 Host 而不是缺认证。前缀/后缀拼是
+        // DNS rebinding 之外的典型误放行点（`starts_with("127.0.0.1")` 会放过
+        // 127.0.0.1.evil.com）。
+        for host in [
+            "127.0.0.1.evil.com",
+            "127.0.0.1.evil.com:17000",
+            "localhost.evil.com",
+            "evil-localhost",
+            "notlocal",
+            "",
+            "127.0.0.2",
+            // IPv6 字面量在 authority 里必须带方括号（RFC 9110 §4.1.2）；裸
+            // "::1" 被 rsplit_once(':') 切成空 host → 拒绝。
+            "::1",
+            // 端口省略的 "[::1]" 同样被 rsplit_once 切坏（留 "[:"），当前
+            // 一律 fail-closed 421。方向是安全的（不会放行外部 host），但和
+            // 白名单里写着 `::1` 的意图不符 —— 已在 TODO.md 记账。
+            "[::1]",
+        ] {
+            let (status, _, body) = send_capture(
+                fx.router.clone(),
+                "GET",
+                "/api/v1/connect/items",
+                &[
+                    ("host", host.to_string()),
+                    ("authorization", format!("Bearer {}", fx.token)),
+                ],
+            )
+            .await;
+            assert_eq!(status, StatusCode::MISDIRECTED_REQUEST, "host={host:?}");
+            assert_eq!(body["error"]["code"], "bad_host", "host={host:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn loopback_host_aliases_pass_the_host_guard() {
+        let fx = fixture().await;
+        // 不带 token → 401 而不是 421，即 Host 这关已经过了（端口与 IPv6
+        // 方括号形式都必须剥掉再比对）。
+        for host in [
+            "127.0.0.1",
+            "127.0.0.1:17000",
+            "localhost",
+            "localhost:17000",
+            "[::1]:17000",
+        ] {
+            let (status, _, body) = send_capture(
+                fx.router.clone(),
+                "GET",
+                "/api/v1/connect/items",
+                &[("host", host.to_string())],
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "host={host:?}");
+            assert_eq!(body["error"]["code"], "unauthorized", "host={host:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn defenses_are_ordered_host_then_origin_then_auth_then_health() {
+        let fx = fixture().await;
+        // 防线 2 先于 health 例外：带 Origin 的 /health 是 403，不是免检 200。
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/health",
+            &[("origin", "http://localhost:3000".to_string())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert_eq!(body["error"]["code"], "origin_forbidden");
+        // 防线 1 先于防线 2：坏 Host + Origin 报 bad_host（421）而非 403。
+        let (status, _, body) = send_capture(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/health",
+            &[
+                ("host", "evil.example.com".to_string()),
+                ("origin", "http://localhost:3000".to_string()),
+            ],
+        )
+        .await;
+        assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+        assert_eq!(body["error"]["code"], "bad_host");
+        // 防线 3 先于路由：不存在的路径未认证时是 401，不泄露路由表。
+        let (status, body) =
+            send(fx.router.clone(), "GET", "/api/v1/connect/nonexistent", &[]).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
+    }
+
+    #[tokio::test]
+    async fn empty_and_non_bearer_credentials_are_401_shaped_like_unknown_tokens() {
+        let fx = fixture().await;
+        for value in [
+            "Bearer ",
+            "Bearer    ",
+            "Bearer",
+            "bearer pconn_abc",
+            "Token pconn_abc",
+            "pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        ] {
+            let (status, body) = send(
+                fx.router.clone(),
+                "GET",
+                "/api/v1/connect/items",
+                &[("authorization", value.to_string())],
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "value={value:?}");
+            assert_eq!(body["error"]["code"], "unauthorized", "value={value:?}");
+            // message 只有两类：格式不合法（缺/畸形）与查无此 token。既不
+            // 泄露「token 存在但被吊销」，也不区分大小写笔误的 scheme。
+            let msg = body["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                msg == "missing or malformed bearer token" || msg == "invalid token",
+                "value={value:?} message={msg:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_service_slot_is_503_vault_locked_while_health_stays_up() {
+        // 宿主尚未初始化库（service 槽位 None）：数据面按锁定语义处理，
+        // health 仍可用（存活探测不该被库状态拖成 5xx）。
+        let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
+        let router = build_router(state.clone());
+        let (status, body) = send(
+            router.clone(),
+            "GET",
+            "/api/v1/connect/items",
+            &auth_header("pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "vault_locked");
+        let (status, body) = send(router, "GET", "/api/v1/connect/health", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["service"], "persona-connect");
+        // 没有 token 行可记账 → 限额表必须保持空（否则探测能占满内存）
+        assert!(state.rates.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn database_failure_is_500_and_leaks_nothing_from_the_cause() {
+        let fx = fixture().await;
+        let auth = auth_header(&fx.token);
+        let (status, _) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::OK, "失败注入前数据面可用");
+
+        fx.db.pool().close().await;
+
+        // 鉴权自身查库失败走 guard 的 500 分支——是 internal 不是 401，
+        // 否则 DB 抖动会被消费者当成 token 失效去重签。
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "internal");
+        assert_eq!(body["error"]["message"], "authentication failed");
+        let leaked = body.to_string().to_lowercase();
+        for forbidden in ["sqlx", "sqlite", "pool", "closed", "memory"] {
+            assert!(
+                !leaked.contains(forbidden),
+                "500 响应外泄了内部细节: {leaked}"
+            );
+        }
+        // 同一条 DB 故障路径下 health 仍 200（免鉴权、不落库）。
+        let (status, _) = send(fx.router, "GET", "/api/v1/connect/health", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // -------------------------------------------------------------------
+    // 限额：固定窗语义
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn consume_rate_allows_exactly_the_cap_then_rejects_within_the_window() {
+        let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
+        let id = Uuid::new_v4();
+        for n in 1..=RATE_LIMIT_PER_MINUTE {
+            assert!(state.consume_rate(id), "第 {n} 次在预算内");
+        }
+        assert!(
+            !state.consume_rate(id),
+            "第 {} 次必须超限（429）",
+            RATE_LIMIT_PER_MINUTE + 1
+        );
+        // 计数按 token 分列，不是全局令牌桶
+        assert!(state.consume_rate(Uuid::new_v4()));
+    }
+
+    #[test]
+    fn consume_rate_resets_the_counter_when_the_window_elapsed() {
+        let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
+        let id = Uuid::new_v4();
+        // 直接种一个「窗口已过期」的槽位：Instant 是单调时钟，构造过去只能
+        // 靠 checked_sub；机器开机不足一个窗口时长时无法构造，跳过而非误红。
+        let stale = match Instant::now().checked_sub(RATE_WINDOW + Duration::from_secs(1)) {
+            Some(at) => at,
+            None => {
+                eprintln!(
+                    "skip: 单调时钟不足 {}s，造不出过期窗口",
+                    RATE_WINDOW.as_secs()
+                );
+                return;
+            }
+        };
+        state
+            .rates
+            .lock()
+            .unwrap()
+            .insert(id, (stale, RATE_LIMIT_PER_MINUTE));
+        assert!(
+            state.consume_rate(id),
+            "过期窗口必须重置计数，否则 token 永久锁死"
+        );
+        // 重置后从 1 重新起算 → 整窗预算仍是 120
+        for _ in 1..RATE_LIMIT_PER_MINUTE {
+            assert!(state.consume_rate(id));
+        }
+        assert!(!state.consume_rate(id));
+    }
+
+    #[tokio::test]
+    async fn rejected_requests_leave_the_rate_map_untouched() {
+        let fx = fixture().await;
+        for _ in 0..20 {
+            // 缺 token / 坏 Origin / 坏 Host / health：全都在记账之前返回。
+            send(fx.router.clone(), "GET", "/api/v1/connect/items", &[]).await;
+            send(
+                fx.router.clone(),
+                "GET",
+                "/api/v1/connect/items",
+                &[("origin", "http://evil".to_string())],
+            )
+            .await;
+            send_capture(
+                fx.router.clone(),
+                "GET",
+                "/api/v1/connect/items",
+                &[("host", "evil.example.com".to_string())],
+            )
+            .await;
+            send(fx.router.clone(), "GET", "/api/v1/connect/health", &[]).await;
+        }
+        assert!(
+            fx.state.rates.lock().unwrap().is_empty(),
+            "未过检的请求不得占用 token 预算"
+        );
+        let auth = auth_header(&fx.token);
+        for _ in 0..5 {
+            let (status, _) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let rates = fx.state.rates.lock().unwrap();
+        assert_eq!(rates.len(), 1, "只有过检请求记账，且按 token 一条");
+        assert_eq!(
+            rates[&fx.token_row_id].1, 5,
+            "计数应等于成功请求数（含在 handler 里被拒的请求，见下一个测试）"
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_requests_consume_budget_even_when_input_is_rejected() {
+        let fx = fixture().await;
+        // 种到差一次即满：证明计数发生在 guard 内、路由/提取器之前。
+        fx.state
+            .rates
+            .lock()
+            .unwrap()
+            .insert(fx.token_row_id, (Instant::now(), RATE_LIMIT_PER_MINUTE - 1));
+        let auth = auth_header(&fx.token);
+        let (status, _, body) = send_capture(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/items/not-a-uuid",
+            &host_and_auth(&fx.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            body,
+            serde_json::Value::Null,
+            "提取器拒绝走 axum 默认正文（已知偏差：不经 ok/error 包络）"
+        );
+        let (status, body) = send(fx.router, "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["error"]["code"], "rate_limited");
+    }
+
+    #[tokio::test]
+    async fn rate_limit_is_per_token_not_per_process() {
+        let fx = fixture().await;
+        let second = mint_token(&fx, "second", read_scope(vec![], vec![])).await;
+        let first = auth_header(&fx.token);
+        for _ in 0..RATE_LIMIT_PER_MINUTE {
+            let (status, _) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &first).await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &first).await;
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["error"]["code"], "rate_limited");
+        // 另一个 token 不受牵连（一个失控客户端不能 DoS 其他集成）
+        let (status, _) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/items",
+            &auth_header(&second),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(fx.state.rates.lock().unwrap().len(), 2);
+    }
+
+    // -------------------------------------------------------------------
+    // scope 过滤与条目可见性（数据面状态流转）
+    // -------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn identity_scoped_token_sees_only_its_identity_and_answers_empty_for_others() {
+        let fx = fixture().await;
+        let other = add_identity(&fx, "personal").await;
+        let other_cred = add_credential(
+            &fx,
+            other,
+            "personal-login",
+            CredentialType::Password,
+            password_data(),
+        )
+        .await;
+        let scoped = mint_token(&fx, "work-only", read_scope(vec![fx.identity_id], vec![])).await;
+        let auth = auth_header(&scoped);
+
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        let titles: Vec<&str> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, vec!["login"], "scope 外身份的条目不得出现在列表");
+
+        // scope 外条目 = 与不存在同形的 404（不区分 403，防探测）
+        let missing = format!("/api/v1/connect/items/{}", other_cred);
+        let (status, body) = send(fx.router.clone(), "GET", &missing, &auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "not_found");
+        let unknown = format!("/api/v1/connect/items/{}", Uuid::new_v4());
+        let (unknown_status, unknown_body) = send(fx.router.clone(), "GET", &unknown, &auth).await;
+        assert_eq!(
+            (status, &body["error"]["code"]),
+            (unknown_status, &unknown_body["error"]["code"]),
+            "越权与不存在必须同形"
+        );
+
+        // 显式请求 scope 外的身份：200 空列表，而不是 403/404
+        let query = format!("/api/v1/connect/items?identity={other}");
+        let (status, body) = send(fx.router.clone(), "GET", &query, &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 0);
+        let query = format!("/api/v1/connect/items?identity={}", fx.identity_id);
+        let (status, body) = send(fx.router.clone(), "GET", &query, &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        // 身份列表同样按 scope 收敛
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/identities",
+            &auth,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+
+        // 对照组：全 scope token 两条身份都看得见
+        let all = auth_header(&fx.token);
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &all).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 2);
+        let (status, _) = send(fx.router, "GET", &missing, &all).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn type_scoped_token_hides_other_types_on_every_endpoint() {
+        let fx = fixture().await;
+        let totp_id = add_credential(
+            &fx,
+            fx.identity_id,
+            "2fa",
+            CredentialType::TwoFactor,
+            totp_data(),
+        )
+        .await;
+        let scoped = mint_token(
+            &fx,
+            "password-only",
+            read_scope(vec![], vec![ConnectItemType::Password]),
+        )
+        .await;
+        let auth = auth_header(&scoped);
+
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        let totp_path = format!("/api/v1/connect/items/{}", totp_id);
+        let (status, body) = send(fx.router.clone(), "GET", &totp_path, &auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "not_found");
+        let totp_post = format!("/api/v1/connect/items/{}/totp", totp_id);
+        let (status, body) = send(fx.router.clone(), "POST", &totp_post, &auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "not_found");
+        // 过滤器本身也不给越权数据
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/items?type=totp",
+            &auth,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn sensitive_types_stay_invisible_even_for_an_all_scope_token() {
+        let fx = fixture().await;
+        let ssh = add_credential(
+            &fx,
+            fx.identity_id,
+            "bastion-key",
+            CredentialType::SshKey,
+            CredentialData::SshKey(SshKeyData {
+                private_key: "-----BEGIN OPENSSH PRIVATE KEY-----".to_string(),
+                public_key: "ssh-ed25519 AAAA".to_string(),
+                key_type: "ed25519".to_string(),
+                passphrase: None,
+            }),
+        )
+        .await;
+        let wallet = add_credential(
+            &fx,
+            fx.identity_id,
+            "cold-wallet",
+            CredentialType::CryptoWallet,
+            CredentialData::Raw(vec![1, 2, 3]),
+        )
+        .await;
+        let custom = add_credential(
+            &fx,
+            fx.identity_id,
+            "legacy-card",
+            CredentialType::Custom("card".to_string()),
+            CredentialData::Raw(vec![4, 5, 6]),
+        )
+        .await;
+        let auth = auth_header(&fx.token);
+
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        let titles: Vec<&str> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["title"].as_str().unwrap())
+            .collect();
+        assert_eq!(titles, vec!["login"], "敏感类型恒不可授权：{titles:?}");
+        for id in [ssh, wallet, custom] {
+            let path = format!("/api/v1/connect/items/{}", id);
+            let (status, body) = send(fx.router.clone(), "GET", &path, &auth).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{id} 泄漏");
+            assert_eq!(body["error"]["code"], "not_found");
+        }
+    }
+
+    #[tokio::test]
+    async fn archived_credential_leaves_the_connect_surface() {
+        let fx = fixture().await;
+        {
+            let guard = fx.state.service.lock().await;
+            let service = guard.as_ref().unwrap();
+            let mut cred = service
+                .get_credential(&fx.cred_id)
+                .await
+                .unwrap()
+                .expect("fixture 条目存在");
+            cred.is_active = false;
+            service.update_credential(&cred).await.unwrap();
+        }
+        let auth = auth_header(&fx.token);
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["data"].as_array().unwrap().len(),
+            0,
+            "归档条目不进列表"
+        );
+        let path = format!("/api/v1/connect/items/{}", fx.cred_id);
+        let (status, body) = send(fx.router.clone(), "GET", &path, &auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body["error"]["code"], "not_found");
+        let totp = format!("/api/v1/connect/items/{}/totp", fx.cred_id);
+        let (status, _) = send(fx.router, "POST", &totp, &auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn totp_endpoint_serves_the_current_code_for_a_scoped_twofactor_item() {
+        let fx = fixture().await;
+        let totp_id = add_credential(
+            &fx,
+            fx.identity_id,
+            "2fa",
+            CredentialType::TwoFactor,
+            totp_data(),
+        )
+        .await;
+        let auth = auth_header(&fx.token);
+        let path = format!("/api/v1/connect/items/{}/totp", totp_id);
+        let (status, body) = send(fx.router.clone(), "POST", &path, &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        let code = body["data"]["code"].as_str().unwrap_or_default();
+        assert_eq!(code.len(), 6, "TOTP 码应为 6 位: {code:?}");
+        assert!(
+            code.chars().all(|c| c.is_ascii_digit()),
+            "TOTP 码必须是数字: {code:?}"
+        );
+        let remaining = body["data"]["remaining_seconds"].as_u64().unwrap();
+        assert!((1..=30).contains(&remaining), "剩余秒越界: {remaining}");
+        // 同一周期内两次取码相同（周期边界附近不做断言，避免抖动）
+        if remaining > 5 {
+            let (_, second) = send(fx.router.clone(), "POST", &path, &auth).await;
+            assert_eq!(second["data"]["code"], code, "同一周期内码不该变");
+        }
+        // 元数据列表里该条目按 scope 词汇表标成 totp
+        let (status, body) = send(fx.router, "GET", "/api/v1/connect/items?type=totp", &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"][0]["type"], "totp");
+    }
+
+    #[tokio::test]
+    async fn query_and_path_filters_are_exact_and_reject_malformed_input() {
+        let fx = fixture().await;
+        let auth = auth_header(&fx.token);
+        // 组合过滤
+        let q = format!(
+            "/api/v1/connect/items?identity={}&type=password&title=login",
+            fx.identity_id
+        );
+        let (status, body) = send(fx.router.clone(), "GET", &q, &auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 1);
+        // title 是精确匹配（大小写敏感），不是子串
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/items?title=Log",
+            &auth,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 0);
+        // 畸形参数：4xx 而不是 500（不能把库/解析细节变成服务器错误）
+        for path in [
+            "/api/v1/connect/items?identity=not-a-uuid",
+            "/api/v1/connect/items?type=bogus",
+            "/api/v1/connect/items/not-a-uuid",
+        ] {
+            let (status, _, _) =
+                send_capture(fx.router.clone(), "GET", path, &host_and_auth(&fx.token)).await;
+            assert!(
+                status.is_client_error() && status != StatusCode::UNAUTHORIZED,
+                "{path} 应折成请求侧 4xx，实为 {status}"
+            );
+        }
+    }
+
+    /// 端点内读到坏行 → 500 `internal`（`internal_or_locked` 的非锁定臂在
+    /// 各 handler 的调用点）。这是那条臂唯一能确定性驱动的入口：guard 之后
+    /// 再锁库是竞态，而损坏的行是真实故障（vault 文件被截断/密钥轮换半途）。
+    #[tokio::test]
+    async fn rows_the_endpoint_cannot_read_are_500_internal_without_leaking_the_cause() {
+        let fx = fixture().await;
+        let totp_id = add_credential(
+            &fx,
+            fx.identity_id,
+            "2fa",
+            CredentialType::TwoFactor,
+            totp_data(),
+        )
+        .await;
+        let broken_list = add_credential(
+            &fx,
+            fx.identity_id,
+            "junk",
+            CredentialType::Password,
+            password_data(),
+        )
+        .await;
+        let auth = auth_header(&fx.token);
+
+        // ① 身份行的时间戳列坏掉 → 行映射失败 → identities 端点 Err。
+        fx.db
+            .execute(&format!(
+                "UPDATE identities SET updated_at = 'not-a-timestamp' WHERE id = '{}'",
+                fx.identity_id
+            ))
+            .await
+            .unwrap();
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/identities",
+            &auth,
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "internal");
+        assert_eq!(body["error"]["message"], "internal error");
+
+        // ② 密文中间字节翻掉（长度不变，只让 AEAD 校验失败）→ 单条读取 Err。
+        for id in [fx.cred_id, totp_id] {
+            for (num, den, byte) in [(1u32, 3u32, "5a"), (2, 3, "a5")] {
+                fx.db
+                    .execute(&format!(
+                        "UPDATE credentials SET encrypted_data =                          substr(encrypted_data, 1, length(encrypted_data)*{num}/{den})                          || X'{byte}'                          || substr(encrypted_data, length(encrypted_data)*{num}/{den} + 2)                          WHERE id = '{id}'"
+                    ))
+                    .await
+                    .unwrap();
+            }
+        }
+        let path = format!("/api/v1/connect/items/{}", fx.cred_id);
+        let (status, body) = send(fx.router.clone(), "GET", &path, &auth).await;
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "解密失败不能折成 404（消费者会误判条目被删）"
+        );
+        assert_eq!(body["error"]["code"], "internal");
+        let totp_path = format!("/api/v1/connect/items/{}/totp", totp_id);
+        let (status, body) = send(fx.router.clone(), "POST", &totp_path, &auth).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "internal");
+
+        // ③ 列表里任一行读不出来 → 整个列表 500（不静默丢条目）。
+        fx.db
+            .execute(&format!(
+                "UPDATE credentials SET updated_at = 'not-a-timestamp' WHERE id = '{broken_list}'"
+            ))
+            .await
+            .unwrap();
+        let (status, body) = send(fx.router.clone(), "GET", "/api/v1/connect/items", &auth).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "internal");
+
+        // 三类内部细节都不许进响应体（只进 tracing 日志）。
+        let leaked = body.to_string().to_lowercase();
+        for forbidden in [
+            "decrypt",
+            "invalid",
+            "updated_at",
+            "timestamp",
+            "sql",
+            "not-a",
+            "credential",
+            "gcm",
+            "bincode",
+        ] {
+            assert!(
+                !leaked.contains(forbidden),
+                "500 响应外泄内部细节: {leaked}"
+            );
+        }
+        // health 不受库损坏影响（不落库），存活探测必须还活着。
+        let (status, _) = send(fx.router, "GET", "/api/v1/connect/health", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // 说明：四个 handler 里的 `locked_response()` 分支（service 槽位在 guard
+    // 查过 is_unlocked 之后、进 handler 之前变成 None）经路由不可确定性触发
+    // ——那是纯竞态，且方向安全（503 而非 5xx 泄漏）。故不为其伪造测试，改由
+    // `ok_err_and_locked_envelopes_match_the_documented_shape` 直接钉住
+    // `locked_response()` 的状态码与错误码，调用点保持纵深防御原样。
+
+    #[tokio::test]
+    async fn unknown_routes_and_methods_404_405_after_authentication() {
+        let fx = fixture().await;
+        let (status, _, body) = send_capture(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/nonexistent",
+            &host_and_auth(&fx.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            body,
+            serde_json::Value::Null,
+            "路由未命中走 axum 默认（空）正文——已知偏差，不经包络"
+        );
+        let (status, _, _) = send_capture(
+            fx.router.clone(),
+            "DELETE",
+            "/api/v1/connect/items",
+            &host_and_auth(&fx.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        // health 只认 GET：免认证例外不是免路由（防止 health 变成通配口）
+        let (status, _, _) = send_capture(
+            fx.router.clone(),
+            "POST",
+            "/api/v1/connect/health",
+            &[("host", "127.0.0.1:17000".to_string())],
+        )
+        .await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        // TOTP 端点只认 POST
+        let path = format!("/api/v1/connect/items/{}/totp", fx.cred_id);
+        let (status, _, _) =
+            send_capture(fx.router.clone(), "GET", &path, &host_and_auth(&fx.token)).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    // -------------------------------------------------------------------
+    // 包络/映射纯函数与 listener 生命周期
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn is_vault_locked_walks_the_whole_cause_chain() {
+        let direct: anyhow::Error = PersonaError::VaultLocked("locked".to_string()).into();
+        assert!(is_vault_locked(&direct));
+        let nested = direct.context("connect endpoint").context("outer wrap");
+        assert!(is_vault_locked(&nested), "锁定态可能被多层 context 包住");
+        assert!(!is_vault_locked(&anyhow::Error::from(
+            PersonaError::Database("no such table".to_string())
+        )));
+        assert!(!is_vault_locked(&anyhow::anyhow!("plain failure")));
+    }
+
+    #[tokio::test]
+    async fn internal_or_locked_maps_locked_to_503_and_other_errors_to_500() {
+        // 这两个臂经路由不可达：guard 已在鉴权后查过 is_unlocked，鉴权自身
+        // 失败又是另一个 500。作为纵深防御保留，故直调纯函数覆盖。
+        let locked = anyhow::Error::from(PersonaError::VaultLocked("vault locked".to_string()))
+            .context("connect endpoint");
+        let (status, body) = response_parts(internal_or_locked(&locked)).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "vault_locked");
+
+        let boom = anyhow::anyhow!("sqlite PoolClosed: /home/user/.persona/vault.db");
+        let (status, body) = response_parts(internal_or_locked(&boom)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body["error"]["code"], "internal");
+        assert_eq!(body["error"]["message"], "internal error");
+        let leaked = body.to_string().to_lowercase();
+        for forbidden in ["sqlite", "poolclosed", "vault.db", "/home/"] {
+            assert!(!leaked.contains(forbidden), "内部错误文本外泄: {leaked}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ok_err_and_locked_envelopes_match_the_documented_shape() {
+        let response = ok_json(json!({ "x": 1 }));
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+        assert_eq!(
+            body_json(response).await,
+            json!({ "ok": true, "data": { "x": 1 } })
+        );
+
+        let response = err_json(StatusCode::NOT_FOUND, "not_found", "item not found");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            body_json(response).await,
+            json!({ "ok": false, "error": { "code": "not_found", "message": "item not found" } })
+        );
+
+        let (status, body) = response_parts(locked_response()).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "vault_locked");
+    }
+
+    #[tokio::test]
+    async fn item_type_slug_is_the_scope_vocabulary_with_a_null_floor() {
+        let fx = fixture().await;
+        let base = {
+            let guard = fx.state.service.lock().await;
+            guard
+                .as_ref()
+                .unwrap()
+                .get_credential(&fx.cred_id)
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        let mut cred = base.clone();
+        cred.credential_type = CredentialType::Password;
+        assert_eq!(item_type_slug(&cred), json!("password"));
+        cred.credential_type = CredentialType::TwoFactor;
+        assert_eq!(item_type_slug(&cred), json!("totp"));
+        cred.credential_type = CredentialType::SecureNote;
+        assert_eq!(item_type_slug(&cred), json!("note"));
+        // 不可映射类型走 null 兜底（scope 过滤已挡住，这里防的是将来漏过滤）
+        for ty in [
+            CredentialType::SshKey,
+            CredentialType::CryptoWallet,
+            CredentialType::Custom("card".to_string()),
+        ] {
+            cred.credential_type = ty.clone();
+            assert_eq!(item_type_slug(&cred), serde_json::Value::Null, "{ty:?}");
+        }
+
+        let meta = item_meta_json(&base);
+        assert_eq!(meta["id"], fx.cred_id.to_string());
+        assert_eq!(meta["title"], "login");
+        assert_eq!(meta["type"], "password");
+        assert_eq!(
+            meta["urls"].as_array().unwrap().len(),
+            0,
+            "无 url 时 urls 仍是数组（不是 null），消费者可无脑迭代"
+        );
+        assert_eq!(meta["updated_at"], json!(base.updated_at.to_rfc3339()));
+        let mut with_url = base.clone();
+        with_url.url = Some("https://example.com".to_string());
+        assert_eq!(
+            item_meta_json(&with_url)["urls"],
+            json!(["https://example.com"])
+        );
+    }
+
+    #[tokio::test]
+    async fn listener_binds_loopback_serves_defenses_over_tcp_and_releases_on_stop() {
+        // 不需要真 service：listener 生命周期与三防线都不依赖库。
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let handle = start_connect_server(service, 0).await.unwrap();
+        assert_ne!(handle.port, 0, "端口 0 要回传 OS 分配的真实值");
+
+        let text = http_over_tcp(
+            handle.port,
+            "GET",
+            "/api/v1/connect/health",
+            "127.0.0.1",
+            "",
+        )
+        .await;
+        assert!(
+            text.starts_with("HTTP/1.1 200"),
+            "真 socket 上 health 应 200: {text}"
+        );
+        assert!(text.contains("\"ok\":true"), "响应缺包络: {text}");
+        assert!(
+            text.to_lowercase().contains("cache-control: no-store"),
+            "响应缺 no-store: {text}"
+        );
+        // 三防线不是 oneshot 专属：走 hyper 解析后同样生效
+        let text = http_over_tcp(
+            handle.port,
+            "GET",
+            "/api/v1/connect/health",
+            "evil.example.com",
+            "",
+        )
+        .await;
+        assert!(
+            text.starts_with("HTTP/1.1 421"),
+            "DNS rebinding 未拦: {text}"
+        );
+        let text = http_over_tcp(
+            handle.port,
+            "GET",
+            "/api/v1/connect/health",
+            "127.0.0.1",
+            "Origin: http://evil.example.com\r\n",
+        )
+        .await;
+        assert!(text.starts_with("HTTP/1.1 403"), "跨源未拦: {text}");
+        // 数据面在库未初始化（service None）时 503；health 仍 200（真 socket）
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let handle2 = start_connect_server(service, 0).await.unwrap();
+        let auth = "Authorization: Bearer pconn_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\r\n";
+        let text = http_over_tcp(
+            handle2.port,
+            "GET",
+            "/api/v1/connect/health",
+            "127.0.0.1",
+            auth,
+        )
+        .await;
+        assert!(
+            text.starts_with("HTTP/1.1 200"),
+            "health 免鉴权，带 token 也应 200: {text}"
+        );
+        let text = http_over_tcp(
+            handle2.port,
+            "GET",
+            "/api/v1/connect/items",
+            "127.0.0.1",
+            auth,
+        )
+        .await;
+        assert!(text.starts_with("HTTP/1.1 503"), "未初始化库应 503: {text}");
+        assert!(text.contains("vault_locked"), "503 缺错误码: {text}");
+        // 缺 token → 401；真 socket 上的顺序与 oneshot 一致
+        let text = http_over_tcp(
+            handle2.port,
+            "GET",
+            "/api/v1/connect/items",
+            "127.0.0.1",
+            "",
+        )
+        .await;
+        assert!(text.starts_with("HTTP/1.1 401"), "缺 token 应 401: {text}");
+        assert_ne!(handle.port, handle2.port, "两次 bind 拿到不同端口");
+
+        let (port1, port2) = (handle.port, handle2.port);
+        handle.stop();
+        handle2.stop();
+        // graceful shutdown 后端口不再接受连接（轮询而非 sleep 猜时长）
+        let stopped = async {
+            for _ in 0..100 {
+                if TcpStream::connect(std::net::SocketAddr::from(([127, 0, 0, 1], port1)))
+                    .await
+                    .is_err()
+                {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            false
+        }
+        .await;
+        assert!(stopped, "stop() 后 listener 未释放端口 {port1}");
+        let still_open = TcpStream::connect(std::net::SocketAddr::from(([127, 0, 0, 1], port2)))
+            .await
+            .is_err();
+        assert!(still_open, "stop() 后第二个 listener 端口也应关闭");
+    }
+
+    #[tokio::test]
+    async fn bind_failure_is_propagated_instead_of_silently_retried() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = occupied.local_addr().unwrap().port();
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let result = start_connect_server(service, port).await;
+        assert!(
+            result.is_err(),
+            "端口 {port} 被占时 bind 必须报错，不得静默换端口"
+        );
+        let err = result.err().unwrap();
+        let io = err
+            .downcast_ref::<std::io::Error>()
+            .expect("bind 失败应保持 io::Error 原样，供设置页显式报错");
+        assert_eq!(io.kind(), std::io::ErrorKind::AddrInUse, "错误: {err}");
+        drop(occupied);
+    }
+
+    async fn body_json(response: Response) -> serde_json::Value {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    async fn response_parts(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        (status, body_json(response).await)
     }
 }
