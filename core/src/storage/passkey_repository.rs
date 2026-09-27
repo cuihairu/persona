@@ -297,6 +297,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_credential_id_rejected_across_identities() {
+        // 设计稿 §5：credential_id 全库唯一（"同一库内不重复"），不只是同一
+        // 身份内——同一条 passkey 不允许在两个身份下各存一份（016 迁移收紧）。
+        let db = setup_db().await;
+        let repo = PasskeyRepository::new(db.clone());
+        let first = seed_identity(&db).await;
+        let second = seed_identity(&db).await;
+        let item = make_item(&db, first);
+        repo.create(&item).await.unwrap();
+
+        let mut moved = item.clone();
+        moved.id = Uuid::new_v4();
+        moved.identity_id = second;
+        assert!(
+            repo.create(&moved).await.is_err(),
+            "the same credential_id must not register under a second identity"
+        );
+    }
+
+    #[tokio::test]
     async fn update_unknown_id_is_not_found() {
         let db = setup_db().await;
         let repo = PasskeyRepository::new(db.clone());
