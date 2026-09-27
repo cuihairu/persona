@@ -3,11 +3,20 @@
 //! These tests verify that the CLI commands work correctly
 //! and integrate properly with the persona-core library.
 
-use anyhow::{Context, Result};
+// `Context`, `Path` and `StdCommand` are only reached from the non-Windows
+// items gated below (agent binary lookup, PATH stripping, the fallback
+// `cargo build`), so on Windows they are unused imports — and the Windows
+// clippy step runs with `-D warnings`. Keep the cfgs in lockstep with those
+// items; adding a new caller means dropping the matching gate here.
+#[cfg(not(windows))]
+use anyhow::Context;
+use anyhow::Result;
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+#[cfg(not(windows))]
 use std::path::Path;
+#[cfg(not(windows))]
 use std::process::Command as StdCommand;
 use tempfile::tempdir;
 
