@@ -34,6 +34,19 @@ jobs:
           cache: npm
           cache-dependency-path: docs/package-lock.json
 
+      # 守卫：docs/ 只有一份锁文件，且必须是 npm 那份。用 pnpm 装过一次
+      # （62940e8 装 mermaid）会留下 docs/pnpm-lock.yaml 而 package-lock.json
+      # 纹丝不动，`npm ci` 随后以 EUSAGE "not in sync" 失败——本地 pnpm 构建
+      # 全绿，CI 却红，且报错只说"锁文件不同步"，不指向真因。先于安装自查，
+      # 把话说清楚。
+      - name: Guard single lockfile (npm only)
+        working-directory: docs
+        run: |
+          if [ -f pnpm-lock.yaml ] || [ -f yarn.lock ]; then
+            echo "::error::docs/ 存在 pnpm-lock.yaml/yarn.lock——本目录由 npm ci 安装（见下方步骤），第二份锁文件必然漂移。请改用 npm install 并只提交 package-lock.json"
+            exit 1
+          fi
+
       # docs/ 是独立 npm 安装（非 pnpm workspace 成员），锁文件见 docs/package-lock.json
       - name: Install dependencies
         working-directory: docs
