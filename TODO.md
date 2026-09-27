@@ -1039,6 +1039,47 @@ Quality & Security
       website umi bundler 构建链引入（node-libs-browser→crypto-browserify），
       不进 desktop/扩展产物；umi 已升 4.7.19 复核仍在，上游出补丁版即
       override。顺带：tauri 2.11.5→2.11.6（desktop 全量测试+clippy 绿）
+- [x] Dependabot 更新任务失败排查（2026-09-27，docs 目录 npm_and_yarn / lodash-es+vite，
+      run 36292552725）：根因**不是** workflow 权限也不是 registry，而是 docs/ 的锁与
+      图状态——① chevrotain 11.0.3 精确钉 `lodash-es@4.17.23`，而 docs/ 不是 pnpm
+      workspace 成员、自己一套 npm `package-lock.json`，Dependabot 按旧锁解析出的修复
+      路径是**降级**（→4.17.21），updater 在 `VulnerabilityAuditor: audit result not
+      viable: downgrades_dependencies` 直接 exit 1 → job 红；② 早前一次
+      `pnpm install --ignore-workspace` 在 docs/ 里留了第二份锁 `pnpm-lock.yaml`
+      （与 package-lock 漂移，`npm ci` 侧的 EUSAGE 也源于它）。仓库内修法（8e24eb6）：
+      `docs/package.json` 的 npm `overrides` 补 `lodash-es: ^4.18.1`（与已有
+      `vite: ^6.4.3` 并列，npm 会整树替换父级精确钉版）+ 重生成 package-lock.json
+      （`node_modules/lodash-es` → 4.18.1）+ 删掉 pnpm-lock.yaml + `docs.yml` 加
+      "Guard single lockfile (npm only)" 步骤。验证：`npm ci && npm run build` 绿、
+      `npm audit` 0 vulnerabilities、chevrotain 真实 init 路径与 mermaid parse 都在
+      4.18.1 上跑通（DOMPurify 那侧的报错是 Node 无 DOM，与 lodash 无关）；
+      `GET /dependabot/alerts?state=open` 已空（图重扫后自动关告警）。
+      **坑**：Dependabot 自有 run 不能 `gh run rerun`（"This workflow run cannot be
+      retried"），所以「转绿」只能以告警关闭 + 本地复算为凭，别指望重跑那条红 run。
+      残留（都不是可达修复）：vite 报 "No update possible"（被 docs 自己的 override 钉住）、
+      历史 /docs esbuild、/. 的 glob+elliptic、cargo 侧 glib/lru/rand 降级型失败（告警已关）
+- [x] 覆盖率轮次·基线与 connect-server（2026-09-27，CI 同口径
+      `cargo llvm-cov --workspace --all-features --ignore-filename-regex '…'`）：
+      全仓 **TOTAL 行覆盖 95.88%**（missed 1979/68783；functions 88.89%、regions 97.12%）。
+      行覆盖最低的前两名不是 connect-server 而是
+      `cli/src/commands/backup.rs` **74.06%**（missed 87/361）与
+      `cli/src/commands/travel.rs` **79.58%**（missed 96/493），其后
+      `core/src/storage/connect_repository.rs` 81.87%、`core/src/auth/remote_http.rs`
+      81.98%、`cli/src/commands/connect.rs` 83.74%、`core/src/sync/remote.rs` 87.27%。
+      本轮按派单先做 connect-server：`connect-server/src/lib.rs` 行覆盖
+      **92.51% → 98.85%**、函数 **90.00% → 100%**、用例 **8 → 35**（5ed10b2）。
+      剩余未覆的 4 行全是 handler 内 `locked_response()`（guard 查过 is_unlocked 之后
+      service 槽位才变 None 的纯竞态），测试模块里已写明不伪造触发。
+      **纠错记账**：上一轮巡检记的「connect-server 759 行、src 内 0 个测试函数」是错的——
+      grep 只数了 `#[test]`，漏了 `#[tokio::test]`；它原本就有 8 个用例。找缺口请用
+      `#[*test]` 一类模式或直接看覆盖率，别数单次字面匹配。
+- [ ] connect-server 两处小硬面（本轮补测暴露，**当前行为已用测试钉住，未改**）：
+      ① `Host` 解析对省略端口的 IPv6 字面量（`[::1]`）会按最后一个 `:` 切 → 剩 `[:` →
+      421 fail-closed，与白名单里写着 `::1` 的意图不符（方向安全，但 IPv6 宿主将来内嵌
+      双栈 listener 时会误拒）；改法是仅当 host 段以 `]` 结尾时才剥端口。
+      ② axum 的提取器拒绝（400）与路由未命中（404/405）走框架默认响应：不经
+      `{"ok":false,"error":{…}}` 包络、也不带 `cache-control: no-store`（4xx 默认可缓存）。
+      加一层统一 header/包络或给 fallback handler 显式包装。
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
