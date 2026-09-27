@@ -121,6 +121,35 @@ pub enum SshSubcommand {
         #[arg(short = 'o')]
         output: Option<String>,
     },
+    /// Manage a vault public key in a host's authorized_keys. Runs the user's
+    /// own `ssh` binary (same trust model as `ssh run`); the agent's host
+    /// policy applies while the session is open
+    Authorize {
+        /// Identity owning the key
+        #[arg(short, long)]
+        identity: String,
+        /// Target host (user@host allowed, passed to ssh)
+        #[arg(long)]
+        host: String,
+        /// Credential UUID (optional when the identity holds exactly one SSH key)
+        #[arg(long)]
+        id: Option<Uuid>,
+        /// Remove matching lines from authorized_keys instead of adding
+        #[arg(long)]
+        remove: bool,
+        /// Print matching authorized_keys lines from the host
+        #[arg(long, conflicts_with = "remove")]
+        list: bool,
+        /// Print the ssh invocation and remote script without running it
+        #[arg(long)]
+        dry_run: bool,
+        /// Remote ssh port
+        #[arg(long)]
+        port: Option<u16>,
+        /// Remote authorized_keys path (default: $HOME/.ssh/authorized_keys)
+        #[arg(long)]
+        remote_path: Option<String>,
+    },
 }
 
 pub async fn execute(args: SshArgs, config: &crate::config::CliConfig) -> Result<()> {
@@ -165,6 +194,32 @@ pub(crate) async fn execute_with(
             file,
             output,
         } => gpg_sign(&mode, &namespace, key, &file, output, config, ui).await,
+        SshSubcommand::Authorize {
+            identity,
+            host,
+            id,
+            remove,
+            list,
+            dry_run,
+            port,
+            remote_path,
+        } => {
+            authorize(
+                &identity,
+                &host,
+                AuthorizeOptions {
+                    id,
+                    remove,
+                    list,
+                    dry_run,
+                    port,
+                    remote_path,
+                },
+                config,
+                ui,
+            )
+            .await
+        }
     }
 }
 
@@ -873,10 +928,10 @@ async fn export_pubkey(
     }
 }
 
-/// 从保险库收集全部可用作签名的 SSH key：(seed, 公钥行, 凭据 id)。
+/// 从保险库收集全部可用作签名的 SSH key：(seed, 公钥行, 凭据 id, 身份 id)。
 /// 解不开（已锁定/损坏）的凭据跳过——不能拿来签的东西不该中断签名流程，
 /// 但如果全军覆没，resolve_signing_key 会以空列表报错。
-async fn vault_ssh_keys(service: &PersonaService) -> Result<Vec<([u8; 32], String, Uuid)>> {
+async fn vault_ssh_keys(service: &PersonaService) -> Result<Vec<([u8; 32], String, Uuid, Uuid)>> {
     let mut keys = Vec::new();
     for identity in service.get_identities().await? {
         let creds = service.get_credentials_for_identity(&identity.id).await?;
@@ -894,7 +949,7 @@ async fn vault_ssh_keys(service: &PersonaService) -> Result<Vec<([u8; 32], Strin
                 },
                 _ => continue,
             };
-            keys.push((seed, public_line, cred.id));
+            keys.push((seed, public_line, cred.id, identity.id));
         }
     }
     Ok(keys)
@@ -926,7 +981,7 @@ fn public_key_blob(line: &str) -> Option<&str> {
 async fn resolve_signing_key(
     service: &PersonaService,
     spec: Option<&str>,
-) -> Result<([u8; 32], String, Uuid)> {
+) -> Result<([u8; 32], String, Uuid, Uuid)> {
     let mut keys = vault_ssh_keys(service).await?;
     if keys.is_empty() {
         anyhow::bail!("No SSH keys in the vault; run `persona ssh generate` first");
@@ -949,7 +1004,7 @@ async fn resolve_signing_key(
     if let Ok(id) = Uuid::parse_str(uuid_text) {
         return keys
             .into_iter()
-            .find(|(_, _, cred_id)| *cred_id == id)
+            .find(|(_, _, cred_id, _)| *cred_id == id)
             .ok_or_else(|| anyhow::anyhow!("Credential {id} is not an SSH key in this vault"));
     }
     // 公钥行字面量或文件路径（git 允许 user.signingkey 是 .pub 文件）
@@ -967,7 +1022,7 @@ async fn resolve_signing_key(
     }
     let blob = tokens.next().context("Public key line has no key blob")?;
     keys.into_iter()
-        .find(|(_, public_line, _)| public_key_blob(public_line) == Some(blob))
+        .find(|(_, public_line, _, _)| public_key_blob(public_line) == Some(blob))
         .ok_or_else(|| {
             anyhow::anyhow!("No vault SSH key matches this public key; import or generate it first")
         })
@@ -990,7 +1045,8 @@ async fn gpg_sign(
     }
     let message = std::fs::read(file).with_context(|| format!("Cannot read {file}"))?;
     let service = ensure_service(config, ui).await?;
-    let (seed, public_line, cred_id) = resolve_signing_key(&service, key.as_deref()).await?;
+    let (seed, public_line, cred_id, identity_id) =
+        resolve_signing_key(&service, key.as_deref()).await?;
     let blob = persona_core::crypto::sshsig::sign(&seed, namespace, &message);
     // 落盘前自验：签名数学上成立，且内嵌公钥就是选中的那把 vault key
     let embedded = persona_core::crypto::sshsig::verify(&blob, namespace, &message)
@@ -1003,6 +1059,296 @@ async fn gpg_sign(
         .with_context(|| format!("Cannot write {out_path}"))?;
     println!("{} Signed {} -> {}", "✓".green(), file, out_path);
     println!("  Key: {} ({})", public_line, cred_id);
+    // 审计口径：与 agent 的 `ssh_sign` 同一动作名，via/namespace/摘要
+    // 落 metadata（best-effort，不阻塞主流程）
+    audit_ssh_event(
+        &config.get_database_path(),
+        "ssh_sign",
+        Some(identity_id),
+        Some(cred_id),
+        &[
+            ("via", "gpg-sign".to_string()),
+            ("namespace", namespace.to_string()),
+            (
+                "data_sha256",
+                persona_core::crypto::hashing::Sha256Hasher::hash_hex(&message),
+            ),
+            ("output", out_path),
+        ],
+    )
+    .await;
+    Ok(())
+}
+
+/// 审计事件（既有口径，与 agents/ssh-agent 相同）：独立短连接落
+/// `audit_log` 行；失败只告警不阻塞主流程。
+async fn audit_ssh_event(
+    db_path: &Path,
+    action: &str,
+    identity_id: Option<Uuid>,
+    credential_id: Option<Uuid>,
+    metadata: &[(&str, String)],
+) {
+    let outcome = (async {
+        use persona_core::models::{AuditAction, AuditLog, ResourceType};
+        use persona_core::storage::AuditLogRepository;
+        use persona_core::Repository;
+        let db: persona_core::Database =
+            Database::from_file::<std::path::PathBuf>(db_path.to_owned())
+                .await
+                .into_anyhow()?;
+        db.migrate().await?;
+        let repo = AuditLogRepository::new(db);
+        let mut log = AuditLog::new(
+            AuditAction::Custom(action.to_string()),
+            ResourceType::Credential,
+            true,
+        )
+        .with_identity_id(identity_id)
+        .with_credential_id(credential_id);
+        for (key, value) in metadata {
+            log = log.with_metadata((*key).to_string(), value.clone());
+        }
+        repo.create(&log).await?;
+        Ok::<(), anyhow::Error>(())
+    })
+    .await;
+    if let Err(err) = outcome {
+        eprintln!("{} audit log: {err}", "!".yellow());
+    }
+}
+
+/// 供远端脚本/argv 组装用的 ssh 二进制（测试与非常规安装可覆盖）。
+fn ssh_binary() -> String {
+    std::env::var("PERSONA_SSH_BINARY")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "ssh".to_string())
+}
+
+/// POSIX sh 单引号转义（authorized_keys 内容只出现 base64 与算法名，
+/// 但远端路径是调用方给的，一律按不可信处理）。
+fn sh_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+/// bare 公钥行（去注释/选项）：与写入远端 authorized_keys 的形态一致，
+/// 也让 remove 的整行匹配只认我们的写法、不误删其他工具的行。
+fn bare_public_line(line: &str) -> String {
+    let mut tokens = line.split_whitespace();
+    let algo = tokens.next().unwrap_or_default();
+    let blob = tokens.next().unwrap_or_default();
+    if algo.is_empty() || blob.is_empty() {
+        line.trim().to_string()
+    } else {
+        format!("{algo} {blob}")
+    }
+}
+
+/// 生成远端 `sh -c` 脚本（POSIX sh）。`path_expr` 已带引用：默认
+/// `"$HOME/.ssh/authorized_keys"`（远端展开），自定义路径走单引号字面量。
+/// - add：幂等（`grep -qxF` 去重后 `printf >>`，不覆盖已有行）；整行
+///   单引号引用——公钥行内含空格，不引号会被 shell 拆词
+/// - remove：只有第 2 字段（key blob）等于我们的行才会删——awk 重写到
+///   `cat` 回原文件保 inode/权限，不误伤其他工具管理的行；blob 内嵌
+///   awk 双引号程序体，只放行 base64 字符集
+/// - list：原样 `cat` 远端文件（不含即空）
+fn authorized_keys_plan(action: &str, path_expr: &str, key: &str) -> Result<String> {
+    match action {
+        "list" => Ok(format!("if test -f {path_expr}; then cat {path_expr}; fi")),
+        "remove" => {
+            if !key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+            {
+                anyhow::bail!(
+                    "Unexpected characters in the key blob; refusing to build the remote script"
+                );
+            }
+            Ok(format!(
+                "if test -f {path_expr}; then awk '$2 != \"{key}\"' {path_expr} > \
+                 {path_expr}.persona-tmp && cat {path_expr}.persona-tmp > {path_expr} && \
+                 rm -f {path_expr}.persona-tmp; fi"
+            ))
+        }
+        _ => {
+            let quoted = sh_quote(key);
+            Ok(format!(
+                "mkdir -p \"$HOME/.ssh\" && chmod 700 \"$HOME/.ssh\" && touch {path_expr} && \
+                 chmod 600 {path_expr} && if grep -qxF {quoted} {path_expr}; then :; else \
+                 printf '%s\\n' {quoted} >> {path_expr}; fi"
+            ))
+        }
+    }
+}
+
+/// 跑一次 ssh（captured stdout/stderr），期间挂 agent-target-host——
+/// 与 `ssh run` 同一策略口径（known_hosts/确认/限速由 agent 的 host
+/// 策略管）。会话结束无论成败都清 host 文件。
+async fn ssh_capture(host: &str, program: &str, args: &[String]) -> Result<std::process::Output> {
+    use tokio::process::Command;
+    let state_dir = agent_state_dir();
+    std::fs::create_dir_all(&state_dir).ok();
+    let host_file = state_dir.join("agent-target-host");
+    std::fs::write(&host_file, host).context("Failed to write agent target host")?;
+    let outcome = Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .await
+        .context("Failed to run ssh");
+    let _ = std::fs::remove_file(&host_file);
+    outcome
+}
+
+/// authorized_keys 分发的参数集（避免 handler 摊成十几个位置参数）。
+struct AuthorizeOptions {
+    id: Option<Uuid>,
+    remove: bool,
+    list: bool,
+    dry_run: bool,
+    port: Option<u16>,
+    remote_path: Option<String>,
+}
+
+/// authorized_keys 分发：密钥由 vault 出（私钥不出库），传输/认证交给
+/// 用户自己的 `ssh` 二进制（与 `ssh run` 同一信任模型——本仓不做 SSH
+/// 客户端协议实现，这是设计边界不是缺失）。
+async fn authorize(
+    identity_name: &str,
+    host: &str,
+    opts: AuthorizeOptions,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    let service = ensure_service(config, ui).await?;
+    let identity = resolve_identity(&service, identity_name).await?;
+    let all = service.get_credentials_for_identity(&identity.id).await?;
+    let mut keys: Vec<(String, Uuid)> = Vec::new();
+    for cred in all {
+        if !matches!(cred.credential_type, CredentialType::SshKey) {
+            continue;
+        }
+        if let Some(CredentialData::SshKey(ssh)) = service.get_credential_data(&cred.id).await? {
+            keys.push((ssh.public_key, cred.id));
+        }
+    }
+    if keys.is_empty() {
+        anyhow::bail!(
+            "Identity '{}' has no SSH keys; run `persona ssh generate` first",
+            identity.name
+        );
+    }
+    let (public_line, cred_id) = match opts.id {
+        Some(wanted) => keys
+            .into_iter()
+            .find(|(_, cred_id)| *cred_id == wanted)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Credential {wanted} is not an SSH key of identity '{}'",
+                    identity.name
+                )
+            })?,
+        None if keys.len() == 1 => keys.remove(0),
+        None => anyhow::bail!(
+            "{} SSH keys for identity '{}'; pick one with --id",
+            keys.len(),
+            identity.name
+        ),
+    };
+    let line = bare_public_line(&public_line);
+    let blob = match line.split_whitespace().nth(1) {
+        Some(blob) if line.split_whitespace().count() == 2 => blob,
+        _ => anyhow::bail!("Vault key {} has an unexpected public key format", cred_id),
+    };
+    let path_expr = match opts.remote_path.as_deref() {
+        Some(path) => sh_quote(path),
+        None => "\"$HOME/.ssh/authorized_keys\"".to_string(),
+    };
+    let action = if opts.list {
+        "list"
+    } else if opts.remove {
+        "remove"
+    } else {
+        "add"
+    };
+    // remove 的匹配键是 blob（第 2 字段），add/list 用整行
+    let key = if action == "remove" {
+        blob
+    } else {
+        line.as_str()
+    };
+    let script = authorized_keys_plan(action, &path_expr, key)?;
+
+    let mut argv = vec![ssh_binary()];
+    if let Some(port) = opts.port {
+        argv.push("-p".to_string());
+        argv.push(port.to_string());
+    }
+    argv.push(host.to_string());
+    argv.push(script);
+    if opts.dry_run {
+        let display: Vec<String> = argv
+            .iter()
+            .map(|piece| {
+                if piece.chars().any(char::is_whitespace) {
+                    format!("{piece:?}")
+                } else {
+                    piece.clone()
+                }
+            })
+            .collect();
+        println!("{}", display.join(" "));
+        return Ok(());
+    }
+
+    let output = ssh_capture(host, &argv[0], &argv[1..]).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "ssh exited with {}: {}",
+            output
+                .status
+                .code()
+                .map(|c| format!("status {c}"))
+                .unwrap_or_else(|| "failure".to_string()),
+            stderr.trim()
+        );
+    }
+    if action == "list" {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.trim().is_empty() {
+            println!(
+                "{} No matching authorized_keys lines on {}.",
+                "none".yellow(),
+                host
+            );
+        } else {
+            print!("{stdout}");
+        }
+    } else {
+        println!(
+            "{} {} → {} (credential {})",
+            "✓".green(),
+            action,
+            host,
+            cred_id
+        );
+    }
+    // 审计口径：动作 + 目标主机 + 凭据/身份（best-effort）
+    audit_ssh_event(
+        &config.get_database_path(),
+        "ssh_authorize",
+        Some(identity.id),
+        Some(cred_id),
+        &[
+            ("host", host.to_string()),
+            ("action", action.to_string()),
+            ("ok", output.status.success().to_string()),
+        ],
+    )
+    .await;
     Ok(())
 }
 
@@ -2772,5 +3118,303 @@ mod tests {
             err.to_string().contains("No SSH keys in the vault"),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn gpg_sign_writes_an_ssh_sign_audit_row() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+        let cred = import_reference_key(&config, "alice").await;
+        let msg = dir.path().join("commit-msg");
+        std::fs::write(&msg, REF_MESSAGE).unwrap();
+
+        gpg_sign_via_dispatch(&config, Some(cred.to_string()), &msg, None)
+            .await
+            .expect("signing works");
+
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = persona_core::storage::AuditLogRepository::new(db);
+        // 审计是 inline await 的，直接查即可
+        let rows = repo
+            .find_by_action(&persona_core::models::AuditAction::Custom(
+                "ssh_sign".to_string(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "one ssh_sign row expected");
+        let row = &rows[0];
+        assert_eq!(row.credential_id, Some(cred));
+        assert_eq!(
+            row.metadata.get("via").map(String::as_str),
+            Some("gpg-sign")
+        );
+        assert_eq!(
+            row.metadata.get("namespace").map(String::as_str),
+            Some("git")
+        );
+        assert_eq!(
+            row.metadata.get("data_sha256").map(String::as_str),
+            Some(persona_core::crypto::hashing::Sha256Hasher::hash_hex(REF_MESSAGE).as_str())
+        );
+    }
+
+    #[test]
+    fn authorize_plan_builders_bare_lines_and_quoting() {
+        let path = "\"$HOME/.ssh/authorized_keys\"";
+        let line = "ssh-ed25519 AAAA";
+        let add = authorized_keys_plan("add", path, line).unwrap();
+        assert!(add.contains("mkdir -p \"$HOME/.ssh\""));
+        assert!(add.contains("chmod 700 \"$HOME/.ssh\""));
+        assert!(add.contains("chmod 600 \"$HOME/.ssh/authorized_keys\""));
+        assert!(
+            add.contains("if grep -qxF 'ssh-ed25519 AAAA'"),
+            "idempotent add via grep -qxF: {add}"
+        );
+        assert!(add.contains("printf '%s\\n' 'ssh-ed25519 AAAA' >>"));
+
+        let remove = authorized_keys_plan("remove", path, "BBBB").unwrap();
+        assert!(remove.contains("awk '$2 != \"BBBB\"'"));
+        assert!(remove.contains(".persona-tmp"), "tmp rewrite, not mv");
+
+        // blob 会内嵌 awk 双引号程序体——非 base64 字符集必须拒绝
+        assert!(authorized_keys_plan("remove", path, "BB;BB").is_err());
+
+        let list = authorized_keys_plan("list", path, "BBBB").unwrap();
+        assert!(list.contains("cat \"$HOME/.ssh/authorized_keys\""));
+        assert!(list.contains("test -f"));
+
+        // 自定义路径按不可信内容单引号转义
+        let custom = sh_quote("/srv/keys/a b'c");
+        assert_eq!(custom, "'/srv/keys/a b'\\''c'");
+        let add_custom = authorized_keys_plan("add", &custom, line).unwrap();
+        assert!(add_custom.contains("touch '/srv/keys/a b'\\''c'"));
+
+        // bare 行：去注释/选项，只留 algo + blob；畸形输入原样兜底
+        assert_eq!(
+            bare_public_line("ssh-ed25519 AAAA some comment"),
+            "ssh-ed25519 AAAA"
+        );
+        assert_eq!(bare_public_line("ssh-ed25519 AAAA"), "ssh-ed25519 AAAA");
+        assert_eq!(bare_public_line("garbage"), "garbage");
+    }
+
+    /// 假 ssh：把「最后一个参数」（远端脚本）放到沙箱 HOME 里执行——测试
+    /// 跑的就是 `authorized_keys_plan` 生成的脚本本身。
+    #[cfg(unix)]
+    fn plant_fake_ssh(dir: &TempDir, home: &std::path::Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let stub = dir.path().join("fake-ssh");
+        let script = format!(
+            "#!/bin/sh\nfor last in \"$@\"; do :; done\nHOME='{}' exec sh -c \"$last\"\n",
+            home.display()
+        );
+        std::fs::write(&stub, &script).unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        stub
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn authorize_round_trip_through_fake_ssh() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+        let cred = import_reference_key(&config, "alice").await;
+        let remote_home = TempDir::new().unwrap();
+        let stub = plant_fake_ssh(&dir, remote_home.path());
+        let _state = sandbox_agent_state_dir(&dir);
+        let _ssh = EnvVarGuard::set("PERSONA_SSH_BINARY", &stub);
+
+        async fn run_authorize(
+            config: &CliConfig,
+            ui: &ScriptedUi,
+            remove: bool,
+            list: bool,
+            dry_run: bool,
+            id: Option<Uuid>,
+        ) -> anyhow::Result<()> {
+            execute_with(
+                ssh_args(SshSubcommand::Authorize {
+                    identity: "alice".to_string(),
+                    host: "server.example".to_string(),
+                    id,
+                    remove,
+                    list,
+                    dry_run,
+                    port: None,
+                    remote_path: None,
+                }),
+                config,
+                ui,
+            )
+            .await
+        }
+
+        let akey = remote_home.path().join(".ssh/authorized_keys");
+
+        // add → 行写入且与参照公钥完全一致（整形换行）
+        let ui = ScriptedUi::new().password("master-pin");
+        run_authorize(&config, &ui, false, false, false, None)
+            .await
+            .expect("add works");
+        assert_eq!(
+            std::fs::read_to_string(&akey).unwrap().trim(),
+            REF_PUBLIC_LINE
+        );
+
+        // 幂等：再 add 一次仍是同一行、没有重复
+        let ui = ScriptedUi::new().password("master-pin");
+        run_authorize(&config, &ui, false, false, false, None)
+            .await
+            .expect("re-add works");
+        assert_eq!(std::fs::read_to_string(&akey).unwrap().lines().count(), 1);
+
+        // list 只读不写
+        let ui = ScriptedUi::new().password("master-pin");
+        run_authorize(&config, &ui, false, true, false, None)
+            .await
+            .expect("list works");
+        assert_eq!(std::fs::read_to_string(&akey).unwrap().lines().count(), 1);
+
+        // remove → 行被删；再 remove 幂等（test -f + awk 空重写）
+        let ui = ScriptedUi::new().password("master-pin");
+        run_authorize(&config, &ui, true, false, false, Some(cred))
+            .await
+            .expect("remove works");
+        assert!(std::fs::read_to_string(&akey).unwrap().trim().is_empty());
+        let ui = ScriptedUi::new().password("master-pin");
+        run_authorize(&config, &ui, true, false, false, None)
+            .await
+            .expect("re-remove works");
+
+        // 审计行（handler 内 inline await，无需轮询）
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let repo = persona_core::storage::AuditLogRepository::new(db);
+        let rows = repo
+            .find_by_action(&persona_core::models::AuditAction::Custom(
+                "ssh_authorize".to_string(),
+            ))
+            .await
+            .unwrap();
+        // add ×2 + list + remove ×2 共 5 行
+        assert!(
+            rows.len() >= 5,
+            "every authorize action audited: {}",
+            rows.len()
+        );
+        for row in &rows {
+            assert_eq!(row.credential_id, Some(cred));
+            assert_eq!(
+                row.metadata.get("host").map(String::as_str),
+                Some("server.example")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authorize_rejections_and_dry_run() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        async fn run_authorize(
+            config: &CliConfig,
+            ui: &ScriptedUi,
+            identity: &str,
+            id: Option<Uuid>,
+        ) -> anyhow::Result<()> {
+            execute_with(
+                ssh_args(SshSubcommand::Authorize {
+                    identity: identity.to_string(),
+                    host: "server.example".to_string(),
+                    id,
+                    remove: false,
+                    list: false,
+                    dry_run: false,
+                    port: None,
+                    remote_path: None,
+                }),
+                config,
+                ui,
+            )
+            .await
+        }
+
+        // 身份名下没有任何 SSH key
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = run_authorize(&config, &ui, "bob", None)
+            .await
+            .expect_err("keyless identity must fail");
+        assert!(err.to_string().contains("has no SSH keys"), "{err}");
+
+        // 两把 key 且未给 --id
+        let key_a = import_reference_key(&config, "alice").await;
+        import_reference_key(&config, "alice").await;
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = run_authorize(&config, &ui, "alice", None)
+            .await
+            .expect_err("ambiguous identity must fail");
+        assert!(err.to_string().contains("pick one with --id"), "{err}");
+
+        // 未知 --id
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = run_authorize(&config, &ui, "alice", Some(Uuid::new_v4()))
+            .await
+            .expect_err("unknown id must fail");
+        assert!(
+            err.to_string().contains("is not an SSH key of identity"),
+            "{err}"
+        );
+
+        // dry-run：ssh 二进制指向不存在也不报错（不 spawn），真实跑才报
+        let _ssh = EnvVarGuard::set("PERSONA_SSH_BINARY", dir.path().join("no-such-ssh"));
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Authorize {
+                identity: "alice".to_string(),
+                host: "server.example".to_string(),
+                id: Some(key_a),
+                remove: false,
+                list: false,
+                dry_run: true,
+                port: None,
+                remote_path: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("dry-run must not spawn");
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Authorize {
+                identity: "alice".to_string(),
+                host: "server.example".to_string(),
+                id: Some(key_a),
+                remove: false,
+                list: false,
+                dry_run: false,
+                port: None,
+                remote_path: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("missing ssh binary must fail");
+        assert!(err.to_string().contains("Failed to run ssh"), "{err}");
     }
 }
