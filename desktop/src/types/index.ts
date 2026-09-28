@@ -759,12 +759,36 @@ export type SecurityLevel = 'Critical' | 'High' | 'Medium' | 'Low';
 /** 主题偏好三档；'system' 跟随 prefers-color-scheme */
 export type ThemePreference = 'system' | 'light' | 'dark';
 
+/**
+ * 1Password 式凭据分类（侧栏"类别"分组 + 列表筛选）。
+ * 每个分类映射到一组 credential_type（见 sidebarNav.ts CATEGORY_TYPES）；
+ * 通行密钥不在此列——它存在独立的 passkeys 表里，由 { kind: 'passkeys' } 视图管理。
+ */
+export type CredentialCategory =
+  | 'passwords'
+  | 'secure_notes'
+  | 'api_keys'
+  | 'ssh_keys'
+  | 'software_licenses'
+  | 'identity_documents'
+  | 'crypto_wallets'
+  | 'game_tokens';
+
 /** 侧栏分类树的单选筛选态（默认 { kind: 'all' }；不做 localStorage 持久化） */
 export type SidebarFilter =
   | { kind: 'all' }
   | { kind: 'favorites' }
-  | { kind: 'type'; value: string }
-  | { kind: 'tag'; value: string };
+  | { kind: 'recent' }
+  | { kind: 'category'; value: CredentialCategory }
+  | { kind: 'identity'; value: string } // identity id
+  | { kind: 'tag'; value: string }
+  // 特殊视图（不参与凭据筛选，直接渲染对应面板）
+  | { kind: 'statistics' }
+  | { kind: 'sshAgent' }
+  | { kind: 'wallets' }
+  | { kind: 'watchtower' }
+  | { kind: 'passkeys' }
+  | { kind: 'generator' };
 
 /**
  * 待注入的凭据选中项（全局搜索跨身份跳转用）：QuickSearch 写入，

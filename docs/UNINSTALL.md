@@ -44,41 +44,50 @@ Windows 行为由 `desktop/src-tauri/nsis/installer.nsi` 保证，并有回归�
 同理（路径见上表）。**卸载 → 重装 = 无损**；只有走到下一节的"彻底清除"
 才会丢数据。
 
-## 4. 彻底清除（显式 purge，二次确认自己做）
+## 4. 彻底清除（显式 purge）
 
-想真正删干净，按平台手动执行（**删前确认已有备份**；vault 删除后无法
-恢复）：
+想真正删干净，有两种方式：
+
+### 方式一：手动命令（所有平台通用）
+
+按平台手动执行（**删前确认已有备份**；vault 删除后无法恢复）：
 
 **Windows（PowerShell）**
-
 ```powershell
-# 卸载应用（"应用和功能"，不勾"删除应用数据"亦可）后：
 Remove-Item -Recurse -Force "$env:APPDATA\persona"          # vault 库
 Remove-Item -Recurse -Force "$env:APPDATA\com.persona.desktop"    # 缓存
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\com.persona.desktop" # 缓存/日志
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:USERPROFILE\.persona"  # CLI 工作区
-# keyring：系统"凭据管理器"里删除 persona 相关条目
 ```
 
 **Linux**
-
 ```bash
 rm -rf ~/.local/share/persona   # vault 库
 rm -rf ~/.persona               # CLI 工作区 + SSH agent 状态
-# keyring（GNOME）：seahorse 里删除 persona 条目
 ```
 
 **macOS**
-
 ```bash
 rm -rf "$HOME/Library/Application Support/persona"  # vault 库
 rm -rf ~/.persona                                   # CLI 工作区
-# keyring：钥匙串访问里删除 persona 条目
 ```
 
-卸载器之所以不带 `--purge` 之类的静默删数据开关：NSIS 模板改动无法在
-Linux 本机编译验证（见 docs/WINDOWS_INSTALLER.md §5），静默删库的风险
-收益不成比例——显式手敲删除命令本身就是那道"二次确认"。
+### 方式二：NSIS 卸载器 /PURGE 参数（Windows 专用）
+
+运行**卸载器**（安装目录下的 `uninstall.exe`，不是安装包）时附加 `/PURGE`
+参数，卸载器将清空所有用户数据（vault + 缓存 + CLI 工作区），无需勾选
+"删除应用数据"复选框：
+
+```powershell
+# 卸载器位于安装目录（per-user 默认 %LOCALAPPDATA%\Persona\uninstall.exe）
+# 交互式卸载 + 彻底清除
+& "$env:LOCALAPPDATA\Persona\uninstall.exe" /PURGE
+# 静默卸载 + 彻底清除
+& "$env:LOCALAPPDATA\Persona\uninstall.exe" /S /PURGE
+```
+
+`/PURGE` 与 `/S` 可组合使用；升级模式（`/UPDATE`）下跳过数据清除（更新
+永不删数据，`/PURGE` 仅在非更新卸载时生效）。
 
 ## 5. 变更清单核对
 

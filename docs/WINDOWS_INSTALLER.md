@@ -42,6 +42,7 @@ Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到
 | `/S`（静默/无人值守）           | 检测旧版（NSIS 或 MSI）→ **静默**卸载 → 安装；失败以非零退出码中止                    |
 | `/P`（被动，仅进度条）          | 同交互默认路径，页面自动按默认值通过                                                  |
 | `/UPDATE`（Tauri updater 内部） | 基线语义保留：原地更新、不弹重装页、不动卸载键与自启项                                |
+| `/PURGE`（卸载器专用）          | 卸载器清空所有用户数据（vault + 缓存 + CLI 工作区），无需勾选确认；对安装包无效；`/UPDATE` 下跳过 |
 | 降级                            | 交互模式"不卸载"选项禁用（`ALLOWDOWNGRADES=false` 默认）；`/S` 模式同样先卸载旧版再装 |
 
 **不再发布 MSI**（2026-09-25 起 `desktop-build.yml` Windows matrix 只构建

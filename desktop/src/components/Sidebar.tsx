@@ -1,57 +1,103 @@
 import * as React from 'react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { clsx } from 'clsx';
 import {
   Cog6ToothIcon,
-  HeartIcon,
   LockClosedIcon,
-  Squares2X2Icon,
+  MagnifyingGlassIcon,
+  TagIcon,
 } from '@heroicons/react/24/outline';
-import { useAppStore, DEFAULT_SIDEBAR_FILTER } from '@/stores/appStore';
+import { useAppStore } from '@/stores/appStore';
 import { IdentitySwitcher } from './IdentitySwitcher';
-import { getCredentialIcon } from './credentialDisplay';
-import type { FeatureFlags, SidebarFilter } from '@/types';
-import { clsx } from 'clsx';
-
-export type ViewId =
-  | 'credentials'
-  | 'statistics'
-  | 'sshAgent'
-  | 'wallets'
-  | 'watchtower'
-  | 'passkeys'
-  | 'generator';
-
-interface NavItem {
-  id: ViewId;
-  /** i18n key（nav.*）——模块级常量不能调 hook，渲染处 t() */
-  label: string;
-  /** 对应 workspace 功能开关；不带的为主航道视图，恒可见 */
-  flag?: keyof FeatureFlags;
-}
-
-export const NAV_ITEMS: NavItem[] = [
-  { id: 'credentials', label: 'nav.credentials' },
-  { id: 'statistics', label: 'nav.statistics' },
-  { id: 'sshAgent', label: 'nav.sshAgent', flag: 'ssh_agent' },
-  { id: 'wallets', label: 'nav.wallets', flag: 'wallet' },
-  { id: 'watchtower', label: 'nav.watchtower' },
-  { id: 'passkeys', label: 'nav.passkeys', flag: 'passkeys' },
-  { id: 'generator', label: 'nav.generator' },
-];
+import {
+  ALL_ITEMS_FILTER,
+  CATEGORY_NODES,
+  TOP_NODES,
+  TOOL_NODES,
+  identityIcon,
+  isSameFilter,
+  navTestId,
+  viewForFilter,
+  type NavNode,
+} from './sidebarNav';
+import type { SidebarFilter } from '@/types';
 
 interface SidebarProps {
-  currentView: ViewId;
-  onNavigate: (view: ViewId) => void;
+  /** 侧栏是唯一的导航源：点击节点先写 store 筛选态，再回调通知 App（切身份等副作用） */
+  onNavigate: (filter: SidebarFilter) => void;
   /** 透传给 IdentitySwitcher 下拉的 "Create new identity" */
-  onCreateIdentity: () => void;
+  onCreateIdentity?: () => void;
   onOpenSettings: () => void;
   onLock: () => void;
 }
 
-/** 全局左侧栏：身份切换器（顶部）→ 视图导航 → 底部操作区；独立于主列滚动 */
+interface RowProps {
+  label: string;
+  icon: NavNode['icon'];
+  active: boolean;
+  onClick: () => void;
+  /** 数字徽标；undefined = 不显示（徽标对读屏隐藏，行名保持干净） */
+  count?: number;
+  testId: string;
+}
+
+/** 侧栏行：图标 + 名称 + 计数，紧凑行高（1Password 式单行选中块） */
+const NavRow: React.FC<RowProps> = ({ label, icon: Icon, active, onClick, count, testId }) => (
+  <button
+    type="button"
+    data-testid={testId}
+    aria-current={active ? 'page' : undefined}
+    onClick={onClick}
+    className={clsx(
+      'group flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] leading-5 transition-colors',
+      active
+        ? 'bg-primary-50 font-medium text-primary-900 dark:bg-primary-500/15 dark:text-primary-100'
+        : 'text-secondary-700 hover:bg-secondary-100 dark:text-secondary-300 dark:hover:bg-white/5',
+    )}
+  >
+    <Icon
+      className={clsx(
+        'h-4 w-4 shrink-0 transition-colors',
+        active
+          ? 'text-primary-600 dark:text-primary-400'
+          : 'text-secondary-400 group-hover:text-secondary-600 dark:text-secondary-500 dark:group-hover:text-secondary-300',
+      )}
+      aria-hidden="true"
+    />
+    <span className="truncate">{label}</span>
+    {count !== undefined && (
+      <span
+        aria-hidden="true"
+        className="ml-auto text-[11px] tabular-nums text-secondary-400 dark:text-secondary-500"
+      >
+        {count}
+      </span>
+    )}
+  </button>
+);
+
+/** 分组标题（类别 / 保险库 / 标签 / 工具） */
+const GroupTitle: React.FC<{ children: React.ReactNode; first?: boolean }> = ({
+  children,
+  first,
+}) => (
+  <p
+    className={clsx(
+      'px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-secondary-400 dark:text-secondary-500',
+      first ? 'pt-1' : 'pt-4',
+    )}
+  >
+    {children}
+  </p>
+);
+
+/**
+ * 全局左侧栏（1Password 式）：顶部身份切换器与大搜索框 → 顶部三行
+ * （全部条目 / 收藏 / 最近使用）→ 类别 → 保险库（身份）→ 标签 → 工具；
+ * 底部设置与锁定。整栏独立滚动，分组之间留出呼吸间距。
+ */
 const Sidebar: React.FC<SidebarProps> = ({
-  currentView,
   onNavigate,
   onCreateIdentity,
   onOpenSettings,
@@ -60,158 +106,203 @@ const Sidebar: React.FC<SidebarProps> = ({
   const { t } = useTranslation();
   const featureFlags = useAppStore((s) => s.featureFlags);
   const credentials = useAppStore((s) => s.credentials);
+  const identities = useAppStore((s) => s.identities);
+  const currentIdentity = useAppStore((s) => s.currentIdentity);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
   const setSidebarFilter = useAppStore((s) => s.setSidebarFilter);
+  const searchQuery = useAppStore((s) => s.credentialSearchQuery);
+  const setCredentialSearchQuery = useAppStore((s) => s.setCredentialSearchQuery);
 
-  const visibleNav = useMemo(
-    () => NAV_ITEMS.filter((item) => !item.flag || featureFlags[item.flag]),
-    [featureFlags]
-  );
+  const visible = (nodes: NavNode[]) => nodes.filter((n) => !n.flag || featureFlags[n.flag]);
 
-  // 分类树聚合（仅当前身份的凭据；类型是自由 string，按数据动态收集）
-  const availableTypes = useMemo(
-    () => Array.from(new Set(credentials.map((c) => c.credential_type))).sort(),
-    [credentials]
+  // 计数口径：store 里的 credentials 即当前身份已加载的条目
+  const counts = useMemo(
+    () => ({
+      all: credentials.length,
+      favorites: credentials.filter((c) => c.is_favorite).length,
+      recent: credentials.filter((c) => c.last_accessed).length,
+    }),
+    [credentials],
   );
+  const countByTypes = useMemo(() => {
+    const cache = new Map<string, number>();
+    return (types: string[]) => {
+      const key = types.join('|');
+      const hit = cache.get(key);
+      if (hit !== undefined) return hit;
+      const n = credentials.filter((c) => types.includes(c.credential_type)).length;
+      cache.set(key, n);
+      return n;
+    };
+  }, [credentials]);
+
   const availableTags = useMemo(
     () => Array.from(new Set(credentials.flatMap((c) => c.tags))).sort(),
-    [credentials]
-  );
-  const favoriteCount = useMemo(
-    () => credentials.filter((c) => c.is_favorite).length,
-    [credentials]
-  );
-  const typeCounts = useMemo(
-    () => new Map(availableTypes.map((t) => [t, credentials.filter((c) => c.credential_type === t).length])),
-    [credentials, availableTypes]
+    [credentials],
   );
   const tagCounts = useMemo(
     () => new Map(availableTags.map((g) => [g, credentials.filter((c) => c.tags.includes(g)).length])),
-    [credentials, availableTags]
+    [credentials, availableTags],
   );
+  const identityCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of credentials) map.set(c.identity_id, (map.get(c.identity_id) ?? 0) + 1);
+    return map;
+  }, [credentials]);
 
-  const isNodeActive = (filter: SidebarFilter) =>
-    JSON.stringify(filter) === JSON.stringify(sidebarFilter);
+  const select = (filter: SidebarFilter) => {
+    setSidebarFilter(filter);
+    onNavigate(filter);
+  };
 
-  const nodeClass = (active: boolean) =>
-    clsx(
-      'w-full flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition-colors',
-      active
-        ? 'bg-primary-50 text-primary-900 dark:bg-primary-500/10 dark:text-primary-100'
-        : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
-    );
-  const countClass = 'ml-auto text-xs text-gray-400 dark:text-gray-500';
-  const groupTitleClass =
-    'px-3 mb-1 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500';
+  const handleSearch = (value: string) => {
+    setCredentialSearchQuery(value);
+    // 搜索只在列表视图有意义：正处于工具/管理面板时先切回全部条目
+    if (value && viewForFilter(sidebarFilter) !== 'credentials') {
+      select(ALL_ITEMS_FILTER);
+    }
+  };
+
+  const nodeRow = (node: NavNode, count?: number) => (
+    <NavRow
+      key={navTestId(node.filter)}
+      testId={navTestId(node.filter)}
+      label={t(node.labelKey)}
+      icon={node.icon}
+      active={isSameFilter(node.filter, sidebarFilter)}
+      count={count}
+      onClick={() => select(node.filter)}
+    />
+  );
 
   return (
     <aside
       data-testid="app-sidebar"
       aria-label={t('sidebar.a11yLabel')}
-      className="w-64 shrink-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700 flex flex-col overflow-y-auto"
+      className="flex w-[264px] shrink-0 flex-col border-r border-secondary-200 bg-white dark:border-gray-800 dark:bg-gray-900"
     >
-      {/* 顶部：身份切换器（对应 1Password 账户切换器的位置） */}
-      <div className="px-3 py-3 border-b border-gray-200 dark:border-gray-700">
-        <IdentitySwitcher onCreateIdentity={onCreateIdentity} />
+      {/* 顶部：身份切换器 + 大搜索框（对应 1Password 的账户行与搜索） */}
+      <div className="space-y-2.5 border-b border-secondary-200 px-3 py-3 dark:border-gray-800">
+        <IdentitySwitcher onCreateIdentity={() => onCreateIdentity?.()} />
+        <div className="relative">
+          <MagnifyingGlassIcon
+            className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-secondary-400 dark:text-secondary-500"
+            aria-hidden="true"
+          />
+          <input
+            type="text"
+            data-testid="sidebar-search"
+            value={searchQuery}
+            onChange={(e) => handleSearch(e.target.value)}
+            placeholder={t('sidebar.searchPlaceholder')}
+            aria-label={t('sidebar.searchPlaceholder')}
+            className="h-9 w-full rounded-md border border-transparent bg-secondary-100 pl-8 pr-2 text-[13px] text-secondary-900 outline-none transition-colors placeholder:text-secondary-500 focus:border-primary-500 focus:bg-white focus:ring-2 focus:ring-primary-500/20 dark:bg-white/5 dark:text-secondary-100 dark:placeholder:text-secondary-400 dark:focus:bg-white/10"
+          />
+        </div>
       </div>
 
-      {/* 视图导航 */}
-      <nav data-testid="sidebar-nav" aria-label={t('sidebar.a11yNav')} className="p-3 space-y-1">
-        {visibleNav.map((item) => (
-          <button
-            key={item.id}
-            data-testid={`nav-${item.id}`}
-            aria-current={currentView === item.id ? 'page' : undefined}
-            onClick={() => onNavigate(item.id)}
-            className={clsx(
-              'w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors',
-              currentView === item.id
-                ? 'bg-primary-50 text-primary-900 dark:bg-primary-500/10 dark:text-primary-100'
-                : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-800'
-            )}
-          >
-            {t(item.label)}
-          </button>
-        ))}
-      </nav>
+      <nav
+        data-testid="sidebar-nav"
+        aria-label={t('sidebar.a11yNav')}
+        className="flex-1 overflow-y-auto px-2 pb-3"
+      >
+        {/* 顶部三行：全部条目 / 收藏 / 最近使用 */}
+        <div className="space-y-0.5 pt-2">
+          {visible(TOP_NODES).map((node) =>
+            nodeRow(
+              node,
+              node.filter.kind === 'all'
+                ? counts.all
+                : node.filter.kind === 'favorites'
+                  ? counts.favorites
+                  : counts.recent,
+            ),
+          )}
+        </div>
 
-      {/* 分类树：仅凭据视图；单选，点中即替换 store 筛选 */}
-      {currentView === 'credentials' && (
-        <div data-testid="sidebar-filters" className="px-3 pb-3 space-y-1">
-          <button
-            data-testid="filter-all"
-            onClick={() => setSidebarFilter(DEFAULT_SIDEBAR_FILTER)}
-            className={nodeClass(isNodeActive(DEFAULT_SIDEBAR_FILTER))}
-          >
-            <Squares2X2Icon className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span className="truncate">{t('sidebar.allItems')}</span>
-            <span className={countClass}>{credentials.length}</span>
-          </button>
-          <button
-            data-testid="filter-favorites"
-            onClick={() => setSidebarFilter({ kind: 'favorites' })}
-            className={nodeClass(isNodeActive({ kind: 'favorites' }))}
-          >
-            <HeartIcon className="w-4 h-4 shrink-0" aria-hidden="true" />
-            <span className="truncate">{t('sidebar.favorites')}</span>
-            <span className={countClass}>{favoriteCount}</span>
-          </button>
+        {/* 类别：1Password 的 item 分类（通行密钥指向独立管理视图，无列表计数） */}
+        <GroupTitle>{t('sidebar.group.categories')}</GroupTitle>
+        <div className="space-y-0.5">
+          {visible(CATEGORY_NODES).map((node) => nodeRow(node, node.types && countByTypes(node.types)))}
+        </div>
 
-          {availableTypes.length > 0 && (
-            <div className="pt-3">
-              <p className={groupTitleClass}>{t('sidebar.types')}</p>
-              {availableTypes.map((type) => {
-                const TypeIcon = getCredentialIcon(type);
+        {/* 保险库：persona 的身份 = 1Password 的保险库，点击即切换当前身份 */}
+        {identities.length > 0 && (
+          <>
+            <GroupTitle>{t('sidebar.group.vaults')}</GroupTitle>
+            <div className="space-y-0.5">
+              {identities.map((identity) => {
+                const loaded = identityCounts.get(identity.id) ?? 0;
                 return (
-                  <button
-                    key={type}
-                    data-testid={`filter-type-${type}`}
-                    onClick={() => setSidebarFilter({ kind: 'type', value: type })}
-                    className={nodeClass(isNodeActive({ kind: 'type', value: type }))}
-                  >
-                    <TypeIcon className="w-4 h-4 shrink-0" aria-hidden="true" />
-                    <span className="truncate">{type}</span>
-                    <span className={countClass}>{typeCounts.get(type)}</span>
-                  </button>
+                  <NavRow
+                    key={identity.id}
+                    testId={navTestId({ kind: 'identity', value: identity.id })}
+                    label={identity.name}
+                    icon={identityIcon(identity.identity_type)}
+                    active={currentIdentity?.id === identity.id}
+                    // 只在条目已加载时给徽标：store 仅持有当前身份的条目，
+                    // 其余保险库留白而不是显示误导性的 0
+                    count={loaded > 0 ? loaded : undefined}
+                    onClick={() => onNavigate({ kind: 'identity', value: identity.id })}
+                  />
                 );
               })}
             </div>
-          )}
+          </>
+        )}
 
-          {availableTags.length > 0 && (
-            <div className="pt-3">
-              <p className={groupTitleClass}>{t('sidebar.tags')}</p>
-              {availableTags.map((tag) => (
-                <button
-                  key={tag}
-                  data-testid={`filter-tag-${tag}`}
-                  onClick={() => setSidebarFilter({ kind: 'tag', value: tag })}
-                  className={nodeClass(isNodeActive({ kind: 'tag', value: tag }))}
-                >
-                  <span className="truncate">#{tag}</span>
-                  <span className={countClass}>{tagCounts.get(tag)}</span>
-                </button>
-              ))}
+        {/* 标签 */}
+        {availableTags.length > 0 && (
+          <>
+            <GroupTitle>{t('sidebar.group.tags')}</GroupTitle>
+            <div className="space-y-0.5">
+              {availableTags.map((tag) => {
+                const filter: SidebarFilter = { kind: 'tag', value: tag };
+                return (
+                  <NavRow
+                    key={tag}
+                    testId={navTestId(filter)}
+                    label={`#${tag}`}
+                    icon={TagIcon}
+                    active={isSameFilter(filter, sidebarFilter)}
+                    count={tagCounts.get(tag)}
+                    onClick={() => select(filter)}
+                  />
+                );
+              })}
             </div>
-          )}
-        </div>
-      )}
+          </>
+        )}
 
-      {/* 底部操作区：设置 + 锁定 */}
+        {/* 工具：统计 / SSH Agent / 钱包 / 安全瞭望 / 生成器 */}
+        <GroupTitle>{t('sidebar.group.tools')}</GroupTitle>
+        <div className="space-y-0.5">{visible(TOOL_NODES).map((node) => nodeRow(node))}</div>
+      </nav>
+
+      {/* 底部操作区：设置 + 锁定（title 只做快捷键提示，不参与可访问名） */}
       <div
         data-testid="sidebar-footer"
-        className="mt-auto border-t border-gray-200 dark:border-gray-700 p-3 flex items-center gap-1"
+        className="flex items-center gap-1 border-t border-secondary-200 px-2 py-2 dark:border-gray-800"
       >
-        <button className="btn-ghost" aria-label={t('sidebar.settings')} title={t('sidebar.settingsTitle')} onClick={onOpenSettings}>
-          <Cog6ToothIcon className="w-4 h-4" />
+        <button
+          type="button"
+          className="flex h-8 flex-1 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-secondary-700 transition-colors hover:bg-secondary-100 dark:text-secondary-300 dark:hover:bg-white/5"
+          aria-label={t('sidebar.settings')}
+          title={t('sidebar.settingsTitle')}
+          onClick={onOpenSettings}
+        >
+          <Cog6ToothIcon className="h-4 w-4 shrink-0 text-secondary-400" aria-hidden="true" />
+          <span className="truncate">{t('sidebar.settings')}</span>
         </button>
         <button
-          className="btn-ghost text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-500/10"
+          type="button"
+          className="flex h-8 flex-1 items-center gap-2.5 rounded-md px-2.5 text-[13px] text-secondary-700 transition-colors hover:bg-red-50 hover:text-red-700 dark:text-secondary-300 dark:hover:bg-red-500/10 dark:hover:text-red-300"
           aria-label={t('sidebar.lock')}
           title={t('sidebar.lockTitle')}
           onClick={onLock}
         >
-          <LockClosedIcon className="w-4 h-4" />
+          <LockClosedIcon className="h-4 w-4 shrink-0 text-secondary-400" aria-hidden="true" />
+          <span className="truncate">{t('sidebar.lock')}</span>
         </button>
       </div>
     </aside>

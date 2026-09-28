@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import Sidebar from './Sidebar';
-import { useAppStore, DEFAULT_FEATURE_FLAGS, DEFAULT_SIDEBAR_FILTER } from '@/stores/appStore';
+import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import type { Credential } from '@/types';
 
 jest.mock('@/components/IdentitySwitcher', () => ({
@@ -21,8 +21,25 @@ const makeCred = (over: Record<string, any> = {}): Credential => ({
   tags: [] as string[],
   created_at: '2023-01-01T00:00:00Z',
   updated_at: '2023-01-01T00:00:00Z',
+  last_accessed: '2023-01-01T00:00:00Z',
   is_active: true,
   is_favorite: false,
+  ...over,
+});
+
+const makeIdentity = (over: Record<string, any> = {}) => ({
+  id: 'i1',
+  name: 'Example',
+  identity_type: 'Personal',
+  description: undefined,
+  email: undefined,
+  phone: undefined,
+  tags: [] as string[],
+  attributes: {},
+  created_at: '2023-01-01T00:00:00Z',
+  updated_at: '2023-01-01T00:00:00Z',
+  is_active: true,
+  travel_marked: false,
   ...over,
 });
 
@@ -32,9 +49,7 @@ type SidebarProps = Parameters<typeof Sidebar>[0];
 
 const renderSidebar = (overrides: Partial<SidebarProps> = {}) => {
   const props: SidebarProps = {
-    currentView: 'credentials',
     onNavigate: jest.fn(),
-    onCreateIdentity: jest.fn(),
     onOpenSettings: jest.fn(),
     onLock: jest.fn(),
     ...overrides,
@@ -48,50 +63,132 @@ describe('components/Sidebar', () => {
     useAppStore.setState({
       featureFlags: { ...DEFAULT_FEATURE_FLAGS },
       credentials: [],
-      sidebarFilter: DEFAULT_SIDEBAR_FILTER,
+      identities: [],
+      sidebarFilter: { kind: 'all' },
+      credentialSearchQuery: '',
     });
   });
 
-  it('renders always-on nav entries and hides flag-gated ones while flags are off', () => {
+  it('renders search bar at top', () => {
     renderSidebar();
 
-    expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '生成器' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'SSH Agent' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '通行密钥' })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索条目…')).toBeInTheDocument();
   });
 
-  it('shows gated nav entries once their flags are on', () => {
+  it('renders category navigation items (all, favorites, recent)', () => {
+    renderSidebar();
+
+    expect(screen.getByRole('button', { name: '全部条目' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '收藏' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '最近使用' })).toBeInTheDocument();
+  });
+
+  it('renders category navigation items for credential categories', () => {
+    renderSidebar();
+
+    expect(screen.getByRole('button', { name: '密码' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '安全备忘录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'API 密钥' })).toBeInTheDocument();
+  });
+
+  it('shows gated category items once their flags are on', () => {
     useAppStore.setState({ featureFlags: ALL_FLAGS_ON });
     renderSidebar();
 
-    expect(screen.getByTestId('nav-credentials')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-statistics')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-sshAgent')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-wallets')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-watchtower')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-passkeys')).toBeInTheDocument();
-    expect(screen.getByTestId('nav-generator')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '通行密钥' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'SSH 密钥' })).toBeInTheDocument();
   });
 
-  it('marks the active view and reports navigation clicks', () => {
-    const { onNavigate } = renderSidebar({ currentView: 'credentials' });
+  it('renders special views section (Tools) when flags are on', () => {
+    useAppStore.setState({ featureFlags: ALL_FLAGS_ON });
+    renderSidebar();
 
-    expect(screen.getByTestId('nav-credentials')).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByTestId('nav-statistics')).not.toHaveAttribute('aria-current');
-
-    fireEvent.click(screen.getByRole('button', { name: '统计' }));
-    expect(onNavigate).toHaveBeenCalledWith('statistics');
+    expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '钱包' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '生成器' })).toBeInTheDocument();
   });
 
-  it('wires the identity switcher create action', () => {
-    const { onCreateIdentity } = renderSidebar();
+  it('marks the active category and reports navigation clicks', () => {
+    const { onNavigate } = renderSidebar();
 
-    fireEvent.click(screen.getByTestId('identity-switcher'));
-    expect(onCreateIdentity).toHaveBeenCalledTimes(1);
+    // all items should be active by default (sidebarFilter is { kind: 'all' })
+    expect(screen.getByTestId('nav-all')).toHaveAttribute('aria-current', 'page');
+
+    fireEvent.click(screen.getByRole('button', { name: '收藏' }));
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'favorites' });
+  });
+
+  it('renders identity groups (vaults) when identities exist', () => {
+    act(() => {
+      useAppStore.setState({
+        identities: [
+          makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+          makeIdentity({ id: 'i2', name: 'Work', identity_type: 'Work' }),
+        ],
+        credentials: [
+          makeCred({ id: 'c1', identity_id: 'i1' }),
+          makeCred({ id: 'c2', identity_id: 'i1' }),
+          makeCred({ id: 'c3', identity_id: 'i2' }),
+        ],
+        currentIdentity: makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+      });
+    });
+
+    renderSidebar();
+
+    expect(screen.getByRole('button', { name: 'Personal' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Work' })).toBeInTheDocument();
+    expect(screen.getByTestId('nav-identity-i1')).toHaveTextContent('2');
+    expect(screen.getByTestId('nav-identity-i2')).toHaveTextContent('1');
+  });
+
+  it('clicking identity group navigates to identity filter', () => {
+    act(() => {
+      useAppStore.setState({
+        identities: [
+          makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+        ],
+        credentials: [makeCred({ id: 'c1', identity_id: 'i1' })],
+        currentIdentity: makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+      });
+    });
+    const { onNavigate } = renderSidebar();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Personal' }));
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'identity', value: 'i1' });
+  });
+
+  it('renders tags section when current identity has tags', () => {
+    act(() => {
+      useAppStore.setState({
+        identities: [
+          makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+        ],
+        credentials: [makeCred({ id: 'c1', identity_id: 'i1', tags: ['dev', 'prod'] })],
+        currentIdentity: makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+      });
+    });
+    renderSidebar();
+
+    expect(screen.getByRole('button', { name: '#dev' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '#prod' })).toBeInTheDocument();
+  });
+
+  it('clicking tag navigates to tag filter', () => {
+    act(() => {
+      useAppStore.setState({
+        identities: [
+          makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+        ],
+        credentials: [makeCred({ id: 'c1', identity_id: 'i1', tags: ['dev'] })],
+        currentIdentity: makeIdentity({ id: 'i1', name: 'Personal', identity_type: 'Personal' }),
+      });
+    });
+    const { onNavigate } = renderSidebar();
+
+    fireEvent.click(screen.getByRole('button', { name: '#dev' }));
+    expect(onNavigate).toHaveBeenCalledWith({ kind: 'tag', value: 'dev' });
   });
 
   it('calls settings and lock from the footer', () => {
@@ -109,66 +206,40 @@ describe('components/Sidebar', () => {
     expect(lock).toHaveAttribute('title', '锁定 (⌘L)');
   });
 
-  it('renders all/favorites nodes always and type/tag groups only when present', () => {
-    renderSidebar();
-
-    expect(screen.getByTestId('filter-all')).toBeInTheDocument();
-    expect(screen.getByTestId('filter-favorites')).toBeInTheDocument();
-    expect(screen.queryByTestId('filter-type-ApiKey')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('filter-tag-dev')).not.toBeInTheDocument();
-
+  it('renders per-node counts for categories', () => {
     act(() => {
       useAppStore.setState({
-        credentials: [makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'] })],
+        credentials: [
+          makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'], is_favorite: true }),
+          makeCred({ id: '2', credential_type: 'ApiKey', tags: ['dev'] }),
+          makeCred({ id: '3', credential_type: 'Password' }),
+        ],
       });
-    });
-    expect(screen.getByTestId('filter-type-ApiKey')).toBeInTheDocument();
-    expect(screen.getByTestId('filter-tag-dev')).toBeInTheDocument();
-  });
-
-  it('selecting a tree node replaces the store filter (single-select)', () => {
-    useAppStore.setState({
-      credentials: [makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'] })],
     });
     renderSidebar();
 
-    fireEvent.click(screen.getByTestId('filter-type-ApiKey'));
-    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'type', value: 'ApiKey' });
-
-    fireEvent.click(screen.getByTestId('filter-tag-dev'));
-    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'tag', value: 'dev' });
-
-    fireEvent.click(screen.getByTestId('filter-all'));
-    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
+    expect(screen.getByTestId('nav-all')).toHaveTextContent('3');
+    expect(screen.getByTestId('nav-favorites')).toHaveTextContent('1');
+    expect(screen.getByTestId('nav-category-passwords')).toHaveTextContent('1');
+    expect(screen.getByTestId('nav-category-api_keys')).toHaveTextContent('2');
   });
 
   it('maps the favorites node to the favorites-only filter', () => {
     renderSidebar();
 
-    fireEvent.click(screen.getByTestId('filter-favorites'));
+    fireEvent.click(screen.getByRole('button', { name: '收藏' }));
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'favorites' });
   });
 
-  it('renders per-node counts', () => {
-    useAppStore.setState({
-      credentials: [
-        makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'], is_favorite: true }),
-        makeCred({ id: '2', credential_type: 'ApiKey', tags: ['dev'] }),
-        makeCred({ id: '3', credential_type: 'Password' }),
-      ],
+  it('maps the category node to the category filter', () => {
+    act(() => {
+      useAppStore.setState({
+        credentials: [makeCred({ id: '1', credential_type: 'ApiKey', tags: ['dev'] })],
+      });
     });
     renderSidebar();
 
-    expect(screen.getByTestId('filter-all')).toHaveTextContent('3');
-    expect(screen.getByTestId('filter-favorites')).toHaveTextContent('1');
-    expect(screen.getByTestId('filter-type-ApiKey')).toHaveTextContent('2');
-    expect(screen.getByTestId('filter-type-Password')).toHaveTextContent('1');
-    expect(screen.getByTestId('filter-tag-dev')).toHaveTextContent('2');
-  });
-
-  it('hides the tree outside the credentials view', () => {
-    renderSidebar({ currentView: 'wallets' });
-
-    expect(screen.queryByTestId('sidebar-filters')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'API 密钥' }));
+    expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'category', value: 'api_keys' });
   });
 });

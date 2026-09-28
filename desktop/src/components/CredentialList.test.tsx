@@ -76,12 +76,6 @@ const setupList = (credentials: any[], serviceOver: Record<string, any> = {}) =>
   return service;
 };
 
-/** 点击紧挨着给定文本右侧的复制按钮（span 与按钮同处一个 flex 容器） */
-const clickCopyNextTo = (text: string) => {
-  const btn = screen.getByText(text).parentElement!.querySelector('button');
-  fireEvent.click(btn!);
-};
-
 describe('filterCredentials (pure)', () => {
   const creds = [
     makeCred({ id: '1', name: 'GitHub Login', credential_type: 'Password', tags: ['work'], is_favorite: true }),
@@ -153,18 +147,19 @@ describe('components/CredentialList', () => {
       makeCred({ id: '2', name: 'Keytwo', credential_type: 'ApiKey' }),
     ]);
 
-    // 命中类型名（大小写不敏感）
-    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
-      target: { value: 'api' },
-    });
+    const setQuery = (q: string) =>
+      act(() => {
+        useAppStore.setState({ credentialSearchQuery: q });
+      });
+
+    // 命中类型名（大小写不敏感）；搜索词在侧栏大搜索框，store 同字段直驱
+    setQuery('api');
     expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Keytwo')).toBeInTheDocument();
     expect(screen.queryByText('Bank one')).not.toBeInTheDocument();
 
     // 无结果：提示调整搜索词，且不渲染首建按钮
-    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
-      target: { value: 'zzz' },
-    });
+    setQuery('zzz');
     expect(screen.getByText('未找到凭据')).toBeInTheDocument();
     expect(screen.getByText('试试调整搜索词')).toBeInTheDocument();
     expect(screen.queryByText('添加第一个凭据')).not.toBeInTheDocument();
@@ -181,13 +176,15 @@ describe('components/CredentialList', () => {
         useAppStore.setState({ sidebarFilter: filter });
       });
 
-    // 仅收藏
+    // 仅收藏；列表头标题随筛选态（filterLabel 单一事实源）
     setFilter({ kind: 'favorites' });
+    expect(screen.getByRole('heading', { name: '收藏' })).toBeInTheDocument();
     expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Fav-one')).toBeInTheDocument();
 
-    // 单选：切类型即替换收藏筛选
-    setFilter({ kind: 'type', value: 'ApiKey' });
+    // 单选：切分类即替换收藏筛选
+    setFilter({ kind: 'category', value: 'api_keys' });
+    expect(screen.getByRole('heading', { name: 'API 密钥' })).toBeInTheDocument();
     expect(screen.getByText('1 条凭据')).toBeInTheDocument();
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
     expect(screen.queryByText('Fav-one')).not.toBeInTheDocument();
@@ -197,16 +194,17 @@ describe('components/CredentialList', () => {
     expect(screen.getByText('Dev-two')).toBeInTheDocument();
 
     // 搜索词与树筛选 AND
-    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
-      target: { value: 'zzz' },
+    act(() => {
+      useAppStore.setState({ credentialSearchQuery: 'zzz' });
     });
     expect(screen.getByText('未找到凭据')).toBeInTheDocument();
 
     // 回全部条目并清搜索
     setFilter({ kind: 'all' });
-    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
-      target: { value: '' },
+    act(() => {
+      useAppStore.setState({ credentialSearchQuery: '' });
     });
+    expect(screen.getByRole('heading', { name: '全部条目' })).toBeInTheDocument();
     expect(screen.getByText('2 条凭据')).toBeInTheDocument();
   });
 
@@ -214,7 +212,7 @@ describe('components/CredentialList', () => {
     setupList([makeCred({ id: '1', name: 'Bank one', credential_type: 'Password' })]);
 
     act(() => {
-      useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'Nope' } });
+      useAppStore.setState({ sidebarFilter: { kind: 'category', value: 'secure_notes' } });
     });
 
     expect(screen.getByText('未找到凭据')).toBeInTheDocument();
@@ -222,12 +220,8 @@ describe('components/CredentialList', () => {
     expect(screen.queryByText('添加第一个凭据')).not.toBeInTheDocument();
   });
 
-  it('injects the pending selection once the target credential is present', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList([makeCred({ id: 'c1', name: 'Jumped' })], { getCredentialData });
+  it('injects the pending selection once the target credential is present', () => {
+    setupList([makeCred({ id: 'c1', name: 'Jumped' })]);
 
     act(() => {
       useAppStore.setState({
@@ -235,11 +229,9 @@ describe('components/CredentialList', () => {
       });
     });
 
-    await screen.findByTestId('detail-pane');
-    expect(getCredentialData).toHaveBeenCalledWith('c1');
     // 消费后即清除，避免下次进列表时再次弹选中
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
-    // 注入同时写入 store 选中 id（全局 ⌘E 依赖同一事实源）
+    // 注入同时写入 store 选中 id（详情面板与全局 ⌘E 依赖同一事实源）
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
   });
 
@@ -252,31 +244,24 @@ describe('components/CredentialList', () => {
       });
     });
 
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
     expect(useAppStore.getState().pendingCredentialSelection).toEqual({
       identityId: 'other',
       credentialId: 'c1',
     });
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
   });
 
-  it('injecting the pending selection clears search and sidebar filter so the target is visible', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    // c1 是 Password；侧栏选中 ApiKey 分类 + 本地搜索词都会把它挡住
-    setupList(
-      [
-        makeCred({ id: 'c1', name: 'JumpTarget' }),
-        makeCred({ id: 'c2', name: 'Other', credential_type: 'ApiKey' }),
-      ],
-      { getCredentialData },
-    );
-    fireEvent.change(screen.getByPlaceholderText('搜索凭据…'), {
-      target: { value: 'Other' },
-    });
+  it('injecting the pending selection clears search and sidebar filter so the target is visible', () => {
+    // c1 是 Password；侧栏选中 api_keys 分类 + 搜索词都会把它挡住
+    setupList([
+      makeCred({ id: 'c1', name: 'JumpTarget' }),
+      makeCred({ id: 'c2', name: 'Other', credential_type: 'ApiKey' }),
+    ]);
     act(() => {
-      useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'ApiKey' } });
+      useAppStore.setState({
+        credentialSearchQuery: 'Other',
+        sidebarFilter: { kind: 'category', value: 'api_keys' },
+      });
     });
     expect(screen.queryByTestId('credential-row-c1')).not.toBeInTheDocument();
 
@@ -286,10 +271,10 @@ describe('components/CredentialList', () => {
       });
     });
 
-    // 注入同时清筛选：目标行可见、搜索框已清空、侧栏分类复位
-    await screen.findByTestId('credential-row-c1');
+    // 注入同时清筛选：目标行可见、搜索词已清空、侧栏分类复位
+    expect(screen.getByTestId('credential-row-c1')).toBeInTheDocument();
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
-    expect(screen.getByPlaceholderText('搜索凭据…')).toHaveValue('');
+    expect(useAppStore.getState().credentialSearchQuery).toBe('');
     expect(useAppStore.getState().sidebarFilter).toEqual({ kind: 'all' });
   });
 
@@ -322,30 +307,21 @@ describe('components/CredentialList', () => {
     });
   });
 
-  it('clears the detail pane when a filter change hides the selected credential', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList(
-      [
-        makeCred({ id: 'c1', name: 'Picked' }),
-        makeCred({ id: 'c2', name: 'Keyed', credential_type: 'ApiKey' }),
-      ],
-      { getCredentialData },
-    );
+  it('clears the selection when a filter change hides the selected credential', () => {
+    setupList([
+      makeCred({ id: 'c1', name: 'Picked' }),
+      makeCred({ id: 'c2', name: 'Keyed', credential_type: 'ApiKey' }),
+    ]);
 
     fireEvent.click(screen.getByTestId('credential-row-c1'));
-    await screen.findByTestId('detail-pane');
     expect(useAppStore.getState().selectedCredentialId).toBe('c1');
 
-    // 侧栏切到 ApiKey 分类：c1 不在结果集里 → 详情面板让位占位
+    // 侧栏切到 api_keys 分类：c1 不在结果集里 → 选中清空（详情面板随之让位占位）
     act(() => {
-      useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'ApiKey' } });
+      useAppStore.setState({ sidebarFilter: { kind: 'category', value: 'api_keys' } });
     });
 
     expect(useAppStore.getState().selectedCredentialId).toBeNull();
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
   });
 
   it('renders row variants: security colors, hostnames and favorites', () => {
@@ -372,65 +348,46 @@ describe('components/CredentialList', () => {
     expect(document.querySelector('svg.text-red-500')).not.toBeNull();
   });
 
-  it('shows the placeholder panel when nothing is selected', () => {
-    setupList([makeCred()]);
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
-    expect(screen.getByText('选择一个条目查看详情')).toBeInTheDocument();
-    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
-  });
-
-  it('derives the selection from the store id (shared with global ⌘E)', async () => {
+  it('derives the row highlight from the store id (shared with global ⌘E)', () => {
     setupList([makeCred({ id: 'c1', name: 'One' })]);
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    expect(screen.getByTestId('credential-row-c1').className).not.toContain('bg-primary-50');
 
-    // 外部（全局快捷键路径）直接写 store id → 面板打开且行高亮
+    // 外部（全局快捷键路径）直接写 store id → 行高亮
     act(() => {
       useAppStore.setState({ selectedCredentialId: 'c1' });
     });
-    expect(screen.getByTestId('detail-pane')).toBeInTheDocument();
+    expect(screen.getByTestId('credential-row-c1')).toHaveAttribute('aria-current', 'true');
     expect(screen.getByTestId('credential-row-c1').className).toContain('bg-primary-50');
 
-    // id 清空 → 回占位
+    // id 清空 → 高亮消失
     act(() => {
       useAppStore.setState({ selectedCredentialId: null });
     });
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    expect(screen.getByTestId('credential-row-c1')).not.toHaveAttribute('aria-current');
   });
 
-  it('selecting a row opens the pane and highlights it', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList(
-      [makeCred({ id: 'c1', name: 'One' }), makeCred({ id: 'c2', name: 'Two' })],
-      { getCredentialData },
-    );
+  it('selecting a row highlights it and records the store id', () => {
+    setupList([makeCred({ id: 'c1', name: 'One' }), makeCred({ id: 'c2', name: 'Two' })]);
 
     fireEvent.click(screen.getByText('One'));
-    await screen.findByTitle('关闭');
-    expect(getCredentialData).toHaveBeenCalledWith('c1');
-    expect(screen.getByTestId('detail-pane')).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
     expect(screen.getByTestId('credential-row-c1').className).toContain('bg-primary-50');
     expect(screen.getByTestId('credential-row-c2').className).not.toContain('bg-primary-50');
   });
 
-  it('activates row selection with the keyboard, but not from the inline copy button', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList([makeCred({ username: 'alice' })], { getCredentialData });
+  it('activates row selection with the keyboard, but not from the inline copy button', () => {
+    setupList([makeCred({ username: 'alice' })]);
 
     // 行上按 Enter：选中
     fireEvent.keyDown(screen.getByTestId('credential-row-c1'), { key: 'Enter' });
-    await screen.findByTitle('关闭');
-    expect(getCredentialData).toHaveBeenCalledWith('c1');
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
 
-    // 焦点在行内复制按钮上时，Enter 不触发选中（先清掉再验证）
-    fireEvent.click(screen.getByTitle('关闭'));
+    // 焦点在行内复制按钮上时，Enter 不触发选中切换
+    act(() => {
+      useAppStore.setState({ selectedCredentialId: null });
+    });
     fireEvent.keyDown(screen.getAllByTitle('复制用户名')[0], { key: 'Enter' });
-    expect(getCredentialData).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
   });
 
   it('inline copy copies the username without selecting the row', async () => {
@@ -443,98 +400,23 @@ describe('components/CredentialList', () => {
     await act(async () => {});
     expect(toast.success).toHaveBeenCalledWith('用户名 已复制（30 秒后自动清除）');
     // stopPropagation 生效：未触发选中
-    expect(screen.queryByTitle('关闭')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
   });
 
-  it('switching selection updates the pane', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList(
-      [makeCred({ id: 'c1', name: 'One' }), makeCred({ id: 'c2', name: 'Two' })],
-      { getCredentialData },
-    );
+  it('switching selection moves the highlight with the store id', () => {
+    setupList([makeCred({ id: 'c1', name: 'One' }), makeCred({ id: 'c2', name: 'Two' })]);
 
     fireEvent.click(screen.getByText('One'));
-    await screen.findByTitle('关闭');
+    expect(useAppStore.getState().selectedCredentialId).toBe('c1');
     fireEvent.click(screen.getByText('Two'));
-    await screen.findByText('Two', { selector: 'h2' });
-    expect(getCredentialData).toHaveBeenCalledTimes(2);
-    expect(getCredentialData).toHaveBeenNthCalledWith(1, 'c1');
-    expect(getCredentialData).toHaveBeenNthCalledWith(2, 'c2');
+    expect(useAppStore.getState().selectedCredentialId).toBe('c2');
+    expect(screen.getByTestId('credential-row-c2').className).toContain('bg-primary-50');
+    expect(screen.getByTestId('credential-row-c1').className).not.toContain('bg-primary-50');
   });
 
-  it('closing the pane clears the selection', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList([makeCred()], { getCredentialData });
-
-    fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('关闭');
-    fireEvent.click(screen.getByTitle('关闭'));
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
-    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
-  });
-
-  it('surfaces the error toast when copying fails', async () => {
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    setupList([makeCred({ username: 'bob' })], { getCredentialData });
-
-    fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('关闭');
-
-    // 真实写入链失败：tauri 插件拒绝 → navigator.clipboard 不可用 →
-    // execCommand 返回 false
-    mockTauriWriteText.mockRejectedValueOnce(new Error('no backend'));
-    document.execCommand = jest.fn().mockReturnValue(false) as any;
-    clickCopyNextTo('bob');
-    await act(async () => {});
-    expect(toast.error).toHaveBeenCalledWith('复制到剪贴板失败');
-  });
-
-  it('shows a loading state while credential data is in flight', async () => {
-    let resolveData: (v: any) => void = () => {};
-    const getCredentialData = jest.fn(
-      () => new Promise((resolve) => { resolveData = resolve; }),
-    );
-    setupList([makeCred()], { getCredentialData });
-
-    fireEvent.click(screen.getByText('Example'));
-    expect(await screen.findByTestId('detail-loading')).toBeInTheDocument();
-    expect(screen.queryByTestId('reveal-password')).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveData({ credential_type: 'Password', data: { email: 'a@b.com' } });
-    });
-    expect(screen.getByText('a@b.com')).toBeInTheDocument();
-    expect(screen.queryByTestId('detail-loading')).not.toBeInTheDocument();
-  });
-
-  it('deleting the selected credential clears the pane', async () => {
-    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
-    const getCredentialData = jest.fn().mockResolvedValue({
-      credential_type: 'Password',
-      data: {},
-    });
-    const deleteCredential = jest.fn().mockResolvedValue(true);
-    setupList([makeCred()], { getCredentialData, deleteCredential });
-
-    fireEvent.click(screen.getByText('Example'));
-    await screen.findByTitle('关闭');
-    fireEvent.click(screen.getByTitle('删除'));
-    await act(async () => {});
-    expect(deleteCredential).toHaveBeenCalledWith('c1');
-    // 列表数组是静态 mock：只断言面板回占位，不断言行消失
-    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
-    confirmSpy.mockRestore();
-  });
+  // 「关闭面板清空选中 / 加载态 / 删除清空面板」是 App 层组合行为（面板挂在
+  // App 的详情列），覆盖迁至 App.test.tsx；「复制失败 toast」随真实剪贴板
+  // 链路迁至 CredentialDetailPane.test.tsx。
 
   it('renders cached favicons on rows when the flag is on', () => {
     useAppStore.setState({

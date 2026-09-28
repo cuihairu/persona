@@ -1,8 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
   KeyIcon,
   PlusIcon,
-  MagnifyingGlassIcon,
   DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
@@ -19,7 +18,7 @@ import {
   credentialTypeLabel,
   securityLevelLabel,
 } from './credentialDisplay';
-import CredentialDetailPane from './CredentialDetailPane';
+import { CATEGORY_TYPES, filterLabel } from './sidebarNav';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
 
@@ -30,13 +29,15 @@ export interface CredentialFilter {
   types?: Set<string>;
   /** 选中标签集合（空 = 全部标签） */
   tags?: Set<string>;
+  /** 选中身份（空/缺省 = 当前身份的条目） */
+  identityId?: string;
   favoritesOnly?: boolean;
 }
 
 /** 本地筛选凭据列表（纯函数，便于单测） */
 export const filterCredentials = (
   credentials: Credential[],
-  { query, types, tags, favoritesOnly }: CredentialFilter,
+  { query, types, tags, identityId, favoritesOnly }: CredentialFilter,
 ): Credential[] =>
   credentials.filter((cred) => {
     const q = (query ?? '').toLowerCase();
@@ -47,8 +48,9 @@ export const filterCredentials = (
     const matchesType = !types || types.size === 0 || types.has(cred.credential_type);
     const matchesTag =
       !tags || tags.size === 0 || cred.tags.some((t) => tags.has(t));
+    const matchesIdentity = !identityId || cred.identity_id === identityId;
     const matchesFavorite = !favoritesOnly || cred.is_favorite;
-    return matchesQuery && matchesType && matchesTag && matchesFavorite;
+    return matchesQuery && matchesType && matchesTag && matchesIdentity && matchesFavorite;
   });
 
 interface CredentialListProps {
@@ -56,17 +58,18 @@ interface CredentialListProps {
 }
 
 /**
- * 1Password 8 式双栏主视图：左侧条目列表（行内复制），右侧常驻详情面板。
- * 窄屏（<lg）退化为单列堆叠，面板出现在列表下方。
+ * 主区左栏：条目列表（行内复制）。搜索在侧栏大搜索框（写同一个 store 字段），
+ * 本组件只负责"当前筛选 → 结果集 → 选中"这条链；详情面板由父级（App）
+ * 监听 store 选中态渲染在列表右侧，窄屏（<lg）下隐藏。
  */
 const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) => {
   const { t } = useTranslation();
-  const { credentials, currentIdentity, getCredentialData } = usePersonaService();
+  const { credentials, currentIdentity } = usePersonaService();
   // flag 开时批量预取列表页 favicon（纯缓存读；miss 不触发抓取）
   useFavicons(credentials.map((c) => c.url));
-  const [credentialData, setCredentialData] = useState<any>(null);
   const sidebarFilter = useAppStore((s) => s.sidebarFilter);
   const resetSidebarFilter = useAppStore((s) => s.resetSidebarFilter);
+  const identities = useAppStore((s) => s.identities);
   // 搜索词在 store（见 appStore 注释）：与选中/侧栏筛选同批更新，避免注入中间帧
   const searchQuery = useAppStore((s) => s.credentialSearchQuery);
   const setCredentialSearchQuery = useAppStore((s) => s.setCredentialSearchQuery);
@@ -81,42 +84,53 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     [credentials, selectedCredentialId],
   );
 
-  // 侧栏分类树（单选）→ CredentialFilter 纯派生；搜索词独立叠加（AND）
+  // 侧栏筛选（单选）→ CredentialFilter 纯派生；搜索词独立叠加（AND）
   const treeFilter = useMemo<CredentialFilter>(() => {
     switch (sidebarFilter.kind) {
       case 'all':
+      case 'recent':
         return {};
       case 'favorites':
         return { favoritesOnly: true };
-      case 'type':
-        return { types: new Set([sidebarFilter.value]) };
+      case 'category':
+        return { types: new Set(CATEGORY_TYPES[sidebarFilter.value]) };
       case 'tag':
         return { tags: new Set([sidebarFilter.value]) };
+      case 'identity':
+        return { identityId: sidebarFilter.value };
+      default:
+        // 工具/通行密钥视图不渲染本组件
+        return {};
     }
   }, [sidebarFilter]);
 
-  const filteredCredentials = filterCredentials(credentials, {
-    query: searchQuery,
-    ...treeFilter,
-  });
+  const filteredCredentials = useMemo(() => {
+    const result = filterCredentials(credentials, { query: searchQuery, ...treeFilter });
+    // 「最近使用」是排序视图而不是筛选：最近访问过的在前，从未访问的沉底
+    if (sidebarFilter.kind !== 'recent') return result;
+    return [...result].sort((a, b) => {
+      const at = a.last_accessed ? Date.parse(a.last_accessed) : null;
+      const bt = b.last_accessed ? Date.parse(b.last_accessed) : null;
+      if (at === bt) return a.name.localeCompare(b.name);
+      if (at === null) return 1;
+      if (bt === null) return -1;
+      return bt - at;
+    });
+  }, [credentials, searchQuery, treeFilter, sidebarFilter.kind]);
 
-
-  const handleCredentialClick = async (credential: Credential) => {
-    // 先清空旧数据再选中：同一批 setState，面板首帧即新条目 + loading，不闪现上一条
-    setCredentialData(null);
+  const handleCredentialClick = (credential: Credential) => {
+    // 选中即写入 store（全局 ⌘E 复制用户名需要）；详情数据由 App 监听
+    // store 选中变化统一加载，这里不再触碰 IPC（避免双取）
     setSelectedCredentialId(credential.id);
-    const data = await getCredentialData(credential.id);
-    setCredentialData(data);
   };
 
   // 切身份后旧选中项悬空：清空右栏选中与搜索词
   useEffect(() => {
     setSelectedCredentialId(null);
-    setCredentialData(null);
     setCredentialSearchQuery('');
   }, [currentIdentity?.id, setSelectedCredentialId, setCredentialSearchQuery]);
 
-  // 筛选（本地搜索词 / 侧栏分类）变化后选中项不再可见时清详情面板：
+  // 筛选（搜索词 / 侧栏分类）变化后选中项不再可见时清详情面板：
   // 1Password 语义——筛选是导航动作，不保留与结果集脱节的详情
   const isSelectionVisible =
     !selectedCredentialId ||
@@ -124,7 +138,6 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
   useEffect(() => {
     if (!isSelectionVisible) {
       setSelectedCredentialId(null);
-      setCredentialData(null);
     }
   }, [isSelectionVisible, setSelectedCredentialId]);
 
@@ -141,88 +154,83 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
       }
       return;
     }
-    // 清本地搜索词与侧栏分类：保证跳转目标可见（否则注入的选中
+    // 清本地搜索词与侧栏筛选：保证跳转目标可见（否则注入的选中
     // 会被上面的"筛选不可见清选中"effect 立即清掉）
     setCredentialSearchQuery('');
     resetSidebarFilter();
     handleCredentialClick(target);
     clearPendingCredentialSelection();
-  }, [pendingSelection, credentials, currentIdentity, handleCredentialClick, clearPendingCredentialSelection, resetSidebarFilter, setCredentialSearchQuery]);
+  }, [pendingSelection, credentials, currentIdentity, clearPendingCredentialSelection, resetSidebarFilter, setCredentialSearchQuery]);
 
   if (!currentIdentity) {
     return (
-      <div className="flex items-center justify-center h-64 text-gray-500 dark:text-gray-400">
+      <div className="flex h-full items-center justify-center text-secondary-500 dark:text-secondary-400">
         <div className="text-center">
-          <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
+          <KeyIcon className="mx-auto mb-4 h-10 w-10 text-secondary-300 dark:text-secondary-600" />
           <p>{t('credList.selectIdentity')}</p>
         </div>
       </div>
     );
   }
 
+  const title = filterLabel(t, sidebarFilter, identities);
+
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100">
-            {t('credList.titleFor', { name: currentIdentity.name })}
+    <div className="flex h-full min-h-0 flex-col" data-testid="credential-list">
+      {/* 列表头：当前筛选名 + 计数 + 新建（1Password 式列表头） */}
+      <div className="flex items-center gap-3 border-b border-secondary-200 px-4 py-2.5 dark:border-gray-800">
+        <div className="min-w-0">
+          <h2 className="truncate text-[15px] font-semibold text-secondary-900 dark:text-secondary-50">
+            {title}
           </h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
+          <p className="text-xs text-secondary-500 dark:text-secondary-400">
             {t('credList.count', { count: filteredCredentials.length })}
           </p>
         </div>
-        <button
-          onClick={onCreateCredential}
-          className="btn-primary flex items-center"
-        >
-          <PlusIcon className="w-4 h-4 mr-2" />
+        <button onClick={onCreateCredential} className="btn-primary ml-auto h-9 px-3">
+          <PlusIcon className="mr-1.5 h-4 w-4" aria-hidden="true" />
           {t('credList.add')}
         </button>
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setCredentialSearchQuery(e.target.value)}
-          className="input pl-10"
-          placeholder={t('credList.searchPlaceholder')}
-        />
-      </div>
-
-      {/* 空态跨整宽；右栏不渲染（选中项被筛选挡住时已由 effect 清空） */}
-      {filteredCredentials.length === 0 ? (
-        <div className="text-center py-12">
-          <KeyIcon className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">{t('credList.noResults')}</h3>
-          <p className="text-gray-500 dark:text-gray-400 mb-4">
-            {searchQuery
-              ? t('credList.tryAdjusting')
-              : sidebarFilter.kind === 'all'
-                ? t('credList.getStarted')
-                : t('credList.tryCategory')}
-          </p>
-          {!searchQuery && sidebarFilter.kind === 'all' && (
-            <button onClick={onCreateCredential} className="btn-primary">
-              {t('credList.addFirst')}
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_380px] lg:gap-6 lg:items-start">
-          {/* 左列：条目列表 */}
-          <div className="space-y-1.5 min-w-0">
+      {/* 条目行：单列、紧凑、选中即整行填充 */}
+      <div
+        className={clsx(
+          'min-h-0 flex-1 overflow-y-auto p-2',
+          filteredCredentials.length === 0 && 'flex flex-col',
+        )}
+      >
+        {filteredCredentials.length === 0 ? (
+          <div className="flex flex-1 flex-col items-center justify-center py-12 text-center">
+            <KeyIcon className="mx-auto mb-4 h-10 w-10 text-secondary-300 dark:text-secondary-600" />
+            <h3 className="mb-2 text-[15px] font-medium text-secondary-900 dark:text-secondary-100">
+              {t('credList.noResults')}
+            </h3>
+            <p className="mb-4 text-secondary-500 dark:text-secondary-400">
+              {searchQuery
+                ? t('credList.tryAdjusting')
+                : sidebarFilter.kind === 'all'
+                  ? t('credList.getStarted')
+                  : t('credList.tryCategory')}
+            </p>
+            {!searchQuery && sidebarFilter.kind === 'all' && (
+              <button onClick={onCreateCredential} className="btn-primary h-9 px-3">
+                {t('credList.addFirst')}
+              </button>
+            )}
+          </div>
+        ) : (
+          <ul className="space-y-0.5">
             {filteredCredentials.map((credential) => {
               const IconComponent = getCredentialIcon(credential.credential_type);
+              const selected = selectedCredential?.id === credential.id;
               return (
-                // 行内有行内复制按钮，禁用 <button> 嵌套：div role="button" + 键盘处理
-                <div
+                // 行内有行内复制按钮，禁用 <button> 嵌套：li role="button" + 键盘处理
+                <li
                   key={credential.id}
                   role="button"
                   tabIndex={0}
+                  aria-current={selected ? 'true' : undefined}
                   data-testid={`credential-row-${credential.id}`}
                   onClick={() => handleCredentialClick(credential)}
                   onKeyDown={(e) => {
@@ -231,35 +239,42 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                     if (e.key === 'Enter' || e.key === ' ') handleCredentialClick(credential);
                   }}
                   className={clsx(
-                    'group flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors',
-                    selectedCredential?.id === credential.id
-                      ? 'bg-primary-50 dark:bg-primary-500/10 border-primary-300 dark:border-primary-500/40'
-                      : 'bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800',
+                    'group flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 transition-colors',
+                    selected
+                      ? 'bg-primary-50 dark:bg-primary-500/15'
+                      : 'hover:bg-secondary-100 dark:hover:bg-white/5',
                   )}
                 >
-                  <div className="p-2 bg-primary-50 dark:bg-primary-500/10 rounded-lg shrink-0">
+                  <span
+                    className={clsx(
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-md',
+                      selected
+                        ? 'bg-white text-primary-600 dark:bg-white/10 dark:text-primary-400'
+                        : 'bg-secondary-100 text-secondary-600 dark:bg-white/5 dark:text-secondary-300',
+                    )}
+                  >
                     <FaviconImg
                       url={credential.url}
                       fallbackIcon={IconComponent}
-                      className="text-primary-600 dark:text-primary-400"
+                      className="h-4 w-4"
                     />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium text-secondary-900 dark:text-secondary-50">
                       {credential.name}
-                    </h3>
-                    <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                    </span>
+                    <span className="block truncate text-[11px] text-secondary-500 dark:text-secondary-400">
                       {credentialTypeLabel(t, credential.credential_type)}
                       {credential.url && ' · '}
                       {credential.url && <span>{getSafeHostname(credential.url)}</span>}
-                    </p>
-                  </div>
+                    </span>
+                  </span>
                   {credential.is_favorite && (
-                    <HeartSolidIcon className="w-4 h-4 text-red-500 shrink-0" />
+                    <HeartSolidIcon className="h-3.5 w-3.5 shrink-0 text-red-500" aria-hidden="true" />
                   )}
                   <span
                     className={clsx(
-                      'px-2 py-0.5 text-xs font-medium rounded-full border shrink-0',
+                      'shrink-0 rounded border px-1.5 py-px text-[10px] font-medium leading-4',
                       getSecurityColor(credential.security_level),
                     )}
                   >
@@ -271,44 +286,19 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
                         e.stopPropagation();
                         void copyToClipboardWithToast(credential.username!, t('app.username'));
                       }}
-                      className="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 opacity-0 focus:opacity-100 group-hover:opacity-100 shrink-0"
+                      className="shrink-0 rounded p-1 text-secondary-400 opacity-0 transition-opacity hover:bg-secondary-200 hover:text-secondary-700 focus:opacity-100 group-hover:opacity-100 dark:hover:bg-white/10 dark:hover:text-secondary-200"
                       title={t('credList.copyUsername')}
                       aria-label={t('credList.copyUsername')}
                     >
-                      <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                      <DocumentDuplicateIcon className="h-4 w-4" />
                     </button>
                   )}
-                </div>
+                </li>
               );
             })}
-          </div>
-
-          {/* 右列：常驻详情面板或占位（窄屏下自然堆叠在列表下方） */}
-          <div className="mt-4 lg:mt-0">
-            {selectedCredential ? (
-              <CredentialDetailPane
-                credential={selectedCredential}
-                credentialData={credentialData}
-                onClose={() => {
-                  setSelectedCredentialId(null);
-                  setCredentialData(null);
-                }}
-                onCopy={copyToClipboardWithToast}
-              />
-            ) : (
-              <div
-                className="card p-6 flex items-center justify-center h-64 text-gray-400 dark:text-gray-500"
-                data-testid="detail-placeholder"
-              >
-                <div className="text-center">
-                  <KeyIcon className="w-10 h-10 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
-                  <p>{t('credList.selectItem')}</p>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+          </ul>
+        )}
+      </div>
     </div>
   );
 };

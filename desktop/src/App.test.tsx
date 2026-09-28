@@ -50,6 +50,13 @@ jest.mock('@/components/CredentialList', () => ({
     <div data-testid="credential-list" onClick={props.onCreateCredential} />
   ),
 }));
+// 详情面板组合测试：哑渲染 reveal 链路（与 CredentialList.test 同款桩）
+jest.mock('@/components/RevealSecretButton', () => ({
+  __esModule: true,
+  default: ({ field, label }: any) => (
+    <button data-testid={`reveal-${field}`}>{label}</button>
+  ),
+}));
 jest.mock('@/components/CreateCredentialModal', () => ({
   __esModule: true,
   default: (props: any) =>
@@ -156,6 +163,16 @@ describe('App', () => {
       // 工具栏 QuickSearch（closed 态不发请求，仅防御引用）
       searchCredentials: jest.fn().mockResolvedValue([]),
       switchIdentity: jest.fn(),
+      // 详情面板防御桩：任何用例往 store 写 selectedCredentialId 都会挂载面板，
+      // 挂载期要拉附件/详情数据——悬挂 promise 不产生 setState，避免 act 警告
+      getCredentialData: jest.fn(() => new Promise(() => {})),
+      listAttachments: jest.fn(() => new Promise(() => {})),
+      toggleCredentialFavorite: jest.fn(),
+      getTotpCode: jest.fn(),
+      getCredentialHistory: jest.fn().mockResolvedValue([]),
+      attachFileToCredential: jest.fn(),
+      saveAttachmentToFile: jest.fn().mockResolvedValue(true),
+      deleteAttachment: jest.fn().mockResolvedValue(true),
     };
   });
 
@@ -228,7 +245,7 @@ describe('App', () => {
     expect(screen.getByTestId('watchtower-panel')).toBeInTheDocument();
     nav('通行密钥');
     expect(screen.getByTestId('passkey-panel')).toBeInTheDocument();
-    nav('凭据');
+    nav('全部条目');
     expect(screen.getByTestId('credential-list')).toBeInTheDocument();
   });
 
@@ -246,7 +263,7 @@ describe('App', () => {
     });
 
     // 主航道恒可见，高级功能默认隐藏
-    expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '全部条目' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '统计' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '安全瞭望' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'SSH Agent' })).not.toBeInTheDocument();
@@ -264,7 +281,7 @@ describe('App', () => {
     });
 
     // 读取失败静默保持默认（全关），主航道不受影响、不崩
-    expect(screen.getByRole('button', { name: '凭据' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '全部条目' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '钱包' })).not.toBeInTheDocument();
     expect(screen.queryByTestId('wallet-panel')).not.toBeInTheDocument();
   });
@@ -293,7 +310,7 @@ describe('App', () => {
   it('resets the sidebar filter when the identity changes', () => {
     serviceState.isUnlocked = true;
     serviceState.currentIdentity = { id: 'id-1', name: 'A' };
-    useAppStore.setState({ sidebarFilter: { kind: 'type', value: 'ApiKey' } });
+    useAppStore.setState({ sidebarFilter: { kind: 'category', value: 'api_keys' } });
     const { rerender } = render(<App />);
 
     serviceState.currentIdentity = { id: 'id-2', name: 'B' };
@@ -443,9 +460,115 @@ describe('App', () => {
     // 失败分支：静默 console.error，保持加载态
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
     (personaAPI.getStatistics as jest.Mock).mockRejectedValueOnce(new Error('x'));
-    fireEvent.click(screen.getByRole('button', { name: '凭据' }));
+    fireEvent.click(screen.getByRole('button', { name: '全部条目' }));
     fireEvent.click(screen.getByRole('button', { name: '统计' }));
     await act(async () => {});
     consoleError.mockRestore();
+  });
+
+  // -- 详情面板组合（面板挂在主区详情列；选中/数据/关闭/删除全链路） --------
+
+  const setupDetail = (serviceOver: Record<string, any> = {}) => {
+    serviceState.isUnlocked = true;
+    serviceState.currentIdentity = { id: 'id-1', name: 'Personal' };
+    // 面板挂载期拉附件（悬挂 promise 不产生 setState），其余 service 面均为防御桩
+    serviceState.getCredentialData = jest.fn().mockResolvedValue(null);
+    serviceState.listAttachments = jest.fn(() => new Promise(() => {}));
+    serviceState.toggleCredentialFavorite = jest.fn();
+    serviceState.getTotpCode = jest.fn();
+    serviceState.getCredentialHistory = jest.fn().mockResolvedValue([]);
+    serviceState.attachFileToCredential = jest.fn();
+    serviceState.saveAttachmentToFile = jest.fn().mockResolvedValue(true);
+    serviceState.deleteAttachment = jest.fn().mockResolvedValue(true);
+    Object.assign(serviceState, serviceOver);
+    useAppStore.setState({
+      credentials: [
+        {
+          id: 'c1',
+          identity_id: 'id-1',
+          name: 'Example',
+          credential_type: 'Password',
+          security_level: 'High',
+          tags: [],
+          created_at: '2023-01-01T00:00:00Z',
+          updated_at: '2023-01-01T00:00:00Z',
+          is_active: true,
+          is_favorite: false,
+        },
+      ],
+      selectedCredentialId: 'c1',
+    });
+  };
+
+  it('shows the detail placeholder when nothing is selected', () => {
+    serviceState.isUnlocked = true;
+    serviceState.currentIdentity = { id: 'id-1', name: 'Personal' };
+    render(<App />);
+
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    expect(screen.getByText('选择一个条目查看详情')).toBeInTheDocument();
+    expect(screen.queryByTestId('detail-pane')).not.toBeInTheDocument();
+  });
+
+  it('loads credential data and renders the pane for the store selection', async () => {
+    const getCredentialData = jest.fn().mockResolvedValue({
+      credential_type: 'Password',
+      data: { email: 'a@b.com' },
+    });
+    setupDetail({ getCredentialData });
+    render(<App />);
+
+    await screen.findByTestId('detail-pane');
+    expect(getCredentialData).toHaveBeenCalledWith('c1');
+    // 面板先以 loading 态渲染，字段值等 App 异步加载完成才出现
+    await screen.findByText('a@b.com');
+  });
+
+  it('shows a loading state while credential data is in flight', async () => {
+    let resolveData: (v: any) => void = () => {};
+    const getCredentialData = jest.fn(
+      () => new Promise((resolve) => { resolveData = resolve; }),
+    );
+    setupDetail({ getCredentialData });
+    render(<App />);
+
+    expect(await screen.findByTestId('detail-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('reveal-password')).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveData({ credential_type: 'Password', data: { email: 'a@b.com' } });
+    });
+    expect(screen.getByText('a@b.com')).toBeInTheDocument();
+    expect(screen.queryByTestId('detail-loading')).not.toBeInTheDocument();
+  });
+
+  it('closing the pane clears the store selection', async () => {
+    setupDetail({
+      getCredentialData: jest.fn().mockResolvedValue({ credential_type: 'Password', data: {} }),
+    });
+    render(<App />);
+
+    await screen.findByTestId('detail-pane');
+    fireEvent.click(screen.getByTitle('关闭'));
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+  });
+
+  it('deleting the selected credential clears the pane', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const deleteCredential = jest.fn().mockResolvedValue(true);
+    setupDetail({
+      getCredentialData: jest.fn().mockResolvedValue({ credential_type: 'Password', data: {} }),
+      deleteCredential,
+    });
+    render(<App />);
+
+    await screen.findByTestId('detail-pane');
+    fireEvent.click(screen.getByTitle('删除'));
+    await act(async () => {});
+    expect(deleteCredential).toHaveBeenCalledWith('c1');
+    expect(useAppStore.getState().selectedCredentialId).toBeNull();
+    expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
+    confirmSpy.mockRestore();
   });
 });

@@ -65,8 +65,25 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     assert!(nsi.contains(
         "!define UNINSTKEY \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCTNAME}\""
     ));
-    // 数据安全：仅当用户勾选"删除应用数据"且非更新模式才清 AppData
-    assert!(nsi.contains("${If} $DeleteAppDataCheckboxState = 1"));
+    // 数据安全：仅当用户勾选"删除应用数据"或 /PURGE 显式清除且非更新模式才清 AppData
+    assert!(nsi.contains("${If} $DeleteAppDataCheckboxState = 1${OrIf} $PurgeMode = 1"));
+    // /PURGE 静默彻底清除参数必须被解析
+    assert!(
+        nsi.contains("${GetOptions} $CMDLINE \"/PURGE\" $PurgeMode"),
+        "silent purge flag must be supported"
+    );
+    // 且解析必须位于 /UPDATE 块之外（嵌套进去会让单独 /PURGE 静默失效）
+    let update_strcpy = nsi
+        .find("StrCpy $UpdateMode 1")
+        .expect("update flag must be parsed");
+    let after_update = &nsi[update_strcpy..];
+    let purge_pos = after_update
+        .find("\"/PURGE\"")
+        .expect("purge flag must be parsed");
+    assert!(
+        after_update[..purge_pos].contains("${EndIf}"),
+        "/PURGE must be parsed outside the /UPDATE block"
+    );
 }
 
 /// 卸载不删 vault 数据（docs/UNINSTALL.md 的承诺）：

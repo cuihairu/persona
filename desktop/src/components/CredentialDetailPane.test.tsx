@@ -3,9 +3,27 @@ import CredentialDetailPane from './CredentialDetailPane';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
+import toast from 'react-hot-toast';
+import { copyToClipboardWithToast } from '@/utils/clipboard';
+
+const mockTauriWriteText = jest.fn();
+const mockTauriReadText = jest.fn();
 
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: jest.fn(),
+}));
+
+// 复制失败 toast 用例走真实 copyToClipboardWithToast：写入主路（tauri 插件）
+// 由这里拦截，navigator.clipboard / execCommand 回退在用例内各自模拟
+jest.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  writeText: (...args: any[]) => mockTauriWriteText(...args),
+  readText: (...args: any[]) => mockTauriReadText(...args),
+}));
+
+jest.mock('react-hot-toast', () => ({
+  __esModule: true,
+  default: { success: jest.fn(), error: jest.fn() },
+  Toaster: () => null,
 }));
 
 // 原生文件对话框只在用户点击 Add File / 保存时触发；jsdom 下哑掉
@@ -47,11 +65,13 @@ const makeCred = (over: Record<string, any> = {}) => ({
   ...over,
 });
 
-/** props 直驱渲染面板；service mock 覆盖默认空实现，onCopy/onClose 为 jest.fn */
+/** props 直驱渲染面板；service mock 覆盖默认空实现，onCopy/onClose 为 jest.fn
+ *  （onCopyOverride：复制失败 toast 用例注入真实 copyToClipboardWithToast） */
 const setupPane = (
   credOver: Record<string, any> = {},
   credentialData: any = null,
   serviceOver: Record<string, any> = {},
+  onCopyOverride?: (text: string, label: string) => void,
 ) => {
   const service = {
     toggleCredentialFavorite: jest.fn(),
@@ -69,7 +89,7 @@ const setupPane = (
     ...serviceOver,
   };
   (usePersonaService as jest.Mock).mockReturnValue(service);
-  const onCopy = jest.fn();
+  const onCopy = onCopyOverride ?? jest.fn();
   const onClose = jest.fn();
   render(
     <CredentialDetailPane
@@ -737,5 +757,22 @@ describe('components/CredentialDetailPane', () => {
     const editing = useAppStore.getState().editingCredential;
     expect(editing).not.toBeNull();
     expect(editing!.data).toBeNull();
+  });
+
+  it('surfaces the error toast when copying fails end-to-end', async () => {
+    // 真实剪贴板链路（App 传给面板的就是它）：tauri 插件拒绝 →
+    // navigator.clipboard 不可用 → execCommand 返回 false → 失败 toast
+    setupPane(
+      { username: 'bob' },
+      { credential_type: 'Password', data: { username: 'bob' } },
+      {},
+      copyToClipboardWithToast as any,
+    );
+
+    mockTauriWriteText.mockRejectedValueOnce(new Error('no backend'));
+    document.execCommand = jest.fn().mockReturnValue(false) as any;
+    clickCopyNextTo('bob');
+    await act(async () => {});
+    expect(toast.error).toHaveBeenCalledWith('复制到剪贴板失败');
   });
 });

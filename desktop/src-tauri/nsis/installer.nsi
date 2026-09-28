@@ -11,6 +11,9 @@
 ;      自定义页面，原版模板在 /S 下完全不卸载旧版；
 ;   3) installMode 固定为 both（tauri.conf.json），重装检测同时覆盖
 ;      历史 per-user / per-machine 安装，杜绝混装残留。
+; 3) 支持 /PURGE 静默彻底清除：正常卸载保留 vault 数据（默认），
+;    /PURGE 显式清空所有用户数据（vault + 缓存 + CLI 工作区）。
+;    与 docs/UNINSTALL.md §4 对齐。
 ; 升级 @tauri-apps/cli 时必须对照新基线重放这三处差异并更新本注释。
 
 Unicode true
@@ -90,6 +93,7 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+Var PurgeMode
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -479,6 +483,9 @@ Function un.ConfirmShow ; Add add a `Delete app data` check box
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_LEAVE un.ConfirmLeave
 Function un.ConfirmLeave
+  ${If} $PurgeMode = 1
+    StrCpy $DeleteAppDataCheckboxState 1
+  ${EndIf}
   SendMessage $DeleteAppDataCheckbox ${BM_GETCHECK} 0 0 $DeleteAppDataCheckboxState
 FunctionEnd
 !define MUI_PAGE_CUSTOMFUNCTION_PRE un.SkipIfPassive
@@ -803,6 +810,12 @@ Function un.onInit
   ${IfNot} ${Errors}
     StrCpy $UpdateMode 1
   ${EndIf}
+
+  ; /PURGE 独立解析：不依赖 /UPDATE 同时出现（否则单独静默清除不生效）
+  ${GetOptions} $CMDLINE "/PURGE" $PurgeMode
+  ${IfNot} ${Errors}
+    StrCpy $PurgeMode 1
+  ${EndIf}
 FunctionEnd
 
 Section Uninstall
@@ -899,7 +912,7 @@ Section Uninstall
 
   ; Delete app data if the checkbox is selected
   ; and if not updating
-  ${If} $DeleteAppDataCheckboxState = 1
+  ${If} $DeleteAppDataCheckboxState = 1${OrIf} $PurgeMode = 1
   ${AndIf} $UpdateMode <> 1
     ; Clear the install location $INSTDIR from registry
     DeleteRegKey SHCTX "${MANUPRODUCTKEY}"

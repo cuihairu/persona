@@ -164,7 +164,7 @@ describe('hooks/usePersonaService', () => {
       isUnlocked: true,
       selectedCredentialId: 'c1',
       pendingCredentialSelection: { identityId: 'i1', credentialId: 'c1' },
-      sidebarFilter: { kind: 'type', value: 'Password' },
+      sidebarFilter: { kind: 'category', value: 'passwords' },
     });
     jest.spyOn(personaAPI, 'lockService').mockResolvedValue({
       success: true,

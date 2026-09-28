@@ -4,35 +4,14 @@ import {
   UserCircleIcon,
   PlusIcon,
   ChevronDownIcon,
-  BriefcaseIcon,
-  HomeIcon,
-  UserGroupIcon,
-  CreditCardIcon,
-  PuzzlePieceIcon
 } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 import { Listbox, Transition } from '@headlessui/react';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { identityIcon } from './sidebarNav';
 import type { IdentityType } from '@/types';
 import { clsx } from 'clsx';
-
-const getIdentityIcon = (type: string) => {
-  switch (type) {
-    case 'Personal':
-      return HomeIcon;
-    case 'Work':
-      return BriefcaseIcon;
-    case 'Social':
-      return UserGroupIcon;
-    case 'Financial':
-      return CreditCardIcon;
-    case 'Gaming':
-      return PuzzlePieceIcon;
-    default:
-      return UserCircleIcon;
-  }
-};
 
 const getIdentityColor = (type: string) => {
   switch (type) {
@@ -71,7 +50,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                     'flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mr-3',
                     getIdentityColor(currentIdentity.identity_type)
                   )}>
-                    {React.createElement(getIdentityIcon(currentIdentity.identity_type), {
+                    {React.createElement(identityIcon(currentIdentity.identity_type), {
                       className: 'w-4 h-4'
                     })}
                   </div>
@@ -122,7 +101,7 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
                         'flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-3',
                         getIdentityColor(identity.identity_type)
                       )}>
-                        {React.createElement(getIdentityIcon(identity.identity_type), {
+                        {React.createElement(identityIcon(identity.identity_type), {
                           className: 'w-3 h-3'
                         })}
                       </div>

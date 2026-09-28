@@ -3660,7 +3660,7 @@ pub async fn delete_credential(
 }
 
 /// Get SSH agent runtime status
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn get_ssh_agent_status(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SshAgentStatus>, String> {
@@ -3676,7 +3676,7 @@ pub async fn get_ssh_agent_status(
 }
 
 /// Start the embedded SSH agent
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn start_ssh_agent<R: tauri::Runtime>(
     request: StartAgentRequest,
     state: State<'_, AppState>,
@@ -3740,7 +3740,7 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
 }
 
 /// Stop the embedded SSH agent
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn stop_ssh_agent(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<bool>, String> {
@@ -3772,7 +3772,7 @@ pub struct SshApprovalRespondRequest {
     pub allow: bool,
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn ssh_approval_respond(
     request: SshApprovalRespondRequest,
     state: State<'_, AppState>,
@@ -3820,7 +3820,7 @@ pub async fn passkey_approval_respond(
 }
 
 /// List stored SSH key credentials
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn get_ssh_keys(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<Vec<SshKeySummary>>, String> {
