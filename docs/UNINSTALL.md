@@ -53,6 +53,7 @@ Windows 行为由 `desktop/src-tauri/nsis/installer.nsi` 保证，并有回归�
 按平台手动执行（**删前确认已有备份**；vault 删除后无法恢复）：
 
 **Windows（PowerShell）**
+
 ```powershell
 Remove-Item -Recurse -Force "$env:APPDATA\persona"          # vault 库
 Remove-Item -Recurse -Force "$env:APPDATA\com.persona.desktop"    # 缓存
@@ -61,12 +62,14 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:USERPROFILE\.per
 ```
 
 **Linux**
+
 ```bash
 rm -rf ~/.local/share/persona   # vault 库
 rm -rf ~/.persona               # CLI 工作区 + SSH agent 状态
 ```
 
 **macOS**
+
 ```bash
 rm -rf "$HOME/Library/Application Support/persona"  # vault 库
 rm -rf ~/.persona                                   # CLI 工作区
