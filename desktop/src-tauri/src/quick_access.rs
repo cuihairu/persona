@@ -31,7 +31,7 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_global_shortcut::GlobalShortcut;
+use tauri_plugin_global_shortcut::{GlobalShortcut, ShortcutState};
 
 use persona_core::models::WorkspaceSettings;
 
@@ -146,13 +146,30 @@ pub fn normalize_accelerator(raw: &str) -> String {
 /// Wayland 上会返回 Err，走 Builder 链这个 Err 会让 `build()` 失败、
 /// `.expect` 直接 panic——全局热键不可用不该让整个密码管理器起不来。
 /// 失败原因存进运行态，设置页能如实显示。
+///
+/// **必须挂 `with_handler`**（2026-09-28 修复"热键不生效"的根因）：
+/// 插件的事件分发只有两路——`register()` 存的 per-shortcut handler
+/// （Rust 侧 `register` 恒为 None）和 Builder 级 handler。此前两路
+/// 都是 None：OS 抢注成功（无冲突报错）、`registered` 也记为 Some，
+/// 但按键事件分发给空 handler，什么都不发生。挂在 Builder 级对
+/// 本应用注册的任何加速键都生效（我们最多注册一个）；只在 `Pressed`
+/// 沿触发——global-hotkey 的 Pressed/Released 都会上报，不过滤会
+/// show 完立刻 hide。
 pub fn install_plugin<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if app.try_state::<GlobalShortcut<R>>().is_some() {
         return Ok(());
     }
-    app.plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    app.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(|app, _shortcut, event| {
+                if event.state == ShortcutState::Pressed {
+                    toggle(app);
+                }
+            })
+            .build(),
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
 }
 
 /// 一次抢注的结果
@@ -171,6 +188,16 @@ fn compute_registration<R: tauri::Runtime>(
     app: &AppHandle<R>,
     accelerator: Option<&str>,
 ) -> Registration {
+    // 开关关闭最先判：关闭 = 用户明确不要热键，**不是失败**——浮窗缺失
+    // /headless 等环境问题不该给关着的开关记一条错误原因（设置页会把
+    // "已关闭"误渲染成"未生效（原因）"）。能拿到插件就顺手注销全部；
+    // 拿不到（mock / 未装载）说明本来就没注册过，无需清理。
+    let Some(raw) = accelerator else {
+        if let Some(plugin) = app.try_state::<GlobalShortcut<R>>() {
+            let _ = plugin.unregister_all();
+        }
+        return Registration::Disabled;
+    };
     // 热键唯一作用是唤出浮窗：浮窗不在（集成测试的 mock context 就是
     // 没有窗口）就没什么可绑的，直接短路。顺带避开一个测试隐患——
     // mock runtime 的 run_on_main_thread 只排队不执行，插件 register 里
@@ -187,9 +214,6 @@ fn compute_registration<R: tauri::Runtime>(
     // 先释放旧绑定：改绑时旧键必须先让位，否则新旧两键同时响应
     let _ = plugin.unregister_all();
 
-    let Some(raw) = accelerator else {
-        return Registration::Disabled;
-    };
     let shortcut = match parse_accelerator(raw) {
         Ok(shortcut) => shortcut,
         Err(err) => return Registration::Failed(err),
@@ -213,6 +237,7 @@ fn store_registration(runtime: &Mutex<QuickAccessRuntime>, outcome: Registration
             guard.last_error = None;
         }
         Registration::Failed(reason) => {
+            tracing::warn!("quick access hotkey registration failed: {reason}");
             guard.registered = None;
             guard.last_error = Some(reason);
         }
@@ -379,8 +404,13 @@ mod tests {
             last_error: None,
             install_error: None,
         };
-        // 未自定义绑定 → configured 落到平台默认值
-        let status = runtime.snapshot(&WorkspaceSettings::default());
+        // 开启态（默认已改关，2026-09-28）：未自定义绑定 → configured 落到
+        // 平台默认值
+        let settings = WorkspaceSettings {
+            quick_access_enabled: true,
+            ..WorkspaceSettings::default()
+        };
+        let status = runtime.snapshot(&settings);
         assert!(status.enabled);
         assert_eq!(status.configured_accelerator, default_accelerator());
         assert_eq!(

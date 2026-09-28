@@ -113,9 +113,11 @@ pub struct WorkspaceSettings {
 
     /// Quick Access（OS 级全局热键唤出的浮窗，对标 1Password Quick
     /// Access）是否启用。关 = 桌面端不注册任何全局热键、托盘入口仍在。
-    /// 旧 JSON 缺键时回退 true：全局热键属"装了就能用"的主航道能力，
-    /// 不因升级前的 JSON 形状而静默失效
-    #[serde(default = "default_true")]
+    /// 默认**关**（2026-09-28 用户决策）：全局热键会抢占 OS 级组合键，
+    /// 与云备份同口径"不主动开"——要用的用户在设置里显式打开并看到
+    /// 当前组合键与冲突状态。**显式存储的既有配置不受影响**（存储了
+    /// true 就保持开）；仅缺键的旧 JSON / 新装回退关
+    #[serde(default)]
     pub quick_access_enabled: bool,
 
     /// Quick Access 全局热键的加速键串（tauri global-shortcut 语法，如
@@ -123,12 +125,6 @@ pub struct WorkspaceSettings {
     /// 绑定——core 是平台无关层，不内置具体键位
     #[serde(default)]
     pub quick_access_hotkey: Option<String>,
-}
-
-/// serde 默认值辅助：bool 字段的"缺键回退 true"（默认实现是 false，
-/// 直接 `#[serde(default)]` 会把旧 JSON 读成关）
-fn default_true() -> bool {
-    true
 }
 
 impl Default for WorkspaceSettings {
@@ -146,7 +142,7 @@ impl Default for WorkspaceSettings {
             locale: None,
             travel_mode: false,
             travel_entered_at: None,
-            quick_access_enabled: true,
+            quick_access_enabled: false,
             quick_access_hotkey: None,
         }
     }
@@ -291,18 +287,30 @@ mod tests {
         // 旅行模式字段（013 批次）同样缺键回退
         assert!(!settings.travel_mode);
         assert_eq!(settings.travel_entered_at, None);
-        // Quick Access（014 批次）：enabled 缺键回退 true（不是默认的 false），
-        // hotkey 缺键回退 None = 桌面端按平台取默认绑定
-        assert!(settings.quick_access_enabled);
+        // Quick Access（014 批次；2026-09-28 起默认关）：enabled 缺键回退
+        // false（全局热键抢占 OS 组合键，不主动开），hotkey 缺键回退
+        // None = 桌面端按平台取默认绑定
+        assert!(!settings.quick_access_enabled);
         assert_eq!(settings.quick_access_hotkey, None);
     }
 
     #[test]
     fn test_quick_access_hotkey_round_trip() {
         let mut ws = Workspace::new("/tmp/persona", "main".to_string());
-        // 默认：开 + 用平台默认绑定
-        assert!(ws.settings.quick_access_enabled);
+        // 默认：关（显式开关在设置页）+ 用平台默认绑定
+        assert!(!ws.settings.quick_access_enabled);
         assert!(ws.settings.quick_access_hotkey.is_none());
+
+        // 显式存储的既有配置尊重：存储了 true 就保持开，升级不静默关闭
+        ws.settings.quick_access_enabled = true;
+        ws.settings.quick_access_hotkey = Some("CommandOrControl+Shift+Space".to_string());
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert!(restored.settings.quick_access_enabled);
+        assert_eq!(
+            restored.settings.quick_access_hotkey.as_deref(),
+            Some("CommandOrControl+Shift+Space")
+        );
 
         ws.settings.quick_access_enabled = false;
         ws.settings.quick_access_hotkey = Some("CommandOrControl+Shift+Space".to_string());

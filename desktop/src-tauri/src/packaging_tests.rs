@@ -68,3 +68,55 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     // 数据安全：仅当用户勾选"删除应用数据"且非更新模式才清 AppData
     assert!(nsi.contains("${If} $DeleteAppDataCheckboxState = 1"));
 }
+
+/// 卸载不删 vault 数据（docs/UNINSTALL.md 的承诺）：
+/// NSIS 模板里所有递归删除（`RmDir /r`）必须只指向 `${BUNDLEID}`
+/// 缓存目录（WebView 缓存 + 日志），vault 所在的 `%APPDATA%\persona`
+/// （`default_db_path`，与 BUNDLEID 无关）绝不允许出现在任何删除指令
+/// 里。升级路径的静默卸载（/S）没有确认页 => 勾选框恒未勾 => 连缓存
+/// 目录都不会被清；vault 目录则任何路径都删不到。
+#[test]
+fn nsis_uninstall_never_targets_vault_data_dir() {
+    let nsi = manifest_file("nsis/installer.nsi");
+
+    let recursive_rmdirs: Vec<&str> = nsi
+        .lines()
+        .filter(|line| {
+            // 精确匹配递归标志 `/r `（`/REBOOTOK` 也以 /R 开头，但它只
+            // 是重启时删除、目标仍是 $INSTDIR 安装残留，不在本断言范围）
+            line.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("rmdir /r ")
+        })
+        .collect();
+    assert!(
+        !recursive_rmdirs.is_empty(),
+        "expected the template to still clean ${{BUNDLEID}} cache dirs on explicit opt-in; \
+         if the uninstall section was rewritten, re-audit docs/UNINSTALL.md promises"
+    );
+    for line in &recursive_rmdirs {
+        assert!(
+            line.contains("${BUNDLEID}"),
+            "recursive delete outside the cache dirs is forbidden: {line:?}"
+        );
+    }
+
+    // vault 路径（`dirs::data_dir()/persona`）不得成为任何删除/移除指令
+    // 的目标；删除指令 = 行首 RMDir/RmDir 或 Delete（忽略注释行）。
+    for line in nsi.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(';') {
+            continue; // 注释里提及 vault 路径是允许的（说明文档）
+        }
+        let upper = trimmed.to_ascii_uppercase();
+        let is_delete_cmd = upper.starts_with("RMDIR")
+            || upper.starts_with("DELETE \"")
+            || upper.starts_with("DELETE $");
+        if is_delete_cmd {
+            assert!(
+                !trimmed.contains("\\persona\""),
+                "vault data dir must never be a deletion target: {line:?}"
+            );
+        }
+    }
+}

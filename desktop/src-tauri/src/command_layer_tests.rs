@@ -8029,15 +8029,26 @@ async fn quick_access_set_requires_unlocked_service() {
     assert!(resp.data.expect("settings").quick_access_hotkey.is_none());
 }
 
-/// 默认档：开关开、绑定落到平台默认值；测试环境（mock context）没有
-/// quick-access 浮窗，抢注必然失败 → registered 为空且带原因（这就是
-/// 设置页要显示的面）
+/// 默认档（2026-09-28 起默认关）：开关关、绑定落到平台默认值；显式
+/// 开启后测试环境（mock context）没有 quick-access 浮窗，抢注必然
+/// 失败 → registered 为空且带原因（这就是设置页要显示的面）
 #[tokio::test]
 async fn quick_access_status_reports_defaults_and_missing_registration() {
     let app = mock_app();
     init_service_ok(&app, "master-pw-123").await;
 
+    // 默认关：新装/缺键不抢注任何全局热键，registered 空、无错误
     let resp = quick_access_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(!status.enabled, "全局热键默认关闭（与云备份同口径）");
+    assert!(status.registered_accelerator.is_none());
+    assert!(status.error.is_none(), "默认关不是失败，不带原因");
+
+    // 显式开启（设置页开关）后才有"抢注失败"面
+    let resp = quick_access_set(app.handle().clone(), true, None, app.state::<AppState>())
+        .await
+        .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     let status = resp.data.expect("status present");
     assert!(status.enabled);
