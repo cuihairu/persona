@@ -140,6 +140,16 @@ SSH Agent (developer focus)
       round-trip：add 幂等/list 只读/remove 幂等 + 审计计数），全仓 1602 绿
       后提交。
 - [ ] Windows-specific testing and optimization
+      · 编译层已收口（2026-09-28）：`rustup target add x86_64-pc-windows-gnu`
+      后 `cargo check --workspace --all-targets --all-features --target
+      x86_64-pc-windows-gnu` 根 workspace 一次全绿（0 修复）；desktop
+      src-tauri 独立 workspace 修 1 处——`tests/desktop_integration.rs` 是
+      Unix domain socket 专项（被测 sink/服务端生产侧本就 `#[cfg(unix)]`），
+      加文件级 `#![cfg(unix)]` 门禁后全绿。其余 5 包无 cfg/路径/平台 API
+      误用。**check 不覆盖的口径**：链接层（需 gnu linker，本机未装）与
+      Windows 运行时行为（命名管道审批流、TPM biometric、NSIS 安装器、
+      SSH agent named-pipe 同流程——见 ⑤）仍待真 Windows 机器验收；
+      msvc target 已装可作后续 CI 矩阵候选。
 
 Wallet Material (experimental — deferred until 1Password parity; see priority policy above)
 

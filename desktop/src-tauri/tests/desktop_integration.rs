@@ -4,6 +4,12 @@
 //! IO 的唤醒，见 `passkey_bridge::tests` 中 FakeSink 的注释），所以
 //! `TauriApprovalSink` 的 emit 路径此前只能用 FakeSink 绕过。lib 化后
 //! 这些测试在独立进程里直驱真实 sink 与审批服务端。
+//!
+//! Unix 专属：被测的审批通道就是 Unix domain socket（生产侧
+//! `run_passkey_approval_server_with` / `TauriApprovalSink` 也一并
+//! `#[cfg(unix)]` 门禁，Windows 用命名管道另一套），故整个测试 target
+//! 在非 Unix 下按空文件编译（Windows 交叉 check 的 E0432/E0433 由此）。
+#![cfg(unix)]
 
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
