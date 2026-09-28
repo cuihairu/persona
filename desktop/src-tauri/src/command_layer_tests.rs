@@ -2230,6 +2230,8 @@ async fn get_totp_code_supports_game_token_provider() {
                     issuer: "Steam".to_string(),
                     account_name: "player_one".to_string(),
                     url: Some("https://store.steampowered.com".to_string()),
+                    identity_secret: None,
+                    device_id: None,
                 }),
             )
             .await
@@ -2273,6 +2275,8 @@ async fn get_totp_code_supports_game_token_provider() {
                     issuer: "Tencent".to_string(),
                     account_name: "player_one".to_string(),
                     url: None,
+                    identity_secret: None,
+                    device_id: None,
                 }),
             )
             .await
@@ -8623,4 +8627,114 @@ async fn sync_rotate_gates_before_any_network_or_crypto() {
     let resp = sync_rotate(state.clone()).await.unwrap();
     assert!(!resp.success);
     assert!(resp.error.unwrap().contains("locked"));
+}
+
+/// 全量 IPC 参数键契约审计（回归钉，2026-09-28 审计结论）。
+///
+/// Tauri 2 的 `#[command]` 宏默认按 camelCase 查 invoke 参数键（宏默认
+/// `ArgumentCase::Camel`，`v.get(key)` 精确匹配、无大小写回退），而前端
+/// `desktop/src/utils/api.ts` 统一发 snake_case 键——缺
+/// `rename_all = "snake_case"` 时运行时报
+/// "missing required key xxxYyy"（用户在生成器面板实测：
+/// `invalid args 'includeLowercase' ... missing required key includeLowercase`）。
+/// 直调 Rust fn 的命令层测试走不到这一层，故按源级断言逐命令核对：
+/// ① 表内每个命令的 `#[command]` 必须带 `rename_all = "snake_case"`；
+/// ② api.ts 发送的每个多词键必须与 Rust 形参同名（拼写漂移会在此暴露）。
+/// 单词参数（`request`/`id`/`query` 等）两种命名法等价，不在本表。
+/// 前端侧发键由 `desktop/src/utils/api.test.ts` 的 mock invoke 断言钉住，
+/// 两侧合起来构成完整契约。新命令若收多词参数：加上属性后在此表登记。
+#[test]
+fn command_ipc_arg_keys_match_api_ts_snake_case() {
+    let source = include_str!("commands.rs");
+
+    // (命令名, api.ts 发送的多词 snake_case 键)——2026-09-28 全量审计
+    const AUDITED: &[(&str, &[&str])] = &[
+        (
+            "generate_password_advanced",
+            &[
+                "length",
+                "include_lowercase",
+                "include_uppercase",
+                "include_numbers",
+                "include_symbols",
+                "pronounceable",
+                "count",
+            ],
+        ),
+        ("attach_file_to_credential", &["credential_id", "file_path"]),
+        ("audit_cleanup", &["retain_days"]),
+        ("delete_attachment", &["attachment_id"]),
+        ("delete_credential", &["credential_id"]),
+        ("delete_identity", &["identity_id"]),
+        ("export_identity", &["identity_id"]),
+        ("fetch_credential_favicon", &["credential_id"]),
+        ("generate_password", &["length", "include_symbols"]),
+        ("get_credential_data", &["credential_id"]),
+        ("get_credential_history", &["credential_id"]),
+        ("get_credentials_for_identity", &["identity_id"]),
+        ("get_totp_code", &["credential_id"]),
+        ("list_attachments", &["credential_id"]),
+        ("passkey_list", &["identity_id"]),
+        ("passkey_list_by_rp", &["rp_id"]),
+        ("restore_credential_version", &["credential_id"]),
+        ("save_attachment_to_file", &["attachment_id", "output_path"]),
+        ("set_active_identity", &["identity_id"]),
+        (
+            "set_feature_flags",
+            &["ssh_agent", "wallet", "passkeys", "fetch_favicons"],
+        ),
+        (
+            "set_sync_config",
+            &["enabled", "server_url", "server_token"],
+        ),
+        ("toggle_credential_favorite", &["credential_id"]),
+        ("wallet_add_address", &["wallet_id"]),
+        ("wallet_delete", &["wallet_id"]),
+        ("wallet_generate", &["identity_id"]),
+        ("wallet_import", &["identity_id"]),
+        ("wallet_list", &["identity_id"]),
+        ("wallet_list_addresses", &["wallet_id"]),
+        ("wallet_pending_transactions", &["wallet_id"]),
+    ];
+
+    let mut failures = Vec::new();
+    // commands.rs 含中文注释，窗口切片须落在字符边界上
+    let boundary_floor = |src: &str, mut idx: usize| -> usize {
+        while idx > 0 && !src.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    };
+    for (name, keys) in AUDITED {
+        let marker = format!("pub async fn {name}");
+        let Some(fn_start) = source.find(&marker) else {
+            failures.push(format!("{name}: definition not found in commands.rs"));
+            continue;
+        };
+        // ① 属性窗内必须有 rename_all = "snake_case"
+        let attrs_window = &source[boundary_floor(source, fn_start.saturating_sub(500))..fn_start];
+        if !attrs_window.contains("#[command(rename_all = \"snake_case\")]") {
+            failures.push(format!(
+                "{name}: missing #[command(rename_all = \"snake_case\")] — invoke layer \
+                 would look up camelCase keys and the frontend call fails at runtime"
+            ));
+        }
+        // ② 每个发送键必须是同名形参（拼接 `key:` 探测，跳过泛型行误配：
+        //    形参行形如 `    key: Type,`）
+        let sig = &source[fn_start..];
+        let sig_end = sig.find(") ->").unwrap_or(sig.len());
+        let params = &sig[..sig_end];
+        for key in *keys {
+            if !params.contains(&format!("\n    {key}:")) && !params.contains(&format!("({key}:")) {
+                failures.push(format!(
+                    "{name}: api.ts sends key `{key}` but no matching parameter in the signature"
+                ));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "IPC arg-key contract violations:\n  - {}",
+        failures.join("\n  - ")
+    );
 }

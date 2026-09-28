@@ -1,4 +1,24 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
+
+/**
+ * 统一 invoke 出口：Tauri 2 的命令错误（命令层 Err(String)、
+ * "invalid args ... missing required key" 等 IPC 层失败）以字符串
+ * reject promise，不是 Error 实例——调用方的
+ * `err instanceof Error ? err.message : 通用文案` 会拿不到底层原因，
+ * 只剩一句"保存失败"。这里把任何 rejection 归一成 Error，让全部
+ * 调用点都能透出真实错误文本。
+ */
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    // 无参调用不传第二个参数：保持与直调 tauriInvoke 相同的实参形态
+    return args === undefined ? await tauriInvoke<T>(cmd) : await tauriInvoke<T>(cmd, args);
+  } catch (e) {
+    if (e instanceof Error) throw e;
+    throw new Error(
+      typeof e === 'string' && e.length > 0 ? e : JSON.stringify(e),
+    );
+  }
+}
 import type {
   ApiResponse,
   Identity,

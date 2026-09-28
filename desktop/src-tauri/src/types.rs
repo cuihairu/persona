@@ -886,6 +886,8 @@ impl CredentialDataRequest {
                 issuer: issuer.clone(),
                 account_name: account_name.clone(),
                 url: url.clone(),
+                identity_secret: None,
+                device_id: None,
             }),
             CredentialDataRequest::SecureNote { note } => {
                 CredentialData::SecureNote(SecureNoteData { note: note.clone() })

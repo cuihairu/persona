@@ -593,8 +593,8 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || t('svc.sshStatusFailed'));
       }
-    } catch {
-      toast.error(t('svc.sshStatusFailed'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('svc.sshStatusFailed'));
     }
   };
 
@@ -607,8 +607,10 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || t('svc.sshAgentStartFailed'));
       }
-    } catch {
-      toast.error(t('svc.sshAgentStartFailed'));
+    } catch (err) {
+      // api 层已把 Tauri 的字符串 rejection 归一成 Error——这里带上底层
+      // 原因（缺库/socket 路径权限/IPC 参数问题），不再只报"启动失败"
+      toast.error(err instanceof Error ? err.message : t('svc.sshAgentStartFailed'));
     }
   };
 
@@ -621,8 +623,8 @@ export const usePersonaService = () => {
       } else {
         toast.error(response.error || t('svc.sshAgentStopFailed'));
       }
-    } catch {
-      toast.error(t('svc.sshAgentStopFailed'));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('svc.sshAgentStopFailed'));
     }
   };
 

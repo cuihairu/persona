@@ -456,4 +456,36 @@ describe('utils/api command mapping coverage', () => {
       adoptOpId: 'op-9',
     });
   });
+
+  // Tauri 2 以字符串 reject invoke promise；api 层必须归一成 Error，
+  // 否则调用方 `err instanceof Error ? err.message : 通用文案` 只显示
+  // "保存失败"，底层原因（如 missing required key）被吞掉。
+  it('normalizes string rejections into Error instances carrying the cause', async () => {
+    mockInvoke.mockRejectedValueOnce(
+      "invalid args 'sshAgent' for command 'set_feature_flags': missing required key sshAgent",
+    );
+    await expect(
+      personaAPI.setFeatureFlags({
+        ssh_agent: true,
+        wallet: true,
+        passkeys: true,
+        fetch_favicons: true,
+      }),
+    ).rejects.toThrow(
+      "invalid args 'sshAgent' for command 'set_feature_flags': missing required key sshAgent",
+    );
+
+    mockInvoke.mockRejectedValueOnce('');
+    await expect(personaAPI.lockService()).rejects.toThrow('""');
+
+    mockInvoke.mockRejectedValueOnce({ code: 7 });
+    await expect(personaAPI.lockService()).rejects.toThrow('{"code":7}');
+  });
+
+  // 已是 Error 的 rejection 原样透传（不二次包装丢失栈）
+  it('passes Error rejections through untouched', async () => {
+    const boom = new Error('backend exploded');
+    mockInvoke.mockRejectedValueOnce(boom);
+    await expect(personaAPI.lockService()).rejects.toBe(boom);
+  });
 });

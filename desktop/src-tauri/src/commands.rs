@@ -471,7 +471,7 @@ pub async fn get_active_identity(
 }
 
 /// Set the active identity ID for this workspace.
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn set_active_identity(
     identity_id: String,
     state: State<'_, AppState>,
@@ -806,7 +806,7 @@ pub async fn exit_travel_mode(
 ///   （此前要等下次 init_service）
 /// - ssh_agent 关：停止已运行的 SSH agent（开：不自动启动——入口显隐
 ///   归 UI，agent 由用户在面板里 start，对齐 1Password 语义）
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn set_feature_flags<R: tauri::Runtime>(
     ssh_agent: bool,
     wallet: bool,
@@ -1656,7 +1656,7 @@ pub(crate) async fn attach_sync_emitter(state: &State<'_, AppState>) {
 /// keyring 不可用时拒绝保存（fail-closed，绝不落明文）。`enabled=false`
 /// 时尽力清除 keyring 令牌（失败仅 warn，不阻塞关闭）。`enabled` 且
 /// `server_url` 空白时报错。
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn set_sync_config(
     enabled: bool,
     server_url: String,
@@ -2723,7 +2723,7 @@ pub async fn update_identity(
 }
 
 /// Delete an identity
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn delete_identity(
     identity_id: String,
     state: State<'_, AppState>,
@@ -2982,7 +2982,7 @@ pub async fn update_credential_data(
 }
 
 /// Get credentials for an identity
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn get_credentials_for_identity(
     identity_id: String,
     state: State<'_, AppState>,
@@ -3008,7 +3008,7 @@ pub async fn get_credentials_for_identity(
 }
 
 /// Get credential data (decrypted)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn get_credential_data(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3056,7 +3056,7 @@ pub async fn get_credential_data(
 
 /// Get change history for a credential (item history; metadata-only,
 /// 字段级 diff 不含任何密文/密钥材料)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn get_credential_history(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3093,7 +3093,7 @@ pub async fn get_credential_history(
 /// Restore a credential's metadata to an earlier item-history version.
 /// 只回滚元数据（name/username/url/notes/tags 等 9 字段）；历史快照从不含
 /// 密文，密码等秘密不会被回滚。删除行无可恢复状态，不支持重建已删条目。
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn restore_credential_version(
     credential_id: String,
     version: u32,
@@ -3122,7 +3122,7 @@ pub async fn restore_credential_version(
 }
 
 /// List attachments for a credential (metadata only; no blob content)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn list_attachments(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3154,7 +3154,7 @@ pub async fn list_attachments(
 /// Attach a local file to a credential. `file_path` comes from the native
 /// file dialog on the frontend; the blob is sealed under the credential's
 /// per-item key when `encrypt` is set.
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn attach_file_to_credential(
     credential_id: String,
     file_path: String,
@@ -3197,7 +3197,7 @@ pub async fn attach_file_to_credential(
 
 /// Save an attachment to disk (decrypted). `output_path` comes from the
 /// native save dialog on the frontend.
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn save_attachment_to_file(
     attachment_id: String,
     output_path: String,
@@ -3226,7 +3226,7 @@ pub async fn save_attachment_to_file(
 }
 
 /// Delete an attachment (blob + metadata)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn delete_attachment(
     attachment_id: String,
     state: State<'_, AppState>,
@@ -3254,7 +3254,7 @@ pub async fn delete_attachment(
 }
 
 /// Generate a TOTP code for a TwoFactor credential (without exposing the secret)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn get_totp_code(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3340,7 +3340,7 @@ pub async fn search_credentials(
 }
 
 /// Generate password
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn generate_password(
     length: usize,
     include_symbols: bool,
@@ -3362,7 +3362,13 @@ pub async fn generate_password(
 /// 调用（后续 Quick Access/锁屏场景可直接复用）。length 夹取到 4..=256、
 /// count 夹取到 1..=10（滑杆 UI 天然受限，这里兜底防滥用）；选项组合
 /// 非法（无字符集/可发音无字母）透传 core 的校验错误。
-#[command]
+///
+/// `rename_all = "snake_case"`：Tauri 2 默认按 camelCase 查 invoke 参数键
+/// （宏默认 `ArgumentCase::Camel`，`v.get(key)` 精确匹配、无大小写回退），
+/// 而前端 api.ts 全文件统一发 snake_case 键——缺此属性会报
+/// "missing required key includeLowercase"。键契约由
+/// `command_layer_tests::generate_password_advanced_ipc_arg_contract` 钉住。
+#[command(rename_all = "snake_case")]
 pub async fn generate_password_advanced(
     length: usize,
     include_lowercase: bool,
@@ -3482,7 +3488,7 @@ pub async fn get_statistics(
 }
 
 /// Toggle credential favorite status
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn toggle_credential_favorite(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3517,7 +3523,7 @@ pub async fn toggle_credential_favorite(
 
 /// 按需抓取凭据对应站点的 favicon 并入缓存（隐私红线：唯一外联入口，
 /// 由详情面板 "Fetch icon" 按钮触发；flag 关闭时后端兜底拒绝）。
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn fetch_credential_favicon(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3632,7 +3638,7 @@ pub async fn get_favicons(
 }
 
 /// Delete a credential
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn delete_credential(
     credential_id: String,
     state: State<'_, AppState>,
@@ -3868,7 +3874,7 @@ pub async fn get_ssh_keys(
     Ok(ApiResponse::success(summaries))
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_list(
     identity_id: Option<String>,
     state: State<'_, AppState>,
@@ -3920,7 +3926,7 @@ pub async fn wallet_list(
     }))
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_list_addresses(
     wallet_id: String,
     state: State<'_, AppState>,
@@ -3974,7 +3980,7 @@ pub async fn wallet_list_addresses(
     Ok(ApiResponse::success(WalletAddressesResponse { addresses }))
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_generate(
     identity_id: String,
     request: WalletGenerateRequest,
@@ -4054,7 +4060,7 @@ pub async fn wallet_generate(
     }))
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_import(
     identity_id: String,
     request: WalletImportRequest,
@@ -4088,7 +4094,7 @@ pub async fn wallet_import(
     Ok(ApiResponse::success(serialize_wallet_summary(&created)))
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_add_address(
     wallet_id: String,
     password: String,
@@ -4214,7 +4220,7 @@ pub async fn wallet_add_address(
     )))
 }
 
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_delete(
     wallet_id: String,
     state: State<'_, AppState>,
@@ -4400,7 +4406,7 @@ pub async fn wallet_create_transaction(
 }
 
 /// List pending (unsigned) transaction requests for a wallet
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn wallet_pending_transactions(
     wallet_id: String,
     state: State<'_, AppState>,
@@ -4880,7 +4886,7 @@ pub async fn audit_statistics(
 }
 
 /// Delete audit logs older than `retain_days` (destructive; requires unlocked service)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn audit_cleanup(
     retain_days: u32,
     state: State<'_, AppState>,
@@ -5013,7 +5019,7 @@ pub async fn health_scan(
 // ---------------------------------------------------------------------------
 
 /// List passkeys for an identity
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn passkey_list(
     identity_id: String,
     state: State<'_, AppState>,
@@ -5044,7 +5050,7 @@ pub async fn passkey_list(
 }
 
 /// List passkeys by relying-party ID
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn passkey_list_by_rp(
     rp_id: String,
     state: State<'_, AppState>,
@@ -5268,7 +5274,7 @@ pub async fn passkey_export_private_key(
 
 /// Export an identity with its credentials (audited by core; metadata only —
 /// no ciphertext/secret material is included in the payload)
-#[command]
+#[command(rename_all = "snake_case")]
 pub async fn export_identity(
     identity_id: String,
     state: State<'_, AppState>,

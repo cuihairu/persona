@@ -816,7 +816,9 @@ describe('hooks/usePersonaService', () => {
     await act(async () => {
       await result.current.startSshAgent();
     });
-    expect(toastError).toHaveBeenLastCalledWith('启动 SSH Agent 失败');
+    // 异常路径必须透出底层错误文本（api 层把 Tauri 字符串 rejection 归一成
+    // Error 后，这里拿到 message），不再只报通用"启动 SSH Agent 失败"
+    expect(toastError).toHaveBeenLastCalledWith('x');
 
     jest.spyOn(personaAPI, 'stopSshAgent').mockResolvedValueOnce({
       success: false,
