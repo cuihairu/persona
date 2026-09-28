@@ -96,6 +96,8 @@ mod tests {
             issuer: "Steam".to_string(),
             account_name: "alice".to_string(),
             url: None,
+            identity_secret: None,
+            device_id: None,
         }
     }
 

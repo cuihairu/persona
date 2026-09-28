@@ -906,9 +906,17 @@ Game Tokens (游戏令牌)
   - [ ] HOTP（RFC 4226 计数器型）录入与出码 —— **暂缓（2026-09）**：非 1Password
         对齐项（1Password 仅支持 TOTP）；core `hotp()` 原语已存在（crypto/totp.rs），
         若将来实现需解决「desktop/mobile 自动轮询会推进计数器」的持久化问题
-  - [ ] Steam Desktop Authenticator 导出格式（maFiles .maFile）—— **不做导入
-        （2026-09 定案）**：私有格式仅文档记录；steam_guard 共享密钥已可经
-        `totp setup-game-token` 手工录入离线出码
+  - [x] Steam Desktop Authenticator 导出格式（maFiles .maFile）—— **已实现导入
+        （用户 2026-09-27 推翻原"不做导入"决策）**：`persona totp import-steam
+        --file <path>`（单文件/目录批量，逐文件确认或 `--yes`）；core
+        `import_mafile::parse_ma_file` 只取验证器字段（shared_secret 必需、
+        identity_secret/device_id/account_name），**Session/access_token 等会话
+        字段永不入库**且导入前显式列出；GameTokenData 尾部追加
+        `identity_secret`/`device_id` 两个 `#[serde(default)] Option`（bincode
+        变体索引不变，`from_bytes` 带 tag==8 + 重序列化逐位比对的 legacy
+        容忍读，旧密文/旧 JSON 导出均可读）；Steam Guard 算法向量由独立
+        Python 参照实现 `scripts/steam_guard_verify.py` 钉死（Valve 无官方
+        向量，语义对齐 ValvePython/steam guard.py）
 
 1Password Parity（2026-09 起，逐批推进；对照 docs/ONEPASSWORD_FEATURES.md）
 

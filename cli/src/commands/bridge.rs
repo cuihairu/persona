@@ -3497,6 +3497,8 @@ pub(crate) mod tests {
                     issuer: "Steam".to_string(),
                     account_name: "alice_steam".to_string(),
                     url: url.map(|s| s.to_string()),
+                    identity_secret: None,
+                    device_id: None,
                 }),
             )
             .await

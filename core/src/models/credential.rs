@@ -323,6 +323,9 @@ pub struct TwoFactorData {
 
 /// Game token data for vendor algorithms outside RFC 4226/6238
 /// (e.g. Steam Guard; providers are dispatched in `core::crypto::game_token`)
+///
+/// 字段追加规则与枚举变体同理：新字段只能以 `#[serde(default)] Option`
+/// 追加在末尾，旧负载经 `CredentialData::from_bytes` 的 legacy 容忍读回迁。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameTokenData {
     /// Vendor identifier (`core::crypto::game_token::PROVIDER_*`, e.g. "steam_guard")
@@ -333,6 +336,28 @@ pub struct GameTokenData {
     pub account_name: String,
     /// Associated service origin (optional)
     pub url: Option<String>,
+    /// Steam trade-confirmation HMAC key（SDA maFile 的 `identity_secret`，
+    /// 标准 base64）。登录出码不需要它；移动端交易确认才用。非 Steam
+    /// provider 恒为 None。
+    #[serde(default)]
+    pub identity_secret: Option<String>,
+    /// SDA 设备标识（maFile 的 `device_id`，形如 "mobile1234567"）
+    #[serde(default)]
+    pub device_id: Option<String>,
+}
+
+/// 追加 `identity_secret`/`device_id` 之前的 GameTokenData 形状（五字段）。
+///
+/// 私有镜像结构，仅供 `CredentialData::from_bytes` 的 legacy 容忍读使用：
+/// bincode 不支持缺省字段，旧密文反序列化新结构会在尾部 EOF 失败，需要按
+/// 旧形状手动解析后再映射（见 `from_bytes`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyGameTokenData {
+    provider: String,
+    secret_key: String,
+    issuer: String,
+    account_name: String,
+    url: Option<String>,
 }
 
 /// 1Password「Secure Note」对齐：全文加密的笔记条目。
@@ -414,9 +439,43 @@ impl CredentialData {
         bincode::serialize(self)
     }
 
-    /// Deserialize credential data from bytes after decryption
+    /// Deserialize credential data from bytes after decryption.
+    ///
+    /// 当前形状反序列化失败时，回退到 legacy 容忍读（见
+    /// [`Self::from_bytes_legacy_game_token`]）；两条路都失败则返回原错误，
+    /// 保证损坏负载不会被静默"修复"。
     pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
-        bincode::deserialize(data)
+        match bincode::deserialize(data) {
+            Ok(parsed) => Ok(parsed),
+            Err(e) => Self::from_bytes_legacy_game_token(data).ok_or(e),
+        }
+    }
+
+    /// GameTokenData 追加 `identity_secret`/`device_id` 之前的旧密文容忍读。
+    ///
+    /// bincode 外部标签枚举里 GameToken 的变体索引是 8（u32 LE 前缀）；
+    /// 旧负载 = 4 字节 tag + 五字段 `LegacyGameTokenData`。识别后先按旧
+    /// 形状解析，再把解析结果**重序列化并与原字节逐位比对**——只有整个
+    /// 负载恰好是旧形状时才接受，避免把碰巧以 0x08000000 开头的损坏数据
+    /// 误判成令牌。映射时新增字段置 None（导入 Steam maFile 后才有值）。
+    fn from_bytes_legacy_game_token(data: &[u8]) -> Option<Self> {
+        const GAME_TOKEN_VARIANT: u32 = 8;
+        if data.len() < 4 || u32::from_le_bytes(data[..4].try_into().ok()?) != GAME_TOKEN_VARIANT {
+            return None;
+        }
+        let legacy: LegacyGameTokenData = bincode::deserialize(&data[4..]).ok()?;
+        if bincode::serialize(&legacy).ok()?.as_slice() != &data[4..] {
+            return None;
+        }
+        Some(CredentialData::GameToken(GameTokenData {
+            provider: legacy.provider,
+            secret_key: legacy.secret_key,
+            issuer: legacy.issuer,
+            account_name: legacy.account_name,
+            url: legacy.url,
+            identity_secret: None,
+            device_id: None,
+        }))
     }
 }
 
@@ -613,6 +672,8 @@ mod tests {
                 issuer: "Steam".to_string(),
                 account_name: "alice".to_string(),
                 url: Some("https://steamcommunity.com".to_string()),
+                identity_secret: None,
+                device_id: None,
             }),
             CredentialData::SecureNote(SecureNoteData {
                 note: "recovery codes:\n1111-2222\n3333-4444".to_string(),
@@ -676,6 +737,8 @@ mod tests {
             issuer: "i".to_string(),
             account_name: "a".to_string(),
             url: None,
+            identity_secret: None,
+            device_id: None,
         })
         .to_bytes()
         .unwrap();
@@ -729,6 +792,87 @@ mod tests {
         assert_eq!(&license[..4], &[11, 0, 0, 0]);
         let decoded = CredentialData::from_bytes(&license).unwrap();
         assert!(matches!(decoded, CredentialData::SoftwareLicense(_)));
+    }
+
+    /// 追加 identity_secret/device_id 之前写入的 GameToken 密文（五字段
+    /// 负载）必须可读，新增字段映射为 None，业务字段原样保留。
+    #[test]
+    fn legacy_game_token_payload_reads_with_none_new_fields() {
+        let legacy = LegacyGameTokenData {
+            provider: "steam_guard".to_string(),
+            secret_key: "abcdefghijklmnopqrst".to_string(),
+            issuer: "Steam".to_string(),
+            account_name: "alice".to_string(),
+            url: Some("https://steamcommunity.com".to_string()),
+        };
+        let mut payload = CredentialData::GameToken(GameTokenData {
+            provider: legacy.provider.clone(),
+            secret_key: legacy.secret_key.clone(),
+            issuer: legacy.issuer.clone(),
+            account_name: legacy.account_name.clone(),
+            url: legacy.url.clone(),
+            identity_secret: None,
+            device_id: None,
+        })
+        .to_bytes()
+        .unwrap();
+        // 截掉新增的两个 Option 字段（bincode 的 Option::None 各占 1 字节
+        // 标志位，见序列化探针；变体索引才是 u32），再造旧负载
+        payload.truncate(payload.len() - 2);
+
+        let decoded = CredentialData::from_bytes(&payload).unwrap();
+        // 重加密走新形状（旧负载不回写，避免反复走 legacy 分支）
+        let rewritten = decoded.to_bytes().unwrap();
+        assert_ne!(rewritten, payload);
+        match decoded {
+            CredentialData::GameToken(data) => {
+                assert_eq!(data.provider, "steam_guard");
+                assert_eq!(data.secret_key, "abcdefghijklmnopqrst");
+                assert_eq!(data.issuer, "Steam");
+                assert_eq!(data.account_name, "alice");
+                assert_eq!(data.url.as_deref(), Some("https://steamcommunity.com"));
+                assert_eq!(data.identity_secret, None);
+                assert_eq!(data.device_id, None);
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+    }
+
+    /// legacy 分支只在"整个负载恰好是旧形状"时接受：以 0x08000000 开头
+    /// 的截断/垃圾数据必须保留反序列化错误，不能被误判成令牌。
+    #[test]
+    fn legacy_tolerance_rejects_truncated_and_garbage_payloads() {
+        // tag 8 + 五字段结构的开头，但在字符串长度处截断
+        let mut truncated = 8u32.to_le_bytes().to_vec();
+        truncated.extend_from_slice(&13u64.to_le_bytes()); // provider 长度前缀
+        truncated.extend_from_slice(b"steam"); // 长度声称 13，实际只有 5 字节
+        assert!(CredentialData::from_bytes(&truncated).is_err());
+
+        // tag 8 + 纯垃圾字节（连 provider 的 u64 长度前缀都凑不齐）
+        let mut garbage = 8u32.to_le_bytes().to_vec();
+        garbage.extend_from_slice(&[0xff, 0x00, 0xde, 0xad, 0xbe, 0xef, 0x42]);
+        assert!(CredentialData::from_bytes(&garbage).is_err());
+
+        // 非 GameToken tag 的垃圾同样报错（走不到 legacy 分支）
+        let mut wrong_tag = 99u32.to_le_bytes().to_vec();
+        wrong_tag.extend_from_slice(b"irrelevant");
+        assert!(CredentialData::from_bytes(&wrong_tag).is_err());
+    }
+
+    /// JSON 面（export 文件）向后兼容：缺新增字段的 GameTokenData 反序列化
+    /// 时 Option 字段取 None。
+    #[test]
+    fn game_token_json_without_new_fields_deserializes() {
+        let json = r#"{
+            "provider": "steam_guard",
+            "secret_key": "abcdefghijklmnopqrst",
+            "issuer": "Steam",
+            "account_name": "alice",
+            "url": "https://steamcommunity.com"
+        }"#;
+        let data: GameTokenData = serde_json::from_str(json).unwrap();
+        assert_eq!(data.identity_secret, None);
+        assert_eq!(data.device_id, None);
     }
 
     #[test]

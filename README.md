@@ -147,6 +147,12 @@ persona totp code --id <UUID> --watch
 persona totp setup-steam --identity alice --account alice_steam --secret <base64-shared-secret>
 persona totp code --id <UUID>   # game token credentials share the same code command
 
+# Or import straight from a Steam Desktop Authenticator export (.maFile) —
+# a single file or a whole directory; only verifier fields are stored, the
+# Session/access_token credentials are listed and never imported
+persona totp import-steam --identity alice --file ~/Downloads/maFiles/alice.maFile
+persona totp import-steam --identity alice --file ~/Downloads/maFiles --yes
+
 # Battle.net authenticator: export via a community tool (serial + restore code ->
 # standard TOTP secret), then import like any TOTP with 8 digits
 persona totp setup --identity alice --secret <base32-secret> --issuer Battle.net --digits 8

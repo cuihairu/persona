@@ -4,8 +4,10 @@
 //! `shared_secret`，通常 20 字节）而非 base32；周期固定 30 秒、BE64
 //! 计数器做 HMAC-SHA1；动态截断与 RFC 4226 同构，但结果不是数字码，
 //! 而是从 26 字符字母表 "23456789BCDFGHJKMNPQRTVWXY" 连续取模 5 次
-//! 得到 5 位码。实现与 steamguard-cli / SteamAuth 等开源实现一致；
-//! Valve 未发布官方测试向量，回归依赖结构断言与独立 HMAC 参照实现。
+//! 得到 5 位码。实现与 steamguard-cli / SteamAuth / ValvePython-steam
+//! 等开源实现一致。Valve 未发布官方测试向量；回归靠三层钉死：钉死
+//! 向量（由独立 Python 参照实现 `scripts/steam_guard_verify.py` 产出）、
+//! 进程内 ipad/opad 手工 HMAC 参照交叉验证、结构断言。
 
 use crate::models::credential::GameTokenData;
 use anyhow::{bail, Result};
@@ -105,6 +107,35 @@ mod tests {
             issuer: "Steam".to_string(),
             account_name: "alice".to_string(),
             url: None,
+            identity_secret: None,
+            device_id: None,
+        }
+    }
+
+    /// `scripts/steam_guard_verify.py --vectors` 产出的钉死向量：与主实现
+    /// 完全独立的 Python stdlib 参照（语义对齐 ValvePython/steam guard.py）
+    /// 在固定 (shared_secret, counter) 上的出码。Valve 无官方向量，任何
+    /// 一侧公式漂移都会在此红灯。改动向量须同步重跑脚本核对。
+    #[test]
+    fn code_matches_independent_python_reference_vectors() {
+        const VECTORS: &[(&str, u64, &str)] = &[
+            ("MDAxMjM0NTY3ODlhYmNkZWZnaGo=", 0, "B792F"),
+            ("MDAxMjM0NTY3ODlhYmNkZWZnaGo=", 1, "4XB8W"),
+            ("MDAxMjM0NTY3ODlhYmNkZWZnaGo=", 42, "8W47Y"),
+            ("MDAxMjM0NTY3ODlhYmNkZWZnaGo=", 12345, "GWYFV"),
+            ("MDAxMjM0NTY3ODlhYmNkZWZnaGo=", u64::MAX, "FPTFY"),
+            ("cGVyc29uYS12ZWN0b3ItYg==", 0, "Q7M34"),
+            ("cGVyc29uYS12ZWN0b3ItYg==", 1, "57FHM"),
+            ("cGVyc29uYS12ZWN0b3ItYg==", 42, "MVQYW"),
+            ("cGVyc29uYS12ZWN0b3ItYg==", 12345, "GMB8H"),
+        ];
+        for (secret_b64, counter, expected) in VECTORS {
+            let secret = decode_steam_secret(secret_b64).unwrap();
+            let code = steam_guard_from_counter(&secret, *counter).unwrap();
+            assert_eq!(
+                &code, expected,
+                "counter {counter} for secret {secret_b64} diverged from the independent reference"
+            );
         }
     }
 
@@ -226,6 +257,8 @@ mod tests {
             issuer: "Steam".to_string(),
             account_name: "alice".to_string(),
             url: None,
+            identity_secret: None,
+            device_id: None,
         }
     }
 }
