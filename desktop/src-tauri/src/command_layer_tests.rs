@@ -8749,3 +8749,96 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         failures.join("\n  - ")
     );
 }
+
+// ---------------------------------------------------------------------------
+// connect_token_* 命令族（create/list/revoke）：Service 槽降级 + 全生命周期。
+// ---------------------------------------------------------------------------
+
+fn read_scope() -> persona_core::connect::ConnectTokenScope {
+    persona_core::connect::ConnectTokenScope {
+        identities: vec![],
+        item_types: vec![],
+        verbs: vec![persona_core::connect::ConnectVerb::Read],
+    }
+}
+
+#[tokio::test]
+async fn connect_token_commands_degrade_when_service_not_initialized() {
+    let app = mock_app();
+
+    let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = connect_token_create(app.state::<AppState>(), "x".to_string(), read_scope())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    let resp = connect_token_revoke(app.state::<AppState>(), Uuid::new_v4().to_string())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+}
+
+#[tokio::test]
+async fn connect_token_commands_round_trip_create_list_revoke() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+
+    // create：明文 token 只在响应里出现一次，info 视图剥哈希
+    let resp = connect_token_create(
+        app.state::<AppState>(),
+        "desktop-pairing".to_string(),
+        read_scope(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let created = resp.data.expect("created view");
+    assert!(created.token.starts_with("pconn_"), "{}", created.token);
+    assert_eq!(created.info.label, "desktop-pairing");
+    assert_eq!(created.info.fingerprint.len(), 16);
+    assert!(created.info.revoked_at.is_none());
+
+    // list：刚创建的 token 处于 active 态
+    let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let rows = resp.data.expect("token rows");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, created.info.id);
+    assert!(rows[0].revoked_at.is_none());
+
+    // revoke：合法 UUID 生效；重复吊销幂等返回 false
+    let resp = connect_token_revoke(app.state::<AppState>(), created.info.id.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(true));
+    let resp = connect_token_revoke(app.state::<AppState>(), created.info.id.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(false));
+
+    // list：revoked_at 已盖章
+    let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
+    let rows = resp.data.expect("token rows");
+    assert!(rows[0].revoked_at.is_some());
+
+    // revoke：非法 UUID 走参数错误分支
+    let resp = connect_token_revoke(app.state::<AppState>(), "not-a-uuid".to_string())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Invalid token id"),
+        "{:?}",
+        resp.error
+    );
+}
