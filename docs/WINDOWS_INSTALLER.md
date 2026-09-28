@@ -61,6 +61,10 @@ Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到
   升级/卸载均不受影响。
 - 结论：**升级（含 `/S` 无人值守）不会丢库、丢配置**。想彻底清理本机
   数据需在卸载后手动删除 `%APPDATA%\persona`。
+- 跨平台口径（Linux/macOS/CLI 卸载同样不删数据 + 显式 purge 步骤）见
+  [UNINSTALL](./UNINSTALL.md)；`packaging_tests.rs` 的
+  `nsis_uninstall_never_targets_vault_data_dir` 把"vault 目录永不出现在
+  卸载删除指令里"钉成回归断言（2026-09-28）。
 
 ## 4. 升级矩阵
 

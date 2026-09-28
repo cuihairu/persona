@@ -252,6 +252,7 @@ persona ssh authorize --identity work --host deploy@prod-1.example.com
 - [FEATURE_GAP_ANALYSIS](./docs/FEATURE_GAP_ANALYSIS.md) – Persona vs. 1Password comparison
 - [PASSKEYS_DESIGN](./docs/PASSKEYS_DESIGN.md) – passkeys (WebAuthn) design draft
 - [MONOREPO](./docs/MONOREPO.md) – monorepo rationale and tooling
+- [UNINSTALL](./docs/UNINSTALL.md) – 卸载与数据保留（卸载不删数据，重装接续；显式 purge 步骤）
 - [ROADMAP](./docs/ROADMAP.md) – roadmap and detailed TODO items
 - [TODO](./TODO.md) – daily-maintained task list
 - [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – browser extension native messaging protocol
