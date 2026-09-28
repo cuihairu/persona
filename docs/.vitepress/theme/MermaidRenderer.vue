@@ -59,7 +59,9 @@ watch(
 
 watch(isDark, () => {
   document
-    .querySelectorAll<HTMLElement>(".vp-doc div.language-mermaid.mermaid-rendered")
+    .querySelectorAll<HTMLElement>(
+      ".vp-doc div.language-mermaid.mermaid-rendered",
+    )
     .forEach((block) => {
       const code = sources.get(block);
       if (code) void renderBlock(block, code);

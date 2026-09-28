@@ -6,26 +6,26 @@ vault 数据；重新安装后用原主密码解锁即接续使用**。彻底清
 
 ## 1. 数据都在哪
 
-| 内容                  | 位置                                                                                                          | 谁写入                                    |
-| --------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
-| **vault 库**          | Windows `%APPDATA%\persona\persona.db`；Linux `~/.local/share/persona/`；macOS `~/Library/Application Support/persona/` | 桌面端 `default_db_path`（`dirs::data_dir()/persona`） |
-| **CLI 工作区**        | `~/.persona/`（`identities.db`、`bridge/`、SSH agent 状态）                                                    | CLI（`PERSONA_DB_PATH` 等环境变量可覆盖） |
-| **OS keyring 条目**   | 系统凭据管理器（Windows Credential Manager / Secret Service / Keychain）                                       | 生物识别解锁、同步令牌（`token_store.rs`） |
-| **缓存与日志**        | `<bundle 目录>`：Windows `%APPDATA%\com.persona.desktop` 与 `%LOCALAPPDATA%\com.persona.desktop`；Linux/macOS 对应 XDG/Bundle 路径 | WebView 缓存、运行日志 —— **不含任何机密** |
+| 内容                | 位置                                                                                                                               | 谁写入                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **vault 库**        | Windows `%APPDATA%\persona\persona.db`；Linux `~/.local/share/persona/`；macOS `~/Library/Application Support/persona/`            | 桌面端 `default_db_path`（`dirs::data_dir()/persona`） |
+| **CLI 工作区**      | `~/.persona/`（`identities.db`、`bridge/`、SSH agent 状态）                                                                        | CLI（`PERSONA_DB_PATH` 等环境变量可覆盖）              |
+| **OS keyring 条目** | 系统凭据管理器（Windows Credential Manager / Secret Service / Keychain）                                                           | 生物识别解锁、同步令牌（`token_store.rs`）             |
+| **缓存与日志**      | `<bundle 目录>`：Windows `%APPDATA%\com.persona.desktop` 与 `%LOCALAPPDATA%\com.persona.desktop`；Linux/macOS 对应 XDG/Bundle 路径 | WebView 缓存、运行日志 —— **不含任何机密**             |
 
 vault 库与缓存目录是两个互不相干的路径：库在 `persona/`，缓存在
 `com.persona.desktop/`。卸载器就算清缓存也碰不到库。
 
 ## 2. 各平台卸载行为（默认全保留）
 
-| 平台/安装方式    | 卸载动作                                            | vault 库     | CLI 工作区   | keyring  | 缓存/日志                    |
-| ---------------- | --------------------------------------------------- | ------------ | ------------ | -------- | ---------------------------- |
-| Windows NSIS     | "应用和功能"卸载（确认页有"删除应用数据"勾选框，**默认未勾**） | **保留**     | 保留         | 保留     | 默认保留；**显式勾选**才清 `com.persona.desktop` |
-| Windows 升级     | 新安装器自动静默卸载旧版（`/S`，无 UI）             | **保留**     | 保留         | 保留     | 保留（静默路径无勾选框）     |
-| Linux deb / rpm  | `apt remove` / `dnf remove`                         | **保留**     | 保留         | 保留     | 保留（包内无任何维护删除脚本，`postrm` 不存在——tauri bundler 只拷贝用户提供的脚本，本仓库未提供） |
-| Linux AppImage   | 删除 .AppImage 文件                                 | **保留**     | 保留         | 保留     | 保留                         |
-| macOS dmg        | 拖入废纸篓                                          | **保留**     | 保留         | 保留     | 保留                         |
-| CLI（cargo/二进制） | 删除二进制                                        | 保留         | **保留**     | 保留     | 保留                         |
+| 平台/安装方式       | 卸载动作                                                       | vault 库 | CLI 工作区 | keyring | 缓存/日志                                                                                         |
+| ------------------- | -------------------------------------------------------------- | -------- | ---------- | ------- | ------------------------------------------------------------------------------------------------- |
+| Windows NSIS        | "应用和功能"卸载（确认页有"删除应用数据"勾选框，**默认未勾**） | **保留** | 保留       | 保留    | 默认保留；**显式勾选**才清 `com.persona.desktop`                                                  |
+| Windows 升级        | 新安装器自动静默卸载旧版（`/S`，无 UI）                        | **保留** | 保留       | 保留    | 保留（静默路径无勾选框）                                                                          |
+| Linux deb / rpm     | `apt remove` / `dnf remove`                                    | **保留** | 保留       | 保留    | 保留（包内无任何维护删除脚本，`postrm` 不存在——tauri bundler 只拷贝用户提供的脚本，本仓库未提供） |
+| Linux AppImage      | 删除 .AppImage 文件                                            | **保留** | 保留       | 保留    | 保留                                                                                              |
+| macOS dmg           | 拖入废纸篓                                                     | **保留** | 保留       | 保留    | 保留                                                                                              |
+| CLI（cargo/二进制） | 删除二进制                                                     | 保留     | **保留**   | 保留    | 保留                                                                                              |
 
 Windows 行为由 `desktop/src-tauri/nsis/installer.nsi` 保证，并有回归断言
 钉住（`desktop/src-tauri/src/packaging_tests.rs`）：
