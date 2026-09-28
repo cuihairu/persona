@@ -883,7 +883,9 @@ mod tests {
     use super::*;
     use crate::config::CliConfig;
     use crate::utils::prompt::scripted::ScriptedUi;
-    use persona_core::models::{ApiKeyData, SshKeyData};
+    use persona_core::models::{
+        ApiKeyData, IdentityData, SecureNoteData, SoftwareLicenseData, SshKeyData,
+    };
     use persona_core::Database;
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -1432,6 +1434,130 @@ mod tests {
         assert!(ui.exhausted());
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// Reveal 的 SecureNote / Identity / SoftwareLicense 三个专用渲染分支
+    /// （Identity 与 SoftwareLicense 用全 Some 字段，连内层 `if let Some`
+    /// 打印行一起覆盖）。
+    #[tokio::test]
+    async fn credential_show_reveal_renders_note_identity_license_payloads() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "nova").await;
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let nova = service.get_identity_by_name("nova").await.unwrap().unwrap();
+
+        let note_id = service
+            .create_credential(
+                nova.id,
+                "recovery-notes".to_string(),
+                CredentialType::SecureNote,
+                SecurityLevel::Medium,
+                &CredentialData::SecureNote(SecureNoteData {
+                    note: "one-time recovery codes".to_string(),
+                }),
+            )
+            .await
+            .unwrap()
+            .id;
+        let identity_id = service
+            .create_credential(
+                nova.id,
+                "government-id".to_string(),
+                CredentialType::Identity,
+                SecurityLevel::High,
+                &CredentialData::Identity(IdentityData {
+                    first_name: "Nova".to_string(),
+                    last_name: "Sato".to_string(),
+                    username: Some("nova.sato".to_string()),
+                    email: Some("nova@example.com".to_string()),
+                    phone: Some("+81-90-0000-0000".to_string()),
+                    birthday: None,
+                    address: Some("2-1 Marunouchi\nChiyoda-ku".to_string()),
+                    id_number: Some("1234-5678".to_string()),
+                    passport_number: Some("TK9876543".to_string()),
+                    driver_license: Some("DL-12345".to_string()),
+                    tax_id: Some("T-0001".to_string()),
+                    organization: None,
+                    job_title: None,
+                }),
+            )
+            .await
+            .unwrap()
+            .id;
+        let license_id = service
+            .create_credential(
+                nova.id,
+                "ide-license".to_string(),
+                CredentialType::SoftwareLicense,
+                SecurityLevel::High,
+                &CredentialData::SoftwareLicense(SoftwareLicenseData {
+                    license_key: "IDE-PRO-0001-FFFF".to_string(),
+                    version: Some("2026.1".to_string()),
+                    publisher: Some("Example Corp".to_string()),
+                    purchase_date: Some("2026-01-15".to_string()),
+                    order_number: Some("ORD-42".to_string()),
+                    support_email: Some("support@example.com".to_string()),
+                    download_url: Some("https://example.com/dl".to_string()),
+                    seats: Some(5),
+                    valid_until: Some("2027-01-15".to_string()),
+                }),
+            )
+            .await
+            .unwrap()
+            .id;
+        drop(service);
+
+        for (id, label) in [
+            (note_id, "secure note"),
+            (identity_id, "identity"),
+            (license_id, "software license"),
+        ] {
+            let ui = ScriptedUi::new().confirm(true);
+            execute_with(
+                CredentialArgs {
+                    command: CredentialCommand::Show { id, reveal: true },
+                },
+                &config,
+                &ui,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{label} reveal must work: {e}"));
+            assert!(ui.exhausted(), "{label} reveal consumed its confirm");
+        }
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[test]
+    fn attachment_size_formats_bytes_kb_and_mb() {
+        assert_eq!(format_attachment_size(512), "512 B");
+        assert_eq!(format_attachment_size(1023), "1023 B");
+        assert_eq!(format_attachment_size(1024), "1.0 KB");
+        assert_eq!(format_attachment_size(2048), "2.0 KB");
+        assert_eq!(
+            format_attachment_size(1024 * 1024),
+            format!("{:.1} MB", 1.0)
+        );
+        assert_eq!(
+            format_attachment_size(3 * 1024 * 1024),
+            format!("{:.1} MB", 3.0)
+        );
     }
 
     #[tokio::test]

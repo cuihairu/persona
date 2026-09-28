@@ -1000,6 +1000,61 @@ mod tests {
     // Unit coverage for the command paths (normalize/finalize/hotp/setup).
     // ------------------------------------------------------------------
 
+    #[tokio::test]
+    async fn ma_file_collection_handles_file_dir_and_missing_paths() {
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("one.maFile");
+        std::fs::write(&file, b"{}").unwrap();
+
+        // 单文件直通
+        assert_eq!(collect_ma_file_paths(&file).unwrap(), vec![file.clone()]);
+        // 目录：列出其中全部 .maFile
+        let second = dir.path().join("two.maFile");
+        std::fs::write(&second, b"{}").unwrap();
+        let mut listed = collect_ma_file_paths(dir.path()).unwrap();
+        listed.sort();
+        assert_eq!(listed, vec![file, second]);
+        // 不存在的路径
+        let missing = dir.path().join("nope").join("x.maFile");
+        let err = collect_ma_file_paths(&missing).unwrap_err();
+        assert!(err.to_string().contains("does not exist"), "{err}");
+
+        // 空目录在 collect 层即报错（因此 import 的 "Nothing to import"
+        // 兜底分支实际不可达，属防御性代码）
+        let empty = TempDir::new().unwrap();
+        let err = collect_ma_file_paths(empty.path()).unwrap_err();
+        assert!(err.to_string().contains("No .maFile files found"), "{err}");
+    }
+
+    /// 解析阶段在解锁库之前：全部文件坏掉时直接报首个失败，
+    /// 不触碰 workspace（config 无需真实库）。
+    #[tokio::test]
+    async fn import_steam_mafiles_reports_first_unparseable_file() {
+        let dir = TempDir::new().unwrap();
+        let bad = dir.path().join("broken.maFile");
+        std::fs::write(&bad, b"definitely not json").unwrap();
+
+        let mut config = crate::config::CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+
+        let err = import_steam_mafiles(
+            &config,
+            &crate::utils::prompt::scripted::ScriptedUi::new(),
+            "someone".to_string(),
+            bad.clone(),
+            None,
+            None,
+            true,
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("No .maFile could be imported") && msg.contains("broken.maFile"),
+            "{msg}"
+        );
+    }
+
     #[test]
     fn normalize_origin_url_variants() {
         assert_eq!(

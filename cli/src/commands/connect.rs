@@ -551,6 +551,54 @@ mod tests {
         assert_eq!(token_rows(&config).await.len(), 1);
     }
 
+    /// `connect token list`：空列表分支 + active/revoked 与
+    /// never-used/revoked-at 状态行的完整打印路径。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn list_tokens_renders_empty_and_populated_states() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+
+        let list_args = || ConnectArgs {
+            command: ConnectCommand::Token {
+                command: TokenCommand::List,
+            },
+        };
+
+        // 空库：走 "(none)" 早退分支
+        execute_with(list_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+
+        // 两个 token，吊销其一：覆盖 active/revoked 两种状态行
+        execute_with(create_args("alpha", &[], &[]), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        execute_with(create_args("beta", &[], &[]), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+        let rows = token_rows(&config).await;
+        assert_eq!(rows.len(), 2);
+        execute_with(
+            ConnectArgs {
+                command: ConnectCommand::Token {
+                    command: TokenCommand::Revoke {
+                        target: rows[0].fingerprint.clone(),
+                    },
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap();
+
+        execute_with(list_args(), &config, &ScriptedUi::new())
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn list_and_revoke_by_id_or_fingerprint() {

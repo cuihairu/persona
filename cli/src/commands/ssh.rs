@@ -1440,6 +1440,27 @@ mod tests {
         config
     }
 
+    /// `decode_seed` 的两个守卫分支：非法 base64、种子长度不是 32 字节。
+    #[test]
+    fn decode_seed_rejects_non_base64_and_wrong_length() {
+        let key = |private_key: String| SshKeyData {
+            private_key,
+            public_key: String::new(),
+            key_type: "ed25519".to_string(),
+            passphrase: None,
+        };
+
+        let err = decode_seed(&key("!!! not base64 !!!".to_string())).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("private material is not valid base64"),
+            "{err}"
+        );
+
+        let err = decode_seed(&key(BASE64.encode(b"too short"))).unwrap_err();
+        assert!(err.to_string().contains("must be 32 bytes, got 9"), "{err}");
+    }
+
     #[tokio::test]
     async fn ensure_service_unlocks_with_scripted_password() {
         let _env = lock_process_env();
