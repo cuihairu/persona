@@ -405,9 +405,15 @@ Desktop (Tauri v2 + React)
       pnpm 按 workspace 根 lockfile --filter persona-desktop... 装依赖，
       rust-cache 缓存 desktop/src-tauri workspace。已知限制：产物未签名
       （SmartScreen/Gatekeeper 安装告警）、版本号恒 0.1.0 无日期区分（资产靠
-      nightly release 名日期区分）。Android 不在本矩阵：mobile 是
-      persona-mobile Rust FFI（就绪）+ Flutter 宿主（工程未建），无 apk 可打，
-      工程落地后另加 flutter job。发布链实测（2026-09-20 dispatch 验证）：
+      nightly release 名日期区分）。Android 已入矩阵（2026-09-29，jniLib
+      层面）：persona-mobile 的 aarch64 cdylib（libpersona_mobile.so，
+      NDK r27/cargo-ndk，本机实测 6.4MB/Android 21）每日构建产出
+      `android-jni-arm64` **artifact**（铁律：只进 artifact 不进 release
+      ——release job 的 download pattern 只认 desktop-* 天然隔离）；apk
+      待 Flutter 宿主工程落地后把该 job 升级为 flutter build。每日构建
+      加 staleness gate（2026-09-29）：schedule 触发时 main HEAD 超过
+      48h 无新提交则整条流水线 skip（gate 绿、build/android/release 全
+      skipped）；tag/手动触发永不跳过。发布链实测（2026-09-20 dispatch 验证）：
       nightly release 六资产齐全——deb/rpm/AppImage（12.3/12.3/85.4MB）、
       NSIS exe/WiX msi（7.7/10.6MB）、aarch64 dmg（9.7MB）；三轮踩坑已修：
       pnpm 版本与 packageManager 冲突、passkey 桥 Windows cfg 分流、
@@ -607,7 +613,8 @@ Server & Sync (optional)
         DefaultBodyLimit 解压后明文 10 MiB 防解压炸弹；压缩在 sink 内部
         宿主零改动；THREAT_MODEL 已登记）
   - [ ] follow-up：mobile Flutter 工程/Dart 绑定（需 Flutter SDK 与设备
-        验证；桥方向手写 FFI vs frb v2 待工程落地时定）、持久 outbox/回补
+        验证；桥方向手写 FFI vs frb v2 待工程落地时定；每日构建已产出
+        aarch64 `libpersona_mobile.so` artifact 供壳工程直链）、持久 outbox/回补
 - [x] Connect-like local-first secrets automation endpoint（2026-09-22 阶段
       0–4 全部落地，见下方子项）
   - [x] 设计稿（2026-09-22 `docs/CONNECT_AUTOMATION_DESIGN.md` 阶段 0）：

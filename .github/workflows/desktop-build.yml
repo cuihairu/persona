@@ -11,6 +11,15 @@
 #   - schedule (daily)   → rolling `nightly` prerelease (assets overwritten)
 #   - workflow_dispatch  → build only; tick `upload` to publish to nightly
 #
+# Staleness gate（2026-09-29）：schedule 触发时先比对 main HEAD 的提交时间，
+# 超过 48h 没有新提交就整条流水线 skip（gate 绿、build/android/release 全
+# skipped，不烧 CI 时长）；tag/手动触发永不跳过。
+#
+# Android（2026-09-29）：persona-mobile 的 aarch64 cdylib 交叉编译进
+# **artifact**（android-jni-arm64，Flutter 壳工程建成前先供链接验证）。
+# 铁律：Android 产物只进 artifact，绝不进 release——release job 只
+# download `desktop-*` pattern，天然隔离。
+#
 # Binaries are unsigned (SmartScreen/Gatekeeper will warn on install);
 # signing keys are tracked as a follow-up in TODO.md. Assets are
 # architecture-pinned per runner: linux/windows x64, macos arm64.
@@ -36,8 +45,41 @@ permissions:
   contents: write
 
 jobs:
+  gate:
+    name: staleness gate
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.gate.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Skip daily build when main has no fresh commits (<= 48h)
+        id: gate
+        shell: bash
+        run: |
+          # 只有 schedule 做新鲜度判断：tag 是正式发版、dispatch 是人手动
+          # 点的，都不允许被 staleness 拦下。
+          if [[ "${GITHUB_EVENT_NAME}" != "schedule" ]]; then
+            echo "event ${GITHUB_EVENT_NAME}: always build" >> "$GITHUB_OUTPUT"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          age=$(( now - last ))
+          echo "main HEAD age: ${age}s ($(date -u -d "@${last}" 2>/dev/null || date -u -r "${last}" 2>/dev/null))"
+          if (( age <= 60 * 60 * 48 )); then
+            echo "fresh enough (<= 48h) — build" >> "$GITHUB_OUTPUT"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main HEAD older than 48h — skip whole daily build" >> "$GITHUB_OUTPUT"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
     name: build (${{ matrix.name }})
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -133,13 +175,58 @@ jobs:
         continue-on-error: true
         run: cargo test --lib spike_probes_print_report -- --ignored --nocapture
 
+  # persona-mobile 的 Android 交叉编译（aarch64 cdylib）。Flutter 壳工程
+  # 尚未建立（TODO）；本 job 先把可 dlopen 的 .so 产出为 artifact，壳建好
+  # 后这里升级成完整 apk 构建。产物只进 artifact——铁律：每日构建不发
+  # release（release job 的 download pattern 只认 desktop-*，天然隔离）。
+  android:
+    name: android (aarch64 jniLib)
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          key: android-aarch64
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27
+
+      - name: Install cargo-ndk
+        shell: bash
+        run: cargo install cargo-ndk --locked
+
+      - name: Build persona-mobile cdylib (arm64-v8a)
+        shell: bash
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: cargo ndk -t arm64-v8a build -p persona-mobile --release
+
+      - name: Upload android jniLib artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-jni-arm64
+          path: target/aarch64-linux-android/release/libpersona_mobile.so
+          if-no-files-found: error
+
   release:
     name: publish
-    needs: build
+    needs: [gate, build]
     if: >-
-      startsWith(github.ref, 'refs/tags/v') ||
+      needs.gate.outputs.should_build == 'true' &&
+      (startsWith(github.ref, 'refs/tags/v') ||
       github.event_name == 'schedule' ||
-      inputs.upload
+      inputs.upload)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
