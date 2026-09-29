@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, Request, State};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -168,6 +168,45 @@ fn no_store_headers() -> [(&'static str, &'static str); 2] {
     ]
 }
 
+/// 归一化框架自产 4xx：路由未命中（404）、方法不匹配（405）、提取器
+/// 拒绝（400，如 `items/:id` 的非法 UUID）走 axum 默认响应——不经
+/// `{"ok":false,"error":{…}}` 包络、不带 `Cache-Control: no-store`（4xx
+/// 默认可缓存）。本 crate 自产 4xx 恒带 no-store（`err_json` 是唯一生产
+/// 者），故以「4xx 且缺 no-store」识别框架响应：保留状态码与既有响应头
+/// （405 的 `Allow` 有调试价值），补 no-store 并换上包络正文（框架正文
+/// 为空或一行纯文本，直接丢弃）。
+async fn normalize_framework_error(response: Response) -> Response {
+    let framework = response.status().is_client_error()
+        && !response.headers().contains_key(header::CACHE_CONTROL);
+    if !framework {
+        return response;
+    }
+    let status = response.status();
+    let (mut parts, body) = response.into_parts();
+    // 框架正文极小；无论读取成败都已被消费，统一丢弃
+    let _ = axum::body::to_bytes(body, 4096).await;
+    parts
+        .headers
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let (code, message) = match status {
+        StatusCode::BAD_REQUEST => ("bad_request", "malformed request or path parameter"),
+        StatusCode::NOT_FOUND => ("not_found", "route not found"),
+        StatusCode::METHOD_NOT_ALLOWED => {
+            ("method_not_allowed", "method not allowed for this route")
+        }
+        _ => (
+            "error",
+            status.canonical_reason().unwrap_or("request rejected"),
+        ),
+    };
+    (
+        status,
+        parts.headers,
+        Json(json!({ "ok": false, "error": { "code": code, "message": message } })),
+    )
+        .into_response()
+}
+
 fn is_vault_locked(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
         cause
@@ -193,7 +232,14 @@ async fn guard(
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .map(|h| {
-            let authority = h.rsplit_once(':').map_or(h, |(host, _)| host);
+            // 括号 IPv6（RFC 9110 §4.1.2）省略端口时不能按 ':' 切端口：
+            // "[::1]" 会被 rsplit_once 剩 "[::"，白名单里的 ::1 反被误拒。
+            // 仅当整段不以 ']' 结尾（即不是无端口的括号 IPv6）才剥端口。
+            let authority = if h.ends_with(']') {
+                h
+            } else {
+                h.rsplit_once(':').map_or(h, |(host, _)| host)
+            };
             let authority = authority.trim_start_matches('[').trim_end_matches(']');
             authority == "127.0.0.1" || authority == "localhost" || authority == "::1"
         })
@@ -217,8 +263,9 @@ async fn guard(
     }
 
     // health 免认证零信息（存活探测用；不含版本以外任何库状态）。
+    // 归一化同样适用：POST /health 的 405 也该带包络（免认证不豁免路由）。
     if request.uri().path() == "/api/v1/connect/health" {
-        return next.run(request).await;
+        return normalize_framework_error(next.run(request).await).await;
     }
 
     // 防线 3：token 必需。
@@ -290,7 +337,7 @@ async fn guard(
     }
 
     request.extensions_mut().insert(row);
-    next.run(request).await
+    normalize_framework_error(next.run(request).await).await
 }
 
 // -----------------------------------------------------------------------
@@ -623,8 +670,9 @@ mod tests {
         (status, json)
     }
 
-    /// 全保真调用：保留响应头，并容忍**非** JSON 正文（axum 自带的
-    /// 400/405 拒绝不走本 crate 的 `{"ok":…}` 包络，解析失败折成 Null）。
+    /// 全保真调用：保留响应头，并容忍**非** JSON 正文（防御性：框架
+    /// 4xx 已由 `normalize_framework_error` 统一包络，但第三方 layer
+    /// 理论上仍可能产非 JSON 正文，解析失败折成 Null 不炸断言）。
     /// `headers` 不自动补 Host——缺 Host 本身就是被测路径。
     async fn send_capture(
         router: Router,
@@ -957,13 +1005,10 @@ mod tests {
             "notlocal",
             "",
             "127.0.0.2",
-            // IPv6 字面量在 authority 里必须带方括号（RFC 9110 §4.1.2）；裸
-            // "::1" 被 rsplit_once(':') 切成空 host → 拒绝。
+            // IPv6 字面量在 authority 里必须带方括号（RFC 9110 §4.1.2）；
+            // 裸 "::1" 缺括号形式非法，按 ':' 切端口后剩空串 → 拒绝。
+            // （括号形式 "[::1]"/"[::1]:port" 的放行见 alias 测试。）
             "::1",
-            // 端口省略的 "[::1]" 同样被 rsplit_once 切坏（留 "[:"），当前
-            // 一律 fail-closed 421。方向是安全的（不会放行外部 host），但和
-            // 白名单里写着 `::1` 的意图不符 —— 已在 TODO.md 记账。
-            "[::1]",
         ] {
             let (status, _, body) = send_capture(
                 fx.router.clone(),
@@ -991,6 +1036,9 @@ mod tests {
             "localhost",
             "localhost:17000",
             "[::1]:17000",
+            // 省略端口的括号 IPv6（段尾 ']'）：不能按 ':' 切端口，否则
+            // "[::1]" 剩 "[::" 被误拒——白名单写着 ::1 就该放行
+            "[::1]",
         ] {
             let (status, _, body) = send_capture(
                 fx.router.clone(),
@@ -1226,9 +1274,8 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(
-            body,
-            serde_json::Value::Null,
-            "提取器拒绝走 axum 默认正文（已知偏差：不经 ok/error 包络）"
+            body["error"]["code"], "bad_request",
+            "提取器拒绝也走统一包络（框架默认正文已由 normalize 包装）"
         );
         let (status, body) = send(fx.router, "GET", "/api/v1/connect/items", &auth).await;
         assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
@@ -1643,12 +1690,8 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
-        assert_eq!(
-            body,
-            serde_json::Value::Null,
-            "路由未命中走 axum 默认（空）正文——已知偏差，不经包络"
-        );
-        let (status, _, _) = send_capture(
+        assert_eq!(body["error"]["code"], "not_found", "路由未命中也走统一包络");
+        let (status, headers, body) = send_capture(
             fx.router.clone(),
             "DELETE",
             "/api/v1/connect/items",
@@ -1656,8 +1699,20 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-        // health 只认 GET：免认证例外不是免路由（防止 health 变成通配口）
-        let (status, _, _) = send_capture(
+        assert_eq!(body["error"]["code"], "method_not_allowed");
+        assert_eq!(
+            headers.get("cache-control").and_then(|v| v.to_str().ok()),
+            Some("no-store"),
+            "框架 405 同样带 no-store（4xx 默认可缓存）"
+        );
+        // 405 的 Allow 头保留（方法协商对调试有价值）
+        assert!(
+            headers.get("allow").is_some(),
+            "axum 默认 405 的 Allow 头必须保留"
+        );
+        // health 只认 GET：免认证例外不是免路由（防止 health 变成通配口）；
+        // 早退路径同样经归一化——免认证不豁免包络
+        let (status, headers, body) = send_capture(
             fx.router.clone(),
             "POST",
             "/api/v1/connect/health",
@@ -1665,11 +1720,17 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(body["error"]["code"], "method_not_allowed");
+        assert_eq!(
+            headers.get("cache-control").and_then(|v| v.to_str().ok()),
+            Some("no-store")
+        );
         // TOTP 端点只认 POST
         let path = format!("/api/v1/connect/items/{}/totp", fx.cred_id);
-        let (status, _, _) =
+        let (status, _, body) =
             send_capture(fx.router.clone(), "GET", &path, &host_and_auth(&fx.token)).await;
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(body["error"]["code"], "method_not_allowed");
     }
 
     // -------------------------------------------------------------------

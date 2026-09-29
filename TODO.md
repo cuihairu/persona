@@ -1144,13 +1144,17 @@ Quality & Security
       区域覆盖已含。本轮补测还暴露并钉住一个真实门禁：**sidecar 已存在时
       `travel enter` 硬拒**（不覆盖上一包的容器）。env 置值在 backup 测试里补了
       RAII 守卫（TempEnv），与 travel 既有 EnvVar 同惯例。
-- [ ] connect-server 两处小硬面（本轮补测暴露，**当前行为已用测试钉住，未改**）：
-      ① `Host` 解析对省略端口的 IPv6 字面量（`[::1]`）会按最后一个 `:` 切 → 剩 `[:` →
-      421 fail-closed，与白名单里写着 `::1` 的意图不符（方向安全，但 IPv6 宿主将来内嵌
-      双栈 listener 时会误拒）；改法是仅当 host 段以 `]` 结尾时才剥端口。
-      ② axum 的提取器拒绝（400）与路由未命中（404/405）走框架默认响应：不经
-      `{"ok":false,"error":{…}}` 包络、也不带 `cache-control: no-store`（4xx 默认可缓存）。
-      加一层统一 header/包络或给 fallback handler 显式包装。
+- [x] connect-server 两处小硬面收口（2026-09-29 修复，钉住测试同步改写）：
+      ① `Host` 解析：整段以 `]` 结尾（= 无端口括号 IPv6）时不再按 `:` 剥端口，
+      `[::1]` 现与 `[::1]:17000` 同被白名单放行（裸 `::1` 无括号仍 421）——
+      alias 测试加 `[::1]`、lookalike 测试删该条目。
+      ② 框架自产 4xx 归一化（`normalize_framework_error`）：以「4xx 且缺
+      no-store」识别（`err_json` 是自产 4xx 唯一生产者，恒带 no-store），保留
+      状态码与既有头（405 的 `Allow` 保留），补 no-store 并换 `{"ok":false,
+      "error":{…}}` 包络——400 提取器拒绝（bad_request）、404 路由未命中
+      （not_found）、405 方法不匹配（method_not_allowed）统一；health 早退
+      路径同样接入（免认证不豁免包络）。原「已知偏差」断言（body==Null）
+      改为包络 + cache-control + Allow 断言。
 - [x] Watchtower health checks: rules engine (weak/reused/expired/stale) in core + `persona watchtower` CLI + desktop `health_scan` command (metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
 - [x] Watchtower: breach check (BreachChecker seam → HIBP k-anonymity; only a 5-char hash prefix leaves the machine, network failure degrades to offline rules)
