@@ -1159,6 +1159,307 @@ mod tests {
         assert_eq!(body["keys"].as_array().unwrap().len(), 0);
     }
 
+    /// 设备登记与信封端点的校验/故障臂：device_name 边界（trim 后空与
+    /// 129 字节）、DELETE 非法 UUID 的幂等 204、put_group_key 的
+    /// device_id / envelope base64 校验、信封表与 epoch 表损坏时的
+    /// fail-closed 500（含删除级联半途失败——幂等重试设计不把故障
+    /// 伪装成 204）。
+    #[tokio::test]
+    async fn device_and_group_key_error_arms() {
+        let (router, state) = crate::test_support::setup(Some(TOKEN)).await;
+
+        // device_name：trim 后为空 / 129 字节 → 422（1..=128 字节边界）
+        for name in ["   ".to_string(), "x".repeat(129)] {
+            let (status, body) = send(
+                router.clone(),
+                req(
+                    "POST",
+                    "/api/v1/sync/devices",
+                    &json!({"device_name": name, "public_key": b64(&[7u8; 32])}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(body["error"]["code"], "validation");
+            assert!(body["error"]["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["field"] == "device_name"));
+        }
+
+        // DELETE 非法 UUID：按「不存在」的幂等语义处理 → 204
+        let (status, _) = send(
+            router.clone(),
+            req("DELETE", "/api/v1/sync/devices/not-a-uuid", ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+
+        let device = register_device(&router, "laptop").await;
+        let envelope = b64(&(0..80u8).collect::<Vec<u8>>());
+
+        // put_group_key：device_id 非 UUID / envelope 坏 base64 → 422
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/group-keys",
+                &json!({"device_id": "not-a-uuid", "envelope": envelope}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/group-keys",
+                &json!({"device_id": device.to_string(), "envelope": "!!!not-base64!!!"})
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // 信封表被删：已登记设备的 upsert → 500 internal（不外泄 sqlx 细节）
+        sqlx::query("DROP TABLE sync_group_keys")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/group-keys",
+                &json!({"device_id": device.to_string(), "envelope": envelope}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+
+        // 删除级联走到一半失败（名字查询成功、信封删除报错）→ 500，
+        // 整体可重试；不得谎报成功。
+        let (status, _) = send(
+            router.clone(),
+            req("DELETE", &format!("/api/v1/sync/devices/{device}"), ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        // epoch 单行表损坏：group-keys 的 epoch 读取与 rotate-begin 的
+        // 事务提交都 fail-closed 500
+        sqlx::query("DROP TABLE sync_group_epoch")
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        let (status, _) = send(router.clone(), get_req("/api/v1/sync/group-keys")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        let (status, _) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/group-key/rotate-begin",
+                &json!({"if_epoch": 0}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// 连接池关闭（等价任意底层 DB 故障）后，各 sync 读/写端点统一
+    /// 500 internal：register 的非 UNIQUE 插入失败、list_devices、
+    /// delete 的名字查询、group-keys 行读取、oplog push 落库与 pull
+    /// 查询——都不能把 DB 抖动折成 4xx 误导客户端。
+    #[tokio::test]
+    async fn db_failure_surfaces_internal_across_sync_endpoints() {
+        let (router, state) = crate::test_support::setup(Some(TOKEN)).await;
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4().to_string();
+        state.pool.close().await;
+
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/devices",
+                &json!({"device_name": "phone", "public_key": b64(&[7u8; 32])}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(body["error"]["code"], "internal");
+
+        let (status, _) = send(router.clone(), get_req("/api/v1/sync/devices")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (status, _) = send(
+            router.clone(),
+            req("DELETE", &format!("/api/v1/sync/devices/{device}"), ""),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (status, _) = send(router.clone(), get_req("/api/v1/sync/group-keys")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        // 校验全过的合法 op：落库失败 → 500（不是 4xx）
+        let op = put_op_json(&Uuid::new_v4().to_string(), &item, 1, &device, &[0u8; 4]);
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [op]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+
+        let (status, _) = send(router, get_req("/api/v1/sync/oplog")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// oplog 逐字段校验臂（kind 边界 / 超大 payload / 未知 op 动词 /
+    /// 坏 rfc3339 时间戳）、坏 JSON 正文、pull 的 limit 边界与坏游标、
+    /// 以及「payload 两列部分为空」的损坏行读取。
+    #[tokio::test]
+    async fn oplog_validation_and_pull_error_arms() {
+        let (router, state) = crate::test_support::setup(Some(TOKEN)).await;
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4().to_string();
+
+        // 每个坏字段单独一条请求：422 且 items 指向对应字段
+        let oversized = b64(&vec![0u8; MAX_PAYLOAD_BYTES + 1]);
+        let bad_op = |mutate: &dyn Fn(&mut Value)| {
+            let mut op = put_op_json(&Uuid::new_v4().to_string(), &item, 1, &device, &[0u8; 4]);
+            mutate(&mut op);
+            op
+        };
+        let cases: Vec<(&str, Value)> = vec![
+            ("kind", bad_op(&|op| op["kind"] = json!(""))),
+            ("kind", bad_op(&|op| op["kind"] = json!("x".repeat(65)))),
+            (
+                "ciphertext",
+                bad_op(&|op| op["payload"]["ciphertext"] = json!(oversized)),
+            ),
+            ("op", bad_op(&|op| op["op"] = json!("patch"))),
+            (
+                "timestamp",
+                bad_op(&|op| op["timestamp"] = json!("not-a-timestamp")),
+            ),
+        ];
+        for (field, op) in cases {
+            let (status, body) = send(
+                router.clone(),
+                req(
+                    "POST",
+                    "/api/v1/sync/oplog",
+                    &json!({"ops": [op]}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert!(
+                body["error"]["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|i| i["field"] == *field),
+                "字段 {field} 未被定位: {body}"
+            );
+        }
+
+        // 坏 JSON 正文 → 400（沿 events 端点的 rejection 口径）
+        let (status, body) = send(
+            router.clone(),
+            req("POST", "/api/v1/sync/oplog", "not json at all"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "bad_request");
+
+        // pull limit：0 与超 PULL_MAX_FETCH 都 422
+        for limit in ["0", "501"] {
+            let (status, body) = send(
+                router.clone(),
+                get_req(&format!("/api/v1/sync/oplog?limit={limit}")),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+            assert_eq!(body["error"]["message"], "invalid limit");
+        }
+
+        // pull 坏游标 → 422 invalid cursor（与 events 同一编解码口径）
+        let (status, body) = send(
+            router.clone(),
+            get_req("/api/v1/sync/oplog?since=not-a-cursor"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["error"]["message"], "invalid cursor");
+
+        // 损坏行：ciphertext 有值而 wrapped_item_key 为 NULL → 500 internal
+        // （半行密文对客户端不可用，不能静默丢弃或折成 4xx）
+        sqlx::query(
+            "INSERT INTO sync_oplog
+                (op_id, item_id, kind, op, lamport, device_id, timestamp,
+                 ciphertext, wrapped_item_key)
+             VALUES (?, ?, 'credential', 'put', 1, ?, NULL, X'01', NULL)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&item)
+        .bind(device.to_string())
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let (status, body) = send(router, get_req("/api/v1/sync/oplog")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(body["error"]["code"], "internal");
+    }
+
+    /// 保留策略清理失败仅告警不打断写入（增长治理不是中继正确性的前置
+    /// 条件）：触发器让 retention 的 DELETE 报错，push 仍 200 且 op 落库。
+    #[tokio::test]
+    async fn oplog_retention_delete_failure_does_not_block_push() {
+        let (router, state) = crate::test_support::setup_with_retention(Some(TOKEN), 1, 0).await;
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4().to_string();
+
+        let first = put_op_json(&Uuid::new_v4().to_string(), &item, 1, &device, &[1u8; 4]);
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [first]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+
+        sqlx::query(
+            "CREATE TRIGGER block_retention BEFORE DELETE ON sync_oplog
+             BEGIN SELECT RAISE(ABORT, 'retention blocked'); END",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let second = put_op_json(&Uuid::new_v4().to_string(), &item, 2, &device, &[2u8; 4]);
+        let (status, body) = send(
+            router,
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": [second]}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["accepted"], 1, "清理失败不得回滚已写入的 op");
+    }
+
     #[tokio::test]
     async fn oplog_push_pull_round_trip_with_cursor() {
         let router = router().await;
