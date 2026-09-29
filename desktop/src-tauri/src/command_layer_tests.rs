@@ -8842,3 +8842,212 @@ async fn connect_token_commands_round_trip_create_list_revoke() {
         resp.error
     );
 }
+
+// ---------------------------------------------------------------------------
+// connect_server_* 命令族（start/status/stop）：解锁门禁 + 生命周期 + 幂等。
+// listener 只 bind 127.0.0.1:0（OS 分配），无需外部网络。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn connect_server_start_requires_unlocked_vault() {
+    let app = mock_app();
+
+    // 未初始化：unlocked 检查走 None → false，同样落 SERVICE_LOCKED 门禁
+    let resp = connect_server_start(app.state::<AppState>(), None)
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some(crate::error::CODE_SERVICE_LOCKED)
+    );
+
+    // 已初始化但锁定：is_unlocked() = false → 同一门禁
+    init_service_ok(&app, "correct-horse").await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = connect_server_start(app.state::<AppState>(), None)
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some(crate::error::CODE_SERVICE_LOCKED)
+    );
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or("")
+            .contains("must be unlocked"),
+        "{:?}",
+        resp.error
+    );
+}
+
+#[tokio::test]
+async fn connect_server_start_status_stop_lifecycle_round_trip() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+
+    // 空态 status：未运行、无端口
+    let resp = connect_server_status(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status");
+    assert!(!status.running);
+    assert_eq!(status.port, None);
+
+    // 启动（None = OS 分配端口）：127.0.0.1 bind，真实端口非 0
+    let resp = connect_server_start(app.state::<AppState>(), None)
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("started status");
+    assert!(status.running);
+    let port = status.port.expect("OS-assigned port");
+    assert_ne!(port, 0);
+
+    // 已运行再 start：明确报错（前端按 status 渲染，不该走到这）
+    let resp = connect_server_start(app.state::<AppState>(), Some(port))
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or("")
+            .contains("already running"),
+        "{:?}",
+        resp.error
+    );
+
+    // status 反映运行态
+    let resp = connect_server_status(app.state::<AppState>())
+        .await
+        .unwrap();
+    let status = resp.data.expect("status");
+    assert!(status.running);
+    assert_eq!(status.port, Some(port));
+
+    // stop → 停止并复位；再 stop 幂等；status 回到空态
+    let resp = connect_server_stop(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success);
+    let status = resp.data.expect("stopped status");
+    assert!(!status.running);
+    assert_eq!(status.port, None);
+
+    let resp = connect_server_stop(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success);
+    assert!(!resp.data.expect("status").running);
+
+    let resp = connect_server_status(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.data.expect("status").running);
+}
+
+// ---------------------------------------------------------------------------
+// set_locale：与 set_feature_flags 同范式（解锁门禁 + 窄写 + 返回全量），
+// 加非法 locale 拒绝。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn set_locale_rejects_bad_values_and_gates_on_lock() {
+    let app = mock_app();
+
+    // 非法 locale 优先拒绝（无需初始化——参数校验先于解锁门禁）
+    let resp = set_locale("fr".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Unsupported locale: fr"));
+
+    // 未初始化：Service not initialized
+    let resp = set_locale("en".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    // 已初始化但锁定：Service is locked
+    init_service_ok(&app, "correct-horse").await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = set_locale("en".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+}
+
+#[tokio::test]
+async fn set_locale_round_trips_zh_cn_and_en() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+
+    for locale in ["zh-CN", "en"] {
+        let resp = set_locale(locale.to_string(), app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(resp.success, "{locale}: {:?}", resp.error);
+        let settings = resp.data.expect("updated settings");
+        assert_eq!(settings.locale.as_deref(), Some(locale));
+
+        // get 反映持久化结果（新连接读库，非进程内缓存）
+        let resp = get_workspace_settings(app.state::<AppState>())
+            .await
+            .unwrap();
+        let settings = resp.data.expect("settings");
+        assert_eq!(settings.locale.as_deref(), Some(locale));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// connect_token_* 的 Err 臂：锁定（error_with_code 路径）与坏库（纯错误
+// 路径）——上轮 round-trip 只测了 Ok 臂。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn connect_token_commands_surface_locked_and_db_errors() {
+    // 锁定的真实库：core 抛 AuthenticationFailed("Service is locked")
+    // → map_persona_error 命中 SERVICE_LOCKED（Some(code) 臂）
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    lock_service(app.state::<AppState>()).await.unwrap();
+
+    let resp = connect_token_create(
+        app.state::<AppState>(),
+        "locked-out".to_string(),
+        persona_core::connect::ConnectTokenScope {
+            identities: vec![],
+            item_types: vec![],
+            verbs: vec![persona_core::connect::ConnectVerb::Read],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error_code.as_deref(),
+        Some(crate::error::CODE_SERVICE_LOCKED)
+    );
+
+    // 垃圾库：repo 层 sqlite 错误 → 无错误码（None 臂），三命令都降级
+    let app = app_with_garbage_db_service().await;
+    let resp = connect_token_list(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error_code.is_none(), "sqlite 错误不带业务码");
+    assert!(
+        resp.error
+            .as_deref()
+            .unwrap_or("")
+            .contains("not a database"),
+        "{:?}",
+        resp.error
+    );
+
+    let resp = connect_token_revoke(app.state::<AppState>(), Uuid::new_v4().to_string())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error_code.is_none());
+}
