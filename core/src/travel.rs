@@ -1282,4 +1282,332 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "tmp files must be renamed away");
     }
+
+    // ---- 防御臂补齐轮（2026-09-29 覆盖率）：值级编解码 / 附件收集 /
+    // blob IO / 坏库 settings / favicon 清理 ----
+
+    /// 最小可用 pack：apply_enter_tx 只消费 identity_ids 与 credentials 表，
+    /// 手工构造（字段全 pub）直达被测分支。
+    fn minimal_pack(identity_ids: Vec<String>) -> TravelPack {
+        TravelPack {
+            format_name: FORMAT_NAME.to_string(),
+            format_version: FORMAT_VERSION,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            active_identity_id: None,
+            identity_ids,
+            tables: std::collections::BTreeMap::new(),
+            attachment_files: Vec::new(),
+        }
+    }
+
+    /// 直插一条凭据行（url 可空——favicon 清理按 Option 采集）。
+    async fn insert_credential(pool: &SqlitePool, identity_id: &str, url: Option<&str>) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO credentials (id, identity_id, name, credential_type, security_level, url, encrypted_data, created_at, updated_at)
+             VALUES (?, ?, 'probe', 'password', 'medium', ?, X'00', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(&id)
+        .bind(identity_id)
+        .bind(url)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn identity_id_by_name(pool: &SqlitePool, name: &str) -> String {
+        sqlx::query_scalar::<_, String>("SELECT id FROM identities WHERE name = ?")
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// SQLite REAL 可存 Inf（`9e999` 字面量溢出）；JSON 表示不了非有限数，
+    /// row_to_json 对此 fail-closed 而不是静默丢列或写 null。
+    #[tokio::test]
+    async fn row_to_json_rejects_non_finite_float() {
+        let (_dir, db) = seeded_db().await;
+        sqlx::query("CREATE TABLE probe (v REAL)")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO probe VALUES (9e999)")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let row = sqlx::query("SELECT v FROM probe")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let err = row_to_json(&row).unwrap_err();
+        assert!(err.to_string().contains("non-finite float"), "{err}");
+    }
+
+    /// 表名白名单拒绝臂：恢复面只认 12 张打包表（表名来自常量表，此臂
+    /// 防手改 pack 注入任意表名）。
+    #[test]
+    fn table_name_whitelist_rejects_unknown_table() {
+        let err = check_table_name("audit_logs").unwrap_err();
+        assert!(err.to_string().contains("illegal table name"), "{err}");
+        assert!(check_table_name("identities").is_ok());
+    }
+
+    /// build_pack 的附件收集防御臂：空 marked 拒绝；BLOB 脏类型的
+    /// storage_path 行被静默跳过（NOT NULL 挡不住 BLOB——TEXT 亲和性
+    /// 不转换 BLOB）；合法行 + chunk 行成对进 attachment_files；缺
+    /// attachments_root、盘上 hash 不符、路径逃逸分路报错。
+    #[tokio::test]
+    async fn build_pack_attachment_edges_and_guards() {
+        let (dir, db) = seeded_db().await;
+        let pool = db.pool();
+
+        let err = build_pack(pool, None, &[]).await.unwrap_err();
+        assert!(err.to_string().contains("no marked identities"), "{err}");
+
+        let ident = identity_id_by_name(pool, "A").await;
+        let cred = insert_credential(pool, &ident, None).await;
+
+        let root = dir.path().join("attachments");
+        let put = |rel: &str, bytes: &[u8]| {
+            let full = root.join(rel);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, bytes).unwrap();
+        };
+        let file_bytes = b"sealed-bytes";
+        put("dir/plain.bin", file_bytes);
+        put("dir/chunk-0.bin", file_bytes);
+
+        // 脏行：storage_path 存 BLOB（类型错）；合法行 + chunk 行
+        sqlx::query(
+            "INSERT INTO attachments (id, credential_id, filename, mime_type, size, storage_path, content_hash, created_at, updated_at)
+             VALUES (?, ?, 'dirty', 'application/octet-stream', 1, X'2F2F', 'whatever', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&cred)
+        .execute(pool)
+        .await
+        .unwrap();
+        let plain_hash = sha256_hex(file_bytes);
+        let att = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO attachments (id, credential_id, filename, mime_type, size, storage_path, content_hash, created_at, updated_at)
+             VALUES (?, ?, 'plain', 'application/octet-stream', ?, 'dir/plain.bin', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .bind(&att)
+        .bind(&cred)
+        .bind(file_bytes.len() as i64)
+        .bind(&plain_hash)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO attachment_chunks (id, attachment_id, chunk_index, size, content_hash, storage_path, created_at)
+             VALUES (?, ?, 0, ?, ?, 'dir/chunk-0.bin', '2026-01-01T00:00:00Z')",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(&att)
+        .bind(file_bytes.len() as i64)
+        .bind(&plain_hash)
+        .execute(pool)
+        .await
+        .unwrap();
+
+        // 合法行 + chunk 行入 pack；BLOB 脏行被 filter_map 跳过
+        let pack = build_pack(pool, Some(&root), std::slice::from_ref(&ident))
+            .await
+            .unwrap();
+        let mut packed_paths: Vec<&str> = pack
+            .attachment_files
+            .iter()
+            .map(|f| f.storage_path.as_str())
+            .collect();
+        packed_paths.sort_unstable();
+        assert_eq!(packed_paths, vec!["dir/chunk-0.bin", "dir/plain.bin"]);
+
+        // 有附件行但调用方没传附件根 → 配置错（fail-closed，不静默丢文件）
+        let err = build_pack(pool, None, std::slice::from_ref(&ident))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("attachment storage is not initialized"),
+            "{err}"
+        );
+
+        // 盘上字节与行内 hash 不符 → 拒绝打包（中继保真的 enter 侧一半）
+        sqlx::query("UPDATE attachments SET content_hash = 'deadbeef' WHERE id = ?")
+            .bind(&att)
+            .execute(pool)
+            .await
+            .unwrap();
+        let err = build_pack(pool, Some(&root), std::slice::from_ref(&ident))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("content hash mismatch"), "{err}");
+
+        // storage_path 逃逸出附件根 → 拒绝（历史脏数据防御）
+        sqlx::query(
+            "UPDATE attachments SET storage_path = '../escape.bin', content_hash = ? WHERE id = ?",
+        )
+        .bind(&plain_hash)
+        .bind(&att)
+        .execute(pool)
+        .await
+        .unwrap();
+        let err = build_pack(pool, Some(&root), &[ident]).await.unwrap_err();
+        assert!(err.to_string().contains("escapes storage root"), "{err}");
+    }
+
+    /// write_blob_file 的三条 IO 失败臂：路径逃逸、父目录创建失败
+    /// （附件根本身是普通文件）、写失败（目标已是目录）。
+    #[test]
+    fn write_blob_file_failure_arms() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = write_blob_file(dir.path(), "../escape.bin", b"x").unwrap_err();
+        assert!(err.to_string().contains("escapes storage root"), "{err}");
+
+        let as_file = dir.path().join("iam-a-file");
+        std::fs::write(&as_file, b"f").unwrap();
+        let err = write_blob_file(&as_file, "sub/file.bin", b"x").unwrap_err();
+        assert!(
+            err.to_string().contains("failed to create attachment dir"),
+            "{err}"
+        );
+
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("occupied")).unwrap();
+        let err = write_blob_file(&root, "occupied", b"x").unwrap_err();
+        assert!(
+            err.to_string().contains("failed to write attachment"),
+            "{err}"
+        );
+    }
+
+    /// delete_blob_files 的非 NotFound 失败必须上报（exit 自愈依赖
+    /// failures 清单可见）；write_blob_files 拒绝坏 base64 载荷。
+    #[test]
+    fn blob_file_delete_failure_and_bad_base64_are_surfaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("att");
+        std::fs::create_dir_all(root.join("a-dir")).unwrap();
+        let failures = delete_blob_files(
+            &root,
+            &[TravelBlobFile {
+                storage_path: "a-dir".to_string(),
+                sha256: String::new(),
+                data_b64: String::new(),
+            }],
+        );
+        assert_eq!(failures, vec!["a-dir".to_string()]);
+
+        let err = write_blob_files(
+            &root,
+            &[TravelBlobFile {
+                storage_path: "x.bin".to_string(),
+                sha256: String::new(),
+                data_b64: "!!not-base64!!".to_string(),
+            }],
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("bad base64"), "{err}");
+    }
+
+    /// enter 事务写 settings 前的库内防御：settings 是合法 JSON 但非
+    /// 对象 → Database；workspace 行缺失 → NotFound（提示 migrate）。
+    /// 事务中途报错即回滚（identities 未被删）。
+    #[tokio::test]
+    async fn enter_tx_rejects_missing_workspace_and_non_object_settings() {
+        let (_dir, db) = seeded_db().await;
+        let pool = db.pool();
+        let pack = minimal_pack(vec![identity_id_by_name(pool, "A").await]);
+
+        sqlx::query("UPDATE workspaces SET settings = '\"junk-string\"'")
+            .execute(pool)
+            .await
+            .unwrap();
+        let err = apply_enter_tx(pool, &pack).await.unwrap_err();
+        assert!(err.to_string().contains("not an object"), "{err}");
+
+        sqlx::query("DELETE FROM workspaces")
+            .execute(pool)
+            .await
+            .unwrap();
+        let err = apply_enter_tx(pool, &pack).await.unwrap_err();
+        assert!(err.to_string().contains("persona migrate"), "{err}");
+
+        // 两次失败都回滚：身份行仍在
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM identities")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    /// exit 恢复对 pack 缺表宽容：build_pack 恒写满 12 张表，但手改或
+    /// 旧版 pack 缺键时跳过该表继续恢复其余表（if-let None 臂）。
+    #[tokio::test]
+    async fn exit_tx_skips_tables_absent_from_pack() {
+        let (_dir, db) = seeded_db().await;
+        let repo = IdentityRepository::new(db.clone());
+        let marked: Vec<String> = repo
+            .find_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id.to_string())
+            .collect();
+
+        let mut pack = build_pack(db.pool(), None, &marked).await.unwrap();
+        assert!(pack.tables.remove("passkeys").is_some());
+        assert!(pack.tables.remove("change_history").is_some());
+        apply_enter_tx(db.pool(), &pack).await.unwrap();
+        apply_exit_tx(db.pool(), &pack).await.unwrap();
+        assert_eq!(repo.find_all().await.unwrap().len(), 2);
+    }
+
+    /// favicon 清理的 host 集合分支：重复 host 去重（contains 命中不
+    /// 重推）、不可抓取 URL（非 https）与 NULL url 跳过提取、仅被移除
+    /// 凭据引用的 host 才删——仍被保留凭据引用的 host 留下。
+    #[cfg(feature = "favicon")]
+    #[tokio::test]
+    async fn favicon_prune_dedups_hosts_and_skips_unfetchable_urls() {
+        let (_dir, db) = seeded_db().await;
+        let pool = db.pool();
+        let id_a = identity_id_by_name(pool, "A").await;
+        let id_b = identity_id_by_name(pool, "B").await;
+
+        // 被移除身份：dup.com 两条（去重臂）+ 非 https 一条（提取失败臂）
+        // + NULL url 一条（flatten 跳过臂）+ 仅本身份引用的 only-a.com
+        insert_credential(pool, &id_a, Some("https://dup.com/one")).await;
+        insert_credential(pool, &id_a, Some("https://dup.com/two")).await;
+        insert_credential(pool, &id_a, Some("http://plain.invalid/x")).await;
+        insert_credential(pool, &id_a, None).await;
+        insert_credential(pool, &id_a, Some("https://only-a.com/item")).await;
+        // 保留身份：dup.com 仍被引用 → 缓存行必须留下
+        insert_credential(pool, &id_b, Some("https://dup.com/kept")).await;
+
+        for host in ["dup.com", "only-a.com"] {
+            sqlx::query(
+                "INSERT INTO favicon_cache (host, mime_type, data, created_at, updated_at)
+                 VALUES (?, 'image/png', X'01', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            )
+            .bind(host)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+
+        apply_enter_tx(pool, &minimal_pack(vec![id_a]))
+            .await
+            .unwrap();
+
+        let hosts: Vec<String> = sqlx::query_scalar("SELECT host FROM favicon_cache ORDER BY host")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        assert_eq!(hosts, vec!["dup.com".to_string()]);
+    }
 }
