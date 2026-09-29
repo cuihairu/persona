@@ -678,4 +678,298 @@ mod tests {
         let back = op_from_wire(to_in(wire)).unwrap();
         assert_eq!(back.timestamp, None);
     }
+
+    // ---- HTTP 编排防御臂补齐轮（2026-09-29 覆盖率）----
+    // 手写 TCP mock（沿 auth/remote_http.rs 测试惯例）：core dev-deps 无
+    // 现成 HTTP mock，reqwest 对手写 TCP 响应完全够用。每连接读一个请求、
+    // 按 handler 回 `Connection: close` 响应；status 0 = 不回包直接断开。
+
+    use std::sync::{Arc, Mutex};
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// mock 收到的一次请求（方法 + 路径带 query + authorization 头原值）。
+    struct Captured {
+        method: String,
+        path: String,
+        auth: Option<String>,
+    }
+
+    type Handler = Arc<dyn Fn(Captured) -> (u16, String) + Send + Sync>;
+
+    /// 起本地 mock，返回 base_url。accept loop 挂在 multi_thread runtime
+    /// 的后台 task 上，测试结束随 runtime 一起丢弃。
+    async fn spawn_mock(handler: Handler) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let handler = handler.clone();
+                tokio::spawn(async move {
+                    if let Some(req) = read_request(&mut stream).await {
+                        let (status, body) = handler(req);
+                        if status == 0 {
+                            return;
+                        }
+                        let resp = format!(
+                            "HTTP/1.1 {status} OK\r\n\
+                             Content-Type: application/json\r\n\
+                             Content-Length: {}\r\n\
+                             Connection: close\r\n\
+                             \r\n\
+                             {body}",
+                            body.len(),
+                        );
+                        let _ = stream.write_all(resp.as_bytes()).await;
+                    }
+                    let _ = stream.flush().await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 读一个请求头（GET 空 body / POST JSON body 都只需头即可判定；
+    /// body 留在内核缓冲由连接关闭回收）。
+    async fn read_request(stream: &mut TcpStream) -> Option<Captured> {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            let n = stream.read(&mut tmp).await.ok()?;
+            if n == 0 {
+                return None;
+            }
+            buf.extend_from_slice(&tmp[..n]);
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let head = String::from_utf8_lossy(&buf).to_string();
+        let request_line = head.lines().next().unwrap_or_default();
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or_default().to_string();
+        let path = parts.next().unwrap_or_default().to_string();
+        let auth = head
+            .lines()
+            .find_map(|l| l.strip_prefix("authorization: ").map(str::to_string));
+        Some(Captured { method, path, auth })
+    }
+
+    /// mock 基建自身的两臂：status 0（不回包直接断开——Handler 约定，
+    /// 驱动客户端 send 失败）；请求头读到一半客户端断连（read_request
+    /// EOF → None，mock 不 panic 静默回收）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mock_status_zero_and_mid_header_disconnect_are_tolerated() {
+        let base = spawn_mock(Arc::new(|_req| (0, String::new()))).await;
+        let remote = HttpSyncRemote::new(base.clone(), "tok").unwrap();
+        let err = remote.push_ops(&[sample_put()]).await.unwrap_err();
+        assert!(
+            err.to_string().contains("sync push request failed"),
+            "{err}"
+        );
+
+        // 半个请求头后直接断连
+        let mut raw = TcpStream::connect(base.trim_start_matches("http://"))
+            .await
+            .unwrap();
+        raw.write_all(b"POST /api/v1/sync/oplog HTTP/1.1\r\n")
+            .await
+            .unwrap();
+        drop(raw);
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    #[test]
+    fn kind_to_wire_covers_identity_and_passkey() {
+        for kind in [ItemKind::Identity, ItemKind::Passkey] {
+            let mut op = sample_put();
+            op.kind = kind;
+            let back = wire_to_op(op_to_wire(&op)).unwrap();
+            assert_eq!(back.kind, kind);
+        }
+    }
+
+    /// push/pull 的 send 失败臂都带步骤名（fail-closed，错误不吞）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn push_pull_connection_failures_carry_step_names() {
+        // bind 后立即 drop：端口必然无服务
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead = listener.local_addr().unwrap();
+        drop(listener);
+        let remote = HttpSyncRemote::new(format!("http://{dead}"), "tok").unwrap();
+
+        let err = remote.push_ops(&[sample_put()]).await.unwrap_err();
+        assert!(
+            err.to_string().contains("sync push request failed"),
+            "{err}"
+        );
+        let err = remote.pull_ops(None, 10).await.unwrap_err();
+        assert!(
+            err.to_string().contains("sync pull request failed"),
+            "{err}"
+        );
+    }
+
+    /// 200 但 body 不是 JSON：push/pull 各自的 malformed 响应臂。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn push_pull_malformed_bodies_are_rejected() {
+        let base = spawn_mock(Arc::new(|_req| (200, "not json at all".to_string()))).await;
+        let remote = HttpSyncRemote::new(base, "tok").unwrap();
+
+        let err = remote.push_ops(&[sample_put()]).await.unwrap_err();
+        assert!(
+            err.to_string().contains("malformed sync push response"),
+            "{err}"
+        );
+        let err = remote.pull_ops(None, 10).await.unwrap_err();
+        assert!(
+            err.to_string().contains("malformed sync pull response"),
+            "{err}"
+        );
+    }
+
+    /// 非 JSON 错误体（反代 502 HTML）：只报状态码，不透传脏内容。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn error_status_without_json_body_omits_summary() {
+        let base = spawn_mock(Arc::new(|_req| (502, "<html>boom</html>".to_string()))).await;
+        let remote = HttpSyncRemote::new(base, "tok").unwrap();
+
+        let err = remote.push_ops(&[sample_put()]).await.unwrap_err();
+        let msg = err.to_string();
+        // reqwest 的 StatusCode Display 带规范原因短语
+        assert!(
+            msg.contains("sync push failed (HTTP 502 Bad Gateway)"),
+            "{msg}"
+        );
+        assert!(!msg.contains("boom"), "{msg}");
+    }
+
+    /// wire 形状正面断言：bearer 头每请求携带、push 走 POST /oplog、
+    /// pull 的 since 游标进 query。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn push_sends_bearer_and_pull_sends_cursor_query() {
+        let captured: Arc<Mutex<Vec<Captured>>> = Default::default();
+        let sink = captured.clone();
+        let base = spawn_mock(Arc::new(move |req| {
+            let method = req.method.clone();
+            sink.lock().unwrap().push(req);
+            if method == "POST" {
+                (200, r#"{"accepted":1,"duplicates":0}"#.to_string())
+            } else {
+                (200, r#"{"ops":[],"next_cursor":null}"#.to_string())
+            }
+        }))
+        .await;
+        let remote = HttpSyncRemote::new(&base, "tok-1").unwrap();
+
+        let (accepted, duplicates) = remote.push_ops(&[sample_put()]).await.unwrap();
+        assert_eq!((accepted, duplicates), (1, 0));
+        let (ops, cursor) = remote.pull_ops(Some("cursor-x"), 7).await.unwrap();
+        assert!(ops.is_empty());
+        assert!(cursor.is_none());
+
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0].auth.as_deref(), Some("Bearer tok-1"));
+        assert_eq!(reqs[0].method, "POST");
+        assert_eq!(reqs[0].path, "/api/v1/sync/oplog");
+        assert!(reqs[1].path.contains("limit=7"), "{}", reqs[1].path);
+        assert!(reqs[1].path.contains("since=cursor-x"), "{}", reqs[1].path);
+    }
+
+    /// register 响应的 device_id 不是 UUID：fail-closed。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn register_device_rejects_non_uuid_device_id() {
+        let base = spawn_mock(Arc::new(|_req| {
+            (200, r#"{"device_id":"nope"}"#.to_string())
+        }))
+        .await;
+        let admin = SyncAdminApi::new(base, "tok").unwrap();
+
+        let err = admin
+            .register_device("laptop", &[7u8; 32])
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("malformed device_id in sync register response"),
+            "{err}"
+        );
+    }
+
+    /// list_devices 的字段防御臂：id 非 UUID、public_key 坏 base64、
+    /// public_key 长度不是 32 字节——逐类拒绝。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_devices_rejects_bad_id_and_bad_public_key() {
+        let short_key = B64.encode([0u8; 16]);
+        let mk_body = |id: &str, key: &str| {
+            format!(
+                r#"{{"devices":[{{"id":"{id}","device_name":"laptop","public_key":"{key}","created_at":"t"}}]}}"#
+            )
+        };
+        let cases = [
+            (
+                "malformed device id",
+                mk_body("nope", &B64.encode([7u8; 32])),
+            ),
+            ("bad base64", mk_body(&Uuid::new_v4().to_string(), " !!! ")),
+            (
+                "bad length",
+                mk_body(&Uuid::new_v4().to_string(), &short_key),
+            ),
+        ];
+        for (needle, body) in cases {
+            let base = spawn_mock(Arc::new(move |_req| (200, body.clone()))).await;
+            let admin = SyncAdminApi::new(base, "tok").unwrap();
+            let err = admin.list_devices().await.unwrap_err();
+            assert!(
+                err.to_string().contains(needle),
+                "expected {needle:?} in: {err}"
+            );
+        }
+    }
+
+    /// group-keys 的字段防御臂：device_id 非 UUID、envelope 坏 base64。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn group_keys_rejects_bad_device_id_and_bad_envelope() {
+        let cases = [
+            (
+                "malformed device_id",
+                r#"{"keys":[{"device_id":"nope","envelope":"AAAA","sealed_by":"s","created_at":"t"}],"epoch":0}"#,
+            ),
+            (
+                "malformed envelope",
+                &format!(
+                    r#"{{"keys":[{{"device_id":"{}","envelope":" !!! ","sealed_by":"s","created_at":"t"}}],"epoch":1}}"#,
+                    Uuid::new_v4()
+                ),
+            ),
+        ];
+        for (needle, body) in cases {
+            let owned = body.to_string();
+            let base = spawn_mock(Arc::new(move |_req| (200, owned.clone()))).await;
+            let admin = SyncAdminApi::new(base, "tok").unwrap();
+            let err = admin.group_keys_with_epoch().await.unwrap_err();
+            assert!(
+                err.to_string().contains(needle),
+                "expected {needle:?} in: {err}"
+            );
+        }
+    }
+
+    /// 老服务器兼容：group-keys 响应无 epoch 字段 → serde default 0
+    /// （与「从未轮换过」同形，begin 方向安全）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn group_keys_without_epoch_field_defaults_to_zero() {
+        let base = spawn_mock(Arc::new(|_req| (200, r#"{"keys":[]}"#.to_string()))).await;
+        let admin = SyncAdminApi::new(base, "tok").unwrap();
+
+        let (keys, epoch) = admin.group_keys_with_epoch().await.unwrap();
+        assert!(keys.is_empty());
+        assert_eq!(epoch, 0);
+    }
 }
