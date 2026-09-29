@@ -65,8 +65,14 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     assert!(nsi.contains(
         "!define UNINSTKEY \"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${PRODUCTNAME}\""
     ));
-    // 数据安全：仅当用户勾选"删除应用数据"或 /PURGE 显式清除且非更新模式才清 AppData
-    assert!(nsi.contains("${If} $DeleteAppDataCheckboxState = 1${OrIf} $PurgeMode = 1"));
+    // 数据安全：仅当用户勾选"删除应用数据"或 /PURGE 显式清除且非更新模式才清 AppData。
+    // LogicLib 的 If/OrIf/AndIf 每个都必须独立成行——同一行内联 `${OrIf}`
+    // 会让 makensis 因宏参数数量不匹配中止（2026-09-28 每日构建 Windows
+    // bundle 实测挂 installer.nsi），这里连换行一起钉住。
+    assert!(
+        nsi.contains("${If} $DeleteAppDataCheckboxState = 1\n  ${OrIf} $PurgeMode = 1"),
+        "OrIf must be on its own line (LogicLib multi-line condition)"
+    );
     // /PURGE 静默彻底清除参数必须被解析
     assert!(
         nsi.contains("${GetOptions} $CMDLINE \"/PURGE\" $PurgeMode"),

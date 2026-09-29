@@ -60,7 +60,7 @@ jobs:
           # 只有 schedule 做新鲜度判断：tag 是正式发版、dispatch 是人手动
           # 点的，都不允许被 staleness 拦下。
           if [[ "${GITHUB_EVENT_NAME}" != "schedule" ]]; then
-            echo "event ${GITHUB_EVENT_NAME}: always build" >> "$GITHUB_OUTPUT"
+            echo "event ${GITHUB_EVENT_NAME}: always build"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -69,10 +69,10 @@ jobs:
           age=$(( now - last ))
           echo "main HEAD age: ${age}s ($(date -u -d "@${last}" 2>/dev/null || date -u -r "${last}" 2>/dev/null))"
           if (( age <= 60 * 60 * 48 )); then
-            echo "fresh enough (<= 48h) — build" >> "$GITHUB_OUTPUT"
+            echo "fresh enough (<= 48h) — build"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           else
-            echo "main HEAD older than 48h — skip whole daily build" >> "$GITHUB_OUTPUT"
+            echo "main HEAD older than 48h — skip whole daily build"
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           fi
 

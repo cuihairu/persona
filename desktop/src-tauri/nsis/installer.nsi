@@ -912,7 +912,8 @@ Section Uninstall
 
   ; Delete app data if the checkbox is selected
   ; and if not updating
-  ${If} $DeleteAppDataCheckboxState = 1${OrIf} $PurgeMode = 1
+  ${If} $DeleteAppDataCheckboxState = 1
+  ${OrIf} $PurgeMode = 1
   ${AndIf} $UpdateMode <> 1
     ; Clear the install location $INSTDIR from registry
     DeleteRegKey SHCTX "${MANUPRODUCTKEY}"
