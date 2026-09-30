@@ -11,16 +11,16 @@
 
 身份是 SQLite 里的 `identities` 表一行（`core/migrations/001_initial.sql`）：
 
-| 字段                             | 含义                                                     |
-| -------------------------------- | -------------------------------------------------------- |
-| `id`                             | UUID，主键                                                 |
-| `name`                           | 你起的名字，CLI/desktop 都用它指代身份                     |
-| `identity_type`                  | `Personal` / `Work` / `Social` / `Financial` / `Gaming` / 自定义 |
-| `description` / `email` / `phone`| 自由备注，仅用于辨认，**不参与任何认证**                   |
-| `ssh_key` / `gpg_key`            | 备注字段，只是贴了一段公钥文本，**不是**受管密钥           |
-| `tags` / `attributes`            | 自定义标签与键值对                                         |
-| `is_active`                      | 历史字段，当前代码**不用**它做过滤（见下）                 |
-| `travel_marked`                  | 旅行模式标记：这个身份要随身带走                           |
+| 字段                              | 含义                                                             |
+| --------------------------------- | ---------------------------------------------------------------- |
+| `id`                              | UUID，主键                                                       |
+| `name`                            | 你起的名字，CLI/desktop 都用它指代身份                           |
+| `identity_type`                   | `Personal` / `Work` / `Social` / `Financial` / `Gaming` / 自定义 |
+| `description` / `email` / `phone` | 自由备注，仅用于辨认，**不参与任何认证**                         |
+| `ssh_key` / `gpg_key`             | 备注字段，只是贴了一段公钥文本，**不是**受管密钥                 |
+| `tags` / `attributes`             | 自定义标签与键值对                                               |
+| `is_active`                       | 历史字段，当前代码**不用**它做过滤（见下）                       |
+| `travel_marked`                   | 旅行模式标记：这个身份要随身带走                                 |
 
 其它表通过 `identity_id` 外键挂到身份上（`ON DELETE CASCADE`）：
 
@@ -65,14 +65,14 @@ SSH Agent 共享同一个"当前身份"——在任何一处切换，其它端�
 
 ## 身份**不**做什么（常见误解）
 
-| 误解                             | 事实                                                                                        |
-| -------------------------------- | ------------------------------------------------------------------------------------------- |
-| 切换身份 = 换一个加密空间         | 否。每条凭据用独立的 item key 加密，再由主密码派生的 master key 包装（见 [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)）。身份不参与密钥派生 |
-| 切换身份需要重新解锁 / 换主密码    | 否。解锁状态由主密码决定，切换身份不解锁也不重新解密                          |
-| 身份带 SSH / GPG 私钥             | 否。`ssh_key` / `gpg_key` 只是备注文本。私钥是独立的凭据条目（`CredentialType::SshKey`），由 SSH Agent 按需提供 |
-| SSH Agent 会只提供当前身份的 key   | 否。`persona ssh` 的 `--identity` 参数在代码里标注为 "reserved for future use"，目前不过滤 |
-| `identities.is_active` 就是当前身份 | 否。这个字段存在但没有任何查询用它过滤。当前身份是 `workspaces.active_identity_id` |
-| 身份有远程账号 / 登录态            | 否。身份是纯本地数据。远程能力（同步、服务端）由 `persona connect` 单独配置，与身份无关 |
+| 误解                                | 事实                                                                                                                                                                                |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 切换身份 = 换一个加密空间           | 否。每条凭据用独立的 item key 加密，再由主密码派生的 master key 包装（见 [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)）。身份不参与密钥派生 |
+| 切换身份需要重新解锁 / 换主密码     | 否。解锁状态由主密码决定，切换身份不解锁也不重新解密                                                                                                                                |
+| 身份带 SSH / GPG 私钥               | 否。`ssh_key` / `gpg_key` 只是备注文本。私钥是独立的凭据条目（`CredentialType::SshKey`），由 SSH Agent 按需提供                                                                     |
+| SSH Agent 会只提供当前身份的 key    | 否。`persona ssh` 的 `--identity` 参数在代码里标注为 "reserved for future use"，目前不过滤                                                                                          |
+| `identities.is_active` 就是当前身份 | 否。这个字段存在但没有任何查询用它过滤。当前身份是 `workspaces.active_identity_id`                                                                                                  |
+| 身份有远程账号 / 登录态             | 否。身份是纯本地数据。远程能力（同步、服务端）由 `persona connect` 单独配置，与身份无关                                                                                             |
 
 ## 为什么第一次打开没有默认身份
 
