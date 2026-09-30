@@ -54,6 +54,15 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
+
+  /* WebView2/Edge 会在每个 password 输入框内画原生“显示密码”眼睛，与应用
+     自建的 EyeIcon/EyeSlashIcon 切换按钮（UnlockScreen/ReauthModal 等）
+     叠成两只。原生的一律隐藏，可见性统一走应用内切换；WebKitGTK/WKWebView
+     不绘制原生眼睛，这两条规则在其余平台惰性。 */
+  input[type='password']::-ms-reveal,
+  input[type='password']::-ms-clear {
+    display: none;
+  }
 }
 
 /*
