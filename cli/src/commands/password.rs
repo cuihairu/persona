@@ -43,6 +43,11 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub pronounceable: bool,
 
+    /// Generate a Diceware-style passphrase of N words (EFF large wordlist,
+    /// `-`-separated). Overrides --length/--set/--pronounceable.
+    #[arg(long)]
+    pub words: Option<usize>,
+
     /// Number of passwords to generate
     #[arg(long, default_value = "1")]
     pub count: usize,
@@ -76,17 +81,26 @@ fn generate_password(args: GenerateArgs) -> Result<()> {
         include_numbers,
         include_symbols,
         pronounceable: args.pronounceable,
+        words: args.words,
     };
 
     for idx in 1..=args.count {
         let password = PasswordGenerator::generate(&options)?;
         if args.count == 1 {
-            println!(
-                "{} Generated password (length {}): {}",
-                "✓".green().bold(),
-                args.length,
-                password.cyan().bold()
-            );
+            if let Some(word_count) = args.words {
+                println!(
+                    "{} Generated passphrase ({word_count} words): {}",
+                    "✓".green().bold(),
+                    password.cyan().bold()
+                );
+            } else {
+                println!(
+                    "{} Generated password (length {}): {}",
+                    "✓".green().bold(),
+                    args.length,
+                    password.cyan().bold()
+                );
+            }
         } else {
             println!(
                 "{} {}",
@@ -96,7 +110,12 @@ fn generate_password(args: GenerateArgs) -> Result<()> {
         }
     }
 
-    if args.pronounceable {
+    if let Some(word_count) = args.words {
+        println!(
+            "{} Passphrase mode: {word_count} words from the EFF large wordlist.",
+            "ℹ".blue()
+        );
+    } else if args.pronounceable {
         println!(
             "{} Pronounceable mode enabled – alternating consonant/vowel pattern.",
             "ℹ".blue()
@@ -116,12 +135,14 @@ mod tests {
         sets: Vec<CharacterSet>,
         pronounceable: bool,
         count: usize,
+        words: Option<usize>,
     ) -> GenerateArgs {
         GenerateArgs {
             length,
             sets,
             pronounceable,
             count,
+            words,
         }
     }
 
@@ -139,6 +160,7 @@ mod tests {
                 ],
                 false,
                 1,
+                None,
             )),
         };
         execute(args, &config)
@@ -158,6 +180,7 @@ mod tests {
                     vec![CharacterSet::Lowercase, CharacterSet::Digits],
                     false,
                     3,
+                    None,
                 )),
             },
             &config,
@@ -173,6 +196,7 @@ mod tests {
                     vec![CharacterSet::Lowercase],
                     true,
                     1,
+                    None,
                 )),
             },
             &config,
@@ -192,11 +216,51 @@ mod tests {
                     vec![CharacterSet::Digits, CharacterSet::Digits],
                     false,
                     1,
+                    None,
                 )),
             },
             &config,
         )
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn words_mode_generates_passphrase() {
+        let config = CliConfig::default();
+        execute(
+            PasswordArgs {
+                command: PasswordCommand::Generate(generate_args(
+                    16,
+                    vec![CharacterSet::Lowercase],
+                    false,
+                    1,
+                    Some(6),
+                )),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn words_mode_rejects_out_of_range_word_count() {
+        let config = CliConfig::default();
+        let err = execute(
+            PasswordArgs {
+                command: PasswordCommand::Generate(generate_args(
+                    16,
+                    vec![CharacterSet::Lowercase],
+                    false,
+                    1,
+                    Some(2),
+                )),
+            },
+            &config,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("between 3 and 10"));
     }
 }

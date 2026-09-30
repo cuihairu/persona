@@ -3387,6 +3387,8 @@ pub async fn generate_password_advanced(
         include_numbers,
         include_symbols,
         pronounceable,
+        // TODO(#10): 桌面生成器面板接线 --words（core/CLI 已落地）
+        words: None,
     };
     let count = count.clamp(1, 10);
 

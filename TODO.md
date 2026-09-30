@@ -487,9 +487,24 @@ Desktop (Tauri v2 + React)
       解锁门禁而读免解锁/默认档+运行态/改绑落库与非法串不落库/关开关清
       运行态/恢复默认存 None/跨窗 UUID 校验）+ jest 22 例（面板 9、
       设置区 9、跨窗桥 4）。威胁登记见 THREAT_MODEL.md「Quick Access」。
+- [x] 单词式 passphrase / words 模式（1Password 对标矩阵 #10，2026-09-30
+      落地）：此前只有字符级生成（随机/可发音），无词库式 passphrase。
+      本轮补齐——
+      ① core `PasswordGeneratorOptions.words: Option<usize>`：第三种生成
+      模式，与 random/pronounceable 并列走 `PasswordGenerator::generate`
+      统一入口；内联校验（3..=10 词区间、与 pronounceable 互斥、words
+      模式跳过 length/字符集校验）；词表为 EFF large wordlist（7772 词、
+      CC BY 3.0；4 个含连字符词剔除以保 `-` 分隔符无歧义），OnceLock
+      每进程解析一次。
+      ② CLI `persona password generate --words N`：passphrase 专用输出
+      （"N words"提示 + 模式行），core 校验错误透传。
+      测试：core 7 例（词数/区间两端/互斥/跳过校验/词表 7772 唯一纯小写/
+      Default 关闭）+ CLI 2 例（生成/区间外拒绝）。
       遗留（下一轮）：#23 Windows/macOS 实机验收（#20 通用格式导入已于
       2026-09-30 落地：`persona import-generic`，CSV 列形嗅探 +
-      Bitwarden JSON，确认流与 1PUX 同线）。
+      Bitwarden JSON，确认流与 1PUX 同线；#10 桌面生成器面板接线
+      `--words` 待后续，`generate_password_advanced` 暂保持
+      `words: None`）。
 
 Server & Sync (optional)
 

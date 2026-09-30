@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use crate::{PersonaError, Result};
 use rand::{rngs::ThreadRng, seq::SliceRandom, RngExt};
 
@@ -26,6 +28,10 @@ pub struct PasswordGeneratorOptions {
     pub include_symbols: bool,
     /// Generate pronounceable passwords (alternating consonants/vowels).
     pub pronounceable: bool,
+    /// Generate a word-based passphrase (Diceware-style): `Some(n)` picks `n`
+    /// words from the embedded EFF large wordlist and joins them with `-`.
+    /// Ignores `length` and the character sets; conflicts with `pronounceable`.
+    pub words: Option<usize>,
 }
 
 impl Default for PasswordGeneratorOptions {
@@ -37,6 +43,7 @@ impl Default for PasswordGeneratorOptions {
             include_numbers: true,
             include_symbols: true,
             pronounceable: false,
+            words: None,
         }
     }
 }
@@ -49,6 +56,10 @@ impl PasswordGenerator {
     pub fn generate(options: &PasswordGeneratorOptions) -> Result<String> {
         Self::validate_options(options)?;
 
+        if let Some(word_count) = options.words {
+            return Ok(Self::generate_words(word_count));
+        }
+
         if options.pronounceable {
             Self::generate_pronounceable(options)
         } else {
@@ -57,6 +68,24 @@ impl PasswordGenerator {
     }
 
     fn validate_options(options: &PasswordGeneratorOptions) -> Result<()> {
+        if let Some(word_count) = options.words {
+            if options.pronounceable {
+                return Err(PersonaError::InvalidInput(
+                    "Words mode cannot be combined with pronounceable".to_string(),
+                )
+                .into());
+            }
+            if !(3..=10).contains(&word_count) {
+                return Err(PersonaError::InvalidInput(
+                    "Passphrase word count must be between 3 and 10".to_string(),
+                )
+                .into());
+            }
+            // Word passphrases derive their shape from the word count alone:
+            // the length minimum and the character-set selection do not apply.
+            return Ok(());
+        }
+
         if options.length < 4 {
             return Err(PersonaError::InvalidInput(
                 "Password length must be at least 4 characters".to_string(),
@@ -183,6 +212,34 @@ impl PasswordGenerator {
         Ok(password_chars.into_iter().collect())
     }
 
+    /// The embedded EFF large wordlist (7772 unique lowercase words; `#`
+    /// comment lines and blank lines skipped), loaded once per process.
+    fn wordlist() -> &'static [&'static str] {
+        static WORDS: OnceLock<Vec<&'static str>> = OnceLock::new();
+        WORDS
+            .get_or_init(|| {
+                include_str!("eff_large_wordlist.txt")
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty() && !line.starts_with('#'))
+                    .collect()
+            })
+            .as_slice()
+    }
+
+    /// Diceware-style passphrase: `word_count` words drawn uniformly from the
+    /// embedded wordlist, joined with `-`. Range and combination rules are
+    /// enforced by `validate_options` before this is called.
+    fn generate_words(word_count: usize) -> String {
+        let words = Self::wordlist();
+        let mut rng = rand::rng();
+        let mut chosen = Vec::with_capacity(word_count);
+        for _ in 0..word_count {
+            chosen.push(words[rng.random_range(0..words.len())]);
+        }
+        chosen.join("-")
+    }
+
     fn choose_random_char(set: &str, rng: &mut ThreadRng) -> char {
         let bytes = set.as_bytes();
         let idx = rng.random_range(0..bytes.len());
@@ -212,6 +269,7 @@ mod tests {
             include_numbers: true,
             include_symbols: true,
             pronounceable: false,
+            words: None,
         };
 
         let password = PasswordGenerator::generate(&options).unwrap();
@@ -231,6 +289,7 @@ mod tests {
             include_numbers: false,
             include_symbols: false,
             pronounceable: true,
+            words: None,
         };
 
         let password = PasswordGenerator::generate(&options).unwrap();
@@ -247,6 +306,7 @@ mod tests {
             include_numbers: false,
             include_symbols: false,
             pronounceable: false,
+            words: None,
         };
 
         let err = PasswordGenerator::generate(&options).unwrap_err();
@@ -277,6 +337,7 @@ mod tests {
             include_numbers: true,
             include_symbols: true,
             pronounceable: true,
+            words: None,
         };
         let err = PasswordGenerator::generate(&options).unwrap_err();
         assert!(err
@@ -293,6 +354,7 @@ mod tests {
             include_numbers: true,
             include_symbols: false,
             pronounceable: false,
+            words: None,
         };
         let password = PasswordGenerator::generate(&options).unwrap();
         assert_eq!(password.len(), 32);
@@ -308,6 +370,7 @@ mod tests {
             include_numbers: false,
             include_symbols: false,
             pronounceable: true,
+            words: None,
         };
         let password = PasswordGenerator::generate(&options).unwrap();
         assert_eq!(password.len(), 20);
@@ -323,6 +386,7 @@ mod tests {
             include_numbers: false,
             include_symbols: false,
             pronounceable: true,
+            words: None,
         };
         let password = PasswordGenerator::generate(&options).unwrap();
         assert_eq!(password.len(), 24);
@@ -346,6 +410,7 @@ mod tests {
                 include_numbers: true,
                 include_symbols: true,
                 pronounceable: true,
+                words: None,
             };
             let password = PasswordGenerator::generate(&options).unwrap();
             assert_eq!(password.len(), 16);
@@ -376,6 +441,7 @@ mod tests {
                 include_numbers,
                 include_symbols: !include_numbers,
                 pronounceable: true,
+                words: None,
             };
             let password = PasswordGenerator::generate(&options).unwrap();
             assert_eq!(password.len(), 20);
@@ -425,6 +491,7 @@ mod tests {
             include_numbers: false,
             include_symbols: false,
             pronounceable: false,
+            words: None,
         };
         let err = PasswordGenerator::generate_random(&no_sets).unwrap_err();
         assert!(err.to_string().contains("At least one character set"));
@@ -435,5 +502,98 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Pronounceable passwords require at least one letter set"));
+    }
+
+    #[test]
+    fn generates_passphrase_with_requested_word_count() {
+        let options = PasswordGeneratorOptions {
+            words: Some(6),
+            ..PasswordGeneratorOptions::default()
+        };
+        let passphrase = PasswordGenerator::generate(&options).unwrap();
+        let words: Vec<&str> = passphrase.split('-').collect();
+        assert_eq!(words.len(), 6);
+        for word in &words {
+            assert!(
+                PasswordGenerator::wordlist().contains(word),
+                "{word} is not in the EFF wordlist"
+            );
+        }
+    }
+
+    #[test]
+    fn passphrase_word_count_must_be_between_3_and_10() {
+        for word_count in [0, 2, 11] {
+            let options = PasswordGeneratorOptions {
+                words: Some(word_count),
+                ..PasswordGeneratorOptions::default()
+            };
+            let err = PasswordGenerator::generate(&options).unwrap_err();
+            assert!(
+                err.to_string().contains("between 3 and 10"),
+                "word count {word_count} should be rejected: {err}"
+            );
+        }
+
+        // Both ends of the range generate.
+        for word_count in [3, 10] {
+            let options = PasswordGeneratorOptions {
+                words: Some(word_count),
+                ..PasswordGeneratorOptions::default()
+            };
+            let passphrase = PasswordGenerator::generate(&options).unwrap();
+            assert_eq!(passphrase.split('-').count(), word_count);
+        }
+    }
+
+    #[test]
+    fn passphrase_and_pronounceable_are_mutually_exclusive() {
+        let options = PasswordGeneratorOptions {
+            pronounceable: true,
+            words: Some(6),
+            ..PasswordGeneratorOptions::default()
+        };
+        let err = PasswordGenerator::generate(&options).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Words mode cannot be combined with pronounceable"));
+    }
+
+    #[test]
+    fn passphrase_ignores_length_and_set_validation() {
+        // length 3 and no character sets would both fail in random mode; words
+        // mode is self-contained and must not inherit those checks.
+        let options = PasswordGeneratorOptions {
+            length: 3,
+            include_lowercase: false,
+            include_uppercase: false,
+            include_numbers: false,
+            include_symbols: false,
+            pronounceable: false,
+            words: Some(5),
+        };
+        let passphrase = PasswordGenerator::generate(&options).unwrap();
+        assert_eq!(passphrase.split('-').count(), 5);
+    }
+
+    #[test]
+    fn eff_wordlist_parses_to_unique_lowercase_words() {
+        let words = PasswordGenerator::wordlist();
+        assert_eq!(words.len(), 7772, "EFF large wordlist word count");
+        let mut sorted = words.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), words.len(), "wordlist contains duplicates");
+        assert!(
+            words
+                .iter()
+                .all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_lowercase())),
+            "every word must be a non-empty [a-z]+ token"
+        );
+    }
+
+    #[test]
+    fn default_options_have_words_disabled() {
+        assert!(PasswordGeneratorOptions::default().words.is_none());
     }
 }

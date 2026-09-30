@@ -199,6 +199,9 @@ persona passkey remove --id <UUID>
 persona password generate --length 32 --set lowercase --set uppercase --set digits --set symbols
 persona password generate --pronounceable --length 18 --set lowercase --set uppercase
 
+# Diceware-style passphrase from the EFF large wordlist (3-10 words, `-`-separated)
+persona password generate --words 6
+
 # TUI dashboard (ratatui + crossterm)
 persona tui --identity alice   # optional: preselect identity
 q to quit, r to reload, ↑/↓ or j/k to navigate
