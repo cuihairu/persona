@@ -95,21 +95,52 @@ SSH Agent 共享同一个"当前身份"——在任何一处切换，其它端�
 ```bash
 persona add --name alice --identity-type Personal   # 新建身份
 persona add --name alice --set-active               # 新建并立即切过去
-persona list                                        # 列出全部身份
-persona show <name>                                 # 看详情
-persona switch <name>                               # 切到该身份（全局生效）
-persona switch --previous                           # 切回上一个
-persona switch --interactive                        # 交互选择
-persona edit <name> --identity-type Work            # 改类型/备注
-persona remove <name> --backup                      # 删除（见下方警告）
+persona list                                         # 列出全部身份
+persona show <name>                                  # 看详情
+persona switch <name>                                # 切到该身份（全局生效）
+persona switch --previous                            # 切回上一个
+persona switch --interactive                         # 交互选择
+persona edit <name> --identity-type Work             # 改类型/备注
+persona remove <name> --backup                       # 删除（见下方警告）
 
 # 凭据默认落在当前身份下，也可显式指定
-persona add-credential --identity alice --username bob
+persona credential add --identity alice --name "GitHub" \
+  --credential-type password --prompt-secret
+persona credential list --identity alice
 ```
 
-### 桌面端
+### 桌面应用
 
-顶栏切换器下拉选择；凭据列表随当前身份自动过滤。
+- 顶栏身份下拉或侧栏点选即可切换；
+- 新建凭据时自动归到**当前身份**（弹窗里没有身份下拉——先切身份再新建）；
+- 设置面板里管理身份：新建、编辑、删除、切换旅行标记。
 
-> ⚠️ 删除身份会经 `ON DELETE CASCADE` 连带删掉其下凭据 / 钱包 / 通行密钥 /
-> 工作区成员行——操作前请确认，误删只能靠加密导出恢复。
+## 三种容易互相搞混的东西
+
+代码和界面里都出现"identity"，指的是三件事：
+
+| 名字                          | 是什么                                                                   | 例                     |
+| ----------------------------- | ------------------------------------------------------------------------ | ---------------------- |
+| **身份 / Identity（本章）**   | 凭据分组 + 当前身份指针，库级实体，跨端共享                              | `persona switch alice` |
+| **Identity 类凭据**           | 一种**凭据类型**，存姓名、地址、证件号码等个人资料（1Password 同名功能） | 新建凭据时选"Identity" |
+| **设备身份 / DeviceIdentity** | 每台机器自己的密钥对，用于同步 oplog 签名                                | 自动生成，用户看不到   |
+
+建凭据弹窗里的"Identity"选项是**第二种**（证件资料），不是本章讲的身份分组。
+顺带一提：证件类凭据本身也归属于某个身份分组，所以一个身份下可以同时放
+"alice 的工作身份"和"alice 的身份证件资料"。
+
+## 删除身份会连带什么
+
+删除身份时外键 `ON DELETE CASCADE` 会一并删除它名下的凭据、加密钱包、通行密钥、
+工作区成员行；凭据删除又会清掉挂在它下面的附件文件（附件密文封装在该凭据的
+item key 下，留着也解不开）。
+
+**审计日志会保留**：删除前先把审计行的 `identity_id` 引用置空，历史记录不丢。
+但被删的凭据内容不可恢复——删之前先 `persona export`。
+
+## 相关页面
+
+- [快速开始](./quick-start) — 建库、创建第一个身份
+- [桌面应用](./desktop) — 切换器与统计页
+- [核心功能](../overview/features) — 身份隔离视图
+- [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md) — 加密到底在哪一层
