@@ -100,4 +100,44 @@ mod tests {
         assert_eq!(fp, fingerprint_for_blob(b"blob"));
         assert_ne!(fp, fingerprint_for_blob(b"other"));
     }
+
+    /// `TtyApprovalHandler::confirm` 全身（spawn_blocking 编排 + join 错误
+    /// 映射 + 决策透传）在无 tty 环境的确定性路径：/dev/tty 打不开 →
+    /// stdin 兜底 → EOF → 空行 → 拒绝。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tty_handler_without_tty_surfaces_stdin_eof_as_deny() {
+        // 有控制终端的开发机：prompt_confirm_blocking 会优先打开 /dev/tty
+        // 并阻塞等键盘输入——跳过，不挂起交互会话（daemon.rs 模块文档：
+        // 该路径需要真实终端）。CI 覆盖率容器与无头环境无 /dev/tty，
+        // 本测试在那里全量执行。
+        if std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .is_ok()
+        {
+            return;
+        }
+        // stdin 无论测试被如何拉起都重定向到 /dev/null：read_line 确定性
+        // EOF → stdin_confirm_from_line("") → false。套件内没有其他测试读
+        // stdin，进程级 dup2 无扰。
+        use std::os::unix::io::AsRawFd;
+        let devnull = std::fs::File::open("/dev/null").expect("open /dev/null");
+        unsafe { libc::dup2(devnull.as_raw_fd(), 0) };
+
+        let req = ApprovalRequest {
+            key_id: "k".to_string(),
+            fingerprint: "SHA256:x".to_string(),
+            operation: "sign".to_string(),
+            peer: None,
+            reason: "policy".to_string(),
+            prompt: "approve? [y/N]".to_string(),
+        };
+        let decision = TtyApprovalHandler
+            .confirm(&req)
+            .await
+            .expect("spawn_blocking join must not fail");
+        assert!(!decision, "stdin EOF must deny");
+    }
 }

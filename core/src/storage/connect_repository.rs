@@ -127,3 +127,96 @@ fn row_to_token(row: &sqlx::sqlite::SqliteRow) -> PersonaResult<ConnectTokenRow>
         revoked_at: parse_time(row.get("revoked_at"))?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::connect::token::{ConnectItemType, ConnectVerb};
+
+    fn sample_row(hash: &str, fingerprint: &str, created_at: DateTime<Utc>) -> ConnectTokenRow {
+        ConnectTokenRow {
+            id: Uuid::new_v4(),
+            label: "ci token".to_string(),
+            hash: hash.to_string(),
+            fingerprint: fingerprint.to_string(),
+            scope: ConnectTokenScope {
+                identities: vec![Uuid::new_v4()],
+                item_types: vec![ConnectItemType::Password, ConnectItemType::ApiKey],
+                verbs: vec![ConnectVerb::Read],
+            },
+            created_at,
+            last_used_at: None,
+            revoked_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_find_touch_revoke_roundtrip_and_listing_order() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let repo = ConnectTokenRepository::new(db);
+
+        assert!(repo.find_by_hash("nope").await.unwrap().is_none());
+
+        let older = sample_row(
+            &"a".repeat(64),
+            "aaaaaaaaaaaaaaaa",
+            Utc::now() - chrono::Duration::seconds(30),
+        );
+        let newer = sample_row(&"b".repeat(64), "bbbbbbbbbbbbbbbb", Utc::now());
+        repo.insert(&older).await.unwrap();
+        repo.insert(&newer).await.unwrap();
+
+        // list_all：含全部行，按 created_at 倒序
+        let all = repo.list_all().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[0].id, newer.id);
+
+        // find_by_hash：字段与 scope 三维完整回读
+        let found = repo.find_by_hash(&older.hash).await.unwrap().unwrap();
+        assert_eq!(found.id, older.id);
+        assert_eq!(found.label, "ci token");
+        assert_eq!(found.fingerprint, "aaaaaaaaaaaaaaaa");
+        assert_eq!(found.scope, older.scope);
+        assert!(found.last_used_at.is_none());
+        assert!(!found.revoked());
+
+        // touch_last_used：回读时间戳逐秒一致
+        let used_at = Utc::now();
+        repo.touch_last_used(&older.id, used_at).await.unwrap();
+        let found = repo.find_by_hash(&older.hash).await.unwrap().unwrap();
+        assert_eq!(found.last_used_at, Some(used_at));
+
+        // revoke：首吊销 true，重复吊销幂等 false
+        let revoked_at = Utc::now();
+        assert!(repo.revoke(&older.id, revoked_at).await.unwrap());
+        let found = repo.find_by_hash(&older.hash).await.unwrap().unwrap();
+        assert_eq!(found.revoked_at, Some(revoked_at));
+        assert!(found.revoked());
+        assert!(!repo.revoke(&older.id, Utc::now()).await.unwrap());
+    }
+
+    /// 兼容手工插入行：空指纹从哈希重导出（row_to_token 的 is_empty 臂）。
+    #[tokio::test]
+    async fn empty_fingerprint_is_rederived_from_hash() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let repo = ConnectTokenRepository::new(db);
+
+        let hash = format!("{}deadbeef", "0123456789abcdef".repeat(4));
+        let row = sample_row(&hash, "", Utc::now());
+        repo.insert(&row).await.unwrap();
+
+        for found in repo.list_all().await.unwrap() {
+            assert_eq!(
+                found.fingerprint,
+                fingerprint_from_hash(&hash),
+                "empty stored fingerprint must re-derive from hash prefix"
+            );
+            assert_eq!(found.fingerprint, &hash[..16]);
+        }
+        let found = repo.find_by_hash(&hash).await.unwrap().unwrap();
+        assert_eq!(found.fingerprint, fingerprint_from_hash(&hash));
+    }
+}
