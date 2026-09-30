@@ -25,6 +25,31 @@ The product focuses on identity-scoped credentials and developer workflows: pass
 - Audit log: critical operations and signing events (with digest)
 - Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks
 
+## UI Preview
+
+The desktop vault after the 1Password-style sidebar redesign: items, categories,
+vaults, tags, and tools in one sidebar, with the item detail pane on the right.
+
+<p align="center">
+  <img src="docs/branding/ui/light-full.png" width="49%" alt="Desktop vault, light theme" />
+  <img src="docs/branding/ui/dark-full.png" width="49%" alt="Desktop vault, dark theme" />
+</p>
+
+<p align="center">
+  <img src="docs/branding/ui/light-sidebar.png" width="49%" alt="Sidebar close-up, light theme" />
+  <img src="docs/branding/ui/dark-sidebar.png" width="49%" alt="Sidebar close-up, dark theme" />
+</p>
+
+<details>
+<summary>Sidebar: before vs after the redesign</summary>
+
+<p align="center">
+  <img src="docs/branding/ui/sidebar-before-redesign.png" width="49%" alt="Sidebar before the redesign" />
+  <img src="docs/branding/ui/light-sidebar.png" width="49%" alt="Sidebar after the redesign" />
+</p>
+
+</details>
+
 ## Architecture
 
 ### Monorepo Layout
