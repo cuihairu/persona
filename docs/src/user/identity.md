@@ -93,8 +93,8 @@ SSH Agent 共享同一个"当前身份"——在任何一处切换，其它端�
 ### CLI
 
 ```bash
-persona add --name alice --identity-type Personal   # 新建身份
-persona add --name alice --set-active               # 新建并立即切过去
+persona add alice --identity-type Personal          # 新建身份（NAME 是位置参数）
+persona add alice --set-active                      # 新建并立即切过去
 persona list                                         # 列出全部身份
 persona show <name>                                  # 看详情
 persona switch <name>                                # 切到该身份（全局生效）
@@ -103,7 +103,8 @@ persona switch --interactive                         # 交互选择
 persona edit <name> --identity-type Work             # 改类型/备注
 persona remove <name> --backup                       # 删除（见下方警告）
 
-# 凭据默认落在当前身份下，也可显式指定
+# CLI 新建凭据必须显式指定归属身份（--identity / --name 均必填；
+# 只有桌面端"新建凭据"才默认落到当前身份）
 persona credential add --identity alice --name "GitHub" \
   --credential-type password --prompt-secret
 persona credential list --identity alice
