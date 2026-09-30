@@ -2,8 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../state/app_state.dart';
+import 'credential_detail_screen.dart';
 
-class _PersonaSearchDelegate extends SearchDelegate<List<dynamic>> {
+class PersonaSearchDelegate extends SearchDelegate<List<dynamic>> {
   @override
   List<Widget> buildActions(BuildContext context) => [
         IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
@@ -61,12 +62,11 @@ class _SearchResultTile extends StatelessWidget {
     final type = credential['credential_type'] as String?;
     return Card(
       child: ListTile(
-        leading: _typeIcon(type),
+        leading: _typeIcon(type, theme),
         title: Text(credential['name'] as String? ?? 'Untitled'),
         subtitle: Text(_subtitle(credential)),
         trailing: _SecurityChip(level: credential['security_level'] as String?),
         onTap: () {
-          close(context, []);
           Navigator.of(context).push(
             MaterialPageRoute(
               builder: (_) => CredentialDetailScreen(credential: credential),
@@ -77,7 +77,7 @@ class _SearchResultTile extends StatelessWidget {
     );
   }
 
-  Widget _typeIcon(String? type) {
+  Widget _typeIcon(String? type, ThemeData theme) {
     IconData icon;
     switch (type) {
       case 'Password':

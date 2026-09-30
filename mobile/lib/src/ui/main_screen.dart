@@ -70,7 +70,7 @@ class _MainScreenState extends State<MainScreen> {
               // Search
               IconButton(
                 icon: const Icon(Icons.search),
-                onPressed: () => showSearch(context: context, delegate: _PersonaSearchDelegate()),
+                onPressed: () => showSearch(context: context, delegate: PersonaSearchDelegate()),
               ),
               // Lock
               IconButton(
@@ -105,7 +105,7 @@ class _MainScreenState extends State<MainScreen> {
         case 'Work':
           return Icons.work_outline;
         case 'Social':
-          return Icons.group_outline;
+          return Icons.groups;
         case 'Financial':
           return Icons.account_balance_outlined;
         case 'Gaming':

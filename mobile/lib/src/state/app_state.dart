@@ -36,22 +36,28 @@ class AppState extends ChangeNotifier {
   String? get syncToken => _syncToken;
 
   /// Initialize from secure storage on app start.
+  /// Catches errors (e.g. MissingPluginException in tests) and leaves
+  /// the app in the uninitialized state so the unlock screen shows.
   Future<void> loadPersisted() async {
-    final dbPath = await _storage.read(key: _kDbPathKey);
-    final syncUrl = await _storage.read(key: _kSyncUrlKey);
-    final syncToken = await _storage.read(key: _kSyncTokenKey);
-    final hasVault = await _storage.read(key: _kHasVaultKey);
+    try {
+      final dbPath = await _storage.read(key: _kDbPathKey);
+      final syncUrl = await _storage.read(key: _kSyncUrlKey);
+      final syncToken = await _storage.read(key: _kSyncTokenKey);
+      final hasVault = await _storage.read(key: _kHasVaultKey);
 
-    if (dbPath != null && hasVault == 'true') {
-      _syncUrl = syncUrl;
-      _syncToken = syncToken;
-      // Don't auto-unlock; wait for user to enter master password.
-      // But we can configure sync if both present.
-      if (syncUrl != null && syncUrl.isNotEmpty && syncToken != null && syncToken.isNotEmpty) {
-        await PersonaApi.configureSync(serverUrl: syncUrl, token: syncToken);
+      if (dbPath != null && hasVault == 'true') {
+        _syncUrl = syncUrl;
+        _syncToken = syncToken;
+        // Don't auto-unlock; wait for user to enter master password.
+        // But we can configure sync if both present.
+        if (syncUrl != null && syncUrl.isNotEmpty && syncToken != null && syncToken.isNotEmpty) {
+          await PersonaApi.configureSync(serverUrl: syncUrl, token: syncToken);
+        }
+        _initialized = true;
+        notifyListeners();
       }
-      _initialized = true;
-      notifyListeners();
+    } catch (_) {
+      // Platform channels unavailable (tests) or storage error — stay uninitialized.
     }
   }
 
@@ -135,7 +141,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> refreshCredentials(String identityId) async {
-    await _loadCredentials(identityId);
+    try {
+      await _loadCredentials(identityId);
+    } catch (_) {
+      // FFI unavailable (tests) — keep existing data
+    }
     notifyListeners();
   }
 

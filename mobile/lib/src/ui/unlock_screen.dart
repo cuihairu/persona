@@ -4,6 +4,7 @@
 /// Subsequent launches -> unlock with master password.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../ffi/persona_bindings.dart';
 import '../state/app_state.dart';
 
 class UnlockScreen extends StatefulWidget {

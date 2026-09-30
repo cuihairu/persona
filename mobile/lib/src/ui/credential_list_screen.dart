@@ -1,6 +1,7 @@
 /// Credential list screen for a specific identity.
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../ffi/persona_bindings.dart';
 import '../state/app_state.dart';
 import 'credential_detail_screen.dart';
 import 'totp_dialog.dart';
@@ -206,7 +207,7 @@ class _CredentialTile extends StatelessWidget {
       onDismissed: (_) => onDelete(),
       child: Card(
         child: ListTile(
-          leading: _typeIcon(type),
+          leading: _typeIcon(type, theme),
           title: Text(credential['name'] as String? ?? 'Untitled'),
           subtitle: Text(_subtitle(credential)),
           trailing: Row(
@@ -236,7 +237,7 @@ class _CredentialTile extends StatelessWidget {
     );
   }
 
-  Widget _typeIcon(String? type) {
+  Widget _typeIcon(String? type, ThemeData theme) {
     IconData icon;
     switch (type) {
       case 'Password':
@@ -258,8 +259,8 @@ class _CredentialTile extends StatelessWidget {
         icon = Icons.help_outline;
     }
     return CircleAvatar(
-      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-      child: Icon(icon, color: Theme.of(context).colorScheme.onPrimaryContainer),
+      backgroundColor: theme.colorScheme.primaryContainer,
+      child: Icon(icon, color: theme.colorScheme.onPrimaryContainer),
     );
   }
 
