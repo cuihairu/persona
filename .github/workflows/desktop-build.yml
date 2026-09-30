@@ -15,8 +15,9 @@
 # 超过 48h 没有新提交就整条流水线 skip（gate 绿、build/android/release 全
 # skipped，不烧 CI 时长）；tag/手动触发永不跳过。
 #
-# Android（2026-09-29）：persona-mobile 的 aarch64 cdylib 交叉编译进
-# **artifact**（android-jni-arm64，Flutter 壳工程建成前先供链接验证）。
+# Android（2026-09-30）：persona-mobile aarch64 cdylib 交叉编译 →
+# Flutter 壳（mobile/）jniLibs → **arm64 APK** 进 artifact
+# （android-apk-arm64）；so 本体另存 android-jni-arm64 供链接验证。
 # 铁律：Android 产物只进 artifact，绝不进 release——release job 只
 # download `desktop-*` pattern，天然隔离。
 #
@@ -175,12 +176,14 @@ jobs:
         continue-on-error: true
         run: cargo test --lib spike_probes_print_report -- --ignored --nocapture
 
-  # persona-mobile 的 Android 交叉编译（aarch64 cdylib）。Flutter 壳工程
-  # 尚未建立（TODO）；本 job 先把可 dlopen 的 .so 产出为 artifact，壳建好
-  # 后这里升级成完整 apk 构建。产物只进 artifact——铁律：每日构建不发
-  # release（release job 的 download pattern 只认 desktop-*，天然隔离）。
+  # persona-mobile 的 Android 交叉编译（aarch64 cdylib）+ Flutter 壳 APK。
+  # 链：cargo ndk 出 libpersona_mobile.so → 拷入 Flutter 壳 jniLibs →
+  # flutter build apk（arm64-v8a 单 ABI）。产物只进 artifact——铁律：
+  # 每日构建不发 release（release job 的 download pattern 只认
+  # desktop-*，天然隔离）；libpersona_mobile.so 另存 android-jni-arm64
+  # artifact 供链接验证/壳外集成。
   android:
-    name: android (aarch64 jniLib)
+    name: android (aarch64 APK)
     needs: gate
     if: needs.gate.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -217,6 +220,35 @@ jobs:
         with:
           name: android-jni-arm64
           path: target/aarch64-linux-android/release/libpersona_mobile.so
+          if-no-files-found: error
+
+      - name: Bundle cdylib into Flutter shell jniLibs
+        shell: bash
+        run: |
+          mkdir -p mobile/android/app/src/main/jniLibs/arm64-v8a
+          cp target/aarch64-linux-android/release/libpersona_mobile.so \
+            mobile/android/app/src/main/jniLibs/arm64-v8a/
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.5
+          cache: true
+
+      - name: Build Android APK (arm64-v8a)
+        working-directory: mobile
+        shell: bash
+        # 单 ABI：jniLibs 只含 arm64 的 libpersona_mobile.so，fat 包会让
+        # 非 arm64 设备在运行时 UnsatisfiedLinkError——产物限定 arm64-v8a
+        run: |
+          flutter pub get
+          flutter build apk --release --target-platform android-arm64
+
+      - name: Upload android APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-apk-arm64
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
   release:
