@@ -3361,7 +3361,7 @@ pub async fn generate_password(
 /// 纯计算（`core::PasswordGenerator`），不触碰库与主密钥——无需解锁即可
 /// 调用（后续 Quick Access/锁屏场景可直接复用）。length 夹取到 4..=256、
 /// count 夹取到 1..=10（滑杆 UI 天然受限，这里兜底防滥用）；选项组合
-/// 非法（无字符集/可发音无字母）透传 core 的校验错误。
+/// 非法（无字符集/可发音无字母/words越界）透传 core 的校验错误。
 ///
 /// `rename_all = "snake_case"`：Tauri 2 默认按 camelCase 查 invoke 参数键
 /// （宏默认 `ArgumentCase::Camel`，`v.get(key)` 精确匹配、无大小写回退），
@@ -3377,6 +3377,7 @@ pub async fn generate_password_advanced(
     include_symbols: bool,
     pronounceable: bool,
     count: usize,
+    words: Option<usize>,
 ) -> std::result::Result<ApiResponse<GeneratedPasswords>, String> {
     use persona_core::password::{PasswordGenerator, PasswordGeneratorOptions};
 
@@ -3387,8 +3388,7 @@ pub async fn generate_password_advanced(
         include_numbers,
         include_symbols,
         pronounceable,
-        // TODO(#10): 桌面生成器面板接线 --words（core/CLI 已落地）
-        words: None,
+        words,
     };
     let count = count.clamp(1, 10);
 
@@ -3413,10 +3413,15 @@ pub async fn generate_password_advanced(
 ///   这里按均匀采样近似，差一位 shuffle 熵，忽略）；
 /// - 可发音模式：与 core 的辅音/元音交替算法同构，按位累加 `log2(当前位池)`
 ///   （数字/符号的注入替换不增熵，保守忽略）。
+/// - 单词式 passphrase 模式：`log2(7772) × word_count`（EFF large wordlist 大小）。
 fn estimate_generator_entropy(
     options: &persona_core::password::PasswordGeneratorOptions,
 ) -> (f64, usize) {
-    if options.pronounceable {
+    if let Some(word_count) = options.words {
+        // Words mode: EFF large wordlist = 7772 words
+        let pool = 7772;
+        ((pool as f64).log2() * word_count as f64, pool)
+    } else if options.pronounceable {
         // 辅音池 21、元音池 5；大小写同开时各翻倍（与 core 常量一致）
         let letter_sets = options.include_lowercase as usize + options.include_uppercase as usize;
         let consonants = 21 * letter_sets;

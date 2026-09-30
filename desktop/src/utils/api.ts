@@ -395,6 +395,7 @@ class PersonaAPI {
     include_symbols: boolean;
     pronounceable: boolean;
     count: number;
+    words?: number;
   }): Promise<ApiResponse<GeneratedPasswords>> {
     return invoke('generate_password_advanced', options);
   }

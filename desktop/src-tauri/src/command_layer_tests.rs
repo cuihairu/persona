@@ -533,7 +533,7 @@ async fn generate_password_and_statistics_serve_values() {
 async fn generate_password_advanced_works_without_unlocked_service() {
     // 纯计算命令：不建 app、不解锁，直接调用即应出数（Quick Access/锁屏
     // 场景的前置条件）。
-    let resp = generate_password_advanced(16, true, true, true, true, false, 3)
+    let resp = generate_password_advanced(16, true, true, true, true, false, 3, None)
         .await
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
@@ -546,7 +546,7 @@ async fn generate_password_advanced_works_without_unlocked_service() {
     assert!((data.entropy_bits - expected).abs() < 1e-9);
 
     // 选项收敛：只留数字集，池 = 10，字符全来自数字集
-    let resp = generate_password_advanced(12, false, false, true, false, false, 1)
+    let resp = generate_password_advanced(12, false, false, true, false, false, 1, None)
         .await
         .unwrap();
     let data = resp.data.unwrap();
@@ -560,7 +560,7 @@ async fn generate_password_advanced_works_without_unlocked_service() {
 #[tokio::test]
 async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
     // 可发音（仅小写）：辅音 21 / 元音 5 交替；长度 20 → 10×log2(21)+10×log2(5)
-    let resp = generate_password_advanced(20, true, false, false, false, true, 1)
+    let resp = generate_password_advanced(20, true, false, false, false, true, 1, None)
         .await
         .unwrap();
     assert!(resp.success, "{:?}", resp.error);
@@ -570,14 +570,14 @@ async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
     assert_eq!(data.pool_size, 21);
 
     // count / length 夹取：0 → 1 条、下限 4；上限防滥用
-    let resp = generate_password_advanced(0, true, true, true, true, false, 0)
+    let resp = generate_password_advanced(0, true, true, true, true, false, 0, None)
         .await
         .unwrap();
     let data = resp.data.unwrap();
     assert_eq!(data.passwords.len(), 1);
     assert_eq!(data.passwords[0].len(), 4);
 
-    let resp = generate_password_advanced(10_000, true, true, true, true, false, 99)
+    let resp = generate_password_advanced(10_000, true, true, true, true, false, 99, None)
         .await
         .unwrap();
     let data = resp.data.unwrap();
@@ -588,7 +588,7 @@ async fn generate_password_advanced_pronounceable_entropy_and_clamps() {
 #[tokio::test]
 async fn generate_password_advanced_surfaces_validation_errors() {
     // 无字符集 / 可发音无字母：core 校验错误透传，不 panic 不静默
-    let resp = generate_password_advanced(16, false, false, false, false, false, 1)
+    let resp = generate_password_advanced(16, false, false, false, false, false, 1, None)
         .await
         .unwrap();
     assert!(!resp.success);
@@ -597,7 +597,7 @@ async fn generate_password_advanced_surfaces_validation_errors() {
         "unexpected error"
     );
 
-    let resp = generate_password_advanced(16, false, false, true, true, true, 1)
+    let resp = generate_password_advanced(16, false, false, true, true, true, 1, None)
         .await
         .unwrap();
     assert!(!resp.success);
@@ -605,6 +605,64 @@ async fn generate_password_advanced_surfaces_validation_errors() {
         resp.error
             .unwrap()
             .contains("Pronounceable passwords require lowercase and/or uppercase"),
+        "unexpected error"
+    );
+}
+
+#[tokio::test]
+async fn generate_password_advanced_words_mode_entropy_and_validation() {
+    // Words mode (Diceware-style): 6 words from 7772-word EFF list, hyphen-separated.
+    // Entropy = 6 * log2(7772).
+    let resp = generate_password_advanced(16, true, true, true, true, false, 1, Some(6))
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.unwrap();
+    assert_eq!(data.passwords.len(), 1);
+    let passphrase = &data.passwords[0];
+    // 6 words → 5 hyphens
+    assert_eq!(passphrase.matches('-').count(), 5);
+    let words: Vec<&str> = passphrase.split('-').collect();
+    assert_eq!(words.len(), 6);
+    // All words must be lowercase [a-z]+
+    for word in &words {
+        assert!(
+            word.chars().all(|c| c.is_ascii_lowercase()),
+            "word {word} not all lowercase"
+        );
+    }
+    // Entropy: 6 * log2(7772)
+    let expected = 6.0 * 7772f64.log2();
+    assert!((data.entropy_bits - expected).abs() < 1e-9);
+    assert_eq!(data.pool_size, 7772);
+
+    // Word count bounds: 2 and 11 are rejected.
+    for word_count in [2usize, 11] {
+        let resp = generate_password_advanced(16, true, true, true, true, false, 1, Some(word_count))
+            .await
+            .unwrap();
+        assert!(!resp.success, "word_count {word_count} should be rejected");
+        assert!(
+            resp.error.unwrap().contains("between 3 and 10"),
+            "unexpected error"
+        );
+    }
+
+    // Words mode ignores length and character sets (length=3, no sets).
+    let resp = generate_password_advanced(3, false, false, false, false, false, 1, Some(5))
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.unwrap();
+    assert_eq!(data.passwords[0].matches('-').count(), 4);
+
+    // Words + pronounceable is rejected.
+    let resp = generate_password_advanced(16, true, true, true, true, true, 1, Some(6))
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.unwrap().contains("cannot be combined with pronounceable"),
         "unexpected error"
     );
 }
