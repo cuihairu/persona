@@ -19,8 +19,10 @@ pluginManagement {
 
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
-    id("com.android.application") version "8.9.1" apply false
-    id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+    // AGP/KGP floors are enforced by Flutter's DependencyVersionChecker:
+    // Flutter 3.47 errors below AGP 8.11.1 and KGP 2.2.20 at plugin apply.
+    id("com.android.application") version "8.11.1" apply false
+    id("org.jetbrains.kotlin.android") version "2.2.20" apply false
 }
 
 include(":app")

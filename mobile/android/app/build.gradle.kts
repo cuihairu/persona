@@ -22,10 +22,13 @@ android {
         versionName = flutter.versionName
     }
 
-    // Include native libraries from jniLibs
+    // Include native libraries from jniLibs. getByName("main") instead of the
+    // bare `main {}` accessor: KGP 2.2+ registers its own KotlinSourceSet
+    // `main` accessor and the implicit resolution no longer picks the
+    // AndroidSourceSet container.
     sourceSets {
-        main {
-            jniLibs.srcDirs = listOf("src/main/jniLibs")
+        getByName("main") {
+            jniLibs.srcDirs("src/main/jniLibs")
         }
     }
 
@@ -35,7 +38,7 @@ android {
         }
     }
 
-    packagingOptions {
+    packaging {
         jniLibs {
             useLegacyPackaging = true
         }
@@ -44,4 +47,13 @@ android {
 
 flutter {
     source = "../.."
+}
+
+// KGP 2.2 defaults jvmTarget to the running JDK (21 on dev boxes and newer
+// runners); pin it to match compileOptions so the Kotlin/Java target
+// validation passes regardless of the build JDK.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
