@@ -69,6 +69,9 @@ enum Commands {
     /// Migrate from a 1Password export (.1pux)
     Import1Pux(commands::import_1pux::Import1PuxArgs),
 
+    /// Migrate from generic exports (CSV / Bitwarden JSON)
+    ImportGeneric(commands::import_generic::ImportGenericArgs),
+
     /// Migrate database schema (e.g., Workspace v2)
     Migrate(commands::migrate::MigrateArgs),
 
@@ -160,6 +163,7 @@ async fn main() -> Result<()> {
         Commands::Backup(args) => commands::backup::execute(args, &config).await,
         Commands::Import(args) => commands::import::execute(args, &config).await,
         Commands::Import1Pux(args) => commands::import_1pux::execute(args, &config).await,
+        Commands::ImportGeneric(args) => commands::import_generic::execute(args, &config).await,
         Commands::Migrate(args) => commands::migrate::execute(args, &config).await,
         Commands::Ssh(args) => commands::ssh::execute(args, &config).await,
         Commands::Credential(args) => commands::credential::execute(args, &config).await,

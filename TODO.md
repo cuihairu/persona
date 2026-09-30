@@ -487,7 +487,9 @@ Desktop (Tauri v2 + React)
       解锁门禁而读免解锁/默认档+运行态/改绑落库与非法串不落库/关开关清
       运行态/恢复默认存 None/跨窗 UUID 校验）+ jest 22 例（面板 9、
       设置区 9、跨窗桥 4）。威胁登记见 THREAT_MODEL.md「Quick Access」。
-      遗留（下一轮）：#20 通用格式导入 → #23 Windows/macOS 实机验收。
+      遗留（下一轮）：#23 Windows/macOS 实机验收（#20 通用格式导入已于
+      2026-09-30 落地：`persona import-generic`，CSV 列形嗅探 +
+      Bitwarden JSON，确认流与 1PUX 同线）。
 
 Server & Sync (optional)
 

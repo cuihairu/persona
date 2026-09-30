@@ -7,19 +7,17 @@
 //! confirmation. `--dry-run` stops after the preview and never opens the
 //! workspace. Attachments (`files/`) are never imported.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Args;
-use uuid::Uuid;
 
+use crate::commands::import_common::apply_plan;
 use crate::commands::service::init_service;
 use crate::config::CliConfig;
 use crate::utils::prompt::PromptUi;
-use persona_core::import_1pux::{parse_1pux, plan_import, ImportPlan, PlannedCredential};
-use persona_core::models::{Identity, IdentityType};
-use persona_core::PersonaService;
+use persona_core::import_1pux::{parse_1pux, plan_import, ImportPlan};
 
 #[derive(Args)]
 pub struct Import1PuxArgs {
@@ -66,101 +64,11 @@ pub(crate) async fn execute_with(
     }
 
     let service = init_service(config, ui).await?;
-    let summary = apply_plan(&service, &plan).await?;
+    let summary = apply_plan(&service, &plan, "1Password", "1Password vault").await?;
     println!(
         "Done: {} credential(s) imported ({} identit(y/ies) created, {} reused).",
         summary.imported, summary.identities_created, summary.identities_reused
     );
-    Ok(())
-}
-
-struct ApplySummary {
-    imported: usize,
-    identities_created: usize,
-    identities_reused: usize,
-}
-
-/// Apply a confirmed plan: create/reuse identities, then credentials.
-///
-/// Same-name identities are reused (reported, never duplicated); the whole
-/// run aborts on the first failure so a partial import can simply be re-run.
-async fn apply_plan(service: &PersonaService, plan: &ImportPlan) -> Result<ApplySummary> {
-    let mut vault_to_identity: HashMap<String, Uuid> = HashMap::new();
-    let mut identities_created = 0;
-    let mut identities_reused = 0;
-
-    for planned in &plan.identities {
-        let identity = match service.get_identity_by_name(&planned.name).await? {
-            Some(existing) => {
-                println!(
-                    "Reusing existing identity '{}' for 1Password vault {}",
-                    planned.name, planned.vault_uuid
-                );
-                identities_reused += 1;
-                existing
-            }
-            None => {
-                let mut identity = Identity::new(
-                    planned.name.clone(),
-                    IdentityType::Custom("1Password".to_string()),
-                );
-                identity.description = Some(planned.description.clone());
-                identities_created += 1;
-                service
-                    .create_identity_full(identity)
-                    .await
-                    .with_context(|| format!("Failed to create identity '{}'", planned.name))?
-            }
-        };
-        vault_to_identity.insert(planned.vault_uuid.clone(), identity.id);
-    }
-
-    let mut imported = 0;
-    for planned in &plan.credentials {
-        let identity_id = vault_to_identity
-            .get(&planned.vault_uuid)
-            .with_context(|| format!("No identity mapped for vault {}", planned.vault_uuid))?;
-        import_credential(service, *identity_id, planned).await?;
-        imported += 1;
-    }
-
-    Ok(ApplySummary {
-        imported,
-        identities_created,
-        identities_reused,
-    })
-}
-
-async fn import_credential(
-    service: &PersonaService,
-    identity_id: Uuid,
-    planned: &PlannedCredential,
-) -> Result<()> {
-    // create_credential only fills the encrypted payload; presentation
-    // fields are patched on and persisted with update_credential (same
-    // pattern as the desktop create flows).
-    let mut credential = service
-        .create_credential(
-            identity_id,
-            planned.name.clone(),
-            planned.credential_type.clone(),
-            planned.security_level.clone(),
-            &planned.credential_data,
-        )
-        .await
-        .with_context(|| format!("Failed to create credential '{}'", planned.name))?;
-
-    credential.url = planned.url.clone();
-    credential.username = planned.username.clone();
-    credential.notes = planned.notes.clone();
-    credential.tags = planned.tags.clone();
-    credential.metadata = planned.metadata.clone();
-    credential.is_favorite = planned.is_favorite;
-
-    service
-        .update_credential(&credential)
-        .await
-        .with_context(|| format!("Failed to finalize credential '{}'", planned.name))?;
     Ok(())
 }
 

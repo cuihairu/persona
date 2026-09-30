@@ -679,7 +679,7 @@ fn collect_totp_values(item: &Item) -> Vec<String> {
 }
 
 #[derive(Debug)]
-struct TotpParams {
+pub(crate) struct TotpParams {
     secret_key: Option<String>,
     issuer: Option<String>,
     account_name: Option<String>,
@@ -688,7 +688,7 @@ struct TotpParams {
     period: Option<u32>,
 }
 
-fn parse_totp_value(
+pub(crate) fn parse_totp_value(
     value: &str,
     fallback_issuer: &str,
     fallback_account: Option<&str>,

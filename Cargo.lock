@@ -4082,6 +4082,7 @@ dependencies = [
  "bs58",
  "chrono",
  "coset",
+ "csv",
  "data-encoding",
  "dirs",
  "ed25519-dalek",

@@ -14,6 +14,7 @@ pub mod events;
 pub mod favicon;
 pub mod health;
 pub mod import_1pux;
+pub mod import_generic;
 pub mod import_mafile;
 pub mod logging;
 pub mod models;
@@ -31,6 +32,7 @@ pub use crypto::*;
 pub use events::*;
 pub use health::*;
 pub use import_1pux::*;
+pub use import_generic::*;
 pub use import_mafile::*;
 pub use logging::*;
 

@@ -87,6 +87,8 @@ regex.workspace = true
 url.workspace = true
 # 1PUX（1Password 导出）ZIP 容器解析
 zip.workspace = true
+# 通用格式导入（#20）：Bitwarden/Chrome/Firefox/1Password/KeePass CSV 导出
+csv.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true
