@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
-import { ChartBarIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { KeyIcon, UserGroupIcon, ShieldCheckIcon, StarIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import i18n, { normalizeLocale } from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
@@ -445,12 +445,13 @@ const StatisticsView: React.FC = () => {
         <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4">{t('statistics.title')}</h2>
       </div>
 
-      {/* Overview Cards */}
+      {/* Overview Cards — 图标是铬件不是数据：单一中性墨色 + 语义字形，
+          不做装饰性多色块（dataviz：颜色只跟随数据实体，状态色保留给状态）。 */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-blue-100 dark:bg-blue-500/10 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+            <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg mr-4">
+              <UserGroupIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
             </div>
             <div>
               <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.totalIdentities')}</p>
@@ -461,8 +462,8 @@ const StatisticsView: React.FC = () => {
 
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-green-100 dark:bg-green-500/10 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-green-600 dark:text-green-400" />
+            <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg mr-4">
+              <KeyIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
             </div>
             <div>
               <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.totalCredentials')}</p>
@@ -473,8 +474,8 @@ const StatisticsView: React.FC = () => {
 
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-yellow-100 dark:bg-yellow-500/10 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-yellow-600 dark:text-yellow-400" />
+            <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg mr-4">
+              <ShieldCheckIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
             </div>
             <div>
               <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.activeCredentials')}</p>
@@ -485,8 +486,8 @@ const StatisticsView: React.FC = () => {
 
         <div className="card p-6">
           <div className="flex items-center">
-            <div className="p-2 bg-red-100 dark:bg-red-500/10 rounded-lg mr-4">
-              <ChartBarIcon className="w-6 h-6 text-red-600 dark:text-red-400" />
+            <div className="p-2 bg-gray-100 dark:bg-gray-800 rounded-lg mr-4">
+              <StarIcon className="w-5 h-5 text-gray-500 dark:text-gray-400" />
             </div>
             <div>
               <p className="text-sm font-medium text-gray-600 dark:text-gray-300">{t('statistics.favorites')}</p>
