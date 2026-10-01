@@ -581,6 +581,8 @@ export default {
     credentialCol: 'Credential',
     tagsCol: 'Tags',
     updatedCol: 'Updated',
+    typeCol: 'Type / Fingerprint',
+    publicKeyCol: 'Public key',
     importButton: 'Import key',
     dropHere: 'Drop a private key file to import (OpenSSH / PKCS#8 / PKCS#1 / SEC1)',
     importTitle: 'Import SSH key',
