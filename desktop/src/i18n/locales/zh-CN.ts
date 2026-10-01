@@ -569,7 +569,7 @@ export default {
     tagsCol: '标签',
     updatedCol: '更新时间',
     importButton: '导入密钥',
-    dropHere: '把 OpenSSH 私钥文件拖进来即可导入',
+    dropHere: '把私钥文件拖进来即可导入（OpenSSH / PKCS#8 / PKCS#1 / SEC1）',
     importTitle: '导入 SSH 密钥',
     importType: '类型',
     importFingerprint: '指纹',

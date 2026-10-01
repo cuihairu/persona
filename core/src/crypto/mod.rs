@@ -9,6 +9,9 @@ pub mod passkey;
 // ssh_import 不做 glob 再导出：import_openssh_private_key 语义已足够限定，
 // 但 ImportedSshKey/函数名以 ssh_ 前缀挂在 crypto 下更清晰，调用方走限定路径。
 pub mod ssh_import;
+// PEM 家族（PKCS#8/PKCS#1/SEC1）解码与格式嗅探，入口在 ssh_import 的
+// import_private_key_file / inspect_private_key_file。
+mod ssh_import_pem;
 // ssh_generate 与 ssh_import 共用字段口径（classify/公钥行/指纹/PEM 编码）。
 pub mod ssh_generate;
 pub mod sshsig;

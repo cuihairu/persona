@@ -3871,13 +3871,14 @@ pub struct ImportSshKeyRequest {
     pub passphrase: Option<String>,
 }
 
-/// 读文件并解析 OpenSSH 私钥容器，返回导入确认所需字段（不入库）。
+/// 读文件并解析私钥容器（格式自动识别：OpenSSH/PKCS#8/PKCS#1/SEC1），
+/// 返回导入确认所需字段（不入库）。
 #[command(rename_all = "snake_case")]
 pub async fn inspect_ssh_key_file(
     path: String,
 ) -> std::result::Result<ApiResponse<SshKeyInspectDto>, String> {
     let inspection = match fs::read_to_string(&path) {
-        Ok(pem) => persona_core::crypto::ssh_import::inspect_openssh_private_key(&pem),
+        Ok(pem) => persona_core::crypto::ssh_import::inspect_private_key_file(&pem),
         Err(e) => Err(PersonaError::Io(format!(
             "Cannot read key file {path}: {e}"
         ))),
@@ -3910,15 +3911,15 @@ pub async fn inspect_ssh_key_file(
     }
 }
 
-/// 导入 OpenSSH 私钥文件入库为 SshKey 条目：解锁（如受保护）→
-/// 私钥以明文 PEM 存 `SshKeyData.private_key`，封存由 per-item key 负责。
+/// 导入私钥文件入库为 SshKey 条目（格式自动识别）：解锁（如受保护）→
+/// 私钥以明文 OpenSSH PEM 存 `SshKeyData.private_key`，封存由 per-item key 负责。
 #[command(rename_all = "snake_case")]
 pub async fn import_ssh_key(
     request: ImportSshKeyRequest,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SshKeyImportedDto>, String> {
     let imported = match fs::read_to_string(&request.path) {
-        Ok(pem) => persona_core::crypto::ssh_import::import_openssh_private_key(
+        Ok(pem) => persona_core::crypto::ssh_import::import_private_key_file(
             &pem,
             request.passphrase.as_deref(),
         ),

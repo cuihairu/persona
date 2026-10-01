@@ -582,7 +582,7 @@ export default {
     tagsCol: 'Tags',
     updatedCol: 'Updated',
     importButton: 'Import key',
-    dropHere: 'Drop an OpenSSH private key file to import',
+    dropHere: 'Drop a private key file to import (OpenSSH / PKCS#8 / PKCS#1 / SEC1)',
     importTitle: 'Import SSH key',
     importType: 'Type',
     importFingerprint: 'Fingerprint',

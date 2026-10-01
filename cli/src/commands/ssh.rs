@@ -966,9 +966,10 @@ async fn import_seed(
     Ok(())
 }
 
-/// 导入 OpenSSH 私钥文件（`persona ssh import-file --identity … --file ~/.ssh/id_ed25519`）。
-/// 解析/解锁走 core 的 ssh_import；入库口径：私钥存解锁后的 OpenSSH PEM
-/// （per-item key 封存在 vault 层），公钥行/类型/指纹解析自同一把钥。
+/// 导入私钥文件（`persona ssh import-file --identity … --file ~/.ssh/id_ed25519`）。
+/// 格式自动识别（OpenSSH 容器 / PKCS#8 / PKCS#1 / SEC1，见 core 的
+/// ssh_import）；入库口径：私钥存解锁后的 OpenSSH PEM（per-item key
+/// 封存在 vault 层），公钥行/类型/指纹解析自同一把钥。
 async fn import_file(
     identity_name: &str,
     file_path: &str,
@@ -977,15 +978,12 @@ async fn import_file(
     config: &crate::config::CliConfig,
     ui: &dyn crate::utils::prompt::PromptUi,
 ) -> Result<()> {
-    println!(
-        "{}",
-        "🔑 Importing OpenSSH private key file...".cyan().bold()
-    );
+    println!("{}", "🔑 Importing private key file...".cyan().bold());
     let pem = std::fs::read_to_string(file_path)
         .with_context(|| format!("Cannot read key file {file_path}"))?;
 
     // 先按给定口令解析；密钥受保护但没给口令时交互补问一次
-    let imported = match persona_core::crypto::ssh_import::import_openssh_private_key(
+    let imported = match persona_core::crypto::ssh_import::import_private_key_file(
         &pem,
         passphrase.as_deref(),
     ) {
@@ -994,7 +992,7 @@ async fn import_file(
             let pass = ui
                 .password("Key passphrase", false, None)
                 .context("Passphrase required to unlock this SSH key")?;
-            persona_core::crypto::ssh_import::import_openssh_private_key(&pem, Some(&pass))?
+            persona_core::crypto::ssh_import::import_private_key_file(&pem, Some(&pass))?
         }
         Err(err) => return Err(err.into()),
     };
@@ -2658,7 +2656,7 @@ mod tests {
         .await
         .expect_err("garbage file must fail");
         assert!(
-            err.to_string().contains("Not a valid OpenSSH private key"),
+            err.to_string().contains("Unrecognized private key file format"),
             "{err}"
         );
 
@@ -2678,7 +2676,7 @@ mod tests {
         .await
         .expect_err("public key file must fail");
         assert!(
-            err.to_string().contains("Not a valid OpenSSH private key"),
+            err.to_string().contains("Unrecognized private key file format"),
             "{err}"
         );
     }

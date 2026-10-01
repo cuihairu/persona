@@ -46,8 +46,10 @@ bech32.workspace = true
 p256.workspace = true
 coset.workspace = true
 base64.workspace = true
-# OpenSSH 私钥文件导入（crypto/ssh_import.rs）
+# OpenSSH 私钥文件导入（crypto/ssh_import.rs）+ PEM 家族（ssh_import_pem.rs）
 ssh-key.workspace = true
+pkcs1.workspace = true
+pkcs8.workspace = true
 # ssh-key 0.6 的 CryptoRngCore 口径（rand 0.10 的 rand_core 0.9 与之不兼容）；
 # 测试 fixture 生成与 ③ 新建密钥的 keygen 都用它
 rand_core.workspace = true

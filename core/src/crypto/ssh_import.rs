@@ -65,6 +65,68 @@ pub(crate) fn classify(algorithm: Algorithm) -> PersonaResult<(&'static str, &'s
     })
 }
 
+/// 解析私钥文件内容并返回导入所需字段——格式自动识别：
+/// OpenSSH 容器（含 bcrypt 口令解锁）、PKCS#8（含 PBES2 加密）、
+/// PKCS#1 RSA、SEC1 EC（仅 P-256）。PuTTY PPK 等明确不支持。
+///
+/// `passphrase`：密钥受口令保护时必传；错误口令返回明确错误（不静默重试）。
+/// 未受保护的密钥传 `None`/`Some(_)` 均可（`Some` 被忽略）。
+pub fn import_private_key_file(
+    content: &str,
+    passphrase: Option<&str>,
+) -> PersonaResult<ImportedSshKey> {
+    if let Some(note) = super::ssh_import_pem::unsupported_format_note(content) {
+        return Err(PersonaError::InvalidInput(note));
+    }
+    let trimmed = content.trim_start();
+    let key = if trimmed.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----") {
+        decode_openssh(content, passphrase)?
+    } else if let Some(kind) = super::ssh_import_pem::sniff_pem(content) {
+        super::ssh_import_pem::decode(kind, content, passphrase)?
+    } else {
+        return Err(PersonaError::InvalidInput(
+            "Unrecognized private key file format (supported: OpenSSH, \
+             PKCS#8/PKCS#1 PEM, SEC1 EC; algorithms: Ed25519, RSA, ECDSA P-256)"
+                .to_string(),
+        ));
+    };
+    finish_import(key)
+}
+
+/// 导入前预览（格式自动识别）：不解锁也能给指纹/类型/是否受保护。
+/// OpenSSH 容器照旧（公钥半边明文）；加密 PKCS#8 PEM 没有明文公钥半边，
+/// 无口令时报"需要口令"。
+pub fn inspect_private_key_file(content: &str) -> PersonaResult<SshKeyInspection> {
+    if let Some(note) = super::ssh_import_pem::unsupported_format_note(content) {
+        return Err(PersonaError::InvalidInput(note));
+    }
+    let trimmed = content.trim_start();
+    if trimmed.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----") {
+        return inspect_openssh_private_key(content);
+    }
+    let key = match super::ssh_import_pem::sniff_pem(content) {
+        Some(kind) => super::ssh_import_pem::decode(kind, content, None)?,
+        None => {
+            return Err(PersonaError::InvalidInput(
+                "Unrecognized private key file format (supported: OpenSSH, \
+                 PKCS#8/PKCS#1 PEM, SEC1 EC; algorithms: Ed25519, RSA, ECDSA P-256)"
+                    .to_string(),
+            ))
+        }
+    };
+    let (key_type, ssh_algorithm) = classify(key.algorithm())?;
+
+    Ok(SshKeyInspection {
+        key_type: key_type.to_string(),
+        ssh_algorithm: ssh_algorithm.to_string(),
+        public_key: encode_public_line(&key)?,
+        fingerprint: fingerprint_of(&key),
+        comment: key.comment().to_string(),
+        // PEM 走到预览成功即已明文（加密件无口令在上一步就被拒）
+        encrypted: false,
+    })
+}
+
 /// 解析 OpenSSH 私钥文件内容并返回导入所需字段。
 ///
 /// `passphrase`：密钥受口令保护时必传；错误口令返回明确错误（不静默重试）。
@@ -74,22 +136,33 @@ pub fn import_openssh_private_key(
     pem: &str,
     passphrase: Option<&str>,
 ) -> PersonaResult<ImportedSshKey> {
+    let key = decode_openssh(pem, passphrase)?;
+    finish_import(key)
+}
+
+/// OpenSSH 容器解码 + 口令解锁（`import_openssh_private_key` 与格式分发共用）。
+fn decode_openssh(
+    pem: &str,
+    passphrase: Option<&str>,
+) -> PersonaResult<ssh_key::private::PrivateKey> {
     let key = ssh_key::private::PrivateKey::from_openssh(pem.trim())
         .map_err(|e| PersonaError::InvalidInput(format!("Not a valid OpenSSH private key: {e}")))?;
 
-    let key = if key.key_data().is_encrypted() {
+    if key.key_data().is_encrypted() {
         let pass = passphrase.ok_or_else(|| {
             PersonaError::InvalidInput(
                 "SSH key is passphrase-protected: passphrase required".to_string(),
             )
         })?;
-        key.decrypt(pass).map_err(|_| {
-            PersonaError::InvalidInput("SSH key passphrase is incorrect".to_string())
-        })?
+        key.decrypt(pass)
+            .map_err(|_| PersonaError::InvalidInput("SSH key passphrase is incorrect".to_string()))
     } else {
-        key
-    };
+        Ok(key)
+    }
+}
 
+/// 解码结果 → 导入载荷（classify/公钥行/指纹/入库 PEM，双入口共用）。
+fn finish_import(key: ssh_key::private::PrivateKey) -> PersonaResult<ImportedSshKey> {
     let (key_type, ssh_algorithm) = classify(key.algorithm())?;
     let public_key = encode_public_line(&key)?;
     let fingerprint = fingerprint_of(&key);

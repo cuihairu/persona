@@ -26,7 +26,7 @@ aes-gcm = "0.10"
 # 维护节奏慢（0.7 停在 rc）——正确性由 RFC 5054 附录 B 向量测试锁定
 # （core/src/auth/srp.rs），调用方经封装隔离可整体换实现（设计稿 DR-2）
 srp = "0.6"
-ed25519-dalek = { version = "2.0", features = ["zeroize"] }
+ed25519-dalek = { version = "2.0", features = ["pkcs8", "zeroize"] }
 # E2EE 同步 device envelope（E2EE_SYNC_DESIGN DR-1）：X25519 ephemeral DH
 # + HKDF-SHA256 展开（key‖nonce）+ AES-256-GCM；组合层约 30 行自写，
 # round-trip/篡改/跨设备失败测试覆盖（core/src/sync/envelope.rs）
@@ -69,6 +69,11 @@ webauthn-rs = "0.5"
 # P-256 的生成/转换（ecdsa feature 只给类型）；rsa 供 agent 的 rsa-sha2-* 签名
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
 rsa = "0.9"
+# PEM 家族私钥导入（PKCS#8/PKCS#1/SEC1，见 core/src/crypto/ssh_import_pem.rs）：
+# 字段级解码交给 pkcs1/pkcs8（RustCrypto 同系），pkcs8 的 encryption feature
+# 供加密 PKCS#8（PBES2）解锁；ed25519-dalek 的 pkcs8 feature 供 PKCS#8→SigningKey
+pkcs1 = { version = "0.7", features = ["std", "pem"] }
+pkcs8 = { version = "0.10", features = ["std", "pem", "encryption"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 
 # 数据库
