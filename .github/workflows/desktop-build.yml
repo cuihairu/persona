@@ -18,8 +18,9 @@
 # Android（2026-09-30）：persona-mobile aarch64 cdylib 交叉编译 →
 # Flutter 壳（mobile/）jniLibs → **arm64 APK** 进 artifact
 # （android-apk-arm64）；so 本体另存 android-jni-arm64 供链接验证。
-# 铁律：Android 产物只进 artifact，绝不进 release——release job 只
-# download `desktop-*` pattern，天然隔离。
+# 上架口径（2026-10-01 起）：**nightly 每日构建带 APK**（下载 pattern
+# 含 android-apk-arm64，改名为 Persona_<ver>_arm64.apk）；tag 正式版
+# 暂不发 APK——移动端还是最小闭环，等稳定后随正式发版放开。
 #
 # Binaries are unsigned (SmartScreen/Gatekeeper will warn on install);
 # signing keys are tracked as a follow-up in TODO.md. Assets are
@@ -253,7 +254,7 @@ jobs:
 
   release:
     name: publish
-    needs: [gate, build]
+    needs: [gate, build, android]
     if: >-
       needs.gate.outputs.should_build == 'true' &&
       (startsWith(github.ref, 'refs/tags/v') ||
@@ -263,11 +264,26 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # nightly/dispatch 带 APK；tag 正式版只发桌面包（见文件头口径）。
+      # needs 已含 android，此处 android artifact 必然已就绪。
       - uses: actions/download-artifact@v8
         with:
-          pattern: desktop-*
+          pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64}' }}
           path: dist
           merge-multiple: true
+
+      - name: Rename Android APK (match desktop asset naming)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        run: |
+          if [ -f dist/app-release.apk ]; then
+            version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+            mv dist/app-release.apk "dist/Persona_${version}_arm64.apk"
+            echo "renamed to Persona_${version}_arm64.apk"
+          else
+            echo "::error::android APK missing from downloaded artifacts"
+            exit 1
+          fi
 
       - name: Compute release target
         id: rel
