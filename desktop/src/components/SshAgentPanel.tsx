@@ -66,7 +66,6 @@ const SshAgentPanel: React.FC = () => {
   useEffect(() => {
     refreshSshAgentStatus();
     loadSshKeys();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 文件拖拽：enter/over 点亮拖放区，drop 带路径走与选择器同一条导入
@@ -96,7 +95,6 @@ const SshAgentPanel: React.FC = () => {
     return () => {
       unlisten?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const beginImport = async (path: string) => {
