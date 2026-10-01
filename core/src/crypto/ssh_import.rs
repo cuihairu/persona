@@ -49,7 +49,7 @@ pub struct SshKeyInspection {
 }
 
 /// 把 ssh-key 的算法判定映射到库内口径；不支持的算法在此统一拒绝。
-fn classify(algorithm: Algorithm) -> PersonaResult<(&'static str, &'static str)> {
+pub(crate) fn classify(algorithm: Algorithm) -> PersonaResult<(&'static str, &'static str)> {
     Ok(match algorithm {
         Algorithm::Ed25519 => ("ed25519", "ssh-ed25519"),
         // 0.6.7 的 Rsa 带 hash 字段（rsa-sha2-* 证书场景）；裸算法即 rsa
@@ -122,17 +122,17 @@ pub fn inspect_openssh_private_key(pem: &str) -> PersonaResult<SshKeyInspection>
     })
 }
 
-fn encode_public_line(key: &ssh_key::private::PrivateKey) -> PersonaResult<String> {
+pub(crate) fn encode_public_line(key: &ssh_key::private::PrivateKey) -> PersonaResult<String> {
     key.public_key().to_openssh().map_err(|e| {
         PersonaError::CryptographicError(format!("Failed to encode SSH public key: {e}"))
     })
 }
 
-fn fingerprint_of(key: &ssh_key::private::PrivateKey) -> String {
+pub(crate) fn fingerprint_of(key: &ssh_key::private::PrivateKey) -> String {
     key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }
 
-fn encode_private_pem(key: &ssh_key::private::PrivateKey) -> PersonaResult<String> {
+pub(crate) fn encode_private_pem(key: &ssh_key::private::PrivateKey) -> PersonaResult<String> {
     key.to_openssh(LineEnding::LF)
         .map_err(|e| {
             PersonaError::CryptographicError(format!("Failed to encode SSH private key: {e}"))

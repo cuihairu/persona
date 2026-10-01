@@ -279,4 +279,111 @@ describe('components/SshAgentPanel', () => {
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(openDialog).not.toHaveBeenCalled();
   });
+
+  // -----------------------------------------------------------------
+  // 新建（生成）弹框：类型选择 → 生成入库 → 公钥可复制；点空白取消
+  // -----------------------------------------------------------------
+
+  const GENERATED = {
+    credential_id: 'cred-gen-1',
+    name: 'cui@laptop',
+    key_type: 'ed25519',
+    public_key: 'ssh-ed25519 AAAAC3Nza GENERATED gen-test',
+    fingerprint: 'SHA256:GENERATEDFINGERPRINT',
+  };
+
+  it('generates in place and shows a copyable public key', async () => {
+    const generateSshKey = jest
+      .fn()
+      .mockResolvedValue({ success: true, data: GENERATED, error: null });
+    const loadSshKeys = jest.fn();
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ generateSshKey, loadSshKeys }),
+    );
+
+    const { getByTestId, queryByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-generate-button'));
+
+    const modal = getByTestId('ssh-generate-modal');
+    expect(modal).toBeTruthy();
+
+    // 默认 ed25519 选中；切到 rsa 再切回
+    expect(getByTestId('ssh-generate-type-ed25519')).toHaveProperty('checked', true);
+    fireEvent.click(getByTestId('ssh-generate-type-rsa'));
+    expect(getByTestId('ssh-generate-type-rsa')).toHaveProperty('checked', true);
+    fireEvent.click(getByTestId('ssh-generate-type-ed25519'));
+
+    fireEvent.change(getByTestId('ssh-generate-comment'), {
+      target: { value: 'cui@laptop' },
+    });
+    fireEvent.click(getByTestId('ssh-generate-confirm'));
+
+    // snake_case 键契约：comment/name 空值传 undefined
+    await waitFor(() =>
+      expect(generateSshKey).toHaveBeenCalledWith({
+        identity_id: 'identity-1',
+        key_type: 'ed25519',
+        comment: 'cui@laptop',
+        name: undefined,
+      }),
+    );
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(loadSshKeys).toHaveBeenCalled();
+
+    // 成功态留在弹框内：公钥 + 复制按钮
+    await waitFor(() => expect(getByTestId('ssh-generate-result')).toBeTruthy());
+    expect(getByTestId('ssh-generate-copy')).toBeTruthy();
+
+    Object.assign(navigator, { clipboard: { writeText: jest.fn().mockResolvedValue(undefined) } });
+    fireEvent.click(getByTestId('ssh-generate-copy'));
+    await waitFor(() =>
+      expect(navigator.clipboard.writeText).toHaveBeenCalledWith(GENERATED.public_key),
+    );
+
+    // 完成关闭
+    fireEvent.click(getByTestId('ssh-generate-done'));
+    await waitFor(() => expect(queryByTestId('ssh-generate-modal')).toBeNull());
+  });
+
+  it('keeps the generate modal open on failure with an inline error', async () => {
+    const generateSshKey = jest
+      .fn()
+      .mockResolvedValue({ success: false, data: null, error: 'boom' });
+    (usePersonaService as jest.Mock).mockReturnValue(makeService({ generateSshKey }));
+    const { getByTestId, queryByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-generate-button'));
+    fireEvent.click(getByTestId('ssh-generate-confirm'));
+
+    await waitFor(() =>
+      expect(getByTestId('ssh-generate-error').textContent).toBe('boom'),
+    );
+    expect(getByTestId('ssh-generate-modal')).toBeTruthy();
+    expect(queryByTestId('ssh-generate-result')).toBeNull();
+  });
+
+  it('mask click cancels the generate modal but not while generating', async () => {
+    let resolveGenerate: (v: unknown) => void = () => {};
+    const generateSshKey = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveGenerate = resolve;
+        }),
+    );
+    (usePersonaService as jest.Mock).mockReturnValue(makeService({ generateSshKey }));
+    const { getByTestId, queryByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-generate-button'));
+    fireEvent.click(getByTestId('ssh-generate-confirm'));
+
+    // 生成中：点遮罩不关（后台仍会入库，关了会误以为没生成）
+    await waitFor(() => expect(generateSshKey).toHaveBeenCalled());
+    fireEvent.mouseDown(getByTestId('ssh-generate-modal'));
+    expect(getByTestId('ssh-generate-modal')).toBeTruthy();
+
+    // 生成完成后：点遮罩关闭，且不产生第二次调用
+    resolveGenerate({ success: true, data: GENERATED, error: null });
+    await waitFor(() => expect(getByTestId('ssh-generate-result')).toBeTruthy());
+    fireEvent.mouseDown(getByTestId('ssh-generate-modal'));
+    await waitFor(() => expect(queryByTestId('ssh-generate-modal')).toBeNull());
+    expect(generateSshKey).toHaveBeenCalledTimes(1);
+  });
 });

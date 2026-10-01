@@ -55,6 +55,7 @@ import type {
   SshAgentStatus,
   SshAgentKey,
   SshKeyInspection,
+  SshKeyGenerated,
   SshKeyImported,
   WalletListResponse,
   WalletAddressesResponse,
@@ -453,6 +454,16 @@ class PersonaAPI {
     passphrase?: string;
   }): Promise<ApiResponse<SshKeyImported>> {
     return invoke('import_ssh_key', { request });
+  }
+
+  /** 页面内生成 SSH 密钥对并入库（RSA 4096 可能数十秒，调用方须有加载态） */
+  async generateSshKey(request: {
+    identity_id: string;
+    key_type: string;
+    comment?: string;
+    name?: string;
+  }): Promise<ApiResponse<SshKeyGenerated>> {
+    return invoke('generate_ssh_key', { request });
   }
 
   async walletList(identityId?: string): Promise<ApiResponse<WalletListResponse>> {

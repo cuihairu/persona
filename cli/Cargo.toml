@@ -85,6 +85,8 @@ hex = { workspace = true }
 # Data formats
 csv = { version = "1.3", optional = true }
 tabled = "0.15"
+# ssh generate：ed25519 公钥行解析出 SHA256 指纹（生成走 core，此处只读公钥行）
+ssh-key.workspace = true
 
 [dev-dependencies]
 tempfile = "3.8"
@@ -95,7 +97,6 @@ predicates = "3.0"
 proptest = { workspace = true }
 sqlx = { workspace = true }
 # import-file 测试现场生成 OpenSSH 私钥 fixture
-ssh-key.workspace = true
 rand_core.workspace = true
 
 [features]

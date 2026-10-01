@@ -3988,6 +3988,93 @@ pub async fn import_ssh_key(
     }
 }
 
+/// 页面内生成结果：与导入 DTO 同形（前端复用同一成功态展示）。
+#[derive(Serialize)]
+pub struct SshKeyGeneratedDto {
+    pub credential_id: String,
+    pub name: String,
+    pub key_type: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct GenerateSshKeyRequest {
+    pub identity_id: String,
+    /// `ed25519`（默认口径）/ `rsa`（4096）/ `ecdsa`（NIST P-256）
+    pub key_type: String,
+    /// 写入钥匙与公钥行的 comment
+    pub comment: Option<String>,
+    /// 条目名；空缺时回退 comment > "SSH Key (generated)"
+    pub name: Option<String>,
+}
+
+/// 页面内生成 SSH 密钥对并入库：私钥明文 PEM 存 `SshKeyData.private_key`，
+/// 封存由 per-item key 负责（与导入通道同构）。
+/// 生成（RSA 4096 可能数十秒）在拿 service 锁之前完成，不阻塞其它命令。
+#[command(rename_all = "snake_case")]
+pub async fn generate_ssh_key(
+    request: GenerateSshKeyRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SshKeyGeneratedDto>, String> {
+    // 未知类型在这里就地报错（不给 service 锁，也不碰 workspace）
+    let generated = match persona_core::crypto::ssh_generate::generate_ssh_keypair(
+        &request.key_type,
+        request.comment.as_deref().unwrap_or_default(),
+    ) {
+        Ok(generated) => generated,
+        Err(e) => {
+            let err: anyhow::Error = e.into();
+            let (_code, msg) = map_persona_error(&err);
+            return Ok(ApiResponse::error(msg));
+        }
+    };
+
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&request.identity_id) {
+            Ok(identity_uuid) => {
+                // 条目名回退与导入通道一致：显式名 > comment > 兜底
+                let name = request
+                    .name
+                    .filter(|n| !n.trim().is_empty())
+                    .or_else(|| (!generated.comment.is_empty()).then(|| generated.comment.clone()))
+                    .unwrap_or_else(|| "SSH Key (generated)".to_string());
+                let ssh_data = persona_core::models::SshKeyData {
+                    private_key: generated.private_key_pem,
+                    public_key: generated.public_key.clone(),
+                    key_type: generated.key_type.clone(),
+                    passphrase: None,
+                };
+                match service
+                    .create_credential(
+                        identity_uuid,
+                        name.clone(),
+                        CredentialType::SshKey,
+                        SecurityLevel::High,
+                        &persona_core::models::CredentialData::SshKey(ssh_data),
+                    )
+                    .await
+                {
+                    Ok(credential) => Ok(ApiResponse::success(SshKeyGeneratedDto {
+                        credential_id: credential.id.to_string(),
+                        name,
+                        key_type: generated.key_type,
+                        public_key: generated.public_key,
+                        fingerprint: generated.fingerprint,
+                    })),
+                    Err(e) => {
+                        let (_code, msg) = map_persona_error(&e);
+                        Ok(ApiResponse::error(msg))
+                    }
+                }
+            }
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
 #[command(rename_all = "snake_case")]
 pub async fn ssh_approval_respond(
     request: SshApprovalRespondRequest,

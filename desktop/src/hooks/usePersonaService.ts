@@ -6,6 +6,7 @@ import type {
   ApiResponse,
   CredentialHistoryEntry,
   Identity,
+  SshKeyGenerated,
   SshKeyImported,
   SshKeyInspection,
   UpdateCredentialRequest,
@@ -651,9 +652,9 @@ export const usePersonaService = () => {
     } catch (err) {
       return {
         success: false,
-        data: null,
+        data: undefined,
         error: err instanceof Error ? err.message : String(err),
-        error_code: null,
+        error_code: undefined,
       } as ApiResponse<SshKeyInspection>;
     }
   };
@@ -669,10 +670,30 @@ export const usePersonaService = () => {
     } catch (err) {
       return {
         success: false,
-        data: null,
+        data: undefined,
         error: err instanceof Error ? err.message : String(err),
-        error_code: null,
+        error_code: undefined,
       } as ApiResponse<SshKeyImported>;
+    }
+  };
+
+  /** 生成 SSH 密钥对并入库；与导入同理不在 hook 层 toast——生成弹框
+   *  需要 RSA 4096 的长加载态与成功后的公钥展示，分支在弹框内处理 */
+  const generateSshKey = async (request: {
+    identity_id: string;
+    key_type: string;
+    comment?: string;
+    name?: string;
+  }) => {
+    try {
+      return await personaAPI.generateSshKey(request);
+    } catch (err) {
+      return {
+        success: false,
+        data: undefined,
+        error: err instanceof Error ? err.message : String(err),
+        error_code: undefined,
+      } as ApiResponse<SshKeyGenerated>;
     }
   };
 
@@ -722,6 +743,9 @@ export const usePersonaService = () => {
     startSshAgent,
     stopSshAgent,
     loadSshKeys,
+    inspectSshKeyFile,
+    importSshKey,
+    generateSshKey,
     clearError,
   };
 };

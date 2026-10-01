@@ -342,6 +342,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::passkey_approval_respond,
             commands::inspect_ssh_key_file,
             commands::import_ssh_key,
+            commands::generate_ssh_key,
             commands::get_ssh_keys,
             commands::wallet_list,
             commands::wallet_list_addresses,

@@ -26,9 +26,12 @@ pub enum SshSubcommand {
         /// Key label (credential name)
         #[arg(short, long)]
         name: Option<String>,
-        /// Key type (ed25519|rsa). Only ed25519 implemented.
+        /// Key type (ed25519|rsa|ecdsa); rsa is 4096-bit, ecdsa is NIST P-256
         #[arg(long, default_value = "ed25519")]
         key_type: String,
+        /// Key comment (written into the key and the public key line)
+        #[arg(short, long)]
+        comment: Option<String>,
         /// Mark as favorite
         #[arg(long)]
         favorite: bool,
@@ -184,8 +187,9 @@ pub(crate) async fn execute_with(
             identity,
             name,
             key_type,
+            comment,
             favorite,
-        } => generate_key(&identity, name, &key_type, favorite, config, ui).await,
+        } => generate_key(&identity, name, &key_type, comment, favorite, config, ui).await,
         SshSubcommand::List { identity } => list_keys(&identity, config, ui).await,
         SshSubcommand::Remove { id, yes } => remove_key(id, yes, config, ui).await,
         SshSubcommand::Status => agent_status(config).await,
@@ -286,55 +290,86 @@ async fn generate_key(
     identity_name: &str,
     label: Option<String>,
     key_type: &str,
+    comment: Option<String>,
     favorite: bool,
     config: &crate::config::CliConfig,
     ui: &dyn crate::utils::prompt::PromptUi,
 ) -> Result<()> {
-    println!("{}", "🔑 Generating SSH key...".cyan().bold());
-    if key_type.to_lowercase() != "ed25519" {
-        anyhow::bail!("Only ed25519 is supported currently");
-    }
+    let key_type = key_type.to_lowercase();
+    let comment = comment.unwrap_or_default();
+    println!(
+        "{}",
+        format!("🔑 Generating {key_type} SSH keypair...")
+            .cyan()
+            .bold()
+    );
+
+    // 生成先行：未知类型在解锁 workspace 之前就报错。ed25519 走库内
+    // 既有约定（BASE64 seed），rsa/ecdsa 走 ssh_generate（明文 PEM，
+    // 封存由 per-item key 负责）——与导入通道的双格式约定一致。
+    let (ssh_data, public_line, fingerprint) = if key_type == "ed25519" {
+        use ed25519_dalek::SigningKey;
+        use rand::Rng;
+
+        let mut rng = rand::rng();
+        let mut seed = [0u8; 32];
+        rng.fill_bytes(&mut seed);
+        let signing_key = SigningKey::from_bytes(&seed);
+        let pub_bytes = signing_key.verifying_key().to_bytes(); // 32-byte public
+
+        // Encode to OpenSSH public line: base64 of [len:"ssh-ed25519"][b"ssh-ed25519"][len:pub][pub]
+        let openssh_pub = encode_ssh_ed25519_public(
+            &pub_bytes,
+            (!comment.is_empty()).then_some(comment.as_str()),
+        );
+        let fingerprint = ssh_key::PublicKey::from_openssh(&openssh_pub)
+            .map(|k| k.fingerprint(ssh_key::HashAlg::Sha256).to_string())
+            .unwrap_or_default();
+        let data = SshKeyData {
+            private_key: BASE64.encode(signing_key.to_bytes()), // 32-byte seed
+            public_key: openssh_pub.clone(),
+            key_type: "ed25519".to_string(),
+            passphrase: None,
+        };
+        (data, openssh_pub, fingerprint)
+    } else {
+        let generated =
+            persona_core::crypto::ssh_generate::generate_ssh_keypair(&key_type, &comment)?;
+        let data = SshKeyData {
+            private_key: generated.private_key_pem,
+            public_key: generated.public_key.clone(),
+            key_type: generated.key_type,
+            passphrase: None,
+        };
+        (data, generated.public_key, generated.fingerprint)
+    };
 
     let service = ensure_service(config, ui).await?;
     let identity = resolve_identity(&service, identity_name).await?;
 
-    // Generate ed25519 keypair
-    use ed25519_dalek::SigningKey;
-    use rand::Rng;
+    // 条目名回退与 import 通道一致：--name > comment > 既有兜底
+    let name = label
+        .or_else(|| (!comment.is_empty()).then(|| comment.clone()))
+        .unwrap_or_else(|| format!("SSH Key ({})", identity.name));
 
-    let mut rng = rand::rng();
-    let mut seed = [0u8; 32];
-    rng.fill_bytes(&mut seed);
-    let signing_key = SigningKey::from_bytes(&seed);
-    let verifying_key = signing_key.verifying_key();
-    let secret_bytes = signing_key.to_bytes(); // 32-byte seed
-    let pub_bytes = verifying_key.to_bytes(); // 32-byte public
-
-    // Encode to OpenSSH public line: base64 of [len:"ssh-ed25519"][b"ssh-ed25519"][len:pub][pub]
-    let openssh_pub = encode_ssh_ed25519_public(&pub_bytes, None);
-    let private_b64 = BASE64.encode(secret_bytes);
-
-    let name = label.unwrap_or_else(|| format!("SSH Key ({})", identity.name));
-    let data = SshKeyData {
-        private_key: private_b64,
-        public_key: openssh_pub.clone(),
-        key_type: "ed25519".to_string(),
-        passphrase: None,
-    };
     let mut cred = service
         .create_credential(
             identity.id,
             name.clone(),
             CredentialType::SshKey,
             SecurityLevel::High,
-            &CredentialData::SshKey(data.clone()),
+            &CredentialData::SshKey(ssh_data),
         )
         .await?;
 
     println!("{} Created SSH key credential:", "✓".green().bold());
     println!("  Name: {}", name.cyan());
     println!("  Identity: {}", identity.name.cyan());
-    println!("  Public: {}", openssh_pub);
+    println!("  Type: {}", key_type.cyan());
+    if !fingerprint.is_empty() {
+        println!("  Fingerprint: {}", fingerprint.yellow());
+    }
+    println!("  Public: {}", public_line);
     println!("  ID: {}", cred.id);
     if favorite {
         cred.is_favorite = true;
@@ -2053,21 +2088,23 @@ mod tests {
             .expect("list-all on a keyless workspace works");
         assert!(ui.exhausted());
 
-        // Non-ed25519 key types are refused before anything is unlocked.
+        // Unknown key types are refused before anything is unlocked
+        // (rsa/ecdsa 生成已支持，dsa 之类仍是快失败).
         let ui = ScriptedUi::new();
         let err = execute_with(
             ssh_args(SshSubcommand::Generate {
                 identity: "alice".to_string(),
                 name: None,
-                key_type: "rsa".to_string(),
+                key_type: "dsa".to_string(),
+                comment: None,
                 favorite: false,
             }),
             &config,
             &ui,
         )
         .await
-        .expect_err("rsa must be refused");
-        assert!(err.to_string().contains("Only ed25519"));
+        .expect_err("dsa must be refused");
+        assert!(err.to_string().contains("Unsupported SSH key type: dsa"));
         assert!(ui.exhausted());
 
         // Generating with an explicit label and favorite flag.
@@ -2077,6 +2114,7 @@ mod tests {
                 identity: "alice".to_string(),
                 name: Some("work-key".to_string()),
                 key_type: "ed25519".to_string(),
+                comment: None,
                 favorite: true,
             }),
             &config,
@@ -2093,6 +2131,7 @@ mod tests {
                 identity: "alice".to_string(),
                 name: None,
                 key_type: "ed25519".to_string(),
+                comment: None,
                 favorite: false,
             }),
             &config,
@@ -2109,6 +2148,7 @@ mod tests {
                 identity: "ghost".to_string(),
                 name: None,
                 key_type: "ed25519".to_string(),
+                comment: None,
                 favorite: false,
             }),
             &config,
@@ -2167,6 +2207,7 @@ mod tests {
                 identity: "alice".to_string(),
                 name: Some("pubkey-src".to_string()),
                 key_type: "ed25519".to_string(),
+                comment: None,
                 favorite: false,
             }),
             &config,
@@ -2638,6 +2679,122 @@ mod tests {
         .expect_err("public key file must fail");
         assert!(
             err.to_string().contains("Not a valid OpenSSH private key"),
+            "{err}"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // generate: 页面内/CLI 生成新密钥对（rsa 走 core 测试，这里不跑 4096 位）
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn generate_stores_keypair_and_applies_name_fallback() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        // 一把带 comment 不带 --name：条目名回退 comment
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                key_type: "ed25519".to_string(),
+                comment: Some("gen-test".to_string()),
+                name: None,
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("ed25519 generate works");
+
+        let creds = alice_credentials(&config, "master-pin").await;
+        let (ssh_id, _) = creds
+            .iter()
+            .find(|(_, t)| matches!(t, CredentialType::SshKey))
+            .expect("generated ssh credential present")
+            .clone();
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        service.authenticate_user("master-pin").await.unwrap();
+        let cred = service.get_credential(&ssh_id).await.unwrap().unwrap();
+        assert_eq!(cred.name, "gen-test", "名字回退 comment");
+
+        let Some(CredentialData::SshKey(ssh)) = service.get_credential_data(&ssh_id).await.unwrap()
+        else {
+            panic!("ssh key data readable");
+        };
+        assert_eq!(ssh.key_type, "ed25519");
+        assert_eq!(ssh.passphrase, None);
+        // ed25519 生成走库内既有约定：BASE64 seed（非 PEM；agent 双格式加载
+        // seed 优先），公钥行以重建 verifying key 为独立裁判
+        let seed = BASE64.decode(&ssh.private_key).unwrap();
+        assert_eq!(seed.len(), 32, "ed25519 私钥 = 32B seed");
+        use ed25519_dalek::SigningKey;
+        let seed_bytes: [u8; 32] = seed.as_slice().try_into().unwrap();
+        let expected_pub = SigningKey::from_bytes(&seed_bytes).verifying_key();
+        let parsed_pub = ssh_key::PublicKey::from_openssh(&ssh.public_key).unwrap();
+        assert_eq!(
+            parsed_pub.key_data().ed25519().unwrap().0,
+            *expected_pub.as_bytes(),
+            "公钥行与 seed 重建的公钥一致"
+        );
+        assert!(ssh.public_key.ends_with("gen-test"), "comment 进公钥行");
+
+        // 二把带 --name + ecdsa：label 优先
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                key_type: "ecdsa".to_string(),
+                comment: Some("ignored-comment".to_string()),
+                name: Some("my-ecdsa".to_string()),
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("ecdsa generate works");
+        let creds = alice_credentials(&config, "master-pin").await;
+        let ecdsa_id = creds
+            .iter()
+            .find(|(id, _)| *id != ssh_id)
+            .map(|(id, _)| *id)
+            .expect("second credential present");
+        let cred = service.get_credential(&ecdsa_id).await.unwrap().unwrap();
+        assert_eq!(cred.name, "my-ecdsa", "--name 优先于 comment");
+    }
+
+    #[tokio::test]
+    async fn generate_rejects_unknown_key_type() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::Generate {
+                identity: "alice".to_string(),
+                key_type: "dsa".to_string(),
+                comment: None,
+                name: None,
+                favorite: false,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("unknown type must fail");
+        assert!(
+            err.to_string().contains("Unsupported SSH key type: dsa"),
             "{err}"
         );
     }
@@ -3172,6 +3329,7 @@ mod tests {
                 identity: "alice".to_string(),
                 name: None,
                 key_type: "ed25519".to_string(),
+                comment: None,
                 favorite: false,
             }),
             &config,

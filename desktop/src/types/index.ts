@@ -691,6 +691,15 @@ export interface SshKeyImported {
   fingerprint: string;
 }
 
+/** generate_ssh_key 响应：与导入同形（成功态展示复用） */
+export interface SshKeyGenerated {
+  credential_id: string;
+  name: string;
+  key_type: string;
+  public_key: string;
+  fingerprint: string;
+}
+
 export interface Statistics {
   total_identities: number;
   total_credentials: number;

@@ -9,6 +9,8 @@ pub mod passkey;
 // ssh_import 不做 glob 再导出：import_openssh_private_key 语义已足够限定，
 // 但 ImportedSshKey/函数名以 ssh_ 前缀挂在 crypto 下更清晰，调用方走限定路径。
 pub mod ssh_import;
+// ssh_generate 与 ssh_import 共用字段口径（classify/公钥行/指纹/PEM 编码）。
+pub mod ssh_generate;
 pub mod sshsig;
 pub mod steam;
 pub mod totp;
