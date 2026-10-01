@@ -62,6 +62,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     createCredential,
     updateCredential,
     updateCredentialData,
+    getCredentialData,
     generatePassword,
     isLoading,
   } = usePersonaService();
@@ -88,6 +89,10 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     security_questions: [],
   });
 
+  // 编辑模式下按 id 兜底补载密文 payload（调用方传 null 时不至于全空回显）；
+  // 补载期间禁提交，避免拿空 payload 覆盖既有密文
+  const [hydrating, setHydrating] = useState(false);
+
   // 打开时初始化表单：编辑模式预填（payload 缺失字段留空），创建模式清残留
   useEffect(() => {
     if (!isOpen) return;
@@ -110,6 +115,21 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         tags: c.tags.join(', '),
       });
       setCredentialData(payload?.data ? { ...payload.data } : {});
+      if (!payload) {
+        // 兜底补载：调用方没带 payload（详情页数据尚未加载/加载失败重试入口）
+        let cancelled = false;
+        setHydrating(true);
+        void getCredentialData(c.id).then((fetched) => {
+          if (cancelled) return;
+          setHydrating(false);
+          if (fetched?.data) {
+            setCredentialData({ ...(fetched.data as Record<string, unknown>) });
+          }
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
     } else {
       setFormData({
         name: '',
@@ -157,6 +177,8 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentIdentity || !formData.name.trim()) return;
+    // 密文 payload 还在补载：此刻提交会用空 payload 覆盖既有密文
+    if (hydrating) return;
 
     const tags = Array.from(
       new Set(
@@ -1012,7 +1034,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             </button>
             <button
               type="submit"
-              disabled={isLoading || !formData.name.trim()}
+              disabled={isLoading || hydrating || !formData.name.trim()}
               className="btn-primary flex-1"
             >
               {isLoading

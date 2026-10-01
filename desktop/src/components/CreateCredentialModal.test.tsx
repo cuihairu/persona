@@ -676,6 +676,48 @@ describe('components/CreateCredentialModal', () => {
       );
     };
 
+    it('backfills payload by id when opened without data, and blocks save while hydrating', async () => {
+      let resolveFetch: (v: unknown) => void = () => {};
+      const getCredentialData = jest.fn(
+        () =>
+          new Promise((resolve) => {
+            resolveFetch = resolve;
+          }),
+      );
+      mockUsePersonaService.mockReturnValue({
+        currentIdentity: identity,
+        createCredential,
+        generatePassword,
+        updateCredential,
+        updateCredentialData,
+        getCredentialData,
+        isLoading: false,
+      });
+      render(
+        <CreateCredentialModal
+          isOpen
+          onClose={onClose}
+          editCredential={{ credential: editCred, data: null }}
+        />,
+      );
+
+      // 元数据先回显；payload 走按 id 补载
+      expect(getCredentialData).toHaveBeenCalledWith('c-9');
+      expect(screen.getByPlaceholderText(/Gmail 账户/)).toHaveValue('Old Name');
+
+      // 补载未完成：保存禁用（防止空 payload 覆盖既有密文）
+      expect(screen.getByRole('button', { name: '保存' })).toBeDisabled();
+
+      resolveFetch({
+        credential_type: 'Password',
+        data: { password: 'fetched-pw', email: 'old@mail.com' },
+      });
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText('输入密码')).toHaveValue('fetched-pw'),
+      );
+      expect(screen.getByRole('button', { name: '保存' })).toBeEnabled();
+    });
+
     it('prefills metadata and payload, locks the type selector, titles as Edit', () => {
       renderEditModal();
 
@@ -731,6 +773,9 @@ describe('components/CreateCredentialModal', () => {
         generatePassword,
         updateCredential,
         updateCredentialData,
+        // data:null 打开触发按 id 兜底补载；这里补载不到（null），
+        // 只编辑元数据的类型不受影响
+        getCredentialData: jest.fn().mockResolvedValue(null),
         isLoading: false,
       });
       render(
@@ -744,6 +789,10 @@ describe('components/CreateCredentialModal', () => {
       fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
         target: { value: 'Renamed Card' },
       });
+      // 补载是异步微任务：等它 flush（保存按钮从禁用变启用）再点保存
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: '保存' })).toBeEnabled(),
+      );
       fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
       await waitFor(() => expect(onClose).toHaveBeenCalled());
