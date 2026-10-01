@@ -638,9 +638,10 @@ async fn generate_password_advanced_words_mode_entropy_and_validation() {
 
     // Word count bounds: 2 and 11 are rejected.
     for word_count in [2usize, 11] {
-        let resp = generate_password_advanced(16, true, true, true, true, false, 1, Some(word_count))
-            .await
-            .unwrap();
+        let resp =
+            generate_password_advanced(16, true, true, true, true, false, 1, Some(word_count))
+                .await
+                .unwrap();
         assert!(!resp.success, "word_count {word_count} should be rejected");
         assert!(
             resp.error.unwrap().contains("between 3 and 10"),
@@ -662,7 +663,9 @@ async fn generate_password_advanced_words_mode_entropy_and_validation() {
         .unwrap();
     assert!(!resp.success);
     assert!(
-        resp.error.unwrap().contains("cannot be combined with pronounceable"),
+        resp.error
+            .unwrap()
+            .contains("cannot be combined with pronounceable"),
         "unexpected error"
     );
 }
@@ -8805,6 +8808,103 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         failures.is_empty(),
         "IPC arg-key contract violations:\n  - {}",
         failures.join("\n  - ")
+    );
+}
+
+/// `generate_password_advanced` 的 IPC 键契约——运行时级（真实 invoke 层）。
+///
+/// 直调 Rust fn 走不到参数键解析，上面的
+/// `command_ipc_arg_keys_match_api_ts_snake_case` 只做源级审计；本测试用
+/// `tauri::test::get_ipc_response` 实跑三条路径，钉死键契约的运行时语义：
+/// ① api.ts 的 snake_case 全键载荷（words 省略）→ 成功，回 1 个候选；
+/// ② camelCase 键载荷（includeLowercase…）→ 报 "missing required key
+///    include_lowercase"——证明 lookup 键是 snake_case；若 `rename_all`
+///    被删，lookup 回落 camelCase、该载荷会误成功，断言即翻红；
+/// ③ 缺一个必需键（无 include_symbols）→ 同样报缺键——缺键 fail-closed，
+///    不静默默认。前端发键侧由 `desktop/src/utils/api.test.ts` 的 mock
+///    invoke 断言钉住。
+#[test]
+fn generate_password_advanced_ipc_arg_contract() {
+    let app = tauri::test::mock_builder()
+        .invoke_handler(tauri::generate_handler![
+            crate::commands::generate_password_advanced
+        ])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+
+    let invoke = |payload: serde_json::Value| {
+        tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: "generate_password_advanced".into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: if cfg!(any(windows, target_os = "android")) {
+                    "http://tauri.localhost"
+                } else {
+                    "tauri://localhost"
+                }
+                .parse()
+                .unwrap(),
+                body: payload.into(),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+    };
+
+    // ① snake_case 全键（words 省略 = None）→ 成功
+    let resp = invoke(serde_json::json!({
+        "length": 16,
+        "include_lowercase": true,
+        "include_uppercase": true,
+        "include_numbers": true,
+        "include_symbols": false,
+        "pronounceable": false,
+        "count": 1,
+    }))
+    .unwrap_or_else(|e| panic!("snake_case payload must succeed: {e}"));
+    let body = resp
+        .deserialize::<serde_json::Value>()
+        .expect("valid json response");
+    assert_eq!(body["success"], serde_json::json!(true), "{body}");
+    let passwords = body["data"]["passwords"].as_array().expect("passwords");
+    assert_eq!(passwords.len(), 1);
+
+    // ② camelCase 键 → 缺键报错，且报的是 snake_case 键名（rename_all 生效）
+    let err = invoke(serde_json::json!({
+        "length": 16,
+        "includeLowercase": true,
+        "includeUppercase": true,
+        "includeNumbers": true,
+        "includeSymbols": false,
+        "pronounceable": false,
+        "count": 1,
+    }))
+    .expect_err("camelCase payload must fail while rename_all = snake_case");
+    assert!(
+        err.to_string()
+            .contains("missing required key include_lowercase"),
+        "{err}"
+    );
+
+    // ③ 缺必需键 → fail-closed，不静默默认
+    let err = invoke(serde_json::json!({
+        "length": 16,
+        "include_lowercase": true,
+        "include_uppercase": true,
+        "include_numbers": true,
+        "pronounceable": false,
+        "count": 1,
+    }))
+    .expect_err("missing key must error, not silently default");
+    assert!(
+        err.to_string()
+            .contains("missing required key include_symbols"),
+        "{err}"
     );
 }
 

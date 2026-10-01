@@ -3368,6 +3368,12 @@ pub async fn generate_password(
 /// 而前端 api.ts 全文件统一发 snake_case 键——缺此属性会报
 /// "missing required key includeLowercase"。键契约由
 /// `command_layer_tests::generate_password_advanced_ipc_arg_contract` 钉住。
+///
+/// 8 个平铺参数超 clippy `too_many_arguments` 阈值（7）：这是 IPC 线格式，
+/// 键名即前端 `invoke` 载荷键，由上面的审计回归钉死，不能为了过 lint 改成
+/// 请求结构体（会改动已发布的线格式）。与仓库其他平铺选项函数同样按
+/// lint 豁免处理（core/cli 共 10 处同因）。
+#[allow(clippy::too_many_arguments)]
 #[command(rename_all = "snake_case")]
 pub async fn generate_password_advanced(
     length: usize,
