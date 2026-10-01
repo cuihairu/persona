@@ -488,4 +488,123 @@ describe('utils/api command mapping coverage', () => {
     mockInvoke.mockRejectedValueOnce(boom);
     await expect(personaAPI.lockService()).rejects.toBe(boom);
   });
+
+  // 薄包装透传面：settings 窄写 / 旅行模式 / Connect / 同步
+  it('settings, travel, connect and sync methods map to tauri invokes', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.setPasswordExpiry(90);
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_password_expiry', { days: 90 });
+
+    await personaAPI.setLocale('zh-CN');
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_locale', { locale: 'zh-CN' });
+
+    await personaAPI.changeMasterPassword('old', 'new');
+    expect(mockInvoke).toHaveBeenLastCalledWith('change_master_password', {
+      request: { old_password: 'old', new_password: 'new', db_path: null },
+    });
+    await personaAPI.changeMasterPassword('old', 'new', '/tmp/x.db');
+    expect(mockInvoke).toHaveBeenLastCalledWith('change_master_password', {
+      request: { old_password: 'old', new_password: 'new', db_path: '/tmp/x.db' },
+    });
+
+    await personaAPI.getTravelStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('get_travel_status');
+
+    await personaAPI.setTravelMarked('id-1', true);
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_travel_marked', { identityId: 'id-1', marked: true });
+
+    await personaAPI.enterTravelMode('pass');
+    expect(mockInvoke).toHaveBeenLastCalledWith('enter_travel_mode', { passphrase: 'pass' });
+
+    await personaAPI.exitTravelMode('pass');
+    expect(mockInvoke).toHaveBeenLastCalledWith('exit_travel_mode', { passphrase: 'pass' });
+
+    await personaAPI.connectServerStart();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_start', { port: null });
+    await personaAPI.connectServerStart(8080);
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_start', { port: 8080 });
+
+    await personaAPI.connectServerStop();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_stop');
+
+    await personaAPI.connectServerStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_status');
+
+    await personaAPI.connectTokenCreate('label', 'full');
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_create', { label: 'label', scope: 'full' });
+
+    await personaAPI.connectTokenList();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_list');
+
+    await personaAPI.connectTokenRevoke('t-1');
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_revoke', { id: 't-1' });
+
+    await personaAPI.setSyncConfig({ enabled: true, server_url: 'https://s', server_token: '' } as never);
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_sync_config', {
+      enabled: true,
+      server_url: 'https://s',
+      server_token: '',
+    });
+
+    await personaAPI.syncTokenPresent();
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_token_present');
+
+    await personaAPI.syncDeviceStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_device_status');
+
+    await personaAPI.syncJoin('device');
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_join', { deviceName: 'device' });
+
+    await personaAPI.syncLeave();
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_leave');
+  });
+
+  it('credential update methods wrap requests', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.updateCredential({ id: 'c-1' } as never);
+    expect(mockInvoke).toHaveBeenLastCalledWith('update_credential', { request: { id: 'c-1' } });
+
+    await personaAPI.updateCredentialData({ id: 'c-1' } as never);
+    expect(mockInvoke).toHaveBeenLastCalledWith('update_credential_data', { request: { id: 'c-1' } });
+  });
+
+  it('ssh key file methods map to tauri invokes', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.inspectSshKeyFile('/home/x/id_ed25519');
+    expect(mockInvoke).toHaveBeenLastCalledWith('inspect_ssh_key_file', { path: '/home/x/id_ed25519' });
+
+    await personaAPI.importSshKey({ identity_id: 'i-1', path: '/home/x/id_ed25519', name: 'n', passphrase: 'p' });
+    expect(mockInvoke).toHaveBeenLastCalledWith('import_ssh_key', {
+      request: { identity_id: 'i-1', path: '/home/x/id_ed25519', name: 'n', passphrase: 'p' },
+    });
+
+    await personaAPI.generateSshKey({ identity_id: 'i-1', key_type: 'ed25519', comment: 'c', name: 'n' });
+    expect(mockInvoke).toHaveBeenLastCalledWith('generate_ssh_key', {
+      request: { identity_id: 'i-1', key_type: 'ed25519', comment: 'c', name: 'n' },
+    });
+  });
+
+  it('quick access and focus methods map to tauri invokes', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.quickAccessStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_status');
+
+    await personaAPI.quickAccessSet(true, null);
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_set', { enabled: true, accelerator: null });
+
+    await personaAPI.quickAccessOpen();
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_open');
+
+    await personaAPI.quickAccessOpenCredential('i-1', 'c-1');
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_open_credential', {
+      request: { identity_id: 'i-1', credential_id: 'c-1' },
+    });
+
+    await personaAPI.focusMainWindow();
+    expect(mockInvoke).toHaveBeenLastCalledWith('focus_main_window');
+  });
 });
