@@ -12,7 +12,7 @@
 | persona-logo.svg            | docs/src/public/persona-logo.svg、docs/branding/logo.svg（SVG 源）                           | 1c85352（初始品牌提交）                    | 2026-09-25 | 主 Logo（矢量）                    |
 | wordmark-horizontal.svg     | docs/branding/wordmark-horizontal.svg                                                        | 1c85352                                    | 2026-09-25 | 横排字标（Persona 数钥）           |
 
-**说明**：站点 VitePress 用 `/ui/*.png`（public 副本），README/品牌目录各保留一份源，均已 git 跟踪。未发现 `docs/design/`、`ui_sandbox_out/` 或其他原型文件（.fig/.sketch/.xd/.ai/.psd）。
+**说明**：站点 VitePress 用 `/ui/*.png`（public 副本），README/品牌目录各保留一份源，均已 git 跟踪。未发现 `ui_sandbox_out/` 或其他原型文件（.fig/.sketch/.xd/.ai/.psd）；`docs/src/design/` 存在但只有文字设计文档（architecture.md、security.md），非原型图资产。
 
 ## 原型缺口清单（等用户交付素材）
 
@@ -34,5 +34,5 @@ docs/src/previews/ui.md 已列入下表。**严禁自行生成或替换任何 SV
 ## 补充说明
 
 - 运行时走查产出（`~/.cache/persona-ui-shots/shots-walk1002f/` 共 17 张）**属于自动化截图，不是设计原型资产**，不应入库到 docs 的设计素材集中。
-- Dependabot：仓库 `.github/` 下**无** `dependabot.yml`（也无 `.yaml`/变体），远端 main 历史中从未存在该文件。GitHub 仓库的 Dependabot 告警（304 处 fixed、2 dismissed）来自本仓库依赖生态的历史扫描与现有依赖更新追踪；**配置文件不存在 = 未启用 version-updates 配置文件**。这属于仓库当前配置状态（未配配置文件）。PR 历史显示 Dependabot 曾自动创建 PR（#21 等）处理安全更新——说明平台级 Dependabot 已在工作（基于默认行为或组织策略），但仓库级自定义 `dependabot.yml` 并未配置。按「顺手确认 Dependabot 配置已生效」的要求：**仓库级 dependabot.yml 不存在，平台级 Dependabot 对本仓库依然在生效（alerts 大部分 fixed，近期有自动 PR #21 merged 2026-09-30）。如需显式配置（schedule/groups/ignore/assignees 等）需补 `.github/dependabot.yml`；当前未配置文件不等同失效。**
+- Dependabot：仓库 `.github/` 下**无** `dependabot.yml`（也无 `.yaml`/变体），远端 main 历史中从未存在该文件。平台级状态（2026-10-01 验证）：`automated-security-fixes` = enabled / paused=false（**生效中**）；告警计数 open 268 / fixed 266 / dismissed 2（GraphQL `vulnerabilityAlerts`）；Dependabot 自动 PR 存在（#21，author=app/dependabot，merged 2026-09-30，npm_and_yarn bump）。**结论：平台级 Dependabot 安全更新对本仓库生效；仓库级 dependabot.yml 未配置 = version updates 无自定义策略（schedule/groups/ignore/assignees 等），如需显式配置需补 `.github/dependabot.yml`。**
 - docs 锁文件：`docs/package-lock.json` 存在（npm），`docs/pnpm-lock.yaml` 在历史曾存在（62940e8 引入 mermaid 时可能用过 pnpm，后续未入库且 CI 已有守卫 `docs.yml` 禁止 docs 出现 pnpm-lock.yaml/yarn.lock）。当前工作区 docs 下无第二份锁文件，CI 门禁有效。
