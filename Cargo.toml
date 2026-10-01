@@ -26,7 +26,7 @@ aes-gcm = "0.10"
 # 维护节奏慢（0.7 停在 rc）——正确性由 RFC 5054 附录 B 向量测试锁定
 # （core/src/auth/srp.rs），调用方经封装隔离可整体换实现（设计稿 DR-2）
 srp = "0.6"
-ed25519-dalek = { version = "2.0", features = ["pkcs8", "zeroize"] }
+ed25519-dalek = { version = "3.0", features = ["pkcs8", "zeroize"] }
 # E2EE 同步 device envelope（E2EE_SYNC_DESIGN DR-1）：X25519 ephemeral DH
 # + HKDF-SHA256 展开（key‖nonce）+ AES-256-GCM；组合层约 30 行自写，
 # round-trip/篡改/跨设备失败测试覆盖（core/src/sync/envelope.rs）
