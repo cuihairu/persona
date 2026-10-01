@@ -7591,6 +7591,441 @@ mod tests {
         );
     }
 
+    // ----- 防御臂覆盖轮（2026-09-30 llvm-cov 缺口最大模块 service.rs）-----
+
+    /// 改密前置：库从未 init（无 user_auth 行）→ 如实报"未初始化"，
+    /// 不把"没有用户"误报成"密码错"。
+    #[tokio::test]
+    async fn change_master_password_requires_an_initialized_workspace() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+
+        let err = service
+            .change_master_password("old-pass", "new-pass")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Workspace not initialized"),
+            "{err}"
+        );
+    }
+
+    /// 改密不是锁定的旁路：连续失败触发锁定后，改密先吃锁门禁
+    /// （verify old password 在锁检查之后，不构成锁定态下的猜密码 oracle）。
+    #[tokio::test]
+    async fn change_master_password_refused_while_account_locked() {
+        let (_db, mut service) = unlocked_service().await;
+
+        for _ in 0..5 {
+            assert_eq!(
+                service.authenticate_user("wrong").await.unwrap(),
+                AuthResult::InvalidCredentials
+            );
+        }
+
+        let err = service
+            .change_master_password("master-pin", "rotated-pin")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Account is locked due to too many failed attempts"),
+            "{err}"
+        );
+    }
+
+    /// create_connect_token 的标签防御臂：trim 后为空与超 128 字符一律拒绝。
+    #[tokio::test]
+    async fn connect_token_label_boundaries_are_rejected() {
+        let (service, _db) = connect_fixture().await;
+
+        let blank = service
+            .create_connect_token("   ".into(), connect_read_scope())
+            .await
+            .unwrap_err();
+        assert!(blank.to_string().contains("1..=128"), "{blank}");
+
+        let long = service
+            .create_connect_token("x".repeat(129), connect_read_scope())
+            .await
+            .unwrap_err();
+        assert!(long.to_string().contains("1..=128"), "{long}");
+    }
+
+    /// 无 Read verb 的 scope：四个读端点一律空结果（同形，不泄露存在性）。
+    #[tokio::test]
+    async fn connect_endpoints_without_read_verb_return_empty() {
+        let (service, _db) = connect_fixture().await;
+        let no_read = ConnectTokenScope {
+            identities: vec![],
+            item_types: vec![],
+            verbs: vec![],
+        };
+
+        assert!(service
+            .connect_list_identities(&no_read)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(service
+            .connect_list_items(&no_read, None, None, None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(service
+            .connect_get_item_data(&no_read, &Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .connect_totp(&no_read, &Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// connect_totp 的 scope/存在性防御臂：未知 id、scope 外身份、
+    /// 未授权 Totp 条目类型一律 None（与列表 404 同形）。
+    #[tokio::test]
+    async fn connect_totp_gates_unknown_identity_and_unscoped_type() {
+        let (service, _db) = connect_fixture().await;
+        let id_a = service
+            .create_identity("A".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let totp_data = CredentialData::TwoFactor(crate::models::credential::TwoFactorData {
+            secret_key: "JBSWY3DPEHPK3PXP".into(),
+            issuer: "Example".into(),
+            account_name: "alice".into(),
+            algorithm: "SHA1".into(),
+            digits: 6,
+            period: 30,
+        });
+        let cred = service
+            .create_credential(
+                id_a.id,
+                "A totp".into(),
+                CredentialType::TwoFactor,
+                SecurityLevel::Medium,
+                &totp_data,
+            )
+            .await
+            .unwrap();
+
+        // 未知 id → None
+        assert!(service
+            .connect_totp(&connect_read_scope(), &Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none());
+
+        // scope 限定到别的身份 → None（防探测同形）
+        let other_only = ConnectTokenScope {
+            identities: vec![Uuid::new_v4()],
+            ..connect_read_scope()
+        };
+        assert!(service
+            .connect_totp(&other_only, &cred.id)
+            .await
+            .unwrap()
+            .is_none());
+
+        // item_types 未授权 Totp → None
+        let no_totp = ConnectTokenScope {
+            item_types: vec![ConnectItemType::Password],
+            ..connect_read_scope()
+        };
+        assert!(service
+            .connect_totp(&no_totp, &cred.id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// list_items 的 item_type 过滤分支：显式条目类型只回同型条目。
+    #[tokio::test]
+    async fn connect_list_items_filters_by_item_type() {
+        let (service, _db) = connect_fixture().await;
+        let id_a = service
+            .create_identity("A".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let pwd = CredentialData::Password(PasswordCredentialData {
+            password: "p1".into(),
+            email: None,
+            security_questions: vec![],
+        });
+        let card = CredentialData::BankCard(crate::models::credential::BankCardData {
+            card_number: "4111 1111 1111 1111".into(),
+            cardholder_name: "ALICE SMITH".into(),
+            expiry_date: "12/29".into(),
+            cvv: "123".into(),
+            bank_name: "Example Bank".into(),
+            card_type: "visa".into(),
+        });
+        service
+            .create_credential(
+                id_a.id,
+                "A login".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                &pwd,
+            )
+            .await
+            .unwrap();
+        service
+            .create_credential(
+                id_a.id,
+                "A card".into(),
+                CredentialType::BankCard,
+                SecurityLevel::High,
+                &card,
+            )
+            .await
+            .unwrap();
+
+        let logins = service
+            .connect_list_items(
+                &connect_read_scope(),
+                None,
+                Some(ConnectItemType::Password),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(logins.len(), 1);
+        assert_eq!(logins[0].credential_type, CredentialType::Password);
+    }
+
+    /// exit 无 sidecar（从未 enter 或已清理）：NotFound 报出确切路径，
+    /// 不当空操作吞掉。
+    #[tokio::test]
+    async fn travel_exit_without_sidecar_reports_missing_path() {
+        let (dir, _db, service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+
+        let err = service.exit_travel_mode(&db_path, "pw").await.unwrap_err();
+        assert!(
+            err.to_string().contains("travel sidecar not found"),
+            "{err}"
+        );
+    }
+
+    /// sidecar 删除失败（non-NotFound）只告警不回滚：行已恢复，exit 仍成功
+    /// （unix-only：借目录只读制造 EACCES；解包与恢复不受影响）。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn travel_exit_survives_unremovable_sidecar() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (dir, _db, service) = travel_fixture().await;
+        let db_path = dir.path().join("identities.db");
+
+        let work = service
+            .create_identity("work".into(), IdentityType::Work)
+            .await
+            .unwrap();
+        service.set_travel_marked(&work.id, true).await.unwrap();
+        service.enter_travel_mode(&db_path, "pw").await.unwrap();
+
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+
+        let counts = service.exit_travel_mode(&db_path, "pw").await.unwrap();
+        assert_eq!(counts.identities, 1);
+
+        let mut perms = std::fs::metadata(dir.path()).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(dir.path(), perms).unwrap();
+    }
+
+    /// retrieve_attachment 解密路径的三条防御臂：metadata 指向已删除凭据、
+    /// legacy 行缺 per-item key、wrapped key 损坏——全部 fail-closed。
+    #[tokio::test]
+    async fn retrieve_attachment_decrypt_defensive_arms() {
+        let (db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Attach Arms".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential =
+            seed_credential(&service, identity.id, "with file", CredentialType::Password).await;
+
+        let dir = tempfile::tempdir().unwrap();
+        service
+            .init_attachment_storage(dir.path(), db.clone())
+            .await
+            .unwrap();
+
+        let file_path = dir.path().join("secret.bin");
+        std::fs::write(&file_path, b"attachment-bytes").unwrap();
+        let attachment_id = service
+            .attach_file(credential.id, &file_path, true)
+            .await
+            .unwrap();
+
+        // ① metadata 的 credential_id 指向已删除凭据。运行态的孤儿行来自
+        // 「删除凭据时 blob 清理失败只告警」的路径；FK 不会放行直接构造，
+        // 测试借连接级 PRAGMA 短暂绕过（用完即恢复，还回池里）。
+        let orphan = Uuid::new_v4().to_string();
+        {
+            let mut conn = db.pool().acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE attachments SET credential_id = ? WHERE id = ?")
+                .bind(&orphan)
+                .bind(attachment_id.to_string())
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+        let err = service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("not found for attachment"),
+            "{err}"
+        );
+
+        // ② legacy 行（无 per-item key）不能解密封存附件
+        sqlx::query("UPDATE attachments SET credential_id = ? WHERE id = ?")
+            .bind(credential.id.to_string())
+            .bind(attachment_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query("UPDATE credentials SET wrapped_item_key = NULL WHERE id = ?")
+            .bind(credential.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("predates item-key sealing"),
+            "{err}"
+        );
+
+        // ③ wrapped key 损坏 → unwrap 失败
+        sqlx::query("UPDATE credentials SET wrapped_item_key = ? WHERE id = ?")
+            .bind(vec![0u8, 1, 2, 3, 4, 5, 6, 7])
+            .bind(credential.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let err = service
+            .retrieve_attachment(&attachment_id, true)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to unwrap item key"),
+            "{err}"
+        );
+    }
+
+    /// 轮换撞上损坏的 legacy 行：解密失败如实报错并整体回滚，不静默跳过
+    /// （跳过会让该行在新主密钥下永久变砖）。旧密码在回滚后仍可用。
+    #[tokio::test]
+    async fn master_password_rotation_fails_closed_on_corrupt_legacy_row() {
+        let (db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Legacy".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let credentials = crate::storage::CredentialRepository::new(db.clone());
+        let corrupt = Credential::new(
+            identity.id,
+            "corrupt legacy".to_string(),
+            CredentialType::Password,
+            SecurityLevel::Medium,
+            b"not-a-valid-ciphertext".to_vec(),
+            None,
+        );
+        credentials.create(&corrupt).await.unwrap();
+
+        let err = service
+            .change_master_password("master-pin", "rotated-pin")
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Failed to decrypt legacy credential during rotation"),
+            "{err}"
+        );
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+    }
+
+    /// 过期策略缺时间戳的防御臂：策略开着但行里没有 password_updated_at
+    /// （迁移前的旧行）→ 跳过判定，绝不因缺时间戳锁死解锁（fail-open）。
+    #[tokio::test]
+    async fn password_expiry_skips_rows_without_timestamp() {
+        let (_dir, db, mut service) = travel_fixture().await;
+
+        let ws_repo = crate::storage::WorkspaceRepository::new(db.clone());
+        let mut ws = Repository::find_all(&ws_repo).await.unwrap().remove(0);
+        ws.settings.password_expiry_days = Some(30);
+        Repository::update(&ws_repo, &ws).await.unwrap();
+
+        sqlx::query("UPDATE user_auth SET password_updated_at = NULL")
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+    }
+
+    /// 历史记录的尽力而为语义：(None, None) 直通返回；底层表不可用时
+    /// 只告警不阻断主写（业务事实已提交，历史是派生数据）。
+    #[tokio::test]
+    async fn credential_history_is_best_effort() {
+        let (db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Hist".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        // (None, None) 直通：无实体可记
+        service
+            .record_credential_history(ChangeType::Created, None, None, None)
+            .await;
+
+        // 表不可用 → 记录失败仅告警，凭据创建照常成功
+        sqlx::query("DROP TABLE change_history")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let credential = seed_credential(
+            &service,
+            identity.id,
+            "after drop",
+            CredentialType::Password,
+        )
+        .await;
+        assert!(service
+            .get_credential(&credential.id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
     /// favicon_cache 里仅被被移除凭据引用的 host 随 enter 清除；
     /// 仍被保留凭据（或同 host 多凭据）引用的 host 保留。
     #[cfg(feature = "favicon")]
