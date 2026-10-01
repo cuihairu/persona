@@ -1,0 +1,52 @@
+# Dependabot version updates：只开定期升级 PR 轨道。
+# 安全告警（alerts）是仓库设置侧的独立轨道，不受本文件影响，保持默认。
+#
+# PR 标题前缀 build/ci 均取自 conventional-commits.yml 允许的 types 列表
+# （dependabot 默认的 "Bump xxx" 标题过不了 semantic-pull-request gate）。
+version: 2
+updates:
+  # pnpm workspace（desktop / browser/chromium-extension / website，
+  # 根 pnpm-lock.yaml 统一解析）
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      dev-deps:
+        dependency-type: "development"
+    commit-message:
+      prefix: "build"
+
+  # docs 站：独立 npm 安装（--ignore-workspace，见 docs.yml 的双锁文件禁令）
+  - package-ecosystem: "npm"
+    directory: "/docs"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      dev-deps:
+        dependency-type: "development"
+    commit-message:
+      prefix: "build"
+
+  # Rust workspace（core / server / cli / mobile/rust / agents / connect-server）
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    groups:
+      dev-deps:
+        dependency-type: "development"
+    commit-message:
+      prefix: "build"
+
+  # GitHub Actions（无开发/生产依赖之分，不分组）
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci"
