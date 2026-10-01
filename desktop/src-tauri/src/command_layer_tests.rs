@@ -1076,40 +1076,63 @@ pub(crate) struct StateDirGuard {
     // 先声明先构造、最后 drop：env 先恢复，锁才释放。
     _lock: std::sync::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
+    // None = 本 guard 未触碰 SOCKET_PATH；Some(None) = 原值缺失需移除；
+    // Some(Some(v)) = 恢复到 v。
+    prev_socket: Option<Option<std::ffi::OsString>>,
 }
 
 impl StateDirGuard {
     pub(crate) fn sandbox(dir: &tempfile::TempDir) -> Self {
-        static STATE_DIR_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-            std::sync::OnceLock::new();
-        let mutex = STATE_DIR_LOCK.get_or_init(|| std::sync::Mutex::new(()));
-        let lock = mutex
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = agent_env_lock();
         let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
         std::env::set_var("PERSONA_AGENT_STATE_DIR", dir.path());
         StateDirGuard {
             _lock: lock,
             prev: prev.map(Into::into),
+            prev_socket: None,
+        }
+    }
+
+    /// sandbox 同时注入 PERSONA_AGENT_SOCKET_PATH：两个 env 必须在同一把
+    /// 锁内设置（std Mutex 不可重入，分别构造两个 guard 会死锁）。
+    pub(crate) fn sandbox_with_socket(
+        dir: &tempfile::TempDir,
+        socket_path: &std::path::Path,
+    ) -> Self {
+        let lock = agent_env_lock();
+        let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
+        std::env::set_var("PERSONA_AGENT_STATE_DIR", dir.path());
+        let prev_socket = std::env::var("PERSONA_AGENT_SOCKET_PATH").ok();
+        std::env::set_var("PERSONA_AGENT_SOCKET_PATH", socket_path);
+        StateDirGuard {
+            _lock: lock,
+            prev: prev.map(Into::into),
+            prev_socket: Some(prev_socket.map(Into::into)),
         }
     }
 
     /// 互斥地移除 PERSONA_AGENT_STATE_DIR：驱动 `agent_state_dir` 的
     /// home 回退臂。持有同一把进程级锁，恢复时 Drop 会移除 env（prev=None）。
     fn without_env() -> Self {
-        static STATE_DIR_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> =
-            std::sync::OnceLock::new();
-        let mutex = STATE_DIR_LOCK.get_or_init(|| std::sync::Mutex::new(()));
-        let lock = mutex
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let lock = agent_env_lock();
         let prev = std::env::var("PERSONA_AGENT_STATE_DIR").ok();
         std::env::remove_var("PERSONA_AGENT_STATE_DIR");
         StateDirGuard {
             _lock: lock,
             prev: prev.map(Into::into),
+            prev_socket: None,
         }
     }
+}
+
+/// 进程级互斥：agent 相关 env（PERSONA_AGENT_STATE_DIR / SOCKET_PATH）在
+/// 并行测试里同进程共享，读写必须串行。
+fn agent_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static AGENT_ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    let mutex = AGENT_ENV_LOCK.get_or_init(|| std::sync::Mutex::new(()));
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl Drop for StateDirGuard {
@@ -1117,6 +1140,12 @@ impl Drop for StateDirGuard {
         match self.prev.take() {
             Some(prev) => std::env::set_var("PERSONA_AGENT_STATE_DIR", prev),
             None => std::env::remove_var("PERSONA_AGENT_STATE_DIR"),
+        }
+        if let Some(prev_socket) = self.prev_socket.take() {
+            match prev_socket {
+                Some(prev) => std::env::set_var("PERSONA_AGENT_SOCKET_PATH", prev),
+                None => std::env::remove_var("PERSONA_AGENT_SOCKET_PATH"),
+            }
         }
     }
 }
@@ -1410,14 +1439,35 @@ async fn ssh_agent_status_reflects_state_files() {
     assert_eq!(status.pid, None);
     assert_eq!(status.state_dir, dir.path().to_string_lossy().to_string());
 
-    // A socket file alone flips running and surfaces the path; the fake
-    // socket accepts no connection, so key_count stays None.
+    // A socket file surfaces the path, but with no live agent task and no
+    // connectable socket it must NOT flip running: the old `hint || files`
+    // OR-chain stayed green on stale files left by a crashed agent (the
+    // "click start, nothing happens" bug). key_count stays None either way.
     std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/nowhere.sock").unwrap();
     let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
     let status = resp.data.unwrap();
-    assert!(status.running, "socket file means running");
+    assert!(
+        !status.running,
+        "stale socket file without a live agent is not running"
+    );
     assert_eq!(status.socket_path.as_deref(), Some("/tmp/nowhere.sock"));
     assert_eq!(status.key_count, None);
+
+    // External agent (no desktop task handle): a genuinely listening socket
+    // at the recorded path probes alive → running stays truthful for the
+    // CLI-launched daemon scenario.
+    let ext = tempfile::tempdir().unwrap();
+    let listener = std::os::unix::net::UnixListener::bind(ext.path().join("live.sock")).unwrap();
+    let ext_path = ext.path().join("live.sock").to_string_lossy().to_string();
+    std::fs::write(dir.path().join("ssh-agent.sock"), &ext_path).unwrap();
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    let status = resp.data.unwrap();
+    assert!(
+        status.running,
+        "connectable socket means an external agent is alive"
+    );
+    assert_eq!(status.socket_path.as_deref(), Some(ext_path.as_str()));
+    drop(listener);
 
     // A pid file surfaces the parsed pid.
     std::fs::write(dir.path().join("ssh-agent.pid"), "424242\n").unwrap();
@@ -3292,7 +3342,12 @@ async fn ssh_agent_status_tolerates_malformed_state_files() {
 
     let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
     let status = resp.data.unwrap();
-    assert!(status.running, "socket file alone still means running");
+    // 畸形内容本身不许 panic；socket 指向的路径不可连接（无此文件），无
+    // 任务句柄 → 不算运行中（字段照常回显，pid 解析失败降级 None）。
+    assert!(
+        !status.running,
+        "malformed state files with no live agent must not mean running"
+    );
     assert_eq!(status.socket_path.as_deref(), Some("/tmp/empty-sock"));
     assert_eq!(status.pid, None, "unparseable pid degrades to None");
 }
@@ -9208,4 +9263,77 @@ async fn connect_token_commands_surface_locked_and_db_errors() {
         .unwrap();
     assert!(!resp.success);
     assert!(resp.error_code.is_none());
+}
+
+#[tokio::test]
+async fn read_agent_status_requires_state_file_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&dir);
+
+    // 空 state 目录 + 任务句柄"存活"：没有 socket/pid 证据不许报运行中。
+    // 旧实现 running_hint 直通——启动失败被吞成假绿，此断言钉死修复。
+    let status = crate::commands::read_agent_status(true);
+    assert!(!status.running);
+    assert!(status.socket_path.is_none());
+    assert!(status.pid.is_none());
+
+    // 句柄存活 + state 文件在 → 运行中，字段如实回读。
+    std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/persona-fake.sock").unwrap();
+    std::fs::write(dir.path().join("ssh-agent.pid"), "12345").unwrap();
+    let status = crate::commands::read_agent_status(true);
+    assert!(status.running);
+    assert_eq!(
+        status.socket_path.as_deref(),
+        Some("/tmp/persona-fake.sock")
+    );
+    assert_eq!(status.pid, Some(12345));
+
+    // 句柄已死（hint=false）：残留 state 文件不算运行中。
+    let status = crate::commands::read_agent_status(false);
+    assert!(!status.running);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn start_ssh_agent_surfaces_bind_failure_as_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+
+    // 注入指向不存在目录的 socket 路径 → daemon bind 失败退出。修复前：
+    // 错误被 eprintln 吞掉、命令睡 400ms 后无条件报"运行中"。修复后必须
+    // 回 error 响应并写明原因（Windows 同一代码路径，实机验收待装机器）。
+    // 两个 agent env 由同一 guard 持同一把锁注入（不可重入，分开即死锁）。
+    let _guard = StateDirGuard::sandbox_with_socket(
+        &dir,
+        &dir.path().join("no-such-subdir/persona-agent.sock"),
+    );
+    let resp = start_ssh_agent(
+        StartAgentRequest {
+            master_password: Some("correct-horse".to_string()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !resp.success,
+        "bind failure must not report success: {:?}",
+        resp.data
+    );
+    let err = resp.error.clone().unwrap_or_default();
+    assert!(
+        err.contains("SSH agent failed to start"),
+        "error must state the failure, got: {err}"
+    );
+
+    // 失败路径清掉 state 文件，不留假证据。
+    assert!(!dir.path().join("ssh-agent.sock").exists());
+    assert!(!dir.path().join("ssh-agent.pid").exists());
+
+    // 状态查询如实报 stopped。
+    let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success);
+    assert!(!resp.data.unwrap().running);
 }

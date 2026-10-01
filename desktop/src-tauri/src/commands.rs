@@ -3677,14 +3677,14 @@ pub async fn delete_credential(
 pub async fn get_ssh_agent_status(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<SshAgentStatus>, String> {
-    let running = state
+    let handle_alive = state
         .agent_handle
         .lock()
         .await
         .as_ref()
         .map(|handle| !handle.inner().is_finished())
         .unwrap_or(false);
-    let status = read_agent_status(running);
+    let status = read_agent_status(handle_alive);
     Ok(ApiResponse::success(status))
 }
 
@@ -3723,6 +3723,10 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
     // biometric provider 与解锁屏/init_service 注入的是同一份：SSH key 的
     // require_biometric 策略走 OS 认证弹框（Agent::new 默认拒绝，注入才放行）
     let biometric = state.biometric_provider.clone();
+    // 启动失败不得静默：agent 任务把 run_agent_with_hooks 的错误存进共享槽位，
+    // 就绪轮询读它回传 UI（旧实现只 eprintln，UI 恒报"运行中"假绿）。
+    let startup_error = Arc::new(std::sync::Mutex::new(None::<String>));
+    let startup_error_task = Arc::clone(&startup_error);
     // tauri 全局运行时而非调用方的 tokio 上下文：mock_app（测试）的
     // reactor 上 socket IO 永不唤醒，agent 必须活在健康的多线程运行时里。
     let handle = tauri::async_runtime::spawn(async move {
@@ -3740,14 +3744,61 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         .await
         {
             eprintln!("SSH agent exited: {}", err);
+            if let Ok(mut slot) = startup_error_task.lock() {
+                *slot = Some(err.to_string());
+            }
         }
         std::env::remove_var("PERSONA_AGENT_STATE_DIR");
         std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
     });
     *handle_guard = Some(handle);
+
+    // 就绪轮询：state 目录的 socket 记录文件出现 = daemon 完成 bind（写文件
+    // 紧随 bind 成功之后）。上限 3s；任务提前退出立即判失败。旧实现的
+    // 固定 400ms + running_hint=true 在慢启动与启动失败两态都撒谎。
+    let sock_file = agent_state_dir().join("ssh-agent.sock");
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let mut ready = false;
+    let mut task_died = false;
+    while std::time::Instant::now() < deadline {
+        if handle_guard
+            .as_ref()
+            .map(|h| h.inner().is_finished())
+            .unwrap_or(false)
+        {
+            task_died = true;
+            break;
+        }
+        if sock_file.exists() {
+            ready = true;
+            break;
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+
+    if !ready {
+        let detail = startup_error
+            .lock()
+            .ok()
+            .and_then(|slot| slot.clone())
+            .unwrap_or_else(|| {
+                if task_died {
+                    "agent task exited during startup (see application logs)".to_string()
+                } else {
+                    "agent socket did not become ready within 3s; startup aborted".to_string()
+                }
+            });
+        if let Some(h) = handle_guard.take() {
+            h.abort();
+        }
+        drop(handle_guard);
+        cleanup_agent_state_files();
+        return Ok(ApiResponse::error(format!(
+            "SSH agent failed to start: {detail}"
+        )));
+    }
     drop(handle_guard);
 
-    sleep(Duration::from_millis(400)).await;
     let status = read_agent_status(true);
     Ok(ApiResponse::success(status))
 }
@@ -5482,7 +5533,7 @@ fn cleanup_agent_state_files() {
     }
 }
 
-fn read_agent_status(running_hint: bool) -> SshAgentStatus {
+pub(crate) fn read_agent_status(running_hint: bool) -> SshAgentStatus {
     let dir = agent_state_dir();
     let sock_path = dir.join("ssh-agent.sock");
     let pid_path = dir.join("ssh-agent.pid");
@@ -5505,12 +5556,41 @@ fn read_agent_status(running_hint: bool) -> SshAgentStatus {
         .and_then(|sock| query_agent_key_count(sock).ok());
 
     SshAgentStatus {
-        running: running_hint || socket_value.is_some() || pid_value.is_some(),
+        // 三态判定，杜绝旧 `hint || files` 的假绿：
+        // - 内嵌 agent（desktop 启动）：任务句柄存活 + state 文件在；
+        // - 外部 agent（CLI 独立进程起的 daemon，desktop 无句柄）：socket
+        //   能真实连上（unix 连接探测）才算运行中；
+        // - 任务已死只剩上次残留的 state 文件：不算运行中（这是"点击启动
+        //   无效果但徽章恒绿"bug 的根源）。
+        // Windows 无连接探测（query_agent_key_count 是 unix 专属）：内嵌
+        // 场景由句柄覆盖；外部 daemon 可见性为已知限制。
+        running: (running_hint && (socket_value.is_some() || pid_value.is_some()))
+            || (!running_hint && probe_agent_alive(socket_value.as_deref())),
         socket_path: socket_value,
         pid: pid_value,
         key_count,
         state_dir: dir.to_string_lossy().to_string(),
     }
+}
+
+/// 外部 agent 探测：unix 下对 state 文件记录的 socket 做一次 connect-only
+/// 探活（不进行协议对话——对无应答的残留 socket 也不会阻塞）。
+/// 连不上 = agent 已死，state 文件只是残留。
+#[cfg(unix)]
+fn probe_agent_alive(sock_path: Option<&str>) -> bool {
+    use std::os::unix::net::UnixStream;
+    // connect-only 探活：本地 unix socket 连接即时完成（成功/ECONNREFUSED/
+    // ENOENT），不做协议对话，无阻塞窗口。
+    sock_path
+        .map(|sock| UnixStream::connect(sock).is_ok())
+        .unwrap_or(false)
+}
+
+#[cfg(not(unix))]
+fn probe_agent_alive(_sock_path: Option<&str>) -> bool {
+    // Windows：内嵌 agent 由任务句柄覆盖；外部 daemon 的 named pipe 探测
+    // 未实现，为已知限制（待 Windows 实机验收一并核对）。
+    false
 }
 
 #[cfg(unix)]
@@ -5519,8 +5599,19 @@ pub(crate) fn query_agent_key_count(sock_path: &str) -> std::result::Result<usiz
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
 
+    // 全程限时：status 查询跑在 UI 路径上，对"活着但不应答"的 socket
+    // （残留监听、卡死的 daemon）无超时会永久阻塞面板。connect 在本地
+    // unix socket 上即时返回；read/write 超时挡住所有协议阶段挂起。
+    // （本工具链的 std 没有 UnixStream::connect_timeout。）
+    const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
     let mut stream =
         UnixStream::connect(sock_path).map_err(|e| format!("Failed to connect to agent: {}", e))?;
+    stream
+        .set_read_timeout(Some(QUERY_TIMEOUT))
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(Some(QUERY_TIMEOUT))
+        .map_err(|e| e.to_string())?;
     // request identities: len=1 payload 11
     let mut pkt = vec![0u8; 5];
     BigEndian::write_u32(&mut pkt[0..4], 1);
