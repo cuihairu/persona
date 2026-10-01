@@ -852,7 +852,7 @@ Browser & Autofill (future)
         测试：CLI 3 个 bridge 测试（card/login 建议分离、fill 卡含 origin 放行 + 响应无 cvv + login 响应形状不变、copy 四字段 + 空值 + 非卡拒绝），
         扩展 6 个 jest（autocomplete/关键词/先于 TOTP/标签不回归/virtual
         form/普通文本不误伤）。
-- [ ] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`
+- [x] Passkeys (WebAuthn) storage + autofill — 设计稿：`docs/PASSKEYS_DESIGN.md`
   - [x] P1: 软件验证器 core/CLI（ES256 生成/签名、p256+coset、passkeys 表与 KeyHierarchy 包裹、
         PersonaService create/list/show/delete/assertion/self-test/export、审计事件、
         `persona passkey …` CLI、JSON 导出含私钥（export_allowed 门禁）、
@@ -878,6 +878,11 @@ Browser & Autofill (future)
         桌面可复用）+ `persona import-1pux --dry-run` 预览/确认/落库；vault→identity、
         Login/API Credential/SSH Key 映射、TOTP 拆独立凭据、未映射类别跳过并报告；
         真实 .1pux 导出待人工验收
+  - [x] §12 fuzz 清单（2026-10-01）：`clientDataJSON`/creation-options/
+        origin↔rp_id 三解析入口确定性种子变异回路常驻 core 单测
+        （`crypto::passkey::tests::fuzz_*`，手写 DetRng + 失败闭合锚点；
+        无 cargo-fuzz/libFuzzer 基建、不引 nightly，真 fuzz target 落地时
+        直接挂同一入口/同一属性）
   - [ ] P4: OS passkey provider（macOS/Windows）、conditional mediation
         ——2026-09-22 细化为可执行计划（`docs/BRIDGE_PROTOCOL.md` §13.1）：
         二者是同一工作流（原生 passkey 选择 UI 出 Persona 条目 = 向 OS 注册
