@@ -2,15 +2,15 @@
 
 ## 已入库的设计资产（出处）
 
-| 文件 | 位置（tracked） | 首次入库 commit | 日期 | 说明 |
-|---|---|---|---|---|
-| light-full.png | docs/branding/ui/light-full.png、docs/src/public/ui/light-full.png | bae6a51（README 段） / 70331ce（站点副本） | 2026-09-30 | 亮色主题全窗（三栏布局） |
-| dark-full.png | docs/branding/ui/dark-full.png、docs/src/public/ui/dark-full.png | bae6a51 / 70331ce | 2026-09-30 | 暗色主题全窗 |
-| light-sidebar.png | docs/branding/ui/light-sidebar.png、docs/src/public/ui/light-sidebar.png | bae6a51 / 70331ce | 2026-09-30 | 亮色侧栏特写（1Password 风格分组） |
-| dark-sidebar.png | docs/branding/ui/dark-sidebar.png、docs/src/public/ui/dark-sidebar.png | bae6a51 / 70331ce | 2026-09-30 | 暗色侧栏特写 |
-| sidebar-before-redesign.png | docs/branding/ui/sidebar-before-redesign.png、docs/src/public/ui/sidebar-before-redesign.png | bae6a51 / 70331ce | 2026-09-30 | 侧栏重设计前对比 |
-| persona-logo.svg | docs/src/public/persona-logo.svg、docs/branding/logo.svg（SVG 源） | 1c85352（初始品牌提交） | 2026-09-25 | 主 Logo（矢量） |
-| wordmark-horizontal.svg | docs/branding/wordmark-horizontal.svg | 1c85352 | 2026-09-25 | 横排字标（Persona 数钥） |
+| 文件                        | 位置（tracked）                                                                              | 首次入库 commit                            | 日期       | 说明                               |
+| --------------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------ | ---------- | ---------------------------------- |
+| light-full.png              | docs/branding/ui/light-full.png、docs/src/public/ui/light-full.png                           | bae6a51（README 段） / 70331ce（站点副本） | 2026-09-30 | 亮色主题全窗（三栏布局）           |
+| dark-full.png               | docs/branding/ui/dark-full.png、docs/src/public/ui/dark-full.png                             | bae6a51 / 70331ce                          | 2026-09-30 | 暗色主题全窗                       |
+| light-sidebar.png           | docs/branding/ui/light-sidebar.png、docs/src/public/ui/light-sidebar.png                     | bae6a51 / 70331ce                          | 2026-09-30 | 亮色侧栏特写（1Password 风格分组） |
+| dark-sidebar.png            | docs/branding/ui/dark-sidebar.png、docs/src/public/ui/dark-sidebar.png                       | bae6a51 / 70331ce                          | 2026-09-30 | 暗色侧栏特写                       |
+| sidebar-before-redesign.png | docs/branding/ui/sidebar-before-redesign.png、docs/src/public/ui/sidebar-before-redesign.png | bae6a51 / 70331ce                          | 2026-09-30 | 侧栏重设计前对比                   |
+| persona-logo.svg            | docs/src/public/persona-logo.svg、docs/branding/logo.svg（SVG 源）                           | 1c85352（初始品牌提交）                    | 2026-09-25 | 主 Logo（矢量）                    |
+| wordmark-horizontal.svg     | docs/branding/wordmark-horizontal.svg                                                        | 1c85352                                    | 2026-09-25 | 横排字标（Persona 数钥）           |
 
 **说明**：站点 VitePress 用 `/ui/*.png`（public 副本），README/品牌目录各保留一份源，均已 git 跟踪。未发现 `docs/design/`、`ui_sandbox_out/` 或其他原型文件（.fig/.sketch/.xd/.ai/.psd）。
 
@@ -18,18 +18,18 @@
 
 docs/src/previews/ui.md 已列入下表。**严禁自行生成或替换任何 SVG/设计资产**。
 
-| 视图 | 缺失原因 | 建议交付形式 |
-|---|---|---|
-| SSH Agent 面板 | 仓库无对应设计原型/截图 | PNG/JPG（明暗双主题，含托管密钥列表、agent 启停态、签名审批弹窗） |
-| 设置 · 安全中心 | 同上 | PNG/JPG（修改主密码、生物识别解锁、自动锁定、旅行模式） |
-| 设置 · 同步设备 | 同上 | PNG/JPG（设备登记/授权/吊销、冲突裁决队列） |
-| 条目详情 · 密文揭示 | 同上 | PNG/JPG（掩显→再认证→明文揭示流程，保留操作细节） |
-| 新建 / 编辑凭据弹窗 | 同上 | PNG/JPG（分类字段、密码生成器、表单校验错误态） |
-| 统计 / 安全瞭望 | 同上 | PNG/JPG（库内元数据、弱口令/重用检测） |
-| 快速访问 | 同上 | PNG/JPG（全局热键唤起的速查面板） |
-| CLI 终端会话 | 同上 | PNG/JPG（persona CLI 关键命令终端记录，浅色/深色择一或双份） |
-| 浏览器扩展 | 同上 | PNG/JPG（填充建议弹层、身份切换） |
-| 移动端（Android / iOS / 鸿蒙） | 同上 | PNG/JPG（三端原生界面，关键视图） |
+| 视图                           | 缺失原因                | 建议交付形式                                                      |
+| ------------------------------ | ----------------------- | ----------------------------------------------------------------- |
+| SSH Agent 面板                 | 仓库无对应设计原型/截图 | PNG/JPG（明暗双主题，含托管密钥列表、agent 启停态、签名审批弹窗） |
+| 设置 · 安全中心                | 同上                    | PNG/JPG（修改主密码、生物识别解锁、自动锁定、旅行模式）           |
+| 设置 · 同步设备                | 同上                    | PNG/JPG（设备登记/授权/吊销、冲突裁决队列）                       |
+| 条目详情 · 密文揭示            | 同上                    | PNG/JPG（掩显→再认证→明文揭示流程，保留操作细节）                 |
+| 新建 / 编辑凭据弹窗            | 同上                    | PNG/JPG（分类字段、密码生成器、表单校验错误态）                   |
+| 统计 / 安全瞭望                | 同上                    | PNG/JPG（库内元数据、弱口令/重用检测）                            |
+| 快速访问                       | 同上                    | PNG/JPG（全局热键唤起的速查面板）                                 |
+| CLI 终端会话                   | 同上                    | PNG/JPG（persona CLI 关键命令终端记录，浅色/深色择一或双份）      |
+| 浏览器扩展                     | 同上                    | PNG/JPG（填充建议弹层、身份切换）                                 |
+| 移动端（Android / iOS / 鸿蒙） | 同上                    | PNG/JPG（三端原生界面，关键视图）                                 |
 
 ## 补充说明
 
