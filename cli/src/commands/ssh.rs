@@ -2656,7 +2656,8 @@ mod tests {
         .await
         .expect_err("garbage file must fail");
         assert!(
-            err.to_string().contains("Unrecognized private key file format"),
+            err.to_string()
+                .contains("Unrecognized private key file format"),
             "{err}"
         );
 
@@ -2676,7 +2677,8 @@ mod tests {
         .await
         .expect_err("public key file must fail");
         assert!(
-            err.to_string().contains("Unrecognized private key file format"),
+            err.to_string()
+                .contains("Unrecognized private key file format"),
             "{err}"
         );
     }

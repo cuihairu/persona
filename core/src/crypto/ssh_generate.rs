@@ -76,7 +76,9 @@ mod tests {
     fn assert_roundtrip(generated: &GeneratedSshKey, expected_type: &str, expected_algo: &str) {
         assert_eq!(generated.key_type, expected_type);
         assert_eq!(generated.ssh_algorithm, expected_algo);
-        assert!(generated.public_key.starts_with(&format!("{expected_algo} AAAA")));
+        assert!(generated
+            .public_key
+            .starts_with(&format!("{expected_algo} AAAA")));
         assert!(generated.fingerprint.starts_with("SHA256:"));
         assert!(generated
             .private_key_pem
@@ -86,7 +88,10 @@ mod tests {
         assert!(!reparsed.key_data().is_encrypted());
         assert_eq!(reparsed.comment(), generated.comment);
         assert_eq!(
-            reparsed.public_key().fingerprint(ssh_key::HashAlg::Sha256).to_string(),
+            reparsed
+                .public_key()
+                .fingerprint(ssh_key::HashAlg::Sha256)
+                .to_string(),
             generated.fingerprint,
             "指纹必须与重解析公钥一致"
         );
