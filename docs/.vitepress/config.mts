@@ -17,6 +17,10 @@ const sidebar = [
     ],
   },
   {
+    text: "界面预览",
+    items: [{ text: "界面一览", link: "/previews/ui" }],
+  },
+  {
     text: "API 文档",
     items: [
       { text: "认证 API", link: "/api/authentication" },
@@ -79,6 +83,7 @@ export default defineConfig({
     siteTitle: "Persona 数钥",
     nav: [
       { text: "指南", link: "/overview/introduction" },
+      { text: "界面", link: "/previews/ui" },
       { text: "开发", link: "/development/structure" },
       { text: "API", link: "/api/sync" },
       {
