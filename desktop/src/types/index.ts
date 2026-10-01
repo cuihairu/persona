@@ -44,16 +44,6 @@ export type AutoLockEventPayload =
   | { type: 'unlocked'; session_id: string }
   | { type: 'activity'; session_id: string };
 
-/** persona://ssh-approval 事件的载荷（与 Rust 侧 SshApprovalRequest 对应） */
-export interface SshApprovalRequest {
-  request_id: string;
-  key_id: string;
-  fingerprint: string;
-  operation: string;
-  peer: string | null;
-  timestamp: string;
-}
-
 /** persona://passkey-approval 事件的负载（与 Rust 侧 PasskeyApprovalRequest 对应） */
 export interface PasskeyApprovalRequest {
   request_id: string;
