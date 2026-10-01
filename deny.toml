@@ -43,6 +43,10 @@ ignore = [
     "RUSTSEC-2025-0080",
     "RUSTSEC-2025-0100",
     "RUSTSEC-2025-0098",
+    # Marvin Attack timing sidechannel in rsa (via ssh-key + ssh-agent rsa-sha2-*
+    # signing); upstream has published no patched release (Solution: none), so
+    # there is nothing to upgrade to. Revisit when RustCrypto/RSA ships a fix.
+    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
