@@ -6,6 +6,8 @@ import type {
   ApiResponse,
   CredentialHistoryEntry,
   Identity,
+  SshKeyImported,
+  SshKeyInspection,
   UpdateCredentialRequest,
   UpdateCredentialDataRequest,
 } from '@/types';
@@ -638,6 +640,39 @@ export const usePersonaService = () => {
       }
     } catch {
       toast.error(t('svc.sshKeysFailed'));
+    }
+  };
+
+  /** SSH 私钥文件导入的两段（inspect/import）不在这里 toast：导入弹框
+   *  需要按响应分支（受保护钥要补口令、错口令要原地重试），错误就地展示 */
+  const inspectSshKeyFile = async (path: string) => {
+    try {
+      return await personaAPI.inspectSshKeyFile(path);
+    } catch (err) {
+      return {
+        success: false,
+        data: null,
+        error: err instanceof Error ? err.message : String(err),
+        error_code: null,
+      } as ApiResponse<SshKeyInspection>;
+    }
+  };
+
+  const importSshKey = async (request: {
+    identity_id: string;
+    path: string;
+    name?: string;
+    passphrase?: string;
+  }) => {
+    try {
+      return await personaAPI.importSshKey(request);
+    } catch (err) {
+      return {
+        success: false,
+        data: null,
+        error: err instanceof Error ? err.message : String(err),
+        error_code: null,
+      } as ApiResponse<SshKeyImported>;
     }
   };
 

@@ -93,6 +93,24 @@ pub enum SshSubcommand {
         #[arg(long, conflicts_with = "seed_base64")]
         seed_hex: Option<String>,
     },
+    /// Import an OpenSSH private key file (id_ed25519 / id_rsa / id_ecdsa,
+    /// passphrase-protected keys are unlocked at import; the stored copy is
+    /// sealed by the vault's per-item key)
+    ImportFile {
+        /// Identity name to store the key under
+        #[arg(short, long)]
+        identity: String,
+        /// Path to the OpenSSH private key file
+        #[arg(short, long)]
+        file: String,
+        /// Key label (defaults to the file's comment, else the file name)
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Passphrase for encrypted keys (you will be prompted if omitted
+        /// and the key needs one)
+        #[arg(long)]
+        passphrase: Option<String>,
+    },
     /// Print OpenSSH public key for a credential
     ExportPub {
         /// Credential UUID
@@ -184,6 +202,12 @@ pub(crate) async fn execute_with(
             seed_base64,
             seed_hex,
         } => import_seed(&identity, name, seed_base64, seed_hex, config, ui).await,
+        SshSubcommand::ImportFile {
+            identity,
+            file,
+            name,
+            passphrase,
+        } => import_file(&identity, &file, name, passphrase, config, ui).await,
         SshSubcommand::ExportPub { id } => export_pubkey(id, config, ui).await,
         SshSubcommand::StopAgent => stop_agent(),
         SshSubcommand::Run { host, command } => run_with_host(&host, command, config).await,
@@ -903,6 +927,77 @@ async fn import_seed(
     println!("  Identity: {}", identity.name.cyan());
     println!("  Name: {}", name.cyan());
     println!("  Public: {}", public_openssh);
+    println!("  ID: {}", cred.id);
+    Ok(())
+}
+
+/// 导入 OpenSSH 私钥文件（`persona ssh import-file --identity … --file ~/.ssh/id_ed25519`）。
+/// 解析/解锁走 core 的 ssh_import；入库口径：私钥存解锁后的 OpenSSH PEM
+/// （per-item key 封存在 vault 层），公钥行/类型/指纹解析自同一把钥。
+async fn import_file(
+    identity_name: &str,
+    file_path: &str,
+    label: Option<String>,
+    passphrase: Option<String>,
+    config: &crate::config::CliConfig,
+    ui: &dyn crate::utils::prompt::PromptUi,
+) -> Result<()> {
+    println!(
+        "{}",
+        "🔑 Importing OpenSSH private key file...".cyan().bold()
+    );
+    let pem = std::fs::read_to_string(file_path)
+        .with_context(|| format!("Cannot read key file {file_path}"))?;
+
+    // 先按给定口令解析；密钥受保护但没给口令时交互补问一次
+    let imported = match persona_core::crypto::ssh_import::import_openssh_private_key(
+        &pem,
+        passphrase.as_deref(),
+    ) {
+        Ok(imported) => imported,
+        Err(err) if err.to_string().contains("passphrase required") => {
+            let pass = ui
+                .password("Key passphrase", false, None)
+                .context("Passphrase required to unlock this SSH key")?;
+            persona_core::crypto::ssh_import::import_openssh_private_key(&pem, Some(&pass))?
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    let service = ensure_service(config, ui).await?;
+    let identity = resolve_identity(&service, identity_name).await?;
+
+    // 条目名回退：--name > 钥匙 comment > 文件名 > 兜底
+    let file_name = std::path::Path::new(file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string());
+    let name = label
+        .or_else(|| (!imported.comment.is_empty()).then(|| imported.comment.clone()))
+        .or(file_name)
+        .unwrap_or_else(|| "SSH Key (imported)".to_string());
+
+    let ssh_data = SshKeyData {
+        private_key: imported.private_key_pem.clone(),
+        public_key: imported.public_key.clone(),
+        key_type: imported.key_type.clone(),
+        passphrase: None,
+    };
+    let cred = service
+        .create_credential(
+            identity.id,
+            name,
+            CredentialType::SshKey,
+            SecurityLevel::High,
+            &CredentialData::SshKey(ssh_data),
+        )
+        .await?;
+
+    println!("{} Imported SSH key:", "✓".green().bold());
+    println!("  Identity: {}", identity.name.cyan());
+    println!("  Name: {}", cred.name.cyan());
+    println!("  Type: {}", imported.key_type.cyan());
+    println!("  Fingerprint: {}", imported.fingerprint.yellow());
+    println!("  Public: {}", imported.public_key);
     println!("  ID: {}", cred.id);
     Ok(())
 }
@@ -2288,6 +2383,263 @@ mod tests {
         .await
         .expect_err("unknown identity must fail");
         assert!(err.to_string().contains("Identity 'ghost' not found"));
+    }
+
+    // ------------------------------------------------------------------
+    // import-file: OpenSSH 私钥文件导入（seed 导入之外的文件通道）
+    // ------------------------------------------------------------------
+
+    fn write_key_file(dir: &TempDir, name: &str, pem: &str) -> std::path::PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, pem).unwrap();
+        path
+    }
+
+    fn openssh_pem(algorithm: ssh_key::Algorithm) -> (String, String) {
+        let key = ssh_key::private::PrivateKey::random(&mut rand_core::OsRng, algorithm).unwrap();
+        (
+            key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string(),
+            key.public_key().to_openssh().unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn import_file_plain_and_stored_shape() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        let (pem, pub_line) = openssh_pem(ssh_key::Algorithm::Rsa { hash: None });
+        let key_path = write_key_file(&dir, "id_rsa", &pem);
+
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: key_path.to_string_lossy().to_string(),
+                name: Some("rsa-import".to_string()),
+                passphrase: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("plain rsa file import works");
+        assert!(ui.exhausted());
+
+        // 库内形状：私钥 = 解锁后的 PEM（可再解析、非密文），类型/公钥一致
+        let creds = alice_credentials(&config, "master-pin").await;
+        let ssh_id = creds
+            .iter()
+            .find(|(_, t)| matches!(t, CredentialType::SshKey))
+            .expect("ssh credential present")
+            .0;
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        service.authenticate_user("master-pin").await.unwrap();
+        let Some(CredentialData::SshKey(ssh)) = service.get_credential_data(&ssh_id).await.unwrap()
+        else {
+            panic!("ssh key data readable");
+        };
+        assert_eq!(ssh.key_type, "rsa");
+        assert_eq!(ssh.public_key, pub_line);
+        assert!(ssh
+            .private_key
+            .starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+        let reparsed = ssh_key::private::PrivateKey::from_openssh(&ssh.private_key).unwrap();
+        assert!(!reparsed.key_data().is_encrypted());
+
+        // 名字回退：comment 非空且无 --name 时用 comment；这里给了 --name
+        // 走 label——再导一把不带 --name 的 ed25519 验证 comment/file 回退。
+        // （这把的公钥行在 set_comment 之后才取，解构出的第一个直接丢弃）
+        let (pem, _) = openssh_pem(ssh_key::Algorithm::Ed25519);
+        let mut key = ssh_key::private::PrivateKey::from_openssh(&pem).unwrap();
+        key.set_comment("cui@laptop");
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+        let pub_line = key.public_key().to_openssh().unwrap();
+        let key_path = write_key_file(&dir, "id_ed25519_test", &pem);
+
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: key_path.to_string_lossy().to_string(),
+                name: None,
+                passphrase: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("comment fallback works");
+        let creds = alice_credentials(&config, "master-pin").await;
+        assert_eq!(
+            creds
+                .iter()
+                .filter(|(_, t)| matches!(t, CredentialType::SshKey))
+                .count(),
+            2
+        );
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        service.authenticate_user("master-pin").await.unwrap();
+        let identity = service
+            .get_identity_by_name("alice")
+            .await
+            .unwrap()
+            .unwrap();
+        let named = service
+            .get_credentials_for_identity(&identity.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|c| c.name == "cui@laptop")
+            .expect("entry named after the key comment");
+        let Some(CredentialData::SshKey(ssh)) =
+            service.get_credential_data(&named.id).await.unwrap()
+        else {
+            panic!("ssh key data readable");
+        };
+        assert_eq!(ssh.public_key, pub_line);
+        assert_eq!(ssh.key_type, "ed25519");
+    }
+
+    #[tokio::test]
+    async fn import_file_encrypted_passphrase_paths() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        let key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Ed25519,
+        )
+        .unwrap();
+        // encrypt 返回新的加密实例（不改动原值），必须接住再序列化
+        let key = key.encrypt(&mut rand_core::OsRng, "hunter2").unwrap();
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+        let key_path = write_key_file(&dir, "id_encrypted", &pem);
+        let file = key_path.to_string_lossy().to_string();
+
+        // 受保护但没给 --passphrase → ScriptedUi 补问口令后解锁成功
+        let ui = ScriptedUi::new().password("hunter2").password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: file.clone(),
+                name: None,
+                passphrase: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("interactive passphrase unlock works");
+        assert!(ui.exhausted());
+
+        // --passphrase 直给也通
+        let ui = ScriptedUi::new().password("master-pin");
+        execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: file.clone(),
+                name: None,
+                passphrase: Some("hunter2".to_string()),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("flagged passphrase unlock works");
+
+        // 错误口令 → 明确报错（不静默吞）
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file,
+                name: None,
+                passphrase: Some("wrong".to_string()),
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("wrong passphrase must fail");
+        assert!(err.to_string().contains("incorrect"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn import_file_rejects_garbage_and_missing_files() {
+        let _env = lock_process_env();
+        let _pw = EnvVarGuard::remove("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = unlocked_workspace(&dir, "master-pin").await;
+
+        // 不存在的文件
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: dir.path().join("nope").to_string_lossy().to_string(),
+                name: None,
+                passphrase: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("missing file must fail");
+        assert!(err.to_string().contains("Cannot read key file"));
+
+        // 垃圾内容 / 公钥行当私钥 → 解析层拒绝
+        let garbage = write_key_file(&dir, "garbage", "not a key at all");
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: garbage.to_string_lossy().to_string(),
+                name: None,
+                passphrase: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("garbage file must fail");
+        assert!(
+            err.to_string().contains("Not a valid OpenSSH private key"),
+            "{err}"
+        );
+
+        let (_, pub_line) = openssh_pem(ssh_key::Algorithm::Ed25519);
+        let pub_file = write_key_file(&dir, "id_ed25519.pub", &pub_line);
+        let ui = ScriptedUi::new().password("master-pin");
+        let err = execute_with(
+            ssh_args(SshSubcommand::ImportFile {
+                identity: "alice".to_string(),
+                file: pub_file.to_string_lossy().to_string(),
+                name: None,
+                passphrase: None,
+            }),
+            &config,
+            &ui,
+        )
+        .await
+        .expect_err("public key file must fail");
+        assert!(
+            err.to_string().contains("Not a valid OpenSSH private key"),
+            "{err}"
+        );
     }
 
     // ------------------------------------------------------------------

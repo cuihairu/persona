@@ -94,6 +94,9 @@ assert_cmd = "2.0"
 predicates = "3.0"
 proptest = { workspace = true }
 sqlx = { workspace = true }
+# import-file 测试现场生成 OpenSSH 私钥 fixture
+ssh-key.workspace = true
+rand_core.workspace = true
 
 [features]
 default = ["interactive"]

@@ -54,6 +54,8 @@ import type {
   QuickAccessStatus,
   SshAgentStatus,
   SshAgentKey,
+  SshKeyInspection,
+  SshKeyImported,
   WalletListResponse,
   WalletAddressesResponse,
   WalletGenerateRequest,
@@ -436,6 +438,21 @@ class PersonaAPI {
 
   async getSshKeys(): Promise<ApiResponse<SshAgentKey[]>> {
     return invoke('get_ssh_keys');
+  }
+
+  /** 预览 OpenSSH 私钥文件（指纹/类型/是否受保护），不入库 */
+  async inspectSshKeyFile(path: string): Promise<ApiResponse<SshKeyInspection>> {
+    return invoke('inspect_ssh_key_file', { path });
+  }
+
+  /** 导入 OpenSSH 私钥文件入库为 SshKey 条目（snake_case 键契约） */
+  async importSshKey(request: {
+    identity_id: string;
+    path: string;
+    name?: string;
+    passphrase?: string;
+  }): Promise<ApiResponse<SshKeyImported>> {
+    return invoke('import_ssh_key', { request });
   }
 
   async walletList(identityId?: string): Promise<ApiResponse<WalletListResponse>> {

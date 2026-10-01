@@ -46,6 +46,11 @@ bech32.workspace = true
 p256.workspace = true
 coset.workspace = true
 base64.workspace = true
+# OpenSSH 私钥文件导入（crypto/ssh_import.rs）
+ssh-key.workspace = true
+# ssh-key 0.6 的 CryptoRngCore 口径（rand 0.10 的 rand_core 0.9 与之不兼容）；
+# 测试 fixture 生成与 ③ 新建密钥的 keygen 都用它
+rand_core.workspace = true
 
 # Watchtower 泄露检查（HIBP k-anonymity）——可选：trait 与解析纯函数不依赖网络
 # json feature：ServerEventSink 的 .json() 请求体需要（workspace 默认未开）

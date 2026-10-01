@@ -2,8 +2,9 @@
 //! - Cross-platform agent (UNIX sockets on Unix, Named Pipes on Windows)
 //! - Implements SSH Agent protocol subset:
 //!   - request_identities
-//!   - sign_request (ed25519)
-//! - Loads SSH keys (ed25519) from Persona vault (CredentialType::SshKey)
+//!   - sign_request (ed25519 / RSA rsa-sha2-256|512 / ECDSA nistp256)
+//! - Loads SSH keys from Persona vault (CredentialType::SshKey): legacy
+//!   BASE64 seed entries and imported OpenSSH PEM entries (ed25519/rsa/ecdsa)
 //! - Unlocks using master password from env PERSONA_MASTER_PASSWORD (if required)
 //! - Advanced policy enforcement: per-host, per-key, time-based restrictions
 //!
@@ -70,11 +71,24 @@ pub async fn handle_connection(agent: &mut Agent, mut stream: AgentStream) -> Re
     Ok(())
 }
 
+/// 签名私钥材料。ed25519 走库内既有约定（`SshKeyData.private_key` =
+/// BASE64(32B seed)）；导入的 OpenSSH 私钥（rsa / ecdsa / ed25519 PEM）
+/// 在加载时解出原始组件，签名时按算法分派。
+#[derive(Clone)]
+pub enum SigningKeyMaterial {
+    /// ed25519 seed（既有约定与导入的 PEM 统一归一到这里）。
+    Ed25519 { seed: [u8; 32] },
+    /// RSA（PKCS#1 v1.5，rsa-sha2-256/512 按 RFC 8332 客户端 flags 分派）。
+    Rsa(Arc<rsa::RsaPrivateKey>),
+    /// ECDSA NIST P-256（ecdsa-sha2-nistp256，确定性 RFC 6979 签名）。
+    EcdsaP256(p256::ecdsa::SigningKey),
+}
+
 #[derive(Clone)]
 pub struct AgentKey {
     pub public_blob: Vec<u8>, // OpenSSH key blob
     pub comment: String,
-    pub secret_seed: [u8; 32], // ed25519 seed
+    pub signing_key: SigningKeyMaterial,
     pub identity_id: uuid::Uuid,
     pub credential_id: uuid::Uuid,
 }
@@ -173,33 +187,12 @@ impl Agent {
                     if let Some(CredentialData::SshKey(ssh)) =
                         service.get_credential_data(&cred.id).await?
                     {
-                        // ssh.private_key is base64 seed; ssh.public_key is OpenSSH text
-                        let seed_bytes = match BASE64.decode(&ssh.private_key) {
-                            Ok(b) if b.len() == 32 => {
-                                let mut arr = [0u8; 32];
-                                arr.copy_from_slice(&b);
-                                arr
+                        match agent_key_from_ssh_data(&ssh, &cred, &id.id) {
+                            Ok(key) => self.keys.push(key),
+                            Err(e) => {
+                                warn!("Skipping SSH credential {}: {e}", cred.id);
                             }
-                            _ => {
-                                warn!("Invalid SSH seed size for credential {}", cred.id);
-                                continue;
-                            }
-                        };
-                        // Build public blob from OpenSSH public text
-                        let public_blob =
-                            if let Some(blob) = parse_openssh_pub_to_blob(&ssh.public_key) {
-                                blob
-                            } else {
-                                warn!("Invalid OpenSSH public key for credential {}", cred.id);
-                                continue;
-                            };
-                        self.keys.push(AgentKey {
-                            public_blob,
-                            comment: cred.name.clone(),
-                            secret_seed: seed_bytes,
-                            identity_id: id.id,
-                            credential_id: cred.id,
-                        });
+                        }
                     }
                 }
             }
@@ -236,7 +229,7 @@ impl Agent {
         self.keys.push(AgentKey {
             public_blob,
             comment,
-            secret_seed: seed,
+            signing_key: SigningKeyMaterial::Ed25519 { seed },
             identity_id: uuid::Uuid::new_v4(),
             credential_id: uuid::Uuid::new_v4(),
         });
@@ -261,7 +254,8 @@ impl Agent {
         // sign_request payload: string key_blob, string data, flags(u32)
         let key_blob = read_ssh_string(&mut payload)?;
         let data_to_sign = read_ssh_string(&mut payload)?;
-        let _flags = payload.read_u32::<BigEndian>().unwrap_or(0);
+        // RFC 8332 flags: SSH_AGENT_RSA_SHA2_256 = 2, SSH_AGENT_RSA_SHA2_512 = 4
+        let flags = payload.read_u32::<BigEndian>().unwrap_or(0);
         // Find key
         let key = self
             .keys
@@ -368,19 +362,13 @@ impl Agent {
             policy_enforcer.record_signature(&key.credential_id, hostname.as_deref());
         }
 
-        // ed25519 sign
-        use ed25519_dalek::{Signature, Signer, SigningKey};
-        let signing = SigningKey::from_bytes(&key.secret_seed);
-        let sig: Signature = signing.sign(&data_to_sign);
+        // Per-algorithm signing; sig_blob carries the wire algorithm name
+        let sig_blob = build_signature_blob(key, &data_to_sign, flags)?;
         // Audit sign operation (best-effort, include SHA256 of signed data)
         if let Err(e) = audit_sign_with_digest(&key.identity_id, &key.credential_id, &data_to_sign)
         {
             tracing::warn!("audit sign failed: {}", e);
         }
-        // Build signature blob: string algo, string signature (raw) for ed25519
-        let mut sig_blob = Vec::new();
-        write_ssh_string(&mut sig_blob, b"ssh-ed25519")?;
-        write_ssh_string(&mut sig_blob, sig.to_bytes().as_slice())?;
         // response: type(14) string sig_blob
         let mut out = Vec::new();
         out.push(14u8);
@@ -464,16 +452,216 @@ fn read_ssh_string(buf: &mut &[u8]) -> Result<Vec<u8>> {
     Ok(s.to_vec())
 }
 
-fn parse_openssh_pub_to_blob(s: &str) -> Option<Vec<u8>> {
-    // "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI.... [comment]"
-    let mut parts = s.split_whitespace();
-    let algo = parts.next()?;
-    if algo != "ssh-ed25519" {
-        return None;
+/// OpenSSH 公钥单行（`ssh-ed25519 AAAA… [comment]` 等）→ 线格式 blob。
+/// ssh-key 解析器对三种算法统一处理，顺带校验行格式（畸形行返回 None）。
+fn parse_public_line_to_blob(s: &str) -> Option<Vec<u8>> {
+    let public = ssh_key::PublicKey::from_openssh(s.trim()).ok()?;
+    public.to_bytes().ok()
+}
+
+/// 库内 SshKey 条目 → AgentKey。私钥双格式：既有约定 BASE64(32B seed)
+/// 优先；其余（导入的 OpenSSH PEM，含 rsa/ecdsa）走 PEM 解析。
+/// 公钥行与私钥算法不一致时以解析出的私钥为准重建公钥 blob，避免
+/// 库内字段被改坏后 agent 通告错误公钥。
+fn agent_key_from_ssh_data(
+    ssh: &persona_core::models::SshKeyData,
+    cred: &persona_core::models::Credential,
+    identity_id: &uuid::Uuid,
+) -> Result<AgentKey> {
+    let signing_key =
+        parse_signing_key(&ssh.private_key).map_err(|e| anyhow!("credential {}: {e}", cred.id))?;
+
+    // 公钥 blob：优先用库内公钥行；与私钥算法不符/行畸形时从私钥重建
+    let public_blob = match parse_public_line_to_blob(&ssh.public_key) {
+        Some(blob) => blob,
+        None => public_blob_from_signing_key(&signing_key)?,
+    };
+    if public_key_algorithm(&public_blob).as_deref() != Some(signing_key.algorithm_name()) {
+        warn!(
+            "credential {}: public key algorithm mismatch, rebuilding from private key",
+            cred.id
+        );
+        return public_blob_from_signing_key(&signing_key).map(|blob| AgentKey {
+            public_blob: blob,
+            comment: cred.name.clone(),
+            signing_key,
+            identity_id: *identity_id,
+            credential_id: cred.id,
+        });
     }
-    let b64 = parts.next()?;
-    let decoded = BASE64.decode(b64).ok()?;
-    Some(decoded)
+
+    Ok(AgentKey {
+        public_blob,
+        comment: cred.name.clone(),
+        signing_key,
+        identity_id: *identity_id,
+        credential_id: cred.id,
+    })
+}
+
+impl SigningKeyMaterial {
+    /// SSH 线格式算法名（签名 blob 与公钥 blob 共用）。
+    fn algorithm_name(&self) -> &'static str {
+        match self {
+            SigningKeyMaterial::Ed25519 { .. } => "ssh-ed25519",
+            SigningKeyMaterial::Rsa(_) => "ssh-rsa",
+            SigningKeyMaterial::EcdsaP256(_) => "ecdsa-sha2-nistp256",
+        }
+    }
+}
+
+/// 私钥文本（BASE64 seed 或 OpenSSH PEM）→ 签名材料。
+fn parse_signing_key(private_key: &str) -> Result<SigningKeyMaterial> {
+    use ssh_key::private::{KeypairData, PrivateKey};
+
+    // 既有约定：BASE64(32B ed25519 seed)。带 '-' 的 PEM 头不可能过 base64 解码。
+    if let Ok(bytes) = BASE64.decode(private_key.trim()) {
+        if bytes.len() == 32 {
+            let mut seed = [0u8; 32];
+            seed.copy_from_slice(&bytes);
+            return Ok(SigningKeyMaterial::Ed25519 { seed });
+        }
+    }
+
+    let key = PrivateKey::from_openssh(private_key.trim())
+        .map_err(|e| anyhow!("private key is neither a 32-byte seed nor an OpenSSH PEM: {e}"))?;
+    if key.key_data().is_encrypted() {
+        return Err(anyhow!(
+            "private key is still passphrase-encrypted; re-import with the passphrase"
+        ));
+    }
+    match key.key_data() {
+        KeypairData::Ed25519(kp) => Ok(SigningKeyMaterial::Ed25519 {
+            seed: kp.private.to_bytes(),
+        }),
+        KeypairData::Rsa(kp) => {
+            let mpint_to_biguint = |m: &ssh_key::Mpint| -> Result<rsa::BigUint> {
+                m.as_positive_bytes()
+                    .map(rsa::BigUint::from_bytes_be)
+                    .ok_or_else(|| anyhow!("negative RSA component is not valid"))
+            };
+            let n = mpint_to_biguint(&kp.public.n)?;
+            let e = mpint_to_biguint(&kp.public.e)?;
+            let d = mpint_to_biguint(&kp.private.d)?;
+            let p = mpint_to_biguint(&kp.private.p)?;
+            let q = mpint_to_biguint(&kp.private.q)?;
+            let mut private = rsa::RsaPrivateKey::from_components(n, e, d, vec![p, q])?;
+            private.precompute()?;
+            Ok(SigningKeyMaterial::Rsa(Arc::new(private)))
+        }
+        KeypairData::Ecdsa(ssh_key::private::EcdsaKeypair::NistP256 { private, .. }) => {
+            let secret = p256::SecretKey::from_slice(private.as_slice())
+                .map_err(|e| anyhow!("invalid P-256 private scalar: {e}"))?;
+            Ok(SigningKeyMaterial::EcdsaP256(secret.into()))
+        }
+        _ => Err(anyhow!(
+            "unsupported SSH key algorithm: {}",
+            key.algorithm()
+        )),
+    }
+}
+
+fn public_blob_from_signing_key(signing_key: &SigningKeyMaterial) -> Result<Vec<u8>> {
+    match signing_key {
+        SigningKeyMaterial::Ed25519 { seed } => {
+            use ed25519_dalek::SigningKey;
+            let pub_bytes = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+            let mut blob = Vec::new();
+            write_ssh_string(&mut blob, b"ssh-ed25519")?;
+            write_ssh_string(&mut blob, &pub_bytes)?;
+            Ok(blob)
+        }
+        SigningKeyMaterial::Rsa(private) => {
+            use rsa::traits::PublicKeyParts;
+            let public = private.to_public_key();
+            let mut blob = Vec::new();
+            write_ssh_string(&mut blob, b"ssh-rsa")?;
+            write_mpint(&mut blob, &public.n().to_bytes_be());
+            write_mpint(&mut blob, &public.e().to_bytes_be());
+            Ok(blob)
+        }
+        SigningKeyMaterial::EcdsaP256(signing) => {
+            let verifying = signing.verifying_key();
+            let mut blob = Vec::new();
+            write_ssh_string(&mut blob, b"ecdsa-sha2-nistp256")?;
+            write_ssh_string(&mut blob, b"nistp256")?;
+            // 非压缩 SEC1 点（65B，0x04 || X || Y），SSH 线格式约定
+            write_ssh_string(&mut blob, verifying.to_encoded_point(false).as_bytes())?;
+            Ok(blob)
+        }
+    }
+}
+
+/// 公钥 blob 的算法名（第一个 ssh string）。
+fn public_key_algorithm(blob: &[u8]) -> Option<String> {
+    let mut slice: &[u8] = blob;
+    let algo = read_ssh_string(&mut slice).ok()?;
+    String::from_utf8(algo).ok()
+}
+
+/// 按算法分派签名并组线格式签名 blob：
+/// string algorithm, string signature。
+/// - ed25519：raw 64B R||S
+/// - RSA（RFC 8332）：客户端 flags 要 sha2-256 用之，其余（含 sha2-512
+///   flag）用 sha2-512；SHA-1 的 `ssh-rsa` 签名不再产出（OpenSSH ≥8.8
+///   已默认禁用，且 SHA-1 签名是弱化路径）
+/// - ECDSA P-256：mpint r || mpint s
+fn build_signature_blob(key: &AgentKey, data: &[u8], flags: u32) -> Result<Vec<u8>> {
+    const SSH_AGENT_RSA_SHA2_256: u32 = 2;
+
+    let (algo, signature): (&str, Vec<u8>) = match &key.signing_key {
+        SigningKeyMaterial::Ed25519 { seed } => {
+            use ed25519_dalek::{Signer, SigningKey};
+            let sig = SigningKey::from_bytes(seed).sign(data);
+            ("ssh-ed25519", sig.to_bytes().to_vec())
+        }
+        SigningKeyMaterial::Rsa(private) => {
+            if flags & SSH_AGENT_RSA_SHA2_256 != 0 {
+                rsa_sign::<rsa::sha2::Sha256>(private, "rsa-sha2-256", data)?
+            } else {
+                rsa_sign::<rsa::sha2::Sha512>(private, "rsa-sha2-512", data)?
+            }
+        }
+        SigningKeyMaterial::EcdsaP256(signing) => {
+            use p256::ecdsa::signature::Signer;
+            let sig: p256::ecdsa::Signature = signing.sign(data);
+            let mut signature = Vec::new();
+            write_mpint(&mut signature, sig.r().to_bytes().as_slice());
+            write_mpint(&mut signature, sig.s().to_bytes().as_slice());
+            ("ecdsa-sha2-nistp256", signature)
+        }
+    };
+
+    let mut sig_blob = Vec::new();
+    write_ssh_string(&mut sig_blob, algo.as_bytes())?;
+    write_ssh_string(&mut sig_blob, &signature)?;
+    Ok(sig_blob)
+}
+
+/// PKCS#1 v1.5 签名（确定性，无 RNG），返回裸签名字节。
+fn rsa_sign<D>(
+    private: &rsa::RsaPrivateKey,
+    algo: &'static str,
+    data: &[u8],
+) -> Result<(&'static str, Vec<u8>)>
+where
+    D: rsa::sha2::Digest + rsa::pkcs8::AssociatedOid,
+{
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+    let signing = SigningKey::<D>::new(private.clone());
+    let sig = signing.sign(data);
+    Ok((algo, sig.to_vec()))
+}
+
+/// RFC 4251 mpint：去前导零、高位为 1 时补 0x00、零编码为空串。
+fn write_mpint(buf: &mut Vec<u8>, bytes: &[u8]) {
+    let first = bytes.iter().position(|&b| b != 0).unwrap_or(bytes.len());
+    let stripped = &bytes[first..];
+    let pad = usize::from(stripped.first().is_some_and(|b| b & 0x80 != 0));
+    buf.extend_from_slice(&((stripped.len() + pad) as u32).to_be_bytes());
+    buf.extend(std::iter::repeat_n(0u8, pad));
+    buf.extend_from_slice(stripped);
 }
 
 fn failure_packet() -> Vec<u8> {
@@ -630,6 +818,7 @@ fn detect_platform() -> Option<BiometricPlatform> {
 #[allow(clippy::await_holding_lock)] // env_lock must be held across .await for env var isolation in parallel tests
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::{Mutex as StdMutex, OnceLock};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -668,12 +857,20 @@ mod tests {
             AgentKey {
                 public_blob,
                 comment: comment.to_string(),
-                secret_seed: seed,
+                signing_key: SigningKeyMaterial::Ed25519 { seed },
                 identity_id: uuid::Uuid::new_v4(),
                 credential_id: uuid::Uuid::new_v4(),
             },
             verifying,
         )
+    }
+
+    /// 从 AgentKey 里取 ed25519 seed（测试断言用）。
+    fn key_seed(key: &AgentKey) -> [u8; 32] {
+        match &key.signing_key {
+            SigningKeyMaterial::Ed25519 { seed } => *seed,
+            other => panic!("expected ed25519 key, got {}", other.algorithm_name()),
+        }
     }
 
     #[test]
@@ -707,17 +904,36 @@ mod tests {
     }
 
     #[test]
-    fn parse_openssh_pub_to_blob_accepts_ed25519() {
-        let decoded = vec![1u8, 2, 3, 4, 5];
-        let encoded = BASE64.encode(&decoded);
-        let line = format!("ssh-ed25519 {} comment", encoded);
-        assert_eq!(parse_openssh_pub_to_blob(&line), Some(decoded));
+    fn parse_public_line_to_blob_accepts_ed25519() {
+        let (_, blob) = openssh_pub_line([5u8; 32]);
+        let line = format!("ssh-ed25519 {} comment", BASE64.encode(&blob));
+        assert_eq!(parse_public_line_to_blob(&line), Some(blob));
     }
 
     #[test]
-    fn parse_openssh_pub_to_blob_rejects_other_algorithms() {
-        let line = "ssh-rsa AAAA comment";
-        assert_eq!(parse_openssh_pub_to_blob(line), None);
+    fn parse_public_line_to_blob_accepts_rsa_and_ecdsa() {
+        let rsa_key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Rsa { hash: None },
+        )
+        .unwrap();
+        let line = rsa_key.public_key().to_openssh().unwrap();
+        let blob = parse_public_line_to_blob(&line).expect("rsa public line parses");
+        assert_eq!(public_key_algorithm(&blob).as_deref(), Some("ssh-rsa"));
+
+        let ecdsa_key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Ecdsa {
+                curve: ssh_key::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap();
+        let line = ecdsa_key.public_key().to_openssh().unwrap();
+        let blob = parse_public_line_to_blob(&line).expect("ecdsa public line parses");
+        assert_eq!(
+            public_key_algorithm(&blob).as_deref(),
+            Some("ecdsa-sha2-nistp256")
+        );
     }
 
     #[test]
@@ -953,7 +1169,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         assert!(agent.load_test_key_from_env().unwrap());
         assert_eq!(agent.keys.len(), 1);
         assert_eq!(agent.keys[0].comment, "Test Key");
-        assert_eq!(agent.keys[0].secret_seed, seed);
+        assert_eq!(key_seed(&agent.keys[0]), seed);
 
         std::env::set_var("PERSONA_AGENT_TEST_KEY_COMMENT", "custom comment");
         assert!(agent.load_test_key_from_env().unwrap());
@@ -974,7 +1190,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         let bogus_path = PathBuf::from("/nonexistent/dir/identities.db");
         agent.load_keys_from_persona(&bogus_path).await.unwrap();
         assert_eq!(agent.keys.len(), 1);
-        assert_eq!(agent.keys[0].secret_seed, seed);
+        assert_eq!(key_seed(&agent.keys[0]), seed);
 
         clear_test_key_env();
     }
@@ -1052,7 +1268,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         assert_eq!(agent.keys.len(), 1);
         let loaded = &agent.keys[0];
         assert_eq!(loaded.comment, "my ssh key");
-        assert_eq!(loaded.secret_seed, seed);
+        assert_eq!(key_seed(loaded), seed);
         assert_eq!(loaded.public_blob, pub_blob);
         assert_eq!(loaded.identity_id, identity.id);
         assert_eq!(loaded.credential_id, cred.id);
@@ -1078,7 +1294,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
             .await
             .unwrap();
 
-        // Bad seed size (not 32 bytes) and malformed public key text.
+        // Bad seed size (not 32 bytes) — neither seed nor PEM → skipped.
         let bad_seed =
             persona_core::models::CredentialData::SshKey(persona_core::models::SshKeyData {
                 private_key: BASE64.encode(b"too short"),
@@ -1097,7 +1313,8 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
             .await
             .unwrap();
 
-        let (_, good_blob) = openssh_pub_line([31u8; 32]);
+        // Malformed public key text with a valid private key: the agent
+        // rebuilds the public blob from the private key so the key stays usable.
         let bad_pub =
             persona_core::models::CredentialData::SshKey(persona_core::models::SshKeyData {
                 private_key: BASE64.encode([32u8; 32]),
@@ -1133,9 +1350,24 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         let mut agent = Agent::default();
         agent.load_keys_from_persona(&db_path).await.unwrap();
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
-        assert_eq!(agent.keys.len(), 1, "only the valid credential loads");
-        assert_eq!(agent.keys[0].secret_seed, seed);
-        let _ = good_blob;
+        assert_eq!(agent.keys.len(), 2, "bad seed skipped; bad pubkey rebuilt");
+        // 加载顺序不承诺与入库顺序一致，按条目名定位
+        let rebuilt = agent
+            .keys
+            .iter()
+            .find(|k| k.comment == "bad pubkey")
+            .expect("bad pubkey credential rebuilt from its private key");
+        assert_eq!(
+            public_key_algorithm(&rebuilt.public_blob).as_deref(),
+            Some("ssh-ed25519"),
+            "rebuilt blob carries the right algorithm"
+        );
+        let good = agent
+            .keys
+            .iter()
+            .find(|k| k.comment == "good")
+            .expect("valid credential loads");
+        assert_eq!(key_seed(good), seed);
     }
 
     #[tokio::test]
@@ -1424,9 +1656,10 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
     }
 
     #[test]
-    fn parse_openssh_pub_to_blob_rejects_malformed_lines() {
-        assert_eq!(parse_openssh_pub_to_blob(""), None);
-        assert_eq!(parse_openssh_pub_to_blob("ssh-ed25519 !!!not-b64!!!"), None);
+    fn parse_public_line_to_blob_rejects_malformed_lines() {
+        assert_eq!(parse_public_line_to_blob(""), None);
+        assert_eq!(parse_public_line_to_blob("ssh-ed25519 !!!not-b64!!!"), None);
+        assert_eq!(parse_public_line_to_blob("garbage"), None);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1820,5 +2053,322 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         agent.load_keys_from_persona(&db_path).await.unwrap();
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
         assert!(agent.keys.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // OpenSSH PEM entries (imported keys): load + sign per algorithm
+    // ------------------------------------------------------------------
+
+    fn pem_credential_data(
+        private: &str,
+        public: &str,
+        key_type: &str,
+    ) -> persona_core::models::CredentialData {
+        persona_core::models::CredentialData::SshKey(persona_core::models::SshKeyData {
+            private_key: private.to_string(),
+            public_key: public.to_string(),
+            key_type: key_type.to_string(),
+            passphrase: None,
+        })
+    }
+
+    async fn seed_vault_with_ssh_credentials(
+        db_path: &Path,
+        entries: Vec<(&str, persona_core::models::CredentialData)>,
+    ) {
+        let db = persona_core::Database::from_file(&db_path.to_path_buf())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        let identity = service
+            .create_identity(
+                "agent-pem".to_string(),
+                persona_core::models::IdentityType::Personal,
+            )
+            .await
+            .unwrap();
+        for (name, data) in entries {
+            service
+                .create_credential(
+                    identity.id,
+                    name.to_string(),
+                    persona_core::models::CredentialType::SshKey,
+                    persona_core::models::SecurityLevel::High,
+                    &data,
+                )
+                .await
+                .unwrap();
+        }
+    }
+
+    /// 从签名响应里解出 (算法名, 裸签名字节)。
+    fn parse_signature_blob(pkt: &[u8]) -> (String, Vec<u8>) {
+        assert_eq!(pkt[4], 14u8, "signature response");
+        let mut slice: &[u8] = &pkt[5..];
+        let sig_blob = read_ssh_string(&mut slice).unwrap();
+        let mut s: &[u8] = &sig_blob;
+        let algo = String::from_utf8(read_ssh_string(&mut s).unwrap()).unwrap();
+        (algo, read_ssh_string(&mut s).unwrap())
+    }
+
+    #[tokio::test]
+    async fn pem_rsa_credential_loads_and_signs_rsa_sha2() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Rsa { hash: None },
+        )
+        .unwrap();
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+        let pub_line = key.public_key().to_openssh().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        std::env::set_var("PERSONA_DB_PATH", dir.path().join("audit.db"));
+        seed_vault_with_ssh_credentials(
+            &db_path,
+            vec![("rsa-pem", pem_credential_data(&pem, &pub_line, "rsa"))],
+        )
+        .await;
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        assert_eq!(agent.keys.len(), 1, "imported RSA PEM loads");
+        let loaded = agent.keys[0].clone();
+        assert_eq!(
+            public_key_algorithm(&loaded.public_blob).as_deref(),
+            Some("ssh-rsa")
+        );
+
+        // flags=0 → rsa-sha2-512（SHA-1 的 ssh-rsa 不再产出）
+        // 独立裁判：从 PEM 的 n/e 重建 rsa 公钥验签
+        let kp = key.key_data().rsa().unwrap();
+        let to_big =
+            |m: &ssh_key::Mpint| rsa::BigUint::from_bytes_be(m.as_positive_bytes().unwrap());
+        let rsa_public =
+            rsa::RsaPublicKey::new(to_big(&kp.public.n), to_big(&kp.public.e)).unwrap();
+
+        let pkt = agent
+            .sign_response(&sign_payload_for(&loaded, b"rsa-data"))
+            .await
+            .unwrap();
+        let (algo, sig_bytes) = parse_signature_blob(&pkt);
+        assert_eq!(algo, "rsa-sha2-512");
+        use rsa::pkcs1v15::VerifyingKey;
+        use rsa::signature::Verifier;
+        let verifying = VerifyingKey::<rsa::sha2::Sha512>::new(rsa_public.clone());
+        let sig = rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()).unwrap();
+        verifying.verify(b"rsa-data", &sig).unwrap();
+
+        // flags=2 (SSH_AGENT_RSA_SHA2_256) → rsa-sha2-256
+        let mut payload = Vec::new();
+        write_ssh_string(&mut payload, &loaded.public_blob).unwrap();
+        write_ssh_string(&mut payload, b"rsa-data").unwrap();
+        payload.extend_from_slice(&2u32.to_be_bytes());
+        let pkt = agent.sign_response(&payload).await.unwrap();
+        let (algo, sig_bytes) = parse_signature_blob(&pkt);
+        assert_eq!(algo, "rsa-sha2-256");
+        let verifying = VerifyingKey::<rsa::sha2::Sha256>::new(rsa_public);
+        let sig = rsa::pkcs1v15::Signature::try_from(sig_bytes.as_slice()).unwrap();
+        verifying.verify(b"rsa-data", &sig).unwrap();
+
+        std::env::remove_var("PERSONA_DB_PATH");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn pem_ecdsa_credential_loads_and_signs_nistp256() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Ecdsa {
+                curve: ssh_key::EcdsaCurve::NistP256,
+            },
+        )
+        .unwrap();
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+        let pub_line = key.public_key().to_openssh().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        std::env::set_var("PERSONA_DB_PATH", dir.path().join("audit.db"));
+        seed_vault_with_ssh_credentials(
+            &db_path,
+            vec![("ecdsa-pem", pem_credential_data(&pem, &pub_line, "ecdsa"))],
+        )
+        .await;
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        assert_eq!(agent.keys.len(), 1, "imported ECDSA PEM loads");
+        let loaded = agent.keys[0].clone();
+        assert_eq!(
+            public_key_algorithm(&loaded.public_blob).as_deref(),
+            Some("ecdsa-sha2-nistp256")
+        );
+
+        let pkt = agent
+            .sign_response(&sign_payload_for(&loaded, b"ecdsa-data"))
+            .await
+            .unwrap();
+        let (algo, sig_bytes) = parse_signature_blob(&pkt);
+        assert_eq!(algo, "ecdsa-sha2-nistp256");
+
+        // 签名是 mpint r || mpint s（RFC 5656 线格式，不是 DER）
+        let mut s: &[u8] = &sig_bytes;
+        let r = read_ssh_string(&mut s).unwrap();
+        let sig_s = read_ssh_string(&mut s).unwrap();
+        assert!(s.is_empty());
+        use p256::ecdsa::signature::Verifier;
+        use p256::FieldBytes;
+        // mpint 带符号：标量高位为 1 时线格式补 0x00（恰好覆盖这条随机路径），
+        // 重构 32B 标量前先剥掉补位
+        let strip_sign_pad = |mut v: Vec<u8>| -> Vec<u8> {
+            while v.len() > 32 {
+                v.remove(0);
+            }
+            v
+        };
+        let sig = p256::ecdsa::Signature::from_scalars(
+            *FieldBytes::from_slice(&strip_sign_pad(r)),
+            *FieldBytes::from_slice(&strip_sign_pad(sig_s)),
+        )
+        .unwrap();
+        let private_bytes = key.key_data().ecdsa().unwrap().private_key_bytes();
+        let signing =
+            p256::ecdsa::SigningKey::from_bytes(FieldBytes::from_slice(private_bytes)).unwrap();
+        let verifying = p256::ecdsa::VerifyingKey::from(&signing);
+        verifying.verify(b"ecdsa-data", &sig).unwrap();
+
+        std::env::remove_var("PERSONA_DB_PATH");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn pem_ed25519_credential_normalizes_to_seed_signing() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Ed25519,
+        )
+        .unwrap();
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+        let pub_line = key.public_key().to_openssh().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        std::env::set_var("PERSONA_DB_PATH", dir.path().join("audit.db"));
+        seed_vault_with_ssh_credentials(
+            &db_path,
+            vec![("ed-pem", pem_credential_data(&pem, &pub_line, "ed25519"))],
+        )
+        .await;
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        assert_eq!(agent.keys.len(), 1, "imported ed25519 PEM loads");
+        let loaded = agent.keys[0].clone();
+        assert_eq!(
+            loaded.signing_key.algorithm_name(),
+            "ssh-ed25519",
+            "PEM ed25519 normalizes to the seed path"
+        );
+
+        let pkt = agent
+            .sign_response(&sign_payload_for(&loaded, b"ed-data"))
+            .await
+            .unwrap();
+        let (algo, sig_bytes) = parse_signature_blob(&pkt);
+        assert_eq!(algo, "ssh-ed25519");
+        // 独立裁判：从 PEM 里的 seed 重建 verifying key 验签
+        let seed = key.key_data().ed25519().unwrap().private.to_bytes();
+        let verifying = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key();
+        let sig = ed25519_dalek::Signature::from_slice(&sig_bytes).unwrap();
+        verifying.verify_strict(b"ed-data", &sig).unwrap();
+
+        std::env::remove_var("PERSONA_DB_PATH");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn encrypted_pem_credential_is_skipped() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Ed25519,
+        )
+        .unwrap();
+        // encrypt 返回加密后的新实例——必须接住，原实例仍是明文
+        let key = key.encrypt(&mut rand_core::OsRng, "hunter2").unwrap();
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        seed_vault_with_ssh_credentials(
+            &db_path,
+            vec![("locked", pem_credential_data(&pem, "garbage", "ed25519"))],
+        )
+        .await;
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert!(agent.keys.is_empty(), "still-encrypted PEM must not load");
+    }
+
+    #[tokio::test]
+    async fn mismatched_public_line_is_rebuilt_from_private() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        // ed25519 私钥 + 一把真实但不同的 rsa 公钥行 → 算法不匹配，重建
+        let key = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Ed25519,
+        )
+        .unwrap();
+        let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
+        let other_rsa = ssh_key::private::PrivateKey::random(
+            &mut rand_core::OsRng,
+            ssh_key::Algorithm::Rsa { hash: None },
+        )
+        .unwrap();
+        let wrong_pub_line = other_rsa.public_key().to_openssh().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        seed_vault_with_ssh_credentials(
+            &db_path,
+            vec![(
+                "mismatch",
+                pem_credential_data(&pem, &wrong_pub_line, "ed25519"),
+            )],
+        )
+        .await;
+
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert_eq!(agent.keys.len(), 1);
+        assert_eq!(
+            public_key_algorithm(&agent.keys[0].public_blob).as_deref(),
+            Some("ssh-ed25519"),
+            "blob rebuilt from the private key, not the mismatched rsa line"
+        );
     }
 }

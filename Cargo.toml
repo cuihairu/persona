@@ -64,6 +64,12 @@ p256 = { version = "0.13", features = ["ecdsa"] }
 coset = "0.3"
 base64 = "0.22"
 webauthn-rs = "0.5"
+# SSH 密钥：OpenSSH 私钥容器（openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf）解析与
+# 序列化、公钥行/指纹格式化，交给审计过的 ssh-key；p256 feature 供 ECDSA
+# P-256 的生成/转换（ecdsa feature 只给类型）；rsa 供 agent 的 rsa-sha2-* 签名
+ssh-key = { version = "0.6", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
+rsa = "0.9"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 # 数据库
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }

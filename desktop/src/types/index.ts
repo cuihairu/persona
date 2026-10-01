@@ -671,6 +671,26 @@ export interface SshAgentKey {
   updated_at: string;
 }
 
+/** inspect_ssh_key_file 响应：导入确认弹框展示（指纹人工核对） */
+export interface SshKeyInspection {
+  file_name: string;
+  key_type: string;
+  ssh_algorithm: string;
+  public_key: string;
+  fingerprint: string;
+  comment: string;
+  encrypted: boolean;
+}
+
+/** import_ssh_key 响应 */
+export interface SshKeyImported {
+  credential_id: string;
+  name: string;
+  key_type: string;
+  public_key: string;
+  fingerprint: string;
+}
+
 export interface Statistics {
   total_identities: number;
   total_credentials: number;

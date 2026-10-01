@@ -3836,6 +3836,158 @@ pub struct SshApprovalRespondRequest {
     pub allow: bool,
 }
 
+// ---------------------------------------------------------------------------
+// SSH 私钥文件导入（文件选择器与拖拽共用同一条 inspect → 确认 → import 流水线）
+// ---------------------------------------------------------------------------
+
+/// 导入前预览（不解锁也能给指纹：OpenSSH 容器的公钥半边是明文）。
+/// 键序沿 SshAgentStatus/SshKeySummary 的 snake_case 契约。
+#[derive(Serialize)]
+pub struct SshKeyInspectDto {
+    pub file_name: String,
+    pub key_type: String,
+    pub ssh_algorithm: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub comment: String,
+    pub encrypted: bool,
+}
+
+/// 入库结果。
+#[derive(Serialize)]
+pub struct SshKeyImportedDto {
+    pub credential_id: String,
+    pub name: String,
+    pub key_type: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ImportSshKeyRequest {
+    pub identity_id: String,
+    pub path: String,
+    pub name: Option<String>,
+    pub passphrase: Option<String>,
+}
+
+/// 读文件并解析 OpenSSH 私钥容器，返回导入确认所需字段（不入库）。
+#[command(rename_all = "snake_case")]
+pub async fn inspect_ssh_key_file(
+    path: String,
+) -> std::result::Result<ApiResponse<SshKeyInspectDto>, String> {
+    let inspection = match fs::read_to_string(&path) {
+        Ok(pem) => persona_core::crypto::ssh_import::inspect_openssh_private_key(&pem),
+        Err(e) => Err(PersonaError::Io(format!(
+            "Cannot read key file {path}: {e}"
+        ))),
+    };
+    match inspection {
+        Ok(info) => {
+            let file_name = Path::new(&path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            Ok(ApiResponse::success(SshKeyInspectDto {
+                file_name,
+                key_type: info.key_type,
+                ssh_algorithm: info.ssh_algorithm,
+                public_key: info.public_key,
+                fingerprint: info.fingerprint,
+                comment: info.comment,
+                encrypted: info.encrypted,
+            }))
+        }
+        Err(e) => {
+            // ssh_import 直接返回 PersonaError（非 anyhow 包装），先归一
+            let err: anyhow::Error = e.into();
+            let (code, msg) = map_persona_error(&err);
+            match code {
+                Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                None => Ok(ApiResponse::error(msg)),
+            }
+        }
+    }
+}
+
+/// 导入 OpenSSH 私钥文件入库为 SshKey 条目：解锁（如受保护）→
+/// 私钥以明文 PEM 存 `SshKeyData.private_key`，封存由 per-item key 负责。
+#[command(rename_all = "snake_case")]
+pub async fn import_ssh_key(
+    request: ImportSshKeyRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SshKeyImportedDto>, String> {
+    let imported = match fs::read_to_string(&request.path) {
+        Ok(pem) => persona_core::crypto::ssh_import::import_openssh_private_key(
+            &pem,
+            request.passphrase.as_deref(),
+        ),
+        Err(e) => Err(PersonaError::Io(format!(
+            "Cannot read key file {}: {e}",
+            request.path
+        ))),
+    };
+    let imported = match imported {
+        Ok(imported) => imported,
+        Err(e) => {
+            let err: anyhow::Error = e.into();
+            let (code, msg) = map_persona_error(&err);
+            return Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(msg),
+            });
+        }
+    };
+
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&request.identity_id) {
+            Ok(identity_uuid) => {
+                // 条目名回退：--name > 钥匙 comment > 文件名 > 兜底
+                let file_name = Path::new(&request.path)
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string());
+                let name = request
+                    .name
+                    .filter(|n| !n.trim().is_empty())
+                    .or_else(|| (!imported.comment.is_empty()).then(|| imported.comment.clone()))
+                    .or(file_name)
+                    .unwrap_or_else(|| "SSH Key (imported)".to_string());
+                let ssh_data = persona_core::models::SshKeyData {
+                    private_key: imported.private_key_pem.clone(),
+                    public_key: imported.public_key.clone(),
+                    key_type: imported.key_type.clone(),
+                    passphrase: None,
+                };
+                match service
+                    .create_credential(
+                        identity_uuid,
+                        name.clone(),
+                        CredentialType::SshKey,
+                        SecurityLevel::High,
+                        &persona_core::models::CredentialData::SshKey(ssh_data),
+                    )
+                    .await
+                {
+                    Ok(credential) => Ok(ApiResponse::success(SshKeyImportedDto {
+                        credential_id: credential.id.to_string(),
+                        name,
+                        key_type: imported.key_type,
+                        public_key: imported.public_key,
+                        fingerprint: imported.fingerprint,
+                    })),
+                    Err(e) => {
+                        let (_code, msg) = map_persona_error(&e);
+                        Ok(ApiResponse::error(msg))
+                    }
+                }
+            }
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
 #[command(rename_all = "snake_case")]
 pub async fn ssh_approval_respond(
     request: SshApprovalRespondRequest,
@@ -6248,5 +6400,48 @@ mod tests {
         }
         let custom = serialize_wallet_address(addr(AddressType::Custom("nft-vault".to_string())));
         assert_eq!(custom.address_type, "nft-vault");
+    }
+
+    /// 一次性丢钥匙（本机 ssh-keygen 生成、无口令），钉住 inspect IPC 的
+    /// DTO 形状与指纹口径；加密钥解锁路径在 core 的 ssh_import 测试覆盖。
+    const INSPECT_FIXTURE_PEM: &str = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDTgnxCrm1hgMlxbs5yYX4cnGwrKT9YHCAVXEvB83667wAAAJgs0sOrLNLD\nqwAAAAtzc2gtZWQyNTUxOQAAACDTgnxCrm1hgMlxbs5yYX4cnGwrKT9YHCAVXEvB83667w\nAAAEA0dGcgt7qKc5Defecn7TTt7fquyTe6FpXVeshCU6jx49OCfEKubWGAyXFuznJhfhyc\nbCspP1gcIBVcS8HzfrrvAAAAFHBlcnNvbmEtZGVza3RvcC10ZXN0AQ==\n-----END OPENSSH PRIVATE KEY-----\n";
+
+    #[tokio::test]
+    async fn inspect_ssh_key_file_previews_fingerprint_and_dto_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("id_ed25519");
+        std::fs::write(&path, INSPECT_FIXTURE_PEM).unwrap();
+
+        let response = inspect_ssh_key_file(path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+        assert!(response.success, "error: {:?}", response.error);
+        let info = response.data.unwrap();
+        assert_eq!(info.file_name, "id_ed25519");
+        assert_eq!(info.key_type, "ed25519");
+        assert_eq!(info.ssh_algorithm, "ssh-ed25519");
+        assert_eq!(info.comment, "persona-desktop-test");
+        assert_eq!(
+            info.fingerprint, "SHA256:Lsw87K5csifD+2RZvvENXB0FG/LEI2+BaBR2gQQSW2Y",
+            "指纹与 ssh-keygen -lf 口径一致"
+        );
+        assert!(info.public_key.starts_with("ssh-ed25519 "));
+        assert!(!info.encrypted);
+    }
+
+    #[tokio::test]
+    async fn inspect_ssh_key_file_missing_file_is_api_error_not_invoke_error() {
+        let response = inspect_ssh_key_file("/nonexistent/id_ed25519".to_string())
+            .await
+            .unwrap();
+        assert!(!response.success);
+        assert!(
+            response
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Cannot read key file"),
+            "文件缺失走 ApiResponse::error，不逃成 invoke 裸 String"
+        );
     }
 }
