@@ -76,18 +76,17 @@ Markdown（`E2EE_SYNC_DESIGN.md`、`PASSKEYS_DESIGN.md`、
   actions 1 条（`ci: bump dtolnay/rust-toolchain`），标题带上了
   `build:` / `ci:` 前缀。一条 cargo entry 覆盖整个 workspace，成员 crate
   的 `Cargo.toml` 会一并出现在 PR 里。
-- **npm 轨道待确认**：配置落地 12 分钟时仍无 npm PR。根 `package.json`
-  自身 0 依赖，真实前端依赖分布在 pnpm workspace 成员（desktop 41 /
-  website 9 / chromium-extension 7）与独立 npm 锁文件的 `docs`；其中有
-  大量早已越过 3 天默认 cooldown 的范围内更新（`clsx` 2.0.0→2.1.1、
-  `vue` 3.5.38→3.5.43、`jest` 30.4.2→30.5.2、`ts-jest` 29.4.5→29.4.14），
-  却零 PR。对照官方口径：Dependabot 自家 monorepo 对 npm 是**按包列
-  `directories`**（`/bun/helpers`、`/npm_and_yarn/helpers`），并不只留根
-  条目——本仓根条目因自身 0 依赖，很可能覆盖不到 workspace 成员。
-  但直接补成员目录有已知副作用：pnpm 共享根锁文件 `pnpm-lock.yaml`，
-  按目录拆分时历史上不会同步更新根锁（dependabot-core #11135）。建议先看
-  一次 Dependabot 作业日志确认是排队未到还是轨道空转，再决定是否按包补
-  `directory`（或改用 `directories` 复数 + `group-by: dependency-name`）。
+- **npm 轨道已实证生效**：配置落地 19 分钟后产出 PR #33–#41——含
+  dev-deps 分组聚合 PR（一次 19 个更新，改 `desktop` /
+  `website` / `browser/chromium-extension` 三处 `package.json` + 根
+  `pnpm-lock.yaml`）与单包 PR（`zod`、`react-hot-toast`、
+  `tauri-apps/api` 等）。这推翻了落地初期的疑虑：根 `package.json` 虽
+  自身 0 依赖，但 pnpm workspace 成员（desktop 41 / website 9 /
+  chromium-extension 7）被根条目整体覆盖，锁文件也同步更新，无需按包
+  补 `directory`（那反而会踩 dependabot-core #11135 的 pnpm 根锁
+  不同步问题）。独立 npm 锁文件的 `/docs` entry 当时尚未产出 PR
+  （`vue` 3.5.38→3.5.43、`rimraf` 6.0.1→6.1.3 有范围内更新），单独
+  entry 排队靠后，下轮周更再核。
 - 平台级安全更新（`automated-security-fixes`）是仓库设置侧的独立轨道，
   不受本文件影响，保持默认。
 
