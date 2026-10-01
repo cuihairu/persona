@@ -888,7 +888,14 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
   if (!isOpen || !currentIdentity) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+      onMouseDown={(e) => {
+        // 点空白 = 取消（REAUTH 叠开/提交中不逃逸，与 Esc 同口径）；
+        // 未保存输入直接丢弃——点外即取消是本批统一口径
+        if (e.target === e.currentTarget && !reauth.isOpen && !isLoading) onClose();
+      }}
+    >
       <div className="bg-white dark:bg-gray-900 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <h2 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-4" data-testid="credential-modal-title">
           {isEditMode ? t('credForm.editTitle') : t('credForm.addTitle')}

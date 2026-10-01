@@ -67,6 +67,10 @@ const TravelPassphraseModal: React.FC<TravelPassphraseModalProps> = ({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="travel-passphrase-modal"
+      onMouseDown={(e) => {
+        // 点空白 = 取消，与 Esc/关闭按钮同口径
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">

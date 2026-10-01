@@ -104,6 +104,10 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
     <div
       className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
       data-testid="transaction-confirm-modal"
+      onMouseDown={(e) => {
+        // 点空白 = 取消（不签署）；签署必须显式点确认，误触外的代价最小
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">

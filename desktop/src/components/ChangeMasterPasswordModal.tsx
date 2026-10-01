@@ -103,6 +103,10 @@ const ChangeMasterPasswordModal: React.FC<ChangeMasterPasswordModalProps> = ({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="change-password-modal"
+      onMouseDown={(e) => {
+        // 点空白 = 取消；forced（解锁屏强引导）不可离开，与 Esc/取消按钮同口径
+        if (e.target === e.currentTarget && !forced) onCancel();
+      }}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">

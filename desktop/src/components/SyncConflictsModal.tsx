@@ -109,6 +109,10 @@ const SyncConflictsModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       data-testid="sync-conflicts-modal"
+      onMouseDown={(e) => {
+        // 点空白 = 稍后处理（冲突保持未解决，与 Esc/关闭同口径）
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">

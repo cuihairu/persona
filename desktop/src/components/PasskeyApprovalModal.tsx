@@ -57,6 +57,10 @@ const PasskeyApprovalModal: React.FC<PasskeyApprovalModalProps> = ({
       data-testid="passkey-approval-modal"
       role="alertdialog"
       aria-label={t('passkeyApproval.ariaLabel')}
+      onMouseDown={(e) => {
+        // 点空白 = 拒绝（安全默认，与 Esc 同口径）；审批必须显式允许
+        if (e.target === e.currentTarget) onRespond(request.request_id, false);
+      }}
     >
       <div className="bg-white dark:bg-gray-900 rounded-lg shadow-xl w-full max-w-md mx-4">
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200 dark:border-gray-700">

@@ -1247,7 +1247,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div
+      className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+      onMouseDown={(e) => {
+        // 点空白 = 关闭；改密子弹框打开时不逃逸（与 Esc 同口径）
+        if (e.target === e.currentTarget && !changingPassword) onClose();
+      }}
+    >
       <div className="bg-white dark:bg-gray-900 rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
         <div className="p-6 pb-0 border-b border-gray-100 dark:border-gray-800">
           <div className="flex items-center justify-between">
