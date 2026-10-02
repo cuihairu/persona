@@ -8841,7 +8841,10 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         ("wallet_generate_mnemonic", &["word_count"]),
         ("wallet_validate_mnemonic", &["phrase"]),
         ("wallet_set_item_password", &["credential_id", "password"]),
-        ("wallet_clear_item_password", &["credential_id", "item_password"]),
+        (
+            "wallet_clear_item_password",
+            &["credential_id", "item_password"],
+        ),
         ("wallet_import", &["identity_id"]),
         ("wallet_list", &["identity_id"]),
         ("wallet_list_addresses", &["wallet_id"]),

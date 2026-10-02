@@ -5813,11 +5813,9 @@ pub async fn reveal_credential_secret(
     match service_guard.as_ref() {
         Some(service) => match service.get_credential_data(&uuid).await {
             Ok(Some(data)) => {
-                if let Some((code, msg)) = ensure_item_password_ok(
-                    &data,
-                    &request.field,
-                    request.item_password.as_deref(),
-                ) {
+                if let Some((code, msg)) =
+                    ensure_item_password_ok(&data, &request.field, request.item_password.as_deref())
+                {
                     if code.is_empty() {
                         return Ok(ApiResponse::error(msg));
                     }
@@ -5869,7 +5867,11 @@ pub async fn wallet_set_item_password(
     }
     let hash = match persona_core::crypto::hashing::PasswordHasher::new().hash_password(trimmed) {
         Ok(h) => h,
-        Err(e) => return Ok(ApiResponse::error(format!("Failed to hash item password: {e}"))),
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Failed to hash item password: {e}"
+            )))
+        }
     };
     let service_guard = state.service.lock().await;
     let Some(service) = service_guard.as_ref() else {
@@ -5892,9 +5894,7 @@ pub async fn wallet_set_item_password(
         ));
     };
     w.item_password_hash = Some(hash);
-    w.item_password_hint = hint
-        .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty());
+    w.item_password_hint = hint.map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
     match service.update_credential_data(&uuid, &data).await {
         Ok(_) => Ok(ApiResponse::success(true)),
         Err(e) => {
@@ -5951,7 +5951,9 @@ pub async fn wallet_clear_item_password(
                 ))
             }
             Err(e) => {
-                return Ok(ApiResponse::error(format!("Item password check failed: {e}")))
+                return Ok(ApiResponse::error(format!(
+                    "Item password check failed: {e}"
+                )))
             }
         }
     }
@@ -6573,17 +6575,31 @@ mod tests {
         });
 
         // 未设条目密码：三个种子字段全部放行
-        for f in ["wallet_mnemonic", "wallet_private_key", "wallet_bip39_passphrase"] {
-            assert!(ensure_item_password_ok(&unguarded, f, None).is_none(), "{f}");
+        for f in [
+            "wallet_mnemonic",
+            "wallet_private_key",
+            "wallet_bip39_passphrase",
+        ] {
+            assert!(
+                ensure_item_password_ok(&unguarded, f, None).is_none(),
+                "{f}"
+            );
         }
 
         // 设了条目密码：缺参 → REQUIRED；对 → 放行；错 → WRONG
-        for f in ["wallet_mnemonic", "wallet_private_key", "wallet_bip39_passphrase"] {
+        for f in [
+            "wallet_mnemonic",
+            "wallet_private_key",
+            "wallet_bip39_passphrase",
+        ] {
             let (code, _) = ensure_item_password_ok(&guarded, f, None)
                 .expect("guarded field must require item password");
             assert_eq!(code, crate::error::CODE_ITEM_PASSWORD_REQUIRED);
 
-            assert!(ensure_item_password_ok(&guarded, f, Some("item-pass")).is_none(), "{f}");
+            assert!(
+                ensure_item_password_ok(&guarded, f, Some("item-pass")).is_none(),
+                "{f}"
+            );
 
             let (code, _) = ensure_item_password_ok(&guarded, f, Some("wrong"))
                 .expect("wrong item password must be rejected");
@@ -6591,11 +6607,12 @@ mod tests {
         }
 
         // 非保护字段（登录密码视角的 password）与非钱包类型不受影响
-        let password = CredentialData::Password(persona_core::models::credential::PasswordCredentialData {
-            password: "pw".to_string(),
-            email: None,
-            security_questions: vec![],
-        });
+        let password =
+            CredentialData::Password(persona_core::models::credential::PasswordCredentialData {
+                password: "pw".to_string(),
+                email: None,
+                security_questions: vec![],
+            });
         assert!(ensure_item_password_ok(&guarded, "password", None).is_none());
         assert!(ensure_item_password_ok(&password, "password", None).is_none());
     }
