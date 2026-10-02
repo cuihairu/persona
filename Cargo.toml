@@ -51,7 +51,7 @@ sha1 = "0.11"
 data-encoding = "2.5"
 zxcvbn = "3"
 hmac = "0.13"
-pbkdf2 = "0.12"
+pbkdf2 = "0.13"
 bs58 = { version = "0.5", features = ["check"] }
 # 链协议标准库：交易序列化/签名哈希/地址解析交给审计过的实现
 bitcoin = "0.32"
