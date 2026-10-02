@@ -59,7 +59,7 @@ pub fn generate_bitcoin_address_from_compressed_pubkey(
 pub fn hash160(data: &[u8]) -> [u8; 20] {
     let sha256_hash = Sha256::digest(data);
     let mut hasher = Ripemd160::new();
-    hasher.update(&sha256_hash);
+    hasher.update(sha256_hash);
     let ripemd_hash = hasher.finalize();
     let mut out = [0u8; 20];
     out.copy_from_slice(&ripemd_hash);

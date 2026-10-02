@@ -40,6 +40,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use sqlx::AssertSqlSafe;
 use sqlx::{Column, Row, SqlitePool};
 use std::path::{Component, Path, PathBuf};
 
@@ -283,7 +284,7 @@ async fn insert_rows(
             placeholders.push('?');
         }
         let sql = format!("INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})");
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for (key, value) in row {
             query = match value_to_cell(key, value)? {
                 Cell::Null => query.bind(None::<String>),
@@ -324,7 +325,7 @@ async fn select_rows_by_ids(
         "SELECT * FROM {table} WHERE {key_column} IN ({})",
         placeholders(ids.len())
     );
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
     for id in ids {
         query = query.bind(id);
     }
@@ -354,7 +355,7 @@ pub(crate) async fn build_pack(
     // 展开凭据/附件/钱包 id（attachment_chunks、钱包子表按父 id 收集）
     let credential_ids: Vec<String> = {
         let sql = format!("SELECT id FROM credentials WHERE identity_id IN ({in_identities})");
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -372,7 +373,7 @@ pub(crate) async fn build_pack(
             "SELECT id FROM attachments WHERE credential_id IN ({})",
             placeholders(credential_ids.len())
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in &credential_ids {
             query = query.bind(id);
         }
@@ -387,7 +388,7 @@ pub(crate) async fn build_pack(
     };
     let wallet_ids: Vec<String> = {
         let sql = format!("SELECT id FROM crypto_wallets WHERE identity_id IN ({in_identities})");
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -671,7 +672,7 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
         let sql = format!(
             "UPDATE audit_logs SET identity_id = NULL WHERE identity_id IN ({in_identities})"
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -691,7 +692,7 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
             "UPDATE audit_logs SET credential_id = NULL WHERE credential_id IN ({})",
             placeholders(credential_ids.len())
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in credential_ids {
             query = query.bind(id);
         }
@@ -709,7 +710,7 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
     // change_history 无 FK，须显式删（快照含明文元数据，随 pack 走）
     {
         let sql = format!("DELETE FROM change_history WHERE entity_id IN ({in_identities})");
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -724,7 +725,7 @@ pub(crate) async fn apply_enter_tx(pool: &SqlitePool, pack: &TravelPack) -> Pers
 
     {
         let sql = format!("DELETE FROM identities WHERE id IN ({in_identities})");
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -769,7 +770,7 @@ async fn prune_favicon_cache_tx(
             "SELECT url FROM credentials WHERE identity_id IN ({})",
             placeholders(marked.len())
         );
-        let mut query = sqlx::query_scalar::<_, Option<String>>(&sql);
+        let mut query = sqlx::query_scalar::<_, Option<String>>(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -784,7 +785,7 @@ async fn prune_favicon_cache_tx(
             "SELECT url FROM credentials WHERE identity_id IS NULL OR identity_id NOT IN ({})",
             placeholders(marked.len())
         );
-        let mut query = sqlx::query_scalar::<_, Option<String>>(&sql);
+        let mut query = sqlx::query_scalar::<_, Option<String>>(AssertSqlSafe(sql.as_str()));
         for id in marked {
             query = query.bind(id);
         }
@@ -806,7 +807,7 @@ async fn prune_favicon_cache_tx(
         "DELETE FROM favicon_cache WHERE host IN ({})",
         placeholders(doomed.len())
     );
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
     for host in &doomed {
         query = query.bind(host);
     }

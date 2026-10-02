@@ -64,7 +64,7 @@ reqwest = { workspace = true, optional = true, features = ["json"] }
 flate2 = { workspace = true, optional = true }
 
 # 数据库
-sqlx = { workspace = true, features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid"], optional = true }
+sqlx = { workspace = true, features = ["chrono", "uuid"], optional = true }
 
 # 序列化
 serde.workspace = true

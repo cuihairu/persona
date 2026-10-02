@@ -15,7 +15,7 @@
 use crate::{PersonaError, PersonaResult};
 use pkcs8::der::asn1::{ObjectIdentifier, OctetStringRef};
 use pkcs8::der::Decode;
-use pkcs8::{EncryptedPrivateKeyInfo, PrivateKeyInfo, SecretDocument};
+use pkcs8::{EncryptedPrivateKeyInfoOwned, PrivateKeyInfoOwned, SecretDocument};
 use ssh_key::private::{KeypairData, PrivateKey};
 
 /// PKCS#8 algorithm OID：rsaEncryption / ecPublicKey / Ed25519。
@@ -93,9 +93,11 @@ pub(super) fn decode(
                     PersonaError::InvalidInput(format!("Failed to parse RSA PKCS#1 PEM: {e}"))
                 })?
                 .1;
-            build_rsa(pkcs1::RsaPrivateKey::from_der(der.as_bytes()).map_err(|e| {
+            build_rsa(
+            <pkcs1::RsaPrivateKey as pkcs1::der::Decode>::from_der(der.as_bytes()).map_err(|e| {
                 PersonaError::InvalidInput(format!("Failed to decode RSA PKCS#1 key: {e}"))
-            })?)
+            })?,
+        )
         }
         PemKind::Sec1Ec => decode_sec1(pem),
     }
@@ -115,7 +117,7 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
     // 明文 DER 统一收敛为 SecretDocument（pki 借用其字节，须活得一样长）
     let plain = match password {
         Some(pass) => {
-            let encrypted = EncryptedPrivateKeyInfo::from_der(der.as_bytes()).map_err(|_| {
+            let encrypted = EncryptedPrivateKeyInfoOwned::from_der(der.as_bytes()).map_err(|_| {
                 PersonaError::InvalidInput(
                     "Failed to parse encrypted PKCS#8 private key".to_string(),
                 )
@@ -129,7 +131,7 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
         }
         None => der,
     };
-    let pki = PrivateKeyInfo::from_der(plain.as_bytes()).map_err(|e| {
+    let pki = PrivateKeyInfoOwned::from_der(plain.as_bytes()).map_err(|e| {
         PersonaError::InvalidInput(format!("Failed to parse PKCS#8 private key: {e}"))
     })?;
 
@@ -137,11 +139,14 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
         OID_ED25519 => {
             // RFC 8410 §7：privateKey 外层 OCTET STRING 里再包一层 DER
             // OCTET STRING（04 20 ‖ seed），两层都剥掉才到 32B seed
-            let seed_bytes = OctetStringRef::from_der(pki.private_key)
-                .map_err(|e| {
-                    PersonaError::InvalidInput(format!("Malformed Ed25519 PKCS#8 key: {e}"))
-                })?
-                .as_bytes();
+            // der 0.8：引用类型的 DecodeValue 落在 &OctetStringRef 上
+            let seed_ref = <&OctetStringRef as pkcs8::der::Decode>::from_der(
+                pki.private_key.as_bytes(),
+            )
+            .map_err(|e| {
+                PersonaError::InvalidInput(format!("Malformed Ed25519 PKCS#8 key: {e}"))
+            })?;
+            let seed_bytes = seed_ref.as_bytes();
             let seed: [u8; 32] = seed_bytes.try_into().map_err(|_| {
                 PersonaError::InvalidInput("Ed25519 private key seed must be 32 bytes".to_string())
             })?;
@@ -155,16 +160,21 @@ fn decode_pkcs8(pem: &str, password: Option<&str>) -> PersonaResult<PrivateKey> 
             })
         }
         OID_EC_PUBLIC_KEY => {
-            let secret = p256::SecretKey::from_sec1_der(pki.private_key).map_err(|e| {
+            let secret = p256::SecretKey::from_sec1_der(pki.private_key.as_bytes()).map_err(|e| {
                 PersonaError::InvalidInput(format!(
                     "Failed to decode EC private key (only NIST P-256 is supported): {e}"
                 ))
             })?;
             Ok(build_ecdsa_p256(secret))
         }
-        OID_RSA_ENCRYPTION => build_rsa(pkcs1::RsaPrivateKey::from_der(pki.private_key).map_err(
-            |e| PersonaError::InvalidInput(format!("Failed to decode RSA private key: {e}")),
-        )?),
+        // pkcs1 0.7 停在 der 0.7（pkcs8 0.11 已是 der 0.8），from_der 走
+        // 各自版本的 Decode trait，这里显式指定 pkcs1 侧避免歧义
+        OID_RSA_ENCRYPTION => build_rsa(
+            <pkcs1::RsaPrivateKey as pkcs1::der::Decode>::from_der(pki.private_key.as_bytes())
+                .map_err(|e| {
+                    PersonaError::InvalidInput(format!("Failed to decode RSA private key: {e}"))
+                })?,
+        ),
         other => Err(PersonaError::InvalidInput(format!(
             "Unsupported private key algorithm OID: {other}"
         ))),

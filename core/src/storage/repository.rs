@@ -5,6 +5,7 @@ use crate::models::{
 use crate::storage::Database;
 use crate::{PersonaError, Result};
 use async_trait::async_trait;
+use sqlx::AssertSqlSafe;
 use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -973,7 +974,7 @@ impl AuditLogRepository {
             placeholders
         );
 
-        let mut query_builder = sqlx::query(&query);
+        let mut query_builder = sqlx::query(AssertSqlSafe(query.as_str()));
         for action in &security_actions {
             query_builder = query_builder.bind(action);
         }
@@ -1464,7 +1465,10 @@ mod tests {
             .execute(db.pool())
             .await
             .unwrap();
-        sqlx::query(ddl).execute(db.pool()).await.unwrap();
+        sqlx::query(AssertSqlSafe(ddl.to_owned()))
+            .execute(db.pool())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

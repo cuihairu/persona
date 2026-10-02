@@ -1,4 +1,5 @@
 use crate::{PersonaError, Result};
+use sqlx::AssertSqlSafe;
 use sqlx::{Pool, Sqlite, SqlitePool};
 use std::path::Path;
 
@@ -50,7 +51,7 @@ impl Database {
 
     /// Execute a query that returns the number of affected rows
     pub async fn execute(&self, query: &str) -> Result<u64> {
-        let result = sqlx::query(query)
+        let result = sqlx::query(AssertSqlSafe(query.to_owned()))
             .execute(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -60,7 +61,7 @@ impl Database {
 
     /// Execute a query that returns a single row
     pub async fn fetch_one(&self, query: &str) -> Result<sqlx::sqlite::SqliteRow> {
-        let row = sqlx::query(query)
+        let row = sqlx::query(AssertSqlSafe(query.to_owned()))
             .fetch_one(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -70,7 +71,7 @@ impl Database {
 
     /// Execute a query that returns multiple rows
     pub async fn fetch_all(&self, query: &str) -> Result<Vec<sqlx::sqlite::SqliteRow>> {
-        let rows = sqlx::query(query)
+        let rows = sqlx::query(AssertSqlSafe(query.to_owned()))
             .fetch_all(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -80,7 +81,7 @@ impl Database {
 
     /// Execute a query that may return a row
     pub async fn fetch_optional(&self, query: &str) -> Result<Option<sqlx::sqlite::SqliteRow>> {
-        let row = sqlx::query(query)
+        let row = sqlx::query(AssertSqlSafe(query.to_owned()))
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -116,7 +117,7 @@ impl<'a> Transaction<'a> {
 
     /// Execute a query within the transaction
     pub async fn execute(&mut self, query: &str) -> Result<u64> {
-        let result = sqlx::query(query)
+        let result = sqlx::query(AssertSqlSafe(query.to_owned()))
             .execute(&mut *self.tx)
             .await
             .map_err(|e| PersonaError::Database(e.to_string()))?;

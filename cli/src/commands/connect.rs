@@ -478,9 +478,9 @@ mod tests {
         let db = Database::from_file(config.get_database_path())
             .await
             .unwrap();
-        sqlx::query_scalar(&format!(
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(1) FROM audit_logs WHERE action = '{action}'"
-        ))
+        )))
         .fetch_one(db.pool())
         .await
         .unwrap()

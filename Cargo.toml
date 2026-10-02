@@ -29,7 +29,7 @@ ed25519-dalek = { version = "3.0", features = ["pkcs8", "zeroize"] }
 # E2EE 同步 device envelope（E2EE_SYNC_DESIGN DR-1）：X25519 ephemeral DH
 # + HKDF-SHA256 展开（key‖nonce）+ AES-256-GCM；组合层约 30 行自写，
 # round-trip/篡改/跨设备失败测试覆盖（core/src/sync/envelope.rs）
-x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+x25519-dalek = { version = "3.0", features = ["static_secrets"] }
 hkdf = "0.13"
 rand = { version = "0.10", features = ["sys_rng", "thread_rng"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
@@ -73,11 +73,13 @@ rsa = { version = "0.9", features = ["sha2"] }
 # 字段级解码交给 pkcs1/pkcs8（RustCrypto 同系），pkcs8 的 encryption feature
 # 供加密 PKCS#8（PBES2）解锁；ed25519-dalek 的 pkcs8 feature 供 PKCS#8→SigningKey
 pkcs1 = { version = "0.7", features = ["std", "pem"] }
-pkcs8 = { version = "0.10", features = ["std", "pem", "encryption"] }
+pkcs8 = { version = "0.11", features = ["std", "pem", "encryption"] }
 rand_core = "0.10"
 
 # 数据库
-sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
+# 0.9 删了 runtime+TLS 组合 feature，拆开写；sqlite 不走 TLS，ring Provider
+# 与仓库既有 ring 对齐（reqwest 0.13 的 rustls 默认 provider 是 aws-lc）
+sqlx = { version = "0.9", features = ["sqlite", "runtime-tokio", "tls-rustls-ring"] }
 
 # 序列化
 serde = { version = "1.0", features = ["derive"] }
@@ -91,7 +93,8 @@ futures = "0.3"
 tokio-util = { version = "0.7", features = ["io"] }
 
 # HTTP 客户端（Watchtower 泄露检查 HIBP k-anonymity；rustls 避免 openssl 依赖）
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# 0.13 起 query/form 拆成可选 feature；sync/oplog 的 GET 拼参用 query
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "query"] }
 
 # Web框架 (服务器端)
 axum = "0.7"

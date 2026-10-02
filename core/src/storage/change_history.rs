@@ -1,6 +1,7 @@
 use crate::models::{ChangeHistory, ChangeHistoryQuery, ChangeHistoryStats, EntityType};
 use crate::storage::Database;
 use crate::{PersonaError, Result};
+use sqlx::AssertSqlSafe;
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -25,7 +26,7 @@ impl ChangeHistoryRepository {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#;
 
-        sqlx::query(query)
+        sqlx::query(AssertSqlSafe(query.to_owned()))
             .bind(history.id.to_string())
             .bind(history.entity_type.to_string())
             .bind(history.entity_id.to_string())
@@ -78,7 +79,7 @@ impl ChangeHistoryRepository {
             ORDER BY version DESC, timestamp DESC
         "#;
 
-        let rows = sqlx::query(query)
+        let rows = sqlx::query(AssertSqlSafe(query.to_owned()))
             .bind(entity_type.to_string())
             .bind(entity_id.to_string())
             .fetch_all(self.db.pool())
@@ -107,7 +108,7 @@ impl ChangeHistoryRepository {
             WHERE entity_type = ? AND entity_id = ? AND version = ?
         "#;
 
-        let row = sqlx::query(query)
+        let row = sqlx::query(AssertSqlSafe(query.to_owned()))
             .bind(entity_type.to_string())
             .bind(entity_id.to_string())
             .bind(version as i64)
@@ -180,7 +181,7 @@ impl ChangeHistoryRepository {
             sql.push_str(&format!(" OFFSET {}", offset));
         }
 
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
         for binding in bindings {
             query = query.bind(binding);
         }
@@ -207,7 +208,7 @@ impl ChangeHistoryRepository {
             WHERE entity_type = ? AND entity_id = ?
         "#;
 
-        let row = sqlx::query(query)
+        let row = sqlx::query(AssertSqlSafe(query.to_owned()))
             .bind(entity_type.to_string())
             .bind(entity_id.to_string())
             .fetch_one(self.db.pool())
@@ -292,7 +293,7 @@ impl ChangeHistoryRepository {
     pub async fn delete_before_date(&self, before: chrono::DateTime<chrono::Utc>) -> Result<usize> {
         let query = "DELETE FROM change_history WHERE timestamp < ?";
 
-        let result = sqlx::query(query)
+        let result = sqlx::query(AssertSqlSafe(query.to_owned()))
             .bind(before.to_rfc3339())
             .execute(self.db.pool())
             .await

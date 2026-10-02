@@ -694,7 +694,10 @@ mod tests {
                 .execute(&mut *conn)
                 .await
                 .unwrap();
-            sqlx::query(sql).execute(&mut *conn).await.unwrap();
+            sqlx::query(sqlx::AssertSqlSafe(sql.to_owned()))
+                .execute(&mut *conn)
+                .await
+                .unwrap();
         });
     }
 

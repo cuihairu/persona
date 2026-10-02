@@ -6,6 +6,7 @@
 //! op_id 主键 + `INSERT OR IGNORE` 提供存储层幂等（重放安全）。
 
 use chrono::{DateTime, Utc};
+use sqlx::AssertSqlSafe;
 use sqlx::Row;
 use std::collections::HashSet;
 use uuid::Uuid;
@@ -221,7 +222,7 @@ impl SyncRepository {
         for chunk in op_ids.chunks(64) {
             let placeholders = vec!["?"; chunk.len()].join(", ");
             let sql = format!("DELETE FROM sync_oplog WHERE op_id IN ({placeholders})");
-            let mut query = sqlx::query(&sql);
+            let mut query = sqlx::query(AssertSqlSafe(sql.as_str()));
             for id in chunk {
                 query = query.bind(id.to_string());
             }

@@ -10,7 +10,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use sha2::{Digest, Sha256};
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 use std::io::{Read, Write};
 use std::path::Path;
 
@@ -42,9 +42,10 @@ pub async fn vault_snapshot(pool: &SqlitePool, dest: &Path) -> Result<()> {
         .execute(pool)
         .await
     {
-        // 退路：转义字面量（SQLite 字符串字面量仅 ' 需转义为 ''）
+        // 退路：转义字面量（SQLite 字符串字面量仅 ' 需转义为 ''）；
+        // 路径先经过 ?1 绑定尝试失败才走到这里，字面量已按 SQLite 规则转义
         let escaped = dest_str.replace('\'', "''");
-        sqlx::query(&format!("VACUUM INTO '{escaped}'"))
+        sqlx::query(AssertSqlSafe(format!("VACUUM INTO '{escaped}'")))
             .execute(pool)
             .await
             .map_err(|error| {
