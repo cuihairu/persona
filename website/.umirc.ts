@@ -1,6 +1,8 @@
 import { defineConfig } from 'umi';
 
 export default defineConfig({
+  // antd 6 产物在多 chunk 间出现 esbuild helper 同名冲突，开启 IIFE 包裹消解
+  esbuildMinifyIIFE: true,
   title: 'Persona - Your Digital Identity Guardian',
   metas: [
     { name: 'description', content: 'Persona is a modern, open-source password manager with SSH Agent and digital wallet support. Built for developers who value security and privacy.' },
