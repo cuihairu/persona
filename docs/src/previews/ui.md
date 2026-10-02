@@ -53,3 +53,5 @@ UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
 | CLI 终端会话                   | persona CLI 关键命令的终端记录               |
 | 浏览器扩展                     | 填充建议弹层与身份切换                       |
 | 移动端（Android / iOS / 鸿蒙） | 三端原生界面                                 |
+
+素材的入库出处、变更史与交付规范见[素材盘点](/previews/assets)。

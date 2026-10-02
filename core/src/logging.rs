@@ -106,6 +106,12 @@ impl RedactedLoggerBuilder {
     }
 
     /// Finish configuring and install the subscriber globally.
+    ///
+    /// Idempotent: a process accepts exactly one global subscriber, so a
+    /// second call keeps the already-installed one and returns `Ok`. The
+    /// first installation in the process wins (the desktop shell installs
+    /// its file-backed subscriber before the embedded agent gets a chance);
+    /// later callers must not treat "already set" as a failure.
     pub fn init(self) -> Result<(), tracing_subscriber::util::TryInitError> {
         let formatter =
             RedactingFormatter::new(self.policy, self.include_timestamp, self.include_target);
@@ -115,15 +121,16 @@ impl RedactedLoggerBuilder {
             .with_target(self.include_target)
             .event_format(formatter);
 
-        match self.writer {
-            Some(factory) => {
-                tracing_subscriber::util::SubscriberInitExt::try_init(
-                    subscriber.with_writer(factory),
-                )?;
-            }
-            None => tracing_subscriber::util::SubscriberInitExt::try_init(subscriber)?,
+        // try_init 唯一的失败形态就是"全局 subscriber 已被占用"（宿主先装）。
+        // 幂等语义：保持已装的并返回 Ok——内嵌 agent 场景下 desktop 壳先装
+        // 文件 writer 是正常次序，绝不能当致命错误传给调用方。签名保留
+        // Result 以防将来引入真实可失败的初始化步骤。
+        let _ = match self.writer {
+            Some(factory) => tracing_subscriber::util::SubscriberInitExt::try_init(
+                subscriber.with_writer(factory),
+            ),
+            None => tracing_subscriber::util::SubscriberInitExt::try_init(subscriber),
         };
-
         Ok(())
     }
 }
@@ -628,20 +635,25 @@ mod tests {
     }
 
     #[test]
-    fn init_redacted_tracing_installs_at_most_once() {
+    fn init_redacted_tracing_is_idempotent() {
         // A process accepts exactly one global subscriber. The first call
-        // installs it (or loses a race with a parallel test); a second call
-        // must report the conflict cleanly instead of panicking.
+        // installs it (or loses a race with a parallel test); every later
+        // call keeps the installed one and returns Ok — the embedded agent
+        // runs inside the desktop shell which already installed logging,
+        // and "already set" must never surface as an agent startup failure.
         let _first = init_redacted_tracing(tracing::Level::INFO);
         let second = init_redacted_tracing(tracing::Level::INFO);
-        assert!(second.is_err(), "a second global init must fail cleanly");
+        assert!(
+            second.is_ok(),
+            "a second global init must be a no-op: {second:?}"
+        );
     }
 
     // with_writer 分支的 init：无论进程内全局槽位是否已被占（竞态下
-    // 可能本测试先装成功），try_init 都必须干净返回——成功装上（输出
-    // 进 SharedBuf，无害）或报告冲突，两条路都合法。
+    // 可能本测试先装成功），init 都幂等地返回 Ok——成功装上（输出
+    // 进 SharedBuf）或保持已装的，两条路都不报错。
     #[test]
-    fn init_with_writer_reports_conflict_or_installs_cleanly() {
+    fn init_with_writer_is_idempotent() {
         let sink = SharedBuf(Arc::new(Mutex::new(Vec::new())));
         let result = RedactedLoggerBuilder::new(tracing::Level::WARN)
             .policy(RedactionPolicy::default())
@@ -650,8 +662,11 @@ mod tests {
                 move || Box::new(SharedWriter(sink.0.clone()))
             })
             .init();
-        // 两种结局都不得 panic；失败必须是 TryInitError 而非其他。
-        // Err 时的 String 求值本身即完成断言（map_err 若 panic 会炸测试）。
-        drop(result.map_err(|e| e.to_string()));
+        // 幂等断言：无论槽位归属如何都必须 Ok（占用 = 保持已装的）
+        assert!(
+            result.is_ok(),
+            "with_writer init must stay idempotent: {:?}",
+            result.map_err(|e| e.to_string())
+        );
     }
 }

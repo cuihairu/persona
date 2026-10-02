@@ -6,9 +6,10 @@
 //! `ApprovalHandler` replaces the TTY prompt, and the never-returning accept
 //! loop is shut down by aborting the spawned task.
 //!
-//! The daemon initializes the global tracing subscriber on startup, and a
-//! process only accepts one global subscriber — so this binary runs exactly
-//! one daemon startup. All scenarios are chained through that single run.
+//! The daemon initializes the global tracing subscriber on startup (idempotent
+//! since the desktop-embedding fix: a second install keeps the existing one).
+//! Daemon startup remains heavyweight — state files, socket binding, key
+//! loading — so all scenarios are still chained through a single run.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use byteorder::{BigEndian, ByteOrder, ReadBytesExt, WriteBytesExt};

@@ -453,6 +453,13 @@ export default {
     confirm: '确认',
     invalid: '主密码错误',
   },
+  unlockGate: {
+    title: '解锁密码箱',
+    description: '密码箱已自动锁定。解锁后将自动继续刚才的操作。',
+    passwordPlaceholder: '主密码',
+    verifying: '解锁中…',
+    submit: '解锁',
+  },
   approval: {
     operation: '操作',
     unknown: '未知',
@@ -568,6 +575,8 @@ export default {
     credentialCol: '凭据',
     tagsCol: '标签',
     updatedCol: '更新时间',
+    typeCol: '类型 / 指纹',
+    publicKeyCol: '公钥',
     importButton: '导入密钥',
     dropHere: '把私钥文件拖进来即可导入（OpenSSH / PKCS#8 / PKCS#1 / SEC1）',
     importTitle: '导入 SSH 密钥',

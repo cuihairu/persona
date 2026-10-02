@@ -5,7 +5,10 @@ use crate::crypto::wallet_crypto::DerivedKey;
 use crate::{PersonaError, PersonaResult};
 use k256::elliptic_curve::{sec1::ToEncodedPoint, FieldBytes, ScalarPrimitive};
 use k256::{ProjectivePoint, PublicKey, Scalar};
-use ripemd::Ripemd160;
+// ripemd 0.2 re-exports digest 0.11 while sha2 stays on digest 0.10 — the two
+// `Digest` traits are distinct types, so ripemd's is imported under an alias
+// and RIPEMD160 is driven through the streaming API.
+use ripemd::{Digest as RipemdDigest, Ripemd160};
 use sha2::{Digest, Sha256};
 use sha3::Keccak256;
 
@@ -55,7 +58,12 @@ pub fn generate_bitcoin_address_from_compressed_pubkey(
 /// hash160 = RIPEMD160(SHA256(data)), the hash used by Bitcoin addresses.
 pub fn hash160(data: &[u8]) -> [u8; 20] {
     let sha256_hash = Sha256::digest(data);
-    Ripemd160::digest(sha256_hash).into()
+    let mut hasher = Ripemd160::new();
+    hasher.update(&sha256_hash);
+    let ripemd_hash = hasher.finalize();
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&ripemd_hash);
+    out
 }
 
 /// Generate P2PKH (Pay-to-Public-Key-Hash) address
@@ -665,9 +673,18 @@ mod tests {
 
     #[test]
     fn test_hash160_matches_double_digest_composition() {
-        let data = b"hash160 composition check";
-        let expected = ripemd::Ripemd160::digest(Sha256::digest(data));
-        assert_eq!(hash160(data), expected.as_slice());
+        // Vectors cross-checked against `openssl dgst -ripemd160` fed with
+        // `sha256sum` output — hash160 must stay RIPEMD160(SHA256(·)).
+        for (data, expected) in [
+            (b"".as_slice(), "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb"),
+            (b"abc".as_slice(), "bb1be98c142444d7a56aa3981c3942a978e4dc33"),
+            (
+                b"hash160 composition check".as_slice(),
+                "585214e818308f2ce5a638d306dda437bd81f0d8",
+            ),
+        ] {
+            assert_eq!(hex::encode(hash160(data)), expected, "input {data:?}");
+        }
     }
 
     #[test]
