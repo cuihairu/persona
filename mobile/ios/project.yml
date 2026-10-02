@@ -1,0 +1,35 @@
+# XcodeGen 工程声明：`xcodegen gen` 生成 Persona.xcodeproj。
+# 链接 cargo 出的 staticlib（aarch64-apple-ios），Rust 源在 mobile/rust。
+name: Persona
+options:
+  bundleIdPrefix: com.persona
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Persona:
+    type: application
+    platform: iOS
+    sources:
+      - Persona
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.persona.mobile
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/include"
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../../../target/aarch64-apple-ios/release"
+        OTHER_LDFLAGS: "-lpersona_mobile"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+    scheme:
+      testTargets:
+        - PersonaTests
+  PersonaTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - PersonaTests
+    settings:
+      base:
+        SWIFT_INCLUDE_PATHS: "$(SRCROOT)/include"
+        LIBRARY_SEARCH_PATHS: "$(PROJECT_DIR)/../../../target/aarch64-apple-ios/release"
+        OTHER_LDFLAGS: "-lpersona_mobile"

@@ -1,0 +1,4 @@
+module PersonaFFI {
+    header "Persona.h"
+    export *
+}
