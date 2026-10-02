@@ -370,11 +370,13 @@ mod tests {
 
     #[test]
     fn init_logging_installs_subscriber_exactly_once() {
-        // The global subscriber can only be installed once per process.
-        // Either this test is the first (first call succeeds, second fails)
-        // or another test installed one earlier (both calls fail) — in every
-        // interleaving the second install must report an error.
-        let _ = init_logging(true);
-        assert!(init_logging(false).is_err());
+        // init() 自 b291488 起幂等：全局 subscriber 已被占用时保持已装的并
+        // 返回 Ok（内嵌 agent 场景 desktop 壳先装是正常次序）。断言重复调用
+        // 安全，且安装真实生效（全局默认不是 NoSubscriber）。
+        init_logging(true).expect("init_logging must never fail (idempotent)");
+        init_logging(false).expect("re-install keeps the existing subscriber and stays Ok");
+        tracing::dispatcher::get_default(|d| {
+            assert!(!d.is::<tracing::subscriber::NoSubscriber>());
+        });
     }
 }
