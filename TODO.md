@@ -162,6 +162,16 @@ Wallet Material (experimental — deferred until 1Password parity; see priority 
 - [x] 签名/编码层全面换用审计过的第三方库：交易序列化与签名哈希 → `alloy-consensus`（EVM）/ `rust-bitcoin`（BTC，`SighashCache::p2wpkh_signature_hash`）、地址编码 → `bech32` crate（BIP‑173/350）/ `bs58`(check) / `alloy-primitives`（EIP‑55）、WIF 解析 → `rust-bitcoin`；手写 RLP/BIP‑143/wire 组装已删除，官方规范向量保留作回归验证（SLIP‑0010 ed25519 派生暂无成熟库，保留自研）
 - [x] CLI: wallet create/import/derive/list/sign (`create-transaction --sign`)
 - [x] Desktop: wallet overview, address lists, QR, signing confirmations
+- [x] BIP-39 passphrase（第 25 词）与 12/24 词助记词生成/校验：桌面添加钱包
+      表单支持口令与词数选择，`wallet_generate_mnemonic`/`wallet_validate_mnemonic`
+      命令 + BIP-39 官方向量回归（57ff279）
+- [x] 详情面板种子材料 reveal：助记词/第 25 词/私钥三字段走统一
+      RevealSecretButton（re-auth 门禁 + 自动隐藏 + 剪贴板自动清空），
+      公钥明文展示带复制（0dfe99e）
+- [x] 条目级独立密码（种子材料第二因子）：CryptoWalletData 增
+      Argon2id `item_password_hash` + 明文提示，reveal 助记词/私钥/第 25 词
+      需额外比对（ITEM_PASSWORD_REQUIRED/WRONG 错误码）；设置/清除命令 +
+      详情面板管理行；不动加密封套与同步格式（4e84fec）
 
 Desktop (Tauri v2 + React)
 
