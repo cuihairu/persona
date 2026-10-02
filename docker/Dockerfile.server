@@ -36,6 +36,10 @@ RUN apt-get update && apt-get install -y \
 
 RUN groupadd -r persona && useradd -r -g persona -d /app -s /sbin/nologin persona
 
+# /data 是 compose 命名卷挂载点（DB + 备份）：fresh 卷属 root，
+# USER persona 写不进会启动即 panic。构建期建目录并改属主收口。
+RUN mkdir -p /data /app && chown -R persona:persona /data /app
+
 WORKDIR /app
 
 COPY --from=builder /app/target/release/persona-server /usr/local/bin/persona-server

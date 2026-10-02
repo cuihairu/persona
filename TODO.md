@@ -15,9 +15,13 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 > 无账号注册/登录/恢复）、插件云通路（现仅 native messaging 本地桥）、
 > server Docker 一键起的可用性核验、隐私红线的显式开启流、双设备真实走查**。
 
-- [ ] **M1 server Docker 可用化（落地⑥）**：核验 `docker/Dockerfile.server` +
-      `docker-compose.deploy.yml` 一键起（compose up → server 健康检查通过），
-      补齐自托管启动文档；Dockerfile 若缺编译要素按需修——独立可验收
+- [x] **M1 server Docker 可用化（落地⑥）**：2026-10-03 核验通过——
+      `docker build -f docker/Dockerfile.server` 出镜像（139MB）+ 容器冒烟
+      全绿（/health 200、无 token 401、有 token sync 200、事件 POST 202/
+      GET 往返、重启后命名卷数据仍在）；修 1 处真问题：runtime `/data`
+      卷属 root 而 USER persona 写不进、启动即 panic，现构建期
+      `mkdir/chown /data`；自托管文档 `docs/SELF_HOST_SERVER.md`（一键起、
+      env 全表、客户端接线、端点速查、运维注意）
 - [ ] **M2 账号体系（落地①）**：server 账号注册/登录（通行密钥优先 +
       SRP 密码兜底——复用 DR-2 的 SRP 链路作密码兜底）、账号级设备管理
       （新设备授权/吊销/设备列表，复用 `/sync/devices` 扩到账号作用域）、
