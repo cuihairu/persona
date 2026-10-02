@@ -28,6 +28,13 @@ features:
     details: CLI、桌面端、浏览器扩展和 SSH Agent 共用同一套本地服务与策略。
 ---
 
+## 界面预览
+
+<UiCarousel />
+
+桌面明暗主题、侧栏细节与移动端界面轮播展示，更多截图与素材出处见
+[界面预览](/previews/ui)、[素材盘点](/previews/assets)。
+
 ## 从这里开始
 
 - [快速开始](/user/quick-start) 构建桌面应用或 CLI，创建你的第一个加密密码库。

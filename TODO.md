@@ -8,14 +8,30 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
 
 Doc site（2026-10-03 插队：首页走马灯）
 
-- [ ] 文档首页走马灯：桌面截图 + 手机原型图在 docs 站首页以走马灯轮播
+- [x] 文档首页走马灯：桌面截图 + 手机原型图在 docs 站首页以走马灯轮播
       ——2026-10-03 用户质问「为啥到现在都没有」：全仓检索「走马灯/轮播/
       carousel」零命中，该需求此前从未登记（追踪遗漏，本次补登防再丢）。
-      桌面素材 5 张在位（源 `docs/branding/ui/` → 站点副本
-      `docs/src/public/ui/`，previews/ui.md 已挂全）；手机原型图全仓零张
-      （previews「原型缺口清单」移动端行仍标暂缺）——出图通路已核：
-      Android SDK + AVD（android-33）+ adb + 10-02 构建的
-      `mobile/android/.../app-release.apk`，emulator screencap 可出
+      落地：`docs/.vitepress/theme/UiCarousel.vue`（自动轮播 5s + hover/
+      focus 暂停 + 箭头/圆点导航 + reduced-motion 尊重）全局注册进
+      theme，首页 index.md「界面预览」区块挂载。桌面 5 张（明暗全窗/
+      侧栏特写/重设计前）+ **Android 真机截图 1 张**——emulator
+      （AVD test34，android-34 x86_64）+ adb screencap 实拍：本机
+      jniLibs 的 so 全部过期（9-30 编，早于 10-02 JNI 首落地 109632b），
+      `cargo ndk -t x86_64` 重编（NDK r27c）+ abiFilters 临时放开重打包
+      后桥连通、真实主界面渲染。previews/ui.md 移动端行同步（Android
+      空库主界面已入；有数据列表、工具/设置 tab、iOS/鸿蒙仍缺）
+  - [ ] 移动端原型图扩展：有数据列表 / 工具 / 设置 tab 截图；iOS 与鸿蒙
+        原生界面。本次出图受阻记录：宿主机过载（load 60+，双模拟器并发）
+        下 systemUI 反复 ANR、app 进程被反复杀——出图脚本本身可行
+        （am start → uiautomator dump 拿坐标 → input tap/text → screencap），
+        低负载时段重跑即可
+  - [ ] Android 初始化崩溃修复（2026-10-03 走查发现，crash buffer 实锤）：
+        `personaServiceInit` 失败路径返回 null（Rust 侧 panic 被吞成
+        null 指针）→ Kotlin `parseResult(json: String)` 非空参数收 null
+        → NPE 直接崩溃退桌面。修法两端：Rust 侧 catch_unwind 后应返回
+        JSON 错误串而非 null；Kotlin 侧 parseResult 前判 null。另：
+        「桥已连通 · persona null」——`personaVersion()` 在 runtime 未
+        起时返回 null 的展示也应处理
 
 Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
