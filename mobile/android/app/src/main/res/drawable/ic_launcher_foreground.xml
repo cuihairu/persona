@@ -1,0 +1,10 @@
+<!-- 占位盾形前景：品牌图标资产定稿前不代餐、不换肤，仅保证可安装可辨识 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,30 L72,37 L72,52 C72,63 64,72 54,76 C44,72 36,63 36,52 L36,37 Z" />
+</vector>

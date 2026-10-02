@@ -1,17 +1,48 @@
-# persona_mobile
+# persona mobile — 三端原生
 
-A new Flutter project.
+iOS（Swift）/ Android（Kotlin）/ 鸿蒙（ArkTS）三端**原生**开发。**禁 Flutter 及一切跨平台 UI 中转层**；三端各自实现原生 UI，经平台标准 native 绑定共用同一套 Rust 桥（`rust/`）：
 
-## Getting Started
+| 端 | UI | native 绑定 | 产物 |
+|---|---|---|---|
+| Android | Kotlin（View 体系） | JNI（`rust/src/jni_android.rs`，Android 平台标准机制） | `cdylib` → `libpersona_mobile.so` |
+| iOS | Swift（SwiftUI） | C ABI（`staticlib` 直接链接） | `libpersona_mobile.a` |
+| 鸿蒙 | ArkTS | NAPI（`libpersona_mobile_napi.so` 包装层） | `.so`（napi 模块） |
 
-This project is a starting point for a Flutter application.
+## 桥语义（三端一致）
 
-A few resources to get you started if this is your first Flutter project:
+- 入参：UTF-8 字符串（主密码、vault 路径、JSON 配置）。
+- 出参：除 `persona_init`（int）、`persona_version`（字符串）、`persona_service_is_unlocked`（bool）外，一律 JSON `{"success":bool,"error":string|null}`。
+- 生命周期：`service_init`（打开 vault → 迁移 → 首次建户或认证，成功即解锁）→ `service_unlock` / `service_lock` / `service_is_unlocked` → `shutdown`。
+- 同步上报：`configure_sync`（config 一半即 fail-closed，url+token 都非空才启用）。
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## 各端构建
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+### Android
+
+```bash
+cargo ndk -t arm64-v8a build -p persona-mobile --release   # libpersona_mobile.so
+cp target/aarch64-linux-android/release/libpersona_mobile.so \
+   mobile/android/app/src/main/jniLibs/arm64-v8a/
+cd mobile/android && ./gradlew :app:assembleRelease
+```
+
+CI：`desktop-build.yml` android job（cargo ndk → jniLibs → gradle assembleRelease，arm64-v8a 单 ABI）。
+
+### iOS
+
+需 macOS + Xcode（Linux 无法构建验证）：
+
+```bash
+rustup target add aarch64-apple-ios
+cargo build -p persona-mobile --release --target aarch64-apple-ios   # staticlib
+cd mobile/ios && xcodegen gen   # 由 project.yml 生成 Xcode 工程
+open Persona.xcodeproj
+```
+
+### 鸿蒙
+
+需 DevEco Studio / 命令行工具链（hvigor）。ArkTS 工程在 `harmony/`；napi 包装层随骨架交付，真机验证需鸿蒙实机/模拟器。
+
+## 历史
+
+2026-10-02 起 Flutter 壳整体移除（唯一提交过的是壳 + 每日 APK 链路，无业务功能），原生三端自此为唯一移动路线。

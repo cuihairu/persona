@@ -223,33 +223,25 @@ jobs:
           path: target/aarch64-linux-android/release/libpersona_mobile.so
           if-no-files-found: error
 
-      - name: Bundle cdylib into Flutter shell jniLibs
+      - name: Bundle cdylib into Kotlin app jniLibs
         shell: bash
         run: |
           mkdir -p mobile/android/app/src/main/jniLibs/arm64-v8a
           cp target/aarch64-linux-android/release/libpersona_mobile.so \
             mobile/android/app/src/main/jniLibs/arm64-v8a/
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          flutter-version: 3.47.5
-          cache: true
-
-      - name: Build Android APK (arm64-v8a)
-        working-directory: mobile
+      - name: Build Android APK (arm64-v8a, native Kotlin)
+        working-directory: mobile/android
         shell: bash
-        # 单 ABI：jniLibs 只含 arm64 的 libpersona_mobile.so，fat 包会让
-        # 非 arm64 设备在运行时 UnsatisfiedLinkError——产物限定 arm64-v8a
-        run: |
-          flutter pub get
-          flutter build apk --release --target-platform android-arm64
+        # 纯 Kotlin 工程直出单 ABI 包：abiFilters 已限定 arm64-v8a，非 arm64
+        # 设备不会装到缺 so 的包——运行时 UnsatisfiedLinkError 不可能出现
+        run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Upload android APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: android-apk-arm64
-          path: mobile/build/app/outputs/flutter-apk/app-release.apk
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
 
   release:

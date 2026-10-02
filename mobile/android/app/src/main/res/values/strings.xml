@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Persona</string>
+    <string name="bridge_starting">正在加载 persona 桥…</string>
+    <string name="master_password_hint">主密码</string>
+    <string name="init_action">初始化 / 首次建户</string>
+    <string name="unlock_action">解锁</string>
+    <string name="lock_action">锁定</string>
+</resources>

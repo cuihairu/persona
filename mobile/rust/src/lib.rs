@@ -13,6 +13,12 @@ mod business;
 mod runtime;
 mod state;
 
+// Android 宿主的 JNI 导出层：Kotlin（com.persona.mobile.PersonaBridge）经
+// System.loadLibrary("persona_mobile") 走平台标准 JNI 调用，内部转发同文件
+// 的 C ABI——与 iOS（staticlib + C ABI）/鸿蒙（NAPI）共用一套桥语义。
+#[cfg(target_os = "android")]
+mod jni_android;
+
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::Arc;

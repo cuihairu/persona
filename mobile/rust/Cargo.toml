@@ -23,6 +23,11 @@ uuid.workspace = true
 # FFI
 libc = "0.2"
 
+# Android 宿主的 JNI 导出层（jni_android.rs；仅 Android 目标编译，
+# Kotlin 侧经 System.loadLibrary + external fun 消费，JSON 包络同 C ABI）
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+
 [dev-dependencies]
 sqlx.workspace = true
 tempfile = "3"
