@@ -4540,7 +4540,7 @@ dependencies = [
  "num-bigint",
  "openssl",
  "p256",
- "pbkdf2 0.12.2",
+ "pbkdf2 0.13.0",
  "pkcs1",
  "pkcs8 0.11.0",
  "proptest",
