@@ -117,11 +117,11 @@ pub fn build_router(state: AppState) -> Router {
                 .route(
                     "/{account_id}/devices",
                     post(api::authorize_device)
+                        .get(api::list_account_devices)
                         .route_layer(middleware::from_fn_with_state(
                             state.clone(),
                             auth::require_bearer,
-                        ))
-                        .get(api::list_account_devices),
+                        )),
                 )
                 .route(
                     "/{account_id}/devices/{device_id}",

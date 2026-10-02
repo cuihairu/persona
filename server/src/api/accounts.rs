@@ -10,6 +10,8 @@ use axum::{Extension, Json};
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use chrono::Utc;
+use hex;
+use persona_core::crypto::hashing::PasswordHasher;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
@@ -440,10 +442,8 @@ pub async fn generate_recovery_codes(
         let code: String = raw.iter().map(|b| format!("{:02x}", b)).collect();
         codes.push(code.clone());
 
-        // Hash with Argon2id (simplified - use persona_core crypto)
-        let hash = format!("$argon2id$v=19$m=19456,t=2,p=1${}${}",
-            B64.encode(&raw[..16]),
-            B64.encode(&raw[16..])); // placeholder
+        // Hash with Argon2id using proper algorithm
+        let hash = hash_recovery_code(&code)?;
 
         sqlx::query(
             "INSERT INTO account_recovery_codes (id, account_id, code_hash, created_at)
@@ -459,6 +459,13 @@ pub async fn generate_recovery_codes(
     }
 
     Ok(Json(GenerateRecoveryCodesResponse { codes }))
+}
+
+/// Hash a recovery code using Argon2id
+fn hash_recovery_code(code: &str) -> Result<String, ApiError> {
+    let hasher = PasswordHasher::new();
+    hasher.hash_password(code)
+        .map_err(|e| ApiError::internal(format!("Hashing failed: {}", e)))
 }
 
 /// Verify a recovery code
@@ -484,6 +491,10 @@ pub async fn verify_recovery_code(
         return Err(ApiError::validation("invalid code format", vec![ErrorItem::batch("code", "must be 32 hex chars")]));
     }
 
+    // Decode the hex code to bytes for verification
+    let code_bytes = hex::decode(&code)
+        .map_err(|_| ApiError::validation("invalid code format", vec![ErrorItem::batch("code", "not valid hex")]))?;
+
     // Find unused recovery codes for this account
     let rows = sqlx::query(
         "SELECT id, code_hash FROM account_recovery_codes WHERE account_id = ? AND used_at IS NULL",
@@ -497,11 +508,12 @@ pub async fn verify_recovery_code(
         let code_id: String = row.get("id");
         let stored_hash: String = row.get("code_hash");
 
-        // Verify with Argon2id (simplified)
-        // In real impl: use persona_core::crypto::hashing::PasswordHasher::verify
-        let _verified = true; // placeholder
+        // Verify the code against the stored hash
+        // The hash format is: $argon2id$v=19$m=19456,t=2,p=1$salt$hash
+        // We need to extract salt and hash, then verify
+        let verified = verify_recovery_code_hash(&stored_hash, &code_bytes);
 
-        if _verified {
+        if verified {
             // Mark as used
             let now = Utc::now().to_rfc3339();
             sqlx::query("UPDATE account_recovery_codes SET used_at = ? WHERE id = ?")
@@ -516,6 +528,13 @@ pub async fn verify_recovery_code(
     }
 
     Ok(Json(VerifyRecoveryCodeResponse { success: false }))
+}
+
+/// Verify a recovery code against an Argon2id hash
+fn verify_recovery_code_hash(hash: &str, code_bytes: &[u8]) -> bool {
+    let code_hex = hex::encode(code_bytes);
+    let hasher = PasswordHasher::new();
+    hasher.verify_password(&code_hex, hash).unwrap_or(false)
 }
 
 /// ---- Account Device Management ----

@@ -4594,12 +4594,14 @@ name = "persona-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "argon2",
  "axum",
  "base64 0.23.1",
  "chrono",
  "dotenvy",
  "flate2",
  "futures",
+ "hex",
  "num-bigint",
  "persona-core",
  "rand 0.10.3",
