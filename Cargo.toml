@@ -62,7 +62,7 @@ bech32 = "0.12"
 # WebAuthn/passkey：P-256 与 COSE/CBOR 用审计过的实现
 p256 = { version = "0.14", features = ["ecdsa"] }
 coset = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 webauthn-rs = "0.5"
 # SSH 密钥：OpenSSH 私钥容器（openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf）解析与
 # 序列化、公钥行/指纹格式化，交给审计过的 ssh-key；p256 feature 供 ECDSA
@@ -97,8 +97,8 @@ tokio-util = { version = "0.7", features = ["io"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "query"] }
 
 # Web框架 (服务器端)
-axum = "0.7"
 tower = "0.5"
+axum = "0.8"
 tower-http = { version = "0.7", features = ["cors", "trace", "decompression-gzip"] }
 
 # 日志
@@ -108,7 +108,7 @@ regex = "1.10"
 
 # 错误处理
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 
 # 时间处理
 chrono = { version = "0.4", features = ["serde"] }
@@ -117,7 +117,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # 配置管理
-config = "0.14"
+config = "0.15"
 
 # 测试
 mockall = "0.12"
