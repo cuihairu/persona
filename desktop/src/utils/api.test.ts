@@ -488,4 +488,198 @@ describe('utils/api command mapping coverage', () => {
     mockInvoke.mockRejectedValueOnce(boom);
     await expect(personaAPI.lockService()).rejects.toBe(boom);
   });
+
+  // 薄包装透传面：settings 窄写 / 旅行模式 / Connect / 同步
+  it('settings, travel, connect and sync methods map to tauri invokes', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.setPasswordExpiry(90);
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_password_expiry', { days: 90 });
+
+    await personaAPI.setLocale('zh-CN');
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_locale', { locale: 'zh-CN' });
+
+    await personaAPI.changeMasterPassword('old', 'new');
+    expect(mockInvoke).toHaveBeenLastCalledWith('change_master_password', {
+      request: { old_password: 'old', new_password: 'new', db_path: null },
+    });
+    await personaAPI.changeMasterPassword('old', 'new', '/tmp/x.db');
+    expect(mockInvoke).toHaveBeenLastCalledWith('change_master_password', {
+      request: { old_password: 'old', new_password: 'new', db_path: '/tmp/x.db' },
+    });
+
+    await personaAPI.getTravelStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('get_travel_status');
+
+    await personaAPI.setTravelMarked('id-1', true);
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_travel_marked', { identityId: 'id-1', marked: true });
+
+    await personaAPI.enterTravelMode('pass');
+    expect(mockInvoke).toHaveBeenLastCalledWith('enter_travel_mode', { passphrase: 'pass' });
+
+    await personaAPI.exitTravelMode('pass');
+    expect(mockInvoke).toHaveBeenLastCalledWith('exit_travel_mode', { passphrase: 'pass' });
+
+    await personaAPI.connectServerStart();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_start', { port: null });
+    await personaAPI.connectServerStart(8080);
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_start', { port: 8080 });
+
+    await personaAPI.connectServerStop();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_stop');
+
+    await personaAPI.connectServerStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_status');
+
+    await personaAPI.connectTokenCreate('label', { identities: [], item_types: ['password'], verbs: ['read'] });
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_create', {
+      label: 'label',
+      scope: { identities: [], item_types: ['password'], verbs: ['read'] },
+    });
+
+    await personaAPI.connectTokenList();
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_list');
+
+    await personaAPI.connectTokenRevoke('t-1');
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_revoke', { id: 't-1' });
+
+    await personaAPI.setSyncConfig({ enabled: true, server_url: 'https://s', server_token: '' } as never);
+    expect(mockInvoke).toHaveBeenLastCalledWith('set_sync_config', {
+      enabled: true,
+      server_url: 'https://s',
+      server_token: '',
+    });
+
+    await personaAPI.syncTokenPresent();
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_token_present');
+
+    await personaAPI.syncDeviceStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_device_status');
+
+    await personaAPI.syncJoin('device');
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_join', { deviceName: 'device' });
+
+    await personaAPI.syncLeave();
+    expect(mockInvoke).toHaveBeenLastCalledWith('sync_leave');
+  });
+
+  it('credential update methods wrap requests', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.updateCredential({ id: 'c-1' } as never);
+    expect(mockInvoke).toHaveBeenLastCalledWith('update_credential', { request: { id: 'c-1' } });
+
+    await personaAPI.updateCredentialData({ id: 'c-1' } as never);
+    expect(mockInvoke).toHaveBeenLastCalledWith('update_credential_data', { request: { id: 'c-1' } });
+  });
+
+  it('ssh key file methods map to tauri invokes', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.inspectSshKeyFile('/home/x/id_ed25519');
+    expect(mockInvoke).toHaveBeenLastCalledWith('inspect_ssh_key_file', { path: '/home/x/id_ed25519' });
+
+    await personaAPI.importSshKey({ identity_id: 'i-1', path: '/home/x/id_ed25519', name: 'n', passphrase: 'p' });
+    expect(mockInvoke).toHaveBeenLastCalledWith('import_ssh_key', {
+      request: { identity_id: 'i-1', path: '/home/x/id_ed25519', name: 'n', passphrase: 'p' },
+    });
+
+    await personaAPI.generateSshKey({ identity_id: 'i-1', key_type: 'ed25519', comment: 'c', name: 'n' });
+    expect(mockInvoke).toHaveBeenLastCalledWith('generate_ssh_key', {
+      request: { identity_id: 'i-1', key_type: 'ed25519', comment: 'c', name: 'n' },
+    });
+  });
+
+  it('quick access and focus methods map to tauri invokes', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.quickAccessStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_status');
+
+    await personaAPI.quickAccessSet(true, null);
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_set', { enabled: true, accelerator: null });
+
+    await personaAPI.quickAccessOpen();
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_open');
+
+    await personaAPI.quickAccessOpenCredential('i-1', 'c-1');
+    expect(mockInvoke).toHaveBeenLastCalledWith('quick_access_open_credential', {
+      request: { identity_id: 'i-1', credential_id: 'c-1' },
+    });
+
+    await personaAPI.focusMainWindow();
+    expect(mockInvoke).toHaveBeenLastCalledWith('focus_main_window');
+  });
+
+  // SERVICE_LOCKED 引导解锁 gate：惰性 auto-lock 竞态下操作不该被堵死
+  describe('SERVICE_LOCKED unlock gate', () => {
+    const lockedEnvelope = {
+      success: false,
+      data: null,
+      error: 'Authentication failed: Session is auto-locked',
+      error_code: 'SERVICE_LOCKED',
+    };
+
+    // 模拟 App 层监听 persona:need-unlock 并以给定结果收口
+    const listenUnlockGate = (outcome: boolean) => {
+      const listener = (e: Event) => {
+        const detail = (e as CustomEvent).detail as { resolve: (ok: boolean) => void };
+        window.removeEventListener('persona:need-unlock', listener);
+        detail.resolve(outcome);
+      };
+      window.addEventListener('persona:need-unlock', listener);
+    };
+
+    it('retries the original command after the gate unlocks', async () => {
+      mockInvoke
+        .mockResolvedValueOnce(lockedEnvelope)
+        .mockResolvedValueOnce({ success: true, data: ['key'] });
+
+      listenUnlockGate(true);
+      const res = await personaAPI.getSshKeys();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+      expect(mockInvoke).toHaveBeenNthCalledWith(1, 'get_ssh_keys');
+      expect(mockInvoke).toHaveBeenNthCalledWith(2, 'get_ssh_keys');
+      expect(res).toEqual({ success: true, data: ['key'] });
+    });
+
+    it('returns the locked error untouched when the user cancels', async () => {
+      mockInvoke.mockResolvedValueOnce(lockedEnvelope);
+
+      listenUnlockGate(false);
+      const res = await personaAPI.getSshKeys();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      expect(res).toEqual(lockedEnvelope);
+    });
+
+    it('does not gate unlock/status commands (no recursion)', async () => {
+      mockInvoke.mockResolvedValueOnce(lockedEnvelope);
+
+      await personaAPI.isServiceUnlocked();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      expect(mockInvoke).toHaveBeenCalledWith('is_service_unlocked');
+    });
+
+    it('passes non-locked errors through without opening the gate', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        data: null,
+        error: 'nope',
+        error_code: 'NOT_FOUND',
+      });
+
+      const res = await personaAPI.getSshKeys();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      expect(res).toEqual({
+        success: false,
+        data: null,
+        error: 'nope',
+        error_code: 'NOT_FOUND',
+      });
+    });
+  });
 });
