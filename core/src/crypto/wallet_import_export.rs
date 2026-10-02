@@ -312,12 +312,12 @@ pub fn import_from_private_key(
     );
 
     // Derive address from private key (secp256k1)
-    let signing_key = k256::ecdsa::SigningKey::from_bytes(private_key_bytes.as_slice().into())
+    let signing_key = k256::ecdsa::SigningKey::from_slice(private_key_bytes.as_slice())
         .map_err(|e| {
             PersonaError::CryptographicError(format!("Invalid secp256k1 private key: {}", e))
         })?;
     let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_encoded_point(true);
+    let encoded = verifying_key.to_sec1_point(true);
     let compressed_bytes = encoded.as_bytes();
     let compressed: [u8; 33] = compressed_bytes
         .try_into()
@@ -944,7 +944,7 @@ mod tests {
         let derived =
             crate::crypto::address_generator::generate_ethereum_address_checksummed_from_compressed_pubkey(
                 &{
-                    let encoded = signing_key.verifying_key().to_encoded_point(true);
+                    let encoded = signing_key.verifying_key().to_sec1_point(true);
                     encoded.as_bytes().try_into().unwrap()
                 },
             )

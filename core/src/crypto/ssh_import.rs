@@ -232,13 +232,13 @@ mod tests {
     /// 自举生成三类测试钥：ssh-key 自身既当生成器又当解析器，
     /// 断言走本模块的产品口径（解锁、字段完整性、指纹格式）。
     fn generate_pem(algorithm: Algorithm) -> String {
-        let key = PrivateKey::random(&mut rand_core::OsRng, algorithm).unwrap();
+        let key = PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), algorithm).unwrap();
         key.to_openssh(LineEnding::LF).unwrap().to_string()
     }
 
     fn generate_encrypted_pem(algorithm: Algorithm, passphrase: &str) -> String {
-        let key = PrivateKey::random(&mut rand_core::OsRng, algorithm).unwrap();
-        key.encrypt(&mut rand_core::OsRng, passphrase)
+        let key = PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), algorithm).unwrap();
+        key.encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), passphrase)
             .unwrap()
             .to_openssh(LineEnding::LF)
             .unwrap()
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn comment_is_preserved() {
-        let mut key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+        let mut key = PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), Algorithm::Ed25519).unwrap();
         key.set_comment("cui@laptop");
         let pem = key.to_openssh(LineEnding::LF).unwrap().to_string();
         let imported = import_openssh_private_key(&pem, None).unwrap();
@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn public_pem_is_rejected() {
         // 公钥不是私钥容器，必须在解析层被拒（用户拿错文件时给出明确口径）
-        let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+        let key = PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), Algorithm::Ed25519).unwrap();
         let pub_line = key.public_key().to_openssh().unwrap();
         assert!(import_openssh_private_key(&pub_line, None).is_err());
     }

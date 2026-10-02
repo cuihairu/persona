@@ -46,12 +46,12 @@ pub fn generate_ssh_keypair(key_type: &str, comment: &str) -> PersonaResult<Gene
     // ssh-key 对 RSA 不走 PrivateKey::random 的统一路径（要 rsa crate 的
     // 素数生成），单独组 KeypairData；comment 统一事后写入
     let mut key = if matches!(algorithm, Algorithm::Rsa { .. }) {
-        let keypair = RsaKeypair::random(&mut rand_core::OsRng, RSA_BIT_SIZE)
+        let keypair = RsaKeypair::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), RSA_BIT_SIZE)
             .map_err(|e| PersonaError::CryptographicError(format!("RSA keygen failed: {e}")))?;
         PrivateKey::new(KeypairData::Rsa(keypair), comment)
             .map_err(|e| PersonaError::CryptographicError(format!("RSA keygen failed: {e}")))?
     } else {
-        PrivateKey::random(&mut rand_core::OsRng, algorithm)
+        PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), algorithm)
             .map_err(|e| PersonaError::CryptographicError(format!("Keygen failed: {e}")))?
     };
     key.set_comment(comment);
@@ -86,7 +86,7 @@ mod tests {
 
         let reparsed = PrivateKey::from_openssh(&generated.private_key_pem).unwrap();
         assert!(!reparsed.key_data().is_encrypted());
-        assert_eq!(reparsed.comment(), generated.comment);
+        assert_eq!(reparsed.comment().as_str_lossy(), generated.comment);
         assert_eq!(
             reparsed
                 .public_key()
@@ -138,8 +138,8 @@ mod tests {
             .key_data()
             .rsa()
             .unwrap()
-            .public
-            .n
+            .public()
+            .n()
             .as_positive_bytes()
             .unwrap()
             .to_vec()

@@ -3,13 +3,13 @@
 use crate::crypto::bech32::{decode_witness_address, encode_witness_address};
 use crate::crypto::wallet_crypto::DerivedKey;
 use crate::{PersonaError, PersonaResult};
-use k256::elliptic_curve::{sec1::ToEncodedPoint, FieldBytes, ScalarPrimitive};
+use k256::elliptic_curve::sec1::ToSec1Point;
 use k256::{ProjectivePoint, PublicKey, Scalar};
 // ripemd 0.2 re-exports digest 0.11 while sha2 stays on digest 0.10 — the two
 // `Digest` traits are distinct types, so ripemd's is imported under an alias
 // and RIPEMD160 is driven through the streaming API.
 use ripemd::{Digest as RipemdDigest, Ripemd160};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use sha3::Keccak256;
 
 /// Bitcoin address types
@@ -131,14 +131,13 @@ pub fn tweak_pubkey_taproot(pubkey: &[u8; 33]) -> PersonaResult<[u8; 32]> {
     // BIP-341: the tweak is reduced mod n; a value >= n is astronomically
     // unlikely for a hash output, but rejecting it matches the spec's "fail"
     // condition without silently wrapping.
-    let tweak_bytes: &FieldBytes<k256::Secp256k1> =
-        k256::elliptic_curve::generic_array::GenericArray::from_slice(&tweak);
-    let tweak_primitive = ScalarPrimitive::<k256::Secp256k1>::from_bytes(tweak_bytes)
+    // k256 0.14 移除了 ScalarPrimitive：Scalar::from_slice 直接做 canonical
+    // 检查（t >= n 时返回 None），语义与 BIP-341 的 fail 条件一致。
+    let tweak_scalar = <Scalar as k256::elliptic_curve::PrimeField>::from_repr(tweak.into())
         .into_option()
         .ok_or_else(|| {
             PersonaError::CryptographicError("TapTweak out of range (t >= n)".to_string())
         })?;
-    let tweak_scalar = Scalar::from(tweak_primitive);
 
     // from_sec1_bytes recovers the full point (including y parity), but the
     // BIP-340 x-only internal key is interpreted as the even-y point, so an
@@ -156,7 +155,7 @@ pub fn tweak_pubkey_taproot(pubkey: &[u8; 33]) -> PersonaResult<[u8; 32]> {
     };
 
     let output_point = internal_point + ProjectivePoint::GENERATOR * tweak_scalar;
-    let encoded = output_point.to_affine().to_encoded_point(false);
+    let encoded = output_point.to_affine().to_sec1_point(false);
     let bytes: [u8; 65] = encoded.as_bytes().try_into().map_err(|_| {
         PersonaError::CryptographicError("Failed to encode tweaked taproot key".to_string())
     })?;
@@ -261,7 +260,7 @@ fn uncompress_secp256k1_pubkey(compressed: &[u8; 33]) -> PersonaResult<Vec<u8>> 
         PersonaError::CryptographicError(format!("Invalid compressed pubkey: {}", e))
     })?;
 
-    let uncompressed = pubkey.to_encoded_point(false);
+    let uncompressed = pubkey.to_sec1_point(false);
     Ok(uncompressed.as_bytes().to_vec())
 }
 

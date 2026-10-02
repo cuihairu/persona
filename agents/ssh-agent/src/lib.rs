@@ -540,11 +540,11 @@ fn parse_signing_key(private_key: &str) -> Result<SigningKeyMaterial> {
                     .map(rsa::BigUint::from_bytes_be)
                     .ok_or_else(|| anyhow!("negative RSA component is not valid"))
             };
-            let n = mpint_to_biguint(&kp.public.n)?;
-            let e = mpint_to_biguint(&kp.public.e)?;
-            let d = mpint_to_biguint(&kp.private.d)?;
-            let p = mpint_to_biguint(&kp.private.p)?;
-            let q = mpint_to_biguint(&kp.private.q)?;
+            let n = mpint_to_biguint(kp.public().n())?;
+            let e = mpint_to_biguint(kp.public().e())?;
+            let d = mpint_to_biguint(kp.private().d())?;
+            let p = mpint_to_biguint(kp.private().p())?;
+            let q = mpint_to_biguint(kp.private().q())?;
             let mut private = rsa::RsaPrivateKey::from_components(n, e, d, vec![p, q])?;
             private.precompute()?;
             Ok(SigningKeyMaterial::Rsa(Arc::new(private)))
@@ -586,7 +586,7 @@ fn public_blob_from_signing_key(signing_key: &SigningKeyMaterial) -> Result<Vec<
             write_ssh_string(&mut blob, b"ecdsa-sha2-nistp256")?;
             write_ssh_string(&mut blob, b"nistp256")?;
             // 非压缩 SEC1 点（65B，0x04 || X || Y），SSH 线格式约定
-            write_ssh_string(&mut blob, verifying.to_encoded_point(false).as_bytes())?;
+            write_ssh_string(&mut blob, verifying.to_sec1_point(false).as_bytes())?;
             Ok(blob)
         }
     }
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn parse_public_line_to_blob_accepts_rsa_and_ecdsa() {
         let rsa_key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Rsa { hash: None },
         )
         .unwrap();
@@ -922,7 +922,7 @@ mod tests {
         assert_eq!(public_key_algorithm(&blob).as_deref(), Some("ssh-rsa"));
 
         let ecdsa_key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Ecdsa {
                 curve: ssh_key::EcdsaCurve::NistP256,
             },
@@ -2120,7 +2120,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
 
         let key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Rsa { hash: None },
         )
         .unwrap();
@@ -2151,7 +2151,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         let to_big =
             |m: &ssh_key::Mpint| rsa::BigUint::from_bytes_be(m.as_positive_bytes().unwrap());
         let rsa_public =
-            rsa::RsaPublicKey::new(to_big(&kp.public.n), to_big(&kp.public.e)).unwrap();
+            rsa::RsaPublicKey::new(to_big(kp.public().n()), to_big(kp.public().e())).unwrap();
 
         let pkt = agent
             .sign_response(&sign_payload_for(&loaded, b"rsa-data"))
@@ -2188,7 +2188,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
 
         let key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Ecdsa {
                 curve: ssh_key::EcdsaCurve::NistP256,
             },
@@ -2238,13 +2238,13 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
             v
         };
         let sig = p256::ecdsa::Signature::from_scalars(
-            *FieldBytes::from_slice(&strip_sign_pad(r)),
-            *FieldBytes::from_slice(&strip_sign_pad(sig_s)),
+            FieldBytes::try_from(strip_sign_pad(r).as_slice()).unwrap(),
+            FieldBytes::try_from(strip_sign_pad(sig_s).as_slice()).unwrap(),
         )
         .unwrap();
         let private_bytes = key.key_data().ecdsa().unwrap().private_key_bytes();
         let signing =
-            p256::ecdsa::SigningKey::from_bytes(FieldBytes::from_slice(private_bytes)).unwrap();
+            p256::ecdsa::SigningKey::from_bytes(&FieldBytes::try_from(private_bytes).unwrap()).unwrap();
         let verifying = p256::ecdsa::VerifyingKey::from(&signing);
         verifying.verify(b"ecdsa-data", &sig).unwrap();
 
@@ -2259,7 +2259,7 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
 
         let key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Ed25519,
         )
         .unwrap();
@@ -2308,12 +2308,12 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
 
         let key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Ed25519,
         )
         .unwrap();
         // encrypt 返回加密后的新实例——必须接住，原实例仍是明文
-        let key = key.encrypt(&mut rand_core::OsRng, "hunter2").unwrap();
+        let key = key.encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), "hunter2").unwrap();
         let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
 
         let dir = tempfile::tempdir().unwrap();
@@ -2338,13 +2338,13 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
 
         // ed25519 私钥 + 一把真实但不同的 rsa 公钥行 → 算法不匹配，重建
         let key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Ed25519,
         )
         .unwrap();
         let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
         let other_rsa = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Rsa { hash: None },
         )
         .unwrap();

@@ -58,7 +58,7 @@ pub enum WalletSigningKey {
 
 /// Compressed 33-byte secp256k1 public key of a signing key.
 fn secp_compressed_pubkey(signing_key: &SigningKey) -> [u8; 33] {
-    let encoded = signing_key.verifying_key().to_encoded_point(true);
+    let encoded = signing_key.verifying_key().to_sec1_point(true);
     encoded
         .as_bytes()
         .try_into()
@@ -935,15 +935,15 @@ pub fn verify_solana_transaction(
 }
 
 fn address_from_verifying_key(key: &VerifyingKey) -> PersonaResult<String> {
-    let encoded = key.to_encoded_point(false);
+    let encoded = key.to_sec1_point(false);
     let hash = Keccak256::digest(&encoded.as_bytes()[1..]);
     Ok(format!("0x{}", hex::encode(&hash[12..])))
 }
 
 /// Sign using secp256k1 (ECDSA)
 fn sign_with_secp256k1(signing_key: &SigningKey, message: &[u8]) -> PersonaResult<Signature> {
-    let digest = Sha256::new().chain_update(message);
-    Ok(signing_key.sign_digest(digest))
+    // signature 3.0 的 DigestSigner 改收 Fn(&mut D) 闭包
+    Ok(signing_key.sign_digest(|d: &mut Sha256| d.update(message)))
 }
 
 /// Verify ECDSA (secp256k1) signature
@@ -957,10 +957,13 @@ fn verify_ecdsa_signature(
     let signature = Signature::from_der(signature)
         .map_err(|e| PersonaError::CryptographicError(format!("Invalid signature: {}", e)))?;
 
-    // Create digest of the message
-    let digest = Sha256::new().chain_update(message);
-
-    match verifying_key.verify_digest(digest, &signature) {
+    match verifying_key.verify_digest(
+        |d: &mut Sha256| {
+            d.update(message);
+            Ok(())
+        },
+        &signature,
+    ) {
         Ok(_) => Ok(true),
         Err(e) => {
             tracing::debug!(error = %e, "ECDSA signature verification failed");

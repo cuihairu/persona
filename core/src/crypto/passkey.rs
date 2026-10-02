@@ -182,7 +182,7 @@ pub fn generate_signing_key() -> SigningKey {
 
 /// Encode a P-256 public key as a WebAuthn COSE_Key (EC2 + P-256 + ES256).
 pub fn cose_public_key(verifying_key: &VerifyingKey) -> PersonaResult<Vec<u8>> {
-    let point = verifying_key.to_encoded_point(false);
+    let point = verifying_key.to_sec1_point(false);
     let x = point
         .x()
         .ok_or_else(|| PersonaError::CryptographicError("Missing x coordinate".to_string()))?;

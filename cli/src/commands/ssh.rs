@@ -2435,7 +2435,7 @@ mod tests {
     }
 
     fn openssh_pem(algorithm: ssh_key::Algorithm) -> (String, String) {
-        let key = ssh_key::private::PrivateKey::random(&mut rand_core::OsRng, algorithm).unwrap();
+        let key = ssh_key::private::PrivateKey::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), algorithm).unwrap();
         (
             key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string(),
             key.public_key().to_openssh().unwrap(),
@@ -2558,12 +2558,12 @@ mod tests {
         let config = unlocked_workspace(&dir, "master-pin").await;
 
         let key = ssh_key::private::PrivateKey::random(
-            &mut rand_core::OsRng,
+            &mut rand_core::UnwrapErr(rand::rngs::SysRng),
             ssh_key::Algorithm::Ed25519,
         )
         .unwrap();
         // encrypt 返回新的加密实例（不改动原值），必须接住再序列化
-        let key = key.encrypt(&mut rand_core::OsRng, "hunter2").unwrap();
+        let key = key.encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), "hunter2").unwrap();
         let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
         let key_path = write_key_file(&dir, "id_encrypted", &pem);
         let file = key_path.to_string_lossy().to_string();

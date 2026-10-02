@@ -3,7 +3,7 @@
 use crate::{PersonaError, PersonaResult};
 use bip32::{ChildNumber, DerivationPath, Prefix, XPrv};
 use bip39::Mnemonic;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use sha2::Sha512;
 use std::str::{self, FromStr};
@@ -328,7 +328,7 @@ impl Ed25519Key {
 
     /// Derive the SLIP-0010 master node from a BIP39 seed.
     pub fn from_seed(seed: &[u8]) -> PersonaResult<Self> {
-        let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(Self::ED25519_SEED_KEY)
+        let mut mac = <Hmac<Sha512> as KeyInit>::new_from_slice(Self::ED25519_SEED_KEY)
             .map_err(|e| PersonaError::CryptographicError(format!("HMAC init failed: {}", e)))?;
         mac.update(seed);
         let output = mac.finalize().into_bytes();
@@ -343,7 +343,7 @@ impl Ed25519Key {
     /// Derive a hardened child at `index` (the hardened bit is applied here).
     pub fn derive_child_hardened(&self, index: u32) -> PersonaResult<Self> {
         let hardened = index | 0x8000_0000;
-        let mut mac = <Hmac<Sha512> as Mac>::new_from_slice(&self.chain_code)
+        let mut mac = <Hmac<Sha512> as KeyInit>::new_from_slice(&self.chain_code)
             .map_err(|e| PersonaError::CryptographicError(format!("HMAC init failed: {}", e)))?;
         mac.update(&[0u8]); // ed25519 private-key derivation prefix
         mac.update(&self.key.to_bytes());

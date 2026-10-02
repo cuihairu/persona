@@ -25,32 +25,32 @@ aes-gcm = "0.10"
 # SRP-6a（RFC 5054）：设备认证（E2EE 同步轨道阶段 1）。RustCrypto/PAKEs
 # 维护节奏慢（0.7 停在 rc）——正确性由 RFC 5054 附录 B 向量测试锁定
 # （core/src/auth/srp.rs），调用方经封装隔离可整体换实现（设计稿 DR-2）
-srp = "0.6"
-ed25519-dalek = { version = "2.0", features = ["pkcs8", "zeroize"] }
+ed25519-dalek = { version = "3.0", features = ["pkcs8", "zeroize"] }
 # E2EE 同步 device envelope（E2EE_SYNC_DESIGN DR-1）：X25519 ephemeral DH
 # + HKDF-SHA256 展开（key‖nonce）+ AES-256-GCM；组合层约 30 行自写，
 # round-trip/篡改/跨设备失败测试覆盖（core/src/sync/envelope.rs）
 x25519-dalek = { version = "2.0", features = ["static_secrets"] }
-hkdf = "0.12"
+hkdf = "0.13"
 rand = { version = "0.10", features = ["sys_rng", "thread_rng"] }
 getrandom = { version = "0.4", features = ["sys_rng"] }
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
+num-bigint = "0.4"
 flate2 = "1.0"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # 密码学 - BIP/加密货币相关
 bip39 = "2.0"
 bip32 = "0.5"
-k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+k256 = { version = "0.14", features = ["ecdsa", "sha256"] }
 secp256k1 = "0.28"
-sha2 = "0.10"
-sha3 = "0.10"
+sha2 = "0.11"
+sha3 = "0.12"
 ripemd = "0.2"
-sha1 = "0.10"
+sha1 = "0.11"
 data-encoding = "2.5"
 zxcvbn = "3"
-hmac = "0.12"
+hmac = "0.13"
 pbkdf2 = "0.12"
 bs58 = { version = "0.5", features = ["check"] }
 # 链协议标准库：交易序列化/签名哈希/地址解析交给审计过的实现
@@ -60,21 +60,21 @@ alloy-eips = "2.4"
 alloy-primitives = "1.7"
 bech32 = "0.12"
 # WebAuthn/passkey：P-256 与 COSE/CBOR 用审计过的实现
-p256 = { version = "0.13", features = ["ecdsa"] }
+p256 = { version = "0.14", features = ["ecdsa"] }
 coset = "0.3"
 base64 = "0.22"
 webauthn-rs = "0.5"
 # SSH 密钥：OpenSSH 私钥容器（openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf）解析与
 # 序列化、公钥行/指纹格式化，交给审计过的 ssh-key；p256 feature 供 ECDSA
 # P-256 的生成/转换（ecdsa feature 只给类型）；rsa 供 agent 的 rsa-sha2-* 签名
-ssh-key = { version = "0.6", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
-rsa = "0.9"
+ssh-key = { version = "0.7.0-rc.11", features = ["ed25519", "rsa", "ecdsa", "p256", "encryption", "rand_core"] }
+rsa = { version = "0.9", features = ["sha2"] }
 # PEM 家族私钥导入（PKCS#8/PKCS#1/SEC1，见 core/src/crypto/ssh_import_pem.rs）：
 # 字段级解码交给 pkcs1/pkcs8（RustCrypto 同系），pkcs8 的 encryption feature
 # 供加密 PKCS#8（PBES2）解锁；ed25519-dalek 的 pkcs8 feature 供 PKCS#8→SigningKey
 pkcs1 = { version = "0.7", features = ["std", "pem"] }
 pkcs8 = { version = "0.10", features = ["std", "pem", "encryption"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
+rand_core = "0.10"
 
 # 数据库
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }

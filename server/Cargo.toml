@@ -43,7 +43,7 @@ uuid.workspace = true
 base64.workspace = true
 
 # SRP 设备认证（auth/srp.rs 复用 core 封装）+ 短期令牌随机源
-srp.workspace = true
+num-bigint.workspace = true
 rand.workspace = true
 
 # Bearer 令牌常量时间比较

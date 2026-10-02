@@ -15,7 +15,8 @@ ring.workspace = true
 argon2.workspace = true
 aes-gcm.workspace = true
 # 设备认证 SRP-6a（auth/srp.rs，E2EE 同步轨道阶段 1）
-srp.workspace = true
+num-bigint.workspace = true
+subtle.workspace = true
 ed25519-dalek.workspace = true
 # E2EE 同步 device envelope + group key 层级（sync/，阶段 2，DR-1）
 x25519-dalek.workspace = true
@@ -50,8 +51,8 @@ base64.workspace = true
 ssh-key.workspace = true
 pkcs1.workspace = true
 pkcs8.workspace = true
-# ssh-key 0.6 的 CryptoRngCore 口径（rand 0.10 的 rand_core 0.9 与之不兼容）；
-# 测试 fixture 生成与 ③ 新建密钥的 keygen 都用它
+# ssh-key 0.7 的 Rng 口径：rand_core 0.10 移除 OsRng，SysRng（getrandom）可失败，
+# 用 UnwrapErr 包装成 Infallible 供 CryptoRng 边界；keygen 与测试 fixture 都用它
 rand_core.workspace = true
 
 # Watchtower 泄露检查（HIBP k-anonymity）——可选：trait 与解析纯函数不依赖网络

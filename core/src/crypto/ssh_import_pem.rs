@@ -200,22 +200,23 @@ fn build_rsa(der_key: pkcs1::RsaPrivateKey<'_>) -> PersonaResult<PrivateKey> {
             "Multi-prime RSA private keys are not supported".to_string(),
         ));
     }
-    let mp = |label: &str, b: &[u8]| {
-        ssh_key::Mpint::from_positive_bytes(b)
-            .map_err(|e| PersonaError::InvalidInput(format!("Invalid RSA {label}: {e}")))
-    };
-    let keypair = ssh_key::private::RsaKeypair {
-        public: ssh_key::public::RsaPublicKey {
-            e: mp("public exponent", der_key.public_exponent.as_bytes())?,
-            n: mp("modulus", der_key.modulus.as_bytes())?,
-        },
-        private: ssh_key::private::RsaPrivateKey {
-            d: mp("private exponent", der_key.private_exponent.as_bytes())?,
-            iqmp: mp("CRT coefficient", der_key.coefficient.as_bytes())?,
-            p: mp("prime 1", der_key.prime1.as_bytes())?,
-            q: mp("prime 2", der_key.prime2.as_bytes())?,
-        },
-    };
+    // ssh-key 0.7 把 Mpint/公私钥构造全部换成带规范校验的 new()：
+    // from_positive_bytes 直接返回 Mpint，范围检查集中在 new() 一处报错。
+    let mp = ssh_key::Mpint::from_positive_bytes;
+    let public = ssh_key::public::RsaPublicKey::new(
+        mp(der_key.public_exponent.as_bytes()),
+        mp(der_key.modulus.as_bytes()),
+    )
+    .map_err(|e| PersonaError::InvalidInput(format!("Invalid RSA public key: {e}")))?;
+    let private = ssh_key::private::RsaPrivateKey::new(
+        mp(der_key.private_exponent.as_bytes()),
+        mp(der_key.coefficient.as_bytes()),
+        mp(der_key.prime1.as_bytes()),
+        mp(der_key.prime2.as_bytes()),
+    )
+    .map_err(|e| PersonaError::InvalidInput(format!("Invalid RSA private key: {e}")))?;
+    let keypair = ssh_key::private::RsaKeypair::new(public, private)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid RSA keypair: {e}")))?;
     PrivateKey::new(KeypairData::Rsa(keypair), "")
         .map_err(|e| PersonaError::CryptographicError(format!("Failed to build SSH key: {e}")))
 }
