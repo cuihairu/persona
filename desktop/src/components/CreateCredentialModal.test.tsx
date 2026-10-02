@@ -13,8 +13,25 @@ const generatePassword = jest.fn();
 const updateCredential = jest.fn();
 const updateCredentialData = jest.fn();
 
+// 钱包表单直连 personaAPI 的纯计算命令（生成/校验助记词，不触库）
+const walletValidateMnemonic = jest.fn().mockResolvedValue({
+  success: true,
+  data: { valid: true, word_count: 2, error: null },
+});
+const walletGenerateMnemonic = jest.fn().mockResolvedValue({
+  success: true,
+  data: 'abandon ability able about above absent absorb abstract absurd abuse access accident',
+});
+
 jest.mock('@/hooks/usePersonaService', () => ({
   usePersonaService: (...args: any[]) => mockUsePersonaService(...(args as [])),
+}));
+
+jest.mock('@/utils/api', () => ({
+  personaAPI: {
+    walletValidateMnemonic: (...args: any[]) => walletValidateMnemonic(...(args as [])),
+    walletGenerateMnemonic: (...args: any[]) => walletGenerateMnemonic(...(args as [])),
+  },
 }));
 
 // modal 接 useReauth 处理 payload 保存的 REAUTH_REQUIRED；
@@ -340,10 +357,73 @@ describe('components/CreateCredentialModal', () => {
             public_key: '',
             address: '0xabc',
             network: 'testnet',
+            bip39_passphrase: undefined,
           },
         }),
       );
     });
+  });
+
+  it('submits wallet passphrase and private key when filled', async () => {
+    renderModal();
+    selectType('CryptoWallet');
+
+    fireEvent.change(screen.getByPlaceholderText(/Gmail 账户/), {
+      target: { value: 'With 25th word' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Bitcoin、Ethereum 等'), {
+      target: { value: 'Ethereum' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('钱包地址'), {
+      target: { value: '0xdef' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('12-24 个词的恢复短语'), {
+      target: { value: 'legal winner thank year wave sausage worth useful legal winner thank yellow' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('附加口令（可选）'), {
+      target: { value: 'tungsten' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('WIF / hex 私钥'), {
+      target: { value: '0xpriv' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '创建凭据' }));
+
+    await waitFor(() => {
+      expect(createCredential).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credential_data: expect.objectContaining({
+            type: 'CryptoWallet',
+            bip39_passphrase: 'tungsten',
+            private_key: '0xpriv',
+          }),
+        }),
+      );
+    });
+  });
+
+  it('generates a mnemonic into the textarea and shows validation feedback', async () => {
+    renderModal();
+    selectType('CryptoWallet');
+
+    fireEvent.click(screen.getByRole('button', { name: '生成' }));
+
+    await waitFor(() => {
+      expect(walletGenerateMnemonic).toHaveBeenCalledWith(24);
+      expect(screen.getByPlaceholderText('12-24 个词的恢复短语')).toHaveValue(
+        'abandon ability able about above absent absorb abstract absurd abuse access accident',
+      );
+    });
+
+    // 生成填入触发防抖后的实时校验反馈
+    await waitFor(
+      () => {
+        expect(screen.getByText(/BIP-39 校验通过/)).toBeInTheDocument();
+      },
+      { timeout: 1500 },
+    );
+    expect(walletValidateMnemonic).toHaveBeenCalledWith(
+      'abandon ability able about above absent absorb abstract absurd abuse access accident',
+    );
   });
 
   it('submits an SshKey credential with key type and passphrase', async () => {

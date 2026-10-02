@@ -11,6 +11,7 @@ import type {
   CredentialDataRequest,
 } from '@/types';
 import { EyeIcon, EyeSlashIcon, KeyIcon } from '@heroicons/react/24/outline';
+import { personaAPI } from '@/utils/api';
 import ReauthModal from './ReauthModal';
 import { credentialTypeLabel, securityLevelLabel } from './credentialDisplay';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
@@ -88,6 +89,61 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     email: '',
     security_questions: [],
   });
+
+  // 钱包表单：助记词校验反馈、生成词数、高敏字段（第 25 词/私钥）显示切换
+  const [mnemonicCheck, setMnemonicCheck] = useState<{
+    valid: boolean;
+    wordCount: number | null;
+    error: string | null;
+  } | null>(null);
+  const [mnemonicWordCount, setMnemonicWordCount] = useState(24);
+  const [showBip39Passphrase, setShowBip39Passphrase] = useState(false);
+  const [showWalletPrivateKey, setShowWalletPrivateKey] = useState(false);
+
+  // 助记词实时校验（BIP-39 词表+校验和，纯计算命令不触库不留存）；
+  // 防抖 400ms 避免逐键打命令；切换类型或清空即清反馈
+  useEffect(() => {
+    if (formData.credential_type !== 'CryptoWallet') {
+      setMnemonicCheck(null);
+      return;
+    }
+    const phrase = (credentialData.mnemonic_phrase || '').trim();
+    if (!phrase) {
+      setMnemonicCheck(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      personaAPI
+        .walletValidateMnemonic(phrase)
+        .then((res) => {
+          if (res.success && res.data) {
+            setMnemonicCheck({
+              valid: res.data.valid,
+              wordCount: res.data.word_count,
+              error: res.data.error,
+            });
+          } else {
+            setMnemonicCheck(null);
+          }
+        })
+        .catch(() => setMnemonicCheck(null));
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [credentialData.mnemonic_phrase, formData.credential_type]);
+
+  const handleGenerateMnemonic = async () => {
+    try {
+      const res = await personaAPI.walletGenerateMnemonic(mnemonicWordCount);
+      if (res.success && res.data) {
+        const phrase = res.data;
+        setCredentialData((prev: any) => ({ ...prev, mnemonic_phrase: phrase }));
+      } else {
+        toast.error(t('credForm.generateMnemonicFailed'));
+      }
+    } catch {
+      toast.error(t('credForm.generateMnemonicFailed'));
+    }
+  };
 
   // 编辑模式下按 id 兜底补载密文 payload（调用方传 null 时不至于全空回显）；
   // 补载期间禁提交，避免拿空 payload 覆盖既有密文
@@ -465,12 +521,105 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
               />
             </div>
             <div>
-              <label className="label mb-2 block">{t('credForm.mnemonic')}</label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="label">{t('credForm.mnemonic')}</label>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={mnemonicWordCount}
+                    onChange={(e) => setMnemonicWordCount(Number(e.target.value))}
+                    className="input h-8 w-auto py-0 text-xs"
+                    aria-label={t('credForm.mnemonicWords')}
+                  >
+                    {[12, 15, 18, 21, 24].map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleGenerateMnemonic}
+                    className="btn-secondary text-xs flex items-center"
+                  >
+                    <KeyIcon className="w-3.5 h-3.5 mr-1" />
+                    {t('credForm.generateMnemonic')}
+                  </button>
+                </div>
+              </div>
               <textarea
                 value={credentialData.mnemonic_phrase || ''}
                 onChange={(e) => setCredentialData({ ...credentialData, mnemonic_phrase: e.target.value })}
                 className="input h-20 resize-none"
                 placeholder={t('credForm.mnemonicPlaceholder')}
+              />
+              {mnemonicCheck && (
+                <p
+                  className={`mt-1 text-xs ${
+                    mnemonicCheck.valid
+                      ? 'text-green-600 dark:text-green-400'
+                      : 'text-red-600 dark:text-red-400'
+                  }`}
+                >
+                  {mnemonicCheck.valid
+                    ? `${t('credForm.mnemonicValid')} · ${mnemonicCheck.wordCount ?? '?'} ${t('credForm.mnemonicWords')}`
+                    : `${t('credForm.mnemonicInvalid')}${mnemonicCheck.error ? `：${mnemonicCheck.error}` : ''}`}
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="label mb-2 block">{t('credForm.bip39Passphrase')}</label>
+              <div className="relative">
+                <input
+                  type={showBip39Passphrase ? 'text' : 'password'}
+                  value={credentialData.bip39_passphrase || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, bip39_passphrase: e.target.value })}
+                  className="input pr-10"
+                  placeholder={t('credForm.bip39PassphrasePlaceholder')}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowBip39Passphrase(!showBip39Passphrase)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                >
+                  {showBip39Passphrase ? (
+                    <EyeSlashIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                  ) : (
+                    <EyeIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                  )}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('credForm.bip39Hint')}</p>
+            </div>
+            <div>
+              <label className="label mb-2 block">{t('credForm.privateKeyOpt')}</label>
+              <div className="relative">
+                <input
+                  type={showWalletPrivateKey ? 'text' : 'password'}
+                  value={credentialData.private_key || ''}
+                  onChange={(e) => setCredentialData({ ...credentialData, private_key: e.target.value })}
+                  className="input pr-10"
+                  placeholder={t('credForm.privateKeyPlaceholder')}
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowWalletPrivateKey(!showWalletPrivateKey)}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                >
+                  {showWalletPrivateKey ? (
+                    <EyeSlashIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                  ) : (
+                    <EyeIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                  )}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="label mb-2 block">{t('credForm.publicKeyOpt')}</label>
+              <textarea
+                value={credentialData.public_key || ''}
+                onChange={(e) => setCredentialData({ ...credentialData, public_key: e.target.value })}
+                className="input h-16 resize-none"
+                placeholder={t('credForm.publicKeyPlaceholder')}
               />
             </div>
             <div>
