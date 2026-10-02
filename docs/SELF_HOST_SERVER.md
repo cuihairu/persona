@@ -36,16 +36,16 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 
 ## 环境变量全表
 
-| 变量 | 默认 | 说明 |
-|---|---|---|
-| `PERSONA_SERVER_TOKEN` | —（必填其一） | legacy 单令牌；未配且 TOKENS 未配 → `/api/v1` 整体 503（fail-closed），`/health` 仍 200 |
-| `PERSONA_SERVER_TOKENS` | — | 多设备 `name:token,…`；非法格式启动即错 |
-| `PERSONA_SERVER_HOST` / `PORT` | `0.0.0.0` / `3000` | 监听面；只放内网/127.0.0.1 时按需改 HOST |
-| `PERSONA_SERVER_DB` | `./persona-server.db` | 事件库（WAL，与 core 身份库分离） |
-| `PERSONA_SERVER_BACKUP_DIR` | `./backups` | 加密备份落盘目录（`{uuid}.persenc`） |
-| `PERSONA_SERVER_BACKUP_MAX_VERSIONS` | `0`（不限） | 超出删最旧（全局跨设备） |
-| `PERSONA_SERVER_OPS_RETENTION_DAYS` | `0`（不清理） | 同步 oplog 窗口：开窗 = 放弃向离线超窗设备补发历史；窗口须 ≥ 最慢设备的离线周期 |
-| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理） | 审计事件副本保留，按 SIEM 摘取周期定 |
+| 变量                                   | 默认                  | 说明                                                                                    |
+| -------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
+| `PERSONA_SERVER_TOKEN`                 | —（必填其一）         | legacy 单令牌；未配且 TOKENS 未配 → `/api/v1` 整体 503（fail-closed），`/health` 仍 200 |
+| `PERSONA_SERVER_TOKENS`                | —                     | 多设备 `name:token,…`；非法格式启动即错                                                 |
+| `PERSONA_SERVER_HOST` / `PORT`         | `0.0.0.0` / `3000`    | 监听面；只放内网/127.0.0.1 时按需改 HOST                                                |
+| `PERSONA_SERVER_DB`                    | `./persona-server.db` | 事件库（WAL，与 core 身份库分离）                                                       |
+| `PERSONA_SERVER_BACKUP_DIR`            | `./backups`           | 加密备份落盘目录（`{uuid}.persenc`）                                                    |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0`（不限）           | 超出删最旧（全局跨设备）                                                                |
+| `PERSONA_SERVER_OPS_RETENTION_DAYS`    | `0`（不清理）         | 同步 oplog 窗口：开窗 = 放弃向离线超窗设备补发历史；窗口须 ≥ 最慢设备的离线周期         |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理）         | 审计事件副本保留，按 SIEM 摘取周期定                                                    |
 
 ## 客户端接线
 
