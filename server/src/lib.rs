@@ -47,7 +47,7 @@ pub fn build_router(state: AppState) -> Router {
             "/backups",
             Router::new()
                 .route("/", post(api::upload).get(api::list))
-                .route("/:id", get(api::download).delete(api::delete))
+                .route("/{id}", get(api::download).delete(api::delete))
                 .layer(DefaultBodyLimit::max(state.max_backup_bytes))
                 .layer(middleware::from_fn_with_state(
                     state.clone(),
@@ -76,6 +76,77 @@ pub fn build_router(state: AppState) -> Router {
                 .route("/verify", post(api::auth_verify))
                 .layer(DefaultBodyLimit::max(64 * 1024)),
         )
+        // 账号体系（M2）：注册/登录（passkey + SRP 兜底）、恢复码、设备授权。
+        // 账号注册免认证；其余需 Bearer（静态 token 或 SRP token 均可）。
+        .nest(
+            "/accounts",
+            Router::new()
+                .route("/register", post(api::register_account))
+                // Passkey registration flow (public endpoints for WebAuthn ceremony)
+                .route(
+                    "/{account_id}/passkeys/create-options",
+                    post(api::passkey_create_options),
+                )
+                .route(
+                    "/{account_id}/passkeys/register",
+                    post(api::passkey_register),
+                )
+                // SRP password fallback (scoped to account)
+                .route(
+                    "/{account_id}/srp/register",
+                    post(api::account_srp_register).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                .route("/{account_id}/srp/challenge", post(api::account_srp_challenge))
+                .route("/{account_id}/srp/verify", post(api::account_srp_verify))
+                // Recovery codes
+                .route(
+                    "/{account_id}/recovery-codes",
+                    post(api::generate_recovery_codes).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                .route(
+                    "/{account_id}/recovery-codes/verify",
+                    post(api::verify_recovery_code),
+                )
+                // Device management (account-scoped)
+                .route(
+                    "/{account_id}/devices",
+                    post(api::authorize_device)
+                        .route_layer(middleware::from_fn_with_state(
+                            state.clone(),
+                            auth::require_bearer,
+                        ))
+                        .get(api::list_account_devices),
+                )
+                .route(
+                    "/{account_id}/devices/{device_id}",
+                    delete(api::revoke_account_device).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                // Account sessions
+                .route(
+                    "/{account_id}/sessions",
+                    post(api::create_account_session).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                .route(
+                    "/{account_id}/sessions/{session_token}",
+                    delete(api::revoke_account_session).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_bearer,
+                    )),
+                )
+                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
+        )
         // E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文
         // 中继 + 设备/信封登记。独立中间件栈（在 api 整体 require_bearer
         // 之外）：无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限
@@ -88,7 +159,7 @@ pub fn build_router(state: AppState) -> Router {
                     "/devices",
                     post(api::sync_register_device).get(api::sync_list_devices),
                 )
-                .route("/devices/:id", delete(api::sync_delete_device))
+                .route("/devices/{id}", delete(api::sync_delete_device))
                 .route(
                     "/group-keys",
                     get(api::sync_get_group_keys).put(api::sync_put_group_key),

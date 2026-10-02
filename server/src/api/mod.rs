@@ -1,6 +1,7 @@
 //! /api 子路由：统一错误形状、请求体守卫与事件端点。
 
 mod auth;
+mod accounts;
 mod backups;
 mod events;
 mod sync;
@@ -14,6 +15,21 @@ use base64::Engine;
 use serde::Serialize;
 
 pub use auth::{challenge as auth_challenge, register as auth_register, verify as auth_verify};
+pub use accounts::{
+    register_account,
+    passkey_create_options,
+    passkey_register,
+    account_srp_register,
+    account_srp_challenge,
+    account_srp_verify,
+    generate_recovery_codes,
+    verify_recovery_code,
+    authorize_device,
+    list_account_devices,
+    revoke_account_device,
+    create_account_session,
+    revoke_account_session,
+};
 pub use backups::{delete, download, list, size_guard, upload};
 pub use events::{ingest, query};
 pub use sync::{
