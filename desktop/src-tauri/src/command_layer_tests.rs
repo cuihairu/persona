@@ -8844,7 +8844,10 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         // 更长的同前缀命令
         let marker = format!("pub async fn {name}(");
         let marker_generic = format!("pub async fn {name}<");
-        let fn_start = match source.find(&marker).or_else(|| source.find(&marker_generic)) {
+        let fn_start = match source
+            .find(&marker)
+            .or_else(|| source.find(&marker_generic))
+        {
             Some(idx) => idx,
             None => {
                 failures.push(format!("{name}: definition not found in commands.rs"));
