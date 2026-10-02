@@ -66,6 +66,7 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
     if (e instanceof Error) throw e;
     throw new Error(
       typeof e === 'string' && e.length > 0 ? e : JSON.stringify(e),
+      { cause: e },
     );
   }
 }
