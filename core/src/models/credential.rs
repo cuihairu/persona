@@ -270,6 +270,9 @@ pub struct CryptoWalletData {
     pub public_key: String,
     pub address: String,
     pub network: String,
+    /// BIP-39 第 25 个词（可选）；与助记词分离存储，同为高敏字段
+    #[serde(default)]
+    pub bip39_passphrase: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -625,6 +628,7 @@ mod tests {
                 public_key: "pub".to_string(),
                 address: "0xabc".to_string(),
                 network: "ethereum".to_string(),
+                bip39_passphrase: Some("tungsten".to_string()),
             }),
             CredentialData::SshKey(SshKeyData {
                 private_key: "priv".to_string(),

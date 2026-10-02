@@ -373,6 +373,7 @@ export type SecretField =
   | 'token'
   | 'wallet_private_key'
   | 'wallet_mnemonic'
+  | 'wallet_bip39_passphrase'
   | 'raw_data';
 
 export interface SecretReveal {
@@ -602,7 +603,7 @@ export interface UpdateCredentialDataRequest {
 
 export type CredentialDataRequest =
   | { type: 'Password'; password: string; email?: string; security_questions: SecurityQuestion[] }
-  | { type: 'CryptoWallet'; wallet_type: string; mnemonic_phrase?: string; private_key?: string; public_key: string; address: string; network: string }
+  | { type: 'CryptoWallet'; wallet_type: string; mnemonic_phrase?: string; private_key?: string; public_key: string; address: string; network: string; bip39_passphrase?: string }
   | { type: 'SshKey'; private_key: string; public_key: string; key_type: string; passphrase?: string }
   | { type: 'ApiKey'; api_key: string; api_secret?: string; token?: string; permissions: string[]; expires_at?: string }
   | { type: 'TwoFactor'; secret_key: string; issuer: string; account_name: string; algorithm: string; digits: number; period: number }

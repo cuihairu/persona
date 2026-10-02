@@ -3012,6 +3012,7 @@ fn extract_secret_field_type_matrix() {
             public_key: "pub".to_string(),
             address: "addr".to_string(),
             network: "Ethereum".to_string(),
+            bip39_passphrase: None,
         })
     };
     assert_eq!(
@@ -3520,6 +3521,7 @@ fn credential_data_to_json_type_matrix_and_redaction() {
         public_key: "pub".to_string(),
         address: "addr".to_string(),
         network: "Ethereum".to_string(),
+        bip39_passphrase: Some("tungsten".to_string()),
     });
     let json = credential_data_to_json(&wallet);
     assert_eq!(json["type"], "CryptoWallet");
@@ -3613,6 +3615,7 @@ fn credential_data_request_conversion_extras() {
         public_key: "pub".to_string(),
         address: "addr".to_string(),
         network: "Ethereum".to_string(),
+        bip39_passphrase: None,
     };
     match wallet.to_credential_data() {
         CredentialData::CryptoWallet(w) => {
@@ -4067,6 +4070,7 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
                 public_key: "pub".to_string(),
                 address: "0xabc".to_string(),
                 network: "Ethereum".to_string(),
+                bip39_passphrase: Some("tungsten".to_string()),
             },
         ),
         (
@@ -8818,6 +8822,8 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         ("wallet_add_address", &["wallet_id"]),
         ("wallet_delete", &["wallet_id"]),
         ("wallet_generate", &["identity_id"]),
+        ("wallet_generate_mnemonic", &["word_count"]),
+        ("wallet_validate_mnemonic", &["phrase"]),
         ("wallet_import", &["identity_id"]),
         ("wallet_list", &["identity_id"]),
         ("wallet_list_addresses", &["wallet_id"]),
@@ -8833,10 +8839,17 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         idx
     };
     for (name, keys) in AUDITED {
-        let marker = format!("pub async fn {name}");
-        let Some(fn_start) = source.find(&marker) else {
-            failures.push(format!("{name}: definition not found in commands.rs"));
-            continue;
+        // 带左括号精确匹配（兼容泛型签名 `<R: Runtime>(`），避免
+        // `wallet_generate` 前缀命中 `wallet_generate_mnemonic` 这类
+        // 更长的同前缀命令
+        let marker = format!("pub async fn {name}(");
+        let marker_generic = format!("pub async fn {name}<");
+        let fn_start = match source.find(&marker).or_else(|| source.find(&marker_generic)) {
+            Some(idx) => idx,
+            None => {
+                failures.push(format!("{name}: definition not found in commands.rs"));
+                continue;
+            }
         };
         // ① 属性窗内必须有 rename_all = "snake_case"
         let attrs_window = &source[boundary_floor(source, fn_start.saturating_sub(500))..fn_start];

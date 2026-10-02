@@ -63,7 +63,9 @@ pub struct EnhancedAutoLockConfig {
     pub enable_warnings: bool,
 
     /// Force lock on sensitive operations after timeout
-    #[serde(default)]
+    /// 「默认安全」：敏感操作（reveal/复制密文等）过后按 sensitive timeout
+    /// 强制上锁；旧配置未显式写 false 的（serde default）随之收紧。
+    #[serde(default = "default_true")]
     pub force_lock_sensitive: bool,
 
     /// Activity grace period - small grace period for rapid operations
@@ -73,6 +75,10 @@ pub struct EnhancedAutoLockConfig {
     /// Background check interval
     #[serde(default = "default_check_interval")]
     pub background_check_interval_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_warning_time() -> u64 {
@@ -95,7 +101,7 @@ impl Default for EnhancedAutoLockConfig {
             warning_time_secs: default_warning_time(),
             max_concurrent_sessions: default_max_sessions(),
             enable_warnings: true,
-            force_lock_sensitive: false,
+            force_lock_sensitive: true,
             activity_grace_period_secs: default_grace_period(),
             background_check_interval_secs: default_check_interval(),
         }
@@ -287,8 +293,11 @@ impl AutoLockManager {
         };
         let mut sessions = self.sessions.write().await;
         if let Some(session_info) = sessions.get_mut(session_id) {
-            // Force lock if enabled and sensitive timeout is reached
-            if force_lock_sensitive {
+            // Force lock if enabled and a stale sensitive timestamp exists.
+            // A session with no sensitive history (freshly unlocked) has not
+            // timed out - its first sensitive operation just refreshes the
+            // timer instead of locking it out.
+            if force_lock_sensitive && session_info.session.has_sensitive_history() {
                 let timeout = Duration::from_secs(sensitive_timeout_secs);
                 if session_info.session.requires_sensitive_reauth(timeout) {
                     session_info.session.lock();
@@ -883,7 +892,8 @@ mod tests {
         assert_eq!(config.warning_time_secs, 60);
         assert_eq!(config.max_concurrent_sessions, 5);
         assert!(!config.enable_warnings);
-        assert!(!config.force_lock_sensitive);
+        // 「默认安全」：敏感操作后强制上锁随 serde default 收紧为开
+        assert!(config.force_lock_sensitive);
         assert_eq!(config.activity_grace_period_secs, 5);
         assert_eq!(config.background_check_interval_secs, 30);
 
@@ -1385,6 +1395,34 @@ mod tests {
 
         assert!(manager.update_sensitive_activity(&session_id).await.is_ok());
         assert!(manager.is_session_valid(&session_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_force_lock_sensitive_fresh_session_first_touch_does_not_lock() {
+        // force_lock_sensitive must not treat a session with no sensitive
+        // history (freshly unlocked) as timed out: the first sensitive
+        // operation refreshes the timer instead of locking the session.
+        let config = EnhancedAutoLockConfig {
+            base: AutoLockConfig {
+                sensitive_operation_timeout_secs: 0,
+                ..Default::default()
+            },
+            force_lock_sensitive: true,
+            ..Default::default()
+        };
+
+        let manager = AutoLockManager::new(config);
+        let session = Session::new("u".to_string(), Duration::from_secs(3600));
+        let session_id = session.id.clone();
+        manager.add_session(session).await.unwrap();
+
+        assert!(manager.update_sensitive_activity(&session_id).await.is_ok());
+        assert!(manager.is_session_valid(&session_id).await);
+        assert!(!manager
+            .get_session(&session_id)
+            .await
+            .expect("session exists")
+            .locked);
     }
 
     #[tokio::test]

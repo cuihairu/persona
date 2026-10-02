@@ -4204,6 +4204,66 @@ pub async fn get_ssh_keys(
     Ok(ApiResponse::success(summaries))
 }
 
+/// 助记词校验结果：词数与（失败时的）具体错误，供表单实时反馈
+#[derive(serde::Serialize)]
+pub struct MnemonicValidation {
+    pub valid: bool,
+    pub word_count: Option<usize>,
+    pub error: Option<String>,
+}
+
+/// 校验助记词（BIP-39 词表 + 校验和）：纯计算，不触库、不留存。
+#[command(rename_all = "snake_case")]
+pub async fn wallet_validate_mnemonic(
+    phrase: String,
+) -> std::result::Result<ApiResponse<MnemonicValidation>, String> {
+    let trimmed = phrase.trim().to_string();
+    if trimmed.is_empty() {
+        return Ok(ApiResponse::success(MnemonicValidation {
+            valid: false,
+            word_count: Some(0),
+            error: Some("Mnemonic phrase is empty".to_string()),
+        }));
+    }
+    let words = trimmed.split_whitespace().count();
+    match SecureMnemonic::from_phrase(&trimmed) {
+        Ok(m) => Ok(ApiResponse::success(MnemonicValidation {
+            valid: true,
+            word_count: Some(m.word_count()),
+            error: None,
+        })),
+        Err(e) => Ok(ApiResponse::success(MnemonicValidation {
+            valid: false,
+            word_count: Some(words),
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+/// 生成 BIP-39 助记词（12/15/18/21/24 词）：纯计算，不触库、不留存。
+#[command(rename_all = "snake_case")]
+pub async fn wallet_generate_mnemonic(
+    word_count: u32,
+) -> std::result::Result<ApiResponse<String>, String> {
+    let count = match word_count {
+        12 => MnemonicWordCount::Words12,
+        15 => MnemonicWordCount::Words15,
+        18 => MnemonicWordCount::Words18,
+        21 => MnemonicWordCount::Words21,
+        24 => MnemonicWordCount::Words24,
+        other => {
+            return Ok(ApiResponse::error(format!(
+                "Unsupported word count: {}. Use 12/15/18/21/24.",
+                other
+            )))
+        }
+    };
+    match SecureMnemonic::generate(count) {
+        Ok(m) => Ok(ApiResponse::success(m.phrase())),
+        Err(e) => Ok(ApiResponse::error(e.to_string())),
+    }
+}
+
 #[command(rename_all = "snake_case")]
 pub async fn wallet_list(
     identity_id: Option<String>,
@@ -5672,6 +5732,10 @@ pub(crate) fn extract_secret_field(
             .mnemonic_phrase
             .clone()
             .ok_or_else(|| "This wallet has no stored mnemonic phrase".to_string()),
+        (CredentialData::CryptoWallet(w), "wallet_bip39_passphrase") => w
+            .bip39_passphrase
+            .clone()
+            .ok_or_else(|| "This wallet has no BIP-39 passphrase".to_string()),
         (CredentialData::SshKey(k), "ssh_private_key") => Ok(k.private_key.clone()),
         (CredentialData::SshKey(k), "ssh_passphrase") => k
             .passphrase
@@ -6287,6 +6351,7 @@ mod tests {
             public_key: "pub".to_string(),
             address: "0x0".to_string(),
             network: "Ethereum".to_string(),
+            bip39_passphrase: None,
         });
         assert!(extract_secret_field(&empty, "wallet_private_key").is_err());
         assert!(extract_secret_field(&empty, "wallet_mnemonic").is_err());
@@ -6298,6 +6363,7 @@ mod tests {
             public_key: "pub".to_string(),
             address: "0x0".to_string(),
             network: "Ethereum".to_string(),
+            bip39_passphrase: Some("tungsten".to_string()),
         });
         assert_eq!(
             extract_secret_field(&full, "wallet_private_key").unwrap(),

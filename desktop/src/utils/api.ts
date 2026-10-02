@@ -553,6 +553,16 @@ class PersonaAPI {
     return invoke('wallet_export', { request });
   }
 
+  /** BIP-39 助记词校验（词表+校验和+词数），纯计算不触库 */
+  async walletValidateMnemonic(phrase: string): Promise<ApiResponse<{ valid: boolean; word_count: number | null; error: string | null }>> {
+    return invoke('wallet_validate_mnemonic', { phrase });
+  }
+
+  /** 生成 BIP-39 助记词（12/15/18/21/24 词），纯计算不触库 */
+  async walletGenerateMnemonic(wordCount: number): Promise<ApiResponse<string>> {
+    return invoke('wallet_generate_mnemonic', { word_count: wordCount });
+  }
+
   // -------------------------------------------------------------------------
   // Auto-lock
   // -------------------------------------------------------------------------

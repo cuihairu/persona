@@ -432,6 +432,7 @@ pub enum CredentialDataRequest {
         public_key: String,
         address: String,
         network: String,
+        bip39_passphrase: Option<String>,
     },
     SshKey {
         private_key: String,
@@ -830,6 +831,7 @@ impl CredentialDataRequest {
                 public_key,
                 address,
                 network,
+                bip39_passphrase,
             } => CredentialData::CryptoWallet(CryptoWalletData {
                 wallet_type: wallet_type.clone(),
                 mnemonic_phrase: mnemonic_phrase.clone(),
@@ -837,6 +839,7 @@ impl CredentialDataRequest {
                 public_key: public_key.clone(),
                 address: address.clone(),
                 network: network.clone(),
+                bip39_passphrase: bip39_passphrase.clone(),
             }),
             CredentialDataRequest::SshKey {
                 private_key,

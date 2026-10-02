@@ -70,6 +70,7 @@ async fn test_full_persona_workflow() {
         public_key: "03a34b99f22c790c4e36b2b3c2c35a36db06226e41c692fc82b8b56ac1c540c5bd".to_string(),
         address: "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
         network: "mainnet".to_string(),
+        bip39_passphrase: None,
     });
 
     let wallet_credential = service

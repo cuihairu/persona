@@ -96,6 +96,11 @@ impl Session {
         self.touch(); // Also update general activity
     }
 
+    /// Whether any sensitive operation has been recorded for this session
+    pub fn has_sensitive_history(&self) -> bool {
+        self.last_sensitive_op.is_some()
+    }
+
     /// Check if sensitive operation requires re-authentication
     pub fn requires_sensitive_reauth(&self, timeout: Duration) -> bool {
         if let Some(last_sensitive) = self.last_sensitive_op {

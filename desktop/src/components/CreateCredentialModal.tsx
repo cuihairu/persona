@@ -274,6 +274,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
           public_key: credentialData.public_key || '',
           address: credentialData.address || '',
           network: credentialData.network || 'mainnet',
+          bip39_passphrase: credentialData.bip39_passphrase || undefined,
         };
         break;
 
