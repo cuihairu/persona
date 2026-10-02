@@ -28,7 +28,7 @@
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-notification": "^2.4.0",
     "clsx": "^2.0.0",
-    "framer-motion": "^10.16.0",
+    "framer-motion": "^13.4.4",
     "i18next": "^26.4.2",
     "qrcode.react": "^4.2.0",
     "react": "^18.2.0",
