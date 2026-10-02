@@ -117,7 +117,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
 # 配置管理
-config = "0.14"
+config = "0.15"
 
 # 测试
 mockall = "0.12"
