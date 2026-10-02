@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Persona 客户端入口模块"
+    },
+    {
+      "name": "ability_desc",
+      "value": "Persona 主界面"
+    },
+    {
+      "name": "ability_label",
+      "value": "Persona"
+    }
+  ]
+}

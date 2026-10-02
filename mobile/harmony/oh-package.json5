@@ -1,0 +1,13 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "persona-mobile",
+  "version": "0.1.0",
+  "description": "Persona mobile — HarmonyOS (ArkTS) 客户端",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {},
+  "devDependencies": {
+    "@ohos/hypium": "1.0.19"
+  }
+}

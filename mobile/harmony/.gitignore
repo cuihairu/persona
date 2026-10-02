@@ -1,0 +1,5 @@
+build/
+.cxx/
+oh_modules/
+/.idea/
+local.properties
