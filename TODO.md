@@ -4,6 +4,38 @@ This is the master checklist for Persona's mainline product: local-first identit
 
 Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track is paused until that feature set is complete — wallet mistakes are irreversible (funds, not accounts), so wallet-grade security must be built on a proven vault foundation.
 
+Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进入主线**——纯本地存疑，对齐 1Password 形态。账号/E2EE 同步/插件云接全部按下方 Account & Sync 章节的里程碑逐项推进；隐私红线（默认关闭、显式开启、明示数据范围）与本地模式完整可用是每项的硬验收。
+
+Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
+
+> 现状勘察（2026-10-03）：E2EE_SYNC_DESIGN 阶段 1（SRP 设备认证）与阶段 2
+> （device envelope / group key / oplog LWW / travel 闸）已于 2026-09 落地，
+> 阶段 3 部分接线在位（SyncConflictsModal、SettingsModal 同步 pane、
+> sync_authorize/sync_revoke 命令）。真实缺口 = **账号体系（现仅设备 SRP，
+> 无账号注册/登录/恢复）、插件云通路（现仅 native messaging 本地桥）、
+> server Docker 一键起的可用性核验、隐私红线的显式开启流、双设备真实走查**。
+
+- [ ] **M1 server Docker 可用化（落地⑥）**：核验 `docker/Dockerfile.server` +
+      `docker-compose.deploy.yml` 一键起（compose up → server 健康检查通过），
+      补齐自托管启动文档；Dockerfile 若缺编译要素按需修——独立可验收
+- [ ] **M2 账号体系（落地①）**：server 账号注册/登录（通行密钥优先 +
+      SRP 密码兜底——复用 DR-2 的 SRP 链路作密码兜底）、账号级设备管理
+      （新设备授权/吊销/设备列表，复用 `/sync/devices` 扩到账号作用域）、
+      账号恢复流程（恢复码/备用路径，无托管原则：主密码不出设备）；
+      桌面设置页账号 UI；与既有设备令牌 Bearer 共存不打断备份链
+- [ ] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）**：设备管理页 +
+      授权/吊销全流程 UI 走查、冲突裁决 UI 走查、`STORAGE_AND_SYNC.md`
+      与实现一致性复查——设计稿阶段 3 验收面收口
+- [ ] **M4 隐私红线（落地⑤，贯穿 M2/M3 UI）**：账号/同步功能默认关闭、
+      显式开启、开启时明示数据范围（哪些元数据上服务器见 §9 可见面）；
+      本地模式（不开启）全功能可用的断言/走查；默认关闭入测试
+- [ ] **M5 浏览器插件接账号（落地④）**：插件登录账号 → 读写云端保险库
+      （HTTP 直连 server，出 native messaging 本地桥）、离线可用
+      （本地缓存兜底）、同步冲突解决；chromium 与 safari 两份
+- [ ] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
+      （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
+      冲突合并正确、吊销流程走查，截图输出
+
 Now (current sprint)
 
 - [x] CI: GitHub Actions (Rust fmt/clippy/test; Desktop lint/test)
