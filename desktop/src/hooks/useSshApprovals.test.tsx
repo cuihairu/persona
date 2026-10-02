@@ -33,7 +33,6 @@ const sampleRequest: SshApprovalRequest = {
   fingerprint: 'SHA256:abcd1234',
   operation: 'sign',
   peer: 'github.com',
-  timestamp: '2024-01-01T00:00:00Z',
   reason: 'policy',
 };
 

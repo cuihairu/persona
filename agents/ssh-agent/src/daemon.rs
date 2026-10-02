@@ -47,10 +47,13 @@ pub async fn run_agent_with_hooks(
     approval: Option<Arc<dyn ApprovalHandler>>,
     biometric: Option<Arc<dyn BiometricProvider>>,
 ) -> Result<()> {
-    RedactedLoggerBuilder::new(Level::INFO)
+    // 日志初始化绝不拦启动：内嵌进 desktop 时宿主壳已先装全局 subscriber
+    // （文件 writer），此处再装只是无害地保持已装的。即便 init 将来出现
+    // 其它失败形态，也不得让它变成 "SSH agent failed to start"。
+    let _ = RedactedLoggerBuilder::new(Level::INFO)
         .include_target(false)
         .with_writer(|| Box::new(AgentLogSink))
-        .init()?;
+        .init();
 
     let socket_path = default_agent_path();
     let db_path = resolve_persona_db_path();

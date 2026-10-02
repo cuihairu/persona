@@ -38,7 +38,7 @@ config = "0.14"
 # Terminal UI
 console = "0.15"
 indicatif = "0.17"
-dialoguer = { version = "0.11", optional = true }
+dialoguer = { version = "0.12", optional = true }
 colored = "2.0"
 crossterm = "0.27"
 ratatui = "0.30"
@@ -56,7 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # File system
-dirs = "5.0"
+dirs = "7.0"
 walkdir = "2.4"
 
 # Utilities
@@ -73,7 +73,7 @@ flate2 = { workspace = true }
 data-encoding = "2.5"
 hmac = "0.12"
 sha1 = "0.10"
-sha2 = "0.10"
+sha2 = "0.11"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rqrr = "0.11"
 

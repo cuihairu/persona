@@ -61,6 +61,8 @@ const SshAgentPanel: React.FC = () => {
   const [importSession, setImportSession] = useState<ImportSession | null>(null);
   const [generateSession, setGenerateSession] = useState<GenerateSession | null>(null);
   const [copied, setCopied] = useState(false);
+  // 列表行内公钥复制的反馈：记录刚复制的行 id（单例 copied 态是生成结果用的）
+  const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
 
   useEffect(() => {
@@ -213,6 +215,17 @@ const SshAgentPanel: React.FC = () => {
     }
   };
 
+  // 列表行内复制：同一模式，但反馈钉在触发行上
+  const handleCopyRowPublicKey = async (keyId: string, publicKey: string) => {
+    try {
+      await navigator.clipboard.writeText(publicKey);
+      setCopiedKeyId(keyId);
+      setTimeout(() => setCopiedKeyId((cur) => (cur === keyId ? null : cur)), 2000);
+    } catch {
+      toast.error(t('common.copyFailed'));
+    }
+  };
+
   const handleStop = async () => {
     setIsStopping(true);
     await stopSshAgent();
@@ -331,6 +344,12 @@ const SshAgentPanel: React.FC = () => {
                     {t('sshAgent.credentialCol')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    {t('sshAgent.typeCol')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    {t('sshAgent.publicKeyCol')}
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.tagsCol')}
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
@@ -346,6 +365,47 @@ const SshAgentPanel: React.FC = () => {
                       {key.identity_name}
                     </td>
                     <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">{key.name}</td>
+                    <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">
+                      {key.ssh_algorithm ? (
+                        <div className="space-y-0.5">
+                          <span className="block font-medium">{key.ssh_algorithm}</span>
+                          {key.fingerprint && (
+                            <span
+                              className="block font-mono text-xs text-gray-500 dark:text-gray-400 truncate max-w-[16rem]"
+                              title={key.fingerprint}
+                            >
+                              {key.fingerprint}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-gray-400 dark:text-gray-500">—</span>
+                      )}
+                    </td>
+                    <td className="px-6 py-3 text-sm">
+                      {key.public_key ? (
+                        <button
+                          onClick={() => handleCopyRowPublicKey(key.id, key.public_key!)}
+                          className="btn-ghost inline-flex items-center text-xs"
+                          data-testid={`ssh-key-copy-${key.id}`}
+                          title={key.public_key}
+                        >
+                          {copiedKeyId === key.id ? (
+                            <>
+                              <CheckIcon className="w-4 h-4 mr-1 text-green-600 dark:text-green-400" />
+                              {t('sshAgent.copied')}
+                            </>
+                          ) : (
+                            <>
+                              <ClipboardDocumentIcon className="w-4 h-4 mr-1" />
+                              {t('sshAgent.copyPublicKey')}
+                            </>
+                          )}
+                        </button>
+                      ) : (
+                        <span className="text-gray-400 dark:text-gray-500">—</span>
+                      )}
+                    </td>
                     <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">
                       {key.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1">

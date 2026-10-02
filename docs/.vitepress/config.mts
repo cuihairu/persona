@@ -18,7 +18,10 @@ const sidebar = [
   },
   {
     text: "界面预览",
-    items: [{ text: "界面一览", link: "/previews/ui" }],
+    items: [
+      { text: "界面一览", link: "/previews/ui" },
+      { text: "素材盘点", link: "/previews/assets" },
+    ],
   },
   {
     text: "API 文档",
