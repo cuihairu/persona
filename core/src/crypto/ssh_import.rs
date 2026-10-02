@@ -201,6 +201,16 @@ pub(crate) fn encode_public_line(key: &ssh_key::private::PrivateKey) -> PersonaR
     })
 }
 
+/// 公钥单行（`ssh-ed25519 AAAA… comment`）→（线格式算法名，SHA256 指纹）。
+/// 供列表/详情展示与指纹核对；解析失败返回 None（调用方按空列展示，不报错）。
+pub fn describe_public_key_line(line: &str) -> Option<(String, String)> {
+    let pk = ssh_key::PublicKey::from_openssh(line.trim()).ok()?;
+    Some((
+        pk.algorithm().to_string(),
+        pk.fingerprint(HashAlg::Sha256).to_string(),
+    ))
+}
+
 pub(crate) fn fingerprint_of(key: &ssh_key::private::PrivateKey) -> String {
     key.public_key().fingerprint(HashAlg::Sha256).to_string()
 }

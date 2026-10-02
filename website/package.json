@@ -11,7 +11,7 @@
     "lint": "eslint --ext .js,.jsx,.ts,.tsx ./src"
   },
   "dependencies": {
-    "@ant-design/icons": "^5.5.0",
+    "@ant-design/icons": "^6.3.4",
     "antd": "^5.22.0",
     "react": "^19.3.0",
     "react-dom": "^18.3.1",
@@ -20,7 +20,7 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^18.3.0",
-    "@umijs/plugins": "^4.7.17",
-    "typescript": "^5.0.0"
+    "@umijs/plugins": "^4.7.22",
+    "typescript": "^7.0.2"
   }
 }

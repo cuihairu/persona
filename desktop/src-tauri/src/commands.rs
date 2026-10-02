@@ -4159,6 +4159,29 @@ pub async fn get_ssh_keys(
         };
         for credential in creds {
             if credential.credential_type == CredentialType::SshKey {
+                // 指纹/算法/公钥行从凭据数据现算；单钥取数失败（门禁、
+                // 数据损坏）只影响本行的展示列，不炸整个列表
+                let key_info = {
+                    let service_guard = state.service.lock().await;
+                    match service_guard.as_ref() {
+                        Some(service) => match service.get_credential_data(&credential.id).await {
+                            Ok(Some(persona_core::models::CredentialData::SshKey(ssh_data))) => {
+                                let describe =
+                                    persona_core::crypto::ssh_import::describe_public_key_line(
+                                        &ssh_data.public_key,
+                                    );
+                                (Some(ssh_data.public_key), describe)
+                            }
+                            _ => (None, None),
+                        },
+                        None => (None, None),
+                    }
+                };
+                let (public_key, describe) = key_info;
+                let (ssh_algorithm, fingerprint) = match describe {
+                    Some((algo, fp)) => (Some(algo), Some(fp)),
+                    None => (None, None),
+                };
                 summaries.push(SshKeySummary {
                     id: credential.id.to_string(),
                     identity_id: credential.identity_id.to_string(),
@@ -4170,6 +4193,9 @@ pub async fn get_ssh_keys(
                     tags: credential.tags,
                     created_at: credential.created_at.to_rfc3339(),
                     updated_at: credential.updated_at.to_rfc3339(),
+                    ssh_algorithm,
+                    fingerprint,
+                    public_key,
                 });
             }
         }
