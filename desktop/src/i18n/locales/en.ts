@@ -463,6 +463,13 @@ export default {
     confirm: 'Confirm',
     invalid: 'Invalid master password',
   },
+  unlockGate: {
+    title: 'Unlock vault',
+    description: 'The vault was auto-locked. Unlock to resume your pending action.',
+    passwordPlaceholder: 'Master password',
+    verifying: 'Unlocking…',
+    submit: 'Unlock',
+  },
   approval: {
     operation: 'Operation',
     unknown: 'unknown',

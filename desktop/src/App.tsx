@@ -22,6 +22,7 @@ import CreateCredentialModal from '@/components/CreateCredentialModal';
 import { ErrorBoundary, ErrorDisplay, LoadingSpinner } from '@/components/ErrorHandling';
 import SshApprovalModal from '@/components/SshApprovalModal';
 import PasskeyApprovalModal from '@/components/PasskeyApprovalModal';
+import UnlockGateModal from '@/components/UnlockGateModal';
 import SshAgentPanel from '@/components/SshAgentPanel';
 import WalletPanel from '@/components/WalletPanel';
 import WatchtowerPanel from '@/components/WatchtowerPanel';
@@ -171,6 +172,30 @@ const App: React.FC = () => {
     respond: respondPasskey,
   } = usePasskeyApprovals(isUnlocked);
 
+  // SERVICE_LOCKED 引导解锁：invoke gate 撞上惰性 auto-lock 时弹解锁框，
+  // 解锁成功后挂起的原操作自动重试（utils/api requestUnlockGate）。
+  // 前端已在解锁屏（store isUnlocked=false）时不叠弹窗——解锁屏本身就是引导。
+  const [unlockGateOpen, setUnlockGateOpen] = useState(false);
+  const unlockGateResolveRef = useRef<((unlocked: boolean) => void) | null>(null);
+  useEffect(() => {
+    const onNeedUnlock = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { resolve: (unlocked: boolean) => void };
+      if (!useAppStore.getState().isUnlocked) {
+        detail.resolve(false);
+        return;
+      }
+      unlockGateResolveRef.current = detail.resolve;
+      setUnlockGateOpen(true);
+    };
+    window.addEventListener('persona:need-unlock', onNeedUnlock);
+    return () => window.removeEventListener('persona:need-unlock', onNeedUnlock);
+  }, []);
+  const resolveUnlockGate = (unlocked: boolean) => {
+    setUnlockGateOpen(false);
+    unlockGateResolveRef.current?.(unlocked);
+    unlockGateResolveRef.current = null;
+  };
+
   // 解锁后启动后端 auto-lock 监控，锁定后停止
   useEffect(() => {
     if (isUnlocked) {
@@ -246,8 +271,11 @@ const App: React.FC = () => {
     resetSidebarFilter();
   }, [currentIdentity]);
 
-  // Show loading state during initialization
-  if (isLoading) {
+  // 全屏 spinner 仅用于启动检查/解锁屏初始化中。解锁后的写操作也共用全局
+  // isLoading（gate 解锁、创建/编辑条目等），若在此拆主 UI，重挂会连带
+  // CredentialList 的「选中悬空即清」effect 把用户选中态清掉——操作中引导
+  // 解锁（UnlockGateModal）正是在解锁态置位，必须保持页面上下文不拆。
+  if (isLoading && !isUnlocked) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
         <LoadingSpinner message={t('app.initializing')} />
@@ -401,6 +429,9 @@ const App: React.FC = () => {
           pendingCount={pendingPasskeyCount}
           onRespond={respondPasskey}
         />
+
+        {/* SERVICE_LOCKED 引导解锁（惰性 auto-lock 竞态） */}
+        <UnlockGateModal isOpen={unlockGateOpen} onResolve={resolveUnlockGate} />
 
         {/* Toast Notifications */}
         <Toaster position="top-right" toastOptions={TOAST_OPTIONS} />

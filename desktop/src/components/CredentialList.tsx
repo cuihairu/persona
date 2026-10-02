@@ -139,7 +139,7 @@ const CredentialList: React.FC<CredentialListProps> = ({ onCreateCredential }) =
     if (!isSelectionVisible) {
       setSelectedCredentialId(null);
     }
-  }, [isSelectionVisible, setSelectedCredentialId]);
+  }, [isSelectionVisible, selectedCredentialId, setSelectedCredentialId]);
 
   // 全局搜索跨身份跳转：目标身份的凭据就绪后注入选中并清除 pending
   // （声明在清选中 effect 之后；凭据异步加载完成会再次触发本 effect）

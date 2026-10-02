@@ -531,8 +531,11 @@ describe('utils/api command mapping coverage', () => {
     await personaAPI.connectServerStatus();
     expect(mockInvoke).toHaveBeenLastCalledWith('connect_server_status');
 
-    await personaAPI.connectTokenCreate('label', 'full');
-    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_create', { label: 'label', scope: 'full' });
+    await personaAPI.connectTokenCreate('label', { identities: [], item_types: ['password'], verbs: ['read'] });
+    expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_create', {
+      label: 'label',
+      scope: { identities: [], item_types: ['password'], verbs: ['read'] },
+    });
 
     await personaAPI.connectTokenList();
     expect(mockInvoke).toHaveBeenLastCalledWith('connect_token_list');
@@ -606,5 +609,77 @@ describe('utils/api command mapping coverage', () => {
 
     await personaAPI.focusMainWindow();
     expect(mockInvoke).toHaveBeenLastCalledWith('focus_main_window');
+  });
+
+  // SERVICE_LOCKED 引导解锁 gate：惰性 auto-lock 竞态下操作不该被堵死
+  describe('SERVICE_LOCKED unlock gate', () => {
+    const lockedEnvelope = {
+      success: false,
+      data: null,
+      error: 'Authentication failed: Session is auto-locked',
+      error_code: 'SERVICE_LOCKED',
+    };
+
+    // 模拟 App 层监听 persona:need-unlock 并以给定结果收口
+    const listenUnlockGate = (outcome: boolean) => {
+      const listener = (e: Event) => {
+        const detail = (e as CustomEvent).detail as { resolve: (ok: boolean) => void };
+        window.removeEventListener('persona:need-unlock', listener);
+        detail.resolve(outcome);
+      };
+      window.addEventListener('persona:need-unlock', listener);
+    };
+
+    it('retries the original command after the gate unlocks', async () => {
+      mockInvoke
+        .mockResolvedValueOnce(lockedEnvelope)
+        .mockResolvedValueOnce({ success: true, data: ['key'] });
+
+      listenUnlockGate(true);
+      const res = await personaAPI.getSshKeys();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(2);
+      expect(mockInvoke).toHaveBeenNthCalledWith(1, 'get_ssh_keys');
+      expect(mockInvoke).toHaveBeenNthCalledWith(2, 'get_ssh_keys');
+      expect(res).toEqual({ success: true, data: ['key'] });
+    });
+
+    it('returns the locked error untouched when the user cancels', async () => {
+      mockInvoke.mockResolvedValueOnce(lockedEnvelope);
+
+      listenUnlockGate(false);
+      const res = await personaAPI.getSshKeys();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      expect(res).toEqual(lockedEnvelope);
+    });
+
+    it('does not gate unlock/status commands (no recursion)', async () => {
+      mockInvoke.mockResolvedValueOnce(lockedEnvelope);
+
+      await personaAPI.isServiceUnlocked();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      expect(mockInvoke).toHaveBeenCalledWith('is_service_unlocked');
+    });
+
+    it('passes non-locked errors through without opening the gate', async () => {
+      mockInvoke.mockResolvedValueOnce({
+        success: false,
+        data: null,
+        error: 'nope',
+        error_code: 'NOT_FOUND',
+      });
+
+      const res = await personaAPI.getSshKeys();
+
+      expect(mockInvoke).toHaveBeenCalledTimes(1);
+      expect(res).toEqual({
+        success: false,
+        data: null,
+        error: 'nope',
+        error_code: 'NOT_FOUND',
+      });
+    });
   });
 });
