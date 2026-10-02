@@ -62,7 +62,7 @@ bech32 = "0.12"
 # WebAuthn/passkey：P-256 与 COSE/CBOR 用审计过的实现
 p256 = { version = "0.14", features = ["ecdsa"] }
 coset = "0.3"
-base64 = "0.22"
+base64 = "0.23"
 webauthn-rs = "0.5"
 # SSH 密钥：OpenSSH 私钥容器（openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf）解析与
 # 序列化、公钥行/指纹格式化，交给审计过的 ssh-key；p256 feature 供 ECDSA
