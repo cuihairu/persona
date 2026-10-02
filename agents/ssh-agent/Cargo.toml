@@ -23,7 +23,7 @@ hex = { workspace = true }
 tokio-util = "0.7"
 byteorder = "1.5"
 ed25519-dalek = "3.0"
-base64 = "0.21"
+base64 = "0.23"
 ring = { workspace = true }
 
 # 库内双格式私钥加载（seed 约定 + 导入的 OpenSSH PEM）与 rsa/p256 签名
