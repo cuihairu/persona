@@ -6,6 +6,17 @@ Priority policy (2026-09): the password-manager track targets 1Password parity f
 
 Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进入主线**——纯本地存疑，对齐 1Password 形态。账号/E2EE 同步/插件云接全部按下方 Account & Sync 章节的里程碑逐项推进；隐私红线（默认关闭、显式开启、明示数据范围）与本地模式完整可用是每项的硬验收。
 
+Doc site（2026-10-03 插队：首页走马灯）
+
+- [ ] 文档首页走马灯：桌面截图 + 手机原型图在 docs 站首页以走马灯轮播
+      ——2026-10-03 用户质问「为啥到现在都没有」：全仓检索「走马灯/轮播/
+      carousel」零命中，该需求此前从未登记（追踪遗漏，本次补登防再丢）。
+      桌面素材 5 张在位（源 `docs/branding/ui/` → 站点副本
+      `docs/src/public/ui/`，previews/ui.md 已挂全）；手机原型图全仓零张
+      （previews「原型缺口清单」移动端行仍标暂缺）——出图通路已核：
+      Android SDK + AVD（android-33）+ adb + 10-02 构建的
+      `mobile/android/.../app-release.apk`，emulator screencap 可出
+
 Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 > 现状勘察（2026-10-03）：E2EE_SYNC_DESIGN 阶段 1（SRP 设备认证）与阶段 2
