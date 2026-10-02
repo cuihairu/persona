@@ -17,7 +17,7 @@ tracing = "0.1"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
 [dev-dependencies]
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.5", features = ["util"] }
 # listener 生命周期测试要在真 TCP 上读写 HTTP/1.1 裸请求（io-util 提供
 # AsyncReadExt/AsyncWriteExt）；生产代码不碰这些 trait，故只进 dev。
 tokio = { version = "1.35", features = ["io-util", "net"] }
