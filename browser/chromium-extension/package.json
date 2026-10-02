@@ -10,12 +10,12 @@
     "test": "jest"
   },
   "devDependencies": {
-    "@types/chrome": "^0.0.248",
-    "@types/jest": "^29.5.14",
-    "@types/node": "^26.6.2",
-    "jest": "^30.4.2",
-    "jest-environment-jsdom": "^30.4.1",
-    "ts-jest": "^29.4.5",
-    "typescript": "^5.4.5"
+    "@types/chrome": "^0.3.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^26.6.3",
+    "jest": "^30.5.2",
+    "jest-environment-jsdom": "^30.5.2",
+    "ts-jest": "^29.4.14",
+    "typescript": "^7.0.2"
   }
 }

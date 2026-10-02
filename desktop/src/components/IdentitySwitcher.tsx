@@ -40,7 +40,8 @@ const IdentitySwitcher: React.FC<IdentitySwitcherProps> = ({ onCreateIdentity })
 
   return (
     <div className="relative">
-      <Listbox value={currentIdentity} onChange={switchIdentity}>
+      {/* headlessui v2 的 value 不再收 null（v1 语义），空态用 undefined */}
+      <Listbox value={currentIdentity ?? undefined} onChange={switchIdentity}>
         <div className="relative">
           <Listbox.Button className="relative w-full cursor-default rounded-lg bg-white dark:bg-gray-900 py-2 pl-3 pr-10 text-left shadow-md focus:outline-none focus-visible:border-primary-500 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-white/75 dark:focus-visible:ring-gray-900 focus-visible:ring-offset-2 focus-visible:ring-offset-primary-300 dark:focus-visible:ring-offset-gray-900 sm:text-sm">
             <div className="flex items-center">

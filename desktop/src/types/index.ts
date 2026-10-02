@@ -44,16 +44,6 @@ export type AutoLockEventPayload =
   | { type: 'unlocked'; session_id: string }
   | { type: 'activity'; session_id: string };
 
-/** persona://ssh-approval 事件的载荷（与 Rust 侧 SshApprovalRequest 对应） */
-export interface SshApprovalRequest {
-  request_id: string;
-  key_id: string;
-  fingerprint: string;
-  operation: string;
-  peer: string | null;
-  timestamp: string;
-}
-
 /** persona://passkey-approval 事件的负载（与 Rust 侧 PasskeyApprovalRequest 对应） */
 export interface PasskeyApprovalRequest {
   request_id: string;
@@ -669,6 +659,12 @@ export interface SshAgentKey {
   tags: string[];
   created_at: string;
   updated_at: string;
+  /** 线格式算法（ssh-ed25519 等）；数据取不到时为 null */
+  ssh_algorithm?: string | null;
+  /** SHA256 指纹（SHA256:…），与导入/生成确认处同口径 */
+  fingerprint?: string | null;
+  /** 完整公钥行，供一键复制 */
+  public_key?: string | null;
 }
 
 /** inspect_ssh_key_file 响应：导入确认弹框展示（指纹人工核对） */

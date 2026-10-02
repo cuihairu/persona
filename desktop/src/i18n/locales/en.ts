@@ -463,6 +463,13 @@ export default {
     confirm: 'Confirm',
     invalid: 'Invalid master password',
   },
+  unlockGate: {
+    title: 'Unlock vault',
+    description: 'The vault was auto-locked. Unlock to resume your pending action.',
+    passwordPlaceholder: 'Master password',
+    verifying: 'Unlocking…',
+    submit: 'Unlock',
+  },
   approval: {
     operation: 'Operation',
     unknown: 'unknown',
@@ -581,6 +588,8 @@ export default {
     credentialCol: 'Credential',
     tagsCol: 'Tags',
     updatedCol: 'Updated',
+    typeCol: 'Type / Fingerprint',
+    publicKeyCol: 'Public key',
     importButton: 'Import key',
     dropHere: 'Drop a private key file to import (OpenSSH / PKCS#8 / PKCS#1 / SEC1)',
     importTitle: 'Import SSH key',

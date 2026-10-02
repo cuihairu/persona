@@ -139,7 +139,7 @@ describe('components/SettingsModal', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows the general pane with feature-flag switches by default', () => {
+  it('shows the general pane with feature-flag switches by default', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
       currentIdentity: null,
@@ -148,7 +148,11 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     // 默认 tab：General 四开关（出厂全关），身份区块不可见
     expect(screen.getByRole('tab', { name: '通用' })).toHaveAttribute('aria-selected', 'true');
@@ -174,7 +178,7 @@ describe('components/SettingsModal', () => {
     expect(screen.queryByText('还没有身份。')).not.toBeInTheDocument();
   });
 
-  it('renders the theme picker with the current preference checked', () => {
+  it('renders the theme picker with the current preference checked', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
       currentIdentity: null,
@@ -184,7 +188,11 @@ describe('components/SettingsModal', () => {
     });
     useAppStore.setState({ theme: 'dark' });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     expect(screen.getByRole('radiogroup', { name: '外观' })).toBeInTheDocument();
     expect(screen.getByTestId('theme-option-system')).toHaveAttribute('aria-checked', 'false');
@@ -192,7 +200,7 @@ describe('components/SettingsModal', () => {
     expect(screen.getByTestId('theme-option-dark')).toHaveAttribute('aria-checked', 'true');
   });
 
-  it('writes the theme preference to the store without touching feature flags', () => {
+  it('writes the theme preference to the store without touching feature flags', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
       currentIdentity: null,
@@ -201,7 +209,11 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     fireEvent.click(screen.getByTestId('theme-option-dark'));
     expect(useAppStore.getState().theme).toBe('dark');
@@ -235,7 +247,11 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     fireEvent.click(screen.getByTestId('feature-toggle-ssh_agent'));
 
@@ -273,7 +289,11 @@ describe('components/SettingsModal', () => {
     });
     mockSetFlags.mockRejectedValueOnce(new Error('ipc down'));
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     fireEvent.click(screen.getByTestId('feature-toggle-wallet'));
 
@@ -303,7 +323,11 @@ describe('components/SettingsModal', () => {
     });
     mockSetFlags.mockResolvedValueOnce({ success: false, error: 'Service is locked' });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     fireEvent.click(screen.getByTestId('feature-toggle-passkeys'));
 
@@ -313,7 +337,7 @@ describe('components/SettingsModal', () => {
     expect(useAppStore.getState().featureFlags.passkeys).toBe(false);
   });
 
-  it('shows empty state when no identities', () => {
+  it('shows empty state when no identities', async () => {
     (usePersonaService as jest.Mock).mockReturnValue({
       identities: [],
       currentIdentity: null,
@@ -322,7 +346,11 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     openIdentitiesTab();
     expect(screen.getByText('还没有身份。')).toBeInTheDocument();
   });
@@ -350,7 +378,11 @@ describe('components/SettingsModal', () => {
       isLoading: false,
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     openIdentitiesTab();
 
     fireEvent.click(screen.getByTitle('编辑'));
@@ -387,7 +419,11 @@ describe('components/SettingsModal', () => {
 
     const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     openIdentitiesTab();
     fireEvent.click(screen.getByTitle('删除'));
 
@@ -424,7 +460,11 @@ describe('components/SettingsModal', () => {
     });
     mockTokenPresent.mockResolvedValue({ success: true, data: true });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('sync-url-input')).toHaveValue('https://sync.example.com');
@@ -451,7 +491,11 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     // 打开开关仅展开表单，不立即保存
     fireEvent.click(screen.getByTestId('sync-toggle'));
@@ -489,7 +533,11 @@ describe('components/SettingsModal', () => {
   it('refuses to save an enabled config without a server url', async () => {
     mockIdentityHook();
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     fireEvent.click(screen.getByTestId('sync-toggle'));
     fireEvent.click(screen.getByTestId('sync-save'));
 
@@ -516,7 +564,11 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
     });
@@ -551,7 +603,11 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('90');
@@ -570,7 +626,11 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     // 服务端真相未回填前默认 Never（旧 JSON 缺键同型）
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('');
@@ -609,7 +669,11 @@ describe('components/SettingsModal', () => {
       },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('365');
     });
@@ -636,7 +700,11 @@ describe('components/SettingsModal', () => {
     });
     mockSetExpiry.mockResolvedValueOnce({ success: false, error: 'Service is locked' });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('password-expiry-select')).toHaveValue('90');
     });
@@ -667,7 +735,11 @@ describe('components/SettingsModal', () => {
     });
     mockChangePw.mockResolvedValue({ success: true, data: true });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     // 手动改密走非 forced 弹窗：可取消，旧密码不预填
     fireEvent.click(screen.getByTestId('change-password-button'));
@@ -703,7 +775,11 @@ describe('components/SettingsModal', () => {
   it('disables the biometric switch with an unavailable hint when the OS lacks support', async () => {
     mockIdentityHook();
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     const toggle = await screen.findByTestId('biometric-toggle');
     expect(toggle).toBeDisabled();
@@ -725,7 +801,11 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: true, platform: 'linux-polkit' },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     const toggle = await screen.findByTestId('biometric-toggle');
     await waitFor(() => expect(toggle).toBeEnabled());
@@ -762,7 +842,11 @@ describe('components/SettingsModal', () => {
       error: 'Invalid master password',
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     const toggle = await screen.findByTestId('biometric-toggle');
     await waitFor(() => expect(toggle).toBeEnabled());
@@ -794,7 +878,11 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: true, platform: 'touch-id', wrap_tier: 'hardware-bound' },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     const toggle = await screen.findByTestId('biometric-toggle');
     await waitFor(() => expect(toggle).toBeEnabled());
@@ -821,7 +909,11 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: true, platform: 'linux-polkit', wrap_tier: 'os-gate' },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('biometric-tier')).toHaveTextContent('仅系统门禁');
@@ -839,7 +931,11 @@ describe('components/SettingsModal', () => {
       data: { available: true, enabled: false, platform: 'linux-polkit' },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     const toggle = await screen.findByTestId('biometric-toggle');
     await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
@@ -880,7 +976,11 @@ describe('components/SettingsModal', () => {
   it('renders the travel enter button while inactive and exit while active', async () => {
     travelHook();
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('travel-enter-button')).toBeInTheDocument();
     });
@@ -897,7 +997,11 @@ describe('components/SettingsModal', () => {
       },
     });
     await act(async () => {});
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('travel-exit-button')).toBeInTheDocument();
     });
@@ -910,7 +1014,11 @@ describe('components/SettingsModal', () => {
       data: { active: true, entered_at: null, sidecar_exists: false, inconsistent: true },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('travel-inconsistent-warning')).toHaveTextContent('sidecar');
@@ -924,7 +1032,11 @@ describe('components/SettingsModal', () => {
       data: { identities: 2, credentials: 5, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('travel-enter-button')).toBeEnabled();
     });
@@ -966,7 +1078,11 @@ describe('components/SettingsModal', () => {
     });
     mockExitTravel.mockResolvedValueOnce({ success: false, error: 'passphrase is wrong' });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('travel-exit-button')).toBeInTheDocument();
     });
@@ -1016,7 +1132,11 @@ describe('components/SettingsModal', () => {
       data: { identities: 1, credentials: 0, attachments: 0, passkeys: 0, wallets: 0, history_rows: 0, files: 0 },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('travel-enter-button')).toBeEnabled();
     });
@@ -1081,7 +1201,11 @@ describe('components/SettingsModal', () => {
     });
     mockSetTravelMarked.mockResolvedValue({ success: true, data: true });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     openIdentitiesTab();
     fireEvent.click(screen.getByTitle('编辑'));
 
@@ -1121,7 +1245,11 @@ describe('components/SettingsModal', () => {
 
   it('shows the join form while not joined and skips the device list', async () => {
     mockIdentityHook();
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
@@ -1132,7 +1260,11 @@ describe('components/SettingsModal', () => {
 
   it('rejects an empty device name without touching the backend', async () => {
     mockIdentityHook();
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
@@ -1149,7 +1281,11 @@ describe('components/SettingsModal', () => {
       data: { device_id: 'dev-new', device_name: '我的笔记本', pending: true },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-device-name-input')).toBeInTheDocument();
     });
@@ -1172,7 +1308,11 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('sync-devices-joined')).toBeInTheDocument();
@@ -1202,7 +1342,11 @@ describe('components/SettingsModal', () => {
     mockSyncList.mockResolvedValue(twoDevices);
     mockSyncRevoke.mockResolvedValue({ success: true, data: true });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
     });
@@ -1225,7 +1369,11 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
     });
@@ -1250,7 +1398,11 @@ describe('components/SettingsModal', () => {
       data: { rewrapped: 2, skipped: 0, pushed: 4 },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
     });
@@ -1273,7 +1425,11 @@ describe('components/SettingsModal', () => {
     mockSyncStatus.mockResolvedValue(joinedStatus);
     mockSyncList.mockResolvedValue(twoDevices);
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
     });
@@ -1299,7 +1455,11 @@ describe('components/SettingsModal', () => {
       error_code: 'CONCURRENT_CONFLICT',
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
     });
@@ -1323,7 +1483,11 @@ describe('components/SettingsModal', () => {
     mockSyncList.mockResolvedValue(twoDevices);
     mockSyncAuthorize.mockResolvedValue({ success: true, data: true });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
     });
@@ -1345,7 +1509,11 @@ describe('components/SettingsModal', () => {
       data: { joined: false, corrupted: true, device_id: null, device_name: null },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
 
     await waitFor(() => {
       expect(screen.getByTestId('sync-devices-corrupted')).toBeInTheDocument();
@@ -1411,7 +1579,11 @@ describe('components/SettingsModal', () => {
     });
     mockSyncConflictsList.mockResolvedValue(conflictedList);
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-now-button')).toBeInTheDocument();
     });
@@ -1444,7 +1616,11 @@ describe('components/SettingsModal', () => {
       data: { pulled: 1, materialized: 1, conflicts: 0, pending_identity: 0, pushed: 0, backfilled: 0 },
     });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-now-button')).toBeInTheDocument();
     });
@@ -1469,7 +1645,11 @@ describe('components/SettingsModal', () => {
     mockSyncList.mockResolvedValue(twoDevices);
     mockSyncLeave.mockResolvedValue({ success: true, data: true });
 
-    render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    // 挂载期四个 pane 异步首拉：async act 冲掉 resolved promise 的 setState，
+    // 否则落在 act 外刷 "not wrapped in act" 告警
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
     await waitFor(() => {
       expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
     });
