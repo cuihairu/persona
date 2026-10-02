@@ -211,7 +211,7 @@ chrome.action.onClicked.addListener(async () => {
 
 async function getPolicies(): Promise<DomainPolicy[]> {
     return new Promise((resolve) => {
-        chrome.storage.local.get(POLICY_KEY, (value) => resolve(value?.[POLICY_KEY] ?? []));
+        chrome.storage.local.get(POLICY_KEY, (value) => resolve((value?.[POLICY_KEY] as DomainPolicy[] | undefined) ?? []));
     });
 }
 
@@ -231,7 +231,10 @@ async function getFormsSnapshot(): Promise<
     | undefined
 > {
     return new Promise((resolve) => {
-        chrome.storage.local.get(FORMS_KEY, (value) => resolve(value?.[FORMS_KEY]));
+        // @types/chrome 收窄 storage.get 回调索引类型后需显式断言（存取同形，契约在本函数签名）
+        chrome.storage.local.get(FORMS_KEY, (value) =>
+            resolve(value?.[FORMS_KEY] as { host: string; forms: unknown[]; capturedAt: number; assessment?: DomainAssessment } | undefined),
+        );
     });
 }
 
