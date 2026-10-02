@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import CredentialDetailPane from './CredentialDetailPane';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { personaAPI } from '@/utils/api';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
 import toast from 'react-hot-toast';
@@ -246,6 +247,84 @@ describe('components/CredentialDetailPane', () => {
     expect(screen.queryByTestId('reveal-wallet_mnemonic')).not.toBeInTheDocument();
     expect(screen.queryByTestId('reveal-wallet_bip39_passphrase')).not.toBeInTheDocument();
     expect(screen.queryByTestId('reveal-wallet_private_key')).not.toBeInTheDocument();
+  });
+
+  it('CryptoWallet pane: item password manager enables then clears the per-item guard', async () => {
+    const walletSetItemPassword = jest.fn().mockResolvedValue({ success: true, data: true });
+    const walletClearItemPassword = jest.fn().mockResolvedValue({ success: true, data: true });
+    (personaAPI as any).walletSetItemPassword = walletSetItemPassword;
+    (personaAPI as any).walletClearItemPassword = walletClearItemPassword;
+
+    setupPane(
+      { name: 'Guarded', credential_type: 'CryptoWallet' },
+      {
+        credential_type: 'CryptoWallet',
+        data: { wallet_type: 'Bitcoin', address: 'bc1qxyz', network: 'mainnet' },
+      },
+    );
+
+    // 未启用：徽章 + 启用入口；表单含新密码与提示两个输入
+    expect(screen.getByText('未启用')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
+    expect(screen.getByPlaceholderText('新条目密码（至少 4 位）')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('密码提示（可选）')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('新条目密码（至少 4 位）'), {
+      target: { value: 'item-pass' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('密码提示（可选）'), {
+      target: { value: 'hint' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '启用' }));
+    await act(async () => {});
+    expect(walletSetItemPassword).toHaveBeenCalledWith('c1', 'item-pass', 'hint');
+    expect(toast.success).toHaveBeenCalledWith('条目独立密码已启用');
+    expect(screen.getByText('已启用')).toBeInTheDocument();
+
+    // 已启用 → 清除入口换当前密码表单
+    fireEvent.click(screen.getByRole('button', { name: '清除' }));
+    expect(screen.getByPlaceholderText('当前条目密码')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('当前条目密码'), {
+      target: { value: 'item-pass' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '清除' }));
+    await act(async () => {});
+    expect(walletClearItemPassword).toHaveBeenCalledWith('c1', 'item-pass');
+    expect(toast.success).toHaveBeenCalledWith('条目独立密码已清除');
+    expect(screen.getByText('未启用')).toBeInTheDocument();
+  });
+
+  it('CryptoWallet pane: item password clear failure surfaces inline, badge stays', async () => {
+    (personaAPI as any).walletSetItemPassword = jest.fn();
+    (personaAPI as any).walletClearItemPassword = jest
+      .fn()
+      .mockResolvedValue({ success: false, error: 'Item password is incorrect' });
+
+    setupPane(
+      { name: 'Guarded', credential_type: 'CryptoWallet' },
+      {
+        credential_type: 'CryptoWallet',
+        data: {
+          wallet_type: 'Bitcoin',
+          address: 'bc1qxyz',
+          network: 'mainnet',
+          item_password_hash: '$argon2id$...',
+        },
+      },
+    );
+
+    // payload 带 hash → 徽章直接已启用
+    expect(screen.getByText('已启用')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '清除' }));
+    fireEvent.change(screen.getByPlaceholderText('当前条目密码'), {
+      target: { value: 'wrong' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '清除' }));
+    await act(async () => {});
+    expect(screen.getByText('Item password is incorrect')).toBeInTheDocument();
+    // 徽章不变、表单保留可重试
+    expect(screen.getByText('已启用')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('当前条目密码')).toBeInTheDocument();
   });
 
   it('SshKey pane: renders key material with three reveal seams', () => {

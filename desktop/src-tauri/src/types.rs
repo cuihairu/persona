@@ -840,6 +840,10 @@ impl CredentialDataRequest {
                 address: address.clone(),
                 network: network.clone(),
                 bip39_passphrase: bip39_passphrase.clone(),
+                // 条目级独立密码走 wallet_set_item_password 独立命令设置
+                // （创建后二次加固），创建请求不承载
+                item_password_hash: None,
+                item_password_hint: None,
             }),
             CredentialDataRequest::SshKey {
                 private_key,
@@ -1168,6 +1172,10 @@ pub struct RevealSecretRequest {
     /// "api_key" | "api_secret" | "token" | "wallet_private_key" |
     /// "wallet_mnemonic" | "raw_data"
     pub field: String,
+    /// 钱包条目级独立密码（可选）：条目设置了 item_password_hash 的种子
+    /// 材料 reveal 必须携带，后端 Argon2id 比对通过才返回明文
+    #[serde(default)]
+    pub item_password: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

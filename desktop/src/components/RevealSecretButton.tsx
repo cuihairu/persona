@@ -40,37 +40,56 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
   const [error, setError] = useState<string | null>(null);
   const reauth = useReauth();
   const retryRef = useRef(false);
+  // 钱包条目独立密码（第二因子）：后端返回 ITEM_PASSWORD_REQUIRED 时展开
+  // 输入行；验证通过后组件内记忆（切条目/关面板随卸载消失）
+  const [rememberedItemPwd, setRememberedItemPwd] = useState<string | null>(null);
+  const [needsItemPassword, setNeedsItemPassword] = useState(false);
+  const [itemPwdInput, setItemPwdInput] = useState('');
 
-  const doReveal = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await personaAPI.revealCredentialSecret(credentialId, field);
-      if (res.success && res.data) {
-        setRevealed(res.data.value);
-        setRemaining(autoHideSeconds);
-      } else if (res.error_code === 'REAUTH_REQUIRED') {
-        // 弹重新认证；成功且未重试过则自动重放一次
-        if (!retryRef.current && (await reauth.requestReauth())) {
-          retryRef.current = true;
-          await doReveal();
+  const doReveal = useCallback(
+    async (itemPassword?: string) => {
+      setIsLoading(true);
+      setError(null);
+      try {
+        const res = await personaAPI.revealCredentialSecret(credentialId, field, itemPassword);
+        if (res.success && res.data) {
+          setRevealed(res.data.value);
+          setRemaining(autoHideSeconds);
+          // 验证通过的条目密码组件内记忆：同一条目的后续 reveal 免重复输入
+          if (itemPassword) setRememberedItemPwd(itemPassword);
+          setNeedsItemPassword(false);
+          setItemPwdInput('');
+        } else if (res.error_code === 'REAUTH_REQUIRED') {
+          // 弹重新认证；成功且未重试过则自动重放一次
+          if (!retryRef.current && (await reauth.requestReauth())) {
+            retryRef.current = true;
+            await doReveal(itemPassword);
+          }
+        } else if (res.error_code === 'ITEM_PASSWORD_REQUIRED') {
+          setNeedsItemPassword(true);
+        } else if (res.error_code === 'ITEM_PASSWORD_WRONG') {
+          setNeedsItemPassword(true);
+          setError(t('reveal.itemPasswordWrong'));
+        } else if (res.error_code === 'SERVICE_LOCKED') {
+          setError(t('common.serviceLocked'));
+        } else {
+          setError(res.error ?? t('reveal.failed'));
         }
-      } else if (res.error_code === 'SERVICE_LOCKED') {
-        setError(t('common.serviceLocked'));
-      } else {
-        setError(res.error ?? t('reveal.failed'));
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [credentialId, field, autoHideSeconds, reauth]);
+    },
+    [credentialId, field, autoHideSeconds, reauth, t],
+  );
 
   const handleHide = () => {
     setRevealed(null);
     setRemaining(null);
     retryRef.current = false;
+    setNeedsItemPassword(false);
+    setItemPwdInput('');
   };
 
   // 自动隐藏倒计时
@@ -111,7 +130,7 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
         </>
       ) : (
         <button
-          onClick={doReveal}
+          onClick={() => doReveal(rememberedItemPwd ?? undefined)}
           disabled={isLoading}
           className="flex items-center gap-1 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 disabled:opacity-50"
           data-testid="reveal-trigger"
@@ -123,6 +142,36 @@ const RevealSecretButton: React.FC<RevealSecretButtonProps> = ({
           )}
           {t('reveal.trigger', { label })}
         </button>
+      )}
+
+      {needsItemPassword && revealed === null && (
+        <form
+          className="flex w-full items-center gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (itemPwdInput) doReveal(itemPwdInput);
+          }}
+        >
+          <input
+            type="password"
+            value={itemPwdInput}
+            onChange={(e) => setItemPwdInput(e.target.value)}
+            className="input h-8 flex-1 text-sm"
+            placeholder={t('reveal.itemPasswordPrompt')}
+            aria-label={t('reveal.itemPasswordPrompt')}
+            autoComplete="off"
+            data-testid="item-password-input"
+            autoFocus
+          />
+          <button
+            type="submit"
+            disabled={isLoading || !itemPwdInput}
+            className="btn-secondary text-xs shrink-0 disabled:opacity-50"
+            data-testid="item-password-submit"
+          >
+            {t('reveal.itemPasswordSubmit')}
+          </button>
+        </form>
       )}
 
       {revealed !== null && (

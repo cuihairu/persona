@@ -273,6 +273,14 @@ pub struct CryptoWalletData {
     /// BIP-39 第 25 个词（可选）；与助记词分离存储，同为高敏字段
     #[serde(default)]
     pub bip39_passphrase: Option<String>,
+    /// 条目级独立密码的 Argon2id PHC hash（可选）：揭示种子材料
+    /// （助记词/私钥/第 25 词）时需额外比对——防解锁态顺手窥探的
+    /// 第二因子。hash 随条目密文存储，不改变加密封套与同步格式。
+    #[serde(default)]
+    pub item_password_hash: Option<String>,
+    /// 条目密码提示（明文，低敏——帮助回忆，不承载安全强度）
+    #[serde(default)]
+    pub item_password_hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -629,6 +637,10 @@ mod tests {
                 address: "0xabc".to_string(),
                 network: "ethereum".to_string(),
                 bip39_passphrase: Some("tungsten".to_string()),
+                item_password_hash: Some(
+                    "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$hash".to_string(),
+                ),
+                item_password_hint: Some("hint".to_string()),
             }),
             CredentialData::SshKey(SshKeyData {
                 private_key: "priv".to_string(),

@@ -15,8 +15,10 @@ import {
 } from '@heroicons/react/24/outline';
 import { HeartIcon as HeartSolidIcon } from '@heroicons/react/24/solid';
 import { open as openFileDialog, save as saveFileDialog } from '@tauri-apps/plugin-dialog';
+import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { personaAPI } from '@/utils/api';
 import { useAppStore } from '@/stores/appStore';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
@@ -83,6 +85,15 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [history, setHistory] = useState<CredentialHistoryEntry[] | null>(null);
   const [isRestoringVersion, setIsRestoringVersion] = useState(false);
+  // 钱包条目独立密码管理：启用态以 payload 为初值，本地维护（hash 无需回显）
+  const [itemPwdEnabled, setItemPwdEnabled] = useState(
+    !!credentialData?.data?.item_password_hash,
+  );
+  const [itemPwdForm, setItemPwdForm] = useState<'set' | 'clear' | null>(null);
+  const [itemPwdValue, setItemPwdValue] = useState('');
+  const [itemPwdHintValue, setItemPwdHintValue] = useState('');
+  const [isItemPwdBusy, setIsItemPwdBusy] = useState(false);
+  const [itemPwdError, setItemPwdError] = useState<string | null>(null);
   // Attachments：主功能，选中即拉取；切换凭据重置后重拉
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const [isAttachmentBusy, setIsAttachmentBusy] = useState(false);
@@ -110,6 +121,20 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     setHistory(null);
   }, [credential.id]);
 
+  // 切换凭据时重置条目独立密码表单（启用态由 credentialData 初值决定）
+  useEffect(() => {
+    setItemPwdForm(null);
+    setItemPwdValue('');
+    setItemPwdHintValue('');
+    setItemPwdError(null);
+    setIsItemPwdBusy(false);
+  }, [credential.id]);
+
+  // 取数完成/切换条目后，启用态跟随 payload 的 hash 字段
+  useEffect(() => {
+    setItemPwdEnabled(!!credentialData?.data?.item_password_hash);
+  }, [credentialData]);
+
   useEffect(() => {
     if (!isHistoryOpen || history !== null) return;
     let cancelled = false;
@@ -135,6 +160,36 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       setIsTotpLoading(false);
     }
   }, [credential.credential_type, credential.id, getTotpCode]);
+
+  // 条目独立密码启用/清除共用提交：后端校验失败（如当前密码错）在行内报错
+  const handleItemPwdSubmit = useCallback(async () => {
+    if (itemPwdForm === null || isItemPwdBusy || !itemPwdValue) return;
+    setIsItemPwdBusy(true);
+    setItemPwdError(null);
+    try {
+      const res =
+        itemPwdForm === 'set'
+          ? await personaAPI.walletSetItemPassword(
+              credential.id,
+              itemPwdValue,
+              itemPwdHintValue || undefined,
+            )
+          : await personaAPI.walletClearItemPassword(credential.id, itemPwdValue);
+      if (res.success) {
+        toast.success(itemPwdForm === 'set' ? t('detail.itemPwdSetOk') : t('detail.itemPwdClearOk'));
+        setItemPwdEnabled(itemPwdForm === 'set');
+        setItemPwdForm(null);
+        setItemPwdValue('');
+        setItemPwdHintValue('');
+      } else {
+        setItemPwdError(res.error ?? t('detail.itemPwdFailed'));
+      }
+    } catch (e) {
+      setItemPwdError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setIsItemPwdBusy(false);
+    }
+  }, [itemPwdForm, isItemPwdBusy, itemPwdValue, itemPwdHintValue, credential.id, t]);
 
   useEffect(() => {
     if (credential.credential_type !== 'TwoFactor') {
@@ -365,6 +420,90 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
                 </div>
               </div>
             )}
+            <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="label text-gray-600 dark:text-gray-300">
+                    {t('detail.itemPwdTitle')}
+                  </label>
+                  <span
+                    className={`ml-2 inline-block rounded px-1.5 py-0.5 text-xs ${
+                      itemPwdEnabled
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300'
+                        : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                    }`}
+                  >
+                    {itemPwdEnabled ? t('detail.itemPwdEnabled') : t('detail.itemPwdNotEnabled')}
+                  </span>
+                </div>
+                {itemPwdForm === null && (
+                  <button
+                    type="button"
+                    onClick={() => setItemPwdForm(itemPwdEnabled ? 'clear' : 'set')}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {itemPwdEnabled ? t('detail.itemPwdClear') : t('detail.itemPwdEnable')}
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('detail.itemPwdDesc')}</p>
+              {itemPwdError && (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-400">{itemPwdError}</p>
+              )}
+              {itemPwdForm !== null && (
+                <form
+                  className="mt-2 space-y-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleItemPwdSubmit();
+                  }}
+                >
+                  <input
+                    type="password"
+                    value={itemPwdValue}
+                    onChange={(e) => setItemPwdValue(e.target.value)}
+                    className="input h-8 text-sm"
+                    placeholder={
+                      itemPwdForm === 'set'
+                        ? t('detail.itemPwdNewPlaceholder')
+                        : t('detail.itemPwdCurrentPlaceholder')
+                    }
+                    autoComplete="off"
+                    required
+                  />
+                  {itemPwdForm === 'set' && (
+                    <input
+                      type="text"
+                      value={itemPwdHintValue}
+                      onChange={(e) => setItemPwdHintValue(e.target.value)}
+                      className="input h-8 text-sm"
+                      placeholder={t('detail.itemPwdHintPlaceholder')}
+                      autoComplete="off"
+                    />
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      disabled={isItemPwdBusy || !itemPwdValue}
+                      className="btn-secondary text-xs disabled:opacity-50"
+                    >
+                      {itemPwdForm === 'set' ? t('detail.itemPwdEnable') : t('detail.itemPwdClear')}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setItemPwdForm(null);
+                        setItemPwdValue('');
+                        setItemPwdHintValue('');
+                      }}
+                      className="text-xs text-gray-500 dark:text-gray-400 hover:underline"
+                    >
+                      {t('common.cancel')}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         );
 

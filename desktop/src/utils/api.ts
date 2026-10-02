@@ -655,9 +655,31 @@ class PersonaAPI {
   async revealCredentialSecret(
     credentialId: string,
     field: SecretField,
+    itemPassword?: string,
   ): Promise<ApiResponse<SecretReveal>> {
     return invoke('reveal_credential_secret', {
-      request: { credential_id: credentialId, field },
+      request: { credential_id: credentialId, field, item_password: itemPassword ?? null },
+    });
+  }
+
+  /** 设置/更换钱包条目独立密码（Argon2id hash 后随条目密文存储） */
+  async walletSetItemPassword(
+    credentialId: string,
+    password: string,
+    hint?: string,
+  ): Promise<ApiResponse<boolean>> {
+    return invoke('wallet_set_item_password', {
+      credential_id: credentialId,
+      password,
+      hint: hint ?? null,
+    });
+  }
+
+  /** 清除钱包条目独立密码（需当前条目密码验证，防解锁态直接摘除保护） */
+  async walletClearItemPassword(credentialId: string, itemPassword: string): Promise<ApiResponse<boolean>> {
+    return invoke('wallet_clear_item_password', {
+      credential_id: credentialId,
+      item_password: itemPassword,
     });
   }
 

@@ -915,6 +915,7 @@ async fn reveal_credential_secret_round_trip_and_unknown_field() {
         RevealSecretRequest {
             credential_id: cred.id.clone(),
             field: "password".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -930,6 +931,7 @@ async fn reveal_credential_secret_round_trip_and_unknown_field() {
         RevealSecretRequest {
             credential_id: cred.id.clone(),
             field: "not_a_field".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -3013,6 +3015,8 @@ fn extract_secret_field_type_matrix() {
             address: "addr".to_string(),
             network: "Ethereum".to_string(),
             bip39_passphrase: None,
+            item_password_hash: None,
+            item_password_hint: None,
         })
     };
     assert_eq!(
@@ -3115,6 +3119,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
         RevealSecretRequest {
             credential_id: uuid::Uuid::new_v4().to_string(),
             field: "password".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -3129,6 +3134,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
         RevealSecretRequest {
             credential_id: "not-a-uuid".to_string(),
             field: "password".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -3157,6 +3163,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
         RevealSecretRequest {
             credential_id: api_cred.id.clone(),
             field: "api_key".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -3172,6 +3179,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
         RevealSecretRequest {
             credential_id: api_cred.id.clone(),
             field: "password".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -3189,6 +3197,7 @@ async fn reveal_secret_paths_and_api_key_round_trip() {
         RevealSecretRequest {
             credential_id: uuid::Uuid::new_v4().to_string(),
             field: "api_key".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -3522,6 +3531,8 @@ fn credential_data_to_json_type_matrix_and_redaction() {
         address: "addr".to_string(),
         network: "Ethereum".to_string(),
         bip39_passphrase: Some("tungsten".to_string()),
+        item_password_hash: Some("phc-hash".to_string()),
+        item_password_hint: None,
     });
     let json = credential_data_to_json(&wallet);
     assert_eq!(json["type"], "CryptoWallet");
@@ -4282,6 +4293,7 @@ async fn locked_service_error_code_matrix() {
         RevealSecretRequest {
             credential_id: uuid::Uuid::new_v4().to_string(),
             field: "password".to_string(),
+            item_password: None,
         },
         app.state::<AppState>(),
     )
@@ -5099,6 +5111,7 @@ async fn credential_commands_surface_db_errors_from_garbage_vault() {
         RevealSecretRequest {
             credential_id: bogus.clone(),
             field: "password".to_string(),
+            item_password: None,
         },
         state.clone(),
     )
@@ -5555,6 +5568,7 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
         RevealSecretRequest {
             credential_id: cred_id.clone(),
             field: "password".to_string(),
+            item_password: None,
         },
         state.clone(),
     )
@@ -5572,6 +5586,7 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
         RevealSecretRequest {
             credential_id: cred_id.clone(),
             field: "password".to_string(),
+            item_password: None,
         },
         state.clone(),
     )
@@ -5602,6 +5617,7 @@ async fn reauth_gate_round_trip_through_configure_and_reauth_verify() {
         RevealSecretRequest {
             credential_id: cred_id,
             field: "password".to_string(),
+            item_password: None,
         },
         state,
     )
@@ -8824,6 +8840,8 @@ fn command_ipc_arg_keys_match_api_ts_snake_case() {
         ("wallet_generate", &["identity_id"]),
         ("wallet_generate_mnemonic", &["word_count"]),
         ("wallet_validate_mnemonic", &["phrase"]),
+        ("wallet_set_item_password", &["credential_id", "password"]),
+        ("wallet_clear_item_password", &["credential_id", "item_password"]),
         ("wallet_import", &["identity_id"]),
         ("wallet_list", &["identity_id"]),
         ("wallet_list_addresses", &["wallet_id"]),

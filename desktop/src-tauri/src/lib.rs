@@ -348,6 +348,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::wallet_list,
             commands::wallet_list_addresses,
             commands::wallet_validate_mnemonic,
+            commands::wallet_set_item_password,
+            commands::wallet_clear_item_password,
             commands::wallet_generate,
             commands::wallet_import,
             commands::wallet_add_address,

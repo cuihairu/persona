@@ -52,7 +52,7 @@ describe('components/RevealSecretButton', () => {
 
     fireEvent.click(screen.getByTestId('reveal-trigger'));
     await act(async () => {});
-    expect(reveal).toHaveBeenCalledWith('c1', 'password');
+    expect(reveal).toHaveBeenCalledWith('c1', 'password', undefined);
     expect(screen.getByTestId('revealed-value').textContent).toBe('s3cret');
     expect(screen.getByTestId('reveal-countdown').textContent).toBe('2 秒后隐藏');
 
@@ -183,5 +183,48 @@ describe('components/RevealSecretButton', () => {
     });
     fireEvent.click(screen.getByLabelText('复制Private Key'));
     expect(copyWithAutoClear).toHaveBeenCalledWith('copy-me');
+  });
+
+  it('requires the item password for guarded wallet fields and retries with it', async () => {
+    reveal
+      .mockResolvedValueOnce({ success: false, data: undefined, error_code: 'ITEM_PASSWORD_REQUIRED' })
+      .mockResolvedValueOnce(resolveOk('seed words'));
+
+    render(<RevealSecretButton credentialId="c1" field="wallet_mnemonic" label="助记词" />);
+
+    fireEvent.click(screen.getByTestId('reveal-trigger'));
+    await waitFor(() => {
+      expect(screen.getByTestId('item-password-input')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('revealed-value')).not.toBeInTheDocument();
+    expect(reveal).toHaveBeenLastCalledWith('c1', 'wallet_mnemonic', undefined);
+
+    // 提交条目密码 → 自动带第二因子重试
+    fireEvent.change(screen.getByTestId('item-password-input'), { target: { value: 'item-pass' } });
+    fireEvent.click(screen.getByTestId('item-password-submit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('revealed-value').textContent).toBe('seed words');
+    });
+    expect(reveal).toHaveBeenLastCalledWith('c1', 'wallet_mnemonic', 'item-pass');
+    // 内联输入随成功收起
+    expect(screen.queryByTestId('item-password-input')).not.toBeInTheDocument();
+  });
+
+  it('shows an inline error on ITEM_PASSWORD_WRONG and keeps the input for retry', async () => {
+    reveal
+      .mockResolvedValueOnce({ success: false, data: undefined, error_code: 'ITEM_PASSWORD_REQUIRED' })
+      .mockResolvedValue({ success: false, data: undefined, error_code: 'ITEM_PASSWORD_WRONG' });
+
+    render(<RevealSecretButton credentialId="c1" field="wallet_private_key" label="私钥" />);
+    fireEvent.click(screen.getByTestId('reveal-trigger'));
+    await waitFor(() => {
+      expect(screen.getByTestId('item-password-input')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByTestId('item-password-input'), { target: { value: 'nope' } });
+    fireEvent.click(screen.getByTestId('item-password-submit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reveal-error')).toHaveTextContent('条目密码不正确');
+    });
+    expect((screen.getByTestId('item-password-input') as HTMLInputElement).value).toBe('nope');
   });
 });

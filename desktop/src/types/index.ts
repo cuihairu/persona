@@ -10,6 +10,8 @@
  * TRAVEL_MODE_ACTIVE：旅行模式进行中，改密等不兼容操作被拒 → 提示先退出。
  * CONCURRENT_CONFLICT：并发互斥操作冲突（组密钥轮换的 epoch 乐观锁未命中，
  * 另一台设备已抢先轮换）→ 提示同步状态已更新，请重试轮换。
+ * ITEM_PASSWORD_REQUIRED / ITEM_PASSWORD_WRONG：钱包条目独立密码守卫
+ * （reveal 种子材料缺参/不匹配）→ RevealSecretButton 内联追加密码输入。
  */
 export type ApiErrorCode =
   | 'REAUTH_REQUIRED'
@@ -18,7 +20,9 @@ export type ApiErrorCode =
   | 'BIOMETRIC_RESET'
   | 'BIOMETRIC_CANCELLED'
   | 'TRAVEL_MODE_ACTIVE'
-  | 'CONCURRENT_CONFLICT';
+  | 'CONCURRENT_CONFLICT'
+  | 'ITEM_PASSWORD_REQUIRED'
+  | 'ITEM_PASSWORD_WRONG';
 
 export interface ApiResponse<T> {
   success: boolean;

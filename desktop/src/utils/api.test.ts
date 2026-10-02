@@ -348,7 +348,12 @@ describe('utils/api command mapping coverage', () => {
 
     await personaAPI.revealCredentialSecret('c1', 'password');
     expect(mockInvoke).toHaveBeenCalledWith('reveal_credential_secret', {
-      request: { credential_id: 'c1', field: 'password' },
+      request: { credential_id: 'c1', field: 'password', item_password: null },
+    });
+
+    await personaAPI.revealCredentialSecret('c1', 'wallet_mnemonic', 'item-pass');
+    expect(mockInvoke).toHaveBeenLastCalledWith('reveal_credential_secret', {
+      request: { credential_id: 'c1', field: 'wallet_mnemonic', item_password: 'item-pass' },
     });
 
     await personaAPI.reauthVerify('pw');

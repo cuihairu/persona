@@ -5760,6 +5760,44 @@ pub(crate) fn extract_secret_field(
     }
 }
 
+/// 钱包条目级独立密码守卫：种子材料三个字段（助记词/私钥/第 25 词）在条目
+/// 设置了 `item_password_hash` 时需额外比对（防解锁态顺手窥探的第二因子）。
+/// 缺参 → `ITEM_PASSWORD_REQUIRED`；不匹配 → `ITEM_PASSWORD_WRONG`。
+/// 非钱包字段 / 未设密码的条目不受影响。
+/// 返回 `None` 表示放行；`Some((code, message))` 表示拦截，code 为空串表示无专用错误码。
+/// （不用 `Result`：persona_core 通配导出的单参 `Result` 别名在此签名里撞 E0107。）
+pub(crate) fn ensure_item_password_ok(
+    data: &CredentialData,
+    field: &str,
+    item_password: Option<&str>,
+) -> Option<(String, String)> {
+    const GUARDED_FIELDS: [&str; 3] = [
+        "wallet_mnemonic",
+        "wallet_private_key",
+        "wallet_bip39_passphrase",
+    ];
+    let (CredentialData::CryptoWallet(w), true) = (data, GUARDED_FIELDS.contains(&field)) else {
+        return None;
+    };
+    let Some(hash) = &w.item_password_hash else {
+        return None;
+    };
+    let Some(pwd) = item_password else {
+        return Some((
+            crate::error::CODE_ITEM_PASSWORD_REQUIRED.to_string(),
+            "This wallet requires its item password to reveal seed material".to_string(),
+        ));
+    };
+    match persona_core::crypto::hashing::PasswordHasher::new().verify_password(pwd, hash) {
+        Ok(true) => None,
+        Ok(false) => Some((
+            crate::error::CODE_ITEM_PASSWORD_WRONG.to_string(),
+            "Item password is incorrect".to_string(),
+        )),
+        Err(e) => Some((String::new(), format!("Item password check failed: {e}"))),
+    }
+}
+
 /// Reveal a single secret field of a credential (sensitive; re-auth gated +
 /// audited via the underlying decrypt)
 #[command]
@@ -5774,13 +5812,25 @@ pub async fn reveal_credential_secret(
     let service_guard = state.service.lock().await;
     match service_guard.as_ref() {
         Some(service) => match service.get_credential_data(&uuid).await {
-            Ok(Some(data)) => match extract_secret_field(&data, &request.field) {
-                Ok(value) => Ok(ApiResponse::success(SecretRevealResponse {
-                    field: request.field,
-                    value,
-                })),
-                Err(msg) => Ok(ApiResponse::error(msg)),
-            },
+            Ok(Some(data)) => {
+                if let Some((code, msg)) = ensure_item_password_ok(
+                    &data,
+                    &request.field,
+                    request.item_password.as_deref(),
+                ) {
+                    if code.is_empty() {
+                        return Ok(ApiResponse::error(msg));
+                    }
+                    return Ok(ApiResponse::error_with_code(code, msg));
+                }
+                match extract_secret_field(&data, &request.field) {
+                    Ok(value) => Ok(ApiResponse::success(SecretRevealResponse {
+                        field: request.field,
+                        value,
+                    })),
+                    Err(msg) => Ok(ApiResponse::error(msg)),
+                }
+            }
             Ok(None) => Ok(ApiResponse::error("Credential not found".to_string())),
             Err(e) => {
                 let (code, msg) = map_persona_error(&e);
@@ -5794,6 +5844,128 @@ pub async fn reveal_credential_secret(
             }
         },
         None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+/// 为钱包条目设置/更换独立密码（CryptoWallet 专属）。密码 Argon2id hash
+/// 后随条目密文存储；提示为明文低敏字段。设置后 reveal 种子材料需携带
+/// 该密码（第二因子）。
+#[command(rename_all = "snake_case")]
+pub async fn wallet_set_item_password(
+    credential_id: String,
+    password: String,
+    hint: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let uuid = match Uuid::from_str(&credential_id) {
+        Ok(u) => u,
+        Err(_) => return Ok(ApiResponse::error("Invalid UUID format".to_string())),
+    };
+    let trimmed = password.trim();
+    if trimmed.chars().count() < 4 {
+        return Ok(ApiResponse::error(
+            "Item password must be at least 4 characters".to_string(),
+        ));
+    }
+    let hash = match persona_core::crypto::hashing::PasswordHasher::new().hash_password(trimmed) {
+        Ok(h) => h,
+        Err(e) => return Ok(ApiResponse::error(format!("Failed to hash item password: {e}"))),
+    };
+    let service_guard = state.service.lock().await;
+    let Some(service) = service_guard.as_ref() else {
+        return Ok(ApiResponse::error("Service not initialized".to_string()));
+    };
+    let mut data = match service.get_credential_data(&uuid).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return Ok(ApiResponse::error("Credential not found".to_string())),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            return Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(format!("Failed to load credential: {msg}")),
+            });
+        }
+    };
+    let CredentialData::CryptoWallet(ref mut w) = data else {
+        return Ok(ApiResponse::error(
+            "Item password is only supported for CryptoWallet credentials".to_string(),
+        ));
+    };
+    w.item_password_hash = Some(hash);
+    w.item_password_hint = hint
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty());
+    match service.update_credential_data(&uuid, &data).await {
+        Ok(_) => Ok(ApiResponse::success(true)),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(format!("Failed to save item password: {msg}")),
+            })
+        }
+    }
+}
+
+/// 清除钱包条目独立密码：需携带当前条目密码验证（防解锁态下直接摘除
+/// 保护）。未设置时幂等成功。
+#[command(rename_all = "snake_case")]
+pub async fn wallet_clear_item_password(
+    credential_id: String,
+    item_password: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let uuid = match Uuid::from_str(&credential_id) {
+        Ok(u) => u,
+        Err(_) => return Ok(ApiResponse::error("Invalid UUID format".to_string())),
+    };
+    let service_guard = state.service.lock().await;
+    let Some(service) = service_guard.as_ref() else {
+        return Ok(ApiResponse::error("Service not initialized".to_string()));
+    };
+    let mut data = match service.get_credential_data(&uuid).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return Ok(ApiResponse::error("Credential not found".to_string())),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            return Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(format!("Failed to load credential: {msg}")),
+            });
+        }
+    };
+    let CredentialData::CryptoWallet(ref mut w) = data else {
+        return Ok(ApiResponse::error(
+            "Item password is only supported for CryptoWallet credentials".to_string(),
+        ));
+    };
+    if let Some(hash) = w.item_password_hash.clone() {
+        match persona_core::crypto::hashing::PasswordHasher::new()
+            .verify_password(item_password.trim(), &hash)
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return Ok(ApiResponse::error_with_code(
+                    crate::error::CODE_ITEM_PASSWORD_WRONG.to_string(),
+                    "Item password is incorrect".to_string(),
+                ))
+            }
+            Err(e) => {
+                return Ok(ApiResponse::error(format!("Item password check failed: {e}")))
+            }
+        }
+    }
+    w.item_password_hash = None;
+    w.item_password_hint = None;
+    match service.update_credential_data(&uuid, &data).await {
+        Ok(_) => Ok(ApiResponse::success(true)),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            Ok(match code {
+                Some(code) => ApiResponse::error_with_code(code, msg),
+                None => ApiResponse::error(format!("Failed to save credential: {msg}")),
+            })
+        }
     }
 }
 
@@ -6352,6 +6524,8 @@ mod tests {
             address: "0x0".to_string(),
             network: "Ethereum".to_string(),
             bip39_passphrase: None,
+            item_password_hash: None,
+            item_password_hint: None,
         });
         assert!(extract_secret_field(&empty, "wallet_private_key").is_err());
         assert!(extract_secret_field(&empty, "wallet_mnemonic").is_err());
@@ -6364,11 +6538,66 @@ mod tests {
             address: "0x0".to_string(),
             network: "Ethereum".to_string(),
             bip39_passphrase: Some("tungsten".to_string()),
+            item_password_hash: None,
+            item_password_hint: None,
         });
         assert_eq!(
             extract_secret_field(&full, "wallet_private_key").unwrap(),
             "0xabc"
         );
+    }
+
+    #[test]
+    fn item_password_guard_gates_wallet_seed_material_only() {
+        use persona_core::crypto::hashing::PasswordHasher;
+
+        let hash = PasswordHasher::new()
+            .hash_password("item-pass")
+            .expect("hash item password");
+        let guarded_data = CryptoWalletData {
+            wallet_type: "evm".to_string(),
+            mnemonic_phrase: Some("test test".to_string()),
+            private_key: Some("0xabc".to_string()),
+            public_key: "pub".to_string(),
+            address: "0x0".to_string(),
+            network: "Ethereum".to_string(),
+            bip39_passphrase: Some("tungsten".to_string()),
+            item_password_hash: Some(hash),
+            item_password_hint: Some("hint".to_string()),
+        };
+        let guarded = CredentialData::CryptoWallet(guarded_data.clone());
+        let unguarded = CredentialData::CryptoWallet(CryptoWalletData {
+            item_password_hash: None,
+            item_password_hint: None,
+            ..guarded_data
+        });
+
+        // 未设条目密码：三个种子字段全部放行
+        for f in ["wallet_mnemonic", "wallet_private_key", "wallet_bip39_passphrase"] {
+            assert!(ensure_item_password_ok(&unguarded, f, None).is_none(), "{f}");
+        }
+
+        // 设了条目密码：缺参 → REQUIRED；对 → 放行；错 → WRONG
+        for f in ["wallet_mnemonic", "wallet_private_key", "wallet_bip39_passphrase"] {
+            let (code, _) = ensure_item_password_ok(&guarded, f, None)
+                .expect("guarded field must require item password");
+            assert_eq!(code, crate::error::CODE_ITEM_PASSWORD_REQUIRED);
+
+            assert!(ensure_item_password_ok(&guarded, f, Some("item-pass")).is_none(), "{f}");
+
+            let (code, _) = ensure_item_password_ok(&guarded, f, Some("wrong"))
+                .expect("wrong item password must be rejected");
+            assert_eq!(code, crate::error::CODE_ITEM_PASSWORD_WRONG);
+        }
+
+        // 非保护字段（登录密码视角的 password）与非钱包类型不受影响
+        let password = CredentialData::Password(persona_core::models::credential::PasswordCredentialData {
+            password: "pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        });
+        assert!(ensure_item_password_ok(&guarded, "password", None).is_none());
+        assert!(ensure_item_password_ok(&password, "password", None).is_none());
     }
 
     #[test]

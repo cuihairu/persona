@@ -71,6 +71,8 @@ async fn test_full_persona_workflow() {
         address: "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2".to_string(),
         network: "mainnet".to_string(),
         bip39_passphrase: None,
+        item_password_hash: None,
+        item_password_hint: None,
     });
 
     let wallet_credential = service

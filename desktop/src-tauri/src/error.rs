@@ -20,6 +20,11 @@ pub const CODE_TRAVEL_MODE_ACTIVE: &str = "TRAVEL_MODE_ACTIVE";
 /// 错误码：并发互斥操作冲突（group key 轮换的 epoch 乐观锁未命中，另一台
 /// 设备已抢先轮换；前端应提示同步状态已更新、稍后重试轮换）
 pub const CODE_CONCURRENT_CONFLICT: &str = "CONCURRENT_CONFLICT";
+/// 错误码：钱包条目设了独立密码，reveal 种子材料需提供 item_password
+/// （前端应展开条目密码输入框）
+pub const CODE_ITEM_PASSWORD_REQUIRED: &str = "ITEM_PASSWORD_REQUIRED";
+/// 错误码：条目密码不匹配（前端应提示错误并保留输入框）
+pub const CODE_ITEM_PASSWORD_WRONG: &str = "ITEM_PASSWORD_WRONG";
 
 /// 将任意 service 错误映射为 `(error_code, message)`。
 ///
