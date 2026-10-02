@@ -1,6 +1,6 @@
 use crate::{PersonaError, PersonaResult};
 use argon2::{
-    password_hash::{PasswordHash, SaltString},
+    password_hash::phc::PasswordHash,
     Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier,
 };
 use ring::digest::{Context, SHA256};
@@ -22,11 +22,11 @@ impl PasswordHasher {
     pub fn hash_password(&self, password: &str) -> PersonaResult<String> {
         let mut salt_bytes = [0u8; 16];
         getrandom::fill(&mut salt_bytes).expect("failed to generate random salt");
-        let salt = SaltString::encode_b64(&salt_bytes).map_err(|e| {
-            PersonaError::CryptographicError(format!("Failed to encode salt: {}", e))
-        })?;
-        let hash = Argon2PasswordHasher::hash_password(&self.argon2, password.as_bytes(), &salt)
-            .map_err(|e| PersonaError::CryptographicError(format!("Hashing failed: {}", e)))?;
+        // argon2 0.6 的 password-hash 0.6 改收原始盐字节（内部再 b64 编码成 PHC 串），
+        // `SaltString::encode_b64` 随 password_hash crate 移到了 phc 模块且不再需要。
+        let hash: PasswordHash =
+            Argon2PasswordHasher::hash_password_with_salt(&self.argon2, password.as_bytes(), &salt_bytes)
+                .map_err(|e| PersonaError::CryptographicError(format!("Hashing failed: {}", e)))?;
         Ok(hash.to_string())
     }
 
@@ -39,7 +39,7 @@ impl PasswordHasher {
             .verify_password(password.as_bytes(), &parsed_hash)
         {
             Ok(()) => Ok(true),
-            Err(argon2::password_hash::Error::Password) => Ok(false),
+            Err(argon2::password_hash::Error::PasswordInvalid) => Ok(false),
             Err(e) => Err(PersonaError::CryptographicError(format!(
                 "Verification failed: {}",
                 e
@@ -119,6 +119,19 @@ mod tests {
         let hash = hasher.hash_password(password).unwrap();
         assert!(hasher.verify_password(password, &hash).unwrap());
         assert!(!hasher.verify_password("wrong_password", &hash).unwrap());
+    }
+
+    #[test]
+    fn argon2_0_5_hash_still_verifies() {
+        // 存量密码箱里的主密码哈希是 argon2 0.5 生成的 PHC 串（v19/m=19456,t=2,p=1，
+        // 16 字节盐）。crate 升到 0.6 后同一串必须仍能校验通过、错密码仍返回 false——
+        // 参数或编码任一处漂移都会把老用户挡在门外。
+        let legacy = "$argon2id$v=19$m=19456,t=2,p=1$EREREREREREREREREREREQ$BkQBhy9xLSmdpdyPswWOSvJZz2Low9eEGe4jKVzIihk";
+        let hasher = PasswordHasher::new();
+        assert!(hasher
+            .verify_password("correct horse battery staple", legacy)
+            .unwrap());
+        assert!(!hasher.verify_password("wrong", legacy).unwrap());
     }
 
     #[test]

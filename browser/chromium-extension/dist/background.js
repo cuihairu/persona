@@ -167,6 +167,7 @@ async function setPolicies(policies) {
 }
 async function getFormsSnapshot() {
     return new Promise((resolve) => {
+        // @types/chrome 收窄 storage.get 回调索引类型后需显式断言（存取同形，契约在本函数签名）
         chrome.storage.local.get(FORMS_KEY, (value) => resolve(value?.[FORMS_KEY]));
     });
 }

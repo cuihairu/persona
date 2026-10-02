@@ -9,7 +9,7 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "declaration": false,
-    "baseUrl": ".",
+    /* TS 7 移除了 baseUrl，paths 直接用相对根解析 */
     "paths": {
       "@/*": ["src/*"]
     }
