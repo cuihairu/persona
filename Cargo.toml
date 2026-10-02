@@ -21,7 +21,7 @@ description = "Master your digital identity. Switch freely with one click."
 # 加密相关
 ring = "0.17"
 argon2 = "0.6"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 # SRP-6a（RFC 5054）：设备认证（E2EE 同步轨道阶段 1）。RustCrypto/PAKEs
 # 维护节奏慢（0.7 停在 rc）——正确性由 RFC 5054 附录 B 向量测试锁定
 # （core/src/auth/srp.rs），调用方经封装隔离可整体换实现（设计稿 DR-2）
