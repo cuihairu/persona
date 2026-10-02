@@ -205,6 +205,49 @@ describe('components/CredentialDetailPane', () => {
     expect(onCopy).toHaveBeenCalledWith('0xabc123', '地址');
   });
 
+  it('CryptoWallet pane: reveals seed material and copies the public key', () => {
+    const { onCopy } = setupPane(
+      { name: 'Seed', credential_type: 'CryptoWallet' },
+      {
+        credential_type: 'CryptoWallet',
+        data: {
+          wallet_type: 'Bitcoin',
+          address: 'bc1qxyz',
+          network: 'mainnet',
+          mnemonic_phrase: 'abandon ability able',
+          bip39_passphrase: 'tungsten',
+          private_key: 'L1priv',
+          public_key: '02a1b2',
+        },
+      },
+    );
+
+    // 高敏提示行 + 三个 reveal 缝（助记词 / 第 25 词 / 私钥）
+    expect(screen.getByText(/钱包种子材料为高敏字段/)).toBeInTheDocument();
+    expect(screen.getByTestId('reveal-wallet_mnemonic')).toBeInTheDocument();
+    expect(screen.getByTestId('reveal-wallet_bip39_passphrase')).toBeInTheDocument();
+    expect(screen.getByTestId('reveal-wallet_private_key')).toBeInTheDocument();
+
+    // 公钥非敏：直接显示 + 复制
+    expect(screen.getByText('02a1b2')).toBeInTheDocument();
+    clickCopyNextTo('02a1b2');
+    expect(onCopy).toHaveBeenCalledWith('02a1b2', '公钥');
+  });
+
+  it('CryptoWallet pane: omits seed rows when payload lacks them', () => {
+    setupPane(
+      { name: 'Bare', credential_type: 'CryptoWallet' },
+      {
+        credential_type: 'CryptoWallet',
+        data: { wallet_type: 'Bitcoin', address: 'bc1qxyz', network: 'mainnet' },
+      },
+    );
+
+    expect(screen.queryByTestId('reveal-wallet_mnemonic')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reveal-wallet_bip39_passphrase')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('reveal-wallet_private_key')).not.toBeInTheDocument();
+  });
+
   it('SshKey pane: renders key material with three reveal seams', () => {
     const { onCopy } = setupPane(
       { name: 'Server key', credential_type: 'SshKey' },

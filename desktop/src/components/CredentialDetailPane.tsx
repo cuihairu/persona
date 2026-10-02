@@ -7,6 +7,7 @@ import {
   ClockIcon,
   DocumentDuplicateIcon,
   HeartIcon,
+  LockClosedIcon,
   PaperClipIcon,
   PencilIcon,
   PlusIcon,
@@ -292,6 +293,10 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       case 'CryptoWallet':
         return (
           <div className="space-y-3">
+            <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+              <LockClosedIcon className="w-3.5 h-3.5" />
+              <span>{t('detail.walletSensitiveHint')}</span>
+            </div>
             <div>
               <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.walletType')}</label>
               <span className="text-sm">{data.wallet_type}</span>
@@ -313,6 +318,53 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
               <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.network')}</label>
               <span className="text-sm">{data.network}</span>
             </div>
+            {data.mnemonic_phrase && (
+              <div>
+                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.mnemonic')}</label>
+                <RevealSecretButton
+                  credentialId={credential.id}
+                  field="wallet_mnemonic"
+                  label={t('detail.labels.mnemonic')}
+                />
+              </div>
+            )}
+            {data.bip39_passphrase && (
+              <div>
+                <label className="label text-gray-600 dark:text-gray-300">
+                  {t('detail.labels.bip39Passphrase')}
+                </label>
+                <RevealSecretButton
+                  credentialId={credential.id}
+                  field="wallet_bip39_passphrase"
+                  label={t('detail.labels.bip39Passphrase')}
+                />
+              </div>
+            )}
+            {data.private_key && (
+              <div>
+                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.privateKey')}</label>
+                <RevealSecretButton
+                  credentialId={credential.id}
+                  field="wallet_private_key"
+                  label={t('detail.labels.privateKey')}
+                />
+              </div>
+            )}
+            {data.public_key && (
+              <div>
+                <label className="label text-gray-600 dark:text-gray-300">{t('detail.labels.publicKey')}</label>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-mono break-all">{data.public_key}</span>
+                  <button
+                    onClick={() => onCopy(data.public_key, t('detail.labels.publicKey'))}
+                    aria-label={t('detail.copyLabel', { name: t('detail.labels.publicKey') })}
+                    className="p-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+                  >
+                    <DocumentDuplicateIcon className="w-4 h-4 text-gray-400 dark:text-gray-500" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         );
 
