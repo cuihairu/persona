@@ -7,7 +7,7 @@
 use crate::models::credential::TwoFactorData;
 use anyhow::{bail, Result};
 use data_encoding::{BASE32, BASE32_NOPAD};
-use hmac::{Hmac, Mac, KeyInit};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha1::Sha1;
 use sha2::{Sha256, Sha512};

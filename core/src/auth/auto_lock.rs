@@ -1418,11 +1418,13 @@ mod tests {
 
         assert!(manager.update_sensitive_activity(&session_id).await.is_ok());
         assert!(manager.is_session_valid(&session_id).await);
-        assert!(!manager
-            .get_session(&session_id)
-            .await
-            .expect("session exists")
-            .locked);
+        assert!(
+            !manager
+                .get_session(&session_id)
+                .await
+                .expect("session exists")
+                .locked
+        );
     }
 
     #[tokio::test]

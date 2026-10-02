@@ -2244,7 +2244,8 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         .unwrap();
         let private_bytes = key.key_data().ecdsa().unwrap().private_key_bytes();
         let signing =
-            p256::ecdsa::SigningKey::from_bytes(&FieldBytes::try_from(private_bytes).unwrap()).unwrap();
+            p256::ecdsa::SigningKey::from_bytes(&FieldBytes::try_from(private_bytes).unwrap())
+                .unwrap();
         let verifying = p256::ecdsa::VerifyingKey::from(&signing);
         verifying.verify(b"ecdsa-data", &sig).unwrap();
 
@@ -2313,7 +2314,9 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         )
         .unwrap();
         // encrypt 返回加密后的新实例——必须接住，原实例仍是明文
-        let key = key.encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), "hunter2").unwrap();
+        let key = key
+            .encrypt(&mut rand_core::UnwrapErr(rand::rngs::SysRng), "hunter2")
+            .unwrap();
         let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap().to_string();
 
         let dir = tempfile::tempdir().unwrap();

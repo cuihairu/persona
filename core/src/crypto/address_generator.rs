@@ -676,7 +676,10 @@ mod tests {
         // `sha256sum` output — hash160 must stay RIPEMD160(SHA256(·)).
         for (data, expected) in [
             (b"".as_slice(), "b472a266d0bd89c13706a4132ccfb16f7c3b9fcb"),
-            (b"abc".as_slice(), "bb1be98c142444d7a56aa3981c3942a978e4dc33"),
+            (
+                b"abc".as_slice(),
+                "bb1be98c142444d7a56aa3981c3942a978e4dc33",
+            ),
             (
                 b"hash160 composition check".as_slice(),
                 "585214e818308f2ce5a638d306dda437bd81f0d8",

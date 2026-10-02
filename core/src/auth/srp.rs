@@ -235,7 +235,14 @@ impl<'a, D: Digest> SrpClient<'a, D> {
         self.params.g.modpow(a, &self.params.n)
     }
 
-    fn premaster(&self, b_pub: &BigUint, k: &BigUint, x: &BigUint, a: &BigUint, u: &BigUint) -> BigUint {
+    fn premaster(
+        &self,
+        b_pub: &BigUint,
+        k: &BigUint,
+        x: &BigUint,
+        a: &BigUint,
+        u: &BigUint,
+    ) -> BigUint {
         let base = (k * self.params.g.modpow(x, &self.params.n)) % &self.params.n;
         let base = ((&self.params.n + b_pub) - &base) % &self.params.n;
         let exp = (u * x) + a;
@@ -418,10 +425,7 @@ impl SrpClientLogin {
         let mut a_priv = vec![0u8; CLIENT_EPHEMERAL_LEN];
         rand::rng().fill(&mut a_priv);
         let a_pub = SrpClient::<Sha256>::new(srp_group()).compute_public_ephemeral(&a_priv);
-        Ok(Self {
-            a_priv,
-            a_pub,
-        })
+        Ok(Self { a_priv, a_pub })
     }
 
     /// 客户端公开值 `A`（hex 编码由传输层负责）。
@@ -499,10 +503,7 @@ pub fn server_challenge(verifier: &[u8]) -> PersonaResult<SrpServerChallenge> {
     let mut b_priv = vec![0u8; SERVER_EPHEMERAL_LEN];
     rand::rng().fill(&mut b_priv);
     let b_pub = SrpServer::<Sha256>::new(srp_group()).compute_public_ephemeral(&b_priv, verifier);
-    Ok(SrpServerChallenge {
-        b_priv,
-        b_pub,
-    })
+    Ok(SrpServerChallenge { b_priv, b_pub })
 }
 
 /// 服务器验证结果：M2 下发 + 会话密钥（与客户端 [`SrpClientProof::verify_server`]

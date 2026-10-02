@@ -1,7 +1,7 @@
 use crate::{PersonaError, PersonaResult};
 use argon2::{
-    password_hash::phc::PasswordHash,
-    Argon2, PasswordHasher as Argon2PasswordHasher, PasswordVerifier,
+    password_hash::phc::PasswordHash, Argon2, PasswordHasher as Argon2PasswordHasher,
+    PasswordVerifier,
 };
 use ring::digest::{Context, SHA256};
 
@@ -24,9 +24,12 @@ impl PasswordHasher {
         getrandom::fill(&mut salt_bytes).expect("failed to generate random salt");
         // argon2 0.6 的 password-hash 0.6 改收原始盐字节（内部再 b64 编码成 PHC 串），
         // `SaltString::encode_b64` 随 password_hash crate 移到了 phc 模块且不再需要。
-        let hash: PasswordHash =
-            Argon2PasswordHasher::hash_password_with_salt(&self.argon2, password.as_bytes(), &salt_bytes)
-                .map_err(|e| PersonaError::CryptographicError(format!("Hashing failed: {}", e)))?;
+        let hash: PasswordHash = Argon2PasswordHasher::hash_password_with_salt(
+            &self.argon2,
+            password.as_bytes(),
+            &salt_bytes,
+        )
+        .map_err(|e| PersonaError::CryptographicError(format!("Hashing failed: {}", e)))?;
         Ok(hash.to_string())
     }
 

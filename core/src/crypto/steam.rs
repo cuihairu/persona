@@ -12,7 +12,7 @@
 use crate::models::credential::GameTokenData;
 use anyhow::{bail, Result};
 use data_encoding::{BASE64, BASE64_NOPAD};
-use hmac::{Hmac, Mac, KeyInit};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Serialize;
 use sha1::Sha1;
 

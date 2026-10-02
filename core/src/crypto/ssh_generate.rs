@@ -46,8 +46,9 @@ pub fn generate_ssh_keypair(key_type: &str, comment: &str) -> PersonaResult<Gene
     // ssh-key 对 RSA 不走 PrivateKey::random 的统一路径（要 rsa crate 的
     // 素数生成），单独组 KeypairData；comment 统一事后写入
     let mut key = if matches!(algorithm, Algorithm::Rsa { .. }) {
-        let keypair = RsaKeypair::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), RSA_BIT_SIZE)
-            .map_err(|e| PersonaError::CryptographicError(format!("RSA keygen failed: {e}")))?;
+        let keypair =
+            RsaKeypair::random(&mut rand_core::UnwrapErr(rand::rngs::SysRng), RSA_BIT_SIZE)
+                .map_err(|e| PersonaError::CryptographicError(format!("RSA keygen failed: {e}")))?;
         PrivateKey::new(KeypairData::Rsa(keypair), comment)
             .map_err(|e| PersonaError::CryptographicError(format!("RSA keygen failed: {e}")))?
     } else {

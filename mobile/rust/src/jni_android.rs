@@ -24,7 +24,9 @@ fn result_to_json(env: &mut JNIEnv, result: PersonaResult) -> jstring {
         // SAFETY: error_message 由 PersonaResult::error 经 CString::into_raw
         // 分配，契约保证此处取走字符串后立刻归还所有权。
         let owned = unsafe {
-            let s = CStr::from_ptr(result.error_message).to_string_lossy().into_owned();
+            let s = CStr::from_ptr(result.error_message)
+                .to_string_lossy()
+                .into_owned();
             let _ = CString::from_raw(result.error_message);
             s
         };
@@ -36,10 +38,7 @@ fn result_to_json(env: &mut JNIEnv, result: PersonaResult) -> jstring {
             result.success,
             serde_json::to_string(&e).unwrap_or_else(|_| "\"\"".to_string())
         ),
-        None => format!(
-            "{{\"success\":{},\"error\":null}}",
-            result.success
-        ),
+        None => format!("{{\"success\":{},\"error\":null}}", result.success),
     };
     // JVM 字符串只能含有效 UTF-8，new_string 失败即宿主已损坏，退化为空串
     env.new_string(&json)

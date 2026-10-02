@@ -312,8 +312,8 @@ pub fn import_from_private_key(
     );
 
     // Derive address from private key (secp256k1)
-    let signing_key = k256::ecdsa::SigningKey::from_slice(private_key_bytes.as_slice())
-        .map_err(|e| {
+    let signing_key =
+        k256::ecdsa::SigningKey::from_slice(private_key_bytes.as_slice()).map_err(|e| {
             PersonaError::CryptographicError(format!("Invalid secp256k1 private key: {}", e))
         })?;
     let verifying_key = signing_key.verifying_key();
