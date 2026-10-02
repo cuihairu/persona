@@ -172,6 +172,13 @@ Wallet Material (experimental — deferred until 1Password parity; see priority 
       Argon2id `item_password_hash` + 明文提示，reveal 助记词/私钥/第 25 词
       需额外比对（ITEM_PASSWORD_REQUIRED/WRONG 错误码）；设置/清除命令 +
       详情面板管理行；不动加密封套与同步格式（4e84fec）
+- [x] **钱包笔4 收官（2026-10-02）**：24 词全流程真实走查 14/14 全过
+      （构建 dist + `__TAURI_INTERNALS__` shim 逐帧断言：词数 24 生成 →
+      BIP-39 实时校验「校验通过 · 24 词」→ 口令/私钥入库 → 详情面板三 reveal
+      缝 → 启用条目密码徽章翻转 → reveal 撞 REQUIRED 内联输入 → WRONG 保留
+      输入 → 对密码揭示 24 词明文，截图 `shots-wallet1002/`）；门禁全绿
+      （src-tauri 210 + jest 606 + fmt 双处 + core 21 suites）；三 workflow
+      全绿（HEAD 4cc7023）。无新增用户报障，BUGS.md 未动
 
 Desktop (Tauri v2 + React)
 
