@@ -3,23 +3,22 @@
 //! Zero-knowledge principle: master password/key never leaves the device. Server only stores
 //! public verification material (passkey public keys, SRP salt+verifier, recovery code hashes).
 
-use axum::extract::{State, Path};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
 use base64::engine::general_purpose::{STANDARD as B64, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use chrono::Utc;
-use hex;
 use persona_core::crypto::hashing::PasswordHasher;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::state::AppState;
 use super::{ApiError, ErrorItem};
+use crate::state::AppState;
 
-/// ---- Account Registration ----
+// ---- Account Registration ----
 
 #[derive(Deserialize)]
 pub struct RegisterAccountRequest {
@@ -90,7 +89,7 @@ pub async fn register_account(
     }
 }
 
-/// ---- Account Login (Passkey) ----
+// ---- Account Login (Passkey) ----
 
 /// WebAuthn credential creation options request
 #[derive(Deserialize)]
@@ -105,16 +104,6 @@ pub struct PasskeyCreateOptionsRequest {
     pub user_name: Option<String>,
     /// User display name
     pub user_display_name: Option<String>,
-    /// Origin (e.g., "https://example.com")
-    pub origin: String,
-}
-
-/// Passkey registration response (attestation object + credential ID)
-#[derive(Serialize)]
-pub struct PasskeyCreateResponse {
-    pub credential_id: String,      // base64url
-    pub attestation_object: String, // base64url
-    pub public_key_cose: String,    // base64url
 }
 
 /// POST /api/v1/accounts/:account_id/passkeys/create-options
@@ -125,19 +114,21 @@ pub async fn passkey_create_options(
     Json(req): Json<PasskeyCreateOptionsRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Verify account exists
-    let account = sqlx::query(
-        "SELECT id, username, display_name FROM accounts WHERE id = ?",
-    )
-    .bind(&account_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(ApiError::internal)?
-    .ok_or_else(|| ApiError::not_found())?;
+    let account = sqlx::query("SELECT id, username, display_name FROM accounts WHERE id = ?")
+        .bind(&account_id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(ApiError::not_found)?;
 
     // Generate creation options (challenge + parameters)
     let challenge = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
-    let user_handle = URL_SAFE_NO_PAD.decode(&req.user_handle)
-        .map_err(|_| ApiError::validation("invalid user_handle", vec![ErrorItem::batch("user_handle", "not valid base64url")]))?;
+    let _user_handle = URL_SAFE_NO_PAD.decode(&req.user_handle).map_err(|_| {
+        ApiError::validation(
+            "invalid user_handle",
+            vec![ErrorItem::batch("user_handle", "not valid base64url")],
+        )
+    })?;
 
     // Store challenge temporarily (in real impl, use Redis or in-memory with TTL)
     // For now, we'll just return the options and let client proceed
@@ -193,31 +184,63 @@ pub async fn passkey_register(
         .fetch_optional(&state.pool)
         .await
         .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found())?;
+        .ok_or_else(ApiError::not_found)?;
 
     // Parse and verify attestation response
     // This would use the core passkey crypto module
     // For now, we'll accept the credential and store it
 
-    let credential_id = req.attestation_response.get("credentialId")
+    let _credential_id = req
+        .attestation_response
+        .get("credentialId")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ApiError::validation("missing credentialId", vec![ErrorItem::batch("credentialId", "required")]))?;
+        .ok_or_else(|| {
+            ApiError::validation(
+                "missing credentialId",
+                vec![ErrorItem::batch("credentialId", "required")],
+            )
+        })?;
 
-    let attestation_object = req.attestation_response.get("attestationObject")
+    let _attestation_object = req
+        .attestation_response
+        .get("attestationObject")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| ApiError::validation("missing attestationObject", vec![ErrorItem::batch("attestationObject", "required")]))?;
+        .ok_or_else(|| {
+            ApiError::validation(
+                "missing attestationObject",
+                vec![ErrorItem::batch("attestationObject", "required")],
+            )
+        })?;
 
     // Decode client data to verify origin and challenge
-    let client_data_bytes = URL_SAFE_NO_PAD.decode(&req.client_data_json)
-        .map_err(|_| ApiError::validation("invalid client_data_json", vec![ErrorItem::batch("client_data_json", "not valid base64url")]))?;
+    let client_data_bytes = URL_SAFE_NO_PAD.decode(&req.client_data_json).map_err(|_| {
+        ApiError::validation(
+            "invalid client_data_json",
+            vec![ErrorItem::batch("client_data_json", "not valid base64url")],
+        )
+    })?;
 
-    let client_data: serde_json::Value = serde_json::from_slice(&client_data_bytes)
-        .map_err(|e| ApiError::validation("invalid client_data_json", vec![ErrorItem::batch("client_data_json", format!("invalid JSON: {e}"))]))?;
+    let client_data: serde_json::Value =
+        serde_json::from_slice(&client_data_bytes).map_err(|e| {
+            ApiError::validation(
+                "invalid client_data_json",
+                vec![ErrorItem::batch(
+                    "client_data_json",
+                    format!("invalid JSON: {e}"),
+                )],
+            )
+        })?;
 
     // Verify origin matches
-    let client_origin = client_data.get("origin").and_then(|v| v.as_str()).unwrap_or("");
+    let client_origin = client_data
+        .get("origin")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if !client_origin.eq_ignore_ascii_case(&req.origin) {
-        return Err(ApiError::validation("origin mismatch", vec![ErrorItem::batch("origin", "does not match client data")]));
+        return Err(ApiError::validation(
+            "origin mismatch",
+            vec![ErrorItem::batch("origin", "does not match client data")],
+        ));
     }
 
     // Extract public key from attestation (simplified - in production use core crypto)
@@ -244,7 +267,7 @@ pub async fn passkey_register(
     Ok(Json(serde_json::json!({ "passkey_id": passkey_id })))
 }
 
-/// ---- Account Login (SRP Password Fallback) ----
+// ---- Account Login (SRP Password Fallback) ----
 
 /// SRP registration request (reuse existing SRP flow but scoped to account)
 #[derive(Deserialize)]
@@ -263,7 +286,7 @@ pub struct AccountSrpRegisterResponse {
 /// Registers an SRP credential for password-based login (requires existing Bearer auth).
 pub async fn account_srp_register(
     State(state): State<AppState>,
-    Extension(operator): Extension<crate::auth::DeviceName>,
+    Extension(_operator): Extension<crate::auth::DeviceName>,
     Path(account_id): Path<String>,
     Json(req): Json<AccountSrpRegisterRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -317,9 +340,9 @@ pub async fn account_srp_challenge(
     Path(account_id): Path<String>,
     Json(req): Json<AccountSrpChallengeRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let srp_state = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
+    let _srp_state = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
     let name = validate_device_name(&req.device_name)?;
-    let client_public = decode_field("client_public", &req.client_public, 768)?;
+    let _client_public = decode_field("client_public", &req.client_public, 768)?;
 
     let row = sqlx::query_as::<_, (Vec<u8>, Vec<u8>)>(
         "SELECT salt, verifier FROM account_srp_credentials WHERE account_id = ? AND device_name = ?",
@@ -351,7 +374,6 @@ pub async fn account_srp_challenge(
 #[derive(Deserialize)]
 pub struct AccountSrpVerifyRequest {
     pub session_id: String,
-    pub client_proof: String, // base64
 }
 
 #[derive(Serialize)]
@@ -371,7 +393,8 @@ pub async fn account_srp_verify(
     let srp_state = state.srp.as_ref().ok_or_else(ApiError::disabled)?;
 
     // Simplified - real impl uses SRP verify from core
-    let _ = srp_state.take_challenge(&req.session_id)
+    let _ = srp_state
+        .take_challenge(&req.session_id)
         .ok_or_else(ApiError::unauthorized)?;
 
     // Issue account session token
@@ -404,7 +427,7 @@ pub async fn account_srp_verify(
     }))
 }
 
-/// ---- Recovery Codes ----
+// ---- Recovery Codes ----
 
 /// Generate recovery codes for an account
 #[derive(Serialize)]
@@ -416,7 +439,7 @@ pub struct GenerateRecoveryCodesResponse {
 /// Generates a new set of recovery codes (requires auth).
 pub async fn generate_recovery_codes(
     State(state): State<AppState>,
-    Extension(device): Extension<crate::auth::DeviceName>,
+    Extension(_device): Extension<crate::auth::DeviceName>,
     Path(account_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
     // Verify account exists and user owns it (in real impl, check device authorization)
@@ -425,7 +448,7 @@ pub async fn generate_recovery_codes(
         .fetch_optional(&state.pool)
         .await
         .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found())?;
+        .ok_or_else(ApiError::not_found)?;
 
     // Delete existing unused recovery codes
     sqlx::query("DELETE FROM account_recovery_codes WHERE account_id = ? AND used_at IS NULL")
@@ -464,7 +487,8 @@ pub async fn generate_recovery_codes(
 /// Hash a recovery code using Argon2id
 fn hash_recovery_code(code: &str) -> Result<String, ApiError> {
     let hasher = PasswordHasher::new();
-    hasher.hash_password(code)
+    hasher
+        .hash_password(code)
         .map_err(|e| ApiError::internal(format!("Hashing failed: {}", e)))
 }
 
@@ -488,12 +512,19 @@ pub async fn verify_recovery_code(
 ) -> Result<impl IntoResponse, ApiError> {
     let code = req.code.trim().replace('-', "");
     if code.len() != 32 {
-        return Err(ApiError::validation("invalid code format", vec![ErrorItem::batch("code", "must be 32 hex chars")]));
+        return Err(ApiError::validation(
+            "invalid code format",
+            vec![ErrorItem::batch("code", "must be 32 hex chars")],
+        ));
     }
 
     // Decode the hex code to bytes for verification
-    let code_bytes = hex::decode(&code)
-        .map_err(|_| ApiError::validation("invalid code format", vec![ErrorItem::batch("code", "not valid hex")]))?;
+    let code_bytes = hex::decode(&code).map_err(|_| {
+        ApiError::validation(
+            "invalid code format",
+            vec![ErrorItem::batch("code", "not valid hex")],
+        )
+    })?;
 
     // Find unused recovery codes for this account
     let rows = sqlx::query(
@@ -537,12 +568,11 @@ fn verify_recovery_code_hash(hash: &str, code_bytes: &[u8]) -> bool {
     hasher.verify_password(&code_hex, hash).unwrap_or(false)
 }
 
-/// ---- Account Device Management ----
+// ---- Account Device Management ----
 
 #[derive(Deserialize)]
 pub struct AuthorizeDeviceRequest {
-    pub device_id: String, // sync_devices.id
-    pub device_name: String,
+    pub device_id: String,  // sync_devices.id
     pub public_key: String, // base64, 32 bytes X25519
 }
 
@@ -566,26 +596,40 @@ pub async fn authorize_device(
         .fetch_optional(&state.pool)
         .await
         .map_err(ApiError::internal)?
-        .ok_or_else(|| ApiError::not_found())?;
+        .ok_or_else(ApiError::not_found)?;
 
     // Verify sync device exists
-    let sync_device = sqlx::query(
-        "SELECT id, device_name, public_key FROM sync_devices WHERE id = ?",
-    )
-    .bind(&req.device_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(ApiError::internal)?
-    .ok_or_else(|| ApiError::validation("device not found", vec![ErrorItem::batch("device_id", "not enrolled")]))?;
+    let sync_device =
+        sqlx::query("SELECT id, device_name, public_key FROM sync_devices WHERE id = ?")
+            .bind(&req.device_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(ApiError::internal)?
+            .ok_or_else(|| {
+                ApiError::validation(
+                    "device not found",
+                    vec![ErrorItem::batch("device_id", "not enrolled")],
+                )
+            })?;
 
     let device_name: String = sync_device.get("device_name");
     let public_key: Vec<u8> = sync_device.get("public_key");
 
     // Verify public key matches
-    let provided_key = B64.decode(&req.public_key)
-        .map_err(|_| ApiError::validation("invalid public_key", vec![ErrorItem::batch("public_key", "malformed base64")]))?;
+    let provided_key = B64.decode(&req.public_key).map_err(|_| {
+        ApiError::validation(
+            "invalid public_key",
+            vec![ErrorItem::batch("public_key", "malformed base64")],
+        )
+    })?;
     if provided_key != public_key {
-        return Err(ApiError::validation("public key mismatch", vec![ErrorItem::batch("public_key", "does not match enrolled device")]));
+        return Err(ApiError::validation(
+            "public key mismatch",
+            vec![ErrorItem::batch(
+                "public_key",
+                "does not match enrolled device",
+            )],
+        ));
     }
 
     let id = Uuid::new_v4().to_string();
@@ -654,19 +698,17 @@ pub async fn list_account_devices(
 
     let devices: Vec<AccountDeviceInfo> = rows
         .iter()
-        .filter_map(|row| {
-            Some(AccountDeviceInfo {
-                id: row.get("id"),
-                device_id: row.get("device_id"),
-                device_name: row.get("device_name"),
-                public_key: B64.encode(row.get::<Vec<u8>, _>("public_key")),
-                status: row.get("status"),
-                authorized_by: row.get("authorized_by"),
-                authorized_at: row.get("authorized_at"),
-                revoked_at: row.get("revoked_at"),
-                revoked_by: row.get("revoked_by"),
-                created_at: row.get("created_at"),
-            })
+        .map(|row| AccountDeviceInfo {
+            id: row.get("id"),
+            device_id: row.get("device_id"),
+            device_name: row.get("device_name"),
+            public_key: B64.encode(row.get::<Vec<u8>, _>("public_key")),
+            status: row.get("status"),
+            authorized_by: row.get("authorized_by"),
+            authorized_at: row.get("authorized_at"),
+            revoked_at: row.get("revoked_at"),
+            revoked_by: row.get("revoked_by"),
+            created_at: row.get("created_at"),
         })
         .collect();
 
@@ -701,7 +743,7 @@ pub async fn revoke_account_device(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// ---- Account Login (Session) ----
+// ---- Account Login (Session) ----
 
 /// POST /api/v1/accounts/:account_id/sessions
 /// Creates a new account session (after successful passkey/SRP auth).
@@ -747,26 +789,27 @@ pub async fn revoke_account_session(
     State(state): State<AppState>,
     Path((account_id, session_token)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    sqlx::query(
-        "DELETE FROM account_sessions WHERE account_id = ? AND session_token = ?",
-    )
-    .bind(&account_id)
-    .bind(&session_token)
-    .execute(&state.pool)
-    .await
-    .map_err(ApiError::internal)?;
+    sqlx::query("DELETE FROM account_sessions WHERE account_id = ? AND session_token = ?")
+        .bind(&account_id)
+        .bind(&session_token)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
 
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
-/// ---- Helper functions ----
+// ---- Helper functions ----
 
 fn validate_device_name(name: &str) -> Result<String, ApiError> {
     let trimmed = name.trim();
     if trimmed.is_empty() || trimmed.len() > 64 || trimmed.chars().any(char::is_whitespace) {
         return Err(ApiError::validation(
             "invalid device_name",
-            vec![ErrorItem::batch("device_name", "must be 1-64 bytes, no whitespace")],
+            vec![ErrorItem::batch(
+                "device_name",
+                "must be 1-64 bytes, no whitespace",
+            )],
         ));
     }
     Ok(trimmed.to_owned())
@@ -807,7 +850,13 @@ mod tests {
     }
 
     fn req(method: &str, uri: &str, body: &str) -> axum::http::Request<String> {
-        request(method, uri, Some(&format!("Bearer {TOKEN}")), Some("application/json"), body)
+        request(
+            method,
+            uri,
+            Some(&format!("Bearer {TOKEN}")),
+            Some("application/json"),
+            body,
+        )
     }
 
     fn get_req(uri: &str) -> axum::http::Request<String> {
@@ -825,25 +874,42 @@ mod tests {
         // Register account
         let (status, body) = send(
             router.clone(),
-            request("POST", "/api/v1/accounts/register", None, Some("application/json"),
-                &json!({"username": "alice@example.com", "display_name": "Alice"}).to_string()),
-        ).await;
+            request(
+                "POST",
+                "/api/v1/accounts/register",
+                None,
+                Some("application/json"),
+                &json!({"username": "alice@example.com", "display_name": "Alice"}).to_string(),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         let account_id = body["account_id"].as_str().unwrap().to_string();
 
         // Duplicate registration should fail
         let (status, body) = send(
             router.clone(),
-            request("POST", "/api/v1/accounts/register", None, Some("application/json"),
-                &json!({"username": "alice@example.com"}).to_string()),
-        ).await;
+            request(
+                "POST",
+                "/api/v1/accounts/register",
+                None,
+                Some("application/json"),
+                &json!({"username": "alice@example.com"}).to_string(),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
 
         // Generate recovery codes
         let (status, body) = send(
             router.clone(),
-            req("POST", &format!("/api/v1/accounts/{account_id}/recovery-codes"), ""),
-        ).await;
+            req(
+                "POST",
+                &format!("/api/v1/accounts/{account_id}/recovery-codes"),
+                "",
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["codes"].as_array().unwrap().len(), 8);
 
@@ -851,18 +917,26 @@ mod tests {
         let code = body["codes"][0].as_str().unwrap();
         let (status, body) = send(
             router.clone(),
-            req("POST", &format!("/api/v1/accounts/{account_id}/recovery-codes/verify"),
-                &json!({"code": code}).to_string()),
-        ).await;
+            req(
+                "POST",
+                &format!("/api/v1/accounts/{account_id}/recovery-codes/verify"),
+                &json!({"code": code}).to_string(),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["success"], true);
 
         // Same code should not work again
         let (status, body) = send(
             router.clone(),
-            req("POST", &format!("/api/v1/accounts/{account_id}/recovery-codes/verify"),
-                &json!({"code": code}).to_string()),
-        ).await;
+            req(
+                "POST",
+                &format!("/api/v1/accounts/{account_id}/recovery-codes/verify"),
+                &json!({"code": code}).to_string(),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["success"], false);
     }
@@ -874,18 +948,28 @@ mod tests {
         // Register account
         let (status, body) = send(
             router.clone(),
-            request("POST", "/api/v1/accounts/register", None, Some("application/json"),
-                &json!({"username": "bob@example.com"}).to_string()),
-        ).await;
+            request(
+                "POST",
+                "/api/v1/accounts/register",
+                None,
+                Some("application/json"),
+                &json!({"username": "bob@example.com"}).to_string(),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         let account_id = body["account_id"].as_str().unwrap().to_string();
 
         // Register a sync device first
         let (status, body) = send(
             router.clone(),
-            req("POST", "/api/v1/sync/devices",
-                &json!({"device_name": "laptop", "public_key": b64(&[7u8; 32])}).to_string()),
-        ).await;
+            req(
+                "POST",
+                "/api/v1/sync/devices",
+                &json!({"device_name": "laptop", "public_key": b64(&[7u8; 32])}).to_string(),
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
         let sync_device_id = body["device_id"].as_str().unwrap().to_string();
 
@@ -896,11 +980,15 @@ mod tests {
                 &json!({"device_id": sync_device_id, "device_name": "laptop", "public_key": b64(&[7u8; 32])}).to_string()),
         ).await;
         assert_eq!(status, StatusCode::CREATED, "{body}");
-        let auth_device_id = body["id"].as_str().unwrap().to_string();
+        let _auth_device_id = body["id"].as_str().unwrap().to_string();
         assert_eq!(body["status"], "authorized");
 
         // List devices
-        let (status, body) = send(router.clone(), get_req(&format!("/api/v1/accounts/{account_id}/devices"))).await;
+        let (status, body) = send(
+            router.clone(),
+            get_req(&format!("/api/v1/accounts/{account_id}/devices")),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["devices"].as_array().unwrap().len(), 1);
         assert_eq!(body["devices"][0]["status"], "authorized");
@@ -908,13 +996,23 @@ mod tests {
         // Revoke device
         let (status, _) = send(
             router.clone(),
-            request("DELETE", &format!("/api/v1/accounts/{account_id}/devices/{sync_device_id}"),
-                Some(&format!("Bearer {TOKEN}")), None, ""),
-        ).await;
+            request(
+                "DELETE",
+                &format!("/api/v1/accounts/{account_id}/devices/{sync_device_id}"),
+                Some(&format!("Bearer {TOKEN}")),
+                None,
+                "",
+            ),
+        )
+        .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
 
         // Verify revoked
-        let (status, body) = send(router.clone(), get_req(&format!("/api/v1/accounts/{account_id}/devices"))).await;
+        let (status, body) = send(
+            router.clone(),
+            get_req(&format!("/api/v1/accounts/{account_id}/devices")),
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["devices"].as_array().unwrap()[0]["status"], "revoked");
     }
