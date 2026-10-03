@@ -49,7 +49,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       卷属 root 而 USER persona 写不进、启动即 panic，现构建期
       `mkdir/chown /data`；自托管文档 `docs/SELF_HOST_SERVER.md`（一键起、
       env 全表、客户端接线、端点速查、运维注意）
-  - [ ] **GHCR 镜像重发布（M1 残留断点，2026-10-03 复验定位）**：compose
+  - [x] **GHCR 镜像重发布（M1 残留断点，2026-10-03 复验定位）**：compose
         默认拉的 `ghcr.io/cuihairu/persona-server:main` 停在修复前构建
         （2026-10-03 04:44，镜像内无 /data 目录）——后续 4 次 docker.yml
         全红（E0432：M2 `accounts.rs` 引 `hex` 而 server/Cargo.toml 缺
@@ -59,11 +59,22 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         全链复验已过（fresh 卷 up → /health 200、noauth 401、token 200、
         零重启）。Makefile 过期 docker-build/run（根目录无 Dockerfile、
         8080 端口错）已修为 build/up/down 三目标对齐 compose 部署链
+        ——2026-10-03 解除：hex 修复随 0514d4a 入 main，docker.yml 于
+        0514d4a/b0ee921 重发 SUCCESS，镜像已含 /data 修复
 - [ ] **M2 账号体系（落地①）**：server 账号注册/登录（通行密钥优先 +
       SRP 密码兜底——复用 DR-2 的 SRP 链路作密码兜底）、账号级设备管理
       （新设备授权/吊销/设备列表，复用 `/sync/devices` 扩到账号作用域）、
       账号恢复流程（恢复码/备用路径，无托管原则：主密码不出设备）；
       桌面设置页账号 UI；与既有设备令牌 Bearer 共存不打断备份链
+      ——2026-10-03 修复批勘察登记：47e0bed/0514d4a 的 server 账号 API
+      是半成品存根——公开端点 `srp/verify` 不验 client_proof（只消
+      challenge 即发令牌）、`sessions` 端点只验 Bearer 不验 passkey/SRP
+      证据、passkey register 不验 attestation 直接落库为凭据（好在
+      `account_sessions` 目前无任何消费方，令牌未生效，属潜伏脚手架
+      非现行提权）；M2 收口前必须补真实验证链。同批处理：桌面端误入
+      的本地账号命令死块（axum 风格签名塞 tauri command + 查本地不存
+      在的表 + 未注册 invoke，20 编译错）已整块回滚——正确架构是代理
+      server 账号 API，不在桌面本地建账号表
 - [ ] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）**：设备管理页 +
       授权/吊销全流程 UI 走查、冲突裁决 UI 走查、`STORAGE_AND_SYNC.md`
       与实现一致性复查——设计稿阶段 3 验收面收口
