@@ -63,7 +63,7 @@ pub fn encrypt_bytes(
 
     let cipher = Aes256Gcm::new((&key).into());
     let ciphertext = cipher
-        .encrypt(aes_gcm::Nonce::from_slice(&nonce), plaintext)
+        .encrypt((&nonce).into(), plaintext)
         .map_err(|e| anyhow!("Encryption failed: {:?}", e))?;
 
     let mut out = Vec::with_capacity(
@@ -126,7 +126,7 @@ pub fn decrypt_bytes(data: &[u8], passphrase: &str) -> Result<Vec<u8>> {
     let cipher = Aes256Gcm::new((&key).into());
     let nonce_arr: &[u8; 12] = nonce.try_into().map_err(|_| anyhow!("Bad nonce length"))?;
     let plaintext = cipher
-        .decrypt(aes_gcm::Nonce::from_slice(nonce_arr), ciphertext)
+        .decrypt(nonce_arr.into(), ciphertext)
         .map_err(|e| anyhow!("Decryption failed: {:?}", e))?;
     key.zeroize();
     Ok(plaintext)

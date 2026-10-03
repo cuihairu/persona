@@ -34,13 +34,14 @@ pub fn seal_group_key(group_key: &[u8; GROUP_KEY_LEN], device_public: &[u8; 32])
     let shared = eph_secret.diffie_hellman(&PublicKey::from(*device_public));
     let okm = derive_okm(&shared);
 
-    use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&okm[..32]));
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
+    let key_bytes: [u8; 32] = okm[..32].try_into().expect("HKDF-SHA256 输出定长");
+    let nonce_bytes: [u8; NONCE_LEN] = okm[32..32 + NONCE_LEN]
+        .try_into()
+        .expect("HKDF-SHA256 输出定长");
+    let cipher = Aes256Gcm::new((&key_bytes).into());
     let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&okm[32..32 + NONCE_LEN]),
-            group_key.as_ref(),
-        )
+        .encrypt((&nonce_bytes).into(), group_key.as_ref())
         .expect("AES-GCM encryption with freshly derived key cannot fail");
 
     let mut out = Vec::with_capacity(ENVELOPE_LEN);
@@ -69,13 +70,14 @@ pub fn open_group_key(
     let shared = secret.diffie_hellman(&PublicKey::from(eph_public_bytes));
     let okm = derive_okm(&shared);
 
-    use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&okm[..32]));
+    use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
+    let key_bytes: [u8; 32] = okm[..32].try_into().expect("HKDF-SHA256 输出定长");
+    let nonce_bytes: [u8; NONCE_LEN] = okm[32..32 + NONCE_LEN]
+        .try_into()
+        .expect("HKDF-SHA256 输出定长");
+    let cipher = Aes256Gcm::new((&key_bytes).into());
     let plaintext = cipher
-        .decrypt(
-            Nonce::from_slice(&okm[32..32 + NONCE_LEN]),
-            &envelope[EPH_PUB_LEN..],
-        )
+        .decrypt((&nonce_bytes).into(), &envelope[EPH_PUB_LEN..])
         .map_err(|_| {
             PersonaError::CryptographicError("device envelope failed authentication".to_string())
         })?;

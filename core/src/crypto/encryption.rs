@@ -1,4 +1,4 @@
-use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit, Nonce};
+use aes_gcm::{aead::Aead, Aes256Gcm, Key, KeyInit};
 use zeroize::Zeroize;
 
 /// Encrypted data with metadata
@@ -22,12 +22,10 @@ pub fn encrypt_data(plaintext: &[u8], password: &[u8]) -> Result<EncryptedData, 
     // Generate random nonce
     let mut nonce_bytes = [0u8; 12];
     getrandom::fill(&mut nonce_bytes).expect("failed to generate random nonce");
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
     // Create cipher and encrypt
-    let key_ref = Key::<Aes256Gcm>::from_slice(&key);
+    let key_ref: &Key<Aes256Gcm> = (&key).into();
     let cipher = Aes256Gcm::new(key_ref);
-    let ciphertext = cipher.encrypt(nonce, plaintext)?;
+    let ciphertext = cipher.encrypt((&nonce_bytes).into(), plaintext)?;
 
     // Zeroize the key
     key.zeroize();
@@ -55,10 +53,10 @@ pub fn decrypt_data(
     derive_key_from_password(password, salt, &mut key);
 
     // Create cipher and decrypt
-    let key_ref = Key::<Aes256Gcm>::from_slice(&key);
+    let key_ref: &Key<Aes256Gcm> = (&key).into();
     let cipher = Aes256Gcm::new(key_ref);
-    let nonce = Nonce::from_slice(nonce_bytes);
-    let plaintext = cipher.decrypt(nonce, ciphertext)?;
+    let nonce_arr: [u8; 12] = nonce_bytes.try_into().expect("nonce 长度已校验为 12");
+    let plaintext = cipher.decrypt((&nonce_arr).into(), ciphertext)?;
 
     // Zeroize the key
     key.zeroize();
@@ -86,7 +84,7 @@ pub struct EncryptionService {
 impl EncryptionService {
     /// Create a new encryption service with the given key
     pub fn new(key: &[u8; 32]) -> Self {
-        let key = Key::<Aes256Gcm>::from_slice(key);
+        let key: &Key<Aes256Gcm> = key.into();
         let cipher = Aes256Gcm::new(key);
         Self { cipher }
     }
@@ -102,9 +100,7 @@ impl EncryptionService {
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, aes_gcm::Error> {
         let mut nonce_bytes = [0u8; 12];
         getrandom::fill(&mut nonce_bytes).expect("failed to generate random nonce");
-        let nonce = Nonce::from_slice(&nonce_bytes);
-
-        let ciphertext = self.cipher.encrypt(nonce, plaintext)?;
+        let ciphertext = self.cipher.encrypt((&nonce_bytes).into(), plaintext)?;
 
         // Prepend nonce to ciphertext
         let mut result = Vec::with_capacity(12 + ciphertext.len());
@@ -121,9 +117,9 @@ impl EncryptionService {
         }
 
         let (nonce_bytes, ciphertext) = encrypted_data.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
+        let nonce_arr: [u8; 12] = nonce_bytes.try_into().expect("split_at(12) 保证 12 字节");
 
-        self.cipher.decrypt(nonce, ciphertext)
+        self.cipher.decrypt((&nonce_arr).into(), ciphertext)
     }
 }
 
