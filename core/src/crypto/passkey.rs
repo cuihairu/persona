@@ -26,6 +26,7 @@ pub const CLIENT_DATA_TYPE_GET: &str = "webauthn.get";
 // authenticator data flag bits (WebAuthn §6.1)
 const FLAG_UP: u8 = 0x01;
 const FLAG_UV: u8 = 0x04;
+const FLAG_BS: u8 = 0x10;
 const FLAG_AT: u8 = 0x40;
 
 /// Fixed Persona AAGUID identifying the software authenticator.
@@ -459,6 +460,165 @@ pub fn verify_assertion(
         .map_err(|_| PersonaError::CryptographicError("Assertion signature invalid".to_string()))
 }
 
+/// Verified RP-side registration output: everything an RP persists for a
+/// newly attested credential.
+#[derive(Debug)]
+pub struct VerifiedRegistration {
+    /// COSE_Key (EC2/P-256/ES256) to persist as the credential's public key.
+    pub public_key_cose: Vec<u8>,
+    /// Credential id as attested in the authenticator data.
+    pub credential_id: Vec<u8>,
+    /// Authenticator signature counter (clone detection at assertion time).
+    pub sign_count: u32,
+    /// AAGUID from the attested credential data.
+    pub aaguid: [u8; 16],
+    /// BS flag: the credential currently backs up to a cloud sync service.
+    pub backed_up: bool,
+}
+
+/// RP-side registration verification: validate the client data against the
+/// origin/rp_id and the issued challenge, then parse the `none`-format
+/// attestation object — checking rpIdHash and flags, and extracting the
+/// attested credential (COSE key, credential id, AAGUID, sign count).
+///
+/// Only `fmt: "none"` is accepted: the creation options issued by this
+/// project request `attestation: "none"`, and other formats carry
+/// authenticator attestation statements this verifier does not implement.
+pub fn verify_attestation(
+    attestation_object: &[u8],
+    rp_id: &str,
+    origin: &str,
+    client_data_json: &[u8],
+    expected_challenge: &str,
+) -> PersonaResult<VerifiedRegistration> {
+    validate_origin_matches_rp_id(origin, rp_id)?;
+    let parsed = parse_client_data(client_data_json, CLIENT_DATA_TYPE_CREATE, origin)?;
+    if parsed.challenge != expected_challenge {
+        return Err(PersonaError::InvalidInput(
+            "clientDataJSON challenge does not match the issued challenge".to_string(),
+        ));
+    }
+    let rp_id = validate_rp_id(rp_id)?;
+
+    let value: coset::cbor::value::Value = coset::cbor::de::from_reader(attestation_object)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid attestation object: {e}")))?;
+    let coset::cbor::value::Value::Map(entries) = value else {
+        return Err(PersonaError::InvalidInput(
+            "attestation object must be a CBOR map".to_string(),
+        ));
+    };
+
+    let fmt = match att_map_get(&entries, "fmt") {
+        Some(coset::cbor::value::Value::Text(t)) => t.as_str(),
+        _ => {
+            return Err(PersonaError::InvalidInput(
+                "attestation object missing fmt".to_string(),
+            ))
+        }
+    };
+    if fmt != "none" {
+        return Err(PersonaError::InvalidInput(format!(
+            "unsupported attestation format: {fmt}"
+        )));
+    }
+    match att_map_get(&entries, "attStmt") {
+        Some(coset::cbor::value::Value::Map(m)) if m.is_empty() => {}
+        _ => {
+            return Err(PersonaError::InvalidInput(
+                "attStmt must be an empty map for fmt \"none\"".to_string(),
+            ))
+        }
+    }
+    let auth_data = match att_map_get(&entries, "authData") {
+        Some(coset::cbor::value::Value::Bytes(b)) => b,
+        _ => {
+            return Err(PersonaError::InvalidInput(
+                "attestation object missing authData".to_string(),
+            ))
+        }
+    };
+
+    // rpIdHash ‖ flags ‖ signCount ‖ attested credential data (AT set).
+    if auth_data.len() < 55 {
+        return Err(PersonaError::InvalidInput(
+            "authenticator data too short".to_string(),
+        ));
+    }
+    let expected_hash: [u8; 32] = Sha256::digest(rp_id.as_bytes()).into();
+    if auth_data[..32] != expected_hash {
+        return Err(PersonaError::InvalidInput(
+            "authenticator data rpIdHash mismatch".to_string(),
+        ));
+    }
+    let flags = auth_data[32];
+    if flags & FLAG_UP == 0 {
+        return Err(PersonaError::InvalidInput(
+            "user presence flag not set".to_string(),
+        ));
+    }
+    if flags & FLAG_AT == 0 {
+        return Err(PersonaError::InvalidInput(
+            "attested credential data missing".to_string(),
+        ));
+    }
+    let sign_count =
+        u32::from_be_bytes([auth_data[33], auth_data[34], auth_data[35], auth_data[36]]);
+    let aaguid: [u8; 16] = auth_data[37..53]
+        .try_into()
+        .expect("slice length checked above");
+    let cred_len = u16::from_be_bytes([auth_data[53], auth_data[54]]) as usize;
+    if cred_len == 0 || cred_len > 1023 {
+        return Err(PersonaError::InvalidInput(
+            "invalid credential id length".to_string(),
+        ));
+    }
+    let cred_end = 55 + cred_len;
+    if auth_data.len() <= cred_end {
+        return Err(PersonaError::InvalidInput(
+            "attested credential data truncated".to_string(),
+        ));
+    }
+    let credential_id = auth_data[55..cred_end].to_vec();
+    let cose = &auth_data[cred_end..];
+
+    // Structural checks on the attested key: EC2/P-256/ES256 only, and the
+    // point must decode (verifying_key_from_cose rejects off-curve points).
+    let key = CoseKey::from_slice(cose)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid COSE key: {e}")))?;
+    if key.kty != coset::KeyType::Assigned(iana::KeyType::EC2) {
+        return Err(PersonaError::InvalidInput(
+            "attested key must be EC2".to_string(),
+        ));
+    }
+    if key.alg != Some(coset::Algorithm::Assigned(iana::Algorithm::ES256)) {
+        return Err(PersonaError::InvalidInput(
+            "attested key must be ES256".to_string(),
+        ));
+    }
+    // Curve is pinned by the decode below: P-256 x/y are 32-byte coordinates,
+    // so a point on any other curve fails Sec1 decoding.
+    verifying_key_from_cose(cose)?;
+
+    Ok(VerifiedRegistration {
+        public_key_cose: cose.to_vec(),
+        credential_id,
+        sign_count,
+        aaguid,
+        backed_up: flags & FLAG_BS != 0,
+    })
+}
+
+/// Look up a text key in a CBOR map.
+fn att_map_get<'a>(
+    entries: &'a [(coset::cbor::value::Value, coset::cbor::value::Value)],
+    key: &str,
+) -> Option<&'a coset::cbor::value::Value> {
+    entries.iter().find_map(|(k, v)| match k {
+        coset::cbor::value::Value::Text(t) if t == key => Some(v),
+        _ => None,
+    })
+}
+
 /// Reconstruct a `VerifyingKey` from a Persona-produced COSE_Key (EC2/P-256).
 fn verifying_key_from_cose(cose: &[u8]) -> PersonaResult<VerifyingKey> {
     let key = CoseKey::from_slice(cose)
@@ -740,6 +900,115 @@ mod tests {
         let err = verify_assertion(&reg.public_key_cose, rp, &cd, &no_up, &out.signature_der)
             .expect_err("cleared UP flag must be rejected");
         assert!(err.to_string().contains("user presence flag not set"));
+    }
+
+    // ============ RP-side registration verification (verify_attestation) ============
+
+    fn reencode_attestation(fmt: &str, auth_data: Vec<u8>) -> Vec<u8> {
+        let map = Value::Map(vec![
+            (Value::Text("fmt".to_string()), Value::Text(fmt.to_string())),
+            (Value::Text("attStmt".to_string()), Value::Map(Vec::new())),
+            (Value::Text("authData".to_string()), Value::Bytes(auth_data)),
+        ]);
+        let mut buf = Vec::new();
+        coset::cbor::ser::into_writer(&map, &mut buf).unwrap();
+        buf
+    }
+
+    fn attestation_auth_data(att: &[u8]) -> Vec<u8> {
+        let value: Value = coset::cbor::de::from_reader(att).unwrap();
+        let Value::Map(entries) = value else {
+            panic!("map expected")
+        };
+        match att_map_get(&entries, "authData") {
+            Some(Value::Bytes(b)) => b.clone(),
+            _ => panic!("authData expected"),
+        }
+    }
+
+    #[test]
+    fn verify_attestation_accepts_none_format_registration() {
+        let rp = "example.com";
+        let challenge = "c2VydmVyLWlzc3VlZA";
+        let cd = client_data(true, challenge, "https://example.com");
+        let reg = register_passkey(rp, "https://example.com", &cd, false).unwrap();
+
+        let verified = verify_attestation(
+            &reg.attestation_object,
+            rp,
+            "https://example.com",
+            &cd,
+            challenge,
+        )
+        .expect("issued registration must verify");
+        assert_eq!(verified.public_key_cose, reg.public_key_cose);
+        assert_eq!(verified.credential_id, reg.credential_id);
+        assert_eq!(verified.sign_count, 0);
+        assert_eq!(verified.aaguid, aaguid());
+        assert!(!verified.backed_up);
+    }
+
+    #[test]
+    fn verify_attestation_rejects_challenge_mismatch() {
+        let rp = "example.com";
+        let cd = client_data(true, "aXNzdWVkLWNoYWxsZW5nZQ", "https://example.com");
+        let reg = register_passkey(rp, "https://example.com", &cd, false).unwrap();
+        let err = verify_attestation(
+            &reg.attestation_object,
+            rp,
+            "https://example.com",
+            &cd,
+            "b3RoZXItY2hhbGxlbmdl",
+        )
+        .expect_err("stale/wrong challenge must be rejected");
+        assert!(err.to_string().contains("issued challenge"), "{err}");
+    }
+
+    #[test]
+    fn verify_attestation_rejects_assertion_client_data() {
+        let rp = "example.com";
+        let challenge = "cmVnaXN0ZXI";
+        let cd = client_data(true, challenge, "https://example.com");
+        let reg = register_passkey(rp, "https://example.com", &cd, false).unwrap();
+        let get_cd = client_data(false, challenge, "https://example.com");
+        let err = verify_attestation(
+            &reg.attestation_object,
+            rp,
+            "https://example.com",
+            &get_cd,
+            challenge,
+        )
+        .expect_err("webauthn.get client data must not pass registration");
+        assert!(err.to_string().contains("type mismatch"), "{err}");
+    }
+
+    #[test]
+    fn verify_attestation_rejects_non_none_format() {
+        let rp = "example.com";
+        let challenge = "cGFja2VkLWZtdA";
+        let cd = client_data(true, challenge, "https://example.com");
+        let reg = register_passkey(rp, "https://example.com", &cd, false).unwrap();
+        let packed = reencode_attestation("packed", attestation_auth_data(&reg.attestation_object));
+        let err = verify_attestation(&packed, rp, "https://example.com", &cd, challenge)
+            .expect_err("formats we did not request must be rejected");
+        assert!(
+            err.to_string().contains("unsupported attestation format"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn verify_attestation_rejects_tampered_rp_id_hash() {
+        let rp = "example.com";
+        let challenge = "dGFtcGVyZWQtaGFzaA";
+        let cd = client_data(true, challenge, "https://example.com");
+        let reg = register_passkey(rp, "https://example.com", &cd, false).unwrap();
+        let mut auth_data = attestation_auth_data(&reg.attestation_object);
+        auth_data[0] ^= 0xFF;
+        let tampered = reencode_attestation("none", auth_data);
+        let err = verify_attestation(&tampered, rp, "https://example.com", &cd, challenge)
+            .expect_err("forged rpIdHash must be rejected");
+        assert!(err.to_string().contains("rpIdHash mismatch"), "{err}");
     }
 
     #[test]
