@@ -177,9 +177,10 @@ jobs:
         continue-on-error: true
         run: cargo test --lib spike_probes_print_report -- --ignored --nocapture
 
-  # persona-mobile 的 Android 交叉编译（aarch64 cdylib）+ Flutter 壳 APK。
-  # 链：cargo ndk 出 libpersona_mobile.so → 拷入 Flutter 壳 jniLibs →
-  # flutter build apk（arm64-v8a 单 ABI）。产物只进 artifact——铁律：
+  # persona-mobile 的 Android 交叉编译（aarch64 cdylib）+ 原生 Kotlin APK。
+  # 链：cargo ndk 出 libpersona_mobile.so（mobile-ffi profile，panic 防线
+  # 需 unwind）→ 拷入 Kotlin 工程 jniLibs → gradle assembleRelease
+  # （arm64-v8a 单 ABI）。产物只进 artifact——铁律：
   # 每日构建不发 release（release job 的 download pattern 只认
   # desktop-*，天然隔离）；libpersona_mobile.so 另存 android-jni-arm64
   # artifact 供链接验证/壳外集成。
@@ -214,20 +215,22 @@ jobs:
         shell: bash
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-        run: cargo ndk -t arm64-v8a build -p persona-mobile --release
+        # mobile-ffi（release + unwind）：panic 在 FFI 边界被 catch_unwind
+        # 收编为错误结果——release 的 panic=abort 会让防线失效（进程直接死）
+        run: cargo ndk -t arm64-v8a build -p persona-mobile --profile mobile-ffi
 
       - name: Upload android jniLib artifact
         uses: actions/upload-artifact@v7
         with:
           name: android-jni-arm64
-          path: target/aarch64-linux-android/release/libpersona_mobile.so
+          path: target/aarch64-linux-android/mobile-ffi/libpersona_mobile.so
           if-no-files-found: error
 
       - name: Bundle cdylib into Kotlin app jniLibs
         shell: bash
         run: |
           mkdir -p mobile/android/app/src/main/jniLibs/arm64-v8a
-          cp target/aarch64-linux-android/release/libpersona_mobile.so \
+          cp target/aarch64-linux-android/mobile-ffi/libpersona_mobile.so \
             mobile/android/app/src/main/jniLibs/arm64-v8a/
 
       - name: Build Android APK (arm64-v8a, native Kotlin)

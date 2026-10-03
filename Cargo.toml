@@ -142,3 +142,12 @@ panic = "abort"
 [profile.dev]
 opt-level = 0
 debug = true
+
+# 移动端 FFI 产物专用（Android/iOS/鸿蒙共用的 panic 防线前提）：
+# release 的 panic="abort" 会让 panic 在 unwind 前就杀进程，
+# mobile/rust 生命周期入口的 catch_unwind 防线（panic → 错误结果而非
+# 崩溃）只有 unwind 构建才会触发。desktop-build.yml 的 android job 用
+# `--profile mobile-ffi` 出 so（产物在 target/<target>/mobile-ffi/ 下）。
+[profile.mobile-ffi]
+inherits = "release"
+panic = "unwind"

@@ -8,6 +8,9 @@
 //! 内存约定：字符串经 `CString::into_raw` 传出，由调用方用
 //! `persona_free_string`/`persona_free_result` 归还；所有服务状态留在
 //! Rust 侧全局槽位（`state.rs`），指针参数仅限入参且本函数内借用。
+//!
+//! panic 防线：生命周期入口统一经 [`guard_result`]/[`guard_bool`] 包裹
+//! （panic → 错误结果而非穿透 C 边界；构建须 unwind，见其文档）。
 
 mod business;
 mod runtime;
@@ -109,6 +112,39 @@ fn ptr_to_str<'a>(ptr: *const c_char) -> Result<&'a str, String> {
         .map_err(|_| "invalid UTF-8 in argument".to_string())
 }
 
+/// FFI panic 防线（2026-10-03 Android 走查实锤修复）：catch_unwind 把
+/// panic 转为携带错误消息的失败 [`PersonaResult`]，而不是穿透
+/// extern "C" 边界（UB / 宿主进程崩溃 / JNI 层拿到不可解析的返回）。
+///
+/// **构建前提**：panic 只在 unwind 构建中可捕获——根 `[profile.release]`
+/// 的 `panic = "abort"` 会让 panic 在 unwind 前就终止进程，本防线不触发。
+/// 移动端 FFI 产物（Android/iOS/鸿蒙共用）走根 Cargo.toml 的
+/// `[profile.mobile-ffi]`（inherits release + unwind），CI android job 以
+/// `--profile mobile-ffi` 出 so。
+///
+/// AssertUnwindSafe 是有意的：闭包借用的裸指针/全局槽位在 panic 逃逸
+/// 路径上一律不再触碰（只产出错误消息），污染状态不存在。
+fn guard_result<F: FnOnce() -> PersonaResult>(f: F) -> PersonaResult {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|payload| PersonaResult::error(&panic_message(&payload)))
+}
+
+/// bool 返回值的同一防线：panic → false（is_unlocked 语义上"未解锁"）。
+fn guard_bool(f: impl FnOnce() -> bool) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or(false)
+}
+
+/// panic payload → 错误消息（&str/String 两种常规形态；其他类型不猜内容）。
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        format!("internal panic: {s}")
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        format!("internal panic: {s}")
+    } else {
+        "internal panic (non-string payload)".to_string()
+    }
+}
+
 /// AuthResult → 错误消息统一映射（init/unlock 两处共用，文案对齐
 /// desktop `init_service`）。Success 之外全部视为失败；FactorRequired
 /// 在当前认证路径不产生（mobile 无因子流程），与 desktop 一样落入
@@ -140,20 +176,22 @@ pub unsafe extern "C" fn persona_service_init(
     db_path: *const c_char,
     master_password: *const c_char,
 ) -> PersonaResult {
-    let result = (|| {
-        let db_path = ptr_to_str(db_path)?;
-        let master_password = ptr_to_str(master_password)?;
-        Ok::<_, String>((db_path.to_string(), master_password.to_string()))
-    })();
-    let (db_path, master_password) = match result {
-        Ok(v) => v,
-        Err(e) => return PersonaResult::error(&e),
-    };
-    runtime::block_on(async move {
-        match init_service_inner(&db_path, &master_password).await {
-            Ok(()) => PersonaResult::success(),
-            Err(e) => PersonaResult::error(&e),
-        }
+    guard_result(|| {
+        let result = (|| {
+            let db_path = ptr_to_str(db_path)?;
+            let master_password = ptr_to_str(master_password)?;
+            Ok::<_, String>((db_path.to_string(), master_password.to_string()))
+        })();
+        let (db_path, master_password) = match result {
+            Ok(v) => v,
+            Err(e) => return PersonaResult::error(&e),
+        };
+        runtime::block_on(async move {
+            match init_service_inner(&db_path, &master_password).await {
+                Ok(()) => PersonaResult::success(),
+                Err(e) => PersonaResult::error(&e),
+            }
+        })
     })
 }
 
@@ -200,52 +238,58 @@ async fn init_service_inner(db_path: &str, master_password: &str) -> Result<(), 
 /// `master_password` 必须是有效的 null 结尾 UTF-8 字符串指针。
 #[no_mangle]
 pub unsafe extern "C" fn persona_service_unlock(master_password: *const c_char) -> PersonaResult {
-    let master_password = match ptr_to_str(master_password) {
-        Ok(s) => s.to_string(),
-        Err(e) => return PersonaResult::error(&e),
-    };
-    runtime::block_on(async move {
-        let mut guard = state::service_slot().lock().await;
-        match guard.as_mut() {
-            Some(service) => {
-                let auth_result = service
-                    .authenticate_user(&master_password)
-                    .await
-                    .map_err(|e| format!("Authentication error: {}", e));
-                match auth_result.and_then(auth_failure_message) {
-                    Ok(()) => PersonaResult::success(),
-                    Err(msg) => PersonaResult::error(&msg),
+    guard_result(|| {
+        let master_password = match ptr_to_str(master_password) {
+            Ok(s) => s.to_string(),
+            Err(e) => return PersonaResult::error(&e),
+        };
+        runtime::block_on(async move {
+            let mut guard = state::service_slot().lock().await;
+            match guard.as_mut() {
+                Some(service) => {
+                    let auth_result = service
+                        .authenticate_user(&master_password)
+                        .await
+                        .map_err(|e| format!("Authentication error: {}", e));
+                    match auth_result.and_then(auth_failure_message) {
+                        Ok(()) => PersonaResult::success(),
+                        Err(msg) => PersonaResult::error(&msg),
+                    }
                 }
+                None => PersonaResult::error("Service not initialized"),
             }
-            None => PersonaResult::error("Service not initialized"),
-        }
+        })
     })
 }
 
 /// 立即落锁（清内存主密钥；语义对齐 desktop 托盘 Lock）。
 #[no_mangle]
 pub extern "C" fn persona_service_lock() -> PersonaResult {
-    runtime::block_on(async {
-        let mut guard = state::service_slot().lock().await;
-        match guard.as_mut() {
-            Some(service) => {
-                service.lock();
-                PersonaResult::success()
+    guard_result(|| {
+        runtime::block_on(async {
+            let mut guard = state::service_slot().lock().await;
+            match guard.as_mut() {
+                Some(service) => {
+                    service.lock();
+                    PersonaResult::success()
+                }
+                None => PersonaResult::error("Service not initialized"),
             }
-            None => PersonaResult::error("Service not initialized"),
-        }
+        })
     })
 }
 
-/// 当前会话是否处于解锁态（service 未初始化视为锁定）。
+/// 当前会话是否处于解锁态（service 未初始化视为锁定；panic 同样视为锁定）。
 #[no_mangle]
 pub extern "C" fn persona_service_is_unlocked() -> bool {
-    runtime::block_on(async {
-        state::service_slot()
-            .lock()
-            .await
-            .as_ref()
-            .is_some_and(|s| s.is_unlocked())
+    guard_bool(|| {
+        runtime::block_on(async {
+            state::service_slot()
+                .lock()
+                .await
+                .as_ref()
+                .is_some_and(|s| s.is_unlocked())
+        })
     })
 }
 
@@ -270,46 +314,50 @@ pub unsafe extern "C" fn persona_configure_sync(
     server_url: *const c_char,
     token: *const c_char,
 ) -> PersonaResult {
-    let result = (|| {
-        let url = ptr_to_str(server_url)?;
-        let token = ptr_to_str(token)?;
-        Ok::<_, String>((url.trim().to_string(), token.trim().to_string()))
-    })();
-    let (url, token) = match result {
-        Ok(v) => v,
-        Err(e) => return PersonaResult::error(&e),
-    };
-    runtime::block_on(async move {
-        let new_emitter = if !url.is_empty() && !token.is_empty() {
-            match ServerEventSink::new(&url, token) {
-                Ok(sink) => {
-                    let emitter = Emitter::new(Arc::new(sink));
-                    emitter.start();
-                    Some(emitter)
+    guard_result(|| {
+        let result = (|| {
+            let url = ptr_to_str(server_url)?;
+            let token = ptr_to_str(token)?;
+            Ok::<_, String>((url.trim().to_string(), token.trim().to_string()))
+        })();
+        let (url, token) = match result {
+            Ok(v) => v,
+            Err(e) => return PersonaResult::error(&e),
+        };
+        runtime::block_on(async move {
+            let new_emitter = if !url.is_empty() && !token.is_empty() {
+                match ServerEventSink::new(&url, token) {
+                    Ok(sink) => {
+                        let emitter = Emitter::new(Arc::new(sink));
+                        emitter.start();
+                        Some(emitter)
+                    }
+                    Err(e) => {
+                        return PersonaResult::error(&format!("Invalid sync server_url: {}", e))
+                    }
                 }
-                Err(e) => return PersonaResult::error(&format!("Invalid sync server_url: {}", e)),
+            } else {
+                None
+            };
+
+            // 锁顺序固定 emitter → service（与 desktop attach_sync_emitter 一致）；
+            // 旧 emitter 在槽位替换后、锁外 stop（flush 可能走网络）
+            let old = {
+                let mut slot = state::emitter_slot().lock().await;
+                let old = slot.take();
+                *slot = new_emitter.clone();
+                old
+            };
+            if let Some(old) = old {
+                old.stop().await;
             }
-        } else {
-            None
-        };
 
-        // 锁顺序固定 emitter → service（与 desktop attach_sync_emitter 一致）；
-        // 旧 emitter 在槽位替换后、锁外 stop（flush 可能走网络）
-        let old = {
-            let mut slot = state::emitter_slot().lock().await;
-            let old = slot.take();
-            *slot = new_emitter.clone();
-            old
-        };
-        if let Some(old) = old {
-            old.stop().await;
-        }
-
-        let mut guard = state::service_slot().lock().await;
-        if let Some(service) = guard.as_mut() {
-            service.set_event_emitter(new_emitter);
-        }
-        PersonaResult::success()
+            let mut guard = state::service_slot().lock().await;
+            if let Some(service) = guard.as_mut() {
+                service.set_event_emitter(new_emitter);
+            }
+            PersonaResult::success()
+        })
     })
 }
 
@@ -317,19 +365,21 @@ pub unsafe extern "C" fn persona_configure_sync(
 /// 双槽位清空（对齐 CLI main 尾部的 stop 语义）。之后可重新 init。
 #[no_mangle]
 pub extern "C" fn persona_shutdown() -> PersonaResult {
-    runtime::block_on(async {
-        {
-            let mut guard = state::service_slot().lock().await;
-            if let Some(service) = guard.as_mut() {
-                service.lock();
+    guard_result(|| {
+        runtime::block_on(async {
+            {
+                let mut guard = state::service_slot().lock().await;
+                if let Some(service) = guard.as_mut() {
+                    service.lock();
+                }
+                *guard = None;
             }
-            *guard = None;
-        }
-        let emitter = state::emitter_slot().lock().await.take();
-        if let Some(emitter) = emitter {
-            emitter.stop().await;
-        }
-        PersonaResult::success()
+            let emitter = state::emitter_slot().lock().await.take();
+            if let Some(emitter) = emitter {
+                emitter.stop().await;
+            }
+            PersonaResult::success()
+        })
     })
 }
 
@@ -362,6 +412,71 @@ mod tests {
     #[test]
     fn init_returns_success_code() {
         assert_eq!(persona_init(), 0);
+    }
+
+    // ---- FFI panic 防线（Android 走查实锤：init 失败路径曾以崩溃而非
+    // 错误串返回宿主） ----
+
+    /// panic 在测试里会打 hook 输出：静音窗口内跑捕获，跑完还原。
+    fn with_silent_panic_hook(f: impl FnOnce()) {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        f();
+        std::panic::set_hook(prev);
+    }
+
+    #[test]
+    fn guard_result_converts_panic_into_error_result() {
+        with_silent_panic_hook(|| {
+            let result = guard_result(|| panic!("boom at FFI boundary"));
+            assert!(!result.success);
+            let msg = unsafe {
+                CStr::from_ptr(result.error_message)
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            };
+            unsafe { persona_free_result(result) };
+            assert_eq!(msg, "internal panic: boom at FFI boundary");
+        });
+    }
+
+    #[test]
+    fn guard_result_converts_non_string_panic_payload() {
+        with_silent_panic_hook(|| {
+            let result = guard_result(|| std::panic::panic_any(42u32));
+            assert!(!result.success);
+            let msg = unsafe {
+                CStr::from_ptr(result.error_message)
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            };
+            unsafe { persona_free_result(result) };
+            assert_eq!(msg, "internal panic (non-string payload)");
+        });
+    }
+
+    #[test]
+    fn guard_result_passes_through_normal_results() {
+        assert!(guard_result(PersonaResult::success).success);
+        let err = guard_result(|| PersonaResult::error("plain error"));
+        let msg = unsafe {
+            CStr::from_ptr(err.error_message)
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        unsafe { persona_free_result(err) };
+        assert_eq!(msg, "plain error");
+    }
+
+    #[test]
+    fn guard_bool_defaults_to_false_on_panic() {
+        assert!(guard_bool(|| true));
+        with_silent_panic_hook(|| {
+            assert!(!guard_bool(|| panic!("unlocked check blew up")));
+        });
     }
 
     #[test]

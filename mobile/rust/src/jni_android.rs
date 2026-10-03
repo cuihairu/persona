@@ -16,6 +16,11 @@ use jni::JNIEnv;
 
 use super::PersonaResult;
 
+/// new_string 失败（JVM 已损坏）时的降级出参：宁可给一条可解析的
+/// 失败 JSON，也不返回 null（Kotlin 侧 parseResult 对 null 只能当未知
+/// 错误，2026-10-03 走查实锤的崩溃路径之一）。
+const JNI_DEGRADED_JSON: &str = "{\"success\":false,\"error\":\"jni bridge degraded\"}";
+
 /// 把 PersonaResult 转成 JSON jstring；error_message 消费后归还。
 fn result_to_json(env: &mut JNIEnv, result: PersonaResult) -> jstring {
     let error = if result.error_message.is_null() {
@@ -40,8 +45,10 @@ fn result_to_json(env: &mut JNIEnv, result: PersonaResult) -> jstring {
         ),
         None => format!("{{\"success\":{},\"error\":null}}", result.success),
     };
-    // JVM 字符串只能含有效 UTF-8，new_string 失败即宿主已损坏，退化为空串
+    // JVM 字符串只能含有效 UTF-8，new_string 失败即宿主已损坏——退化为
+    // 固定失败 JSON（再失败才 null，两层都挂说明 JVM 无从谈返回值）
     env.new_string(&json)
+        .or_else(|_| env.new_string(JNI_DEGRADED_JSON))
         .map(|s| s.into_raw())
         .unwrap_or(std::ptr::null_mut())
 }
@@ -83,6 +90,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaVersion(
         owned
     };
     env.new_string(&version)
+        .or_else(|_| env.new_string("unknown"))
         .map(|s| s.into_raw())
         .unwrap_or(std::ptr::null_mut())
 }

@@ -28,7 +28,8 @@ class MainActivity : AppCompatActivity() {
 
         status.text = runCatching {
             PersonaBridge.personaInit()
-            "桥已连通 · persona ${PersonaBridge.personaVersion()}"
+            // runtime 未起时版本可能为 null——展示层兜底"未知"，不当崩溃
+            "桥已连通 · persona ${PersonaBridge.personaVersion() ?: "未知"}"
         }.getOrElse { "桥加载失败：${it.message}" }
 
         initButton.setOnClickListener { submit(initial = true) }
