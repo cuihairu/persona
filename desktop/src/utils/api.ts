@@ -107,8 +107,11 @@ import type {
   SshAgentKey,
   SshKeyInspection,
   SshKeyGenerated,
+  SshKeyImported,
   AccountRegistrationResponse,
-  AccountLoginResponse,
+  AccountSrpRegisterResponse,
+  AccountSrpChallengeResponse,
+  AccountSrpVerifyResponse,
   AccountDeviceInfo,
   AccountDevicesList,
   AccountRecoveryCodes,
@@ -779,10 +782,8 @@ class PersonaAPI {
   }
 
   /** 生成恢复码（需要 Bearer 令牌）。账号每次调用生成新一组（如 8 个），旧未用的作废。 */
-  async accountGenerateRecoveryCodes(
-    request?: { }
-  ): Promise<ApiResponse<AccountRecoveryCodes>> {
-    return invoke('account_generate_recovery_codes', { request: request ?? {} });
+  async accountGenerateRecoveryCodes(): Promise<ApiResponse<AccountRecoveryCodes>> {
+    return invoke('account_generate_recovery_codes');
   }
 
   /** 验证恢复码（需要 Bearer 令牌）。一次性消费，验证成功后标记为已用。 */
@@ -800,10 +801,8 @@ class PersonaAPI {
   }
 
   /** 获取账号下的已授权设备列表（需要 Bearer 令牌）。 */
-  async accountListDevices(
-    request?: { }
-  ): Promise<ApiResponse<AccountDevicesList>> {
-    return invoke('account_list_devices', { request: request ?? {} });
+  async accountListDevices(): Promise<ApiResponse<AccountDevicesList>> {
+    return invoke('account_list_devices');
   }
 
   /** 吊销账号下的设备（需要 Bearer 令牌）。 */
@@ -814,10 +813,8 @@ class PersonaAPI {
   }
 
   /** 创建账号会话（需要 Bearer 令牌）。登录后创建短期会话 token。 */
-  async accountCreateSession(
-    request?: { }
-  ): Promise<ApiResponse<AccountSessionInfo>> {
-    return invoke('account_create_session', { request: request ?? {} });
+  async accountCreateSession(): Promise<ApiResponse<AccountSessionInfo>> {
+    return invoke('account_create_session');
   }
 
   /** 吊销账号会话（需要 Bearer 令牌）。登出当前设备的会话。 */

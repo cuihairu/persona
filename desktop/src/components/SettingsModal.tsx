@@ -1279,7 +1279,6 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'general', label: t('settings.tabGeneral') },
     { id: 'identities', label: t('settings.tabIdentities') },
-    { id: 'accounts', label: t('settings.tabAccounts') },
   ];
 
   return (

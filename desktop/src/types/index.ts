@@ -890,6 +890,10 @@ export interface AccountLoginResponse {
   expires_in_secs: number;
 }
 
+export interface AccountSrpRegisterResponse {
+  device_name: string;
+}
+
 export interface AccountSrpChallengeResponse {
   session_id: string;
   salt: string;
