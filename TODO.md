@@ -75,6 +75,16 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       的本地账号命令死块（axum 风格签名塞 tauri command + 查本地不存
       在的表 + 未注册 invoke，20 编译错）已整块回滚——正确架构是代理
       server 账号 API，不在桌面本地建账号表
+      ——2026-10-03 验证链第一批落地（28d34d6/ae0c788）：core 补
+      verify_attestation（RP 侧 none 格式解析+校验，返回落库全量材料）；
+      server 三组存根换真链——srp/challenge 真握手（锁键
+      account:{id}:{device} 隔离）、srp/verify 验 client_proof（锁户
+      423/失败记账/真 M2）、passkey register 验 attestation + 挑战
+      一次性（新 AccountWebauthnState，迁移 0008 补 rp_id 列）、新增
+      公开 login-options、sessions 验二选一证据（srp_token 本账号行
+      /passkey 断言：挑战比对+验签+计数器单调）；19 例逐链测试。
+      遗留：桌面 UI 代理接线（accountCreateSession 空 body、缺
+      accountPasskeyLoginOptions）、account_sessions 令牌消费方接线
 - [ ] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）**：设备管理页 +
       授权/吊销全流程 UI 走查、冲突裁决 UI 走查、`STORAGE_AND_SYNC.md`
       与实现一致性复查——设计稿阶段 3 验收面收口
