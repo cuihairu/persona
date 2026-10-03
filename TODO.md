@@ -25,13 +25,21 @@ Doc site（2026-10-03 插队：首页走马灯）
         下 systemUI 反复 ANR、app 进程被反复杀——出图脚本本身可行
         （am start → uiautomator dump 拿坐标 → input tap/text → screencap），
         低负载时段重跑即可
-  - [ ] Android 初始化崩溃修复（2026-10-03 走查发现，crash buffer 实锤）：
-        `personaServiceInit` 失败路径返回 null（Rust 侧 panic 被吞成
-        null 指针）→ Kotlin `parseResult(json: String)` 非空参数收 null
-        → NPE 直接崩溃退桌面。修法两端：Rust 侧 catch_unwind 后应返回
-        JSON 错误串而非 null；Kotlin 侧 parseResult 前判 null。另：
-        「桥已连通 · persona null」——`personaVersion()` 在 runtime 未
-        起时返回 null 的展示也应处理
+  - [x] Android 初始化崩溃修复（2026-10-03 走查发现，crash buffer 实锤；
+        2026-10-04 落地）：`personaServiceInit` 失败路径曾返回 null（Rust
+        侧 panic 被吞成 null 指针）→ Kotlin `parseResult(json: String)`
+        非空参数收 null → NPE 直接崩溃退桌面。修法两端已落：
+        Rust 侧 `mobile/rust/src/lib.rs` 生命周期入口（init/unlock/lock/
+        is_unlocked/configure_sync/shutdown）统一经 `guard_result`/
+        `guard_bool`（catch_unwind → 错误结果），`jni_android.rs` 的
+        new_string 失败降级为可解析失败 JSON（version 降级 "unknown"）；
+        Kotlin 侧 PersonaBridge extern 声明改可空、`parseResult(String?)`
+        null/非 JSON 均落失败臂，`personaVersion()` null 展示兜底"未知"。
+        **构建前提**：panic 防线需 unwind——根 Cargo.toml 新增
+        `[profile.mobile-ffi]`（release + unwind），desktop-build.yml
+        android job 改 `--profile mobile-ffi` 出 so（产物路径
+        target/aarch64-linux-android/mobile-ffi/）。4 例防线测试入
+        persona-mobile（宿主机可跑，不依赖 Android target）
 
 Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
@@ -85,6 +93,22 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       /passkey 断言：挑战比对+验签+计数器单调）；19 例逐链测试。
       遗留：桌面 UI 代理接线（accountCreateSession 空 body、缺
       accountPasskeyLoginOptions）、account_sessions 令牌消费方接线
+      ——2026-10-04 收口批落地：server 侧 `require_account_bearer`
+      （auth.rs）挂全部账号管理路由——静态/SRP 短期令牌同
+      require_bearer 语义，另接受 account_sessions 未过期行（15min
+      SRP 登录令牌与 24h 会话令牌）但仅限归属账号自己的路径（跨账号
+      401 同形；axum 0.8 nest 剥前缀，路径解析按 /{account_id}/… 形状），
+      迁移 0007 边界不变——require_bearer 不查 account_sessions，
+      sync/events/backups 不认账号会话；4 例消费方测试（端到端兑换链/
+      跨账号/过期/路由隔离）。桌面 api.ts 账号 seam 对齐 server 契约：
+      全部账号方法带 account_id、create-options 去伪 origin 字段、
+      authorize-device 去多余 device_name、create-session 带
+      AccountSessionEvidence（srp_token XOR passkey_assertion）、新增
+      accountPasskeyLoginOptions、AccountSessionInfo 修正
+      expires_in_secs——tauri 代理命令层与账号 UI 留待 M2 UI 批
+      （隐私红线照旧：默认关闭、显式开启）。同批：business.rs 的
+      ~12 个业务 extern 尚无 panic 防线（无单一收口点，逐个包
+      guard_result 的后续项）
 - [ ] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）**：设备管理页 +
       授权/吊销全流程 UI 走查、冲突裁决 UI 走查、`STORAGE_AND_SYNC.md`
       与实现一致性复查——设计稿阶段 3 验收面收口
