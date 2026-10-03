@@ -616,6 +616,108 @@ describe('utils/api command mapping coverage', () => {
     expect(mockInvoke).toHaveBeenLastCalledWith('focus_main_window');
   });
 
+  it('wallet mnemonic and item-password methods map to tauri invokes', async () => {
+    await personaAPI.walletValidateMnemonic('abandon ability');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_validate_mnemonic', { phrase: 'abandon ability' });
+
+    await personaAPI.walletGenerateMnemonic(24);
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_generate_mnemonic', { word_count: 24 });
+
+    await personaAPI.walletSetItemPassword('c1', 'pw', 'hint');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_set_item_password', {
+      credential_id: 'c1',
+      password: 'pw',
+      hint: 'hint',
+    });
+
+    await personaAPI.walletClearItemPassword('c1', 'pw');
+    expect(mockInvoke).toHaveBeenCalledWith('wallet_clear_item_password', {
+      credential_id: 'c1',
+      item_password: 'pw',
+    });
+  });
+
+  it('account methods map to tauri invokes (M2 scaffold)', async () => {
+    await personaAPI.accountRegister({ username: 'u' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_register', {
+      request: { username: 'u' },
+    });
+
+    await personaAPI.accountPasskeyCreateOptions({
+      rp_id: 'example.com',
+      user_handle: 'uh',
+      origin: 'https://example.com',
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('account_passkey_create_options', {
+      request: {
+        rp_id: 'example.com',
+        user_handle: 'uh',
+        origin: 'https://example.com',
+      },
+    });
+
+    await personaAPI.accountPasskeyRegister({
+      attestation_response: {},
+      client_data_json: 'cdj',
+      origin: 'https://example.com',
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('account_passkey_register', {
+      request: {
+        attestation_response: {},
+        client_data_json: 'cdj',
+        origin: 'https://example.com',
+      },
+    });
+
+    await personaAPI.accountSrpRegister({ device_name: 'laptop', salt: 'c2FsdA', verifier: 'dmVy' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_srp_register', {
+      request: { device_name: 'laptop', salt: 'c2FsdA', verifier: 'dmVy' },
+    });
+
+    await personaAPI.accountSrpChallenge({ device_name: 'laptop', client_public: 'cHVi' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_srp_challenge', {
+      request: { device_name: 'laptop', client_public: 'cHVi' },
+    });
+
+    await personaAPI.accountSrpVerify({ session_id: 's1', client_proof: 'cHJvb2Y' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_srp_verify', {
+      request: { session_id: 's1', client_proof: 'cHJvb2Y' },
+    });
+
+    await personaAPI.accountGenerateRecoveryCodes();
+    expect(mockInvoke).toHaveBeenCalledWith('account_generate_recovery_codes');
+
+    await personaAPI.accountVerifyRecoveryCode({ code: 'XXXX-XXXX' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_verify_recovery_code', {
+      request: { code: 'XXXX-XXXX' },
+    });
+
+    await personaAPI.accountAuthorizeDevice({
+      device_id: 'd1',
+      device_name: 'laptop',
+      public_key: 'cHVi',
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('account_authorize_device', {
+      request: { device_id: 'd1', device_name: 'laptop', public_key: 'cHVi' },
+    });
+
+    await personaAPI.accountListDevices();
+    expect(mockInvoke).toHaveBeenCalledWith('account_list_devices');
+
+    await personaAPI.accountRevokeDevice({ device_id: 'd1' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_revoke_device', {
+      request: { device_id: 'd1' },
+    });
+
+    await personaAPI.accountCreateSession();
+    expect(mockInvoke).toHaveBeenCalledWith('account_create_session');
+
+    await personaAPI.accountRevokeSession({ session_token: 'tok' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_revoke_session', {
+      request: { session_token: 'tok' },
+    });
+  });
+
   // SERVICE_LOCKED 引导解锁 gate：惰性 auto-lock 竞态下操作不该被堵死
   describe('SERVICE_LOCKED unlock gate', () => {
     const lockedEnvelope = {
