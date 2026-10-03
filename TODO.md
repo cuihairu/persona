@@ -49,6 +49,16 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       卷属 root 而 USER persona 写不进、启动即 panic，现构建期
       `mkdir/chown /data`；自托管文档 `docs/SELF_HOST_SERVER.md`（一键起、
       env 全表、客户端接线、端点速查、运维注意）
+  - [ ] **GHCR 镜像重发布（M1 残留断点，2026-10-03 复验定位）**：compose
+        默认拉的 `ghcr.io/cuihairu/persona-server:main` 停在修复前构建
+        （2026-10-03 04:44，镜像内无 /data 目录）——后续 4 次 docker.yml
+        全红（E0432：M2 `accounts.rs` 引 `hex` 而 server/Cargo.toml 缺
+        依赖，工作区已补待提交），**按文档一键起的用户现在会撞 DB
+        panic 循环**（fresh 卷 + USER persona 写不进 /data，本机复现）。
+        hex 修复进 main 后 docker.yml 自动重发即闭环；本地工作区代码
+        全链复验已过（fresh 卷 up → /health 200、noauth 401、token 200、
+        零重启）。Makefile 过期 docker-build/run（根目录无 Dockerfile、
+        8080 端口错）已修为 build/up/down 三目标对齐 compose 部署链
 - [ ] **M2 账号体系（落地①）**：server 账号注册/登录（通行密钥优先 +
       SRP 密码兜底——复用 DR-2 的 SRP 链路作密码兜底）、账号级设备管理
       （新设备授权/吊销/设备列表，复用 `/sync/devices` 扩到账号作用域）、

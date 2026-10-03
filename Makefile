@@ -199,12 +199,15 @@ benchmark: ## 运行性能测试
 	cargo bench
 	@echo "性能测试完成!"
 
-# Docker 相关
-docker-build: ## 构建 Docker 镜像
-	docker build -t persona:latest .
+# Docker 相关（persona-server 自托管链：docs/SELF_HOST_SERVER.md）
+docker-build: ## 本地构建 persona-server 镜像（docker/Dockerfile.server）
+	docker build -f docker/Dockerfile.server -t persona-server:local .
 
-docker-run: ## 运行 Docker 容器
-	docker run -p 8080:8080 persona:latest
+docker-up: ## compose 一键起（需 PERSONA_SERVER_TOKEN，缺省拒绝启动）
+	docker compose -f docker/docker-compose.deploy.yml up -d
+
+docker-down: ## 停止并移除容器（保留数据卷）
+	docker compose -f docker/docker-compose.deploy.yml down
 
 # 数据库相关
 db-migrate: ## 运行数据库迁移
