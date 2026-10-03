@@ -31,151 +31,156 @@ pub fn build_router(state: AppState) -> Router {
     //（gzip 传输的真实上限）；DefaultBodyLimit 经 extensions 作用于
     // extractor 读到的 body——放在解压层内层即"解压后明文"上限
     //（防解压炸弹，兼兜底无 Content-Length 的 chunked 请求）。
-    let api =
-        Router::new()
-            .route("/events", post(api::ingest).get(api::query))
-            .layer(DefaultBodyLimit::max(api::MAX_DECOMPRESSED_BODY_BYTES))
-            .layer(tower_http::decompression::RequestDecompressionLayer::new())
-            .layer(middleware::from_fn_with_state(
-                state.clone(),
-                auth::require_bearer,
-            ))
-            .layer(middleware::from_fn(api::payload_size_guard))
-            // 备份子路由：独立中间件栈（层序 size_guard（CL 预检 256 MiB）→
-            // require_bearer → DefaultBodyLimit）。无解压层：密文不可压，且
-            // 避免第二个解压炸弹面；上限即落盘上限（AppState.max_backup_bytes）。
-            .nest(
-                "/backups",
-                Router::new()
-                    .route("/", post(api::upload).get(api::list))
-                    .route("/{id}", get(api::download).delete(api::delete))
-                    .layer(DefaultBodyLimit::max(state.max_backup_bytes))
-                    .layer(middleware::from_fn_with_state(
+    let api = Router::new()
+        .route("/events", post(api::ingest).get(api::query))
+        .layer(DefaultBodyLimit::max(api::MAX_DECOMPRESSED_BODY_BYTES))
+        .layer(tower_http::decompression::RequestDecompressionLayer::new())
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_bearer,
+        ))
+        .layer(middleware::from_fn(api::payload_size_guard))
+        // 备份子路由：独立中间件栈（层序 size_guard（CL 预检 256 MiB）→
+        // require_bearer → DefaultBodyLimit）。无解压层：密文不可压，且
+        // 避免第二个解压炸弹面；上限即落盘上限（AppState.max_backup_bytes）。
+        .nest(
+            "/backups",
+            Router::new()
+                .route("/", post(api::upload).get(api::list))
+                .route("/{id}", get(api::download).delete(api::delete))
+                .layer(DefaultBodyLimit::max(state.max_backup_bytes))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::require_bearer,
+                ))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    api::size_guard,
+                )),
+        )
+        // SRP 设备认证子路由（E2EE 同步轨道阶段 1）：challenge/verify 免
+        // Bearer（它们就是换取令牌的登录步骤）；register 需既有 Bearer
+        // （引导链）。独立中间件栈（在 api 整体 require_bearer 之外），
+        // body 上限 64 KiB——盐/verifier/公开值都远小于此，防异常载荷。
+        .nest(
+            "/auth",
+            Router::new()
+                .route(
+                    "/register",
+                    post(api::auth_register).route_layer(middleware::from_fn_with_state(
                         state.clone(),
                         auth::require_bearer,
-                    ))
-                    .layer(middleware::from_fn_with_state(
-                        state.clone(),
-                        api::size_guard,
                     )),
-            )
-            // SRP 设备认证子路由（E2EE 同步轨道阶段 1）：challenge/verify 免
-            // Bearer（它们就是换取令牌的登录步骤）；register 需既有 Bearer
-            // （引导链）。独立中间件栈（在 api 整体 require_bearer 之外），
-            // body 上限 64 KiB——盐/verifier/公开值都远小于此，防异常载荷。
-            .nest(
-                "/auth",
-                Router::new()
-                    .route(
-                        "/register",
-                        post(api::auth_register).route_layer(middleware::from_fn_with_state(
+                )
+                .route("/challenge", post(api::auth_challenge))
+                .route("/verify", post(api::auth_verify))
+                .layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        // 账号体系（M2）：注册/登录（passkey + SRP 兜底）、恢复码、设备授权。
+        // 账号注册免认证；其余走 require_account_bearer——静态 token /
+        // SRP 短期 token / 账号会话令牌（account_sessions 行，仅限归属
+        // 账号自己的路径；这是 M2 的令牌消费方接线，见 auth 模块）。
+        .nest(
+            "/accounts",
+            Router::new()
+                .route("/register", post(api::register_account))
+                // Passkey registration flow (public endpoints for WebAuthn ceremony)
+                .route(
+                    "/{account_id}/passkeys/create-options",
+                    post(api::passkey_create_options),
+                )
+                .route(
+                    "/{account_id}/passkeys/register",
+                    post(api::passkey_register),
+                )
+                // passkey 登录仪式第一步（免 Bearer——这就是登录）
+                .route(
+                    "/{account_id}/passkeys/login-options",
+                    post(api::passkey_login_options),
+                )
+                // SRP password fallback (scoped to account)
+                .route(
+                    "/{account_id}/srp/register",
+                    post(api::account_srp_register).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_account_bearer,
+                    )),
+                )
+                .route(
+                    "/{account_id}/srp/challenge",
+                    post(api::account_srp_challenge),
+                )
+                .route("/{account_id}/srp/verify", post(api::account_srp_verify))
+                // Recovery codes
+                .route(
+                    "/{account_id}/recovery-codes",
+                    post(api::generate_recovery_codes).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_account_bearer,
+                    )),
+                )
+                .route(
+                    "/{account_id}/recovery-codes/verify",
+                    post(api::verify_recovery_code),
+                )
+                // Device management (account-scoped)
+                .route(
+                    "/{account_id}/devices",
+                    post(api::authorize_device)
+                        .get(api::list_account_devices)
+                        .route_layer(middleware::from_fn_with_state(
                             state.clone(),
-                            auth::require_bearer,
+                            auth::require_account_bearer,
                         )),
-                    )
-                    .route("/challenge", post(api::auth_challenge))
-                    .route("/verify", post(api::auth_verify))
-                    .layer(DefaultBodyLimit::max(64 * 1024)),
-            )
-            // 账号体系（M2）：注册/登录（passkey + SRP 兜底）、恢复码、设备授权。
-            // 账号注册免认证；其余需 Bearer（静态 token 或 SRP token 均可）。
-            .nest(
-                "/accounts",
-                Router::new()
-                    .route("/register", post(api::register_account))
-                    // Passkey registration flow (public endpoints for WebAuthn ceremony)
-                    .route(
-                        "/{account_id}/passkeys/create-options",
-                        post(api::passkey_create_options),
-                    )
-                    .route(
-                        "/{account_id}/passkeys/register",
-                        post(api::passkey_register),
-                    )
-                    // passkey 登录仪式第一步（免 Bearer——这就是登录）
-                    .route(
-                        "/{account_id}/passkeys/login-options",
-                        post(api::passkey_login_options),
-                    )
-                    // SRP password fallback (scoped to account)
-                    .route(
-                        "/{account_id}/srp/register",
-                        post(api::account_srp_register).route_layer(
-                            middleware::from_fn_with_state(state.clone(), auth::require_bearer),
-                        ),
-                    )
-                    .route(
-                        "/{account_id}/srp/challenge",
-                        post(api::account_srp_challenge),
-                    )
-                    .route("/{account_id}/srp/verify", post(api::account_srp_verify))
-                    // Recovery codes
-                    .route(
-                        "/{account_id}/recovery-codes",
-                        post(api::generate_recovery_codes).route_layer(
-                            middleware::from_fn_with_state(state.clone(), auth::require_bearer),
-                        ),
-                    )
-                    .route(
-                        "/{account_id}/recovery-codes/verify",
-                        post(api::verify_recovery_code),
-                    )
-                    // Device management (account-scoped)
-                    .route(
-                        "/{account_id}/devices",
-                        post(api::authorize_device)
-                            .get(api::list_account_devices)
-                            .route_layer(middleware::from_fn_with_state(
-                                state.clone(),
-                                auth::require_bearer,
-                            )),
-                    )
-                    .route(
-                        "/{account_id}/devices/{device_id}",
-                        delete(api::revoke_account_device).route_layer(
-                            middleware::from_fn_with_state(state.clone(), auth::require_bearer),
-                        ),
-                    )
-                    // Account sessions
-                    .route(
-                        "/{account_id}/sessions",
-                        post(api::create_account_session).route_layer(
-                            middleware::from_fn_with_state(state.clone(), auth::require_bearer),
-                        ),
-                    )
-                    .route(
-                        "/{account_id}/sessions/{session_token}",
-                        delete(api::revoke_account_session).route_layer(
-                            middleware::from_fn_with_state(state.clone(), auth::require_bearer),
-                        ),
-                    )
-                    .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
-            )
-            // E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文
-            // 中继 + 设备/信封登记。独立中间件栈（在 api 整体 require_bearer
-            // 之外）：无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限
-            // 沿 events 线上限 1 MiB——凭据密文 KB 级，500 条/批足够（附件走
-            // 备份通道，是 §11 v2 议题）。
-            .nest(
-                "/sync",
-                Router::new()
-                    .route(
-                        "/devices",
-                        post(api::sync_register_device).get(api::sync_list_devices),
-                    )
-                    .route("/devices/{id}", delete(api::sync_delete_device))
-                    .route(
-                        "/group-keys",
-                        get(api::sync_get_group_keys).put(api::sync_put_group_key),
-                    )
-                    .route("/group-key/rotate-begin", post(api::sync_rotate_begin))
-                    .route("/oplog", post(api::sync_push).get(api::sync_pull))
-                    .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
-                    .layer(middleware::from_fn_with_state(
+                )
+                .route(
+                    "/{account_id}/devices/{device_id}",
+                    delete(api::revoke_account_device).route_layer(middleware::from_fn_with_state(
                         state.clone(),
-                        auth::require_bearer,
+                        auth::require_account_bearer,
                     )),
-            );
+                )
+                // Account sessions
+                .route(
+                    "/{account_id}/sessions",
+                    post(api::create_account_session).route_layer(middleware::from_fn_with_state(
+                        state.clone(),
+                        auth::require_account_bearer,
+                    )),
+                )
+                .route(
+                    "/{account_id}/sessions/{session_token}",
+                    delete(api::revoke_account_session).route_layer(
+                        middleware::from_fn_with_state(state.clone(), auth::require_account_bearer),
+                    ),
+                )
+                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
+        )
+        // E2EE 同步子路由（阶段 2 批 3，E2EE_SYNC_DESIGN §5/§6）：密文
+        // 中继 + 设备/信封登记。独立中间件栈（在 api 整体 require_bearer
+        // 之外）：无解压层（密文不可压，兼免第二个解压炸弹面）；body 上限
+        // 沿 events 线上限 1 MiB——凭据密文 KB 级，500 条/批足够（附件走
+        // 备份通道，是 §11 v2 议题）。
+        .nest(
+            "/sync",
+            Router::new()
+                .route(
+                    "/devices",
+                    post(api::sync_register_device).get(api::sync_list_devices),
+                )
+                .route("/devices/{id}", delete(api::sync_delete_device))
+                .route(
+                    "/group-keys",
+                    get(api::sync_get_group_keys).put(api::sync_put_group_key),
+                )
+                .route("/group-key/rotate-begin", post(api::sync_rotate_begin))
+                .route("/oplog", post(api::sync_push).get(api::sync_pull))
+                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    auth::require_bearer,
+                )),
+        );
 
     // 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight
     // OPTIONS 在 CORS 短路不计数；Router::layer 在路由后运行，MatchedPath

@@ -309,6 +309,90 @@ pub async fn require_bearer(State(state): State<AppState>, req: Request, next: N
     next.run(req).await
 }
 
+/// 账号路由专用 Bearer 中间件（M2：`account_sessions` 令牌消费方）。
+///
+/// [`require_bearer`] 认得的静态令牌 / SRP 短期令牌行为完全一致；在此
+/// 之外还接受 `account_sessions` 里未过期的账号会话令牌——srp/verify
+/// 签发的 15 分钟令牌与 sessions 端点签发的 24h 令牌——但只放行其归属
+/// 账号自己的路径（`/api/v1/accounts/{account_id}/…`，跨账号一律 401，
+/// 与其他失败同形）。迁移 0007 的边界不变：账号会话不作 sync/events/
+/// backups 的 Bearer——那些路由仍走 [`require_bearer`]（不查
+/// account_sessions）。
+pub async fn require_account_bearer(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Response {
+    let Some(tokens) = state.auth.as_deref() else {
+        return ApiError::disabled().into_response();
+    };
+    let provided = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(extract_bearer);
+    // 静态/SRP 短期令牌优先（与 require_bearer 同序同语义，无 DB 查询）。
+    if let Some(device) = provided.and_then(|token| {
+        tokens
+            .authenticate(token.as_bytes())
+            .map(str::to_owned)
+            .or_else(|| state.srp.as_ref()?.authenticate_token(token))
+    }) {
+        let mut req = req;
+        req.extensions_mut().insert(DeviceName(device));
+        return next.run(req).await;
+    }
+    // 账号会话令牌：行未过期 + 路径 account_id 与归属一致才放行；
+    // 任一不满足都落入统一 401（不泄露行是否存在）。
+    if let (Some(token), Some(path_account)) = (provided, account_path_id(req.uri().path())) {
+        if let Some(owner) = live_account_session_owner(&state, token).await {
+            if owner == path_account {
+                touch_session_activity(&state, token).await;
+                let mut req = req;
+                req.extensions_mut()
+                    .insert(DeviceName(format!("account:{owner}")));
+                return next.run(req).await;
+            }
+        }
+    }
+    ApiError::unauthorized().into_response()
+}
+
+/// 本中间件挂载点的路径 → account_id 段（形状不符返回 None，会话令牌
+/// 路径不放行——fail-closed）。
+///
+/// axum 0.8 的 `nest` 会剥离前缀再交给内层路由，`/api/v1` 与 `/accounts`
+/// 两级 nest 剥完后中间件看到的是 `/{account_id}/…`——首段即 account_id。
+/// 该形状只用于会话令牌的路径归属比对（首段 ≠ 令牌归属账号 → 401），
+/// 解析偏保守只会造成拒绝，不会放行错账号。
+fn account_path_id(path: &str) -> Option<&str> {
+    let account_id = path.strip_prefix('/')?.split('/').next()?;
+    (!account_id.is_empty()).then_some(account_id)
+}
+
+/// 查未过期账号会话的归属 account_id（TTL 判定与签发/证据核验侧同一
+/// 口径：`expires_at > now` 的 RFC3339 串比较）。
+async fn live_account_session_owner(state: &AppState, token: &str) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT account_id FROM account_sessions
+         WHERE session_token = ? AND expires_at > ? LIMIT 1",
+    )
+    .bind(token)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .fetch_optional(&state.pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// 会话令牌消费侧的活跃触达（last_activity_at；失败不阻断请求）。
+async fn touch_session_activity(state: &AppState, token: &str) {
+    let _ = sqlx::query("UPDATE account_sessions SET last_activity_at = ? WHERE session_token = ?")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(token)
+        .execute(&state.pool)
+        .await;
+}
+
 /// 解析 `Bearer <token>`：scheme 大小写不敏感，token 精确匹配。
 fn extract_bearer(value: &HeaderValue) -> Option<&str> {
     let value = value.to_str().ok()?;
@@ -422,6 +506,19 @@ mod tests {
         let tokens = AuthTokens::single("legacy");
         assert_eq!(tokens.authenticate(b"legacy"), Some("default"));
         assert_eq!(tokens.authenticate(b"other"), None);
+    }
+
+    #[test]
+    fn account_path_id_extracts_the_account_segment_only() {
+        use super::account_path_id;
+        // axum 0.8 两级 nest（/api/v1、/accounts）剥完前缀后的挂载点形状
+        assert_eq!(account_path_id("/abc/devices"), Some("abc"));
+        assert_eq!(account_path_id("/abc"), Some("abc"));
+        assert_eq!(account_path_id("/abc/sessions/tok"), Some("abc"));
+        // 空段 / 非 `/` 开头：一律 None（fail-closed；形状偏差只会拒绝）
+        assert_eq!(account_path_id("/"), None);
+        assert_eq!(account_path_id(""), None);
+        assert_eq!(account_path_id("abc/devices"), None);
     }
 
     #[test]

@@ -2268,4 +2268,190 @@ mod tests {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
         assert_eq!(account_session_count(&state, &account_id).await, 0);
     }
+
+    // ---- M2 收口：account_sessions 令牌消费方（require_account_bearer） ----
+
+    /// 登录兑换链端到端：SRP 登录令牌（15min，account_sessions 行）本身
+    /// 即可作账号路由 Bearer——兑换 24h 会话 → 会话令牌驱动账号管理路由
+    /// （含活跃触达）→ 吊销自身（登出）→ 再用即 401。
+    #[tokio::test]
+    async fn account_session_tokens_drive_account_routes_end_to_end() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "consumer@example.com").await;
+        register_account_srp(&router, &account_id).await;
+        let (status, body) = attempt_account_srp_login(&router, &account_id, SRP_PASSWORD).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let srp_token = body["token"].as_str().unwrap().to_owned();
+
+        // 15 分钟 SRP 令牌作 Bearer + 证据 → 24h 账号会话（此前该流程在
+        // 没有静态令牌的客户端上拿不到 Bearer，兑换链断在第一步）
+        let (status, body) = send(
+            router.clone(),
+            request(
+                "POST",
+                &format!("/api/v1/accounts/{account_id}/sessions"),
+                Some(&format!("Bearer {srp_token}")),
+                Some("application/json"),
+                &json!({"srp_token": srp_token}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let session_token = body["session_token"].as_str().unwrap().to_owned();
+
+        async fn session_activity(state: &crate::state::AppState, token: &str) -> String {
+            sqlx::query_scalar(
+                "SELECT last_activity_at FROM account_sessions WHERE session_token = ?",
+            )
+            .bind(token)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap()
+        }
+        let before = session_activity(&state, &session_token).await;
+
+        // 24h 会话令牌驱动账号管理路由 + last_activity_at 被消费方触达
+        let (status, body) = send(
+            router.clone(),
+            request(
+                "GET",
+                &format!("/api/v1/accounts/{account_id}/devices"),
+                Some(&format!("Bearer {session_token}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["devices"].as_array().unwrap().len(), 0);
+        let after = session_activity(&state, &session_token).await;
+        assert!(
+            after > before,
+            "activity should be touched ({before} → {after})"
+        );
+
+        // 登出：会话令牌吊销自己 → 204；被吊销的令牌再用即 401
+        let (status, _) = send(
+            router.clone(),
+            request(
+                "DELETE",
+                &format!("/api/v1/accounts/{account_id}/sessions/{session_token}"),
+                Some(&format!("Bearer {session_token}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let (status, _) = send(
+            router.clone(),
+            request(
+                "GET",
+                &format!("/api/v1/accounts/{account_id}/devices"),
+                Some(&format!("Bearer {session_token}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// 路径归属限定：账号 A 的会话令牌打 B 的账号路径 → 401。
+    #[tokio::test]
+    async fn account_session_token_rejected_on_foreign_account_paths() {
+        let (router, _) = setup_state().await;
+        let owner = create_account(&router, "owner@example.com").await;
+        register_account_srp(&router, &owner).await;
+        let (status, body) = attempt_account_srp_login(&router, &owner, SRP_PASSWORD).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let token = body["token"].as_str().unwrap().to_owned();
+
+        let other = create_account(&router, "foreign@example.com").await;
+        let (status, _) = send(
+            router.clone(),
+            request(
+                "GET",
+                &format!("/api/v1/accounts/{other}/devices"),
+                Some(&format!("Bearer {token}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// 过期会话行不认（消费侧 TTL 与签发/证据核验同口径）。
+    #[tokio::test]
+    async fn expired_account_session_token_is_rejected() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "expired@example.com").await;
+        sqlx::query(
+            "INSERT INTO account_sessions (id, account_id, session_token, expires_at, created_at, last_activity_at)
+             VALUES ('sid-expired', ?, 'expired-session-token', '2020-01-01T00:00:00+00:00',
+                     '2020-01-01T00:00:00+00:00', '2020-01-01T00:00:00+00:00')",
+        )
+        .bind(&account_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let (status, _) = send(
+            router.clone(),
+            request(
+                "GET",
+                &format!("/api/v1/accounts/{account_id}/devices"),
+                Some("Bearer expired-session-token"),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// 迁移 0007 边界：账号会话不作 sync/events 的 Bearer——require_bearer
+    /// 不查 account_sessions，账号路由之外的提权不存在。
+    #[tokio::test]
+    async fn account_session_token_is_not_accepted_outside_account_routes() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "isolation@example.com").await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let future = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO account_sessions (id, account_id, session_token, expires_at, created_at, last_activity_at)
+             VALUES ('sid-live', ?, 'live-session-token', ?, ?, ?)",
+        )
+        .bind(&account_id)
+        .bind(&future)
+        .bind(&now)
+        .bind(&now)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        // 未过期令牌对 sync/events 均无效（require_bearer 无此消费方）
+        for uri in ["/api/v1/sync/devices", "/api/v1/events"] {
+            let (status, _) = send(
+                router.clone(),
+                request("GET", uri, Some("Bearer live-session-token"), None, ""),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{uri}");
+        }
+        // 同一令牌在其归属账号路径上仍然有效（对照组，确认插入的行可用）
+        let (status, _) = send(
+            router.clone(),
+            request(
+                "GET",
+                &format!("/api/v1/accounts/{account_id}/devices"),
+                Some("Bearer live-session-token"),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
 }
