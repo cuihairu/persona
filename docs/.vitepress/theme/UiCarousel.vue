@@ -243,7 +243,10 @@ onBeforeUnmount(stop);
   color: var(--vp-c-text-2);
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
 }
 
 .ui-carousel:hover .arrow,
@@ -310,7 +313,9 @@ onBeforeUnmount(stop);
   border-radius: 50%;
   background: var(--vp-c-default-3);
   cursor: pointer;
-  transition: background 0.2s ease, transform 0.2s ease;
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
 }
 
 .dot.active {
