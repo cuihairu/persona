@@ -24,6 +24,7 @@ import ConnectAutomationSection from './ConnectAutomationSection';
 import QuickAccessSection from './QuickAccessSection';
 import UpdateCheckSection from './UpdateCheckSection';
 import SyncConflictsModal from './SyncConflictsModal';
+import DataScopeConsentModal from './DataScopeConsentModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
 interface SettingsModalProps {
@@ -74,6 +75,8 @@ const SyncServerPane: React.FC = () => {
   const [token, setToken] = useState('');
   const [tokenPlaceholder, setTokenPlaceholder] = useState('API token');
   const [saving, setSaving] = useState(false);
+  // 隐私红线：开启前先过数据范围披露，确认才展开配置表单（取消 = 保持关闭）
+  const [consentOpen, setConsentOpen] = useState(false);
 
   // token 真值存 OS keyring（后端 sync.server_token 恒回空串），placeholder
   // 由 sync_token_present 驱动；token 不回填（避免既有令牌常驻前端内存，
@@ -156,8 +159,13 @@ const SyncServerPane: React.FC = () => {
           data-testid="sync-toggle"
           onClick={() => {
             const next = !enabled;
-            setEnabled(next);
-            if (!next) save(false);
+            if (next) {
+              // 隐私红线：开启 = 先明示数据范围，确认才展开配置表单
+              setConsentOpen(true);
+              return;
+            }
+            setEnabled(false);
+            save(false);
           }}
           className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
             enabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-gray-700'
@@ -216,6 +224,17 @@ const SyncServerPane: React.FC = () => {
           </div>
         </div>
       )}
+
+      {consentOpen && (
+        <DataScopeConsentModal
+          scope="audit"
+          onConfirm={() => {
+            setConsentOpen(false);
+            setEnabled(true);
+          }}
+          onCancel={() => setConsentOpen(false)}
+        />
+      )}
     </div>
   );
 };
@@ -233,6 +252,8 @@ const SyncDevicesSection: React.FC = () => {
   // 最近一轮同步报告（conflicts > 0 时亮冲突入口）+ 裁决弹窗开关
   const [lastReport, setLastReport] = useState<SyncNowReport | null>(null);
   const [conflictsOpen, setConflictsOpen] = useState(false);
+  // 隐私红线：加入 E2EE 同步前先过数据范围披露，确认才执行 sync_join
+  const [consentOpen, setConsentOpen] = useState(false);
 
   const refreshStatus = async (): Promise<SyncDeviceStatus | null> => {
     try {
@@ -275,6 +296,12 @@ const SyncDevicesSection: React.FC = () => {
       toast.error(t('settings.syncDevices.nameRequired'));
       return;
     }
+    setConsentOpen(true);
+  };
+
+  /** 披露确认后的实际加入（原 join 主体；与披露解耦以便确认才调后端） */
+  const confirmJoin = async (): Promise<void> => {
+    setConsentOpen(false);
     setBusy(true);
     try {
       const resp = await personaAPI.syncJoin(deviceName.trim());
@@ -577,6 +604,14 @@ const SyncDevicesSection: React.FC = () => {
 
       {conflictsOpen && (
         <SyncConflictsModal onClose={() => setConflictsOpen(false)} />
+      )}
+
+      {consentOpen && (
+        <DataScopeConsentModal
+          scope="e2ee"
+          onConfirm={confirmJoin}
+          onCancel={() => setConsentOpen(false)}
+        />
       )}
     </div>
   );
@@ -1244,6 +1279,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
   const tabs: { id: SettingsTab; label: string }[] = [
     { id: 'general', label: t('settings.tabGeneral') },
     { id: 'identities', label: t('settings.tabIdentities') },
+    { id: 'accounts', label: t('settings.tabAccounts') },
   ];
 
   return (

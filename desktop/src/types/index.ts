@@ -875,3 +875,53 @@ export interface GeneratedPasswords {
   entropy_bits: number;
   pool_size: number;
 }
+
+/* account system (M2) */
+export interface AccountRegistrationResponse {
+  account_id: string;
+  username: string;
+  display_name?: string;
+}
+
+export interface AccountLoginResponse {
+  account_id: string;
+  username: string;
+  session_token: string;
+  expires_in_secs: number;
+}
+
+export interface AccountSrpChallengeResponse {
+  session_id: string;
+  salt: string;
+  server_public: string;
+}
+
+export interface AccountSrpVerifyResponse {
+  server_proof: string;
+  token: string;
+  expires_in_secs: number;
+}
+
+export interface AccountDeviceInfo {
+  id: string;
+  device_id: string;
+  device_name: string;
+  public_key: string;
+  status: string;
+}
+
+export interface AccountDevicesList {
+  devices: AccountDeviceInfo[];
+}
+
+export interface AccountRecoveryCodes {
+  codes: string[];
+}
+
+export interface AccountSessionInfo {
+  session_token: string;
+  expires_at: string;
+}
+
+/* end account system */
+

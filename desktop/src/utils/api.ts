@@ -107,7 +107,12 @@ import type {
   SshAgentKey,
   SshKeyInspection,
   SshKeyGenerated,
-  SshKeyImported,
+  AccountRegistrationResponse,
+  AccountLoginResponse,
+  AccountDeviceInfo,
+  AccountDevicesList,
+  AccountRecoveryCodes,
+  AccountSessionInfo,
   WalletListResponse,
   WalletAddressesResponse,
   WalletGenerateRequest,
@@ -725,6 +730,101 @@ class PersonaAPI {
   /** 主窗口拉到前台（浮窗锁定态的"去解锁"出口） */
   async focusMainWindow(): Promise<ApiResponse<boolean>> {
     return invoke('focus_main_window');
+  }
+
+  // -------------------------------------------------------------------------
+  // 账号体系
+  // -------------------------------------------------------------------------
+
+  /** 公开注册新账号（无需认证）。成功返回 account_id 与 basic info。 */
+  async accountRegister(
+    request: { username: string; display_name?: string }
+  ): Promise<ApiResponse<AccountRegistrationResponse>> {
+    return invoke('account_register', { request });
+  }
+
+  /** 通行密钥注册选项（公开端点，无需 Bearer）。生成 WebAuthn creation options。 */
+  async accountPasskeyCreateOptions(
+    request: { rp_id: string; rp_name?: string; user_handle: string; user_name?: string; origin: string }
+  ): Promise<ApiResponse<PasskeyCreationResponse>> {
+    return invoke('account_passkey_create_options', { request });
+  }
+
+  /** 通行密钥注册完成（公开端点，无需 Bearer）。验证 attestation 对象并存入账号。 */
+  async accountPasskeyRegister(
+    request: { attestation_response: any; client_data_json: string; origin: string }
+  ): Promise<ApiResponse<{ passkey_id: string }>> {
+    return invoke('account_passkey_register', { request });
+  }
+
+  /** SRP 凭据注册（需要 Bearer 令牌）。账号内设备的 SRP salt+verifier 登记。 */
+  async accountSrpRegister(
+    request: { device_name: string; salt: string; verifier: string }
+  ): Promise<ApiResponse<AccountSrpRegisterResponse>> {
+    return invoke('account_srp_register', { request });
+  }
+
+  /** SRP 挑战请求（需要 Bearer 令牌）。发起账号 SRP 登录。 */
+  async accountSrpChallenge(
+    request: { device_name: string; client_public: string }
+  ): Promise<ApiResponse<AccountSrpChallengeResponse>> {
+    return invoke('account_srp_challenge', { request });
+  }
+
+  /** SRP 验证完成（需要 Bearer 令牌）。完成登录并返回账号会话 token。 */
+  async accountSrpVerify(
+    request: { session_id: string; client_proof: string }
+  ): Promise<ApiResponse<AccountSrpVerifyResponse>> {
+    return invoke('account_srp_verify', { request });
+  }
+
+  /** 生成恢复码（需要 Bearer 令牌）。账号每次调用生成新一组（如 8 个），旧未用的作废。 */
+  async accountGenerateRecoveryCodes(
+    request?: { }
+  ): Promise<ApiResponse<AccountRecoveryCodes>> {
+    return invoke('account_generate_recovery_codes', { request: request ?? {} });
+  }
+
+  /** 验证恢复码（需要 Bearer 令牌）。一次性消费，验证成功后标记为已用。 */
+  async accountVerifyRecoveryCode(
+    request: { code: string }
+  ): Promise<ApiResponse<{ success: boolean }>> {
+    return invoke('account_verify_recovery_code', { request });
+  }
+
+  /** 为账号授权设备（需要 Bearer 令牌）。将已注册的 sync device 关联到账号。 */
+  async accountAuthorizeDevice(
+    request: { device_id: string; device_name: string; public_key: string }
+  ): Promise<ApiResponse<AccountDeviceInfo>> {
+    return invoke('account_authorize_device', { request });
+  }
+
+  /** 获取账号下的已授权设备列表（需要 Bearer 令牌）。 */
+  async accountListDevices(
+    request?: { }
+  ): Promise<ApiResponse<AccountDevicesList>> {
+    return invoke('account_list_devices', { request: request ?? {} });
+  }
+
+  /** 吊销账号下的设备（需要 Bearer 令牌）。 */
+  async accountRevokeDevice(
+    request: { device_id: string }
+  ): Promise<ApiResponse<boolean>> {
+    return invoke('account_revoke_device', { request });
+  }
+
+  /** 创建账号会话（需要 Bearer 令牌）。登录后创建短期会话 token。 */
+  async accountCreateSession(
+    request?: { }
+  ): Promise<ApiResponse<AccountSessionInfo>> {
+    return invoke('account_create_session', { request: request ?? {} });
+  }
+
+  /** 吊销账号会话（需要 Bearer 令牌）。登出当前设备的会话。 */
+  async accountRevokeSession(
+    request: { session_token: string }
+  ): Promise<ApiResponse<boolean>> {
+    return invoke('account_revoke_session', { request });
   }
 
   // -------------------------------------------------------------------------

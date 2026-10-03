@@ -167,6 +167,27 @@ export default {
       urlRequired: 'Server URL is required when sync is enabled',
       saved: 'Sync settings saved',
       saveFailed: 'Failed to save sync settings',
+      consent: {
+        title: 'Before enabling: what the server will see',
+        intro:
+          'When enabled, audit events (operation records) from this device are reported in batches to the persona-server you enter. Credential contents, passwords, keys and your master password never leave this device.',
+        seesTitle: 'The server will see',
+        sees: [
+          'Action and outcome: what was done (e.g. "create credential", "unlock") and whether it succeeded',
+          'Identifiers: item / identity / session IDs (UUIDs) and resource types',
+          'Timestamps and metadata notes (e.g. import counts)',
+          'Connection source IP and request time (inherently visible at the connection layer)',
+        ],
+        noTitle: 'Never leaves this device',
+        no: [
+          'Credential contents: usernames, passwords, keys, notes',
+          'Master password, device private keys and encryption keys',
+        ],
+        note:
+          'This switch only controls audit-event reporting. End-to-end credential sync is joined separately below, with its own data-scope disclosure.',
+        confirm: 'Understood, enable setup',
+        cancel: 'Keep it off',
+      },
     },
     syncDevices: {
       title: 'End-to-end encrypted sync',
@@ -175,6 +196,27 @@ export default {
       deviceNameLabel: 'Device name',
       deviceNamePlaceholder: 'e.g. My laptop',
       join: 'Join sync',
+      consent: {
+        title: 'Before joining: what the server can see',
+        intro:
+          'Credentials sync end-to-end encrypted: the group key travels only as an envelope that solely the target device private key can open, so the server never sees the group key or any plaintext; sync is triggered manually (Sync now).',
+        seesTitle: 'The server will see',
+        sees: [
+          'Encrypted operation log (unreadable contents)',
+          'Item UUIDs and operation types (add / change / delete)',
+          'Version numbers (Lamport clock) and timestamps',
+          'Device public keys and envelopes',
+          'Item sizes may be observed (size side channel, honestly registered in THREAT_MODEL)',
+        ],
+        noTitle: 'Cannot see / not synced',
+        no: [
+          'Master password and group key never leave devices; the server cannot read any plaintext',
+          'Identities, Passkeys, attachment files and app settings are not synced',
+          'Server withholding/deletion/rollback of the log is not claimed against; sync pauses (both directions) during Travel Mode',
+        ],
+        confirm: 'Understood, join sync',
+        cancel: 'Not now',
+      },
       joinPending: 'Registered — authorize this device from another authorized device',
       joinDone: 'Joined sync',
       joinFailed: 'Failed to join sync',
@@ -351,6 +393,12 @@ export default {
       fetchFaviconsLabel: 'Website icons',
       fetchFaviconsHint: 'Fetch site icons only when you click "Fetch icon" on an entry; cached locally and shared across entries',
       fetchFaviconsNote: 'Off by default — no network requests until you opt in',
+      accountTitle: 'Account',
+      accountDescription: 'Account system: registration, login, device management, recovery codes',
+      accountRegister: 'Register account',
+      accountLogin: 'Login',
+      accountDevices: 'Devices',
+      accountRecoveryCodes: 'Recovery codes',
     },
   },
   generator: {

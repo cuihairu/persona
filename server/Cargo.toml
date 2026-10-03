@@ -49,6 +49,10 @@ rand.workspace = true
 # Bearer 令牌常量时间比较
 subtle.workspace = true
 
+# 账号恢复码 Argon2id hash（accounts.rs hash_recovery_code/verify_recovery_code_hash）
+argon2.workspace = true
+hex.workspace = true
+
 # 备份端点：sha256 边写边算（去重键/ETag）、流式 body 读写、下载 ReaderStream
 sha2.workspace = true
 futures.workspace = true

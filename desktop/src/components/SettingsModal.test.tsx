@@ -497,9 +497,13 @@ describe('components/SettingsModal', () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
 
-    // 打开开关仅展开表单，不立即保存
+    // 打开开关先弹数据范围披露：确认前表单不出现、不落盘
     fireEvent.click(screen.getByTestId('sync-toggle'));
     expect(mockSetSync).not.toHaveBeenCalled();
+    expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('sync-url-input')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId('sync-url-input'), {
       target: { value: 'https://s.example.com' },
@@ -539,6 +543,7 @@ describe('components/SettingsModal', () => {
       render(<SettingsModal isOpen={true} onClose={() => {}} />);
     });
     fireEvent.click(screen.getByTestId('sync-toggle'));
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
     fireEvent.click(screen.getByTestId('sync-save'));
 
     await waitFor(() => {
@@ -585,6 +590,82 @@ describe('components/SettingsModal', () => {
     });
     await waitFor(() => {
       expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // 隐私红线（2026-10 定位升级令⑤）：同步默认关闭、显式开启、开启时明示
+  // 数据范围；取消披露 = 一律不放行（不落盘、不加入）
+  // -------------------------------------------------------------------------
+
+  it('defaults sync off and gates enabling behind the data-scope disclosure', async () => {
+    mockIdentityHook();
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    // fresh workspace（无 sync 段）→ 开关默认关闭
+    expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
+
+    // 点开 = 先披露：不落盘、不展开配置表单
+    fireEvent.click(screen.getByTestId('sync-toggle'));
+    expect(screen.getByTestId('data-scope-modal')).toHaveAttribute('data-scope', 'audit');
+    expect(screen.queryByTestId('sync-url-input')).not.toBeInTheDocument();
+    expect(mockSetSync).not.toHaveBeenCalled();
+
+    // 取消 = 保持关闭
+    fireEvent.click(screen.getByTestId('data-scope-cancel'));
+    expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'false');
+    expect(mockSetSync).not.toHaveBeenCalled();
+
+    // 再开 + 确认 = 展开表单（保存才落盘，确认本身不落盘）
+    fireEvent.click(screen.getByTestId('sync-toggle'));
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sync-url-input')).toBeInTheDocument();
+    expect(screen.getByTestId('sync-toggle')).toHaveAttribute('aria-checked', 'true');
+    expect(mockSetSync).not.toHaveBeenCalled();
+  });
+
+  it('skips joining E2EE sync when the disclosure is cancelled and joins after confirming', async () => {
+    mockIdentityHook();
+    mockSyncJoin.mockResolvedValue({
+      success: true,
+      data: { device_id: 'dev-new', device_name: '我的笔记本', pending: true },
+    });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-device-name-input')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('sync-device-name-input'), {
+      target: { value: '我的笔记本' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+
+    // 披露开着、后端没被调
+    expect(screen.getByTestId('data-scope-modal')).toHaveAttribute('data-scope', 'e2ee');
+    expect(mockSyncJoin).not.toHaveBeenCalled();
+
+    // 取消 = 不加入，披露关闭
+    fireEvent.click(screen.getByTestId('data-scope-cancel'));
+    expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
+    expect(mockSyncJoin).not.toHaveBeenCalled();
+
+    // 重开并确认 = 才真正调后端
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    await waitFor(() => {
+      expect(mockSyncJoin).toHaveBeenCalledWith('我的笔记本');
     });
   });
 
@@ -1295,6 +1376,13 @@ describe('components/SettingsModal', () => {
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+
+    // 加入前先弹 E2EE 数据范围披露，确认才调后端
+    expect(screen.getByTestId('data-scope-modal')).toHaveAttribute('data-scope', 'e2ee');
+    expect(mockSyncJoin).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('data-scope-confirm'));
     });
 
     await waitFor(() => {
