@@ -92,6 +92,11 @@ pub fn build_router(state: AppState) -> Router {
                         "/{account_id}/passkeys/register",
                         post(api::passkey_register),
                     )
+                    // passkey 登录仪式第一步（免 Bearer——这就是登录）
+                    .route(
+                        "/{account_id}/passkeys/login-options",
+                        post(api::passkey_login_options),
+                    )
                     // SRP password fallback (scoped to account)
                     .route(
                         "/{account_id}/srp/register",

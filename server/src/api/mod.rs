@@ -17,8 +17,8 @@ use serde::Serialize;
 pub use accounts::{
     account_srp_challenge, account_srp_register, account_srp_verify, authorize_device,
     create_account_session, generate_recovery_codes, list_account_devices, passkey_create_options,
-    passkey_register, register_account, revoke_account_device, revoke_account_session,
-    verify_recovery_code,
+    passkey_login_options, passkey_register, register_account, revoke_account_device,
+    revoke_account_session, verify_recovery_code, AccountWebauthnState,
 };
 pub use auth::{challenge as auth_challenge, register as auth_register, verify as auth_verify};
 pub use backups::{delete, download, list, size_guard, upload};

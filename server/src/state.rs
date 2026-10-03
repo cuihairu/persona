@@ -26,6 +26,9 @@ pub struct AppState {
     /// SRP 会话/短期令牌状态。与 `auth` 同生命周期（静态令牌未配置 =
     /// 认证体系整体未启用 = SRP 端点同样禁用）。
     pub srp: Option<Arc<SrpAuthState>>,
+    /// 账号 WebAuthn 未决挑战（passkey 注册/登录仪式），内存态、TTL 120s。
+    /// 无条件构造（不随 `auth` 门禁）：账号注册流本身免 Bearer。
+    pub account_webauthn: Arc<crate::api::AccountWebauthnState>,
     /// 备份文件落盘目录（POST 写、GET 下载读；`{dir}/{id}.persenc`）。
     pub backup_dir: PathBuf,
     /// 保留版本数上限；0 = 不限（PERSONA_SERVER_BACKUP_MAX_VERSIONS）。
@@ -60,6 +63,7 @@ impl AppState {
             metrics,
             auth,
             srp,
+            account_webauthn: Arc::new(crate::api::AccountWebauthnState::new()),
             backup_dir: PathBuf::from("./backups"),
             backup_max_versions: 0,
             max_backup_bytes: MAX_BACKUP_BYTES,
