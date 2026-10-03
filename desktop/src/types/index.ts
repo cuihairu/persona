@@ -883,13 +883,6 @@ export interface AccountRegistrationResponse {
   display_name?: string;
 }
 
-export interface AccountLoginResponse {
-  account_id: string;
-  username: string;
-  session_token: string;
-  expires_in_secs: number;
-}
-
 export interface AccountSrpRegisterResponse {
   device_name: string;
 }
@@ -905,6 +898,42 @@ export interface AccountSrpVerifyResponse {
   token: string;
   expires_in_secs: number;
 }
+
+/** passkeys/create-options 响应（服务器签发挑战的 WebAuthn creation
+ * options；与本地密码库 passkey 的类型分开——RP 侧账号域）。 */
+export interface AccountPasskeyCreationOptions {
+  rp: { id: string; name: string };
+  user: { id: string; name: string; displayName: string };
+  challenge: string;
+  pubKeyCredParams: { type: string; alg: number }[];
+  authenticatorSelection: {
+    authenticatorAttachment?: string;
+    userVerification?: string;
+    residentKey?: string;
+  };
+  timeout: number;
+  attestation: string;
+}
+
+/** passkeys/login-options 响应：登录仪式第一步拿到的服务器挑战。 */
+export interface AccountPasskeyLoginOptions {
+  challenge: string;
+  rp_id: string;
+}
+
+/** sessions 端点的 passkey 断言证据（字段全为 base64url 编码）。 */
+export interface AccountPasskeyAssertion {
+  credential_id: string;
+  client_data_json: string;
+  origin: string;
+  authenticator_data: string;
+  signature: string;
+}
+
+/** sessions 端点证据：SRP 15 分钟令牌或 passkey 断言，恰好一种。 */
+export type AccountSessionEvidence =
+  | { srp_token: string }
+  | { passkey_assertion: AccountPasskeyAssertion };
 
 export interface AccountDeviceInfo {
   id: string;
@@ -924,7 +953,7 @@ export interface AccountRecoveryCodes {
 
 export interface AccountSessionInfo {
   session_token: string;
-  expires_at: string;
+  expires_in_secs: number;
 }
 
 /* end account system */

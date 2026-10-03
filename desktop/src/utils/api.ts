@@ -112,7 +112,9 @@ import type {
   AccountSrpRegisterResponse,
   AccountSrpChallengeResponse,
   AccountSrpVerifyResponse,
-  AccountDeviceInfo,
+  AccountPasskeyCreationOptions,
+  AccountPasskeyLoginOptions,
+  AccountSessionEvidence,
   AccountDevicesList,
   AccountRecoveryCodes,
   AccountSessionInfo,
@@ -736,7 +738,8 @@ class PersonaAPI {
   }
 
   // -------------------------------------------------------------------------
-  // 账号体系
+  // 账号体系（M2 脚手架：对齐 server /api/v1/accounts/* 契约的代理 seam，
+  // tauri 代理命令层随 M2 账号 UI 批次落地；账号/同步功能默认关闭）
   // -------------------------------------------------------------------------
 
   /** 公开注册新账号（无需认证）。成功返回 account_id 与 basic info。 */
@@ -746,82 +749,122 @@ class PersonaAPI {
     return invoke('account_register', { request });
   }
 
-  /** 通行密钥注册选项（公开端点，无需 Bearer）。生成 WebAuthn creation options。 */
+  /** passkey 注册选项（公开端点）。服务器签发带挑战的 WebAuthn creation
+   * options（120s 一次性挑战，register 时严格比对）。 */
   async accountPasskeyCreateOptions(
-    request: { rp_id: string; rp_name?: string; user_handle: string; user_name?: string; origin: string }
-  ): Promise<ApiResponse<PasskeyCreationResponse>> {
-    return invoke('account_passkey_create_options', { request });
+    account_id: string,
+    request: {
+      rp_id: string;
+      rp_name?: string;
+      user_handle: string;
+      user_name?: string;
+      user_display_name?: string;
+    }
+  ): Promise<ApiResponse<AccountPasskeyCreationOptions>> {
+    return invoke('account_passkey_create_options', { account_id, request });
   }
 
-  /** 通行密钥注册完成（公开端点，无需 Bearer）。验证 attestation 对象并存入账号。 */
+  /** passkey 注册完成（公开端点）。提交认证器 attestation，服务器做 RP 侧
+   * 完整验证后存入公钥材料。 */
   async accountPasskeyRegister(
-    request: { attestation_response: any; client_data_json: string; origin: string }
+    account_id: string,
+    request: {
+      attestation_response: { credentialId: string; attestationObject: string };
+      client_data_json: string;
+      origin: string;
+    }
   ): Promise<ApiResponse<{ passkey_id: string }>> {
-    return invoke('account_passkey_register', { request });
+    return invoke('account_passkey_register', { account_id, request });
   }
 
-  /** SRP 凭据注册（需要 Bearer 令牌）。账号内设备的 SRP salt+verifier 登记。 */
+  /** passkey 登录选项（公开端点，登录仪式第一步）。按凭据 id 换取服务器
+   * 挑战（120s 一次性），断言时消费。 */
+  async accountPasskeyLoginOptions(
+    account_id: string,
+    request: { credential_id: string }
+  ): Promise<ApiResponse<AccountPasskeyLoginOptions>> {
+    return invoke('account_passkey_login_options', { account_id, request });
+  }
+
+  /** SRP 凭据注册（需要 Bearer）。账号内设备的 SRP salt+verifier 登记。 */
   async accountSrpRegister(
+    account_id: string,
     request: { device_name: string; salt: string; verifier: string }
   ): Promise<ApiResponse<AccountSrpRegisterResponse>> {
-    return invoke('account_srp_register', { request });
+    return invoke('account_srp_register', { account_id, request });
   }
 
-  /** SRP 挑战请求（需要 Bearer 令牌）。发起账号 SRP 登录。 */
+  /** SRP 挑战请求（公开端点，登录步骤）。发起账号 SRP 登录握手。 */
   async accountSrpChallenge(
+    account_id: string,
     request: { device_name: string; client_public: string }
   ): Promise<ApiResponse<AccountSrpChallengeResponse>> {
-    return invoke('account_srp_challenge', { request });
+    return invoke('account_srp_challenge', { account_id, request });
   }
 
-  /** SRP 验证完成（需要 Bearer 令牌）。完成登录并返回账号会话 token。 */
+  /** SRP 验证完成（公开端点，登录步骤）。完成握手，返回 15 分钟 SRP
+   * 登录令牌（可作账号路由 Bearer，或兑换 24h 会话）。 */
   async accountSrpVerify(
+    account_id: string,
     request: { session_id: string; client_proof: string }
   ): Promise<ApiResponse<AccountSrpVerifyResponse>> {
-    return invoke('account_srp_verify', { request });
+    return invoke('account_srp_verify', { account_id, request });
   }
 
-  /** 生成恢复码（需要 Bearer 令牌）。账号每次调用生成新一组（如 8 个），旧未用的作废。 */
-  async accountGenerateRecoveryCodes(): Promise<ApiResponse<AccountRecoveryCodes>> {
-    return invoke('account_generate_recovery_codes');
+  /** 生成恢复码（需要 Bearer）。每次调用生成新一组（8 个），旧未用的作废。 */
+  async accountGenerateRecoveryCodes(
+    account_id: string
+  ): Promise<ApiResponse<AccountRecoveryCodes>> {
+    return invoke('account_generate_recovery_codes', { account_id });
   }
 
-  /** 验证恢复码（需要 Bearer 令牌）。一次性消费，验证成功后标记为已用。 */
+  /** 验证恢复码（公开端点）。一次性消费，验证成功后标记为已用。 */
   async accountVerifyRecoveryCode(
+    account_id: string,
     request: { code: string }
   ): Promise<ApiResponse<{ success: boolean }>> {
-    return invoke('account_verify_recovery_code', { request });
+    return invoke('account_verify_recovery_code', { account_id, request });
   }
 
-  /** 为账号授权设备（需要 Bearer 令牌）。将已注册的 sync device 关联到账号。 */
+  /** 为账号授权设备（需要 Bearer）。把已登记的 sync 设备（按 device_id +
+   * 公钥比对）关联到账号。 */
   async accountAuthorizeDevice(
-    request: { device_id: string; device_name: string; public_key: string }
-  ): Promise<ApiResponse<AccountDeviceInfo>> {
-    return invoke('account_authorize_device', { request });
+    account_id: string,
+    request: { device_id: string; public_key: string }
+  ): Promise<ApiResponse<{ id: string; status: string }>> {
+    return invoke('account_authorize_device', { account_id, request });
   }
 
-  /** 获取账号下的已授权设备列表（需要 Bearer 令牌）。 */
-  async accountListDevices(): Promise<ApiResponse<AccountDevicesList>> {
-    return invoke('account_list_devices');
+  /** 获取账号下的已授权设备列表（需要 Bearer）。 */
+  async accountListDevices(
+    account_id: string
+  ): Promise<ApiResponse<AccountDevicesList>> {
+    return invoke('account_list_devices', { account_id });
   }
 
-  /** 吊销账号下的设备（需要 Bearer 令牌）。 */
+  /** 吊销账号下的设备（需要 Bearer）。 */
   async accountRevokeDevice(
-    request: { device_id: string }
+    account_id: string,
+    device_id: string
   ): Promise<ApiResponse<boolean>> {
-    return invoke('account_revoke_device', { request });
+    return invoke('account_revoke_device', { account_id, device_id });
   }
 
-  /** 创建账号会话（需要 Bearer 令牌）。登录后创建短期会话 token。 */
-  async accountCreateSession(): Promise<ApiResponse<AccountSessionInfo>> {
-    return invoke('account_create_session');
+  /** 创建账号会话（需要 Bearer）。凭恰好一种登录证据（SRP 15 分钟令牌或
+   * passkey 断言）兑换 24h 账号会话令牌。 */
+  async accountCreateSession(
+    account_id: string,
+    request: AccountSessionEvidence
+  ): Promise<ApiResponse<AccountSessionInfo>> {
+    return invoke('account_create_session', { account_id, request });
   }
 
-  /** 吊销账号会话（需要 Bearer 令牌）。登出当前设备的会话。 */
+  /** 吊销账号会话（需要 Bearer）。登出该会话令牌。 */
   async accountRevokeSession(
-    request: { session_token: string }
+    account_id: string,
+    session_token: string
   ): Promise<ApiResponse<boolean>> {
-    return invoke('account_revoke_session', { request });
+    return invoke('account_revoke_session', { account_id, session_token });
   }
 
   // -------------------------------------------------------------------------

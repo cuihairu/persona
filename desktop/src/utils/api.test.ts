@@ -638,83 +638,125 @@ describe('utils/api command mapping coverage', () => {
   });
 
   it('account methods map to tauri invokes (M2 scaffold)', async () => {
+    const acct = 'acct-1';
+
     await personaAPI.accountRegister({ username: 'u' });
     expect(mockInvoke).toHaveBeenCalledWith('account_register', {
       request: { username: 'u' },
     });
 
-    await personaAPI.accountPasskeyCreateOptions({
+    await personaAPI.accountPasskeyCreateOptions(acct, {
       rp_id: 'example.com',
       user_handle: 'uh',
-      origin: 'https://example.com',
     });
     expect(mockInvoke).toHaveBeenCalledWith('account_passkey_create_options', {
-      request: {
-        rp_id: 'example.com',
-        user_handle: 'uh',
-        origin: 'https://example.com',
-      },
+      account_id: acct,
+      request: { rp_id: 'example.com', user_handle: 'uh' },
     });
 
-    await personaAPI.accountPasskeyRegister({
-      attestation_response: {},
+    await personaAPI.accountPasskeyRegister(acct, {
+      attestation_response: { credentialId: 'cid', attestationObject: 'YXR0' },
       client_data_json: 'cdj',
       origin: 'https://example.com',
     });
     expect(mockInvoke).toHaveBeenCalledWith('account_passkey_register', {
+      account_id: acct,
       request: {
-        attestation_response: {},
+        attestation_response: { credentialId: 'cid', attestationObject: 'YXR0' },
         client_data_json: 'cdj',
         origin: 'https://example.com',
       },
     });
 
-    await personaAPI.accountSrpRegister({ device_name: 'laptop', salt: 'c2FsdA', verifier: 'dmVy' });
+    // 登录仪式第一步：按凭据 id 换服务器挑战
+    await personaAPI.accountPasskeyLoginOptions(acct, { credential_id: 'cid' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_passkey_login_options', {
+      account_id: acct,
+      request: { credential_id: 'cid' },
+    });
+
+    await personaAPI.accountSrpRegister(acct, { device_name: 'laptop', salt: 'c2FsdA', verifier: 'dmVy' });
     expect(mockInvoke).toHaveBeenCalledWith('account_srp_register', {
+      account_id: acct,
       request: { device_name: 'laptop', salt: 'c2FsdA', verifier: 'dmVy' },
     });
 
-    await personaAPI.accountSrpChallenge({ device_name: 'laptop', client_public: 'cHVi' });
+    await personaAPI.accountSrpChallenge(acct, { device_name: 'laptop', client_public: 'cHVi' });
     expect(mockInvoke).toHaveBeenCalledWith('account_srp_challenge', {
+      account_id: acct,
       request: { device_name: 'laptop', client_public: 'cHVi' },
     });
 
-    await personaAPI.accountSrpVerify({ session_id: 's1', client_proof: 'cHJvb2Y' });
+    await personaAPI.accountSrpVerify(acct, { session_id: 's1', client_proof: 'cHJvb2Y' });
     expect(mockInvoke).toHaveBeenCalledWith('account_srp_verify', {
+      account_id: acct,
       request: { session_id: 's1', client_proof: 'cHJvb2Y' },
     });
 
-    await personaAPI.accountGenerateRecoveryCodes();
-    expect(mockInvoke).toHaveBeenCalledWith('account_generate_recovery_codes');
+    await personaAPI.accountGenerateRecoveryCodes(acct);
+    expect(mockInvoke).toHaveBeenCalledWith('account_generate_recovery_codes', {
+      account_id: acct,
+    });
 
-    await personaAPI.accountVerifyRecoveryCode({ code: 'XXXX-XXXX' });
+    await personaAPI.accountVerifyRecoveryCode(acct, { code: 'XXXX-XXXX' });
     expect(mockInvoke).toHaveBeenCalledWith('account_verify_recovery_code', {
+      account_id: acct,
       request: { code: 'XXXX-XXXX' },
     });
 
-    await personaAPI.accountAuthorizeDevice({
+    await personaAPI.accountAuthorizeDevice(acct, {
       device_id: 'd1',
-      device_name: 'laptop',
       public_key: 'cHVi',
     });
     expect(mockInvoke).toHaveBeenCalledWith('account_authorize_device', {
-      request: { device_id: 'd1', device_name: 'laptop', public_key: 'cHVi' },
+      account_id: acct,
+      request: { device_id: 'd1', public_key: 'cHVi' },
     });
 
-    await personaAPI.accountListDevices();
-    expect(mockInvoke).toHaveBeenCalledWith('account_list_devices');
+    await personaAPI.accountListDevices(acct);
+    expect(mockInvoke).toHaveBeenCalledWith('account_list_devices', {
+      account_id: acct,
+    });
 
-    await personaAPI.accountRevokeDevice({ device_id: 'd1' });
+    await personaAPI.accountRevokeDevice(acct, 'd1');
     expect(mockInvoke).toHaveBeenCalledWith('account_revoke_device', {
-      request: { device_id: 'd1' },
+      account_id: acct,
+      device_id: 'd1',
     });
 
-    await personaAPI.accountCreateSession();
-    expect(mockInvoke).toHaveBeenCalledWith('account_create_session');
+    // 会话证据两种形态：SRP 15 分钟令牌 / passkey 断言（恰好一种）
+    await personaAPI.accountCreateSession(acct, { srp_token: 'tok15m' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_create_session', {
+      account_id: acct,
+      request: { srp_token: 'tok15m' },
+    });
 
-    await personaAPI.accountRevokeSession({ session_token: 'tok' });
+    await personaAPI.accountCreateSession(acct, {
+      passkey_assertion: {
+        credential_id: 'cid',
+        client_data_json: 'cdj',
+        origin: 'https://example.com',
+        authenticator_data: 'YXV0aERhdGE',
+        signature: 'c2ln',
+      },
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('account_create_session', {
+      account_id: acct,
+      request: {
+        passkey_assertion: {
+          credential_id: 'cid',
+          client_data_json: 'cdj',
+          origin: 'https://example.com',
+          authenticator_data: 'YXV0aERhdGE',
+          signature: 'c2ln',
+        },
+      },
+    });
+
+    await personaAPI.accountRevokeSession(acct, 'tok24h');
     expect(mockInvoke).toHaveBeenCalledWith('account_revoke_session', {
-      request: { session_token: 'tok' },
+      account_id: acct,
+      session_token: 'tok24h',
     });
   });
 
