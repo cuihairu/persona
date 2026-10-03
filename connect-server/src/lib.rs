@@ -92,8 +92,8 @@ pub fn build_router(state: ConnectServerState) -> Router {
         .route("/api/v1/connect/health", get(health))
         .route("/api/v1/connect/identities", get(identities))
         .route("/api/v1/connect/items", get(items))
-        .route("/api/v1/connect/items/:id", get(item))
-        .route("/api/v1/connect/items/:id/totp", post(item_totp))
+        .route("/api/v1/connect/items/{id}", get(item))
+        .route("/api/v1/connect/items/{id}/totp", post(item_totp))
         .layer(middleware::from_fn_with_state(state.clone(), guard))
         .with_state(state)
 }
