@@ -167,9 +167,15 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 ---
 
-### 批 B：iframe/多步登录自动填充增强（优先级：高，自动化覆盖面） - 待开始
+### ✅ 批 B 完成：iframe/多步登录自动填充增强（2026-10-04 复核收口）
 
-**目标**: 覆盖 iframe 嵌入登录、用户名/密码分步表单
+**目标**: 覆盖 iframe 嵌入登录、用户名/密码分步表单（实现已随 a2a8292
+入库；复核：manifest all_frames + about:blank 已配，content.js 逐 frame
+自填（ISOLATED world、每 frame 自带 origin 过 binding），loginSteps.ts
+纯决策（announced 字段门禁/no-overwrite/可解析建议），pendingSave 跨 frame
+去重；扩展 jest 11 套件 135 例绿 + tsc 绿。**残留**：github.com 实机
+零点击勾稽与 iframe 真站（Stripe/Shopify）验证需浏览器 E2E 基建，与批 E
+E2 一并登记重启）
 
 | 任务 | 文件 | 说明 |
 |------|------|------|
@@ -222,18 +228,21 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 **目标**: 确保 v2/v3 无回归，补充缺失边界
 
-| 任务 | 说明 |
+| 任务 | 判定 / 说明 |
 |------|------|
-| E1. 扩展侧 passkey 创建/断言：手势闸门 + 桌面审批双闸门回归测试 | 现有 `passkeyCreate/Assert` 已接手势 + 桌面审批 |
-| E2. OS passkey provider（v3）Windows/macOS 真机验收 | 需真机；CI 仅 Linux |
-| E3. 跨源 iframe passkey：`all_frames: true` 下 MAIN world hook 行为 | `webauthnHook.ts` 仅 top frame，需确认 provider 场景 |
+| E1. 扩展侧 passkey 创建/断言：手势闸门 + 桌面审批双闸门回归测试 | ✅ 已覆盖：`passkeyCreate/Assert/List` authed 消息 + gesture 双向断言（nativeBridge.test.ts）、content 确认 UI、core 桥用例 + 审批白名单用例、`via=extension\|os_provider` 审计元数据（P4.4） |
+| E2. OS passkey provider（v3）Windows/macOS 真机验收 | ⏸ 顺延：需 macOS/Windows 实机 + Developer ID 签名环境（与 #23/#24 同前提），CI 仅 Linux；重启条件见 `docs/PASSKEY_GATE_AUDIT.md` §2 |
+| E3. 跨源 iframe passkey：`all_frames: true` 下 MAIN world hook 行为 | ✅ 设计裁定：webauthnHook 保持 top frame only（跨源 iframe 退回浏览器原生 passkey 流程），manifest 契约测试锁定；同源 iframe 走批 B 的 content.js 逐 frame 自填 |
+
+核查证据归档：`docs/PASSKEY_GATE_AUDIT.md`（2026-10-04，批 E 收口）。
 
 ---
 
 ## 执行顺序与门禁
 
 ```
-✅ 批 A → ✅ 批 C → ✅ 批 D → CI 绿 → 批 B → CI 绿 → 批 E (Passkey 核查) → 全绿收口
+✅ 批 A → ✅ 批 C → ✅ 批 D → ✅ 批 B（2026-10-04 复核）→ ✅ 批 E（Passkey 核查，2026-10-04）→ 全绿收口
+（残留：批 B 真站勾稽 + E2 真机验收，需 E2E 基建/实机，登记重启）
 ```
 
 **每批门禁**:
@@ -259,7 +268,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 ## 里程碑（本轨，按批计——勿与主清单 Account & Sync 的 M1~M6 混用）
 
 - ✅ **批A 完成**: 注册页一键生成+填充+保存全链路通
-- **批B**: GitHub 多步登录、iframe 登录零点击填充 - 待开始
+- ✅ **批B 完成**: GitHub 多步登录、iframe 登录零点击填充（2026-10-04 复核；真站勾稽登记待 E2E 基建）
 - ✅ **批C 完成**: 全局快捷键唤起搜索、条目模糊检索
 - ✅ **批D 完成**: 桌面解锁=插件解锁，免主密码
 - **批E 完成**: Passkey 全矩阵回归绿
