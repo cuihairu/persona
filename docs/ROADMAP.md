@@ -54,7 +54,7 @@ Milestone 7 – Identity Runtime (positioning & concepts; feature track follows)
 
 - [x] Concept docs: `docs/src/concepts/` — identity / context / material / policy / action / principal (2026-10-04)
 - [x] Site copy & terminology: homepage / intro / architecture / security de-“password-manager”ed; "零知识" standardized as "本地优先 + 端到端加密" (zero-knowledge kept only for credential-storage semantics)
-- [ ] Context-aware identity suggestion: terminal cwd/repo + host → suggested identity (today only origin binding + per-site defaults exist)
+- [ ] Context-aware identity suggestion: terminal cwd/repo + host → suggested identity (today only origin binding + per-site defaults exist; design at `CONTEXT_AWARE_DESIGN.md` stage 0, 2026-10-04)
 - [ ] Principal / Agent scoping: optional `principal_id` in protocol & audit; per-principal action allowlists (reserved direction, no timeline commitment)
 
 Ongoing quality

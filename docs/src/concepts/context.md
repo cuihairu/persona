@@ -42,6 +42,8 @@ Identity: OpenSource
 - CLI 里 `persona ssh --identity` 已标注 "reserved for future use"，
   正是为这类语义留的口子。
 
-落地节奏见 [路线图](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md)。
+完整设计见
+[CONTEXT_AWARE_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.md)
+（阶段 0：确定性打分、静态映射表 + 可选历史学习、CLI 先行）。
 在此之前，机制只有一个硬规则：**上下文只会影响建议与默认值，永远不会绕过
 策略放行一个动作**。
