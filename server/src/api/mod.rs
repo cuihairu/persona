@@ -11,8 +11,6 @@ use axum::extract::Request;
 use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use base64::Engine;
 use serde::Serialize;
 
 pub use accounts::{
@@ -34,7 +32,7 @@ pub use sync::{
     delete_device as sync_delete_device, get_group_keys as sync_get_group_keys,
     list_devices as sync_list_devices, pull as sync_pull, push as sync_push,
     put_group_key as sync_put_group_key, register_device as sync_register_device,
-    rotate_begin as sync_rotate_begin,
+    rotate_begin as sync_rotate_begin, status as sync_status,
 };
 
 /// 请求体上限（线上字节）。带 Content-Length 的请求由
@@ -232,29 +230,23 @@ impl IntoResponse for ApiError {
     }
 }
 
-// ---- 稳定游标编解码（events 与 backups 的分页共用）----
-// base64url("v1:{毫秒时间戳}:{行 id}")，无 padding。
+// ---- 稳定游标编解码（events/backups/oplog 的分页共用）----
+// base64url("v1:{毫秒时间戳}:{行 id}")，无 padding。编解码本体在
+// persona_core::sync::cursor——core engine 要把本地游标解回 seq 得到
+// 「本机已同步水位」（sync-group-mode §二.5.5），格式单一真相源在 core；
+// 这里只保留 ApiError 包装的旧签名，三个调用点不用动。
 
 pub(crate) fn encode_cursor(ms: i64, id: &str) -> String {
-    URL_SAFE_NO_PAD.encode(format!("v1:{ms}:{id}"))
+    persona_core::sync::cursor::encode_cursor(ms, id)
 }
 
 pub(crate) fn decode_cursor(raw: &str) -> Result<(i64, String), ApiError> {
-    let invalid = || {
+    persona_core::sync::cursor::decode_cursor(raw).map_err(|_| {
         ApiError::validation(
             "invalid cursor",
             vec![ErrorItem::batch("cursor", "malformed cursor token")],
         )
-    };
-    let decoded = URL_SAFE_NO_PAD.decode(raw).map_err(|_| invalid())?;
-    let text = String::from_utf8(decoded).map_err(|_| invalid())?;
-    let rest = text.strip_prefix("v1:").ok_or_else(invalid)?;
-    let (ms, id) = rest.split_once(':').ok_or_else(invalid)?;
-    let ms: i64 = ms.parse().map_err(|_| invalid())?;
-    if id.is_empty() {
-        return Err(invalid());
-    }
-    Ok((ms, id.to_owned()))
+    })
 }
 
 #[cfg(test)]

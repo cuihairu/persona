@@ -82,6 +82,13 @@ struct PullResponseWire {
     next_cursor: Option<String>,
 }
 
+/// `GET /sync/status`：组指令流水位（§二.5.5）。旧 server（无此路由）
+/// 返回 404 → 本层如实报错，状态显示降级为不可用，不谎报 0。
+#[derive(Debug, serde::Deserialize)]
+struct StatusResponseWire {
+    head_seq: i64,
+}
+
 fn kind_to_wire(kind: ItemKind) -> String {
     match kind {
         ItemKind::Credential => "credential".to_string(),
@@ -291,6 +298,21 @@ impl SyncRemote for HttpSyncRemote {
             // else：条目级损坏，跳过（模块文档的容错口径）
         }
         Ok((ops, body.next_cursor))
+    }
+
+    async fn head_seq(&self) -> Result<i64> {
+        let resp = self
+            .http
+            .request(reqwest::Method::GET, "/status")
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync status request failed: {e}")))?;
+        let resp = SyncHttp::ensure_success(resp, "status").await?;
+        let body: StatusResponseWire = resp
+            .json()
+            .await
+            .map_err(|_| PersonaError::Io("malformed sync status response".to_string()))?;
+        Ok(body.head_seq)
     }
 }
 

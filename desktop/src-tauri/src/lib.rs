@@ -317,6 +317,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::sync_authorize,
             commands::sync_revoke,
             commands::sync_now,
+            commands::sync_status,
             commands::sync_rotate,
             commands::sync_conflicts_list,
             commands::sync_conflict_resolve,

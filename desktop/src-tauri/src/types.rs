@@ -167,6 +167,31 @@ impl From<persona_core::sync::runtime::SyncNowReport> for SyncNowReport {
     }
 }
 
+/// `sync_status_report` 返回：组同步水位快照（sync-group-mode §二.5.5
+/// 状态显示——组最新版本号 / 本机已同步水位 / 落后 N / 待推 N / 最近同步时间）。
+/// 字段与 core `engine::SyncStatusReport` 对应；`last_sync_at` 为 RFC3339。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncStatusInfo {
+    pub head_seq: i64,
+    pub local_watermark: i64,
+    pub behind: i64,
+    pub pending_push: i64,
+    pub last_sync_at: Option<String>,
+}
+
+impl From<persona_core::sync::engine::SyncStatusReport> for SyncStatusInfo {
+    fn from(report: persona_core::sync::engine::SyncStatusReport) -> Self {
+        Self {
+            head_seq: report.head_seq,
+            local_watermark: report.local_watermark,
+            behind: report.behind,
+            pending_push: report.pending_push,
+            last_sync_at: report.last_sync_at.map(|t| t.to_rfc3339()),
+        }
+    }
+}
+
 /// `sync_rotate` 返回：一次 group key 轮换的计数汇总（字段与 core
 /// `SyncRotateReport` 一一对应，供 UI 展示「重包 N / 跳过 N / 推送 N」）。
 #[derive(Debug, Clone, Serialize)]

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SettingsModal from './SettingsModal';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
@@ -41,6 +41,7 @@ jest.mock('@/utils/api', () => ({
     syncAuthorize: jest.fn(),
     syncRevoke: jest.fn(),
     syncNow: jest.fn(),
+    syncStatus: jest.fn(),
     syncRotate: jest.fn(),
     syncConflictsList: jest.fn(),
     syncConflictResolve: jest.fn(),
@@ -76,6 +77,7 @@ const mockSyncList = personaAPI.syncListDevices as jest.Mock;
 const mockSyncAuthorize = personaAPI.syncAuthorize as jest.Mock;
 const mockSyncRevoke = personaAPI.syncRevoke as jest.Mock;
 const mockSyncNow = personaAPI.syncNow as jest.Mock;
+const mockSyncStatusReport = personaAPI.syncStatus as jest.Mock;
 const mockSyncRotate = personaAPI.syncRotate as jest.Mock;
 const mockSyncConflictsList = personaAPI.syncConflictsList as jest.Mock;
 
@@ -124,6 +126,8 @@ describe('components/SettingsModal', () => {
       success: true,
       data: { joined: false, corrupted: false, device_id: null, device_name: null },
     });
+    // 默认水位查询无数据（行隐藏；用例按需覆盖成具体快照）
+    mockSyncStatusReport.mockResolvedValue({ success: true, data: null });
   });
 
   it('renders nothing when closed', () => {
@@ -1421,6 +1425,67 @@ describe('components/SettingsModal', () => {
 
     // leave 入口
     expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
+  });
+
+  it('shows the sync status row: up-to-date, behind and hidden-when-unavailable', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    // 已最新：组版本号 + 绿色结论 + 最近同步时间
+    mockSyncStatusReport.mockResolvedValue({
+      success: true,
+      data: {
+        headSeq: 42,
+        localWatermark: 42,
+        behind: 0,
+        pendingPush: 0,
+        lastSyncAt: '2026-10-05T10:00:00Z',
+      },
+    });
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-status-row')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('sync-status-head')).toHaveTextContent('组版本号 #42');
+    expect(screen.getByTestId('sync-status-uptodate')).toHaveTextContent('已最新');
+    expect(screen.queryByTestId('sync-status-behind')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sync-status-last-sync')).toHaveTextContent('最近同步');
+
+    // 落后 5 条：黄条取代绿色结论（重挂载取新快照）
+    cleanup();
+    mockSyncStatusReport.mockResolvedValue({
+      success: true,
+      data: { headSeq: 47, localWatermark: 42, behind: 5, pendingPush: 3, lastSyncAt: null },
+    });
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-status-behind')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('sync-status-behind')).toHaveTextContent('落后 5 条指令');
+    expect(screen.queryByTestId('sync-status-uptodate')).not.toBeInTheDocument();
+    expect(screen.getByTestId('sync-status-last-sync')).toHaveTextContent('从未同步');
+  });
+
+  it('hides the sync status row when the snapshot query fails', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    // 服务器不可达：查询失败必须保持行隐藏（不谎报「已最新」）
+    mockSyncStatusReport.mockResolvedValue({ success: false, data: null });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-devices-joined')).toBeInTheDocument();
+    });
+    await act(async () => {}); // 冲掉水位 effect 的 rejected promise
+    expect(screen.queryByTestId('sync-status-row')).not.toBeInTheDocument();
   });
 
   it('revokes a device after confirm and refreshes the list', async () => {

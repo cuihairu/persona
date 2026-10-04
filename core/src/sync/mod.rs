@@ -11,6 +11,7 @@
 //! - [`envelope`]：`persona-dev-env-1` 信封密封与开启
 //! - [`oplog`]：SyncOp 结构 + LWW/冲突双版本纯逻辑（DR-4）
 //! - [`engine`]：push/pull 周期编排 + Lamport 时钟 + travel 闸
+//! - [`cursor`]：服务器 seq 游标编解码（server 分页与本机水位共用格式）
 //! - [`materialize`]：pull 后把 oplog 主位落进主库（凭据行物化）
 //! - [`resolve`]：冲突裁决数据面（可展示版本 + 采纳入账，阶段 3c）
 //! - [`runtime`]：SyncSession 会话装配（open 拆信封/backfill 存量/run_cycle/
@@ -25,6 +26,7 @@
 //! key AEAD 包裹经中转递交，中转零知识。
 
 pub mod capture;
+pub mod cursor;
 pub mod device;
 pub mod engine;
 pub mod envelope;

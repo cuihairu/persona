@@ -37,6 +37,9 @@ pub trait SyncRemote: Send + Sync {
         since: Option<&str>,
         limit: u32,
     ) -> Result<(Vec<SyncOp>, Option<String>)>;
+    /// 组当前指令流水位（sync-group-mode §二.5.5「组最新版本号」）——服务
+    /// 器 oplog 最大 seq；空组为 0。
+    async fn head_seq(&self) -> Result<i64>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,11 +173,44 @@ impl<R: SyncRemote> SyncEngine<R> {
         if max_lamport_seen > 0 {
             self.repo.bump_lamport(max_lamport_seen).await?;
         }
+        // 完整跑完一轮 pull（哪怕无新 op）= 与组对过账，记最近同步时间。
+        self.repo.mark_synced(Utc::now()).await?;
         Ok(PullCycleReport {
             applied,
             skipped_travel: false,
         })
     }
+
+    /// 同步状态（sync-group-mode §二.5.5）：组最新版本号、本机已同步水位、
+    /// 落后条数、待推条数与最近同步时间。只读，不动任何周期状态。
+    pub async fn sync_status(&self) -> Result<SyncStatusReport> {
+        let head_seq = self.remote.head_seq().await?;
+        let local_watermark = self.repo.local_watermark().await?;
+        let pending_push = self.repo.pending_count().await?;
+        let last_sync_at = self.repo.get_state().await?.last_sync_at;
+        Ok(SyncStatusReport {
+            head_seq,
+            local_watermark,
+            behind: (head_seq - local_watermark).max(0),
+            pending_push,
+            last_sync_at,
+        })
+    }
+}
+
+/// 组同步水位快照（设置页状态显示的数据面）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncStatusReport {
+    /// 组最新版本号（服务器 oplog 最大 seq；空组 0）。
+    pub head_seq: i64,
+    /// 本机已同步水位（已拉到的 seq；从未拉过 0）。
+    pub local_watermark: i64,
+    /// 落后组多少条指令（head − local，不取负）。
+    pub behind: i64,
+    /// 本机已产生、尚未推上组的指令数。
+    pub pending_push: i64,
+    /// 最近一次成功同步周期；None = 从未同步。
+    pub last_sync_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[cfg(test)]
@@ -233,10 +269,35 @@ mod tests {
 
         async fn pull_ops(
             &self,
-            _since: Option<&str>,
-            _limit: u32,
+            since: Option<&str>,
+            limit: u32,
         ) -> Result<(Vec<SyncOp>, Option<String>)> {
-            Ok((self.state.lock().unwrap().ops.clone(), None))
+            // 游标语义与 server 同构：cursor 位点 = 已返回条数，next 指向下
+            // 一页起点；拉到最后一页返回 None（否则引擎循环永不收尾）。
+            let state = self.state.lock().unwrap();
+            let start = match since {
+                Some(raw) => crate::sync::cursor::decode_cursor(raw)
+                    .map(|(seq, _)| seq as usize)
+                    .unwrap_or(0),
+                None => 0,
+            };
+            let total = state.ops.len();
+            let end = start.saturating_add(limit as usize).min(total);
+            let page = state.ops[start.min(total)..end].to_vec();
+            // 与 server 同语义：非空页恒返回该页最后一行的游标（空页 null，
+            // 客户端按「空页才停」循环）——水位因此总能推进到已消费位点。
+            let next = (end > start).then(|| {
+                crate::sync::cursor::encode_cursor(
+                    end as i64,
+                    &state.ops[end - 1].op_id.to_string(),
+                )
+            });
+            Ok((page, next))
+        }
+
+        async fn head_seq(&self) -> Result<i64> {
+            // 内存远端的「服务器 seq」= 累计 op 条数（push 进几条 head 涨几条）
+            Ok(self.state.lock().unwrap().ops.len() as i64)
         }
     }
 
@@ -253,6 +314,10 @@ mod tests {
             limit: u32,
         ) -> Result<(Vec<SyncOp>, Option<String>)> {
             self.as_ref().pull_ops(since, limit).await
+        }
+
+        async fn head_seq(&self) -> Result<i64> {
+            self.as_ref().head_seq().await
         }
     }
 
@@ -415,5 +480,82 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(op.lamport, 8);
+    }
+
+    // ---- sync_status（sync-group-mode §二.5.5 状态显示）----
+
+    #[tokio::test]
+    async fn sync_status_tracks_head_watermark_pending_and_last_sync() {
+        let (engine, remote) = fixture(false).await;
+
+        // 初始：组 head=0，本机水位 0，从未同步
+        let s = engine.sync_status().await.unwrap();
+        assert_eq!(
+            (s.head_seq, s.local_watermark, s.behind, s.pending_push),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(s.last_sync_at, None);
+
+        // 组里出现 5 条指令 + 本机离线写 2 条：落后 5、待推 2
+        remote.add(
+            (1..=5)
+                .map(|i| remote_put(i, 1, ItemKind::Credential))
+                .collect(),
+        );
+        for _ in 0..2 {
+            engine
+                .record_local_change(
+                    Uuid::new_v4(),
+                    ItemKind::Credential,
+                    OpType::Put,
+                    put_payload(1),
+                )
+                .await
+                .unwrap();
+        }
+        let before = engine.sync_status().await.unwrap();
+        assert_eq!(
+            (
+                before.head_seq,
+                before.local_watermark,
+                before.behind,
+                before.pending_push,
+                before.last_sync_at.is_none()
+            ),
+            (5, 0, 5, 2, true)
+        );
+
+        // pull 完成：水位到 5、落后清零、记下同步时间；待推不受 pull 影响
+        engine.pull_cycle().await.unwrap();
+        let after = engine.sync_status().await.unwrap();
+        assert_eq!(after.local_watermark, 5);
+        assert_eq!(after.behind, 0);
+        assert_eq!(after.pending_push, 2);
+        assert!(after.last_sync_at.is_some());
+
+        // push 完成：待推清零；head 不含未推前的 2 条时是 5，推完远端变 7
+        engine.push_cycle().await.unwrap();
+        let final_status = engine.sync_status().await.unwrap();
+        assert_eq!(final_status.head_seq, 7, "推上的 2 条计入组流水位");
+        assert_eq!(final_status.pending_push, 0);
+        assert_eq!(final_status.behind, 2, "远端又被自己推进(自推自) → 还差拉");
+    }
+
+    #[tokio::test]
+    async fn pull_again_never_loops_and_watermark_reaches_head() {
+        // 大批次跨页拉取：水位必须一路推进到 head（位点续传）
+        let (engine, remote) = fixture(false).await;
+        remote.add(
+            (1..=450)
+                .map(|i| remote_put(i, 1, ItemKind::Credential))
+                .collect(),
+        );
+        let report = engine.pull_cycle().await.unwrap();
+        assert_eq!(report.applied, 450);
+        let s = engine.sync_status().await.unwrap();
+        assert_eq!((s.local_watermark, s.behind), (450, 0));
+        // 游标推进到头后，下一轮 pull 是一次空页往返
+        let again = engine.pull_cycle().await.unwrap();
+        assert_eq!(again.applied, 0);
     }
 }

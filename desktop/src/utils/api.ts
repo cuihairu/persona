@@ -96,6 +96,7 @@ import type {
   SyncPairingCreateOutcome,
   SyncPairingPollOutcome,
   SyncRotateReport,
+  SyncStatusReport,
   FaviconData,
   BiometricStatus,
   TravelStatus,
@@ -341,6 +342,11 @@ class PersonaAPI {
   /** 立即同步：存量灌入 → pull/materialize/push 周期，返回计数汇总 */
   async syncNow(): Promise<ApiResponse<SyncNowReport>> {
     return invoke('sync_now');
+  }
+
+  /** 同步状态快照：组最新版本号/本机水位/落后 N/待推 N/最近同步时间（只读） */
+  async syncStatus(): Promise<ApiResponse<SyncStatusReport>> {
+    return invoke('sync_status');
   }
 
   /** group key 轮换：换信封 + 全量重包（吊销设备真正闭环的安全操作） */

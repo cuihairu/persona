@@ -998,3 +998,17 @@ export interface SyncJoinBeginOutcome {
   /** 中转会话 id（confirm / cancel 定位用） */
   session_id: string;
 }
+
+/** `sync_status` 返回（对应 Rust SyncStatusInfo）：组同步水位快照 */
+export interface SyncStatusReport {
+  /** 组最新版本号（服务器指令流最大 seq；空组 0） */
+  headSeq: number;
+  /** 本机已同步水位（已拉到的 seq；从未拉过 0） */
+  localWatermark: number;
+  /** 落后组多少条指令 */
+  behind: number;
+  /** 本机已产生、尚未推上组的指令数 */
+  pendingPush: number;
+  /** 最近一次成功同步（RFC3339；null = 从未同步） */
+  lastSyncAt: string | null;
+}

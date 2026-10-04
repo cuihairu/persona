@@ -239,6 +239,12 @@ export default {
       syncNow: 'Sync now',
       syncDone: 'Synced — pulled {{pulled}}, pushed {{pushed}}',
       syncFailed: 'Sync failed',
+      statusHead: 'Group version #{{head}}',
+      statusUpToDate: 'Up to date',
+      statusBehind: 'Behind by {{count}} instructions',
+      statusPending: '{{count}} local instructions not pushed',
+      statusLastSync: 'Last synced {{time}}',
+      statusNever: 'Never synced',
       conflictsFound:
         '{{count}} item(s) were changed on multiple devices — pick which version to keep (all-or-nothing, no field merging).',
       viewConflicts: 'Review conflicts',

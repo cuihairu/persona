@@ -233,6 +233,13 @@ impl<R: SyncRemote> SyncSession<R> {
         })
     }
 
+    /// 同步状态快照（sync-group-mode §二.5.5 设置页显示的数据面）：组最新
+    /// 版本号、本机已同步水位、落后条数、待推条数、最近同步时间。只读，
+    /// 不跑周期——「立即同步」仍走 [`Self::run_cycle`]。
+    pub async fn status(&self) -> Result<super::engine::SyncStatusReport> {
+        self.engine.sync_status().await
+    }
+
     /// oplog 增长治理（E2EE_SYNC_DESIGN §11 开放问题 3 的客户端半边）。
     /// 本地 oplog 是 append-only 密文日志，长期使用无界增长；本方法按保守
     /// 谓词只清「再无消费方」的历史版本：
@@ -593,6 +600,10 @@ mod tests {
             _limit: u32,
         ) -> Result<(Vec<SyncOp>, Option<String>)> {
             Ok((Vec::new(), None))
+        }
+
+        async fn head_seq(&self) -> Result<i64> {
+            Ok(self.pushed.lock().unwrap().len() as i64)
         }
     }
 

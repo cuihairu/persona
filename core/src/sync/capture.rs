@@ -110,6 +110,9 @@ mod tests {
         ) -> Result<(Vec<SyncOp>, Option<String>)> {
             Ok((vec![], None))
         }
+        async fn head_seq(&self) -> Result<i64> {
+            Ok(0)
+        }
     }
 
     fn sample_snapshot() -> SyncItemSnapshot {

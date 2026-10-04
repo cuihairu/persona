@@ -2310,6 +2310,24 @@ pub async fn sync_now(
     Ok(ApiResponse::success(SyncNowReport::from(report)))
 }
 
+/// 同步状态快照（sync-group-mode §二.5.5）：组最新版本号 / 本机已同步水位 /
+/// 落后 N 条 / 待推 N 条 / 最近同步时间。只读，不跑任何周期——「立即同步」
+/// 仍是 sync_now。门禁与 sync_now 同（需解锁且已入组；head 查询走服务器，
+/// 服务器不可达时如实报错，不谎报「已最新」）。
+#[command]
+pub async fn sync_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncStatusInfo>, String> {
+    let session = match open_sync_session(&state).await {
+        Ok(session) => session,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match session.status().await {
+        Ok(report) => Ok(ApiResponse::success(SyncStatusInfo::from(report))),
+        Err(e) => Ok(ApiResponse::error(format!("Sync status failed: {e}"))),
+    }
+}
+
 /// group key 轮换（E2EE sync 阶段 3d）：换信封 + 全量重包——吊销设备
 /// 真正闭环的安全操作。核心流程在 core `SyncSession::rotate_group_key`；
 /// 这里只做宿主编排。诚实边界（前端确认弹窗须如实提示，见 core 文档）：

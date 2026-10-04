@@ -8640,6 +8640,41 @@ async fn sync_now_gates_before_any_network_or_crypto() {
     assert!(resp.error.unwrap().contains("locked"));
 }
 
+/// sync_status（§二.5.5 状态显示）与 sync_now 同门禁——共用 open_sync_session：
+/// 只读快照也不越过「未初始化/未加入/未配置/锁定」任何一道，且失败如实
+/// 报错（不返回假 0 水位）。聚合语义（head/水位/落后/待推/最近同步）在
+/// core engine 测试覆盖，宿主层只验门禁。
+#[tokio::test]
+async fn sync_status_shares_sync_now_gates() {
+    let app = mock_app();
+
+    // 未初始化 service → 拒绝
+    let resp = sync_status(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success, "must reject before init");
+    assert!(resp.error.unwrap().contains("not initialized"));
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 未加入 → 拒绝
+    let resp = sync_status(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not joined"));
+
+    // 已加入但服务器未配置 → 拒绝（不触网）
+    seed_device_identity(&app, &db_path).await;
+    let resp = sync_status(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("not configured"));
+
+    // 锁定后 → 拒绝
+    let resp = lock_service(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = sync_status(state.clone()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("locked"));
+}
+
 /// 冲突命令族（阶段 3c）与 sync_now 同门禁——共用 open_sync_session：
 /// 未初始化/未加入/未配置/锁定各态先于任何网络或密码学访问被拒；
 /// resolve 的参数格式校验先于会话装配（Malformed 不触网）。裁决的完整

@@ -726,6 +726,24 @@ pub async fn pull(State(state): State<AppState>, Query(params): Query<PullQuery>
     (Json(PullResponse { ops, next_cursor })).into_response()
 }
 
+#[derive(Debug, serde::Serialize)]
+struct StatusResponse {
+    head_seq: i64,
+}
+
+/// GET /sync/status：组指令流水位（sync-group-mode §二.5.5「组最新版本号」，
+/// 设置页状态显示用）。只回 max(seq)——纯元数据，不含密文。
+pub async fn status(State(state): State<AppState>) -> Response {
+    let head_seq: i64 = match sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM sync_oplog")
+        .fetch_one(&state.pool)
+        .await
+    {
+        Ok(seq) => seq,
+        Err(error) => return ApiError::internal(error).into_response(),
+    };
+    (Json(StatusResponse { head_seq })).into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1520,6 +1538,46 @@ mod tests {
         let payload = rest[0]["payload"].as_object().unwrap();
         let ciphertext = B64.decode(payload["ciphertext"].as_str().unwrap()).unwrap();
         assert_eq!(ciphertext.len(), 8);
+    }
+
+    #[tokio::test]
+    async fn status_reports_group_head_seq() {
+        let router = router().await;
+
+        // 空组：head_seq = 0（不泄存在性之外的任何东西，纯元数据）
+        let (status, body) = send(router.clone(), get_req("/api/v1/sync/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["head_seq"], 0);
+
+        // 推 3 条后 head_seq = 3；重复 op（幂等拒收）不涨水位
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4();
+        let ops: Vec<Value> = (0..3)
+            .map(|i| {
+                put_op_json(
+                    &Uuid::new_v4().to_string(),
+                    &item.to_string(),
+                    i + 1,
+                    &device,
+                    &[i as u8; 8],
+                )
+            })
+            .collect();
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/oplog",
+                &json!({"ops": ops}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["accepted"], 3);
+
+        let (status, body) = send(router, get_req("/api/v1/sync/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["head_seq"], 3);
     }
 
     #[tokio::test]

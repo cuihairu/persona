@@ -235,6 +235,12 @@ export default {
       syncNow: '立即同步',
       syncDone: '同步完成——拉取 {{pulled}} 条，推送 {{pushed}} 条',
       syncFailed: '同步失败',
+      statusHead: '组版本号 #{{head}}',
+      statusUpToDate: '已最新',
+      statusBehind: '落后 {{count}} 条指令',
+      statusPending: '待推送 {{count}} 条',
+      statusLastSync: '最近同步 {{time}}',
+      statusNever: '从未同步',
       conflictsFound:
         '{{count}} 个条目存在并发修改的冲突版本——请选择保留哪个（整体取舍，不做字段合并）。',
       viewConflicts: '查看冲突',

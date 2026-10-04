@@ -24,6 +24,8 @@ pub struct SyncState {
     pub device_id: Option<Uuid>,
     /// pull 游标（服务器 seq），None = 从头。
     pub last_pull_cursor: Option<String>,
+    /// 最近一次成功同步周期的时间（迁移 017；None = 从未同步）。
+    pub last_sync_at: Option<DateTime<Utc>>,
 }
 
 pub struct SyncRepository {
@@ -40,7 +42,8 @@ impl SyncRepository {
     /// 读本设备同步状态；行不存在时返回全默认（lamport 0 / 未注册 / 无游标）。
     pub async fn get_state(&self) -> Result<SyncState> {
         let row = sqlx::query(
-            "SELECT local_lamport, device_id, last_pull_cursor FROM sync_state WHERE id = 1",
+            "SELECT local_lamport, device_id, last_pull_cursor, last_sync_at
+             FROM sync_state WHERE id = 1",
         )
         .fetch_optional(self.db.pool())
         .await
@@ -50,13 +53,18 @@ impl SyncRepository {
                 local_lamport: 0,
                 device_id: None,
                 last_pull_cursor: None,
+                last_sync_at: None,
             });
         };
         let device_id: Option<String> = row.get("device_id");
+        let last_sync_at: Option<String> = row.get("last_sync_at");
         Ok(SyncState {
             local_lamport: row.get::<i64, _>("local_lamport") as u64,
             device_id: device_id.and_then(|s| Uuid::parse_str(&s).ok()),
             last_pull_cursor: row.get("last_pull_cursor"),
+            last_sync_at: last_sync_at
+                .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
+                .map(|t| t.with_timezone(&Utc)),
         })
     }
 
@@ -95,6 +103,41 @@ impl SyncRepository {
         .await
         .map_err(|e| PersonaError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    /// 记「最近一次成功同步周期」时间（sync-group-mode §二.5.5 状态显示）。
+    pub async fn mark_synced(&self, at: DateTime<Utc>) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sync_state (id, last_sync_at) VALUES (1, ?)
+             ON CONFLICT(id) DO UPDATE SET last_sync_at = excluded.last_sync_at",
+        )
+        .bind(at.to_rfc3339())
+        .execute(self.db.pool())
+        .await
+        .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 本机已同步水位：pull 游标解回服务器 seq；无游标（从没拉过）= 0。
+    pub async fn local_watermark(&self) -> Result<i64> {
+        let state = self.get_state().await?;
+        Ok(state
+            .last_pull_cursor
+            .as_deref()
+            .and_then(|raw| crate::sync::cursor::decode_cursor(raw).ok())
+            .map(|(seq, _)| seq)
+            .unwrap_or(0))
+    }
+
+    /// push 队列长度（本机已产生、未推上服务器的指令数）。
+    pub async fn pending_count(&self) -> Result<i64> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS n FROM sync_oplog WHERE origin = 'local' AND push_state = 'pending'",
+        )
+        .fetch_one(self.db.pool())
+        .await
+        .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(row.get::<i64, _>("n"))
     }
 
     // ---- oplog ----

@@ -13,6 +13,7 @@ import type {
   SyncDeviceStatus,
   SyncDeviceView,
   SyncNowReport,
+  SyncStatusReport,
   ThemePreference,
   TravelStatus,
 } from '@/types';
@@ -254,6 +255,8 @@ const SyncDevicesSection: React.FC = () => {
   // 最近一轮同步报告（conflicts > 0 时亮冲突入口）+ 裁决弹窗开关
   const [lastReport, setLastReport] = useState<SyncNowReport | null>(null);
   const [conflictsOpen, setConflictsOpen] = useState(false);
+  // 同步水位快照（组版本号/落后 N/待推 N/最近同步时间；只读，查询失败不亮行）
+  const [syncStatus, setSyncStatus] = useState<SyncStatusReport | null>(null);
   // 隐私红线：加入 E2EE 同步前先过数据范围披露，确认才执行 sync_join
   const [consentOpen, setConsentOpen] = useState(false);
 
@@ -288,9 +291,18 @@ const SyncDevicesSection: React.FC = () => {
     void refreshStatus();
   }, []);
 
-  // joined 才拉列表（未加入时命令会报「未加入」）
+  // joined 才拉列表与水位快照（未加入时命令会报「未加入」）
   useEffect(() => {
-    if (status?.joined) void refreshDevices();
+    if (!status?.joined) return;
+    void refreshDevices();
+    personaAPI
+      .syncStatus()
+      .then((resp) => {
+        if (resp.success && resp.data) setSyncStatus(resp.data);
+      })
+      .catch(() => {
+        // 水位查询失败（服务器不可达/旧版 server 无路由）保持隐藏，不谎报
+      });
   }, [status?.joined]);
 
   const join = async (): Promise<void> => {
@@ -339,6 +351,13 @@ const SyncDevicesSection: React.FC = () => {
             pushed: resp.data.pushed,
           }),
         );
+        // 周期跑完水位已变，重取快照（失败静默，保留旧值）
+        personaAPI
+          .syncStatus()
+          .then((r) => {
+            if (r.success && r.data) setSyncStatus(r.data);
+          })
+          .catch(() => {});
         if (resp.data.conflicts > 0) setConflictsOpen(true);
       } else {
         toast.error(resp.error || t('settings.syncDevices.syncFailed'));
@@ -498,6 +517,43 @@ const SyncDevicesSection: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {syncStatus && (
+            <div
+              className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-gray-500 dark:text-gray-400 px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg"
+              data-testid="sync-status-row"
+            >
+              <span data-testid="sync-status-head">
+                {t('settings.syncDevices.statusHead', { head: syncStatus.headSeq })}
+              </span>
+              {syncStatus.behind > 0 ? (
+                <span
+                  className="text-amber-600 dark:text-amber-400"
+                  data-testid="sync-status-behind"
+                >
+                  {t('settings.syncDevices.statusBehind', { count: syncStatus.behind })}
+                </span>
+              ) : syncStatus.pendingPush > 0 ? (
+                <span
+                  className="text-amber-600 dark:text-amber-400"
+                  data-testid="sync-status-pending"
+                >
+                  {t('settings.syncDevices.statusPending', { count: syncStatus.pendingPush })}
+                </span>
+              ) : (
+                <span className="text-green-600 dark:text-green-400" data-testid="sync-status-uptodate">
+                  {t('settings.syncDevices.statusUpToDate')}
+                </span>
+              )}
+              <span data-testid="sync-status-last-sync">
+                {syncStatus.lastSyncAt
+                  ? t('settings.syncDevices.statusLastSync', {
+                      time: new Date(syncStatus.lastSyncAt).toLocaleString(),
+                    })
+                  : t('settings.syncDevices.statusNever')}
+              </span>
+            </div>
+          )}
 
           {lastReport && lastReport.conflicts > 0 && (
             <div

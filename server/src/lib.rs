@@ -175,6 +175,7 @@ pub fn build_router(state: AppState) -> Router {
                 )
                 .route("/group-key/rotate-begin", post(api::sync_rotate_begin))
                 .route("/oplog", post(api::sync_push).get(api::sync_pull))
+                .route("/status", get(api::sync_status))
                 .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
                 .layer(middleware::from_fn_with_state(
                     state.clone(),
