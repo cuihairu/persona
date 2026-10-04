@@ -1455,7 +1455,7 @@ async function offerSaveBar(proposal: SaveProposal | null) {
     // A click on a submit button and the form's own submit event both fire
     // for one action — don't rebuild (and re-lookup) a bar that's already
     // showing this exact proposal.
-    const proposalKey = `${proposal.username ?? ''} ${proposal.password}`;
+    const proposalKey = `${proposal.username ?? ''}|${proposal.password}`;
     if (saveBar && visibleSaveKey === proposalKey) return;
 
     // Blocked/suspicious domains never see the bar (same gate as fills:
@@ -1687,7 +1687,7 @@ function renderSaveBar(proposal: SaveProposal, updateTarget: { item_id: string; 
 
     mountPersonaUi(document).root.appendChild(bar);
     saveBar = bar;
-    visibleSaveKey = `${proposal.username ?? ''} ${proposal.password}`;
+    visibleSaveKey = `${proposal.username ?? ''}|${proposal.password}`;
 }
 
 // Start
