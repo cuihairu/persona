@@ -786,28 +786,28 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 
 ### 错误码列表
 
-| 错误码                       | 描述                                  |
-| ---------------------------- | ------------------------------------- |
-| `invalid_json`               | JSON 解析失败                         |
-| `unknown_type`               | 未知的消息类型                        |
-| `locked`                     | 保险库已锁定，需要解锁                |
-| `not_found`                  | 请求的资源不存在                      |
-| `origin_mismatch`            | Origin 不匹配                         |
-| `origin_binding_required`    | 条目未设置 URL，无法进行 Origin 绑定  |
-| `authentication_failed`      | 认证失败                              |
-| `wrong_identity`             | 当前 active identity 不匹配           |
-| `user_confirmation_required` | 需要用户确认                          |
-| `session_expired`            | 会话已过期                            |
-| `rate_limited`               | 请求过于频繁                          |
-| `user_gesture_required`      | 缺少用户手势（v2）                    |
-| `no_active_identity`         | 未设置 active identity（v2）          |
-| `passkey_rp_mismatch`        | origin 与 passkey 的 rp_id 不符（v2） |
-| `passkey_alg_unsupported`    | pubKeyCredParams 不含 ES256（v2）     |
-| `passkey_item_not_found`     | 指定的 passkey 不存在（v2）           |
-| `passkey_origin_mismatch`    | passkey origin 校验失败（预留）（v2） |
-| `save_desktop_denied`        | 保存/更新被桌面审批拒绝（v4）         |
-| `unsupported_credential_type`| 条目类型不支持该操作                  |
-| `invalid_payload`            | payload 校验失败（如空密码）          |
+| 错误码                        | 描述                                  |
+| ----------------------------- | ------------------------------------- |
+| `invalid_json`                | JSON 解析失败                         |
+| `unknown_type`                | 未知的消息类型                        |
+| `locked`                      | 保险库已锁定，需要解锁                |
+| `not_found`                   | 请求的资源不存在                      |
+| `origin_mismatch`             | Origin 不匹配                         |
+| `origin_binding_required`     | 条目未设置 URL，无法进行 Origin 绑定  |
+| `authentication_failed`       | 认证失败                              |
+| `wrong_identity`              | 当前 active identity 不匹配           |
+| `user_confirmation_required`  | 需要用户确认                          |
+| `session_expired`             | 会话已过期                            |
+| `rate_limited`                | 请求过于频繁                          |
+| `user_gesture_required`       | 缺少用户手势（v2）                    |
+| `no_active_identity`          | 未设置 active identity（v2）          |
+| `passkey_rp_mismatch`         | origin 与 passkey 的 rp_id 不符（v2） |
+| `passkey_alg_unsupported`     | pubKeyCredParams 不含 ES256（v2）     |
+| `passkey_item_not_found`      | 指定的 passkey 不存在（v2）           |
+| `passkey_origin_mismatch`     | passkey origin 校验失败（预留）（v2） |
+| `save_desktop_denied`         | 保存/更新被桌面审批拒绝（v4）         |
+| `unsupported_credential_type` | 条目类型不支持该操作                  |
+| `invalid_payload`             | payload 校验失败（如空密码）          |
 
 ## 配置
 
