@@ -15,14 +15,14 @@ OS keyring + OS 认证弹框做门禁**。本设计是它的升级：把"弹框�
 
 ## 1. 平台支持矩阵
 
-| 平台      | API                                                                                                                    | 绑定强度               | 本轮状态                                                        |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------- |
-| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2）     |
-| Android   | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2）     |
+| 平台      | API                                                                                                                    | 绑定强度               | 本轮状态                                                                        |
+| --------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------- |
+| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2）                     |
+| Android   | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2）                     |
 | HarmonyOS | ArkTS `@ohos.userIAM.userAuth` + HUKS 通用密钥库（密钥属性绑定用户认证）                                               | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2；API 语义待真机核实） |
-| macOS     | Secure Enclave P-256 + ECIES（路线 B'，§5.2）                                                                          | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层                      |
-| Windows   | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | **spike 工具已备，待真机**（§6）；当前保持 Windows Hello 门禁层 |
-| Linux     | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.1 诚实局限）                                       |
+| macOS     | Secure Enclave P-256 + ECIES（路线 B'，§5.2）                                                                          | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层                                      |
+| Windows   | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | **spike 工具已备，待真机**（§6）；当前保持 Windows Hello 门禁层                 |
+| Linux     | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.1 诚实局限）                                                       |
 
 绑定强度三档（`BiometricWrapCapability`，core 定义、三端共用）：
 

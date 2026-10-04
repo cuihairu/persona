@@ -200,14 +200,14 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 
 ## 10. 威胁模型增补（并入 THREAT_MODEL.md）
 
-| 威胁                                      | 控制                                                                                                       |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 钓鱼站用合法 rp_id 发起断言（同域恶意页） | 选择 UI 显示完整 origin + 用户显式点击；审计留痕；与密码填充同源策略一致                                   |
-| 扩展被攻破，替任意域请求签名              | core 侧 origin↔rp_id 校验 + HMAC 配对绑定扩展实例 + user gesture + 桌面确认策略（`confirm_on_fill` 同级） |
-| 页面以 hidden iframe 触发 WebAuthn        | 拦截层拒绝 cross-origin iframe 上下文（WebAuthn 规范本身禁止，拦截层双保险）                               |
-| 解锁态自动化脚本借用桥接静默签名          | 与 SSH agent 同思路：passkey assert 走敏感操作再认证/生物识别闸门，可策略强制                              |
-| 导出备份泄露 passkey 私钥                 | 与库同级加密（Argon2id 备份加密）；`export_allowed=false` 仅在 JSON/YAML 导出跳过私钥——备份是物理快照、不检查该标志（已知边界）；导出事件审计                               |
-| signCount=0 无克隆检测                    | 接受的限制（业界软件 passkey 现状），条目详情明示用户                                                      |
+| 威胁                                      | 控制                                                                                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| 钓鱼站用合法 rp_id 发起断言（同域恶意页） | 选择 UI 显示完整 origin + 用户显式点击；审计留痕；与密码填充同源策略一致                                                                      |
+| 扩展被攻破，替任意域请求签名              | core 侧 origin↔rp_id 校验 + HMAC 配对绑定扩展实例 + user gesture + 桌面确认策略（`confirm_on_fill` 同级）                                    |
+| 页面以 hidden iframe 触发 WebAuthn        | 拦截层拒绝 cross-origin iframe 上下文（WebAuthn 规范本身禁止，拦截层双保险）                                                                  |
+| 解锁态自动化脚本借用桥接静默签名          | 与 SSH agent 同思路：passkey assert 走敏感操作再认证/生物识别闸门，可策略强制                                                                 |
+| 导出备份泄露 passkey 私钥                 | 与库同级加密（Argon2id 备份加密）；`export_allowed=false` 仅在 JSON/YAML 导出跳过私钥——备份是物理快照、不检查该标志（已知边界）；导出事件审计 |
+| signCount=0 无克隆检测                    | 接受的限制（业界软件 passkey 现状），条目详情明示用户                                                                                         |
 
 ## 11. 导入导出
 
@@ -226,12 +226,12 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 
 ## 13. 分阶段落地
 
-| 阶段          | 内容                                                                                                                                   | 验收                                     |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| 阶段          | 内容                                                                                                                                                              | 验收                                     |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
 | P1 core       | 模型/存储/迁移、`p256`+`coset` 接入、CLI（`persona passkey create/list/show/remove`、`persona passkey self-test <id>` 子命令做本地注册+断言自检）、导出导入、审计 | workspace 测试 + webauthn-rs RP 校验全绿 |
-| P2 浏览器     | 桥接 v2 三消息、扩展 main-world 拦截、选择/确认 UI、回退原生                                                                           | webauthn.io + GitHub 真站互通            |
-| P3 桌面与策略 | 桌面 passkey 列表/详情、再认证与生物识别闸门接线、域策略联动                                                                           | 桌面端全流程                             |
-| P4 远期       | OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入、CXF                                                            | 各平台原生 UI 出 Persona 条目            |
+| P2 浏览器     | 桥接 v2 三消息、扩展 main-world 拦截、选择/确认 UI、回退原生                                                                                                      | webauthn.io + GitHub 真站互通            |
+| P3 桌面与策略 | 桌面 passkey 列表/详情、再认证与生物识别闸门接线、域策略联动                                                                                                      | 桌面端全流程                             |
+| P4 远期       | OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入、CXF                                                                                       | 各平台原生 UI 出 Persona 条目            |
 
 ## 13.1 P4 实施计划（OS passkey provider + conditional mediation，2026-09-22 细化）
 
@@ -247,7 +247,7 @@ JS 侧拦截 `mediation: "conditional"` 并自造 UI 会破坏原生 passkey 回
 | P4.2 | macOS   | AuthenticationServices `ASAuthorizationCredentialProviderExtension` + `ASAuthorizationPlatformPublicKeyCredentialProvider`：系统弹「使用 Persona 登录」→ extension 进程经 App Group/Unix socket 调 persona bridge → provider assert | Safari/Chrome 的 conditional-UI 下拉出现 Persona 条目；webauthn.io 登录走通 |
 | P4.3 | Windows | Windows Hello passkey 插件（WebAuthn UX entitlement / Credential Provider）：系统选择器出 Persona 条目 → 本地 IPC 调 bridge                                                                                                         | Edge/Chrome conditional-UI 出条目；GitHub 登录走通                          |
 | P4.4 | 共通    | 已落地（2026-09-24，随 P4.1）：provider 路径 assert 走与扩展完全相同的敏感操作门禁与桌面审批闸门；`passkey_asserted` 审计携带 `via=extension\|os_provider` 元数据（`log_audit_with_metadata`），provider 来源可独立追溯             | 协议/审计用例绿                                                             |
-| P4.5 | 共通    | CXF（FIDO 凭据交换）跟踪：`foreign_key_ref` 字段**计划预留、尚未落地**（模型/存储中不存在），标准定稿前不实现                                                                                                                                                              | —                                                                           |
+| P4.5 | 共通    | CXF（FIDO 凭据交换）跟踪：`foreign_key_ref` 字段**计划预留、尚未落地**（模型/存储中不存在），标准定稿前不实现                                                                                                                       | —                                                                           |
 
 非目标不变：caBLE/hybrid、CTAP2 传输层、attestation（§2）。
 

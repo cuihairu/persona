@@ -99,17 +99,17 @@ Unlock」一节的固有暴露说明）。
 
 HTTP 端点（除 health/metrics 外全部要求 Bearer 令牌）：
 
-| 端点                  | 方法         | 用途                                            | 请求上限                          |
-| --------------------- | ------------ | ----------------------------------------------- | --------------------------------- |
-| `/api/v1/events`      | POST         | 上报审计事件批（单批 ≤500 条）                  | 线上 1 MiB（gzip）/ 解压后 10 MiB |
-| `/api/v1/events`      | GET          | 查询已存事件（按动作/成败/时间过滤 + 游标分页） | —                                 |
-| `/api/v1/backups`     | POST / GET   | 上传备份 / 列版本                               | 256 MiB                           |
-| `/api/v1/backups/:id` | GET / DELETE | 下载 / 删除某版本                               | —                                 |
-| `/api/v1/sync/*`      | POST / GET / DELETE | 设备注册、组密钥信封取/传、oplog 推拉（本文端到端同步一节的承载面） | —                     |
-| `/api/v1/auth/*`      | POST         | 设备 SRP 认证（register/challenge/verify 换短期 token） | —                        |
-| `/api/v1/accounts/*`  | POST / GET / DELETE | 账号域（SRP 密码、passkey 仪式、恢复码、账号设备/会话） | 线上 1 MiB     |
-| `/api/v1/pairing/*`   | POST / GET / DELETE | 同步组动态密码配对信箱（**免 Bearer**，TTL 600s、队列 ≤4、payload ≤4KiB） | 4 KiB          |
-| `/health`、`/metrics` | GET          | 存活与指标                                      | 公开                              |
+| 端点                  | 方法                | 用途                                                                      | 请求上限                          |
+| --------------------- | ------------------- | ------------------------------------------------------------------------- | --------------------------------- |
+| `/api/v1/events`      | POST                | 上报审计事件批（单批 ≤500 条）                                            | 线上 1 MiB（gzip）/ 解压后 10 MiB |
+| `/api/v1/events`      | GET                 | 查询已存事件（按动作/成败/时间过滤 + 游标分页）                           | —                                 |
+| `/api/v1/backups`     | POST / GET          | 上传备份 / 列版本                                                         | 256 MiB                           |
+| `/api/v1/backups/:id` | GET / DELETE        | 下载 / 删除某版本                                                         | —                                 |
+| `/api/v1/sync/*`      | POST / GET / DELETE | 设备注册、组密钥信封取/传、oplog 推拉（本文端到端同步一节的承载面）       | —                                 |
+| `/api/v1/auth/*`      | POST                | 设备 SRP 认证（register/challenge/verify 换短期 token）                   | —                                 |
+| `/api/v1/accounts/*`  | POST / GET / DELETE | 账号域（SRP 密码、passkey 仪式、恢复码、账号设备/会话）                   | 线上 1 MiB                        |
+| `/api/v1/pairing/*`   | POST / GET / DELETE | 同步组动态密码配对信箱（**免 Bearer**，TTL 600s、队列 ≤4、payload ≤4KiB） | 4 KiB                             |
+| `/health`、`/metrics` | GET                 | 存活与指标                                                                | 公开                              |
 
 设备名由命中的令牌推导（客户端不可自报）；同设备与最新版本 sha256 相同
 的 push 幂等去重。端点细节见 `SELF_HOST_SERVER.md` 端点速查。

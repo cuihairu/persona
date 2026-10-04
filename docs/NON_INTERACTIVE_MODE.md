@@ -336,9 +336,9 @@ In non-interactive mode, the CLI will:
 
 ### Exit Codes
 
-| Code | Meaning       |
-| ---- | ------------- |
-| 0    | Success       |
+| Code | Meaning                                                           |
+| ---- | ----------------------------------------------------------------- |
+| 0    | Success                                                           |
 | 1    | Error (any failure: bad arguments, authentication, missing input) |
 
 All failures currently funnel through one path: the error message is printed

@@ -63,11 +63,11 @@ This document explains how Persona’s clients (CLI, desktop/Tauri app, browser 
 
 ## Storage & Sync Modes
 
-| Mode                      | Description                                                                                                                                                               | Notes                                                                          |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Local-only                | All data resides under `~/.persona` (or platform-specific path). No network calls.                                                                                        | Best for air-gapped usage. Backups handled manually or via OS-level snapshots. |
-| Self-hosted cloud         | **Planned, not implemented.** A sync adapter would push/pull encrypted blobs to iCloud Drive, Dropbox, WebDAV, or S3; today you only get cloud *backup custody* by exporting and uploading ciphertext yourself (`STORAGE_AND_SYNC.md`). | Cloud would see ciphertext only; encryption keys never leave the device.       |
-| Persona server (optional) | Connect to a Persona-managed or self-hosted server for sync, approvals, and automation workflows. Sync is manual-trigger today ("立即同步" runs pull → apply → push), not realtime. | Still zero-knowledge: payloads are envelope-encrypted locally before upload.   |
+| Mode                      | Description                                                                                                                                                                                                                             | Notes                                                                          |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Local-only                | All data resides under `~/.persona` (or platform-specific path). No network calls.                                                                                                                                                      | Best for air-gapped usage. Backups handled manually or via OS-level snapshots. |
+| Self-hosted cloud         | **Planned, not implemented.** A sync adapter would push/pull encrypted blobs to iCloud Drive, Dropbox, WebDAV, or S3; today you only get cloud _backup custody_ by exporting and uploading ciphertext yourself (`STORAGE_AND_SYNC.md`). | Cloud would see ciphertext only; encryption keys never leave the device.       |
+| Persona server (optional) | Connect to a Persona-managed or self-hosted server for sync, approvals, and automation workflows. Sync is manual-trigger today ("立即同步" runs pull → apply → push), not realtime.                                                     | Still zero-knowledge: payloads are envelope-encrypted locally before upload.   |
 
 ### Sync Adapter Design
 

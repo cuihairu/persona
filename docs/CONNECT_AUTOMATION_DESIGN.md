@@ -197,13 +197,13 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 
 ## 8. 实施阶段映射
 
-| 阶段      | 内容                                                                                             | 验收要点                                                    | 威胁模型登记                     |
-| --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | -------------------------------- |
-| 0（本文） | 设计稿                                                                                           | 决策拍板 + 用户确认                                         | 骨架（§6）                       |
-| 1         | core `connect` 服务层：token 表迁移 + 管理 API + scope 过滤 + 锁定门禁编排（框架无关，纯函数化） | core 测试：token 生命周期/scope 过滤/404 同形               | **已落地 2026-09**：`core/src/connect/`（token 表 + scope 过滤 + 锁定编排） |
+| 阶段      | 内容                                                                                             | 验收要点                                                    | 威胁模型登记                                                                                                                   |
+| --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| 0（本文） | 设计稿                                                                                           | 决策拍板 + 用户确认                                         | 骨架（§6）                                                                                                                     |
+| 1         | core `connect` 服务层：token 表迁移 + 管理 API + scope 过滤 + 锁定门禁编排（框架无关，纯函数化） | core 测试：token 生命周期/scope 过滤/404 同形               | **已落地 2026-09**：`core/src/connect/`（token 表 + scope 过滤 + 锁定编排）                                                    |
 | 2         | desktop 内嵌 axum（DR-1 A1）+ 三防线 + 限额 + 设置页 token 管理 UI                               | DR-4 全拒绝路径测试；`cargo test -p persona-desktop` + jest | **已落地 2026-09**：`desktop/src-tauri` 内嵌 listener（`connect_server_start/stop/status`）+ `ConnectAutomationSection` 设置页 |
-| 3         | CLI `persona connect token …` + `serve`（DR-1 A2）                                               | CLI 集成测试（ScriptedUi 缝）；跨宿主同 token 存储互通      | **已落地 2026-09**：`cli/src/commands/connect.rs`（token create/list/revoke + serve） |
-| 4         | 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速上手（curl 示例）                       | 文档与实现一致                                              | **已落地 2026-09-22**（TODO 阶段 4 文档收口） |
+| 3         | CLI `persona connect token …` + `serve`（DR-1 A2）                                               | CLI 集成测试（ScriptedUi 缝）；跨宿主同 token 存储互通      | **已落地 2026-09**：`cli/src/commands/connect.rs`（token create/list/revoke + serve）                                          |
+| 4         | 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速上手（curl 示例）                       | 文档与实现一致                                              | **已落地 2026-09-22**（TODO 阶段 4 文档收口）                                                                                  |
 
 规模预估：3–4 个会话量级；阶段 1–2 是主面。
 
