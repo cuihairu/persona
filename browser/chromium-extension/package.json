@@ -1,6 +1,6 @@
 {
   "name": "persona-chromium-extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Chromium (Chrome/Edge) extension scaffold for Persona autofill and identity switching",
   "scripts": {

@@ -6,6 +6,8 @@ export interface AutofillSettings {
     autoFillTotpOnFocus: boolean;
     autoFillTotpAfterLogin: boolean;
     requireTrustedDomain: boolean;
+    /** Offer the save/update bar when a submitted form carries a password. */
+    savePromptEnabled: boolean;
     minMatchStrengthLogin: number;
     minMatchStrengthTotp: number;
 }
@@ -16,6 +18,7 @@ export const DEFAULT_AUTOFILL_SETTINGS: AutofillSettings = {
     autoFillTotpOnFocus: true,
     autoFillTotpAfterLogin: true,
     requireTrustedDomain: true,
+    savePromptEnabled: true,
     minMatchStrengthLogin: 90,
     minMatchStrengthTotp: 90
 };
@@ -41,6 +44,7 @@ function normalizeSettings(value: any): AutofillSettings {
         autoFillTotpOnFocus: coerceBoolean(raw.autoFillTotpOnFocus, DEFAULT_AUTOFILL_SETTINGS.autoFillTotpOnFocus),
         autoFillTotpAfterLogin: coerceBoolean(raw.autoFillTotpAfterLogin, DEFAULT_AUTOFILL_SETTINGS.autoFillTotpAfterLogin),
         requireTrustedDomain: coerceBoolean(raw.requireTrustedDomain, DEFAULT_AUTOFILL_SETTINGS.requireTrustedDomain),
+        savePromptEnabled: coerceBoolean(raw.savePromptEnabled, DEFAULT_AUTOFILL_SETTINGS.savePromptEnabled),
         minMatchStrengthLogin: clampMatchStrength(raw.minMatchStrengthLogin, DEFAULT_AUTOFILL_SETTINGS.minMatchStrengthLogin),
         minMatchStrengthTotp: clampMatchStrength(raw.minMatchStrengthTotp, DEFAULT_AUTOFILL_SETTINGS.minMatchStrengthTotp)
     };

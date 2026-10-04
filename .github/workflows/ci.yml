@@ -197,5 +197,9 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build Chromium extension
         run: pnpm --filter persona-chromium-extension run build
+      # 扩展的 jest 套件（表单扫描/域名策略/保存提案/原生桥签名…）此前只在本地
+      # 跑，CI 不设门禁——写路径这类改动必须先过它再进主干。
+      - name: Test Chromium extension
+        run: pnpm --filter persona-chromium-extension run test
       - name: Build website
         run: pnpm --filter persona-website run build

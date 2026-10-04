@@ -148,6 +148,27 @@ describe('setAutofillDefaultsForOrigin', () => {
         expect(all['https://a.com']).toBeUndefined();
     });
 
+    it('keeps an entry that only carries savePromptDisabled and clears it back to empty', async () => {
+        // 保存条的「此站永不」：没有 item id 也必须保留条目
+        const entry = await setAutofillDefaultsForOrigin('https://a.com', {
+            savePromptDisabled: true
+        });
+        expect(entry?.savePromptDisabled).toBe(true);
+        expect(await getAutofillDefaultsForOrigin('https://a.com')).toEqual({
+            passwordItemId: undefined,
+            totpItemId: undefined,
+            savePromptDisabled: true,
+            updatedAt: expect.any(Number)
+        });
+
+        // 关掉之后（patch 回 false）三字段全空 → 条目清除
+        const cleared = await setAutofillDefaultsForOrigin('https://a.com', {
+            savePromptDisabled: false
+        });
+        expect(cleared).toBeNull();
+        expect(await getAutofillDefaultsForOrigin('https://a.com')).toBeNull();
+    });
+
     it('refuses unparseable origins without writing', async () => {
         const result = await setAutofillDefaultsForOrigin('::bad::', { passwordItemId: 'p' });
         expect(result).toBeNull();

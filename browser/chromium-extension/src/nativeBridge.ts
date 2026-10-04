@@ -98,6 +98,34 @@ export interface PasskeyAssertRequest {
     user_verification: boolean;
 }
 
+// ============ Vault write path (bridge protocol v4) ============
+
+export interface FindForSaveMatch {
+    item_id: string;
+    name: string;
+    username?: string;
+}
+
+export interface FindForSaveResponsePayload {
+    matches: FindForSaveMatch[];
+}
+
+export interface SaveCredentialRequest {
+    origin: string;
+    user_gesture: boolean;
+    /** Present ⇒ update that item's password; absent ⇒ create a new item. */
+    item_id?: string;
+    username?: string;
+    password: string;
+    name_hint?: string;
+}
+
+export interface SaveCredentialResponsePayload {
+    item_id: string;
+    action: 'created' | 'updated';
+    name: string;
+}
+
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 
@@ -489,4 +517,37 @@ export async function passkeyAssert(
     host = DEFAULT_NATIVE_HOST
 ): Promise<NativeBridgeResponse<PasskeyAssertResponsePayload>> {
     return sendAuthedNativeMessage<PasskeyAssertResponsePayload>('passkey_assert', request, host);
+}
+
+// ============ Vault write path (bridge protocol v4) ============
+
+/**
+ * Look up existing password items for this host+username so the save bar can
+ * offer "update" instead of piling up duplicates. Metadata only — no secrets.
+ */
+export async function findForSave(
+    origin: string,
+    username?: string,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<FindForSaveResponsePayload>> {
+    return sendAuthedNativeMessage<FindForSaveResponsePayload>(
+        'find_for_save',
+        {
+            origin,
+            username
+        },
+        host
+    );
+}
+
+/**
+ * Save (create) or update a login with a password captured from a submitted
+ * form. Must ride an explicit user click on the save bar — the host refuses
+ * silent writes (`user_gesture_required`).
+ */
+export async function saveCredential(
+    request: SaveCredentialRequest,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<SaveCredentialResponsePayload>> {
+    return sendAuthedNativeMessage<SaveCredentialResponsePayload>('save_credential', request, host);
 }

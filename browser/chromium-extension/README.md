@@ -7,6 +7,8 @@ TOTP display, and SSH-agent workflows in Chromium-based browsers. It is intentio
 - `src/formScanner.ts` contains heuristic form detection for passwords/usernames/TOTP.
 - `src/content.ts` injects the scanner, streams snapshots to the background script, and listens for popup requests.
 - `src/webauthnHook.ts` intercepts WebAuthn ceremonies in the MAIN world and routes them to Persona (v2 protocol).
+- `src/saveDetect.ts` classifies a submitted login/registration/change-password form into a save proposal (pure).
+- `src/pendingSave.ts` hands a captured proposal to the background so the save bar survives a redirect.
 - `src/nativeBridge.ts` implements the Native Messaging bridge to `persona bridge` (stdio JSON frames).
 - `src/popup.ts` renders the popup UI, wires the “Connect” button, and displays detected form metadata.
 - `manifest.json` is the loadable MV3 manifest (points at `dist/*` + `public/popup.html`).
@@ -50,6 +52,23 @@ Passkeys (WebAuthn, bridge protocol v2):
   `docs/BRIDGE_PROTOCOL.md` (v2 messages `passkey_list` / `passkey_create` / `passkey_assert`).
 - Chromium only. Safari does not support MAIN-world WebAuthn interception — that host shell waits
   for the OS passkey provider phase.
+
+Login save/update (bridge protocol v4):
+
+- After a form with a filled password is submitted (real `submit` event, or a submit-ish button click for
+  SPA logins), a save bar appears in the page's Persona shadow root: **Save / Update / Never on this site /
+  Dismiss**. Nothing is ever written without one explicit click — the host rejects saves without
+  `user_gesture`, and a second consent line exists on the desktop side (`op=credential_save`).
+- `find_for_save` decides the default button: an existing item for this host + username turns "Save" into
+  "Update", and updates always carry an explicit `item_id` (only the password field is replaced; email and
+  security questions survive).
+- Most logins navigate, so the captured proposal is stashed in `chrome.storage.session` (memory-backed, never
+  written to disk) and the landing page re-offers the bar for the *exact* same origin within 2 minutes.
+  Dismissal drops the stash; "Never on this site" is remembered per origin in storage.
+- Blocked and suspicious domains never see the bar — same gate as filling, since writing a password to a
+  lookalike is as harmful as filling one there. Toggle the whole feature off in the popup
+  ("Offer to save logins after sign-in / registration", on by default).
+- See `docs/BRIDGE_PROTOCOL.md` §14/§15.
 
 For Native Messaging host installation and protocol details, see:
 

@@ -7,6 +7,8 @@ import {
     passkeyList,
     passkeyCreate,
     passkeyAssert,
+    findForSave,
+    saveCredential,
     type BridgeStatus,
     type SuggestionItem,
     type SuggestionsPayload,
@@ -15,7 +17,10 @@ import {
     type PasskeyAssertRequest,
     type PasskeyListResponsePayload,
     type PasskeyCreateResponsePayload,
-    type PasskeyAssertResponsePayload
+    type PasskeyAssertResponsePayload,
+    type FindForSaveResponsePayload,
+    type SaveCredentialRequest,
+    type SaveCredentialResponsePayload
 } from './nativeBridge';
 import {
     evaluateDomain,
@@ -24,6 +29,12 @@ import {
     type DomainPolicy,
     type DomainAssessment
 } from './domainPolicy';
+import {
+    clearPendingSave,
+    stashPendingSave,
+    takePendingSave,
+    type PendingSaveEntry
+} from './pendingSave';
 import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings';
 
 const STORAGE_KEY = 'persona_bridge_status';
@@ -131,6 +142,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message?.type === 'persona_passkey_assert') {
         handlePasskeyAssert(message.request).then(sendResponse);
+        return true;
+    }
+
+    // ============ Vault write path (bridge protocol v4) ============
+
+    if (message?.type === 'persona_find_for_save') {
+        handleFindForSave(message.origin, message.username).then(sendResponse);
+        return true;
+    }
+
+    if (message?.type === 'persona_save_credential') {
+        handleSaveCredential(message.request).then(sendResponse);
+        return true;
+    }
+
+    // Pending-save hand-off across navigations (memory-backed session area).
+    if (message?.type === 'persona_stash_pending_save') {
+        handleStashPendingSave(message.entry)
+            .then(() => sendResponse({ success: true }))
+            .catch((error) =>
+                sendResponse({
+                    success: false,
+                    error: error instanceof Error ? error.message : 'Unknown error'
+                })
+            );
+        return true;
+    }
+
+    if (message?.type === 'persona_take_pending_save') {
+        takePendingSave(message.origin)
+            .then((entry) => sendResponse({ success: true, data: entry }))
+            .catch(() => sendResponse({ success: true, data: null }));
+        return true;
+    }
+
+    if (message?.type === 'persona_clear_pending_save') {
+        clearPendingSave()
+            .then(() => sendResponse({ success: true }))
+            .catch(() => sendResponse({ success: true }));
         return true;
     }
 
@@ -541,6 +591,64 @@ async function handlePasskeyAssert(
         const response = await passkeyAssert(request);
         if (!response.ok) {
             return { success: false, error: response.error ?? 'Passkey assertion failed' };
+        }
+        return { success: true, data: response.payload };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+}
+
+// ============ Vault write path (bridge protocol v4) ============
+
+/**
+ * Existing password items for this host+username (metadata only) — lets the
+ * save bar offer "update" instead of stacking duplicates.
+ */
+async function handleFindForSave(
+    origin: string,
+    username?: string
+): Promise<AutofillResult<FindForSaveResponsePayload>> {
+    try {
+        const policyError = await policyRejection(origin);
+        if (policyError) return { success: false, error: policyError };
+
+        const response = await findForSave(origin, username);
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Failed to look up existing items' };
+        }
+        return { success: true, data: response.payload };
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+}
+
+/**
+ * Save/update a captured login. Same strict gate as fills (blocked AND
+ * suspicious both refuse): writing a password to a phishing lookalike is as
+ * harmful as filling one there. The explicit save-bar click is the user
+ * gesture the host requires.
+ */
+/**
+ * Hold a captured proposal for the next page load of the same origin. The
+ * content script only stashes after its own policy gate passed, and the
+ * entry is origin-bound + TTL-bounded in `pendingSave.ts`, so this stays a
+ * plain memory write.
+ */
+async function handleStashPendingSave(entry: PendingSaveEntry): Promise<void> {
+    if (!entry?.origin || !entry?.password) return;
+    await stashPendingSave(entry);
+}
+
+async function handleSaveCredential(
+    request: SaveCredentialRequest
+): Promise<AutofillResult<SaveCredentialResponsePayload>> {
+    try {
+        const policyError = await policyRejection(request.origin);
+        if (policyError) return { success: false, error: policyError };
+
+        const response = await saveCredential(request);
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Save failed' };
         }
         return { success: true, data: response.payload };
     } catch (error) {

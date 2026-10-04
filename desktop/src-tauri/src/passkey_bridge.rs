@@ -127,9 +127,12 @@ fn parse_query(line: &str) -> Result<BridgeApprovalQuery, ApprovalDecision> {
     // passkey_list（含 provider 变体）不放行：枚举非敏感，出现在这里是
     // 协议误用，按 unsupported 拒绝而非批准。provider 代断言与扩展断言
     // 同闸门——op 名透传给弹窗，用户可辨识来源（P4.4）。
+    // credential_save（桥协议 v4）：插件保存/更新登录的第二次同意线，
+    // 与 passkey 写入同一闸门语义。
     if query.op != "passkey_create"
         && query.op != "passkey_assert"
         && query.op != "passkey_credential_provider_assert"
+        && query.op != "credential_save"
     {
         return Err(ApprovalDecision::deny("unsupported"));
     }
@@ -485,6 +488,11 @@ mod tests {
             parse_query(r#"{"v":1,"op":"passkey_credential_provider_list","origin":"https://x"}"#),
             Err(ApprovalDecision::deny("unsupported"))
         );
+        // credential_save（桥协议 v4）：插件保存/更新登录走同一确认闸门。
+        assert!(parse_query(
+            r#"{"v":1,"op":"credential_save","origin":"https://github.com","user_name":"bob@example.com"}"#
+        )
+        .is_ok());
     }
 
     #[tokio::test(flavor = "multi_thread")]

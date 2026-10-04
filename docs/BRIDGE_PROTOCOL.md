@@ -583,6 +583,85 @@ origin↔rp_id 校验 + 敏感操作门禁。差异仅审计：`passkey_asserted
 
 > v2 扩展对这两个新消息会得到 `unknown_type`（向后兼容）。
 
+### 14. find_for_save - 保存前查重（协议 v4）
+
+插件的保存/更新条在表单提交后调用：按 host + username 查既有同站同名
+password 条目，决定条默认给「更新」还是「另存」。纯元数据（无任何密文/
+密码材料），与 `get_suggestions` 同级——只需会话认证，不要求 user gesture。
+
+**请求：**
+
+```json
+{
+  "type": "find_for_save",
+  "payload": {
+    "origin": "https://example.com",
+    "username": "bob@example.com"
+  }
+}
+```
+
+**响应：** `find_for_save_response`
+
+```json
+{
+  "matches": [
+    { "item_id": "…", "name": "Example Login", "username": "bob@example.com" }
+  ]
+}
+```
+
+匹配规则：password 类型 + `validate_origin_binding`（TLD+1，同填充）+
+username trim 后大小写不敏感全等；无 URL 的条目不参与（无法归属站点）。
+
+### 15. save_credential - 保存 / 更新登录（协议 v4）
+
+保存条上一次显式点击背后的写路径。`item_id` 缺省 = 新建（绑定请求 origin、
+`SecurityLevel::High`、name 取 `name_hint` 否则 host、username 里的 email
+同步进 payload 的 email 字段）；`item_id` 在 = 更新该条目的密码——**只替换
+password 字段**，payload 其余（email、安全问题）原样保留；更新必须带明确的
+item_id，没有「替用户挑一个覆盖」的路径。
+
+**闸门**（与 passkey 写入同构）：user gesture 必需（保存条点击）→ 桌面审批
+闸门（op=`credential_save`，auto/require/off 语义同上节）→ 活动身份校验
+（新建必需；更新要求条目属于活动身份）→ origin 绑定校验（更新时条目有
+URL 即强制 TLD+1 匹配）→ 审计 `bridge_save_credential`。
+
+**请求：**
+
+```json
+{
+  "type": "save_credential",
+  "payload": {
+    "origin": "https://example.com",
+    "user_gesture": true,
+    "item_id": "…（更新时；缺省 = 新建）",
+    "username": "bob@example.com",
+    "password": "…",
+    "name_hint": "Example — Sign In"
+  }
+}
+```
+
+**响应：** `save_credential_response`
+
+```json
+{ "item_id": "…", "action": "created", "name": "Example Login" }
+```
+
+错误码：`user_gesture_required`、`invalid_payload`（空密码）、
+`save_desktop_denied`、`no_active_identity`、`not_found`、
+`unsupported_credential_type`、`wrong_identity`、`origin_mismatch`、
+`locked` / `authentication_failed`。
+
+扩展侧行为（参考实现见 `browser/chromium-extension/src/content.ts`）：表单提交
+（真 `submit` 事件或 SPA 的提交按钮点击）后捕获字段 → 保存条给「保存 / 更新 /
+此站永不 / 关闭」四选一，唯一一次显式点击才是 `user_gesture`。多数登录会跳转，
+捕获到的提案暂存进 `chrome.storage.session`（内存区，不落盘），落地页在 2 分钟
+内按**完全相同**的 origin 取回并重放保存条；关闭即丢弃暂存，「此站永不」按
+origin 记进 storage。blocked / suspicious 域与填充同一道闸门——把密码写进钓鱼
+站和填进去一样有害。
+
 ## 安全机制
 
 ### Origin 绑定
@@ -595,7 +674,7 @@ origin↔rp_id 校验 + 敏感操作门禁。差异仅审计：`passkey_asserted
 
 ### User Gesture 要求
 
-`request_fill` / `get_totp` / `copy` / `passkey_*` 操作要求：
+`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` 操作要求：
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
 2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
@@ -603,8 +682,8 @@ origin↔rp_id 校验 + 敏感操作门禁。差异仅审计：`passkey_asserted
 
 ### 桌面审批（Passkey 确认闸门）
 
-`passkey_create` / `passkey_assert` 在桌面应用运行时可要求第二道确认——独立于扩展的
-user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PASSKEYS_DESIGN.md` §10）。
+`passkey_create` / `passkey_assert` / `credential_save`（§15）在桌面应用运行时可要求第二道确认——独立于扩展的
+user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模型见 `PASSKEYS_DESIGN.md` §10）。
 
 **传输**：bridge（每个请求的短命进程）作为客户端连接 Unix domain socket
 `<agent state dir>/passkey-approval.sock`（默认 `~/.persona/passkey-approval.sock`，
@@ -726,6 +805,9 @@ user gesture 自报，扩展被攻破也无法静默签名（威胁模型见 `PA
 | `passkey_alg_unsupported`    | pubKeyCredParams 不含 ES256（v2）     |
 | `passkey_item_not_found`     | 指定的 passkey 不存在（v2）           |
 | `passkey_origin_mismatch`    | passkey origin 校验失败（预留）（v2） |
+| `save_desktop_denied`        | 保存/更新被桌面审批拒绝（v4）         |
+| `unsupported_credential_type`| 条目类型不支持该操作                  |
+| `invalid_payload`            | payload 校验失败（如空密码）          |
 
 ## 配置
 
@@ -811,9 +893,11 @@ manifest 文件内容示例：
 | ---------------- | ----------- | ------------------------------------------------------------------------------------------------------ |
 | 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
 | 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                              |
-| 3 (计划)         | -           | biometric confirmation + richer policy prompts                                                         |
+| 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）              |
+| 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                        |
+| 5 (计划)         | -           | biometric confirmation + richer policy prompts + generate_password                                     |
 
-> v2 未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；v1 扩展对 v2 桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
+> v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 
 ## 安装脚本
 

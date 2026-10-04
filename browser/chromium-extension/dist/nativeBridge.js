@@ -268,4 +268,23 @@ export async function passkeyCreate(request, host = DEFAULT_NATIVE_HOST) {
 export async function passkeyAssert(request, host = DEFAULT_NATIVE_HOST) {
     return sendAuthedNativeMessage('passkey_assert', request, host);
 }
+// ============ Vault write path (bridge protocol v4) ============
+/**
+ * Look up existing password items for this host+username so the save bar can
+ * offer "update" instead of piling up duplicates. Metadata only — no secrets.
+ */
+export async function findForSave(origin, username, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('find_for_save', {
+        origin,
+        username
+    }, host);
+}
+/**
+ * Save (create) or update a login with a password captured from a submitted
+ * form. Must ride an explicit user click on the save bar — the host refuses
+ * silent writes (`user_gesture_required`).
+ */
+export async function saveCredential(request, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('save_credential', request, host);
+}
 //# sourceMappingURL=nativeBridge.js.map

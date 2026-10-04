@@ -122,6 +122,65 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
       冲突合并正确、吊销流程走查，截图输出
 
+浏览器插件推进（2026-10-04 用户令：对齐 1Password，**自动化优先**——填充/保存/生成尽量全自动，用户只点一下；每批 = 桥协议+扩展+测试+文档全链，CI 绿门禁）
+
+> 勘察结论（2026-10-04）：已有 = 填充（load/focus 自动 + 手动、per-origin 默认
+> 条目）、TOTP 链填、银行卡填充（CVV copy-only）、passkey v2/v3（create/assert/
+> provider/conditional mediation/桌面审批闸门）、页内 Ctrl+Shift+P overlay。
+> 缺口 = ① iframe 不覆盖（manifest all_frames:false 主 frame only）；
+> ② 写路径整条缺失（桥无 save/update 消息→登录保存弹层无从谈起）；
+> ③ 无生成器（`PersonaService.generate_password` 在、桥未接）；
+> ⑤ 无浏览器 commands 快捷键（manifest 无 commands 键）；⑥ 解锁模型 =
+> `PERSONA_MASTER_PASSWORD` env，无桌面联动。基础设施可复用：桥协议 v3
+> hello 广播 capabilities（扩消息向后兼容，旧扩展收 unknown_type）、
+> pairing+HMAC 会话、core 写路径全在（create_credential / 
+> update_credential_data / search_credentials / generate_password）、桌面
+> 审批 Unix socket（passkey-approval.sock，op 泛化即可复用）。
+
+- [x] **批A 桥写路径 + 登录保存弹层（能力②，自动化主缺口）**：桥协议
+      v4 新消息 `find_for_save`（origin+username 查既有同站同名条目，纯元数据、
+      不要求 gesture）+ `save_credential`（item_id 缺省=新建绑 origin、
+      item_id 在=只换 password 字段保留 email/安全问题）；闸门 = user_gesture
+      + 桌面审批（op=`credential_save` 进 passkey_bridge.rs 白名单）+
+      活动身份 + TLD+1 origin 绑定 + 审计 `bridge_save_credential`。扩展侧：
+      saveDetect.ts 纯函数分类（login/new/change，autocomplete 优先、改密取
+      最后一个已填密码）+ 提交捕获（submit 事件 + SPA 提交按钮点击，
+      capture phase 抢在页面清空前读值）+ 保存条 shadow UI（保存/更新/此站
+      永不/关闭，一次显式点击才写）+ 跨导航暂存（pendingSave.ts 走
+      chrome.storage.session 内存区，2 分钟 TTL、origin 严格相等、read-and-clear，
+      dismiss 即丢弃）+ settings 开关（popup 默认开）。测试：jest 105 全绿
+      （新增 saveDetect/pendingSave 用例）+ bridge.rs `save_credential_protocol_cases`
+      （gesture/空密码/origin 绑定/身份归属/更新语义）+ parse_query 钉 credential_save。
+      ci.yml web job 补扩展 jest 步骤——此前扩展测试只在本地跑、不设门禁。
+      版本 0.1.0 → 0.2.0。
+- [ ] **批B iframe + 多步登录（能力①）**：content script all_frames:true
+      + 逐 frame 自己的 origin 校验（frame origin ≠ top origin，桥的
+      origin 绑定必须按各 frame 的来）；同 host 多 frame UI 去重（overlay
+      只出一份）；多步登录状态机：用户名页→密码页分步自动接续（复用
+      per-origin 默认条目记忆，focus 阶段先填用户名、密码字段出现时自动
+      接力填密码）
+- [ ] **批C 密码生成器（能力③）**：桥 v4 `generate_password` 消息（走
+      `PersonaService.generate_password`；桌面 generate_password_advanced
+      的策略参数若要全集，考虑下沉 core 共享实现）；注册表单
+      new-password 字段内联"生成"入口 + popup 生成器面板（复制/直填）；
+      与批A联动"生成并保存"一键流
+- [ ] **批D commands 快捷键 + 迷你搜索弹窗（能力⑤）**：manifest commands
+      （唤起/一键填充，避开页内已占的 Ctrl+Shift+P）；background 接
+      command → 当前 tab 注入 overlay 搜索条（复用 shadowUi）；新增桥
+      `search_credentials` 消息（服务端模糊搜索）或 get_suggestions 全量
+      兜底；popup 列表补搜索框
+- [ ] **批E 桌面解锁联动（能力⑥）**：桥解锁模型升级——桌面审批 socket
+      泛化为 persona 本地 IPC：桥收到请求而 env 未带主密码时向桌面询问
+      解锁态，桌面已解锁则用其内存会话代答（首次需桌面确认"允许浏览器
+      插件"，可撤销）；`PERSONA_MASTER_PASSWORD` env 降级为无桌面后备；
+      涉及 cli bridge.rs + desktop 审批/解锁服务 + 协议文档；形态对齐
+      1Password = 桌面解锁一次、浏览器跟随
+- [ ] **能力④ passkey 缺口核查**：v2/v3 已落地大半，核查清单 =
+      allowCredentials 过滤、transports 提示、prf 扩展、Safari 侧对齐
+      （低优先；browser/safari-extension 分批落地后单独对齐）
+- 备注：M5（插件接账号读写云端）与本轨并行不冲突——本轨全部走本地桥，
+  M5 落地后同一能力面平移到 HTTP 通道；隐私红线（本轨不涉及账号/云）。
+
 Now (current sprint)
 
 - [x] CI: GitHub Actions (Rust fmt/clippy/test; Desktop lint/test)

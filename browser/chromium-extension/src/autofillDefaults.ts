@@ -3,6 +3,8 @@ export const AUTOFILL_DEFAULTS_KEY = 'persona_autofill_defaults_v1';
 export interface OriginAutofillDefaults {
     passwordItemId?: string;
     totpItemId?: string;
+    /** User pressed "never save on this site" on the save/update bar. */
+    savePromptDisabled?: boolean;
     updatedAt: number;
 }
 
@@ -25,10 +27,12 @@ function normalizeDefaults(value: any): AutofillDefaultsByOrigin {
         const e = entry && typeof entry === 'object' ? (entry as any) : {};
         const passwordItemId = typeof e.passwordItemId === 'string' && e.passwordItemId.trim() ? e.passwordItemId.trim() : undefined;
         const totpItemId = typeof e.totpItemId === 'string' && e.totpItemId.trim() ? e.totpItemId.trim() : undefined;
-        if (!passwordItemId && !totpItemId) continue;
+        const savePromptDisabled = e.savePromptDisabled === true;
+        if (!passwordItemId && !totpItemId && !savePromptDisabled) continue;
         out[normalizedOrigin] = {
             passwordItemId,
             totpItemId,
+            savePromptDisabled: savePromptDisabled || undefined,
             updatedAt: typeof e.updatedAt === 'number' ? e.updatedAt : Date.now()
         };
     }
@@ -65,7 +69,7 @@ export async function setAutofillDefaultsForOrigin(
         updatedAt: Date.now()
     };
 
-    if (!next.passwordItemId && !next.totpItemId) {
+    if (!next.passwordItemId && !next.totpItemId && !next.savePromptDisabled) {
         delete all[normalizedOrigin];
     } else {
         all[normalizedOrigin] = next;

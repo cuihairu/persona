@@ -17,11 +17,13 @@ function normalizeDefaults(value) {
         const e = entry && typeof entry === 'object' ? entry : {};
         const passwordItemId = typeof e.passwordItemId === 'string' && e.passwordItemId.trim() ? e.passwordItemId.trim() : undefined;
         const totpItemId = typeof e.totpItemId === 'string' && e.totpItemId.trim() ? e.totpItemId.trim() : undefined;
-        if (!passwordItemId && !totpItemId)
+        const savePromptDisabled = e.savePromptDisabled === true;
+        if (!passwordItemId && !totpItemId && !savePromptDisabled)
             continue;
         out[normalizedOrigin] = {
             passwordItemId,
             totpItemId,
+            savePromptDisabled: savePromptDisabled || undefined,
             updatedAt: typeof e.updatedAt === 'number' ? e.updatedAt : Date.now()
         };
     }
@@ -52,7 +54,7 @@ export async function setAutofillDefaultsForOrigin(origin, patch) {
         ...patch,
         updatedAt: Date.now()
     };
-    if (!next.passwordItemId && !next.totpItemId) {
+    if (!next.passwordItemId && !next.totpItemId && !next.savePromptDisabled) {
         delete all[normalizedOrigin];
     }
     else {

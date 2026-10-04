@@ -17,7 +17,7 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use persona_core::crypto::{parse_creation_options, validate_origin_matches_rp_id};
-use persona_core::models::{CredentialData, CredentialType, TwoFactorData};
+use persona_core::models::{CredentialData, CredentialType, PasswordCredentialData, TwoFactorData};
 use persona_core::storage::{CredentialRepository, WorkspaceRepository};
 use persona_core::{Database, PersonaError, PersonaService, Repository};
 
@@ -212,6 +212,72 @@ struct CopyResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Bridge protocol v4: vault write path (login save/update from the extension).
+// The extension captures a submitted login form and offers a save/update bar;
+// one explicit click there is the user gesture behind these messages. The
+// host never writes silently and never overwrites without an explicit
+// item_id-qualified update.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct FindForSavePayload {
+    origin: String,
+    /// Username captured from the submitted form. Matching is
+    /// trim + case-insensitive against the stored username.
+    #[serde(default)]
+    username: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct FindForSaveMatch {
+    item_id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct FindForSaveResponse {
+    matches: Vec<FindForSaveMatch>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SaveCredentialPayload {
+    origin: String,
+    /// Explicit user action on the save bar (保存/更新 click). Required —
+    /// the host refuses to write the vault behind a silent page event.
+    #[serde(default)]
+    user_gesture: bool,
+    /// Present ⇒ update that item's password; absent ⇒ create a new item.
+    /// Updates are always item_id-qualified: there is no "pick a target for
+    /// me and overwrite" path.
+    #[serde(default)]
+    item_id: Option<String>,
+    /// Submitted username (may be absent/empty for username-less forms).
+    #[serde(default)]
+    username: Option<String>,
+    /// Submitted password. Required — saving an empty password is refused.
+    password: String,
+    /// Display name hint from the page (title / form context); falls back
+    /// to the request host for new items.
+    #[serde(default)]
+    name_hint: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct SaveCredentialResponse {
+    item_id: String,
+    /// "created" or "updated".
+    action: String,
+    name: String,
+}
+
+// ---------------------------------------------------------------------------
 // Bridge protocol v2: passkey (WebAuthn software authenticator) messages
 // ---------------------------------------------------------------------------
 
@@ -394,8 +460,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "protocol_version": 3,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert"],
+                "protocol_version": 4,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -782,6 +848,25 @@ async fn handle_request(
                 &cred.name,
                 &field,
             )
+        }
+        "find_for_save" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: FindForSavePayload =
+                serde_json::from_value(req.payload).context("invalid payload for find_for_save")?;
+            let host = origin_to_host(&parsed.origin)?;
+            let matches =
+                find_credentials_for_save(db_path, &host, parsed.username.as_deref()).await?;
+            Ok(ok(
+                req.request_id,
+                "find_for_save_response",
+                serde_json::to_value(FindForSaveResponse { matches })?,
+            ))
+        }
+        "save_credential" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: SaveCredentialPayload = serde_json::from_value(req.payload)
+                .context("invalid payload for save_credential")?;
+            run_save_credential(db_path, req.request_id, parsed).await
         }
         "passkey_list" => {
             require_authenticated_session(state_dir, &req)?;
@@ -1984,6 +2069,228 @@ fn copy_success_response(
     ))
 }
 
+/// Metadata-only candidates for the extension's save/update bar: password
+/// items bound to this host whose username matches the submitted one. No
+/// secret material is returned, so like `get_suggestions` this is
+/// session-authenticated but not gesture-gated.
+async fn find_credentials_for_save(
+    db_path: &Path,
+    host: &str,
+    username: Option<&str>,
+) -> Result<Vec<FindForSaveMatch>> {
+    let db = open_db(db_path).await?;
+    let active_identity_id = get_active_identity_id(&db).await;
+    let repo = CredentialRepository::new(db);
+    let all = match active_identity_id {
+        Some(identity_id) => repo.find_by_identity(&identity_id).await?,
+        None => repo.find_all().await?,
+    };
+
+    let submitted = username
+        .map(|u| u.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    let mut matches = Vec::new();
+    for cred in all {
+        if !cred.is_active || cred.credential_type != CredentialType::Password {
+            continue;
+        }
+        // Same binding rule as fills: at least TLD+1 match with the
+        // requesting host. Items without a URL can't be attributed to a
+        // site, so they are never offered as update targets.
+        if !validate_origin_binding(host, cred.url.as_deref()) {
+            continue;
+        }
+        let stored = cred
+            .username
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if stored != submitted {
+            continue;
+        }
+        matches.push(FindForSaveMatch {
+            item_id: cred.id.to_string(),
+            name: cred.name,
+            username: cred.username,
+        });
+    }
+
+    debug!(
+        host = %host,
+        candidates = matches.len(),
+        "find_for_save candidates retrieved"
+    );
+    Ok(matches)
+}
+
+/// Body of `save_credential`: create a new password item or apply an
+/// item_id-qualified password update. Every write is behind the gesture
+/// gate + desktop approval + audit, mirroring the passkey create flow.
+async fn run_save_credential(
+    db_path: &Path,
+    request_id: Option<String>,
+    parsed: SaveCredentialPayload,
+) -> Result<BridgeResponse<serde_json::Value>> {
+    if gesture_required() && !parsed.user_gesture {
+        warn!(
+            origin = %parsed.origin,
+            "save_credential rejected: user_gesture required"
+        );
+        return Err(anyhow!(
+            "user_gesture_required: saving must be confirmed by explicit user action"
+        ));
+    }
+    if parsed.password.is_empty() {
+        return Err(anyhow!("invalid_payload: password must not be empty"));
+    }
+    let host = origin_to_host(&parsed.origin)?;
+
+    // Second consent line, same as passkey writes: a running desktop gets
+    // to approve before the vault changes. Auto mode falls back to the
+    // gesture gate when no desktop is around.
+    match desktop_approval_gate(
+        "credential_save",
+        Some(&host),
+        &parsed.origin,
+        parsed.username.as_deref(),
+        parsed.item_id.as_deref(),
+    )
+    .await?
+    {
+        #[cfg(unix)]
+        DesktopApproval::Approved => {}
+        #[cfg(unix)]
+        DesktopApproval::Denied(reason) => {
+            warn!(origin = %parsed.origin, %reason, "save_credential denied by desktop");
+            return Err(anyhow!(
+                "save_desktop_denied: save rejected by desktop approval ({reason})"
+            ));
+        }
+        DesktopApproval::Unavailable => {}
+    }
+
+    let (service, active_identity_id) = open_unlocked_service(db_path).await?;
+    let username = parsed
+        .username
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    let (item_id, name, action) = match parsed.item_id.as_deref() {
+        Some(id_str) => {
+            let item_id = uuid::Uuid::parse_str(id_str)
+                .map_err(|e| anyhow!("invalid_payload: item_id uuid: {e}"))?;
+            let cred = service
+                .get_credential(&item_id)
+                .await?
+                .ok_or_else(|| anyhow!("not_found"))?;
+            if cred.credential_type != CredentialType::Password {
+                return Err(anyhow!("unsupported_credential_type"));
+            }
+            if let Some(active) = active_identity_id {
+                if cred.identity_id != active {
+                    return Err(anyhow!(
+                        "wrong_identity: switch active identity to update this credential"
+                    ));
+                }
+            }
+            // Same binding rule as fills. An item without a URL is allowed
+            // through: the update is an explicit user-picked target from
+            // find_for_save, so there is no attribution ambiguity to guard.
+            if let Some(url) = cred.url.as_deref() {
+                if !validate_origin_binding(&host, Some(url)) {
+                    warn!(
+                        origin = %parsed.origin,
+                        host = %host,
+                        cred_url = url,
+                        item_id = %item_id,
+                        "save_credential rejected: origin mismatch"
+                    );
+                    return Err(anyhow!(
+                        "origin_mismatch: request origin does not match credential URL"
+                    ));
+                }
+            }
+
+            // Replace only the password inside the existing payload — email
+            // and security questions survive untouched.
+            let existing = match service.get_credential_data(&item_id).await? {
+                Some(CredentialData::Password(p)) => p,
+                Some(_) => return Err(anyhow!("unsupported_credential_type")),
+                None => return Err(anyhow!("not_found")),
+            };
+            let updated_data = CredentialData::Password(PasswordCredentialData {
+                password: parsed.password,
+                email: existing.email,
+                security_questions: existing.security_questions,
+            });
+            service
+                .update_credential_data(&item_id, &updated_data)
+                .await?;
+            (item_id, cred.name, "updated")
+        }
+        None => {
+            let identity_id = active_identity_id.ok_or_else(|| {
+                anyhow!("no_active_identity: switch to an identity before saving a login")
+            })?;
+            let name = parsed
+                .name_hint
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(&host)
+                .to_string();
+            let data = CredentialData::Password(PasswordCredentialData {
+                password: parsed.password,
+                email: username
+                    .as_deref()
+                    .filter(|u| u.contains('@'))
+                    .map(str::to_string),
+                security_questions: Vec::new(),
+            });
+
+            // create_credential only fills the encrypted payload; url and
+            // username are presentation fields patched on afterwards (same
+            // pattern as the desktop create flows).
+            let mut credential = service
+                .create_credential(
+                    identity_id,
+                    name,
+                    CredentialType::Password,
+                    persona_core::models::SecurityLevel::High,
+                    &data,
+                )
+                .await?;
+            credential.url = Some(parsed.origin.clone());
+            credential.username = username;
+            let credential = service.update_credential(&credential).await?;
+            (credential.id, credential.name, "created")
+        }
+    };
+
+    info!(
+        event = "bridge_save_credential",
+        action,
+        origin = %parsed.origin,
+        host = %host,
+        item_id = %item_id,
+        user_gesture = parsed.user_gesture,
+        "credential saved via bridge"
+    );
+
+    Ok(ok(
+        request_id,
+        "save_credential_response",
+        serde_json::to_value(SaveCredentialResponse {
+            item_id: item_id.to_string(),
+            action: action.to_string(),
+            name,
+        })?,
+    ))
+}
+
 #[cfg(target_os = "macos")]
 fn copy_text_to_clipboard(text: &str) -> Result<()> {
     pipe_to_command("pbcopy", &[], text)
@@ -2168,7 +2475,7 @@ pub(crate) mod tests {
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
 
-        // ---- hello: request declaring v2 still gets the v3 capability set
+        // ---- hello: request declaring v2 still gets the v4 capability set
         // (server reports its own protocol_version; old extensions stay
         // compatible by receiving unknown_type for new messages) ----
         let resp = handle_request(
@@ -2188,13 +2495,15 @@ pub(crate) mod tests {
         .unwrap();
         assert!(resp.ok, "hello must succeed: {:?}", resp.error);
         let payload = resp.payload.unwrap();
-        assert_eq!(payload["protocol_version"], 3);
+        assert_eq!(payload["protocol_version"], 4);
         for capability in [
             "passkey_list",
             "passkey_create",
             "passkey_assert",
             "passkey_credential_provider_list",
             "passkey_credential_provider_assert",
+            "find_for_save",
+            "save_credential",
         ] {
             assert!(
                 payload["capabilities"]
@@ -2721,6 +3030,364 @@ pub(crate) mod tests {
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// Bridge protocol v4 write path: find_for_save matching + save_credential
+    /// create/update semantics and every gate on the way (gesture, empty
+    /// password, origin binding, identity scoping, lock state).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn save_credential_protocol_cases() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        // Same deterministic no-desktop setup as the passkey cases: auto
+        // mode with no socket ⇒ the plain gesture gate applies.
+        std::env::remove_var("PERSONA_BRIDGE_DESKTOP_APPROVAL");
+        let no_socket = std::env::temp_dir().join(format!(
+            "persona-no-approval-{}-save-protocol",
+            std::process::id()
+        ));
+        std::env::set_var("PERSONA_PASSKEY_APPROVAL_SOCKET", &no_socket);
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+
+        // ---- find_for_save: empty vault for this host ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "find_for_save",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "bob@example.com"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "find_for_save must succeed: {:?}", resp.error);
+        assert_eq!(resp.kind, "find_for_save_response");
+        assert_eq!(
+            resp.payload.unwrap()["matches"].as_array().unwrap().len(),
+            0
+        );
+
+        // ---- save_credential: gesture required ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "bob@example.com",
+                    "password": "s3cret-new"
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().starts_with("user_gesture_required"),
+            "got: {err}"
+        );
+
+        // ---- save_credential: empty password refused ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "bob@example.com",
+                    "password": "",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("invalid_payload"), "got: {err}");
+
+        // ---- save_credential: create happy path ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "Bob@Example.com",
+                    "password": "s3cret-new",
+                    "name_hint": "Example Login",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "save create must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["action"], "created");
+        assert_eq!(payload["name"], "Example Login");
+        let item_id = payload["item_id"].as_str().unwrap().to_string();
+
+        // Presentation fields landed: url = origin, username = submitted
+        // (trimmed), email picked up from the username, payload decryptable.
+        let service = {
+            let db = open_db(&db_path).await.unwrap();
+            let mut service = crate::commands::service::new_service(db.clone())
+                .await
+                .unwrap();
+            assert_eq!(
+                service.authenticate_user(PASSWORD).await.unwrap(),
+                persona_core::auth::authentication::AuthResult::Success
+            );
+            drop(db);
+            service
+        };
+        let created_id = uuid::Uuid::parse_str(&item_id).unwrap();
+        let created = service.get_credential(&created_id).await.unwrap().unwrap();
+        assert_eq!(created.url.as_deref(), Some("https://example.com"));
+        assert_eq!(created.username.as_deref(), Some("Bob@Example.com"));
+        match service.get_credential_data(&created_id).await.unwrap() {
+            Some(CredentialData::Password(p)) => {
+                assert_eq!(p.password, "s3cret-new");
+                assert_eq!(p.email.as_deref(), Some("Bob@Example.com"));
+            }
+            other => panic!("expected password payload, got {other:?}"),
+        }
+
+        // ---- find_for_save now matches (username compare is case-insensitive) ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "find_for_save",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "bob@example.com"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        let matches = resp.payload.unwrap()["matches"].as_array().unwrap().clone();
+        assert_eq!(matches.len(), 1, "case-insensitive username match");
+        assert_eq!(matches[0]["item_id"], item_id);
+
+        // ---- find_for_save: different username → no match ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "find_for_save",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "someone-else@example.com"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            resp.payload.unwrap()["matches"].as_array().unwrap().len(),
+            0
+        );
+
+        // ---- save_credential: update happy path keeps non-password payload ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": item_id,
+                    "password": "rotated-pass-2",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "save update must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["action"], "updated");
+        assert_eq!(payload["item_id"], item_id.as_str());
+        match service.get_credential_data(&created_id).await.unwrap() {
+            Some(CredentialData::Password(p)) => {
+                assert_eq!(p.password, "rotated-pass-2");
+                assert_eq!(
+                    p.email.as_deref(),
+                    Some("Bob@Example.com"),
+                    "update must preserve non-password payload fields"
+                );
+            }
+            other => panic!("expected password payload, got {other:?}"),
+        }
+
+        // ---- save_credential: update a non-password item is refused ----
+        use persona_core::models::credential::{BankCardData, SecurityLevel};
+        let card = service
+            .create_credential(
+                identity_id,
+                "Test Card".to_string(),
+                CredentialType::BankCard,
+                SecurityLevel::Medium,
+                &CredentialData::BankCard(BankCardData {
+                    card_number: "4111111111111111".to_string(),
+                    cardholder_name: "Bob".to_string(),
+                    expiry_date: "12/30".to_string(),
+                    cvv: "123".to_string(),
+                    bank_name: "Test Bank".to_string(),
+                    card_type: "visa".to_string(),
+                }),
+            )
+            .await
+            .unwrap();
+        drop(service);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": card.id.to_string(),
+                    "password": "x",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().starts_with("unsupported_credential_type"),
+            "got: {err}"
+        );
+
+        // ---- save_credential: update unknown item ----
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": uuid::Uuid::new_v4().to_string(),
+                    "password": "x",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("not_found"), "got: {err}");
+
+        // ---- save_credential: update across origins is refused ----
+        // (credential bound to example.com, request origin is other.example)
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://other.example",
+                    "item_id": item_id,
+                    "password": "x",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("origin_mismatch"), "got: {err}");
+
+        // ---- save_credential: wrong identity ----
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(uuid::Uuid::new_v4().to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": item_id,
+                    "password": "x",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("wrong_identity"), "got: {err}");
+
+        // ---- save_credential: create without an active identity ----
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = NULL")
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "username": "bob@example.com",
+                    "password": "x",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().starts_with("no_active_identity"),
+            "got: {err}"
+        );
+        let db = open_db(&db_path).await.unwrap();
+        sqlx::query("UPDATE workspaces SET active_identity_id = ?")
+            .bind(identity_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        drop(db);
+
+        // ---- locked vault (no PERSONA_MASTER_PASSWORD) ----
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "save_credential",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": item_id,
+                    "password": "x",
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("locked"), "got: {err}");
+
+        std::env::remove_var("PERSONA_PASSKEY_APPROVAL_SOCKET");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
     }
 
     // ---- desktop approval gate (Passkeys P3) ----
@@ -3832,7 +4499,7 @@ pub(crate) mod tests {
         assert_eq!(payload["paired"], false);
         assert!(payload["session_id"].is_null());
         assert!(payload["session_expires_at_ms"].is_null());
-        assert_eq!(payload["protocol_version"], 3);
+        assert_eq!(payload["protocol_version"], 4);
         assert!(payload["server_version"].is_string());
         let caps = payload["capabilities"].as_array().unwrap();
         for capability in [
@@ -3843,6 +4510,8 @@ pub(crate) mod tests {
             "request_fill",
             "get_totp",
             "copy",
+            "find_for_save",
+            "save_credential",
         ] {
             assert!(
                 caps.iter().any(|c| c == capability),

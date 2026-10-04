@@ -28,6 +28,7 @@ const autoFillLoginOnLoadEl = document.getElementById('autoFillLoginOnLoad') as 
 const autoFillTotpOnFocusEl = document.getElementById('autoFillTotpOnFocus') as HTMLInputElement | null;
 const autoFillTotpAfterLoginEl = document.getElementById('autoFillTotpAfterLogin') as HTMLInputElement | null;
 const requireTrustedDomainEl = document.getElementById('requireTrustedDomain') as HTMLInputElement | null;
+const savePromptEnabledEl = document.getElementById('savePromptEnabled') as HTMLInputElement | null;
 const minMatchStrengthLoginEl = document.getElementById('minMatchStrengthLogin') as HTMLInputElement | null;
 const minMatchStrengthTotpEl = document.getElementById('minMatchStrengthTotp') as HTMLInputElement | null;
 
@@ -485,6 +486,7 @@ async function refreshSettings() {
     if (autoFillTotpOnFocusEl) autoFillTotpOnFocusEl.checked = settings.autoFillTotpOnFocus;
     if (autoFillTotpAfterLoginEl) autoFillTotpAfterLoginEl.checked = settings.autoFillTotpAfterLogin;
     if (requireTrustedDomainEl) requireTrustedDomainEl.checked = settings.requireTrustedDomain;
+    if (savePromptEnabledEl) savePromptEnabledEl.checked = settings.savePromptEnabled;
     if (minMatchStrengthLoginEl) minMatchStrengthLoginEl.value = String(settings.minMatchStrengthLogin);
     if (minMatchStrengthTotpEl) minMatchStrengthTotpEl.value = String(settings.minMatchStrengthTotp);
 }
@@ -506,6 +508,9 @@ function bindSettings() {
     });
     requireTrustedDomainEl?.addEventListener('change', () => {
         void setAutofillSettings({ requireTrustedDomain: Boolean(requireTrustedDomainEl.checked) });
+    });
+    savePromptEnabledEl?.addEventListener('change', () => {
+        void setAutofillSettings({ savePromptEnabled: Boolean(savePromptEnabledEl.checked) });
     });
     minMatchStrengthLoginEl?.addEventListener('change', () => {
         const raw = Number(minMatchStrengthLoginEl.value);

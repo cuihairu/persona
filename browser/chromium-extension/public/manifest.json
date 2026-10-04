@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Persona Autofill",
   "description": "Preview extension for switching Persona identities, autofilling credentials, and initiating SSH workflows.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "action": {
     "default_title": "Persona",
     "default_popup": "popup.html"
