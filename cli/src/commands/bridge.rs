@@ -2360,9 +2360,11 @@ async fn run_generate_password(
         }
     }
 
-    // Validate length bounds.
-    if parsed.length == 0 || parsed.length > 10_000 {
-        return Err(anyhow!("invalid_payload: length must be 1..10000"));
+    // Validate length bounds (core rejects < 4; keep the payload
+    // error at the bridge so the extension shows invalid_payload,
+    // not generation_failed).
+    if parsed.length < 4 || parsed.length > 10_000 {
+        return Err(anyhow!("invalid_payload: length must be 4..10000"));
     }
 
     // At least one character set must be enabled unless words mode.
@@ -2590,7 +2592,7 @@ pub(crate) mod tests {
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
 
-        // ---- hello: request declaring v2 still gets the v4 capability set
+        // ---- hello: request declaring v2 still gets the v5 capability set
         // (server reports its own protocol_version; old extensions stay
         // compatible by receiving unknown_type for new messages) ----
         let resp = handle_request(
@@ -2610,7 +2612,7 @@ pub(crate) mod tests {
         .unwrap();
         assert!(resp.ok, "hello must succeed: {:?}", resp.error);
         let payload = resp.payload.unwrap();
-        assert_eq!(payload["protocol_version"], 4);
+        assert_eq!(payload["protocol_version"], 5);
         for capability in [
             "passkey_list",
             "passkey_create",
@@ -3499,6 +3501,147 @@ pub(crate) mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().starts_with("locked"), "got: {err}");
+
+        std::env::remove_var("PERSONA_PASSKEY_APPROVAL_SOCKET");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_GESTURE");
+    }
+
+    /// Bridge protocol v5 password generator: defaults, custom
+    /// charsets, passphrase mode, the locked gate, and the payload
+    /// validation rails (extension UI shows invalid_payload verbatim).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_password_protocol_cases() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_GESTURE", "1");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        std::env::remove_var("PERSONA_BRIDGE_DESKTOP_APPROVAL");
+        let no_socket = std::env::temp_dir().join(format!(
+            "persona-no-approval-{}-generate",
+            std::process::id()
+        ));
+        std::env::set_var("PERSONA_PASSKEY_APPROVAL_SOCKET", &no_socket);
+
+        let (_dir, db_path, state_dir, _identity_id) = seeded_bridge().await;
+
+        const SYMBOLS: &str = "!@#$%^&*()_+-=[]{}|;:,.<>?";
+
+        // ---- defaults: 16 chars over all character sets ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request("generate_password", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp.ok,
+            "default generation must succeed: {:?}",
+            resp.error
+        );
+        assert_eq!(resp.kind, "generate_password_response");
+        let default_password = resp.payload.unwrap()["password"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(default_password.len(), 16);
+
+        // ---- custom length with symbols off ⇒ no symbol characters ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "generate_password",
+                serde_json::json!({
+                    "length": 24,
+                    "include_symbols": false
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp.ok,
+            "custom generation must succeed: {:?}",
+            resp.error
+        );
+        let custom_payload = resp.payload.unwrap();
+        let password = custom_payload["password"].as_str().unwrap();
+        assert_eq!(password.len(), 24);
+        assert!(
+            !password.chars().any(|c| SYMBOLS.contains(c)),
+            "symbols disabled but password contains one: {password}"
+        );
+
+        // ---- passphrase mode: n words joined with '-' ----
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "generate_password",
+                serde_json::json!({ "words": 3 }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            resp.ok,
+            "passphrase generation must succeed: {:?}",
+            resp.error
+        );
+        let passphrase_payload = resp.payload.unwrap();
+        let passphrase = passphrase_payload["password"].as_str().unwrap();
+        assert_eq!(
+            passphrase.split('-').count(),
+            3,
+            "3-word passphrase must be exactly 3 hyphen-joined words: {passphrase}"
+        );
+
+        // ---- locked vault refuses generation (session gate) ----
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request("generate_password", serde_json::json!({})),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().starts_with("locked"), "got: {err}");
+        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+
+        // ---- validation rails ----
+        for (label, payload) in [
+            ("length below minimum", serde_json::json!({ "length": 3 })),
+            (
+                "length above maximum",
+                serde_json::json!({ "length": 10_001 }),
+            ),
+            (
+                "all charsets disabled",
+                serde_json::json!({
+                    "include_lowercase": false,
+                    "include_uppercase": false,
+                    "include_digits": false,
+                    "include_symbols": false
+                }),
+            ),
+            ("words below range", serde_json::json!({ "words": 2 })),
+            ("words above range", serde_json::json!({ "words": 11 })),
+        ] {
+            let err = handle_request(
+                &db_path,
+                &state_dir,
+                request("generate_password", payload),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                err.to_string().starts_with("invalid_payload"),
+                "{label}: got {err}"
+            );
+        }
 
         std::env::remove_var("PERSONA_PASSKEY_APPROVAL_SOCKET");
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
@@ -4614,7 +4757,7 @@ pub(crate) mod tests {
         assert_eq!(payload["paired"], false);
         assert!(payload["session_id"].is_null());
         assert!(payload["session_expires_at_ms"].is_null());
-        assert_eq!(payload["protocol_version"], 4);
+        assert_eq!(payload["protocol_version"], 5);
         assert!(payload["server_version"].is_string());
         let caps = payload["capabilities"].as_array().unwrap();
         for capability in [
