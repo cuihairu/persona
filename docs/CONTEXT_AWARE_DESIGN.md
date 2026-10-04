@@ -38,16 +38,16 @@ core: ContextService（纯函数，可单测）
 
 ## 3. 上下文信号清单
 
-| 维度 | 信号 | 来源 | 可靠性 | v1 纳入? |
-| --- | --- | --- | --- | --- |
-| 终端 | `cwd` | `std::env::current_dir` | 脚本可伪造，但建议不授权所以无害 | ✅ |
-| Git | `cwd` 上溯到 `.git`，读 `remote origin` → forge 与 owner/repo | shell 调用 git 或 `git2` | 高 | ✅ |
-| 终端 | `hostname` | `gethostname` / `PERSONA_HOST` 覆盖 | 高（可通过环境变量改，见下） | ✅ |
-| 终端 | 父进程链（shell 是否交互） | `/proc/<ppid>/comm` 启发式 | 中；交互 TTY 才提示，脚本不打扰 | ⚠️ 阶段 2 |
-| SSH | Agent 请求的 host / key | 已有 agent 策略输入 | 高 | ⚠️ 阶段 3 |
-| 浏览器 | page origin / 每站点默认 | 已有 autofillDefaults | 高 | ⚠️ 阶段 4 |
-| 桌面 | 当前窗口/项目 | Tauri 侧 | 中 | ⚠️ 阶段 4 |
-| 设备 | 机器角色（dev-pc / laptop / server） | 主机名约定或 `~/.persona/machine-profile` | 用户自声明 | ✅（可选） |
+| 维度   | 信号                                                          | 来源                                      | 可靠性                           | v1 纳入?   |
+| ------ | ------------------------------------------------------------- | ----------------------------------------- | -------------------------------- | ---------- |
+| 终端   | `cwd`                                                         | `std::env::current_dir`                   | 脚本可伪造，但建议不授权所以无害 | ✅         |
+| Git    | `cwd` 上溯到 `.git`，读 `remote origin` → forge 与 owner/repo | shell 调用 git 或 `git2`                  | 高                               | ✅         |
+| 终端   | `hostname`                                                    | `gethostname` / `PERSONA_HOST` 覆盖       | 高（可通过环境变量改，见下）     | ✅         |
+| 终端   | 父进程链（shell 是否交互）                                    | `/proc/<ppid>/comm` 启发式                | 中；交互 TTY 才提示，脚本不打扰  | ⚠️ 阶段 2  |
+| SSH    | Agent 请求的 host / key                                       | 已有 agent 策略输入                       | 高                               | ⚠️ 阶段 3  |
+| 浏览器 | page origin / 每站点默认                                      | 已有 autofillDefaults                     | 高                               | ⚠️ 阶段 4  |
+| 桌面   | 当前窗口/项目                                                 | Tauri 侧                                  | 中                               | ⚠️ 阶段 4  |
+| 设备   | 机器角色（dev-pc / laptop / server）                          | 主机名约定或 `~/.persona/machine-profile` | 用户自声明                       | ✅（可选） |
 
 隐私边界：信号全部本地计算，永不外发；建议历史不进同步、不进服务器；
 审计只记「用户确认了哪个建议」（复用已有 switch 审计），不记信号本身。
@@ -128,12 +128,12 @@ cwd/host 信号主要在终端场景价值最大。v1 锁 CLI，把 ContextServi
 
 ## 8. 阶段计划
 
-| 阶段 | 交付 | 验收 |
-| --- | --- | --- |
-| 1 | core `ContextService` + `context.toml` 解析 + `persona suggest [--json]` + `context` 子命令 | 单测：映射命中/无命中/覆盖链/平局/伪造信号；无映射时输出=active |
-| 2 | shell-hook、交互 TTY 提示、`persona use`、历史学习表（默认关） | 双 shell 冒烟；学习开关默认关；审计含 reason |
-| 3 | SSH host 维度接入、`--identity` 生效 | `ssh -T git@github.com` 场景建议正确；host 策略联动不变 |
-| 4 | 桥协议字段、桌面托盘候选、浏览器建议排序 | 全部入口一致候选；旧扩展（未知字段）不回归 |
+| 阶段 | 交付                                                                                        | 验收                                                            |
+| ---- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 1    | core `ContextService` + `context.toml` 解析 + `persona suggest [--json]` + `context` 子命令 | 单测：映射命中/无命中/覆盖链/平局/伪造信号；无映射时输出=active |
+| 2    | shell-hook、交互 TTY 提示、`persona use`、历史学习表（默认关）                              | 双 shell 冒烟；学习开关默认关；审计含 reason                    |
+| 3    | SSH host 维度接入、`--identity` 生效                                                        | `ssh -T git@github.com` 场景建议正确；host 策略联动不变         |
+| 4    | 桥协议字段、桌面托盘候选、浏览器建议排序                                                    | 全部入口一致候选；旧扩展（未知字段）不回归                      |
 
 ## 9. 开放问题
 
