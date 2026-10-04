@@ -16,14 +16,16 @@ Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安
   - `SSH_AGENT_FAILURE` (5): 失败响应
 
 - **加密算法支持**:
-  - ed25519 (签名/验证)
-  - 使用 `ed25519-dalek` 库实现
+  - ed25519 (签名/验证, `ed25519-dalek`)
+  - RSA `rsa-sha2-256`/`rsa-sha2-512` (RFC 8332, 按客户端 flags 分派)
+  - ECDSA P-256 (`ecdsa-sha2-nistp256`, RFC 6979 确定性签名)
 
 ### 2. 跨平台传输层
 
 - **UNIX 域套接字** (macOS/Linux):
   - 默认路径: 系统临时目录下的 `persona-ssh-agent-<pid>.sock`
-  - Agent 会把实际监听地址写入 `PERSONA_AGENT_STATE_DIR/ssh-agent.sock`
+  - Agent 会把实际监听地址写入 `PERSONA_AGENT_STATE_DIR/ssh-agent.sock`,
+    进程 PID 写入 `PERSONA_AGENT_STATE_DIR/ssh-agent.pid`
   - 可通过环境变量 `PERSONA_AGENT_SOCKET_PATH` 自定义 Agent 监听地址
 
 - **Windows 命名管道** (Windows):
@@ -40,8 +42,9 @@ Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安
   - 优雅处理锁定状态
 
 - **密钥格式**:
-  - 公钥: OpenSSH 格式 (`ssh-ed25519 AAAAC3... comment`)
-  - 私钥: Base64 编码的 ed25519 seed (32 字节)
+  - 公钥: OpenSSH 格式 (`ssh-ed25519 AAAAC3... comment` 等)
+  - 私钥: 库内既有约定为 Base64 编码的 ed25519 seed (32 字节); 导入的
+    OpenSSH PEM 私钥 (ed25519/RSA/ECDSA) 在加载时解出原始组件
   - 自动转换为 SSH Agent 协议所需的二进制格式
 
 ### 4. 综合策略系统
@@ -78,9 +81,11 @@ deny_all = false
 
 #### 4.3 每密钥策略 (KeyPolicy)
 
+`key_policies` 是以 credential_id 为键的 map-of-table(**不是** `[[key_policies]]`
+数组表——数组格式不会被解析, 对应密钥会静默回退默认策略):
+
 ```toml
-[[key_policies]]
-credential_id = "12345678-1234-5678-1234-567812345678"
+[key_policies."12345678-1234-5678-1234-567812345678"]
 enabled = true
 allowed_hosts = ["github.com", "gitlab.com", "*.company.com"]
 denied_hosts = []
@@ -99,9 +104,10 @@ allowed_time_range = "09:00-18:00"  # 仅在工作时间允许
 
 #### 4.4 每主机策略 (HostPolicy)
 
+`host_policies` 同样是 map-of-table, 键 = 主机名(支持 glob 模式):
+
 ```toml
-[[host_policies]]
-hostname = "prod-*.company.com"
+[host_policies."prod-*.company.com"]
 enabled = true
 allowed_keys = []  # 空 = 允许所有密钥
 require_confirm = true
@@ -128,10 +134,10 @@ max_connections_per_hour = 20
 
 #### 5.1 平台支持
 
-- **macOS**: Touch ID / Face ID
+- **macOS**: Touch ID (当前实现恒选 Touch ID; Face ID 检测是 stub, 未接入)
 - **Windows**: Windows Hello
-- **Linux**: Linux Secret Service
-- **自动检测**: 根据运行平台自动选择合适的生物识别类型
+- **Linux**: polkit 认证 (`auth_self` 门禁)
+- **平台映射**: 按编译目标平台选择对应的生物识别类型
 
 #### 5.2 认证流程
 
@@ -149,7 +155,8 @@ max_connections_per_hour = 20
 #### 5.3 集成方式
 
 - 使用 `BiometricProvider` trait 进行抽象
-- 默认使用 `MockBiometricProvider` (用于测试)
+- 默认 fail-closed: 内置 `MockBiometricProvider` (`available=false`,
+  `force_fail=true`), 未注入真实平台实现时 `require_biometric` 一律拒绝签名
 - 桌面/移动应用可注入真实的平台特定实现
 
 ### 6. 速率限制
@@ -208,24 +215,16 @@ max_connections_per_hour = 20
 
 ### 9. 测试覆盖
 
-#### 9.1 单元测试 (7个)
+#### 9.1 单元测试 (78 个)
 
-**Policy 测试** (`agents/ssh-agent/src/policy.rs`):
+按模块分布: `policy.rs` 30、`lib.rs` 37、`transport.rs` 5、`daemon.rs` 3、
+`approval.rs` 3。覆盖默认策略放行、`deny_all` 紧急锁定、速率限制
+(间隔/每小时/每日/每主机)、每密钥与每主机策略、glob 匹配、时间窗限制、
+known_hosts 强制与未知主机确认、TOML/环境变量策略加载与回退等。
 
-- `test_default_policy_allows`: 默认策略允许所有操作
-- `test_deny_all_lockdown`: 紧急锁定模式测试
-- `test_rate_limiting`: 速率限制功能测试
-- `test_key_policy_host_restrictions`: 每密钥主机限制测试
-- `test_glob_patterns`: Glob 模式匹配测试
+#### 9.2 集成测试 (13 个)
 
-**Transport 测试** (`agents/ssh-agent/src/transport.rs`):
-
-- `test_default_path`: 默认套接字路径测试
-- `test_env_var_name`: 环境变量名称测试
-
-#### 9.2 E2E 测试 (6个)
-
-**协议测试** (`agents/ssh-agent/tests/e2e_test.rs`):
+**协议/E2E** (`agents/ssh-agent/tests/e2e_test.rs`, 10 个):
 
 - `test_ssh_protocol_format`: SSH 协议编码/解码
 - `test_ed25519_public_key_encoding`: ed25519 公钥编码
@@ -233,8 +232,15 @@ max_connections_per_hour = 20
 - `test_policy_config_format`: TOML 策略配置解析
 - `test_read_ssh_string_function`: SSH 字符串读取
 - `test_identities_answer_format`: SSH_AGENT_IDENTITIES_ANSWER 消息格式
+- 另有 agent 子进程回环、`sign_request` 编码等用例; 其中
+  `test_agent_request_identities` / `test_ssh_github_connection` 标记
+  `#[ignore]`(需 agent 运行中 / 外网, 默认跳过)
 
-**总计**: 13 个测试全部通过
+**daemon** (`agents/ssh-agent/tests/daemon_test.rs`, 3 个): 守护进程启动与
+身份/签名处理
+
+**总计**: 91 个测试(单元 78 + 集成 13), 除 2 个默认 `#[ignore]` 的联网
+用例外全部通过
 
 ### 10. 环境变量配置
 
@@ -259,6 +265,18 @@ PERSONA_AGENT_POLICY_FILE=~/.persona/agent-policy.toml
 # 目标主机(由 SSH 客户端或包装器设置)
 PERSONA_AGENT_TARGET_HOST=github.com
 
+# 目标主机提示(优先级低于 PERSONA_AGENT_TARGET_HOST)
+PERSONA_AGENT_TARGET_HOST_HINT=gitlab.com
+
+# SSH 目的地(user@host 形式会解析出主机)
+PERSONA_AGENT_SSH_DEST=deploy@prod-1
+
+# SSH 命令行(从中解析目标主机)
+PERSONA_AGENT_SSH_COMMAND="ssh admin@intranet"
+
+# 回退来源(未设置上述变量时依次尝试):
+# SSH_CONNECTION / SSH_CLIENT / SSH_ORIGINAL_COMMAND / GIT_SSH_COMMAND
+
 # 全局确认要求(简化配置)
 PERSONA_AGENT_REQUIRE_CONFIRM=true
 
@@ -282,11 +300,15 @@ PERSONA_KNOWN_HOSTS_FILE=~/.ssh/my_known_hosts
 ```
 agents/ssh-agent/
 ├── src/
-│   ├── main.rs          # Agent 主程序(协议处理、签名逻辑)
+│   ├── main.rs          # 入口 shim(6 行, 调 lib 的 run_agent)
+│   ├── lib.rs           # Agent 核心(协议处理、签名逻辑、密钥加载)
+│   ├── daemon.rs        # 守护进程(监听循环、sock/pid 状态文件)
+│   ├── approval.rs      # 签名确认处理器(TtyApprovalHandler 等)
 │   ├── policy.rs        # 策略系统(PolicyEnforcer、决策逻辑)
 │   └── transport.rs     # 跨平台传输层(Unix/Windows)
 ├── tests/
-│   └── e2e_test.rs      # E2E 测试
+│   ├── e2e_test.rs      # 协议/E2E 测试
+│   └── daemon_test.rs   # daemon 测试
 ├── Cargo.toml           # 依赖配置
 └── agent-policy.example.toml  # 策略配置示例
 ```
@@ -300,6 +322,7 @@ struct Agent {
     keys: Vec<AgentKey>,                              // 加载的密钥
     policy: Arc<Mutex<PolicyEnforcer>>,               // 策略执行器
     biometric_provider: Arc<dyn BiometricProvider>,   // 生物识别提供者
+    approval_handler: Arc<dyn ApprovalHandler>,       // 签名确认处理器
 }
 ```
 
@@ -307,11 +330,17 @@ struct Agent {
 
 ```rust
 struct AgentKey {
-    pub public_blob: Vec<u8>,       // OpenSSH 公钥 blob
-    pub comment: String,            // 密钥注释
-    pub secret_seed: [u8; 32],      // ed25519 seed
-    pub identity_id: Uuid,          // 关联的身份 ID
-    pub credential_id: Uuid,        // 凭证 ID
+    pub public_blob: Vec<u8>,            // OpenSSH 公钥 blob
+    pub comment: String,                 // 密钥注释
+    pub signing_key: SigningKeyMaterial, // 签名材料(见下)
+    pub identity_id: Uuid,               // 关联的身份 ID
+    pub credential_id: Uuid,             // 凭证 ID
+}
+
+enum SigningKeyMaterial {
+    Ed25519 { seed: [u8; 32] },          // ed25519 seed(库内既有约定)
+    Rsa(Arc<RsaPrivateKey>),             // RSA PKCS#1 v1.5
+    EcdsaP256(SigningKey),               // ECDSA NIST P-256
 }
 ```
 
@@ -363,25 +392,22 @@ ssh -T git@github.com
 require_confirm = false
 max_signatures_per_hour = 100
 
-[[key_policies]]
 # 生产环境密钥: 要求生物识别
-credential_id = "prod-key-uuid-here"
+[key_policies."prod-key-uuid-here"]
 enabled = true
 allowed_hosts = ["prod-*.company.com"]
 require_biometric = true
 max_uses_per_day = 50
 
-[[key_policies]]
 # 开发环境密钥: 无限制
-credential_id = "dev-key-uuid-here"
+[key_policies."dev-key-uuid-here"]
 enabled = true
 allowed_hosts = ["dev-*.company.com", "github.com"]
 require_confirm = false
 max_uses_per_day = 0
 
-[[host_policies]]
 # 生产环境主机: 严格控制
-hostname = "prod-*.company.com"
+[host_policies."prod-*.company.com"]
 enabled = true
 allowed_keys = ["prod-key-uuid-here"]
 require_confirm = true
@@ -415,7 +441,7 @@ git config gpg.format ssh
 git config gpg.ssh.program ~/.local/bin/persona-ssh-sign
 git config user.signingkey "persona:ssh:<credential-uuid>"   # 或 ssh-ed25519 AAAA… 公钥行
 
-# ③ 签名提交（身份名下只有一把 key 时 -f 可省略）
+# ③ 签名提交（整个 vault 只有一把 SSH key 时 -f 可省略；多把必须 -f 指定）
 git commit -S
 
 # 也可以直接用（与 ssh-keygen -Y sign 同参）
@@ -462,11 +488,12 @@ remove 只删除本工具写入的行（按 key blob 字段匹配）、`--list` 
 
 ## 安全考虑
 
-1. **密钥永不离开内存**: 私钥仅在签名时加载,使用后立即清除
+1. **私钥常驻内存**: 私钥在 agent 启动时从加密保险库解密加载,进程生命周期
+   内常驻,无 zeroize 清除(已知限制); 数据库中仍为加密存储
 2. **加密存储**: 所有密钥在数据库中加密存储
 3. **审计完整**: 所有签名操作都有审计日志
 4. **策略优先**: 策略拒绝优先于任何其他决策
-5. **生物识别回退**: 不可用时优雅降级,不会完全阻塞
+5. **生物识别回退**: 不可用时 fail-closed(默认拒绝签名)或按策略降级
 6. **速率限制**: 多层次防护防止滥用
 7. **known_hosts 检查**: 可选的主机验证
 
@@ -474,13 +501,14 @@ remove 只删除本工具写入的行（按 key blob 字段匹配）、`--list` 
 
 ### 当前限制
 
-1. **密钥类型**: 仅支持 ed25519(未来将添加 RSA、ECDSA)
+1. **密钥类型**: ed25519、RSA (RFC 8332, rsa-sha2-256/512)、ECDSA P-256
+   三档均已支持
 2. **协议**: 仅实现核心 SSH Agent 协议子集
 3. **平台**: 生物识别集成需要平台特定的实现
 
 ### 未来增强
 
-1. **更多密钥类型**: RSA (2048/4096), ECDSA (P-256/P-384/P-521)
+1. **更多曲线**: ECDSA P-384/P-521 等
 2. **完整协议**: 支持 `SSH_AGENTC_ADD_IDENTITY`, `SSH_AGENTC_REMOVE_IDENTITY`
 3. **智能卡集成**: 支持 YubiKey 等硬件安全模块
 4. **桌面 UI**: 图形化签名确认和策略配置
@@ -503,7 +531,7 @@ cargo test -p persona-ssh-agent --lib
 cargo test -p persona-ssh-agent --test e2e_test
 
 # 运行特定测试
-cargo test -p persona-ssh-agent test_policy_enforcement
+cargo test -p persona-ssh-agent test_key_policy_host_restrictions
 ```
 
 ### 代码检查

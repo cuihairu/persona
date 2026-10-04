@@ -24,7 +24,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 - 长度字段为 32 位无符号整数（小端序）
-- 最大消息大小：10MB（软限制 1MB）
+- 最大消息大小：10MB（硬限制，超出返回 `invalid_frame_length`）
 - 编码：UTF-8 JSON
 
 ## 消息结构
@@ -99,7 +99,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "payload": {
     "extension_id": "abcdefghijklmnopabcdefghijklmnop",
     "extension_version": "1.0.0",
-    "protocol_version": 3,
+    "protocol_version": 5,
     "client_instance_id": "uuid-v4"
   }
 }
@@ -113,7 +113,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "ok": true,
   "payload": {
     "server_version": "0.1.0",
-    "protocol_version": 3,
+    "protocol_version": 5,
     "capabilities": [
       "status",
       "pairing_request",
@@ -126,19 +126,27 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
       "passkey_create",
       "passkey_assert",
       "passkey_credential_provider_list",
-      "passkey_credential_provider_assert"
+      "passkey_credential_provider_assert",
+      "find_for_save",
+      "save_credential",
+      "generate_password"
     ],
     "pairing_required": true,
     "paired": false,
     "session_id": null,
-    "session_expires_at_ms": null
+    "session_expires_at_ms": null,
+    "connect_available": false,
+    "connect_port": null
   }
 }
 ```
 
 > 备注：当已经完成配对时，`pairing_required=false` 且会返回 `session_id`（短期会话，默认 24h）。
-> 服务器回自身支持的 `protocol_version`（当前 3）；声明旧版本的扩展对不认识的新消息
+> 服务器回自身支持的 `protocol_version`（当前 5）；声明旧版本的扩展对不认识的新消息
 > 会得到 `unknown_type`，向后兼容。
+> `connect_available` / `connect_port`：本机 desktop/CLI Connect server 的探测
+> 结果（读 `~/.persona/connect.port` 并探活 `/health`，可用 `PERSONA_CONNECT_PORT`
+> 覆盖），用于解锁联动；无运行中的 server 时为 `false` / `null`。
 
 ### 2. pairing_request - 申请配对码
 
@@ -223,8 +231,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "ok": true,
   "payload": {
     "locked": false,
-    "active_identity": "uuid-v4",
-    "active_identity_name": "Work Profile"
+    "active_identity": "uuid-v4"
   }
 }
 ```
@@ -334,8 +341,9 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 > 安全登记：**CVV 永远不出现在 `request_fill` 响应里。** fill 的去向是页面
-> DOM 输入框，同页任意脚本可读；CVV 仅支持 `copy`（剪贴板路径，30s 自动
-> 清除），由用户手动粘贴。扩展侧同样不得把 CVV 注入页内元素。
+> DOM 输入框，同页任意脚本可读；CVV 仅支持 `copy`（剪贴板路径），由用户
+> 手动粘贴后自行清理剪贴板（桥接侧没有自动清除）。扩展侧同样不得把 CVV
+> 注入页内元素。
 
 **错误码：**
 
@@ -403,11 +411,13 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "type": "copy_response",
   "ok": true,
   "payload": {
-    "copied": true,
-    "clear_after_seconds": 30
+    "copied": true
   }
 }
 ```
+
+> 剪贴板没有自动清除：字段复制后由用户自行清理（`clear_after_seconds`
+> 恒不返回）。
 
 **`field` 取值：** `username`、`password`、`totp`，以及 BankCard 的
 `card_number` / `cardholder_name` / `expiry_date` / `cvv`（2026-09 起）。
@@ -440,6 +450,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "type": "passkey_list_response",
   "ok": true,
   "payload": {
+    "rp_id": "example.com",
     "items": [
       {
         "id": "uuid-v4",
@@ -611,8 +622,10 @@ password 条目，决定条默认给「更新」还是「另存」。纯元数�
 }
 ```
 
-匹配规则：password 类型 + `validate_origin_binding`（TLD+1，同填充）+
-username trim 后大小写不敏感全等；无 URL 的条目不参与（无法归属站点）。
+匹配规则：password 类型 + `validate_origin_binding` + username trim 后
+大小写不敏感全等。`validate_origin_binding` 对无 URL 条目直接放行
+（不校验站点归属，仅靠 username 全等），因此**无 URL 条目同样参与匹配**
+（已知行为：条目无法归属站点时只以 username 为准）。
 
 ### 15. save_credential - 保存 / 更新登录（协议 v4）
 
@@ -662,6 +675,39 @@ URL 即强制 TLD+1 匹配）→ 审计 `bridge_save_credential`。
 origin 记进 storage。blocked / suspicious 域与填充同一道闸门——把密码写进钓鱼
 站和填进去一样有害。
 
+### 16. generate_password - 密码生成（协议 v5）
+
+纯计算消息：不读写保险库，只需会话认证，不要求 user gesture。
+
+**请求：**
+
+```json
+{
+  "type": "generate_password",
+  "payload": {
+    "length": 16,
+    "include_lowercase": true,
+    "include_uppercase": true,
+    "include_digits": true,
+    "include_symbols": true,
+    "pronounceable": false,
+    "words": null
+  }
+}
+```
+
+- 全部字段可缺省：`length` 默认 16，四个字符集默认全开，`pronounceable` 默认 false
+- `words`（Diceware 词数，3–10）给出时覆盖 `length` 与字符集设置
+- 校验失败（`length` 越界、`words` 越界、非 words 模式下未启用任何字符集）返回 `invalid_payload`
+
+**响应：** `generate_password_response`
+
+```json
+{ "password": "…" }
+```
+
+生成失败返回 `generation_failed`。
+
 ## 安全机制
 
 ### Origin 绑定
@@ -682,7 +728,8 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 
 ### 桌面审批（Passkey 确认闸门）
 
-`passkey_create` / `passkey_assert` / `credential_save`（§15）在桌面应用运行时可要求第二道确认——独立于扩展的
+`passkey_create` / `passkey_assert` / `passkey_credential_provider_assert`
+（§13）/ `credential_save`（§15）在桌面应用运行时可要求第二道确认——独立于扩展的
 user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模型见 `PASSKEYS_DESIGN.md` §10）。
 
 **传输**：bridge（每个请求的短命进程）作为客户端连接 Unix domain socket
@@ -702,7 +749,9 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 }
 ```
 
-- `op` 仅接受 `passkey_create` / `passkey_assert`；`passkey_list` 非敏感不走审批
+- `op` 白名单：`passkey_create` / `passkey_assert` /
+  `passkey_credential_provider_assert` / `credential_save`；`passkey_list`
+  非敏感不走审批（在白名单外，收到也按 `unsupported` 拒绝）
 
 响应（桌面 → bridge）：
 
@@ -723,10 +772,13 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 | `require` | 策略强制：socket 不在也拒绝该 passkey 请求（fail closed）                      |
 | `off`     | 永不询问                                                                       |
 
-拒绝时 bridge 对该请求返回错误 `passkey request denied by desktop approval (<reason>)`。
+拒绝/不可达时 bridge 对该请求返回错误，错误码前缀随 op 不同：
+`passkey_desktop_denied: <op> rejected by desktop approval (<reason>)`、
+`save_desktop_denied: ...`（保存路径）、
+`passkey_desktop_approval_required: ...`（`require` 模式下桌面不可达）。
 
 此协议是本地实现细节，不占用桥接协议版本号（`protocol_version` 由 hello
-响应承载，当前 3；下一版方向见 `CLIENT_COMMUNICATION_ARCHITECTURE.md`）。
+响应承载，当前 5；下一版方向见 `CLIENT_COMMUNICATION_ARCHITECTURE.md`）。
 
 ### 会话管理（可选）
 
@@ -750,20 +802,35 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 
 ### 敏感操作确认
 
-可通过策略配置要求以下操作需要用户确认：
+以下策略键为**计划中，当前未实现**（bridge/CLI 尚无任何配置读取，也不会
+据此改变行为）：
 
-- `confirm_on_unknown_origin` - 未知域名首次请求
-- `confirm_on_fill` - 每次填充都需确认
-- `require_biometric` - 敏感操作需要生物识别
+- `confirm_on_unknown_origin` - 未知域名首次请求（未实现）
+- `confirm_on_fill` - 每次填充都需确认（未实现）
+- `require_biometric` - 敏感操作需要生物识别（未实现）
+
+当前实际生效的确认手段是 user gesture 闸门 + 桌面审批闸门（见上节）。
 
 ## 审计日志
 
-所有操作都会记录到审计日志：
+桥接会话的敏感操作以结构化日志事件记录（Tracing，落到桥接进程日志），
+事件名清单：
+
+- `bridge_fill_success` - 凭据填充成功
+- `bridge_totp_success` - TOTP 生成
+- `bridge_copy_success` - 剪贴板复制
+- `bridge_save_credential` - 保存/更新登录
+- `bridge_passkey_create` / `bridge_passkey_assert` - passkey 写入/断言
+- `bridge_generate_password` - 密码生成
+- `bridge_passkey_list` - passkey 枚举（**debug 级**，默认 info 级别不输出）
+
+不是"所有操作默认记录"：`passkey_list` 只在 debug 级可见，且记录的是
+日志事件而非数据库 `audit_log` 表。
 
 ```json
 {
   "timestamp": "2025-01-15T10:30:00Z",
-  "event": "bridge_fill_request",
+  "event": "bridge_fill_success",
   "origin": "https://github.com",
   "item_id": "uuid-v4",
   "result": "success",
@@ -798,13 +865,14 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 | `wrong_identity`              | 当前 active identity 不匹配           |
 | `user_confirmation_required`  | 需要用户确认                          |
 | `session_expired`             | 会话已过期                            |
-| `rate_limited`                | 请求过于频繁                          |
 | `user_gesture_required`       | 缺少用户手势（v2）                    |
 | `no_active_identity`          | 未设置 active identity（v2）          |
 | `passkey_rp_mismatch`         | origin 与 passkey 的 rp_id 不符（v2） |
 | `passkey_alg_unsupported`     | pubKeyCredParams 不含 ES256（v2）     |
 | `passkey_item_not_found`      | 指定的 passkey 不存在（v2）           |
 | `passkey_origin_mismatch`     | passkey origin 校验失败（预留）（v2） |
+| `passkey_desktop_denied`      | passkey 创建/断言被桌面审批拒绝       |
+| `passkey_desktop_approval_required` | `require` 模式下桌面审批不可达  |
 | `save_desktop_denied`         | 保存/更新被桌面审批拒绝（v4）         |
 | `unsupported_credential_type` | 条目类型不支持该操作                  |
 | `invalid_payload`             | payload 校验失败（如空密码）          |
@@ -895,7 +963,7 @@ manifest 文件内容示例：
 | 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                              |
 | 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）              |
 | 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                        |
-| 5 (计划)         | -           | biometric confirmation + richer policy prompts + generate_password                                     |
+| 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port            |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

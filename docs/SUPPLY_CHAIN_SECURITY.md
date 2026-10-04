@@ -78,23 +78,24 @@ npm audit fix
 
 ### 允许的许可证
 
-项目允许以下开源许可证:
+`deny.toml` 的 allowlist（未列入即拒绝，机制是 allowlist 而非分级警告）:
 
 - **MIT** - 最宽松的许可证
-- **Apache-2.0** - 商业友好的许可证
+- **Apache-2.0**（含 `Apache-2.0 WITH LLVM-exception`）- 商业友好的许可证
 - **BSD-2-Clause / BSD-3-Clause** - 简洁的许可证
 - **ISC** - 与 MIT 类似
+- **Unicode-3.0 / Zlib / MITNFA / CDLA-Permissive-2.0 / BSL-1.0** - 常见宽松许可
 - **MPL-2.0** - Mozilla Public License
 - **CC0-1.0** - 公共领域声明
 - **0BSD** - 零条款 BSD
 
 ### 禁止的许可证
 
-以下许可证因其 copyleft 性质被禁止:
+以下许可证因其 copyleft 性质被禁止（allowlist 之外全部拒绝）:
 
 - **GPL-2.0 / GPL-3.0** - 强 copyleft
 - **AGPL-3.0** - 网络 copyleft
-- **LGPL** - 较弱的 copyleft (警告级别)
+- **LGPL** - 较弱的 copyleft
 
 ### 处理许可证问题
 
@@ -112,9 +113,9 @@ npm audit fix
 CI/CD 流水线自动运行安全检查:
 
 ```yaml
-# .github/workflows/ci.yml
-- name: Security Audit
-  run: cargo deny check && cargo audit
+# .github/workflows/ci.yml — Security Audit job（两个独立 step）
+- run: cargo deny check advisories sources
+- run: cargo audit
 ```
 
 ### 2. 漏洞分析
@@ -162,10 +163,10 @@ ignore = [
 
 | 告警                         | 依赖           | 引入链                                                          | 风险面评估                                                                                    | 解除路径                                                |
 | ---------------------------- | -------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| GHSA-wrw7-89jp-8q8g (medium) | glib 0.18.5    | Tauri 1.x → gtk-rs（仅 Linux 桌面）                             | `VariantStrIter` 迭代器 soundness 缺陷；Persona 桌面端不直接以该迭代器遍历不可信 Variant 数据 | Tauri 2.x 升级批次（独立工程）                          |
+| GHSA-wrw7-89jp-8q8g (medium) | glib 0.18.5    | Tauri（Linux GTK 后端）→ gtk-rs（仅 Linux 桌面）                | `VariantStrIter` 迭代器 soundness 缺陷；Persona 桌面端不直接以该迭代器遍历不可信 Variant 数据 | 待上游 gtk-rs 传递依赖升级（glib 0.18.5 仍在 `desktop/src-tauri/Cargo.lock`） |
 | GHSA-848j-6mx2-7j84 (low)    | elliptic 6.6.1 | website (umi) → webpack → node-libs-browser → crypto-browserify | 构建链 polyfill 聚合；website 是展示站，产物不调用 node crypto polyfill；上游无补丁版本       | umi/webpack 构建链演进后依赖消失，或迁出 webpack 系构建 |
 
-已修复（同批复核）：workspace `lru` 0.12.5→0.18.4（ratatui 0.26→0.30 + rqrr 0.7→0.11）；`desktop/src-tauri` `rand` 0.8.5→0.8.7；docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12（npm overrides，vitepress 1.6.4 构建验证通过）；`image-size`（GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr，high）pnpm override `less@<4.9.1`→4.9.1 后整链消失——less 4.9.1 已移除 image-size 依赖，另留 `image-size@<2.0.4`→2.0.4 防御性 pin（OSV 确认 2.0.4 无已知漏洞；Dependabot 告警元数据滞后仍标"无补丁"）。
+已修复（同批复核）：workspace `lru` 0.12.5→0.18.4（ratatui 0.26→0.30 + rqrr 0.7→0.11）；`desktop/src-tauri` `rand` 0.8.5→0.8.7；docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12（当初用 npm overrides 拉平，后续经 vite ^6.4.3 自然解析到 0.25.12，override 已移除；vitepress 1.6.4 构建验证通过）；`image-size`（GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr，high）pnpm override `less@<4.9.1`→4.9.1 后整链消失——less 4.9.1 已移除 image-size 依赖，另留 `image-size@<2.0.4`→2.0.4 防御性 pin（OSV 确认 2.0.4 无已知漏洞；Dependabot 告警元数据滞后仍标"无补丁"）。
 
 ## Makefile 命令
 
@@ -211,9 +212,11 @@ make security-audit
 
 **失败策略:**
 
-- 高危/严重漏洞 → CI 失败
-- 中危/低危漏洞 → 警告（不阻塞）
-- 许可证违规 → CI 失败
+- Rust 侧（`cargo deny check advisories`，v2 advisories）：任何级别
+  RustSec 漏洞都令 CI 失败（"Vulnerable" 默认 deny，豁免需显式登记）；
+- JS/TS 侧（pnpm audit）：`--audit-level=moderate` 且 `continue-on-error`
+  ——高危以上报告出来，但不阻塞合并；
+- 许可证违规 → CI 失败（allowlist 机制）
 - 未知依赖来源 → 警告
 
 ## 定期维护
@@ -369,5 +372,5 @@ serde = "1.0.197"  # 好
 ---
 
 **维护者:** Persona Security Team
-**最后更新:** 2025-01-24
+**最后更新:** 2026-10-05
 **审阅周期:** 季度

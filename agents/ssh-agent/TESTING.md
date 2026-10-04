@@ -181,14 +181,14 @@ cat > ~/.persona/agent-policy.toml <<'EOF'
 require_confirm = false
 max_signatures_per_hour = 10
 
-[[key_policies]]
-credential_id = "<your-credential-id>"
+# map-of-table: the table key IS the credential id / hostname pattern
+# ([[key_policies]] array syntax is not parsed and would be ignored)
+[key_policies."<your-credential-id>"]
 enabled = true
 allowed_hosts = ["github.com", "gitlab.com"]
 require_confirm = true
 
-[[host_policies]]
-hostname = "*.prod.example.com"
+[host_policies."*.prod.example.com"]
 enabled = true
 require_confirm = true
 max_connections_per_hour = 5

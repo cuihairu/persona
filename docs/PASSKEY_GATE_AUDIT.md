@@ -20,8 +20,10 @@
 
 - 扩展消息层：`passkey_list` / `passkey_create` / `passkey_assert` 均为
   authed 消息（配对 + session HMAC）；`passkeyCreate`/`passkeyAssert` 原样
-  转发页面报告的 `user_gesture`（`nativeBridge.ts`），测试覆盖
-  `user_gesture=true/false` 两条路径与断言选择条目（`nativeBridge.test.ts`）。
+  转发页面报告的 `user_gesture`（`nativeBridge.ts`）。转发逻辑的扩展测试
+  （`nativeBridge.test.ts`）只覆盖 `gesture=true` 一例；`true/false` 双向
+  闸门用例在 core 桥测试（cli `bridge.rs` 协议用例，含
+  `user_gesture_required` 拒绝路径）与断言选择条目用例。
 - 内容层：确认 UI 在 `persona_passkey_create/list/assert` 消息后触发
   （`content.ts`），手势来自真实点击。
 - core 侧：桥协议用例（cli bridge 测试）+ 桌面审批白名单用例
@@ -31,7 +33,7 @@
 - 审计：`passkey_asserted` 携带 `via=extension|os_provider` 元数据
   （P4.4，协议测试已锁）。
 
-复核方式：`browser/chromium-extension` 内 `npx jest`（11 套件 135 例全绿）
+复核方式：`browser/chromium-extension` 内 `npx jest`（11 套件 129 例全绿）
 
 - `npx tsc --noEmit`；扩展测试含 manifest 契约测试（webauthnHook 仅顶层、
   content.js 全 frame、ISOLATED world）。
@@ -41,8 +43,10 @@
 与 `FEATURE_GAP_ANALYSIS.md` #23/#24 同一类前提缺失：OS provider 需要
 macOS（Signing & WebAuthn entitlement 签名）与 Windows（Hello 插件）实机
 
-- 签名环境；本仓库 CI 仅 Linux，只能跑协议与 core 回归（P4.1/P4.4 已在此
-  闭环）。顺延登记，重启条件：拿到 macOS/Windows 实机 + Developer ID
+- 签名环境；CI 的编译/协议面已覆盖 macOS/Windows（`ci.yml` 含 windows job，
+  `desktop-build.yml` 跑 macos/windows 矩阵），但 runner 是无 SE/Hello 硬件
+  的 VM，只能跑协议与 core 回归（P4.1/P4.4 已在此闭环），真机行为仍需
+  实机验收。顺延登记，重启条件：拿到 macOS/Windows 实机 + Developer ID
   签名环境（对照 PASSKEYS_DESIGN §13.1 的 P4.2/P4.3 验收）。
 
 ## 3. E3：跨源 iframe passkey — 设计裁定：不注入
@@ -67,8 +71,8 @@ webauthnHook 不入 iframe）。iframe 段落在 README 有对应设计说明。
 | P4.2 macOS provider / P4.3 Windows Hello 插件         | 真机前提                                         | 顺延（同 E2）            |
 | 开放问题 1：多身份命中同一 rp_id 的选择 UI 过滤       | 倾向 active identity 过滤 + 「显示其他身份」展开 | PASSKEYS_DESIGN §14 待决 |
 | 开放问题 2：私钥备份格式（自定义 JSON vs PKCS#12 类） | 标准（CXF）定稿前维持 v1 自定义 + schema 文档    | 同上                     |
-| 开放问题 3：`confirm_on_passkey_assert` 独立策略键    | 当前复用 `confirm_on_fill`，P3 后评估            | 同上                     |
-| P4.5 CXF 字段预留                                     | `foreign_key_ref` 已预留，不实现                 | 跟踪项                   |
+| 开放问题 3：`confirm_on_passkey_assert` 独立策略键    | 该策略键未落库；当前实际走独立桌面审批闸门 `PERSONA_BRIDGE_DESKTOP_APPROVAL`，P3 后评估 | 同上                     |
+| P4.5 CXF 字段预留                                     | 计划中：`foreign_key_ref` 字段未落库，标准定稿前不实现 | 跟踪项                   |
 | 扩展 passkey 真站互操作（webauthn.io/GitHub）         | 无浏览器 E2E 基建，同批 B 实机勾稽待补           | 与 E2 一并重启           |
 
 ## 5. 建议的后续动作（不阻塞收口）

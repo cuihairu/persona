@@ -19,7 +19,7 @@ Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到
 
 ## 2. 现在的标准升级流程
 
-三处改动（相对 `@tauri-apps/cli` 2.11.6 锁定链里的 `tauri-cli-v2.11.4`
+四处改动（相对 `@tauri-apps/cli` 2.12.1 锁定链里的 `tauri-cli-v2.12.1`
 基线模板，差异全部标注 `Persona 定制` 注释）：
 
 1. **`installMode: "both"`**：首次安装出现"为本机所有用户 / 仅当前用户"
@@ -33,6 +33,10 @@ Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到
    `DisplayName`+`Publisher` 的 WiX/MSI 条目并以
    `msiexec /x {ProductCode} /quiet /norestart` 卸载（缺口 3）。卸载失败
    则安装器中止（fail-closed，拒绝在旧版残留之上继续安装）。
+4. **`!include "Win\RestartManager.nsh"`**（2026-10-04 随 2.12.1 基线新增）：
+   CLI 2.12.x 的 `utils.nsh` 强制改用 Restart Manager 宏关闭运行中进程，
+   模板必须带上这个 include，否则 makensis 报
+   `macro named RestartManager_StartSession not found`。
 
 各入口的行为：
 
@@ -97,8 +101,10 @@ Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到
 ## 6. 模板维护
 
 `nsis/installer.nsi` 基于
-[`tauri-cli-v2.11.4`](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)
-基线（`pnpm-lock.yaml` 锁定 `@tauri-apps/cli` 2.11.4，`Cargo.lock` 锁定
-`tauri` 2.11.6）。升级 CLI 时：下载新基线模板 → 重放三处
-`Persona 定制`（见文件头注释）→ 更新头注释里的基线标签 →
+[`tauri-cli-v2.12.1`](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.1/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)
+基线（`desktop/package.json` 的 `@tauri-apps/cli ^2.12.1`，lock 锁
+`tauri` 2.12.1）。升级 CLI 时：下载新基线模板 → 重放四处
+`Persona 定制`（见文件头注释，含 2.12.x 起强制的
+`!include "Win\RestartManager.nsh"`——缺它 makensis 直接报
+`RestartManager_StartSession not found`）→ 更新头注释里的基线标签 →
 `cargo test -p persona-desktop packaging`（或全量测试）确认断言仍过。

@@ -68,24 +68,27 @@ info="persona-dev-env-1"), plaintext = group key)`。组合层自写约 30 行�
 实化 `core/src/auth/remote.rs` 的 `RemoteAuthProvider`（现为 129 行纯 mock）：
 
 - **协议**：SRP-6a，RFC 5054 4096-bit group（有官方测试向量，跨实现互通）。
-  数学走 RustCrypto `srp` 0.6（`core/src/auth/srp.rs` 封装），握手哈希 SHA-256；
-  实现正确性由 RFC 5054 附录 B 官方向量（1024-bit/SHA-1 interop 向量）锁定。
+  数学内联实现在 `core/src/auth/srp.rs`（原拟采用的 RustCrypto `srp` 0.6 crate
+  因 digest 生态漂移未采用、已不在依赖中），握手哈希 SHA-256；实现正确性由
+  RFC 5054 附录 B 官方向量（1024-bit/SHA-1 interop 向量）回归锁定。
 - **防 verifier 泄露离线爆破**：客户端先对「主密码 ‖ 域分隔盐
   （`persona-srp-v1` ‖ 服务器 salt）」做 Argon2id（Argon2id v19，m=19 MiB、
-  t=2、p=1——与本地库解锁 KDF 同参数，即 argon2 crate 默认；较备份文件
-  KDF 的 64 MiB/t3 轻，因登录路径高频执行）得到 SRP 私钥 x——服务器存的是
-  SRP verifier，泄露后离线猜解的成本 ≈ Argon2 成本，与本地密码验证同级。
+  t=2、p=1——argon2 crate 默认参数，与本地密码验证哈希同族；本地库解锁是
+  另一条 PBKDF2-100k 路径，算法与参数都不同，见 `KEY_HIERARCHY.md`；较备份
+  文件 KDF 的 64 MiB/t3 轻，因登录路径高频执行）得到 SRP 私钥 x——服务器存
+  的是 SRP verifier，泄露后离线猜解的成本 ≈ Argon2 成本，与本地密码验证同级。
 - **会话**：SRP 握手成功 → 双方派生会话密钥 → 客户端用它换取短期 access token
   （TTL 分钟级），后续请求 `Authorization: Bearer`。锁户对齐本机 5 次语义。
 - **兼容硬约束**：既有 `PERSONA_SERVER_TOKENS` Bearer 路径**保留共存**——备份链
   （push 无需解锁主密码）与事件上报不打断；SRP 是同步端点的认证方式，不是
   全端点的前置改造。
 - **crate 现状（2026-09 调研，选型依据）**：RustCrypto `srp` 0.6 可用但维护缓慢
-  （PAKEs 仓库标注 "USE AT YOUR OWN RISK"，0.7 停在 rc）；活跃替代有 `srp6-rs`。
-  应对：实现走 `RemoteAuthProvider` seam、锁定具体 crate 版本 + **RFC 5054 官方
-  测试向量做回归**，换实现不动调用方。**OPAQUE（`opaque-ke` 4.x，RFC 9807 已
-  定稿、防服务器模拟攻击且 verifier 不可离线爆破）列为远期升级**——实现重、
-  依赖链深，等同步链路稳定后评估；seam 层已为此留位。
+  （PAKEs 仓库标注 "USE AT YOUR OWN RISK"，0.7 停在 rc、随依赖漂移编不过）；活跃
+  替代有 `srp6-rs`。实际落地：不引任何 SRP crate——按 `srp` 0.6 公式把 SRP 数学
+  内联进 `core/src/auth/srp.rs`，调用方经 `RemoteAuthProvider` seam 隔离可整体换
+  实现，正确性由 **RFC 5054 官方测试向量做回归**。**OPAQUE（`opaque-ke` 4.x，
+  RFC 9807 已定稿、防服务器模拟攻击且 verifier 不可离线爆破）列为远期升级**——
+  实现重、依赖链深，等同步链路稳定后评估；seam 层已为此留位。
 
 ### DR-3 信封方向：组密钥层级（否决：逐 item 逐设备收件人列表）
 
@@ -157,14 +160,17 @@ SyncOp {
 
 | 端点                       | 方法                | 用途                                               |
 | -------------------------- | ------------------- | -------------------------------------------------- |
-| `/sync/devices`            | POST / GET / DELETE | 注册（公钥+设备名）/ 列出 / 吊销                   |
+| `/sync/devices`            | POST / GET          | 注册（公钥+设备名）/ 列出                          |
+| `/sync/devices/{id}`       | DELETE              | 吊销该设备                                         |
 | `/sync/group-keys`         | GET / PUT           | 取全部设备信封 / 上传本设备的 group key 信封       |
 | `/sync/oplog`              | POST                | push 本地新 oplog 段（≤500 条/批，沿 events 惯例） |
 | `/sync/oplog?since=cursor` | GET                 | pull 增量（游标分页）                              |
 
 **推送/拉取语义**：push 按 `op_id` 幂等；pull 从 since 游标起增量。服务端按到达
-顺序追加存储，不排序、不合并（DR-4）。配额/上限沿用 server 既有 1 MiB/批、
-解压 10 MiB 防线。
+顺序追加存储，不排序、不合并（DR-4）。body 上限沿用 server 既有 1 MiB/批；
+`/sync/*` 子路由**没有解压层**（密文不可压，兼免第二个解压炸弹面），10 MiB
+解压防线只挂在 events 子路由（`server/src/lib.rs` 分层注释，THREAT_MODEL 已
+如实登记）。
 
 **捕获点**：在 service 层写路径（与 change_history 相同的调用点）同步生成
 oplog——元数据明文只留在本地 change_history，oplog 只持有 §5 的密文结构。
@@ -204,7 +210,7 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
 | `change_history`                                              | 本地审计，含明文元数据，**不上同步通道**；oplog 是独立写入（§5 捕获点）                                                                                                                                                                                                                    |
 | 审计事件上报（WireEvent）                                     | 元数据级、本来就不含载荷，与同步无耦合，各走各的                                                                                                                                                                                                                                           |
 | **Travel Mode**                                               | **同步在 travel 激活期间必须整体暂停（push 与 pull 双停）**：enter 事务的批量删除若进 oplog，会把 tombstone 推到其他设备毁库；pull 则可能把被移出身份写回主库，直接违反「主库零痕迹」。exit 恢复后需手动/提示恢复同步。此交互列入 §11 首位开放问题，阶段 2 实现时落地为 push/pull 的前置闸 |
-| 桌面 keyring 双 service（`persona-biometric`/`persona-sync`） | 新增 `persona-device`（DR-1），三 service 并列，语义同款：真值在 keyring，库里只留占位                                                                                                                                                                                                     |
+| 桌面 keyring service 集合（`persona-biometric`/`persona-sync` 起步） | 从「双 service」演进为**四 service 并列**：新增 `persona-device`（DR-1）、再增 `persona-biometric-wrap`（2026-09-26 硬件绑定包裹层，`token_store.rs` 常量；见 THREAT_MODEL「Biometric Unlock」）——语义同款：真值在 keyring，库里只留占位                                                                                                                                 |
 
 ## 9. 服务端可见面与威胁模型登记骨架
 

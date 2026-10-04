@@ -17,9 +17,9 @@ OS keyring + OS 认证弹框做门禁**。本设计是它的升级：把"弹框�
 
 | 平台      | API                                                                                                                    | 绑定强度               | 本轮状态                                                        |
 | --------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------------------------------- |
-| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（原生 App 规划，§7.2）                                     |
-| Android   | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（原生 App 规划，§7.2）                                     |
-| HarmonyOS | ArkTS `@ohos.userIAM.userAuth` + HUKS 通用密钥库（密钥属性绑定用户认证）                                               | 硬件绑定               | 未接（原生 App 规划，§7.2；API 语义待真机核实）                 |
+| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2）     |
+| Android   | androidx BiometricPrompt + Android Keystore（`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`） | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2）     |
+| HarmonyOS | ArkTS `@ohos.userIAM.userAuth` + HUKS 通用密钥库（密钥属性绑定用户认证）                                               | 硬件绑定               | 未接（三端原生 App 已入库 `mobile/`，生物识别层待接，§7.2；API 语义待真机核实） |
 | macOS     | Secure Enclave P-256 + ECIES（路线 B'，§5.2）                                                                          | 硬件绑定               | **spike 工具已备，待真机**；当前保持门禁层                      |
 | Windows   | 首选 NCrypt/TPM "Passport 密钥"；次选 WebAuthn 平台认证器复用 `core/src/crypto/passkey.rs` ES256 原语                  | 硬件绑定（TPM）        | **spike 工具已备，待真机**（§6）；当前保持 Windows Hello 门禁层 |
 | Linux     | polkit `auth_self`（现状）或 fprintd D-Bus 直调                                                                        | **仅门禁，无硬件封装** | 现状保持（§7.1 诚实局限）                                       |
@@ -348,7 +348,7 @@ fprintd D-Bus 直调（system bus `net.reactivated.fprint`，对象
 `/net/reactivated/fprint/device`）是 polkit 的备选（少一层
 策略依赖），收益只是少装 polkit，暂不做。
 
-### 7.2 iOS / Android / HarmonyOS（路线图：**原生开发**）
+### 7.2 iOS / Android / HarmonyOS（三端原生已入库 `mobile/`，生物识别层待接）
 
 技术决策（用户定音，2026-09-26）：移动端三端各自用**平台原生技术**
 开发——iOS Swift/SwiftUI、Android Kotlin/Jetpack Compose、
@@ -390,8 +390,9 @@ Flutter/Rust FFI 中转**：生物识别与密钥存储是深度平台特性，�
       强制改密旗标与密码路径对齐）+ `derive_master_key_for_wrap` +
       `unlock_with_master_key`
 - [x] desktop：capability 分流的 enable/unlock/disable/status +
-      wrap blob keyring 隔离（`persona-biometric-wrap`）+ 改密联动删 blob + 命令层 7 用例（enable 落密文/blob 互斥/unlock 闭环/注册集漂移/
-      用户取消/blob 损坏/改密失效/spike 非 macOS 报 Unsupported）
+      wrap blob keyring 隔离（`persona-biometric-wrap`）+ 改密联动删 blob + 命令层 8 用例（enable 落密文含两类条目互斥断言/unlock 闭环/注册集漂移/
+      用户取消/blob 损坏/改密失效/spike 非 macOS 报 Unsupported/spike 非
+      Windows 报 Unsupported）
 - [x] desktop：macos_se.rs（路线 B'，spike 门控；**编译验证已过**——
       Linux 交叉 check/clippy，见 §5.3）+ `biometric_wrap_spike` 命令
 - [x] desktop：windows_tpm.rs（Passport KSP 首选路线，spike 门控；
@@ -412,4 +413,6 @@ Flutter/Rust FFI 中转**：生物识别与密钥存储是深度平台特性，�
       （含 §6.2 差距是否如登记成立）
 - [ ] Windows 次选路线（WebAuthn 平台认证器）——**押后**：弱于 Passport
       Key 且无 §6.2 之外的额外收益，先看首选路线真机结论
-- [ ] iOS/Android/HarmonyOS 原生应用（iOS Swift/SwiftUI + Android Kotlin + HarmonyOS ArkTS，含平台生物识别解锁；不经 Flutter/FFI 中转——§7.2 技术决策）
+- [ ] iOS/Android/HarmonyOS 平台生物识别解锁接入——三端原生应用已入库
+      （`mobile/`：iOS Swift/SwiftUI + Android Kotlin + HarmonyOS ArkTS，
+      不经 Flutter/FFI 中转——§7.2 技术决策），本设计的硬件绑定层尚未接进三端

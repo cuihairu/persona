@@ -78,8 +78,10 @@ confirm_on_unknown_host = false
 max_signatures_per_hour = 0
 deny_all = false
 
-[[key_policies]]
-credential_id = "12345678-1234-5678-1234-567812345678"
+# key_policies / host_policies are map-of-tables: the table key IS the
+# credential id / hostname pattern (array-table [[key_policies]] syntax is
+# not parsed and would be silently ignored — default policy applies).
+[key_policies."12345678-1234-5678-1234-567812345678"]
 enabled = true
 allowed_hosts = ["github.com", "gitlab.com", "*.company.com"]
 denied_hosts = []
@@ -88,8 +90,7 @@ require_biometric = false
 max_uses_per_day = 100
 allowed_time_range = "09:00-18:00"
 
-[[host_policies]]
-hostname = "prod-*.company.com"
+[host_policies."prod-*.company.com"]
 enabled = true
 allowed_keys = []
 require_confirm = true

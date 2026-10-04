@@ -129,9 +129,9 @@ PERSONA_REPRO_RUNTIME=podman scripts/build-repro.sh --docker   # podman 亦可
    以 `--remap-path-prefix` 重映射 `$HOME`，实测二进制内 `/home/<user>`
    计数 1006 → 0、registry 路径全部变为常量前缀。
 2. ~~工具链未固定~~ **已收口**（2026-09-24）：根仓 `rust-toolchain.toml`
-   钉 1.97.0（rustup 向上查找，双 workspace 同受覆盖）+ CI 五处
-   `dtolnay/rust-toolchain@1.97.0`（版本 ref 官方支持）；升级 = 两处
-   一起改。
+   钉 1.97.0（rustup 向上查找，双 workspace 同受覆盖）+ CI 六处
+   `dtolnay/rust-toolchain@1.97.0`（`ci.yml` 四处 + `desktop-build.yml`
+   两处，版本 ref 官方支持）；升级 = 两处一起改。
 3. **上游 bundler 不归一**：tar mtime/属主由 tauri-bundler 写入，仓库侧以
    `normalize-deb.sh` 后处理兜底；上游若提供 `SOURCE_DATE_EPOCH` 支持，脚本
    可退化为校验器。
@@ -169,7 +169,7 @@ PERSONA_REPRO_RUNTIME=podman scripts/build-repro.sh --docker   # podman 亦可
 ## 依赖输入固定现状
 
 - `Cargo.lock` ×2（根 workspace + desktop/src-tauri）已入库；
-- `pnpm-lock.yaml` 已入库；tauri-cli 2.11.4 / vite 8.3.0 由锁文件固定；
+- `pnpm-lock.yaml` 已入库；tauri-cli 2.12.1 / vite ^8.3.2 由锁文件固定；
 - 图标、polkit policy 等静态资源入库（无生成物）；
 - **容器钉死（2026-09-24）**：`docker/Dockerfile.server` 两个 FROM 按
   digest 钉死（CI 发布面浮动收口）——

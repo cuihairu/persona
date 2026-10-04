@@ -1,10 +1,12 @@
 # Connect 本机自动化端点设计稿（阶段 0）
 
-> 状态：**设计稿，未实现**。本文是 TODO「Connect-like local-first secrets
-> automation endpoint」（ROADMAP Milestone 6）的开工文档，对标 1Password
-> Secrets Automation / Connect server 在 Persona 本地优先架构下的形态：
-> 把必须先拍板的设计决策定下来，并给出实施阶段映射与威胁模型登记骨架。
-> 实现按 §8 的阶段逐个落地，每阶段独立 PR 粒度。
+> 状态：**设计稿，阶段 1–4 均已落地（2026-09）**。本文是 TODO「Connect-like
+> local-first secrets automation endpoint」（ROADMAP Milestone 6）的开工文档，
+> 对标 1Password Secrets Automation / Connect server 在 Persona 本地优先架构
+> 下的形态：把必须先拍板的设计决策定下来，并给出实施阶段映射与威胁模型登记
+> 骨架。实现落点：`connect-server/` 独立 crate（宿主内嵌 axum listener，桌面
+> 与 CLI 共用）、桌面 `connect_server_start/stop/status` 命令、CLI
+> `persona connect token create/list/revoke` + `serve`；状态标注见 §8。
 >
 > 相关文档：[`ROADMAP.md`](./ROADMAP.md) Milestone 6、[`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md)
 > （同轨道姊妹稿——本端点**不依赖**同步轨道，可独立落地）、
@@ -60,8 +62,9 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 - **否决独立进程/容器**：1P Connect 容器形态服务于「服务器托管、多消费
   者远程访问」——与本地优先边界相反；独立本地常驻进程则引入密钥跨进程
   传递（违背「解锁态在宿主进程内」的单一边界）与第二份生命周期管理。
-- **依赖**：axum 0.7（与 server 同版本，workspace 先例；desktop 独立
-  workspace 需自行声明）+ 既有 tokio。bind 地址硬编码 `127.0.0.1`，
+- **依赖**：axum 0.8（与 server/connect-server 同版本，workspace 先例；
+  desktop 独立 workspace 里另有 0.7——两处版本由各自 lock 决定）+
+  既有 tokio。bind 地址硬编码 `127.0.0.1`，
   端口默认 `0`（OS 分配）+ 显式配置项；**拒绝任何非 loopback 配置**
   （fail-closed，配置了就启动失败并报错，不静默回退）。
 
@@ -73,8 +76,10 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 - **scope 三维**：
   - `identities`: 允许的身份 UUID 列表（空 = 全部——显式选择，UI 需
     二次确认措辞「该 token 可读取所有身份」）；
-  - `item_types`: 允许的凭据类型（如 `password`/`totp`/`note`/`address`；
-    passkey/wallet/ssh 恒不可授权，不在合法枚举里）；
+  - `item_types`: 允许的凭据类型（`ConnectItemType` 实际枚举 10 变体：
+    `password`/`totp`/`note`/`api_key`/`bank_card`/`server_config`/
+    `certificate`/`game_account`/`identity`/`software_license`；
+    custom/ssh/wallet 恒不可授权，不在合法枚举里）；
   - `verbs`: `read`（起步唯一合法值；未来写路径再加枚举）。
 - **存放**：工作区库内新表 `connect_tokens`（id、hash、fingerprint、
   scope JSON、created_at、last_used_at、revoked_at、label）。随库走 =
@@ -195,10 +200,10 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
 | 阶段      | 内容                                                                                             | 验收要点                                                    | 威胁模型登记                     |
 | --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- | -------------------------------- |
 | 0（本文） | 设计稿                                                                                           | 决策拍板 + 用户确认                                         | 骨架（§6）                       |
-| 1         | core `connect` 服务层：token 表迁移 + 管理 API + scope 过滤 + 锁定门禁编排（框架无关，纯函数化） | core 测试：token 生命周期/scope 过滤/404 同形               | —                                |
-| 2         | desktop 内嵌 axum（DR-1 A1）+ 三防线 + 限额 + 设置页 token 管理 UI                               | DR-4 全拒绝路径测试；`cargo test -p persona-desktop` + jest | 「Connect 本机自动化端点」章写实 |
-| 3         | CLI `persona connect token …` + `serve`（DR-1 A2）                                               | CLI 集成测试（ScriptedUi 缝）；跨宿主同 token 存储互通      | 复查与实现相符                   |
-| 4         | 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速上手（curl 示例）                       | 文档与实现一致                                              | —                                |
+| 1         | core `connect` 服务层：token 表迁移 + 管理 API + scope 过滤 + 锁定门禁编排（框架无关，纯函数化） | core 测试：token 生命周期/scope 过滤/404 同形               | **已落地 2026-09**：`core/src/connect/`（token 表 + scope 过滤 + 锁定编排） |
+| 2         | desktop 内嵌 axum（DR-1 A1）+ 三防线 + 限额 + 设置页 token 管理 UI                               | DR-4 全拒绝路径测试；`cargo test -p persona-desktop` + jest | **已落地 2026-09**：`desktop/src-tauri` 内嵌 listener（`connect_server_start/stop/status`）+ `ConnectAutomationSection` 设置页 |
+| 3         | CLI `persona connect token …` + `serve`（DR-1 A2）                                               | CLI 集成测试（ScriptedUi 缝）；跨宿主同 token 存储互通      | **已落地 2026-09**：`cli/src/commands/connect.rs`（token create/list/revoke + serve） |
+| 4         | 文档收口：STORAGE_AND_SYNC 增 automation 节 + README 快速上手（curl 示例）                       | 文档与实现一致                                              | **已落地 2026-09-22**（TODO 阶段 4 文档收口） |
 
 规模预估：3–4 个会话量级；阶段 1–2 是主面。
 

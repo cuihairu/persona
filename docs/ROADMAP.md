@@ -61,5 +61,5 @@ Milestone 7 – Identity Runtime (positioning & concepts; feature track follows)
 Ongoing quality
 
 - [x] Threat model + periodic review process (`THREAT_MODEL.md`)
-- [x] Fuzz tests for parsers (mnemonic/keystore/QR); secrets redaction policy for logs
+- [~] Fuzz-style parser tests: passkey clientData/creation-options parsing has a deterministic mutation harness (no cargo-fuzz scaffolding yet; `core/src/crypto/passkey.rs` §12); mnemonic covered by proptest-style property tests; keystore/QR lack dedicated harnesses. Secrets redaction policy for logs is done
 - [ ] KDF parameter review: both paths documented (`KEY_HIERARCHY.md`); PBKDF2 iteration count and Argon2 parameters revisited quarterly, changes applied via re-wrap/re-encrypt migrations

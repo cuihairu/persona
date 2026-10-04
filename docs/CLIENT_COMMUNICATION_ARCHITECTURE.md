@@ -1,6 +1,23 @@
 # 客户端通信架构
 
-Persona 数字身份管理系统采用统一的客户端通信架构，所有客户端（CLI、桌面应用、浏览器扩展、SSH Agent）都通过标准化的IPC协议与本地服务进行通信。
+> **Status: target architecture / protocol design — NOT the current state.**
+> 本文描述的统一 IPC 层（`IpcMessage` 消息结构、`identity.*`/`credential.*` RPC
+> 方法表、`~/.persona/persona.sock`、JWT SessionToken、MessagePack+LZ4、
+> `PersonaPlugin`/`PluginManager` 插件系统、`persona-debug` 调试二进制、
+> systemd/launchd 单元、`~/.persona/service.toml`、连接池/批量请求/缓存层、
+> trace_id 等）**在代码中均不存在，属于目标设计**。当前真实的客户端通信面是：
+>
+> - **桌面端（Tauri）**：进程内持有 `PersonaService`，前端经 Tauri invoke 调用，无独立 IPC 守护进程；
+> - **浏览器扩展**：Native Messaging host（`persona bridge`）直接打开同一个 SQLite 工作区；另有 passkey 审批专用 Unix socket（`passkey-approval.sock`）；
+> - **SSH Agent**：独立 `persona-ssh-agent` 进程 + 专用 Unix socket / Windows Named Pipe；
+> - **Connect 自动化**：`connect-server` 内嵌桌面宿主进程，绑定 `127.0.0.1`；
+> - **可选服务器**：persona-server（axum HTTP + 手写 Prometheus 文本指标）。
+>
+> 现状说明见 [`LOCAL_SERVICE.md`](./LOCAL_SERVICE.md) 与
+> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md)。本文其余内容按设计稿阅读，
+> 供未来实现对照。
+
+Persona 数字身份管理系统的**目标架构**是统一的客户端通信设计：设想所有客户端（CLI、桌面应用、浏览器扩展、SSH Agent）通过一套标准化的 IPC 协议与本地服务进行通信。该设计当前**未实现**（现状见上方 Status 块与 `LOCAL_SERVICE.md`）；下文以设计态措辞描述目标形态。
 
 ## 架构概览
 
@@ -832,7 +849,6 @@ Persona的客户端通信架构采用了现代化的设计模式：
 
 ## 参考资料
 
-- [IPC协议详细文档](./IPC_PROTOCOL.md)
 - [Unix Domain Sockets编程指南](https://man7.org/linux/man-pages/man7/unix.7.html)
 - [Windows Named Pipes文档](https://docs.microsoft.com/en-us/windows/win32/ipc/named-pipes)
 - [MessagePack序列化格式](https://msgpack.org/)
@@ -841,5 +857,5 @@ Persona的客户端通信架构采用了现代化的设计模式：
 ---
 
 **维护者**: Persona 架构团队
-**最后更新**: 2024-01-24
-**版本**: v1.0
+**最后更新**: 2026-09-25（本文首次入库；现状边界见文首 Status 块）
+**版本**: v1.0（设计稿）

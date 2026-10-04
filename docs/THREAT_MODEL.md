@@ -76,7 +76,7 @@
 - `PERSONA_MASTER_PASSWORD` 适合自动化，但会暴露给同一执行环境中的进程/日志风险；CI 必须使用 secret store 并禁用命令回显。
 - 没有 URL 的浏览器凭据无法做严格 origin binding；高价值凭据必须绑定 URL。
 - 可选 Server/Sync 仍不是信任根：加密备份让服务端可作为密文快照的恢复点，但恢复能力以本地持有备份口令与主密码为前提，服务端不可用不应导致数据不可恢复（本地库是第一事实源）。
-- persona-server 的 events API 是令牌门禁的观测面：接受客户端自报的事件摘要（`client_timestamp` 不可信，排序只用 server 的 `received_at`），无保留策略（事件库无界增长），不构成防篡改审计账本。
+- persona-server 的 events API 是令牌门禁的观测面：接受客户端自报的事件摘要（`client_timestamp` 不可信，排序只用 server 的 `received_at`），默认不开保留窗口（事件库无界增长；配置 `PERSONA_SERVER_EVENTS_RETENTION_DAYS` 后按天 prune），不构成防篡改审计账本。
 - 钱包能力仍是实验性，不能用当前主线安全承诺覆盖生产级资金安全。
 
 ## 安全复审节奏
@@ -121,7 +121,7 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 - **认证**：共享 Bearer 令牌（legacy 单令牌 `PERSONA_SERVER_TOKEN` 或多设备令牌 `PERSONA_SERVER_TOKENS`），对全部条目常量时间比较；未配置即 503 整体禁用（fail-closed）。`/`、`/health`、`/metrics` 免认证。
 - **明确不宣称**：该存储不是防篡改账本，不提供防抵赖保证——持有令牌的客户端可上报任意内容，`client_timestamp` 不可信；审计语义以各端本地审计日志为准，server 侧只作聚合观测。
 - **指标面**：`/metrics` 输出请求计数（方法 + 路由模板 + 状态码）与事件接入计数，标签基数有界，不含用户数据或路径参数。
-- **已知限制**：无保留策略（事件库无界增长）；无速率限制与配额；`ip_address`/`user_agent` 为客户端自报字段；permissive CORS（当前客户端非浏览器）；单令牌无 per-client 身份。
+- **已知限制**：保留窗口默认关闭（事件库无界增长；`PERSONA_SERVER_EVENTS_RETENTION_DAYS` 设为正整数即按天 prune，默认 0 = 不清理，见 `server/src/main.rs`）；无速率限制与配额；`ip_address`/`user_agent` 为客户端自报字段；permissive CORS（当前客户端非浏览器）；单令牌无 per-client 身份。
 
 客户端上报器（`core::events::Emitter` + `ServerEventSink`，把本地审计事件尽力复制到上述 Events API）：
 
@@ -136,7 +136,7 @@ Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的�
 
 - **desktop（Tauri）**：`settings.sync` 段存 vault 的 `workspaces.settings` JSON 列，但 `server_token` **恒写空串占位**——token 真值存 OS keyring（keyring 4：Linux secret-service / macOS Keychain / Windows Credential Manager；service `"persona-sync"`、键为 vault db_path，字段级加密缺口已闭合）。keyring 批次之前的 legacy 明文在运行时一次性迁移进 keyring、DB 清空；迁移前 keyring 不可用时**保留明文不销毁数据**（上报禁用，下次 attach 重试）。`get_workspace_settings` 免解锁（解锁屏裁剪 UI 需要）返回的 sync 段因此不再含 token，锁定状态下 IPC 不暴露令牌；新增免解锁 `sync_token_present` 布尔查询（仅泄露"是否配置过"一位元数据），前端 placeholder 由它驱动、token 不回填。fail-closed 语义：提交非空 token 时 keyring 写失败拒绝保存；挂上报器要求 enabled + url 非空 + keyring 有 token 三者齐备；禁用即清 keyring（失败仅 warn，残留令牌在同一 OS 用户信任域内）；vault 文件拷到他机 → keyring 无对应条目 → 上报不启用，需重输入。配置保存即重挂上报器（停旧换新）；进程退出经 `RunEvent::Exit` 尽力最终 flush。
 - **CLI**：env-only（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用，空白视同未设置），**不落盘**——配置文件通道故意不提供；`main` 尾部 `stop()` 尽力 flush，release `panic = "abort"` 的崩溃路径不经 flush（丢失窗口与上面内存队列限制一致）。
-- **mobile（persona-mobile，Rust FFI 层）**：手写 extern "C" 宿主接线——`persona_service_init`（建户/认证序列对齐 desktop）、`persona_service_unlock/lock/is_unlocked`、`persona_configure_sync`（url+token trim 后都非空才启用、任一空白即摘除，fail-closed 对齐 CLI；URL 不做格式预校验，与 desktop attach 一致，格式错误在发送期暴露并退避）、`persona_shutdown`（落锁清密钥 + 尽力最终 flush + 清槽位）。**Rust 侧不落盘、不读环境变量**：url/token 由宿主（Dart 层）经 FFI 参数注入，服务状态留 Rust 侧全局槽位、密钥材料不跨 FFI 边界。如实标注未完成面：Flutter 工程本身（android/ios 目录、gradle）、Dart FFI 绑定层与 flutter_secure_storage 的 token 存储接线均未落地（本机无 Flutter SDK），当前安全结论只覆盖 Rust FFI 层；杀进程丢未 flush 批为已知限制（与 CLI/desktop 同）。手工验收（cargo-ndk 交叉编译、真 server 上报）转交有设备环境时执行。
+- **mobile（persona-mobile，三端原生宿主 + Rust FFI 桥）**：Flutter 壳已于 2026-10-02 整体移除，现为三端原生宿主（iOS Swift / Android Kotlin / 鸿蒙 ArkTS）经各自平台标准 native 绑定（C ABI staticlib / JNI cdylib / NAPI）共用同一 Rust 桥（`mobile/rust`，手写 extern "C"）。桥函数：`persona_service_init`（建户/认证序列对齐 desktop）、`persona_service_unlock/lock/is_unlocked`、`persona_configure_sync`（url+token trim 后都非空才启用、任一空白即摘除，fail-closed 对齐 CLI；URL 不做格式预校验，与 desktop attach 一致，格式错误在发送期暴露并退避）、`persona_shutdown`（落锁清密钥 + 尽力最终 flush + 清槽位）。**Rust 侧不落盘、不读环境变量**：url/token 由宿主（Swift/Kotlin/ArkTS 层）经 FFI 参数注入，服务状态留 Rust 侧全局槽位、密钥材料不跨 FFI 边界。如实标注未完成面：iOS/Android 宿主已接 init/unlock/lock/is_unlocked/shutdown 序列；鸿蒙 `PersonaBridge.ets` 为同签名 stub（napi 包装层待接，真机验收需实机/模拟器）；`persona_configure_sync` 尚未暴露到宿主侧（iOS C 头 `Persona.h` 与 JNI 层均未导出该函数）——三端宿主上的上报配置还没有接线，当前安全结论覆盖 Rust FFI 桥层与已接序列；杀进程丢未 flush 批为已知限制（与 CLI/desktop 同）。Android cdylib 交叉编译已入 CI（`desktop-build.yml`：cargo-ndk aarch64 → `libpersona_mobile.so` + arm64 APK artifact）；真 server 上报验收待有设备环境执行。
 - **上报面不变**：三宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。
 
 ## 备份保管端点（`/api/v1/backups`，2026-09）
@@ -159,8 +159,8 @@ salt、verifier，密码与 Argon2 派生值永不出机）。设计见
 
 - **数据处理范围**：落盘仅设备名 + salt + verifier（注册时经既有 Bearer 上传——引导链）；未决握手（session_id、服务器临时私钥、客户端公开值，TTL 120s）、已签发短期令牌（TTL 15 分钟）、失败计数**全部内存态、有意不持久化**——服务器重启即全部失效（fail-closed，重新登录）。
 - **认证**：`/register` 需既有 Bearer（静态令牌或已登录 SRP 令牌）；`/challenge` 与 `/verify` 免 Bearer（它们就是换取令牌的登录步骤），凭 SRP 证明放行；签发令牌为随机 ≥256-bit base64url，`require_bearer` 静态令牌优先、miss 后查 SRP 令牌表——**TOKENS Bearer 路径保留共存，备份链不打断**。认证体系未配置（无 TOKENS）时三端点整体 503（与 events/backups 同 fail-closed）。
-- **爆破与滥用缓解**：Argon2id 预 hash（v19，m=19 MiB、t=2、p=1，与本地库解锁同参数、域分隔盐 `persona-srp-v1`）使 verifier 泄露后的离线猜解成本 ≈ Argon2 成本；连续 5 次验证失败锁 15 分钟（对齐本机 user_auth 语义，返回 423）；challenge 一次性（verify 即从缓存取走）+ 120s TTL；设备名不存在与任何握手失败同形 401（不暴露注册状态）；M1/M2 双向证明核验（客户端核验 M2 防恶意服务器/中间人降级）。`/auth` 子路由整体 64 KiB body 上限，base64 字段解码有逐字段字节上限。
-- **明确不宣称**：不防服务器操作者对 `auth_devices` 表**离线爆破 verifier**（verifier 在服务器手里，成本 = Argon2 + 主密码强度——与本地库被拖库同级，主密码强度仍是核心风险）；不防**未认证 challenge 刷量**（内存会话缓存无速率限制，已知 DoS 面，部署侧反代缓解）；不防服务器**拒绝服务/删除注册记录**（设备无第二副本，重新注册即可，但属可用性损失）；SRP 数学依赖 RustCrypto `srp` crate（低维护，见设计稿 crate 调研）——由 RFC 5054 官方向量回归测试锁定实现，seam 隔离可换。
+- **爆破与滥用缓解**：Argon2id 预 hash（v19，m=19 MiB、t=2、p=1——argon2 crate 默认参数，与本地密码验证哈希同族；本地库解锁是另一条 PBKDF2-100k 路径（`core/src/auth/authentication.rs`），算法与参数均不同，见 `KEY_HIERARCHY.md`；域分隔盐 `persona-srp-v1`）使 verifier 泄露后的离线猜解成本 ≈ Argon2 成本；连续 5 次验证失败锁 15 分钟（对齐本机 user_auth 语义，返回 423）；challenge 一次性（verify 即从缓存取走）+ 120s TTL；设备名不存在与任何握手失败同形 401（不暴露注册状态）；M1/M2 双向证明核验（客户端核验 M2 防恶意服务器/中间人降级）。`/auth` 子路由整体 64 KiB body 上限，base64 字段解码有逐字段字节上限。
+- **明确不宣称**：不防服务器操作者对 `auth_devices` 表**离线爆破 verifier**（verifier 在服务器手里，成本 = Argon2 + 主密码强度——与本地库被拖库同级，主密码强度仍是核心风险）；不防**未认证 challenge 刷量**（内存会话缓存无速率限制，已知 DoS 面，部署侧反代缓解）；不防服务器**拒绝服务/删除注册记录**（设备无第二副本，重新注册即可，但属可用性损失）；SRP 数学内联实现于 `core/src/auth/srp.rs`（RustCrypto `srp` crate 因 digest 生态漂移未采用、已不在依赖中）——由 RFC 5054 官方向量回归测试锁定实现，seam 隔离可换。
 - **已知限制**：设备吊销/移除已落地（2026-09 吊销闭环）：同步设备吊销（`DELETE /sync/devices/:id`）级联删除同名 `auth_devices` 行（SRP 登记以设备名为键），并即刻吊销其内存短期令牌与未决握手（`SrpAuthState::revoke_device`——被吊销设备的既有凭证不再能用，真 TCP 测试锁定）；但吊销粒度是**设备**——无独立的「只吊令牌不吊设备」操作，令牌离开设备吊销仍以 TTL（15 分钟）自然失效；无变更门槛外的审计——注册/登录仅服务器日志（`tracing`），不入事件库。
 
 ## E2EE 同步中继（`/api/v1/sync/*`，2026-09，E2EE 同步轨道阶段 2）

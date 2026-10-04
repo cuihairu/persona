@@ -74,7 +74,8 @@ pub struct PasskeyItem {
     pub user_name: Option<String>,  // 登录名（展示用）
     pub user_display_name: Option<String>,
     pub credential_id: Vec<u8>,     // 32 字节随机
-    pub private_key: SecretVec<u8>, // P-256 标量（32B），由 item key 加密落盘
+    pub encrypted_private_key: Vec<u8>, // P-256 标量（32B）密文，item key 加密
+    pub wrapped_item_key: Vec<u8>,  // 主密钥包裹的 item key（解开上行密文）
     pub public_key_cose: Vec<u8>,   // COSE_Key 原始字节（展示/导出/自检）
     pub alg: i64,                   // -7 (ES256)；v1 唯一
     pub sign_count: u32,            // 恒 0（软件验证器惯例）
@@ -86,10 +87,10 @@ pub struct PasskeyItem {
 }
 ```
 
-- 落盘：`private_key` 与 `user_handle` 等敏感字段整体作为 payload，由随机 item key 加密（AES-256-GCM），item key 由主密钥包裹——与 `KEY_HIERARCHY.md` 完全一致，无需新加密路径
+- 落盘：`encrypted_private_key`（item key 加密的 AES-256-GCM 密文）与 `wrapped_item_key`（主密钥包裹的 item key）两字段——与 `KEY_HIERARCHY.md` 完全一致，无需新加密路径；`user_handle` 等敏感字段同走 payload 加密
 - `credential_id` 加唯一索引（同一库内不重复；与 RP 侧无全局注册）
 - 同一 identity + 同一 rp_id + 同一 user_name 允许多条（站点本身支持多 passkey），选择 UI 去重展示
-- 条目历史（item versioning）自动覆盖：私钥轮换/字段变更进历史
+- 条目历史（item versioning）：**未实现**——`EntityType` 没有 Passkey 变体（`change_history.rs`），passkey 轮换/字段变更不进 change_history/item history
 
 `CredentialType` **不**新增 `Passkey` 变体：passkey 是独立模型，避免 `Credential` 的 secret 字段语义被稀释；列表/搜索/TUI 层把它呈现为一种条目类型即可。
 
@@ -144,9 +145,9 @@ core 侧流程：
 
 1. 解析 options：取 `rp.id`（缺省用 origin 的 effective domain）、`user.id`（user_handle）、`user.name`、`pubKeyCredParams`（只接受 ES256；不含则拒绝）
 2. **origin 校验**：`client_data_json` 内的 `origin` 必须与请求 `origin` 一致，且 effective domain 与 rp_id 满足 registrable-suffix 关系
-3. **challenge 不解释**：原样保留在 client_data_json 里，只对完整字节取 SHA-256
+3. **challenge 不参与语义解析**：仅做 base64url 格式校验（`URL_SAFE_NO_PAD` 解码检查），内容不解释，原样保留在 client_data_json 里、只对完整字节取 SHA-256
 4. 生成密钥对 + credential_id（随机 32B）→ 组装 authenticator data（rpIdHash、UP|UV|AT、signCount=0、AAGUID、credential_id、COSE 公钥）→ `{fmt:"none", attStmt:{}, authData}`
-5. 落库 `PasskeyItem`（先解锁 + 敏感操作再认证/生物识别闸门），返回 attestation 响应
+5. 落库 `PasskeyItem`——**只过解锁闸（`create_passkey_full` 仅 `ensure_unlocked`），不走敏感操作再认证/生物识别闸门**（该闸只接 assertion/self-test/export 路径）；桥接路径上另有桌面审批二次同意（`desktop_approval_gate`），返回 attestation 响应
 
 ### 7.3 passkey_assert — 认证（assertion）
 
@@ -166,7 +167,7 @@ core 侧流程：同 7.3 的 origin↔rp_id 校验 → 组装 `authenticator_dat
 
 ### 7.4 版本兼容
 
-`protocol_version` 升 2；v1 扩展收到未知消息返回既有 `unknown_type` 错误码，向后兼容。协议文档增补三节 + 错误码：`passkey_rp_mismatch`、`passkey_alg_unsupported`、`passkey_item_not_found`、`passkey_origin_mismatch`。
+`protocol_version` 升 2；v1 扩展收到未知消息返回既有 `unknown_type` 错误码，向后兼容。协议文档增补三节 + 错误码：`passkey_rp_mismatch`、`passkey_alg_unsupported`、`passkey_item_not_found`。（初稿曾列 `passkey_origin_mismatch`——代码从不产生该错误码，origin↔rp_id 不匹配统一走 `passkey_rp_mismatch`。）
 
 ## 8. 浏览器扩展集成
 
@@ -189,13 +190,13 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 ## 9. 安全设计
 
 - **origin↔rp_id 校验在 core 强制执行**（§7.2），扩展侧校验只是 UX 前置；这是扩展被攻破后的最后防线
-- **UV 旗标映射**：`uv` flag 只有在本次操作实际通过本地认证（主密码再认证或生物识别闸门）时才置位；未置位而 RP 要求 UV 时，先触发再认证再签
+- **UV 旗标映射**：**直通透传，未做本地认证联动**（如实登记：这是设计意图、尚未落地）——扩展侧按 `publicKey.userVerification !== 'discouraged'` 置 `user_verification`（`webauthnHook.ts` → 桥 → `core` 里 `true` 即置 FLAG_UV），RP 要求 UV 并不会先触发主密码再认证/生物识别闸门；当前 UV 位只反映 RP 的偏好声明，不证明本次操作经过了本地用户认证
 - **user presence（UP）**：由 user gesture 保证；桥接请求缺 `user_gesture: true` 一律拒绝
 - **静默签名禁止**：无选择 UI 点击不发 assert；审计可区分「用户点选」与「自动」
-- **AAGUID**：固定一个 Persona 专属 UUID（代码常量，随机生成一次后固化），RP 侧可识别 Persona 但不做 attestation 断言
-- **挑战/计数**：challenge 不解析；signCount 恒 0 并在条目详情向用户说明「软件 passkey 无克隆检测」
-- **审计**：`passkey_created` / `passkey_asserted` / `passkey_exported` 事件，记录 rp_id、origin、item_id、结果与 client_data 的 SHA-256 摘要（不记 challenge 原文与签名）
-- **导出**：`export_allowed=false` 的条目在导出/备份中跳过并产生告警事件；默认 true（与 1Password 一致，passkey 必须可随库迁移）
+- **AAGUID**：固定 Persona 专属可读 ASCII 常量 `"PersonaPasskey01"`（`models/passkey.rs` 里写死的 16 字节，非随机生成后固化的 UUID），RP 侧可识别 Persona 但不做 attestation 断言
+- **挑战/计数**：challenge 仅做 base64url 格式校验、内容不解析；signCount 恒 0 并在条目详情向用户说明「软件 passkey 无克隆检测」
+- **审计**：`passkey_created` / `passkey_asserted` / `passkey_exported` 三事件带 item_id/identity_id 与成功标记；metadata 键只有 `via`（`extension`|`os_provider`，仅 asserted）——**rp_id、origin 与 client_data 摘要只进 tracing 日志，不入审计事件**（不记 challenge 原文与签名）
+- **导出**：`export_allowed=false` **只在 JSON/YAML 导出命令生效**——跳过私钥并打印告警（`cli/src/commands/export.rs`）；**加密备份不检查该标志**（VACUUM INTO 物理快照语义，passkey 私钥随库进备份）——已知边界，如实登记。默认 true（与 1Password 一致，passkey 必须可随库迁移）
 
 ## 10. 威胁模型增补（并入 THREAT_MODEL.md）
 
@@ -205,14 +206,14 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 | 扩展被攻破，替任意域请求签名              | core 侧 origin↔rp_id 校验 + HMAC 配对绑定扩展实例 + user gesture + 桌面确认策略（`confirm_on_fill` 同级） |
 | 页面以 hidden iframe 触发 WebAuthn        | 拦截层拒绝 cross-origin iframe 上下文（WebAuthn 规范本身禁止，拦截层双保险）                               |
 | 解锁态自动化脚本借用桥接静默签名          | 与 SSH agent 同思路：passkey assert 走敏感操作再认证/生物识别闸门，可策略强制                              |
-| 导出备份泄露 passkey 私钥                 | 与库同级加密（Argon2id 备份加密）；`export_allowed=false` 跳过；导出事件审计                               |
+| 导出备份泄露 passkey 私钥                 | 与库同级加密（Argon2id 备份加密）；`export_allowed=false` 仅在 JSON/YAML 导出跳过私钥——备份是物理快照、不检查该标志（已知边界）；导出事件审计                               |
 | signCount=0 无克隆检测                    | 接受的限制（业界软件 passkey 现状），条目详情明示用户                                                      |
 
 ## 11. 导入导出
 
 - 库导出（JSON/YAML）：passkey 条目按 §9 规则参与导出；加密备份沿用 Argon2id 路径
-- 从其他管理器导入：1Password/Bitwarden 的导出格式均含 passkey 私钥字段（1PUX 的 `truncatedUpdateToken`…各不相同），v1 只做**1Password 1PUX 只读导入**中 passkey 字段的解析（能拿到私钥的才导入，平台锁定的跳过并报告）
-- 跨管理器标准交换（CXF）：留 `foreign_key_ref` 字段空间，待 FIDO 定稿再实现
+- 从其他管理器导入：1Password/Bitwarden 的导出格式均含 passkey 私钥字段（1PUX 的 `truncatedUpdateToken`…各不相同）——**1PUX 导入不处理 passkey 字段（未实现）**：`import_1pux.rs` 无任何 passkey 解析，与 §13 P4 的排期一致（passkey 跨管理器导入属远期）
+- 跨管理器标准交换（CXF）：计划预留 `foreign_key_ref` 字段——**计划中，字段未落**（`PasskeyItem` 模型与存储中不存在该字段），待 FIDO 定稿再实现
 
 ## 12. 测试与互操作验证
 
@@ -227,7 +228,7 @@ Safari 不支持 main-world 注入拦截 WebAuthn——Safari host shell 下的 
 
 | 阶段          | 内容                                                                                                                                   | 验收                                     |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| P1 core       | 模型/存储/迁移、`p256`+`coset` 接入、CLI（`persona passkey create/list/show/remove`、`--self-test` 本地注册+断言自检）、导出导入、审计 | workspace 测试 + webauthn-rs RP 校验全绿 |
+| P1 core       | 模型/存储/迁移、`p256`+`coset` 接入、CLI（`persona passkey create/list/show/remove`、`persona passkey self-test <id>` 子命令做本地注册+断言自检）、导出导入、审计 | workspace 测试 + webauthn-rs RP 校验全绿 |
 | P2 浏览器     | 桥接 v2 三消息、扩展 main-world 拦截、选择/确认 UI、回退原生                                                                           | webauthn.io + GitHub 真站互通            |
 | P3 桌面与策略 | 桌面 passkey 列表/详情、再认证与生物识别闸门接线、域策略联动                                                                           | 桌面端全流程                             |
 | P4 远期       | OS passkey provider（macOS/Windows）、conditional mediation、1PUX 导入、CXF                                                            | 各平台原生 UI 出 Persona 条目            |
@@ -246,7 +247,7 @@ JS 侧拦截 `mediation: "conditional"` 并自造 UI 会破坏原生 passkey 回
 | P4.2 | macOS   | AuthenticationServices `ASAuthorizationCredentialProviderExtension` + `ASAuthorizationPlatformPublicKeyCredentialProvider`：系统弹「使用 Persona 登录」→ extension 进程经 App Group/Unix socket 调 persona bridge → provider assert | Safari/Chrome 的 conditional-UI 下拉出现 Persona 条目；webauthn.io 登录走通 |
 | P4.3 | Windows | Windows Hello passkey 插件（WebAuthn UX entitlement / Credential Provider）：系统选择器出 Persona 条目 → 本地 IPC 调 bridge                                                                                                         | Edge/Chrome conditional-UI 出条目；GitHub 登录走通                          |
 | P4.4 | 共通    | 已落地（2026-09-24，随 P4.1）：provider 路径 assert 走与扩展完全相同的敏感操作门禁与桌面审批闸门；`passkey_asserted` 审计携带 `via=extension\|os_provider` 元数据（`log_audit_with_metadata`），provider 来源可独立追溯             | 协议/审计用例绿                                                             |
-| P4.5 | 共通    | CXF（FIDO 凭据交换）跟踪：字段预留 `foreign_key_ref`，标准定稿前不实现                                                                                                                                                              | —                                                                           |
+| P4.5 | 共通    | CXF（FIDO 凭据交换）跟踪：`foreign_key_ref` 字段**计划预留、尚未落地**（模型/存储中不存在），标准定稿前不实现                                                                                                                                                              | —                                                                           |
 
 非目标不变：caBLE/hybrid、CTAP2 传输层、attestation（§2）。
 

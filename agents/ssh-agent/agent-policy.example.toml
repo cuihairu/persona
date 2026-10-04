@@ -23,11 +23,13 @@ max_signatures_per_hour = 0
 deny_all = false
 
 # Per-key policies
-# Keys are identified by credential_id UUID
+# Keys are identified by credential_id UUID.
+# NOTE: this is a map-of-table — the table key IS the credential id.
+# Array-table syntax ([[key_policies]] entries) is NOT parsed and the
+# policies would be silently ignored (default policy applies).
 
-[[key_policies]]
+[key_policies."12345678-1234-5678-1234-567812345678"]
 # Example: Restrict a key to specific hosts
-credential_id = "12345678-1234-5678-1234-567812345678"
 enabled = true
 allowed_hosts = ["github.com", "gitlab.com", "*.company.com"]
 denied_hosts = []
@@ -35,9 +37,8 @@ require_confirm = false
 max_uses_per_day = 100
 allowed_time_range = "09:00-18:00"  # Only allow during business hours
 
-[[key_policies]]
+[key_policies."87654321-4321-8765-4321-876543218765"]
 # Example: High-security key requiring confirmation
-credential_id = "87654321-4321-8765-4321-876543218765"
 enabled = true
 allowed_hosts = ["prod-*.company.com"]
 denied_hosts = []
@@ -46,27 +47,25 @@ max_uses_per_day = 10
 # No time restriction
 
 # Per-host policies
-# Hosts support glob patterns
+# Hosts support glob patterns.
+# NOTE: also a map-of-table — the table key IS the hostname pattern.
 
-[[host_policies]]
+[host_policies."prod-*.company.com"]
 # Example: Production hosts require extra scrutiny
-hostname = "prod-*.company.com"
 enabled = true
 allowed_keys = []  # Empty = all keys allowed
 require_confirm = true
 max_connections_per_hour = 20
 
-[[host_policies]]
+[host_policies."dev-*.company.com"]
 # Example: Development hosts are unrestricted
-hostname = "dev-*.company.com"
 enabled = true
 allowed_keys = []
 require_confirm = false
 max_connections_per_hour = 0
 
-[[host_policies]]
+[host_policies."untrusted-server.example.com"]
 # Example: Block a specific host
-hostname = "untrusted-server.example.com"
 enabled = false
 allowed_keys = []
 require_confirm = false

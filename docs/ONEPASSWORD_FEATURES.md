@@ -43,4 +43,4 @@ This list captures the major features of 1Password grouped by domain, to guide P
 
 Notes
 
-- 1Password does not act as a crypto wallet, but can store seed phrases/private keys as secrets. Persona will extend here with first-class wallet support (BIP32/44/SLIP10 derivations, signing).
+- 1Password does not act as a crypto wallet, but can store seed phrases/private keys as secrets. Persona has shipped that extension here: first-class wallet support (BIP32/44/SLIP-10 derivations and signing) landed 2026-09 (`core/src/models/wallet.rs`, `core/src/crypto/wallet_crypto.rs` with official test vectors).

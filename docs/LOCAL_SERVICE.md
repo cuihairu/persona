@@ -1,5 +1,16 @@
 # Persona Client Communication & Storage Modes
 
+> **Status: target architecture (design), not the current state.** Today there is
+> no local service daemon and no IPC layer: the CLI links the core library and
+> opens SQLite directly, the desktop app holds `Arc<Mutex<Option<PersonaService>>>`
+> in-process (Tauri invoke), the browser bridge runs in the native-messaging
+> host process against the same DB, and mobile talks through the `mobile/rust`
+> bridge in-process. Two dedicated Unix sockets do exist (SSH agent, passkey
+> approval), plus `connect-server` on `127.0.0.1`. The Goals/Architecture below
+> describe where this is headed; see `CLIENT_COMMUNICATION_ARCHITECTURE.md`
+> for the same caveat at protocol level, and `STORAGE_AND_SYNC.md` for how
+> storage/sync actually works today.
+
 This document explains how Persona’s clients (CLI, desktop/Tauri app, browser extension, SSH agent, and future mobile apps) communicate with the core vault, and how users can choose between local-only, self-hosted, or Persona-managed storage/sync options.
 
 ## Goals
@@ -55,8 +66,8 @@ This document explains how Persona’s clients (CLI, desktop/Tauri app, browser 
 | Mode                      | Description                                                                                                                                                               | Notes                                                                          |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Local-only                | All data resides under `~/.persona` (or platform-specific path). No network calls.                                                                                        | Best for air-gapped usage. Backups handled manually or via OS-level snapshots. |
-| Self-hosted cloud         | Users can point Persona at their own iCloud Drive, Dropbox, WebDAV, or S3 bucket. The sync adapter pushes/pulls encrypted blobs; the service handles conflict resolution. | Cloud only sees ciphertext; encryption keys never leave the device.            |
-| Persona server (optional) | Connect to a Persona-managed or self-hosted server for realtime sync, approvals, and automation workflows.                                                                | Still zero-knowledge: payloads are envelope-encrypted locally before upload.   |
+| Self-hosted cloud         | **Planned, not implemented.** A sync adapter would push/pull encrypted blobs to iCloud Drive, Dropbox, WebDAV, or S3; today you only get cloud *backup custody* by exporting and uploading ciphertext yourself (`STORAGE_AND_SYNC.md`). | Cloud would see ciphertext only; encryption keys never leave the device.       |
+| Persona server (optional) | Connect to a Persona-managed or self-hosted server for sync, approvals, and automation workflows. Sync is manual-trigger today ("立即同步" runs pull → apply → push), not realtime. | Still zero-knowledge: payloads are envelope-encrypted locally before upload.   |
 
 ### Sync Adapter Design
 

@@ -23,10 +23,9 @@ Persona CLI supports a non-interactive (headless) mode for use in CI/CD pipeline
 
 ### Security Configuration
 
-| Variable                     | Description                  | Example           | Default |
-| ---------------------------- | ---------------------------- | ----------------- | ------- |
-| `PERSONA_ENCRYPTION_ENABLED` | Enable/disable encryption    | `true` or `false` | `true`  |
-| `PERSONA_AUTO_LOCK_TIMEOUT`  | Auto-lock timeout in seconds | `300`             | `300`   |
+| Variable                     | Description               | Example           | Default |
+| ---------------------------- | ------------------------- | ----------------- | ------- |
+| `PERSONA_ENCRYPTION_ENABLED` | Enable/disable encryption | `true` or `false` | `true`  |
 
 ## CI/CD Integration
 
@@ -332,32 +331,20 @@ for cred in credentials:
 
 In non-interactive mode, the CLI will:
 
-1. **Exit with non-zero code** on errors
-2. **Output structured errors** in JSON format (if `PERSONA_OUTPUT_FORMAT=json`)
-3. **Never prompt for input** - fail instead if required input is missing
+1. **Exit with a non-zero code** on errors
+2. **Never prompt for input** - fail instead if required input is missing
 
 ### Exit Codes
 
-| Code | Meaning                                          |
-| ---- | ------------------------------------------------ |
-| 0    | Success                                          |
-| 1    | General error                                    |
-| 2    | Invalid command or arguments                     |
-| 3    | Authentication failed                            |
-| 4    | Workspace not initialized                        |
-| 5    | Required input missing (in non-interactive mode) |
+| Code | Meaning       |
+| ---- | ------------- |
+| 0    | Success       |
+| 1    | Error (any failure: bad arguments, authentication, missing input) |
 
-### JSON Error Format
-
-```json
-{
-  "error": {
-    "code": 5,
-    "message": "Master password required but PERSONA_MASTER_PASSWORD not set",
-    "details": "Run in interactive mode or set PERSONA_MASTER_PASSWORD environment variable"
-  }
-}
-```
+All failures currently funnel through one path: the error message is printed
+to stderr and the process exits 1. There is no machine-readable error envelope
+and no per-cause exit codes yet - scripts that need to distinguish error
+kinds should match on the message text.
 
 ## Security Considerations
 
@@ -461,10 +448,9 @@ persona add --name "Test" --email "test@example.com" --yes
 
 ## Related Documentation
 
-- [Configuration Guide](./CONFIGURATION.md)
-- [Environment Variables](./ENVIRONMENT_VARIABLES.md)
-- [CI/CD Examples](./CI_CD_EXAMPLES.md)
-- [Security Best Practices](./SECURITY.md)
+- [Threat Model](./THREAT_MODEL.md)
+- [Self-Host Server](./SELF_HOST_SERVER.md)
+- [README](../README.md) – CLI usage examples (non-interactive flags per command)
 
 ---
 

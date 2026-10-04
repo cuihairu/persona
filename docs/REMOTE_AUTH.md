@@ -34,3 +34,10 @@ Client-side HTTP wiring is live too (2026-09-22):
 
 - `core/src/auth/remote_http.rs` (feature `remote-auth`) — `HttpRemoteAuthProvider` (`register_device` / `begin_login` / `PendingRemoteLogin::finish`) drives the real three-endpoint flow and verifies the server proof `M2` before handing out the token. The mock trait above stays as the UI seam: its two-step shape cannot carry a real SRP session (`a_priv` must live with one owner from `A` to `M2` verification), so the real client is a standalone type and future OPAQUE work replaces this file only.
 - Cross-end integration test: `server/src/api/auth.rs::tests::http_provider_full_round_trip_over_real_tcp` runs the full register → challenge → verify flow over real TCP against the server router and asserts the issued SRP token passes `require_bearer` alongside static tokens.
+
+## Account-domain SRP (2026-10, M2) and pairing relay (S1)
+
+The same SRP math backs two more remote-auth surfaces:
+
+- **Account domain** — `POST /api/v1/accounts/{id}/srp/register|challenge|verify` (server: `server/src/api/accounts.rs`): password auth for the persona-account track, with passkey (WebAuthn) ceremonies, one-time recovery codes, and account-scoped device/session management alongside it. Bearer-gated write paths: srp/register, recovery-code generation, devices, sessions. Red-line verification script: `scripts/verify-account-redline.sh` (10 live assertions: public register, fail-closed 401s, one-time recovery codes, session-evidence 422, device/session family 401).
+- **Sync-group pairing relay client** — `core/src/sync/pairing.rs::relay` (same `remote-auth` feature): `PairingRelayClient` drives the zero-account pairing mailbox (`/api/v1/pairing/*`, no bearer) for the dynamic-password PAKE handshake; see `docs/sync-group-mode.md` §四 for status. Verification script: `scripts/verify-sync-group-pairing.sh`.

@@ -60,8 +60,10 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 - `/api/v1/events`（POST/GET）：审计事件批量 ≤500/body ≤1MiB，`client_event_id` 部分去重，游标分页。
 - `/api/v1/backups`（POST/GET/DELETE）：流式落盘 256 MiB 上限、同设备最新版本 sha256 去重、下载 ETag=sha256。
 - `/api/v1/sync/devices`（POST/GET/DELETE）：设备注册（公钥+设备名）/列出/吊销。
-- `/api/v1/sync/group-keys`（GET/PUT）：设备信封取/传；`rotate-begin` 以 epoch 乐观锁抢写信封窗口（409 = 后到者重读重试）。
+- `/api/v1/sync/group-keys`（GET/PUT）：设备信封取/传；`/api/v1/sync/group-key/rotate-begin` 以 epoch 乐观锁抢写信封窗口（409 = 后到者重读重试）。
 - `/api/v1/sync/oplog`（POST/GET）：push ≤500 条/批幂等（`op_id`），pull 游标增量。服务器不排序不合并（DR-4，裁决在客户端 LWW + 冲突双版本）。
+- `/api/v1/accounts/*`：账号体系（M2）。`register`、`{id}/srp/register|challenge|verify`（SRP 密码认证，见上文 DR-2 之外的第二套账号域）、`{id}/passkeys/create-options|register|login-options`（WebAuthn 仪式）、`{id}/recovery-codes`（生成/验证一次性恢复码）、`{id}/devices`（POST/GET/DELETE 设备授权与吊销）、`{id}/sessions`（POST 建/DELETE 吊销账号会话）。带 Bearer 门禁的写路径：srp/register、recovery-codes 生成、devices、sessions。
+- `/api/v1/pairing/*`：同步组动态密码配对的无账号信箱（S1，`docs/sync-group-mode.md`；**不要求 Bearer**）。`POST sessions`（建会话，TTL 600s）、`GET|DELETE sessions/{id}`（回读 salt/队列水位/删会话）、`POST|GET messages/to-host`、`POST|GET messages/to-guest`（GET 即消费；单方向队列 ≤4、payload ≤4KiB、404 合并存在性）。中转不解释 payload。
 
 ## 运维注意
 
