@@ -19,16 +19,16 @@ Policy Engine（core 内）
 
 ## 已落地的策略（硬门槛 + 可配置）
 
-| 域       | 规则                                                            | 配置方式                     |
-| -------- | --------------------------------------------------------------- | ---------------------------- |
-| 浏览器   | fill/copy/TOTP 必须 user gesture                                | 自动 fill 开关（按站点默认值） |
-| 浏览器   | TLD+1 **origin binding**（`validate_origin_binding`，match ≥ 60）| 不可关闭——硬门槛            |
-| 浏览器   | 阻塞/可疑域拒绝填充与保存（钓鱼防护）                           | 域策略表可维护               |
-| 写路径   | `save_credential` 需 user gesture + 桌面审批闸门（auto/require/off）+ origin binding + 审计 | 桌面设置里的审批模式 |
-| SSH Agent| known_hosts、deny-all、速率限制、每密钥/每主机规则、确认/生物识别优先级 | `persona ssh policy` 可配   |
-| 解锁层   | 自动锁、敏感操作再认证                                          | 客户端可配                   |
-| 自动化   | 非交互模式需显式环境变量启用（CI 场景）                         | `PERSONA_NON_INTERACTIVE` 等 |
-| 全域     | 所有敏感动作进审计日志（脱敏）                                  | 不开              |
+| 域        | 规则                                                                                        | 配置方式                       |
+| --------- | ------------------------------------------------------------------------------------------- | ------------------------------ |
+| 浏览器    | fill/copy/TOTP 必须 user gesture                                                            | 自动 fill 开关（按站点默认值） |
+| 浏览器    | TLD+1 **origin binding**（`validate_origin_binding`，match ≥ 60）                           | 不可关闭——硬门槛               |
+| 浏览器    | 阻塞/可疑域拒绝填充与保存（钓鱼防护）                                                       | 域策略表可维护                 |
+| 写路径    | `save_credential` 需 user gesture + 桌面审批闸门（auto/require/off）+ origin binding + 审计 | 桌面设置里的审批模式           |
+| SSH Agent | known_hosts、deny-all、速率限制、每密钥/每主机规则、确认/生物识别优先级                     | `persona ssh policy` 可配      |
+| 解锁层    | 自动锁、敏感操作再认证                                                                      | 客户端可配                     |
+| 自动化    | 非交互模式需显式环境变量启用（CI 场景）                                                     | `PERSONA_NON_INTERACTIVE` 等   |
+| 全域      | 所有敏感动作进审计日志（脱敏）                                                              | 不开                           |
 
 三条原则：
 
@@ -47,7 +47,7 @@ identity: work
 rules:
   aws:
     access_key:
-      allow: false        # 工作分身的 AWS key 禁止从浏览器使用
+      allow: false # 工作分身的 AWS key 禁止从浏览器使用
   ssh:
     hosts: ["*.company.com"]
     require_confirmation: true

@@ -9,11 +9,11 @@ API key、TOTP、钱包、通行密钥都是材料。「材料」统一了它们
 
 core 数据模型里，材料落在三张表里（全部通过 `identity_id` 归属分身）：
 
-| 存储表           | 材料                                                              |
-| ---------------- | ----------------------------------------------------------------- |
+| 存储表           | 材料                                                                                                                                                                       |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `credentials`    | `CredentialType`：Password、TwoFactor(TOTP)、ApiKey、SshKey、CryptoWallet、BankCard、GameAccount、ServerConfig、Certificate、SecureNote、SoftwareLicense、Identity、Custom |
-| `crypto_wallets` | 加密钱包（BTC/ETH/Solana，BIP-143 / EIP-155 / EIP-1559 派生与签名） |
-| `passkeys`       | WebAuthn 通行密钥（RP 绑定、attestation 留存）                    |
+| `crypto_wallets` | 加密钱包（BTC/ETH/Solana，BIP-143 / EIP-155 / EIP-1559 派生与签名）                                                                                                        |
+| `passkeys`       | WebAuthn 通行密钥（RP 绑定、attestation 留存）                                                                                                                             |
 
 安全属性（详见 [安全设计](/design/security) 与
 [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)）：

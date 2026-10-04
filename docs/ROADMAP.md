@@ -2,7 +2,7 @@
 
 Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track stays experimental and deferred until that foundation is proven — wallet security requirements (irreversible outcomes, signing confirmations, a transaction-level threat model) deserve a dedicated design pass of their own. Daily task tracking lives in the root [TODO](../TODO.md); this file is the milestone view.
 
-Product position (2026-10): Persona positions as a **local-first digital identity runtime** (本地优先的多分身数字身份运行时), not another password manager. Password / SSH key / TOTP / Wallet / Passkey are identity *materials*; reveal / copy / fill / sign / save are *actions* governed by a policy engine; scenes are organized as *identities* under a (future) *principal*. The 1Password-parity track below stays the capability benchmark, not the product narrative. Concept docs: `docs/src/concepts/`.
+Product position (2026-10): Persona positions as a **local-first digital identity runtime** (本地优先的多分身数字身份运行时), not another password manager. Password / SSH key / TOTP / Wallet / Passkey are identity _materials_; reveal / copy / fill / sign / save are _actions_ governed by a policy engine; scenes are organized as _identities_ under a (future) _principal_. The 1Password-parity track below stays the capability benchmark, not the product narrative. Concept docs: `docs/src/concepts/`.
 
 Milestones 0–3 – Foundation (done)
 

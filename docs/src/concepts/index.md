@@ -36,14 +36,14 @@ flowchart TB
 
 ## 现状与规划（诚实边界）
 
-| 概念     | 现状                             | 主要落点                                                                 |
-| -------- | -------------------------------- | ------------------------------------------------------------------------ |
-| Identity | ✅ 已实现                        | `identities` 表 + active 指针（见[用户手册：身份](/user/identity)）       |
-| Material | ✅ 已实现                        | credentials / crypto_wallets / passkeys 表（见[身份材料](./material)）   |
-| Policy   | 🟡 已实现为安全硬门槛，部分可配置 | origin binding、user gesture、SSH 策略、审批闸门（见[策略](./policy)）    |
-| Action   | 🟡 协议层已分离                  | bridge 请求类型 + 授权闸门（见[动作](./action)）                          |
-| Context  | 🟡 部分机制已落地                | origin binding、按身份过滤、站点默认值（见[上下文](./context)）           |
-| Principal| ⬜ 预留，未实现                  | 方向见[主体](./principal)                                                 |
+| 概念      | 现状                              | 主要落点                                                               |
+| --------- | --------------------------------- | ---------------------------------------------------------------------- |
+| Identity  | ✅ 已实现                         | `identities` 表 + active 指针（见[用户手册：身份](/user/identity)）    |
+| Material  | ✅ 已实现                         | credentials / crypto_wallets / passkeys 表（见[身份材料](./material)） |
+| Policy    | 🟡 已实现为安全硬门槛，部分可配置 | origin binding、user gesture、SSH 策略、审批闸门（见[策略](./policy)） |
+| Action    | 🟡 协议层已分离                   | bridge 请求类型 + 授权闸门（见[动作](./action)）                       |
+| Context   | 🟡 部分机制已落地                 | origin binding、按身份过滤、站点默认值（见[上下文](./context)）        |
+| Principal | ⬜ 预留，未实现                   | 方向见[主体](./principal)                                              |
 
 > 「已实现」指代码里存在并可测试；「部分落地」指机制存在但未抽象成一级模型，
 > 或只有部分入口使用；「预留」指设计方向，不含实现承诺。

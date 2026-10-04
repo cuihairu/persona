@@ -18,27 +18,27 @@ copy、fill、TOTP、generate、sign、save。**动作才携带权限语义**：
 
 crypto 动作（bridge 协议消息类型，均要求配对 + session HMAC 认证）：
 
-| 动作         | 协议消息            | 闸门（core 裁决）                                               |
-| ------------ | ------------------- | --------------------------------------------------------------- |
-| 建议         | `get_suggestions`   | origin + active identity + match strength                       |
-| 填充         | `request_fill`      | user gesture + origin binding（fetch 到的凭据内容只回给本页）   |
-| TOTP 获取    | `get_totp`          | user gesture + origin binding                                   |
-| 复制         | `copy`              | user gesture（由桌面/CLI 执行剪贴板，含 30s 自动清除）           |
-| 通行密钥创建 | `passkey_create`    | user gesture + 桌面审批                                          |
-| 通行密钥断言 | `passkey_assert`    | user gesture + 桌面审批                                          |
+| 动作         | 协议消息            | 闸门（core 裁决）                                                 |
+| ------------ | ------------------- | ----------------------------------------------------------------- |
+| 建议         | `get_suggestions`   | origin + active identity + match strength                         |
+| 填充         | `request_fill`      | user gesture + origin binding（fetch 到的凭据内容只回给本页）     |
+| TOTP 获取    | `get_totp`          | user gesture + origin binding                                     |
+| 复制         | `copy`              | user gesture（由桌面/CLI 执行剪贴板，含 30s 自动清除）            |
+| 通行密钥创建 | `passkey_create`    | user gesture + 桌面审批                                           |
+| 通行密钥断言 | `passkey_assert`    | user gesture + 桌面审批                                           |
 | 保存/更新    | `save_credential`   | user gesture + 桌面审批（credential_save）+ origin binding + 审计 |
-| 密码生成     | `generate_password` | 认证 session；纯生成不落库                                       |
+| 密码生成     | `generate_password` | 认证 session；纯生成不落库                                        |
 
 协议细节见 [BRIDGE_PROTOCOL](https://github.com/cuihairu/persona/blob/main/docs/BRIDGE_PROTOCOL.md)。
 
 本地动作（core 直连入口）：
 
-| 动作     | 入口                 | 闸门                                       |
-| -------- | -------------------- | ------------------------------------------ |
-| reveal   | CLI/桌面             | 解锁 + 敏感操作再认证 + 30s 自动隐藏       |
-| SSH 签名 | SSH Agent            | 策略引擎：known_hosts、确认、速率限制、生物识别优先级 |
-| 导出     | `persona export`     | 解锁 + 目标加密策略确认                    |
-| 钱包签名 | 桌面/wallet（试验）  | 确认模态：地址/金额/链/防地址投毒提示      |
+| 动作     | 入口                | 闸门                                                  |
+| -------- | ------------------- | ----------------------------------------------------- |
+| reveal   | CLI/桌面            | 解锁 + 敏感操作再认证 + 30s 自动隐藏                  |
+| SSH 签名 | SSH Agent           | 策略引擎：known_hosts、确认、速率限制、生物识别优先级 |
+| 导出     | `persona export`    | 解锁 + 目标加密策略确认                               |
+| 钱包签名 | 桌面/wallet（试验） | 确认模态：地址/金额/链/防地址投毒提示                 |
 
 ## 规划
 
