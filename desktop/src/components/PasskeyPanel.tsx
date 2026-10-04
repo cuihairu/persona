@@ -368,7 +368,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 type="button"
                 onClick={() => void runSelfTest()}
                 disabled={testStatus === 'running'}
-                className="btn-ghost inline-flex items-center"
+                className="btn-secondary inline-flex items-center"
                 data-testid="passkey-selftest-button"
               >
                 {testStatus === 'running' && <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />}
@@ -394,7 +394,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
                 type="button"
                 onClick={() => void runExport()}
                 disabled={!passkey.export_allowed || isExporting}
-                className="btn-ghost inline-flex items-center"
+                className="btn-secondary inline-flex items-center"
                 data-testid="passkey-export-button"
               >
                 {isExporting && <ArrowPathIcon className="w-4 h-4 mr-1 animate-spin" />}
@@ -440,7 +440,7 @@ const PasskeyDetailModal: React.FC<PasskeyDetailModalProps> = ({ row, onClose, o
             type="button"
             onClick={() => void handleDelete()}
             disabled={isDeleting}
-            className="btn-ghost inline-flex items-center text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
+            className="btn-secondary inline-flex items-center text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
             data-testid="passkey-delete-button"
           >
             <TrashIcon className="w-4 h-4 mr-1" />

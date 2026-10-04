@@ -271,25 +271,32 @@ const SshAgentPanel: React.FC = () => {
               />
               <button
                 onClick={handleStart}
-                disabled={isStarting}
+                disabled={isStarting || sshAgentStatus?.running === true}
                 className="btn-primary inline-flex items-center"
+                data-testid="ssh-agent-start-button"
               >
                 <PlayIcon className="w-4 h-4 mr-1" />
-                {isStarting ? t('sshAgent.starting') : t('sshAgent.start')}
+                {isStarting
+                  ? t('sshAgent.starting')
+                  : sshAgentStatus?.running
+                    ? t('sshAgent.running')
+                    : t('sshAgent.start')}
               </button>
             </div>
             <div className="flex gap-2">
               <button
                 onClick={handleStop}
-                disabled={isStopping}
-                className="btn-ghost inline-flex items-center text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
+                disabled={isStopping || !sshAgentStatus?.running}
+                data-testid="ssh-agent-stop-button"
+                className="btn-secondary inline-flex items-center text-red-600 dark:text-red-400 hover:text-red-700 dark:hover:text-red-300"
               >
                 <StopIcon className="w-4 h-4 mr-1" />
                 {isStopping ? t('sshAgent.stopping') : t('sshAgent.stop')}
               </button>
               <button
                 onClick={refreshSshAgentStatus}
-                className="btn-ghost inline-flex items-center"
+                data-testid="ssh-agent-refresh-button"
+                className="btn-secondary inline-flex items-center"
               >
                 <ArrowPathIcon className="w-4 h-4 mr-1" />
                 {t('sshAgent.refresh')}
@@ -309,7 +316,7 @@ const SshAgentPanel: React.FC = () => {
             <button
               onClick={handleGenerateButtonClick}
               data-testid="ssh-generate-button"
-              className="btn-ghost inline-flex items-center"
+              className="btn-secondary inline-flex items-center"
             >
               <PlusIcon className="w-4 h-4 mr-1" />
               {t('sshAgent.generateButton')}
@@ -317,12 +324,12 @@ const SshAgentPanel: React.FC = () => {
             <button
               onClick={handleImportButtonClick}
               data-testid="ssh-import-button"
-              className="btn-ghost inline-flex items-center"
+              className="btn-secondary inline-flex items-center"
             >
               <ArrowDownTrayIcon className="w-4 h-4 mr-1" />
               {t('sshAgent.importButton')}
             </button>
-            <button onClick={loadSshKeys} className="btn-ghost inline-flex items-center">
+            <button onClick={loadSshKeys} className="btn-secondary inline-flex items-center">
               <ArrowPathIcon className="w-4 h-4 mr-1" />
               {t('sshAgent.reload')}
             </button>

@@ -134,7 +134,7 @@ const WatchtowerPanel: React.FC = () => {
             <button
               onClick={handleScan}
               disabled={isLoading}
-              className="btn-ghost inline-flex items-center"
+              className="btn-secondary inline-flex items-center"
             >
               <ArrowPathIcon className="w-4 h-4 mr-1" />
               {t('watchtower.rescan')}

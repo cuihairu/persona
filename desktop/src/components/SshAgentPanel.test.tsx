@@ -1,4 +1,4 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import SshAgentPanel from './SshAgentPanel';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
@@ -92,6 +92,47 @@ describe('components/SshAgentPanel', () => {
     await Promise.resolve();
 
     expect(startSshAgent).toHaveBeenCalledWith('pw');
+    expect(refreshSshAgentStatus).toHaveBeenCalled();
+  });
+
+  it('disables the start button while running, re-enables after stop (BUG ⑦)', async () => {
+    // 运行中：启动按钮禁用置灰、文案「运行中」；重复点击物理禁掉
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ sshAgentStatus: { running: true, socket_path: '/tmp/s', key_count: 1 } }),
+    );
+    const { getByTestId } = render(<SshAgentPanel />);
+    const start = getByTestId('ssh-agent-start-button');
+    expect(start).toBeDisabled();
+    expect(start).toHaveTextContent('运行中');
+    expect(getByTestId('ssh-agent-stop-button')).toBeEnabled();
+
+    // 停止后状态联动：启动恢复可点、文案回落「启动」；停止按钮禁用
+    cleanup();
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ sshAgentStatus: { running: false, socket_path: null, key_count: 0 } }),
+    );
+    render(<SshAgentPanel />);
+    expect(getByTestId('ssh-agent-start-button')).toBeEnabled();
+    expect(getByTestId('ssh-agent-start-button')).toHaveTextContent('启动');
+    expect(getByTestId('ssh-agent-stop-button')).toBeDisabled();
+  });
+
+  it('stop button invokes stopSshAgent and refreshes status (BUG ⑧ clickable)', async () => {
+    const stopSshAgent = jest.fn().mockResolvedValue(undefined);
+    const refreshSshAgentStatus = jest.fn().mockResolvedValue(undefined);
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({
+        sshAgentStatus: { running: true, socket_path: '/tmp/s', key_count: 0 },
+        stopSshAgent,
+        refreshSshAgentStatus,
+      }),
+    );
+
+    const { getByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-agent-stop-button'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(stopSshAgent).toHaveBeenCalled();
     expect(refreshSshAgentStatus).toHaveBeenCalled();
   });
 
