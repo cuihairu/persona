@@ -4,6 +4,7 @@ mod accounts;
 mod auth;
 mod backups;
 mod events;
+mod pairing;
 mod sync;
 
 use axum::extract::Request;
@@ -23,6 +24,12 @@ pub use accounts::{
 pub use auth::{challenge as auth_challenge, register as auth_register, verify as auth_verify};
 pub use backups::{delete, download, list, size_guard, upload};
 pub use events::{ingest, query};
+pub use pairing::{
+    create_session as pairing_create_session, delete_session as pairing_delete_session,
+    post_to_guest as pairing_post_to_guest, post_to_host as pairing_post_to_host,
+    session_info as pairing_session_info, take_to_guest as pairing_take_to_guest,
+    take_to_host as pairing_take_to_host,
+};
 pub use sync::{
     delete_device as sync_delete_device, get_group_keys as sync_get_group_keys,
     list_devices as sync_list_devices, pull as sync_pull, push as sync_push,

@@ -180,6 +180,28 @@ pub fn build_router(state: AppState) -> Router {
                     state.clone(),
                     auth::require_bearer,
                 )),
+        )
+        // 同步组配对中转（S1，docs/sync-group-mode.md）：无账号信箱，
+        // 无 Bearer（配对双方本就没有共享凭证）；payload 是客户端加密
+        // 协议消息（SRP 公开消息 + AEAD 密文），中转零知识。TTL/队列
+        // 上限/payload 上限在 handlers 内强制。
+        .nest(
+            "/pairing",
+            Router::new()
+                .route("/sessions", post(api::pairing_create_session))
+                .route(
+                    "/sessions/{id}",
+                    get(api::pairing_session_info).delete(api::pairing_delete_session),
+                )
+                .route(
+                    "/sessions/{id}/messages/to-host",
+                    post(api::pairing_post_to_host).get(api::pairing_take_to_host),
+                )
+                .route(
+                    "/sessions/{id}/messages/to-guest",
+                    post(api::pairing_post_to_guest).get(api::pairing_take_to_guest),
+                )
+                .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES)),
         );
 
     // 顶层（后 .layer 在外层）：track_metrics 挂在 CORS 内层——preflight

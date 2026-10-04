@@ -1544,16 +1544,21 @@ References
 
 推进顺序 S1→S2→S3(S4/S5 随批落地),每批可验收增量提交推送。
 
-- [ ] S1 配对与密钥层:动态密码(短时效)+PAKE 换钥、组密钥管理(退出销毁/轮换)、条目内容与元数据加密(零知识)
-      技术路线:`core/src/sync/pairing.rs`——短码 Crockford base32 单次使用,
-      Argon2id 域分隔派生后进 PAKE(短码不作密钥);PAKE 复用已过 RFC 5054
-      向量锁定的 SRP-6a 数学(`core/src/auth/srp.rs`,配对双方同持短码、A 端
-      现场派 verifier,无 verifier 落盘面);双方 UI 各展示派生 6 位数字短指纹
-      防 MITM。组密钥端上生成、经 PAKE 派生钥 AEAD 包裹经中转递交新设备
-      (复用 `envelope` 信封,中转只见密文);server 无账号中转路由
-      `/api/v1/pairing/*`(短时效 session、单次使用、限次尝试、TTL 清理)。
-      红线同口径:默认零账号零外发断言;桌面设置页配对 UI(出码/输码/
-      指纹比对/入组)随批落地。
+- [x] S1 配对与密钥层(协议+中转已收口 2026-10-04,桌面 UI 接线待续):动态密码(短时效)+PAKE 换钥、组密钥管理(退出销毁/轮换)、条目内容与元数据加密(零知识)
+      已落:`core/src/sync/pairing.rs`——短码 Crockford base32(45 bit)单次
+      使用,Argon2id 域分隔(persona-pairing-v1)派生后进 PAKE(短码不作密钥);
+      PAKE 复用 RFC 5054 向量锁定的 SRP-6a 数学(host 现场派 verifier 不
+      落盘);双端各展示 6 位数字短指纹(fingerprint())防 MITM;组密钥经
+      pairing key AES-256-GCM(AAD 域绑定)包裹递交;`handle_message`
+      状态机 + `PairingMessage` wire(JSON/b64)宿主直接驱动;host
+      finished 后拒绝再 join,complete/accept_handoff 单次消耗。
+      server `/api/v1/pairing/*` 无账号信箱(0009 migration):TTL 600s、
+      单方向队列上限 4、payload ≤4KiB、GET 即消费、过期惰性清理、404
+      合并存在性;真 core 协议端到端测试(信箱驱动双端入组,组密钥一致,
+      中转零知识)。实机勾稽 `scripts/verify-sync-group-pairing.sh`
+      8 断言真实进程全过。core 9 例 + server 5 例测试,core 1025/server
+      130 全绿。余项:桌面命令层 + 设置页配对 UI(出码/输码/指纹比对/
+      入组)、账号模式显式可选口径文案、组密钥退出销毁/轮换语义接 S4。
 - [ ] S2 指令流收敛:增/删/改条目走指令(op_id 幂等+定序+位点续传),复用 M3 E2EE 同步管线成果,快照+指令压缩
       收敛对象=M3 oplog/engine;零知识核查(条目名/域名密文化)入测试;
       与 M3 LWW/冲突裁决面的衔接语义(指令流下冲突显式化,静默 LWW 为可选项)。
