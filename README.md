@@ -60,7 +60,7 @@ vaults, tags, and tools in one sidebar, with the item detail pane on the right.
 persona/
 ├── core/               # Rust core library: models, crypto, storage, service layer
 ├── cli/                # Persona CLI: init/add/list/show/switch/export/import/ssh/...
-├── agents/ssh-agent/   # Built-in SSH agent (UNIX socket, ed25519)
+├── agents/ssh-agent/   # Built-in SSH agent (UNIX socket; ed25519/RSA/ECDSA)
 ├── desktop/            # Tauri + React desktop client (sync, passkeys, conflict UI)
 ├── browser/            # Browser clients (Chromium extension, Safari extension)
 ├── mobile/             # Mobile clients (iOS, Android, HarmonyOS)
@@ -72,9 +72,12 @@ persona/
 
 ### Tech Stack
 - Core library: Rust with sqlx + SQLite
-- Cryptography: Argon2id key derivation and AES-256-GCM symmetric encryption
-- Desktop: Tauri + React + TypeScript (prototype)
+- Cryptography: Argon2id key derivation and AES-256-GCM symmetric encryption (RustCrypto-family crates)
+- Desktop: Tauri + React + TypeScript
 - Server: Rust + Axum (optional)
+- Wallet: rust-bitcoin (BTC) and alloy (EVM) with official test vectors as regression harnesses
+
+Persona builds on established open-source foundations — Tauri, React, Axum, sqlx, rust-bitcoin, alloy — rather than replacing them; the product layer (identity model, policy engine, pairing protocol, vault hierarchy) is where this repo's own work lives.
 
 ## Security Highlights
 
@@ -195,7 +198,7 @@ persona totp setup-game-token --identity alice --provider tencent_security --acc
 persona passkey create --identity alice --rp github.com --user alice@example.com
 persona passkey list --identity alice
 persona passkey show <UUID>
-persona passkey self-test --id <UUID>   # local register + assert round trip
+persona passkey self-test <UUID>   # local register + assert round trip
 persona passkey remove --id <UUID>
 
 # Password generator with custom sets
