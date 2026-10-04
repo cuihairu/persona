@@ -17,6 +17,18 @@ const sidebar = [
     ],
   },
   {
+    text: "核心概念",
+    items: [
+      { text: "概念总览", link: "/concepts/index" },
+      { text: "分身（Identity）", link: "/concepts/identity" },
+      { text: "上下文（Context）", link: "/concepts/context" },
+      { text: "身份材料（Material）", link: "/concepts/material" },
+      { text: "策略（Policy）", link: "/concepts/policy" },
+      { text: "动作（Action）", link: "/concepts/action" },
+      { text: "主体（Principal，预留）", link: "/concepts/principal" },
+    ],
+  },
+  {
     text: "界面预览",
     items: [
       { text: "界面一览", link: "/previews/ui" },

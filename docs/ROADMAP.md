@@ -2,6 +2,8 @@
 
 Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track stays experimental and deferred until that foundation is proven — wallet security requirements (irreversible outcomes, signing confirmations, a transaction-level threat model) deserve a dedicated design pass of their own. Daily task tracking lives in the root [TODO](../TODO.md); this file is the milestone view.
 
+Product position (2026-10): Persona positions as a **local-first digital identity runtime** (本地优先的多分身数字身份运行时), not another password manager. Password / SSH key / TOTP / Wallet / Passkey are identity *materials*; reveal / copy / fill / sign / save are *actions* governed by a policy engine; scenes are organized as *identities* under a (future) *principal*. The 1Password-parity track below stays the capability benchmark, not the product narrative. Concept docs: `docs/src/concepts/`.
+
 Milestones 0–3 – Foundation (done)
 
 - [x] Monorepo + CI + Conventional Commits + supply-chain checks (cargo-deny, npm/pnpm audit)
@@ -47,6 +49,13 @@ Milestone 6 – Server & Sync (optional)
   - [x] Sync phase 2 core (2026-09-22): device envelopes (DR-1, X25519 `persona-dev-env-1`) + group-key hierarchy; oplog + LWW/conflict dual-version pure logic (DR-4); local sync storage (migration 014); server ciphertext relay `/api/v1/sync/*` (migration 0004: device registry / envelope custody / idempotent oplog push / cursor-paginated pull); client engine (push/pull cycles + Lamport clock + travel gate); server-holds-ciphertext-only, replay idempotence, out-of-order tolerance, master-password-rotation immunity, and two-device convergence over real TCP (offline concurrent edits keep both versions); THREAT_MODEL "E2EE sync relay" section
   - [ ] Stage 3 wiring: desktop device-management UI + conflict-resolution UI; service write paths feed `record_local_change`; group-key rotation
 - [x] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted (`STORAGE_AND_SYNC.md`, 2026-09)
+
+Milestone 7 – Identity Runtime (positioning & concepts; feature track follows)
+
+- [x] Concept docs: `docs/src/concepts/` — identity / context / material / policy / action / principal (2026-10-04)
+- [x] Site copy & terminology: homepage / intro / architecture / security de-“password-manager”ed; "零知识" standardized as "本地优先 + 端到端加密" (zero-knowledge kept only for credential-storage semantics)
+- [ ] Context-aware identity suggestion: terminal cwd/repo + host → suggested identity (today only origin binding + per-site defaults exist)
+- [ ] Principal / Agent scoping: optional `principal_id` in protocol & audit; per-principal action allowlists (reserved direction, no timeline commitment)
 
 Ongoing quality
 
