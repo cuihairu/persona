@@ -105,10 +105,25 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       authorize-device 去多余 device_name、create-session 带
       AccountSessionEvidence（srp_token XOR passkey_assertion）、新增
       accountPasskeyLoginOptions、AccountSessionInfo 修正
-      expires_in_secs——tauri 代理命令层与账号 UI 留待 M2 UI 批
-      （隐私红线照旧：默认关闭、显式开启）。同批：business.rs 的
-      ~12 个业务 extern 尚无 panic 防线（无单一收口点，逐个包
-      guard_result 的后续项）
+      expires_in_secs——账号 UI 留待 M2 UI 批（隐私红线照旧：默认关闭、
+      显式开启）。同批：business.rs 的 ~12 个业务 extern 尚无 panic
+      防线（无单一收口点，逐个包 guard_result 的后续项）
+      ——2026-10-04 tauri 代理命令层落地（f687059/03b5644/378da28）：
+      14 条 account_* 命令对齐 api.ts seam 全量注册 invoke（
+      rename_all="snake_case" 匹配 seam 的 device_id/session_token 键）；
+      wire 在 core 新 feature `accounts`（AccountsApi 14 端点 + 16 例
+      TCP 假服务器契约用例），desktop 只做宿主编排。Bearer 门禁：新
+      keyring service `persona-account`（AppState.account_token_store，
+      fail-closed），令牌生命周期 srp/verify 写入 15min 令牌 →
+      create_session 覆盖为 24h 会话 → revoke_session 自吊销清除
+      （吊销他人会话不动本机；命令层两例：门禁阶梯 + 生命周期端到端）。
+      与 sync 同门禁同语义：未初始化/未配置 server_url（=默认关闭）/
+      未解锁先于任何网络拒绝。已知服务器侧语义如实镜像：sessions 端点
+      本身也在 require_account_bearer 之下，纯 passkey 首次登录无既有
+      令牌走不通（需静态服务器令牌或先完成一次 SRP 登录）——server 域
+      设计边界，UI 批决定是否默示（如登录向导先 SRP）。剩余：桌面账号
+      UI（M2 UI 批）、M4 口径的账号侧红线复查（默认关闭/显式开启）、
+      实机勾稽
 - [x] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）——2026-10-04 复核收口**：
       设备管理/授权/吊销/离开命令（`commands.rs` 的 `sync_device_status/
       join/leave/list_devices/authorize/revoke`）+ 设置页接线（SettingsModal：
