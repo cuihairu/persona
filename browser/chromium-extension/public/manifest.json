@@ -33,6 +33,15 @@
       "match_about_blank": true
     }
   ],
+  "commands": {
+    "open_search": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open Persona mini search"
+    }
+  },
   "icons": {
     "128": "icons/icon128.png"
   }

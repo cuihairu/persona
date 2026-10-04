@@ -195,6 +195,22 @@ async function broadcastStatus(status) {
 chrome.action.onClicked.addListener(async () => {
     await handleBridgePing();
 });
+// MV3 commands API: global keyboard shortcut to open mini search
+chrome.commands.onCommand.addListener((command) => {
+    if (command === 'open_search') {
+        void openSearchOnActiveTab();
+    }
+});
+async function openSearchOnActiveTab() {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = tabs?.[0];
+    if (!tab?.id)
+        return;
+    // Send message to content script to open search overlay
+    chrome.tabs.sendMessage(tab.id, { type: 'persona_open_search' }).catch(() => {
+        // Content script not loaded (e.g., chrome:// page) — silently ignore
+    });
+}
 async function getPolicies() {
     return new Promise((resolve) => {
         chrome.storage.local.get(POLICY_KEY, (value) => resolve(value?.[POLICY_KEY] ?? []));

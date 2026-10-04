@@ -499,4 +499,17 @@ function bindSettings() {
     });
 }
 bindSettings();
+// Keyboard shortcuts hint
+const shortcutsEl = document.getElementById('shortcuts');
+if (shortcutsEl) {
+    shortcutsEl.innerHTML = `
+        <details style="margin-top: 16px;">
+            <summary style="cursor: pointer; color: #6b7280; font-size: 13px;">Keyboard shortcuts</summary>
+            <div style="margin-top: 8px; font-size: 12px; color: #6b7280; line-height: 1.8;">
+                <div><kbd style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-family:monospace;">Ctrl+Shift+P</kbd> Toggle overlay</div>
+                <div><kbd style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-family:monospace;">Ctrl+Shift+Y</kbd> Mini search (global)</div>
+            </div>
+        </details>
+    `;
+}
 //# sourceMappingURL=popup.js.map
