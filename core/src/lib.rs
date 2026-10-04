@@ -3,6 +3,8 @@
 //! This crate provides the core functionality for the Persona digital identity management system,
 //! including cryptographic operations, secure storage, and identity management.
 
+#[cfg(feature = "accounts")]
+pub mod accounts;
 pub mod auth;
 #[cfg(feature = "backup")]
 pub mod backup;
@@ -26,6 +28,11 @@ pub mod sync;
 pub mod travel;
 
 // Re-export commonly used types
+// 显式单条而非 `accounts::*`：`auth::*` 已 re-export 同名模块 `remote`，
+// glob 对撞（ambiguous_glob_reexports）。wire 类型走全路径
+// `persona_core::accounts::remote::*`。
+#[cfg(feature = "accounts")]
+pub use accounts::remote::AccountsApi;
 pub use auth::*;
 pub use breach::*;
 pub use crypto::*;

@@ -125,3 +125,6 @@ backup = ["dep:reqwest", "dep:flate2", "sqlite"]
 # SRP 设备认证的 HTTP 客户端编排（auth/remote_http.rs；reqwest 同上在
 # default 树零增量）。E2EE 同步轨道阶段 1 客户端半边
 remote-auth = ["dep:reqwest"]
+# 账号域 HTTP 客户端（accounts/remote.rs，persona-server /accounts/*）。
+# 不进 default：CLI headless 无账号 UI，桌面宿主按需开启
+accounts = ["dep:reqwest"]
