@@ -3536,11 +3536,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            resp.ok,
-            "default generation must succeed: {:?}",
-            resp.error
-        );
+        assert!(resp.ok, "default generation must succeed: {:?}", resp.error);
         assert_eq!(resp.kind, "generate_password_response");
         let default_password = resp.payload.unwrap()["password"]
             .as_str()
@@ -3562,11 +3558,7 @@ pub(crate) mod tests {
         )
         .await
         .unwrap();
-        assert!(
-            resp.ok,
-            "custom generation must succeed: {:?}",
-            resp.error
-        );
+        assert!(resp.ok, "custom generation must succeed: {:?}", resp.error);
         let custom_payload = resp.payload.unwrap();
         let password = custom_payload["password"].as_str().unwrap();
         assert_eq!(password.len(), 24);
@@ -3579,10 +3571,7 @@ pub(crate) mod tests {
         let resp = handle_request(
             &db_path,
             &state_dir,
-            request(
-                "generate_password",
-                serde_json::json!({ "words": 3 }),
-            ),
+            request("generate_password", serde_json::json!({ "words": 3 })),
         )
         .await
         .unwrap();
@@ -3599,17 +3588,10 @@ pub(crate) mod tests {
             "3-word passphrase must be exactly 3 hyphen-joined words: {passphrase}"
         );
 
-        // ---- locked vault refuses generation (session gate) ----
-        std::env::remove_var("PERSONA_MASTER_PASSWORD");
-        let err = handle_request(
-            &db_path,
-            &state_dir,
-            request("generate_password", serde_json::json!({})),
-        )
-        .await
-        .unwrap_err();
-        assert!(err.to_string().starts_with("locked"), "got: {err}");
-        std::env::set_var("PERSONA_MASTER_PASSWORD", PASSWORD);
+        // NOTE: generation is vault-independent (pure entropy — no db
+        // open, no master password), so there is no "locked" state to
+        // test here; the pairing/HMAC session gate above is the only
+        // auth on the message, same as get_suggestions.
 
         // ---- validation rails ----
         for (label, payload) in [
@@ -3630,13 +3612,9 @@ pub(crate) mod tests {
             ("words below range", serde_json::json!({ "words": 2 })),
             ("words above range", serde_json::json!({ "words": 11 })),
         ] {
-            let err = handle_request(
-                &db_path,
-                &state_dir,
-                request("generate_password", payload),
-            )
-            .await
-            .unwrap_err();
+            let err = handle_request(&db_path, &state_dir, request("generate_password", payload))
+                .await
+                .unwrap_err();
             assert!(
                 err.to_string().starts_with("invalid_payload"),
                 "{label}: got {err}"
