@@ -70,6 +70,25 @@ Login save/update (bridge protocol v4):
   ("Offer to save logins after sign-in / registration", on by default).
 - See `docs/BRIDGE_PROTOCOL.md` §14/§15.
 
+Login automation (batch B):
+
+- The content script runs in **every frame** (`all_frames` + `match_about_blank`). Each frame scans and
+  fills its own forms and talks to the bridge with **its own origin**, so an embedded third-party login
+  iframe is handled by that iframe's policy evaluation, never the top page's.
+- Page-level chrome stays in the top frame: the Ctrl+Shift+P overlay and the post-navigation save-bar
+  restore (a same-origin iframe claiming the stash would otherwise show a duplicate bar).
+- Form snapshots are stored per frame in the background with the top frame winning, so an ad iframe can no
+  longer overwrite what the popup displays.
+- **Multi-step logins** are handled: on a username-only step (no password field yet) Persona fills just
+  the username and remembers that item as the site's default, so the password page finishes on its own.
+  `loginSteps.ts` owns the decision and its guards: on page load only fields the scanner classified as
+  username/email are filled (bare text boxes wait for a click), a field that already has a value is never
+  overwritten, and nothing happens unless exactly one item can be resolved for the origin (no guessing
+  among accounts).
+- A focus on an identity field fetches suggestions for that frame on demand (the load-time scan only asks
+  about forms with a password/OTP field). Failed or empty lookups back off for 10s/30s instead of spawning
+  a `persona bridge` process per click; unlocking Persona clears the backoff immediately.
+
 For Native Messaging host installation and protocol details, see:
 
 - `scripts/native-messaging/install-native-host.sh`

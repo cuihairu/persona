@@ -50,8 +50,34 @@ export function isPendingSaveUsable(
 export async function stashPendingSave(
     entry: PendingSaveEntry,
     now: number = Date.now()
-): Promise<void> {
-    await chrome.storage.session.set({ [PENDING_SAVE_KEY]: { ...entry, at: entry.at || now } });
+): Promise<{ duplicate: boolean }> {
+    const candidate = { ...entry, at: entry.at || now };
+    const existing = (await chrome.storage.session.get(PENDING_SAVE_KEY))?.[
+        PENDING_SAVE_KEY
+    ] as PendingSaveEntry | undefined;
+
+    // Cross-frame dedup: one login submit can be seen by several frames of
+    // the same origin (nested same-origin iframes, plus the click+submit pair
+    // on the same page). Whoever renders first owns the slot; the others are
+    // told it is a duplicate so they don't stack a second bar on screen.
+    if (
+        isPendingSaveUsable(existing, candidate.origin, candidate.at) &&
+        isSameProposal(existing!, candidate)
+    ) {
+        return { duplicate: true };
+    }
+
+    await chrome.storage.session.set({ [PENDING_SAVE_KEY]: candidate });
+    return { duplicate: false };
+}
+
+/** Same site + same account + same password ⇒ the same save, already shown. */
+export function isSameProposal(a: PendingSaveEntry, b: PendingSaveEntry): boolean {
+    return (
+        normalizeOrigin(a.origin) === normalizeOrigin(b.origin) &&
+        (a.username ?? '').trim() === (b.username ?? '').trim() &&
+        a.password === b.password
+    );
 }
 
 /**

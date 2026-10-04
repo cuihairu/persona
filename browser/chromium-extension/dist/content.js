@@ -314,12 +314,18 @@ function findIdentityInput(focusedInput) {
         if (el instanceof HTMLInputElement && isFillableInput(el))
             return el;
     }
+    // Last resort for forms the scanner never grouped (SPA step-1 forms are
+    // invisible to it without a password/OTP seed). Restricted to inputs
+    // inside a real <form>: a loose search/filter box in a page header has
+    // no form around it and must never receive an identity.
     for (const el of document.querySelectorAll('input')) {
         if (!(el instanceof HTMLInputElement) || !isFillableInput(el))
             continue;
-        if (classifyIdentityInput(el) === 'none')
-            continue;
         if (el.type.toLowerCase() === 'password')
+            continue;
+        if (!el.closest('form'))
+            continue;
+        if (classifyIdentityInput(el) === 'none')
             continue;
         return el;
     }

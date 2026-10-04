@@ -7,6 +7,7 @@ import {
     PENDING_SAVE_TTL_MS,
     clearPendingSave,
     isPendingSaveUsable,
+    isSameProposal,
     stashPendingSave,
     takePendingSave,
     type PendingSaveEntry
@@ -100,5 +101,36 @@ describe('takePendingSave', () => {
         await stashPendingSave(ENTRY);
         await clearPendingSave();
         expect(await takePendingSave('https://example.com')).toBeNull();
+    });
+});
+
+describe('cross-frame dedup', () => {
+    it('flags a second stash of the same site/account/password as duplicate', async () => {
+        expect((await stashPendingSave(ENTRY)).duplicate).toBe(false);
+        // A nested same-origin iframe (or the click+submit pair) sees the
+        // very same login again — it must not stack a second bar.
+        expect((await stashPendingSave({ ...ENTRY, at: ENTRY.at + 5 })).duplicate).toBe(true);
+        expect(await takePendingSave('https://example.com', ENTRY.at + 10)).toEqual(ENTRY);
+    });
+
+    it('is not a duplicate when the password or account changed', async () => {
+        await stashPendingSave(ENTRY);
+        expect((await stashPendingSave({ ...ENTRY, password: 'rotated' })).duplicate).toBe(false);
+        await stashPendingSave(ENTRY);
+        expect(
+            (await stashPendingSave({ ...ENTRY, username: 'other@example.com' })).duplicate
+        ).toBe(false);
+    });
+
+    it('is not a duplicate when the stash expired (bar may reappear)', async () => {
+        await stashPendingSave(ENTRY);
+        const late = ENTRY.at + PENDING_SAVE_TTL_MS + 1;
+        expect((await stashPendingSave({ ...ENTRY, at: late }, late)).duplicate).toBe(false);
+    });
+
+    it('isSameProposal ignores whitespace-only username differences', () => {
+        expect(isSameProposal(ENTRY, { ...ENTRY, username: ' bob@example.com ' })).toBe(true);
+        expect(isSameProposal(ENTRY, { ...ENTRY, origin: 'https://other.test' })).toBe(false);
+        expect(isSameProposal(ENTRY, { ...ENTRY, password: 'nope' })).toBe(false);
     });
 });
