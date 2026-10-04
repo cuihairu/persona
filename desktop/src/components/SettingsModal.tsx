@@ -25,6 +25,7 @@ import AccountSection from './AccountSection';
 import QuickAccessSection from './QuickAccessSection';
 import UpdateCheckSection from './UpdateCheckSection';
 import SyncConflictsModal from './SyncConflictsModal';
+import SyncGroupSection from './SyncGroupSection';
 import DataScopeConsentModal from './DataScopeConsentModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
@@ -1137,6 +1138,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <SyncDevicesSection />
+      </section>
+
+      <section className="mb-5">
+        <SyncGroupSection />
       </section>
 
       <section className="mb-5">

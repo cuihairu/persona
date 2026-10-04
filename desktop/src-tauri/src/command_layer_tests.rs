@@ -77,6 +77,11 @@ fn mock_app_with_wrap_parts(
         // Quick Access 运行态：测试里没有 OS 全局热键可抢注，默认空态
         // （quick_access_* 命令测试直接读写这个槽位断言语义）
         quick_access: std::sync::Mutex::new(crate::quick_access::QuickAccessRuntime::default()),
+        // 同步组配对会话槽：默认空表（pairing 命令族测试跨命令断言状态）
+        pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+        // 同步组组密钥槽：默认内存 fake，配对命令族测试从 AppState 取同
+        // 一 Arc 读回命令写入的组密钥做断言
+        sync_group_store: Arc::new(InMemoryTokenStore::default()),
     });
     app
 }
@@ -9992,4 +9997,293 @@ fn decode_b64(value: &str) -> Vec<u8> {
 fn encode_b64(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// 同步组配对命令族（S1 桌面接线）
+//
+// 协议正确性归 core（`sync::pairing` 全握手/错码/篡改/端到端 11 例），这里
+// 只测宿主编排：门禁（未解锁/未配置/已入组）、会话状态机、双端组密钥落地。
+// 中转用手搓 HTTP 假 relay（与 core 测试同构：内存双向信箱，路由与
+// server /pairing/* 一致，单会话）。
+// ---------------------------------------------------------------------------
+
+/// 一次性 TCP 假 relay：返回 base_url。session_id 恒 `sess-1`（单会话测试）。
+fn spawn_mock_pairing_relay() -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    #[derive(Default)]
+    struct Mailbox {
+        salt: Option<Vec<u8>>,
+        to_host: Vec<Vec<u8>>,
+        to_guest: Vec<Vec<u8>>,
+    }
+    let state = Arc::new(std::sync::Mutex::new(Mailbox::default()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                if stream.read(&mut byte).unwrap_or(0) == 0 {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&buf).into_owned();
+            let request_line = head.lines().next().unwrap_or_default().to_string();
+            let content_length: usize = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':').and_then(|(_, v)| v.trim().parse().ok()))
+                .unwrap_or(0);
+            let mut body = vec![0u8; content_length];
+            if content_length > 0 {
+                let _ = stream.read_exact(&mut body);
+            }
+            let method = request_line
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let path = request_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            let body_str = String::from_utf8_lossy(&body).into_owned();
+            use base64::Engine as _;
+            let (status, resp_body) = {
+                let mut st = state.lock().unwrap();
+                let b64d = |v: &str| base64::engine::general_purpose::STANDARD.decode(v).unwrap();
+                let b64e = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
+                if method == "POST" && path == "/api/v1/pairing/sessions" {
+                    let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+                    st.salt = Some(b64d(json["salt"].as_str().unwrap()));
+                    (
+                        201,
+                        r#"{"session_id":"sess-1","expires_in_secs":600}"#.to_string(),
+                    )
+                } else if method == "GET" && path == "/api/v1/pairing/sessions/sess-1" {
+                    let json = serde_json::json!({
+                        "salt": b64e(st.salt.as_deref().unwrap_or_default()),
+                        "expires_in_secs": 600,
+                        "to_host_len": st.to_host.len() as i64,
+                        "to_guest_len": st.to_guest.len() as i64,
+                    });
+                    (200, json.to_string())
+                } else if path.ends_with("/messages/to-host") && method == "POST" {
+                    let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+                    st.to_host.push(b64d(json["payload"].as_str().unwrap()));
+                    (202, "{}".to_string())
+                } else if path.ends_with("/messages/to-guest") && method == "POST" {
+                    let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
+                    st.to_guest.push(b64d(json["payload"].as_str().unwrap()));
+                    (202, "{}".to_string())
+                } else if path.ends_with("/messages/to-host") {
+                    let msgs: Vec<String> = st.to_host.drain(..).map(|m| b64e(&m)).collect();
+                    (200, serde_json::json!({ "messages": msgs }).to_string())
+                } else if path.ends_with("/messages/to-guest") {
+                    let msgs: Vec<String> = st.to_guest.drain(..).map(|m| b64e(&m)).collect();
+                    (200, serde_json::json!({ "messages": msgs }).to_string())
+                } else if method == "DELETE" {
+                    (204, String::new())
+                } else {
+                    (404, String::new())
+                }
+            };
+            let reason = if status == 204 { "" } else { "OK" };
+            let resp = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+                resp_body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// 给已初始化的 vault 写 sync 配置（server_url 指向给定地址）。
+async fn set_sync_server_url(
+    _app: &tauri::App<tauri::test::MockRuntime>,
+    db_path: &str,
+    url: &str,
+) {
+    use persona_core::models::SyncConfig;
+    use persona_core::storage::{Database, Repository, WorkspaceRepository};
+    let db = Database::from_file(db_path).await.unwrap();
+    let workspace_path = crate::commands::workspace_path_for_db_path(db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = crate::commands::ensure_workspace_for_path(&db, &workspace_path)
+        .await
+        .unwrap();
+    ws.settings.sync = Some(SyncConfig {
+        enabled: true,
+        server_url: url.to_string(),
+        server_token: String::new(),
+    });
+    ws.touch();
+    repo.update(&ws).await.unwrap();
+}
+
+#[tokio::test]
+async fn sync_group_status_gates_on_db_path_and_reports_keyring_entry() {
+    let app = mock_app();
+    let resp = sync_group_status(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success, "no db path yet");
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let resp = sync_group_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success);
+    assert!(!resp.data.unwrap(), "fresh vault not in a sync group");
+
+    app.state::<AppState>()
+        .sync_group_store
+        .set(&db_path, &"ab".repeat(32))
+        .unwrap();
+    let resp = sync_group_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.data.unwrap(), "keyring entry = joined");
+}
+
+#[tokio::test]
+async fn sync_group_pairing_create_requires_server_config() {
+    let app = mock_app();
+    let resp = sync_group_pairing_create(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success, "not unlocked / no db path");
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let resp = sync_group_pairing_create(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success, "server url not configured");
+
+    let base = spawn_mock_pairing_relay();
+    set_sync_server_url(&app, &db_path, &base).await;
+    let resp = sync_group_pairing_create(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "create failed: {:?}", resp.error);
+    let outcome = resp.data.unwrap();
+    assert_eq!(outcome.code.len(), 9, "Crockford base32 9-char code");
+    assert!(outcome.invite_link.starts_with("persona-pair-1."));
+    assert_eq!(outcome.session_id, "sess-1");
+    assert!(
+        app.state::<AppState>()
+            .pairing_sessions
+            .lock()
+            .unwrap()
+            .contains_key("sess-1"),
+        "host session held in memory"
+    );
+}
+
+#[tokio::test]
+async fn sync_group_join_begin_rejects_already_joined_vault() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    app.state::<AppState>()
+        .sync_group_store
+        .set(&db_path, &"cd".repeat(32))
+        .unwrap();
+    let resp = sync_group_join_begin("persona-pair-1.x".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("already joined"));
+}
+
+#[tokio::test]
+async fn sync_group_pairing_cancel_is_idempotent_without_session() {
+    let app = mock_app();
+    let resp = sync_group_pairing_cancel("nope".to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success && resp.data.unwrap(), "cancel is idempotent");
+}
+
+/// 双端全链路：host create → poll 与 guest join_begin → confirm 并发跑完，
+/// 断言两端短指纹一致、两端 keyring 组密钥一致、会话清理干净。
+#[tokio::test]
+async fn sync_group_full_pairing_lands_same_group_key_on_both_sides() {
+    let host_app = mock_app();
+    let guest_app = mock_app();
+    let host_db = init_service_ok(&host_app, "master-pw-123").await;
+    let guest_db = init_service_ok(&guest_app, "master-pw-456").await;
+
+    let base = spawn_mock_pairing_relay();
+    set_sync_server_url(&host_app, &host_db, &base).await;
+
+    let created = sync_group_pairing_create(host_app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(created.success, "create failed: {:?}", created.error);
+    let invite = created.data.unwrap();
+
+    let link = invite.invite_link.clone();
+    let session_id = invite.session_id.clone();
+    let guest_flow = async {
+        let begun = sync_group_join_begin(link, guest_app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(begun.success, "join_begin failed: {:?}", begun.error);
+        let begun = begun.data.unwrap();
+        let confirmed = sync_group_join_confirm(session_id, guest_app.state::<AppState>())
+            .await
+            .unwrap();
+        (begun, confirmed)
+    };
+    let (polled, (begun, confirmed)) = tokio::join!(
+        sync_group_pairing_poll(invite.session_id.clone(), host_app.state::<AppState>()),
+        guest_flow,
+    );
+
+    let polled = polled.unwrap();
+    assert!(polled.success, "poll failed: {:?}", polled.error);
+    let poll_outcome = polled.data.unwrap();
+    assert!(poll_outcome.completed);
+    let host_fp = poll_outcome.fingerprint.expect("host fingerprint");
+    assert_eq!(
+        host_fp, begun.fingerprint,
+        "both sides see the same fingerprint"
+    );
+
+    assert!(confirmed.success, "confirm failed: {:?}", confirmed.error);
+
+    let host_hex = host_app
+        .state::<AppState>()
+        .sync_group_store
+        .get(&host_db)
+        .unwrap()
+        .expect("host group key stored");
+    let guest_hex = guest_app
+        .state::<AppState>()
+        .sync_group_store
+        .get(&guest_db)
+        .unwrap()
+        .expect("guest group key stored");
+    assert_eq!(host_hex, guest_hex, "both sides hold the same group key");
+    assert_eq!(host_hex.len(), 64, "hex-encoded 32-byte key");
+
+    assert!(
+        !host_app
+            .state::<AppState>()
+            .pairing_sessions
+            .lock()
+            .unwrap()
+            .contains_key("sess-1"),
+        "host session cleaned after completion"
+    );
+    assert!(
+        !guest_app
+            .state::<AppState>()
+            .pairing_sessions
+            .lock()
+            .unwrap()
+            .contains_key("sess-1"),
+        "guest session cleaned after completion"
+    );
 }

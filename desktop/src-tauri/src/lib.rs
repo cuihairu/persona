@@ -223,6 +223,10 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             )),
             connect_server: Mutex::new(None),
             quick_access: std::sync::Mutex::new(quick_access::QuickAccessRuntime::default()),
+            pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            sync_group_store: Arc::new(token_store::OsKeyringTokenStore::new(
+                token_store::SYNC_GROUP_SERVICE,
+            )),
         })
         .setup(|app| {
             // 日志先行：后续所有 tracing 事件（含托盘降级提示）都有落点
@@ -316,6 +320,13 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::sync_rotate,
             commands::sync_conflicts_list,
             commands::sync_conflict_resolve,
+            commands::sync_group_status,
+            commands::sync_group_pairing_create,
+            commands::sync_group_pairing_poll,
+            commands::sync_group_pairing_cancel,
+            commands::sync_group_join_begin,
+            commands::sync_group_join_confirm,
+            commands::sync_group_join_cancel,
             commands::account_register,
             commands::set_account_binding,
             commands::account_passkey_create_options,

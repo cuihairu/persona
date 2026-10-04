@@ -969,3 +969,32 @@ export interface AccountSessionInfo {
 
 /* end account system */
 
+
+/** 同步组配对（对应 Rust SyncPairingCreateOutcome）：host 出码面 */
+export interface SyncPairingCreateOutcome {
+  /** 动态密码（9 位 Crockford base32，与对方人工核对） */
+  code: string;
+  /** 邀请串 persona-pair-1.{b64url 载荷}（QR / 剪贴板递给对方） */
+  invite_link: string;
+  /** 中转会话 id（poll / cancel 定位用） */
+  session_id: string;
+  /** 中转会话剩余有效期（秒） */
+  expires_in_secs: number;
+}
+
+/** `sync_group_pairing_poll` 返回（对应 Rust SyncPairingPollOutcome） */
+export interface SyncPairingPollOutcome {
+  completed: boolean;
+  /** host 侧 6 位数字短指纹（与 guest 端展示比对） */
+  fingerprint: string | null;
+}
+
+/** `sync_group_join_begin` 返回（对应 Rust SyncJoinBeginOutcome） */
+export interface SyncJoinBeginOutcome {
+  /** guest 侧 6 位数字短指纹（与 host 端比对，一致才 confirm） */
+  fingerprint: string;
+  /** 邀请串里的动态密码（与手输码核对） */
+  code: string;
+  /** 中转会话 id（confirm / cancel 定位用） */
+  session_id: string;
+}

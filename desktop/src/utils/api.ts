@@ -90,8 +90,11 @@ import type {
   SyncConflictEntry,
   SyncDeviceStatus,
   SyncDeviceView,
+  SyncJoinBeginOutcome,
   SyncJoinOutcome,
   SyncNowReport,
+  SyncPairingCreateOutcome,
+  SyncPairingPollOutcome,
   SyncRotateReport,
   FaviconData,
   BiometricStatus,
@@ -353,6 +356,44 @@ class PersonaAPI {
   /** 冲突裁决：采纳一个副本（其余版本淘汰出裁决视图，数据不丢） */
   async syncConflictResolve(itemId: string, adoptOpId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_conflict_resolve', { itemId, adoptOpId });
+  }
+
+  /** 同步组：本 vault 是否已加入（keyring 组密钥条目，免解锁只读） */
+  async syncGroupStatus(): Promise<ApiResponse<boolean>> {
+    return invoke('sync_group_status');
+  }
+
+  /** 同步组配对：host 出码（动态密码 + 邀请串；会话挂起等待对方加入） */
+  async syncGroupPairingCreate(): Promise<ApiResponse<SyncPairingCreateOutcome>> {
+    return invoke('sync_group_pairing_create');
+  }
+
+  /**
+   * 同步组配对：host 等待 guest 加入（阻塞至完成或 90s 超时；取消走
+   * syncGroupPairingCancel，中转信箱删除后本调用即报错返回）
+   */
+  async syncGroupPairingPoll(sessionId: string): Promise<ApiResponse<SyncPairingPollOutcome>> {
+    return invoke('sync_group_pairing_poll', { sessionId });
+  }
+
+  /** 同步组配对：取消会话（host/guest 通用；幂等，尽力清理中转信箱） */
+  async syncGroupPairingCancel(sessionId: string): Promise<ApiResponse<boolean>> {
+    return invoke('sync_group_pairing_cancel', { sessionId });
+  }
+
+  /** 同步组加入：guest 解析邀请串起配，返回短指纹（与 host 端比对） */
+  async syncGroupJoinBegin(inviteLink: string): Promise<ApiResponse<SyncJoinBeginOutcome>> {
+    return invoke('sync_group_join_begin', { inviteLink });
+  }
+
+  /** 同步组加入：指纹比对通过后确认入组（组密钥落 keyring） */
+  async syncGroupJoinConfirm(sessionId: string): Promise<ApiResponse<boolean>> {
+    return invoke('sync_group_join_confirm', { sessionId });
+  }
+
+  /** 同步组加入：取消（指纹不通过 / 放弃；幂等） */
+  async syncGroupJoinCancel(sessionId: string): Promise<ApiResponse<boolean>> {
+    return invoke('sync_group_join_cancel', { sessionId });
   }
 
   /** biometric unlock 状态（免解锁只读；解锁屏 mount 即查，决定指纹按钮显隐） */

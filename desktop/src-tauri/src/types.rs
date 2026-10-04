@@ -76,6 +76,32 @@ pub struct AppState {
     /// 进程里 OS 抢注成功没有"——见 `quick_access` 模块注释。用 std Mutex
     /// （同 ssh_approvals 槽位）：锁内只做字段读写，从不跨 await。
     pub quick_access: std::sync::Mutex<crate::quick_access::QuickAccessRuntime>,
+    /// 同步组配对进行中的会话（session_id → 会话态）。host 出码、guest
+    /// 输码各存一条；完成/取消即移除。动态密码派生值与 SRP 私有份额只在
+    /// 这里存活（内存态，不落盘）——见 `core/src/sync/pairing.rs` 模块
+    /// 注释。锁内只做 take/put，从不跨 await 持锁（drive/join 的网络等待
+    /// 都在锁外）。
+    pub pairing_sessions: Arc<std::sync::Mutex<HashMap<String, crate::types::PairingSession>>>,
+    /// 同步组组密钥的 keyring 存储（service `persona-sync-group`，键 =
+    /// vault db_path，值 = hex）。条目存在与否 = 本 vault 是否已加入同步
+    /// 组（单一真相源）；配对完成时写入，S2 指令流从这里读。
+    pub sync_group_store: Arc<dyn crate::token_store::TokenStore>,
+}
+
+/// 同步组配对会话（host 出码 / guest 输码两种角色，内存态）。
+pub enum PairingSession {
+    /// 邀请端：动态密码握手现场 + 待递交的组密钥（完成时落
+    /// sync_group_store）。GroupKey 带内存清零（Drop/ZeroizeOnDrop）。
+    Host {
+        host: persona_core::sync::pairing::PairingHost,
+        group_key: persona_core::sync::keys::GroupKey,
+        relay_url: String,
+    },
+    /// 加入端：join_begin 与 join_confirm 之间持有（指纹比对通过后 confirm）。
+    Guest {
+        guest: persona_core::sync::pairing::PairingGuest,
+        relay_url: String,
+    },
 }
 
 /// `sync_device_status` 返回：本机设备身份状态（纯本地 keyring，免解锁）。
@@ -1536,4 +1562,41 @@ impl From<persona_core::models::Attachment> for SerializableAttachment {
             created_at: attachment.created_at.to_rfc3339(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 同步组配对（S1 桌面接线）
+// ---------------------------------------------------------------------------
+
+/// `sync_group_pairing_create` 返回：出码面（动态密码 + 邀请串 + 中转会话）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPairingCreateOutcome {
+    /// 动态密码（9 位 Crockford base32；与对方人工核对的是它）。
+    pub code: String,
+    /// 邀请串 `persona-pair-1.<b64url>`（QR / 剪贴板递给 guest）。
+    pub invite_link: String,
+    /// 中转会话 id（前端不再关心，只用于 poll/cancel 定位会话）。
+    pub session_id: String,
+    /// 中转会话剩余有效期（秒；TTL 600，过期需重新出码）。
+    pub expires_in_secs: i64,
+}
+
+/// `sync_group_pairing_poll` 返回：host 侧等待结果。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncPairingPollOutcome {
+    /// 配对完成（组密钥已递交 guest 并落本机 keyring）。
+    pub completed: bool,
+    /// host 侧短指纹（6 位数字；完成时返回，与 guest 侧展示一致）。
+    pub fingerprint: Option<String>,
+}
+
+/// `sync_group_join_begin` 返回：guest 输码面（指纹比对门禁前）。
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncJoinBeginOutcome {
+    /// guest 侧短指纹（6 位数字；与 host 端展示比对，一致才 confirm）。
+    pub fingerprint: String,
+    /// 邀请串里的动态密码（与用户手输的码应一致，多一层人工核对）。
+    pub code: String,
+    /// 中转会话 id（confirm/cancel 定位用）。
+    pub session_id: String,
 }

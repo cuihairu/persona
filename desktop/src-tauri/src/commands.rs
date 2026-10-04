@@ -2411,6 +2411,394 @@ pub async fn sync_conflict_resolve(
     }
 }
 
+// ---- 同步组配对（S1 桌面接线：出码/输码/指纹比对/入组）----
+//
+// 协议全在 core（`sync::pairing`：SRP-6a PAKE + 短指纹 + 组密钥包裹），
+// 这里只做宿主编排：中转客户端构造、配对会话（内存态）的存取、组密钥
+// 的 keyring 落存。中转地址复用 settings.sync.server_url（host 侧）；
+// guest 侧地址来自邀请串本身（跨机加入不要求本地已配置服务器）。
+//
+// 安全语义：
+// - 动态密码派生值与 SRP 私有份额只活在 `pairing_sessions`（内存态），
+//   不落盘、不进 settings——退出应用即消失，需重新出码（短时效语义）。
+// - 组密钥落 `sync_group_store`（keyring service persona-sync-group），
+//   条目存在与否 = 本 vault 是否已加入同步组（单一真相源）。
+// - guest 侧已入组再 join 一律拒绝（覆盖组密钥 = 静默换组，不可接受）；
+//   host 侧已入组出码 = 邀请新设备进现有组（复用既有组密钥）。
+// - keyring 不可用 fail-closed：配对完成但组密钥无法落存时按错误返回
+//   （不静默丢弃也不退回明文存储）。
+
+/// 组密钥 hex 编解码（32 字节 ↔ 64 字符；keyring 值格式）。
+fn group_key_to_hex(key: &[u8; 32]) -> String {
+    key.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn group_key_from_hex(value: &str) -> Option<[u8; 32]> {
+    let value = value.trim();
+    if value.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, chunk) in value.as_bytes().chunks(2).enumerate() {
+        let hi = (chunk[0] as char).to_digit(16)?;
+        let lo = (chunk[1] as char).to_digit(16)?;
+        out[i] = ((hi << 4) | lo) as u8;
+    }
+    Some(out)
+}
+
+/// 本 vault 是否已加入同步组（keyring 组密钥条目；读失败 fail-closed
+/// 视为未加入——host 出码会生成新组密钥，guest 加入不受影响）。
+fn sync_group_joined(state: &State<'_, AppState>, db_path: &str) -> bool {
+    state
+        .sync_group_store
+        .get(db_path)
+        .ok()
+        .and_then(|v| v)
+        .is_some()
+}
+
+/// 同步组状态（只读，免解锁——同 sync_device_status 口径）。
+#[command]
+pub async fn sync_group_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    Ok(ApiResponse::success(sync_group_joined(&state, &db_path)))
+}
+
+/// host 出码：新建配对会话与中转信箱，返回动态密码与邀请串。
+/// 组密钥：本机已在组 = 复用；首次 = 随机生成（poll 完成时落 keyring）。
+#[command]
+pub async fn sync_group_pairing_create(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncPairingCreateOutcome>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = db_path_or_return!(state);
+    let relay_url = match account_server_for(&state).await {
+        Ok(url) => url,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let (host, invite) = match persona_core::sync::pairing::PairingHost::new_invite() {
+        Ok(pair) => pair,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    let group_key = match state.sync_group_store.get(&db_path) {
+        Ok(Some(hex)) => match group_key_from_hex(&hex) {
+            Some(key) => persona_core::sync::keys::GroupKey::from_bytes(key),
+            None => {
+                return Ok(ApiResponse::error(
+                    "Existing sync-group key entry is corrupted; refuse to start pairing"
+                        .to_string(),
+                ))
+            }
+        },
+        Ok(None) => match persona_core::sync::keys::GroupKey::generate() {
+            Ok(key) => key,
+            Err(e) => {
+                return Ok(ApiResponse::error(format!(
+                    "Group key generation failed: {e}"
+                )))
+            }
+        },
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Cannot read sync-group key from OS keyring: {e}"
+            )))
+        }
+    };
+    let relay = match persona_core::sync::pairing::relay::PairingRelayClient::new(&relay_url) {
+        Ok(relay) => relay,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    let (session_id, expires_in_secs) = match relay.create_session(&invite.salt).await {
+        Ok(pair) => pair,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    let code = invite.code.clone();
+    let invite_link = persona_core::sync::pairing::PairingInviteLink {
+        code: code.clone(),
+        relay_url: relay_url.clone(),
+        session_id: session_id.clone(),
+    }
+    .encode();
+    state
+        .pairing_sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            session_id.clone(),
+            PairingSession::Host {
+                host,
+                group_key,
+                relay_url,
+            },
+        );
+    Ok(ApiResponse::success(SyncPairingCreateOutcome {
+        code,
+        invite_link,
+        session_id,
+        expires_in_secs,
+    }))
+}
+
+/// host 等待 guest 加入：阻塞驱动握手直到完成（90s 窗口，期间可取消
+/// ——cancel 删中转信箱后本命令即报错返回）。完成时组密钥落 keyring。
+#[command]
+pub async fn sync_group_pairing_poll(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncPairingPollOutcome>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = db_path_or_return!(state);
+    let taken = state
+        .pairing_sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&session_id);
+    let (mut host, group_key, relay_url) = match taken {
+        Some(PairingSession::Host {
+            host,
+            group_key,
+            relay_url,
+        }) => (host, group_key, relay_url),
+        Some(session @ PairingSession::Guest { .. }) => {
+            state
+                .pairing_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(session_id, session);
+            return Ok(ApiResponse::error(
+                "Session is a guest join, not a pairing host".to_string(),
+            ));
+        }
+        None => {
+            return Ok(ApiResponse::error(
+                "No active pairing session; create one first".to_string(),
+            ))
+        }
+    };
+    let relay = match persona_core::sync::pairing::relay::PairingRelayClient::new(&relay_url) {
+        Ok(relay) => relay,
+        Err(e) => {
+            state
+                .pairing_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(
+                    session_id,
+                    PairingSession::Host {
+                        host,
+                        group_key,
+                        relay_url,
+                    },
+                );
+            return Ok(ApiResponse::error(format!("{e}")));
+        }
+    };
+    match relay
+        .drive_host(&mut host, group_key.as_bytes(), &session_id)
+        .await
+    {
+        Ok(fingerprint) => {
+            if let Err(e) = state
+                .sync_group_store
+                .set(&db_path, &group_key_to_hex(group_key.as_bytes()))
+            {
+                return Ok(ApiResponse::error(format!(
+                    "Pairing completed but cannot persist the group key: {e}"
+                )));
+            }
+            Ok(ApiResponse::success(SyncPairingPollOutcome {
+                completed: true,
+                fingerprint: Some(fingerprint),
+            }))
+        }
+        Err(e) => {
+            // 未等到 guest（90s 超时）或中转故障：会话放回可重试（TTL 内）
+            state
+                .pairing_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(
+                    session_id,
+                    PairingSession::Host {
+                        host,
+                        group_key,
+                        relay_url,
+                    },
+                );
+            Ok(ApiResponse::error(format!("{e}")))
+        }
+    }
+}
+
+/// 取消配对/加入会话（两角色通用）：移除本地会话并尽力清理中转信箱。
+/// 幂等：会话不存在也返回成功（页面残留状态可重复点）。
+#[command]
+pub async fn sync_group_pairing_cancel(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    let relay_url = state
+        .pairing_sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&session_id)
+        .map(|session| match session {
+            PairingSession::Host { relay_url, .. } | PairingSession::Guest { relay_url, .. } => {
+                relay_url
+            }
+        });
+    if let Some(relay_url) = relay_url {
+        if let Ok(relay) = persona_core::sync::pairing::relay::PairingRelayClient::new(&relay_url) {
+            // 信箱清理尽力而为：中转不可达时本地已清，TTL 到期自然回收
+            if let Err(e) = relay.delete_session(&session_id).await {
+                tracing::warn!(%e, "pairing relay mailbox cleanup failed; TTL will reclaim it");
+            }
+        }
+    }
+    Ok(ApiResponse::success(true))
+}
+
+/// guest 输码第一步：解码邀请串、起配并把 client_public 投给 host，
+/// 等回 host 应答后返回短指纹（UI 与 host 端比对，一致才 confirm）。
+#[command]
+pub async fn sync_group_join_begin(
+    invite_link: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<SyncJoinBeginOutcome>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = db_path_or_return!(state);
+    if sync_group_joined(&state, &db_path) {
+        return Ok(ApiResponse::error(
+            "This vault already joined a sync group; leave it before joining another".to_string(),
+        ));
+    }
+    let link = match persona_core::sync::pairing::PairingInviteLink::decode(invite_link.trim()) {
+        Ok(link) => link,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    let relay = match persona_core::sync::pairing::relay::PairingRelayClient::new(&link.relay_url) {
+        Ok(relay) => relay,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    let (guest, fingerprint) = match relay.join_begin(&link).await {
+        Ok(pair) => pair,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    state
+        .pairing_sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            link.session_id.clone(),
+            PairingSession::Guest {
+                guest,
+                relay_url: link.relay_url.clone(),
+            },
+        );
+    Ok(ApiResponse::success(SyncJoinBeginOutcome {
+        fingerprint,
+        code: link.code,
+        session_id: link.session_id,
+    }))
+}
+
+/// guest 第二步：指纹比对通过后确认入组——投 M1、收组密钥交接、解出
+/// 组密钥落 keyring。失败时本地会话作废（需重新输码起配）。
+#[command]
+pub async fn sync_group_join_confirm(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = db_path_or_return!(state);
+    if sync_group_joined(&state, &db_path) {
+        state
+            .pairing_sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&session_id);
+        return Ok(ApiResponse::error(
+            "This vault already joined a sync group".to_string(),
+        ));
+    }
+    let taken = state
+        .pairing_sessions
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&session_id);
+    let (mut guest, relay_url) = match taken {
+        Some(PairingSession::Guest { guest, relay_url }) => (guest, relay_url),
+        Some(session @ PairingSession::Host { .. }) => {
+            state
+                .pairing_sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(session_id, session);
+            return Ok(ApiResponse::error(
+                "Session is a pairing host, not a guest join".to_string(),
+            ));
+        }
+        None => {
+            return Ok(ApiResponse::error(
+                "No active join session; scan the invite again".to_string(),
+            ))
+        }
+    };
+    let relay = match persona_core::sync::pairing::relay::PairingRelayClient::new(&relay_url) {
+        Ok(relay) => relay,
+        Err(e) => return Ok(ApiResponse::error(format!("{e}"))),
+    };
+    if let Err(e) = relay.join_confirm(&mut guest, &session_id).await {
+        // M1 已投出或交接超时：会话状态不再可靠，作废（重新输码起配）
+        return Ok(ApiResponse::error(format!("{e}")));
+    }
+    let group_key = match guest.group_key() {
+        Some(key) => persona_core::sync::keys::GroupKey::from_bytes(*key),
+        None => {
+            return Ok(ApiResponse::error(
+                "Pairing completed without a group key (unexpected)".to_string(),
+            ))
+        }
+    };
+    if let Err(e) = state
+        .sync_group_store
+        .set(&db_path, &group_key_to_hex(group_key.as_bytes()))
+    {
+        return Ok(ApiResponse::error(format!(
+            "Joined the sync group but cannot persist the group key: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(true))
+}
+
+/// guest 取消加入（指纹比对不通过/放弃）：本地会话移除 + 中转信箱清理。
+/// 即 pairing_cancel 的 guest 侧别名，语义同幂等。
+#[command]
+pub async fn sync_group_join_cancel(
+    session_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    sync_group_pairing_cancel(session_id, state).await
+}
+
 // ---- 账号体系（M2：persona-server /api/v1/accounts/* 的 desktop 代理
 //      层）----
 //
