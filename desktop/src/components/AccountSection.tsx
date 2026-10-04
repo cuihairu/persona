@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { personaAPI } from '../utils/api';
+import DataScopeConsentModal from './DataScopeConsentModal';
 import type { AccountBinding, AccountDeviceInfo } from '../types';
 
 /**
@@ -15,6 +16,12 @@ import type { AccountBinding, AccountDeviceInfo } from '../types';
  * accountSrpLogin（challenge/M1/M2 核验在 core，15min 令牌入 keyring）
  * → accountExchangeSession（换 24h 会话，入 keyring）→ accountSetBinding。
  * 登录路径同后三步（account_id 由用户填入）。
+ *
+ * 隐私红线（M4 同口径）：提交动作（注册/登录）先把账号材料外发面摆到
+ * DataScopeConsentModal（account 披露面：服务器会看到什么/永不什么），
+ * 确认才执行编排；取消 / Esc / 点空白一律不放行。披露一次管住本机
+ * 账号能力面，已绑定后的重新登录/设备管理不再重复弹。组件加载零网络
+ * 请求（只读本地 settings）。
  */
 
 type WizardMode = 'register' | 'login';
@@ -38,6 +45,9 @@ const AccountSection: React.FC = () => {
   const [loginPassword, setLoginPassword] = useState('');
   const [devices, setDevices] = useState<AccountDeviceInfo[] | null>(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+
+  // 披露防火墙：None = 无未决动作；Some = 等用户对披露面显式确认
+  const [consentPending, setConsentPending] = useState<'register' | 'login' | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,11 +90,7 @@ const AccountSection: React.FC = () => {
     [fail]
   );
 
-  const register = useCallback(async () => {
-    if (!username.trim() || !password || !deviceName.trim()) {
-      fail(t('settings.account.formIncomplete'));
-      return;
-    }
+  const registerExecute = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
@@ -119,11 +125,7 @@ const AccountSection: React.FC = () => {
     }
   }, [username, password, deviceName, signIn, fail, t]);
 
-  const loginExisting = useCallback(async () => {
-    if (!accountId.trim() || !password || !deviceName.trim()) {
-      fail(t('settings.account.formIncomplete'));
-      return;
-    }
+  const loginExistingExecute = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
@@ -214,6 +216,19 @@ const AccountSection: React.FC = () => {
       setBusy(false);
     }
   }, [binding, fail]);
+
+  const consentConfirm = useCallback(() => {
+    setConsentPending(null);
+    if (consentPending === 'register') {
+      void registerExecute();
+    } else if (consentPending === 'login') {
+      void loginExistingExecute();
+    }
+  }, [consentPending, registerExecute, loginExistingExecute]);
+
+  const consentCancel = useCallback(() => {
+    setConsentPending(null);
+  }, []);
 
   const signOut = useCallback(async () => {
     if (!binding) return;
@@ -342,7 +357,13 @@ const AccountSection: React.FC = () => {
               </label>
               <button
                 type="button"
-                onClick={register}
+                onClick={() => {
+                  if (!username.trim() || !password || !deviceName.trim()) {
+                    fail(t('settings.account.formIncomplete'));
+                    return;
+                  }
+                  setConsentPending('register');
+                }}
                 disabled={busy}
                 className="btn-primary"
                 data-testid="account-register-submit"
@@ -389,7 +410,13 @@ const AccountSection: React.FC = () => {
               </label>
               <button
                 type="button"
-                onClick={loginExisting}
+                onClick={() => {
+                  if (!accountId.trim() || !password || !deviceName.trim()) {
+                    fail(t('settings.account.formIncomplete'));
+                    return;
+                  }
+                  setConsentPending('login');
+                }}
                 disabled={busy}
                 className="btn-primary"
                 data-testid="account-login-submit"
@@ -504,6 +531,14 @@ const AccountSection: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+
+      {consentPending && (
+        <DataScopeConsentModal
+          scope="account"
+          onConfirm={consentConfirm}
+          onCancel={consentCancel}
+        />
       )}
     </div>
   );

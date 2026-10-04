@@ -59,6 +59,64 @@ describe('components/AccountSection', () => {
     jest.clearAllMocks();
   });
 
+  it('取消披露面不放行：不注册、不登录、无任何账号网络调用', async () => {
+    mockGetSettings.mockResolvedValue(unbound);
+    seedRegisterFlow();
+
+    render(<AccountSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId('account-wizard')).toBeInTheDocument()
+    );
+    fireEvent.change(screen.getByTestId('account-username-input'), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.change(screen.getByTestId('account-password-input'), {
+      target: { value: 'pw' },
+    });
+    fireEvent.change(screen.getByTestId('account-device-name-input'), {
+      target: { value: 'laptop' },
+    });
+    fireEvent.click(screen.getByTestId('account-register-submit'));
+    await waitFor(() =>
+      expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument()
+    );
+
+    // 取消 = 不放行
+    fireEvent.click(screen.getByTestId('data-scope-cancel'));
+    expect(screen.queryByTestId('data-scope-modal')).not.toBeInTheDocument();
+    expect(mockRegister).not.toHaveBeenCalled();
+    expect(mockSrpRegister).not.toHaveBeenCalled();
+    expect(mockSrpLogin).not.toHaveBeenCalled();
+    expect(mockExchange).not.toHaveBeenCalled();
+    expect(mockSetBinding).not.toHaveBeenCalled();
+
+    // 再提交 + Esc 语义（点确认按钮之外路径）同样由 modal 内部处理；
+    // 这里验证确认后放行
+    fireEvent.click(screen.getByTestId('account-register-submit'));
+    await waitFor(() =>
+      expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    await waitFor(() =>
+      expect(screen.getByTestId('account-bound')).toBeInTheDocument()
+    );
+  });
+
+  it('组件加载零网络请求（红线：未开启前不会有任何网络调用）', async () => {
+    mockGetSettings.mockResolvedValue(unbound);
+    render(<AccountSection />);
+    await waitFor(() =>
+      expect(screen.getByTestId('account-wizard')).toBeInTheDocument()
+    );
+    expect(mockRegister).not.toHaveBeenCalled();
+    expect(mockSrpRegister).not.toHaveBeenCalled();
+    expect(mockSrpLogin).not.toHaveBeenCalled();
+    expect(mockExchange).not.toHaveBeenCalled();
+    expect(mockSetBinding).not.toHaveBeenCalled();
+    expect(mockListDevices).not.toHaveBeenCalled();
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+
   it('未绑定时显示向导，注册流按序编排四步并写入绑定', async () => {
     mockGetSettings.mockResolvedValue(unbound);
     seedRegisterFlow();
@@ -78,6 +136,17 @@ describe('components/AccountSection', () => {
       target: { value: 'laptop' },
     });
     fireEvent.click(screen.getByTestId('account-register-submit'));
+
+    // 隐私红线：提交先到披露面，确认前零编排调用
+    await waitFor(() =>
+      expect(screen.getByTestId('data-scope-modal')).toHaveAttribute(
+        'data-scope',
+        'account'
+      )
+    );
+    expect(mockRegister).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
 
     await waitFor(() =>
       expect(mockSetBinding).toHaveBeenCalledWith({
@@ -124,6 +193,10 @@ describe('components/AccountSection', () => {
       target: { value: 'laptop' },
     });
     fireEvent.click(screen.getByTestId('account-register-submit'));
+    await waitFor(() =>
+      expect(screen.getByTestId('data-scope-modal')).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
 
     await waitFor(() =>
       expect(screen.getByTestId('account-error')).toHaveTextContent('HTTP 409')

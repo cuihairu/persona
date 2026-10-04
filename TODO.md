@@ -134,8 +134,8 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       JSON 缺键回退 None）；设置页 AccountSection（注册/登录向导 + 重新
       登录 + 设备管理 + 恢复码 + 退出解绑；i18n zh/en；组件测试 3 例 +
       命令层 3 例 + 前端 seam 覆盖）。登录 UX 以 account_id 为标识（服务器
-      无 username→id 解析端点，向导明示）。剩余：M4 口径的账号侧红线
-      复查（默认关闭/显式开启）、实机勾稽
+      无 username→id 解析端点，向导明示）。账号侧红线复查与实机勾稽
+      已按 M4 口径收口（见 M4 条目）
 - [x] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）——2026-10-04 复核收口**：
       设备管理/授权/吊销/离开命令（`commands.rs` 的 `sync_device_status/
       join/leave/list_devices/authorize/revoke`）+ 设置页接线（SettingsModal：
@@ -158,7 +158,15 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       不放行；确认后才展开配置或执行 sync_join。「本地模式全功能」= 默认
       全关 + 零网络请求断言 + 无 server 时同步命令先闸后网（命令层测试）。
       **余项**：M2 账号体系落地后，账号侧红线按同口径复查（默认关闭/
-      披露/入测试）
+      披露/入测试）——2026-10-04 账号侧收口：账号数据范围披露面
+      `DataScopeConsentModal` 新增 account scope（sees：账号身份/SRP 验证
+      材料/设备与授权记录/会话操作记录；no：主密码与 Argon2 派生值/vault
+      凭据内容/passkey 私钥与同步组密钥）；注册与登录提交均先到披露面，
+      确认前零编排调用、取消/Esc/空白不放行；组件挂载零网络请求断言
+      （AccountSection.test 5 例）；服务侧边界实机勾稽
+      `scripts/verify-account-redline.sh`（10 断言：注册公开、srp/恢复码/
+      sessions/devices 无 Bearer fail-closed 401、恢复码一次性、challenge
+      真 B、伪证明 401、sessions 恰好一证据 422）真实进程 wire 全过
 - [ ] **M5 浏览器插件接账号（落地④）**：插件登录账号 → 读写云端保险库
       （HTTP 直连 server，出 native messaging 本地桥）、离线可用
       （本地缓存兜底）、同步冲突解决；chromium 与 safari 两份

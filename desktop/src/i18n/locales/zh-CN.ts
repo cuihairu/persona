@@ -267,6 +267,22 @@ export default {
       accountIdHint: '账号 ID 在注册时生成（服务器无用户名找回）——请在注册设备上查看后填入。',
       registerSubmit: '注册并绑定本机',
       loginSubmit: '登录',
+      consent: {
+        title: '绑定前明示：服务器会看到什么',
+        intro:
+          '注册或登录将把账号相关材料发送到已配置的 persona-server。本机主密码与保险库内容与此无关。',
+        seesTitle: '服务器会看到',
+        sees: [
+          '账号身份：用户名与账号 ID',
+          '密码验证材料：SRP 加密盐与验证值（不可反推密码）',
+          '本机设备：设备名与设备公钥、设备授权/吊销记录',
+          '会话与操作记录：登录/登出/恢复码生成/消耗',
+        ],
+        noTitle: '永不出本机',
+        no: ['主密码与 Argon2 派生值', '保险库凭据内容（用户名、密码、密钥、备注）', 'passkey 私钥与同步组密钥'],
+        confirm: '已了解，继续',
+        cancel: '取消',
+      },
       boundAs: '已绑定：{{username}}',
       accountId: '账号 ID',
       device: '本机设备',

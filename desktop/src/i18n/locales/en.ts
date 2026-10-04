@@ -272,6 +272,22 @@ export default {
         'The account ID is generated at registration (no username lookup on the server) — copy it from the registering device.',
       registerSubmit: 'Register and bind this device',
       loginSubmit: 'Sign in',
+      consent: {
+        title: 'Disclosure before binding: what the server sees',
+        intro:
+          'Registration or sign-in sends account material to the configured persona-server. Your master password and vault contents are unrelated.',
+        seesTitle: 'The server will see',
+        sees: [
+          'Account identity: username and account ID',
+          'Password verification material: SRP salt and verifier (password cannot be derived from it)',
+          'This device: device name and device public key, device authorization/revocation records',
+          'Session and operation logs: sign-in/out, recovery-code generation/consumption',
+        ],
+        noTitle: 'Never leaves this device',
+        no: ['The master password and Argon2 derivatives', 'Vault credential contents (usernames, passwords, keys, notes)', 'Passkey private keys and sync group keys'],
+        confirm: 'Understood, continue',
+        cancel: 'Cancel',
+      },
       boundAs: 'Bound: {{username}}',
       accountId: 'Account ID',
       device: 'This device',

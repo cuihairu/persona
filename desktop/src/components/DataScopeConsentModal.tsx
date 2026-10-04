@@ -3,8 +3,9 @@ import { ShieldCheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
-/** 披露面：audit = 同步服务器开关（审计事件上报）；e2ee = 加入端到端同步 */
-export type DataScope = 'audit' | 'e2ee';
+/** 披露面：audit = 同步服务器开关（审计事件上报）；e2ee = 加入端到端同步；
+ * account = 注册/绑定 persona-server 账号（账号材料外发面） */
+export type DataScope = 'audit' | 'e2ee' | 'account';
 
 interface DataScopeConsentModalProps {
   scope: DataScope;
@@ -24,7 +25,12 @@ const DataScopeConsentModal: React.FC<DataScopeConsentModalProps> = ({
   onCancel,
 }) => {
   const { t } = useTranslation();
-  const base = scope === 'audit' ? 'settings.sync.consent' : 'settings.syncDevices.consent';
+  const base =
+    scope === 'audit'
+      ? 'settings.sync.consent'
+      : scope === 'e2ee'
+        ? 'settings.syncDevices.consent'
+        : 'settings.account.consent';
   // 文案为固定数组（i18n 资源内联，模块加载即在位）；returnObjects 取整组
   const sees = t(`${base}.sees`, { returnObjects: true }) as string[];
   const notSees = t(`${base}.no`, { returnObjects: true }) as string[];
