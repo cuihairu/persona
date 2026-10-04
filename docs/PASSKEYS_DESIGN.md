@@ -103,7 +103,7 @@ pub struct PasskeyItem {
 | COSE/CBOR 编解码         | `coset`（Google 维护，Fuchsia 在用，基于 ciborium） | COSE_Key、COSE_Algorithm 常量齐全；不用手写 CBOR |
 | SHA-256                  | 复用 `sha2`                                         | rpIdHash、client data hash                       |
 
-自研部分只剩「authenticator data / attestation object 的拼装」这一小段规范固定的字节组装（~百行），并用 RP 侧库做回归验证（见 §12）——与钱包迁移同一策略：协议编解码用库，标准向量兜底。
+自行开发部分只剩「authenticator data / attestation object 的拼装」这一小段规范固定的字节组装（~百行），并用 RP 侧库做回归验证（见 §12）——与钱包迁移同一策略：协议编解码用库，标准向量兜底。
 
 私钥在内存中的形态：`p256::SecretKey`，落盘前后走 `zeroize` 路径（与现有 secret 处理一致）。
 

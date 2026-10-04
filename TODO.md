@@ -485,7 +485,7 @@ Wallet Material (experimental — deferred until 1Password parity; see priority 
 - [x] Import (mnemonic/private key) & export with confirmations; WIF 已支持（mainnet compressed，`import --wif` 及私钥导入自动识别）；keystore JSON 仍待做
 - [x] Sign: ETH (EIP‑155 legacy + EIP‑1559 dynamic fee, 字节级规范向量/结构自洽验证)、Solana (ed25519, 签名即 tx id)；本地签名验证后再持久化
 - [x] Sign: BTC raw transaction (BIP‑143 P2WPKH + BIP‑141 segwit 组装, 官方规范向量逐字节验证) — 需 UTXO `inputs` metadata；无 inputs 时仅存审计签名；PSBT 仍待做
-- [x] 签名/编码层全面换用审计过的第三方库：交易序列化与签名哈希 → `alloy-consensus`（EVM）/ `rust-bitcoin`（BTC，`SighashCache::p2wpkh_signature_hash`）、地址编码 → `bech32` crate（BIP‑173/350）/ `bs58`(check) / `alloy-primitives`（EIP‑55）、WIF 解析 → `rust-bitcoin`；手写 RLP/BIP‑143/wire 组装已删除，官方规范向量保留作回归验证（SLIP‑0010 ed25519 派生暂无成熟库，保留自研）
+- [x] 签名/编码层全面换用审计过的第三方库：交易序列化与签名哈希 → `alloy-consensus`（EVM）/ `rust-bitcoin`（BTC，`SighashCache::p2wpkh_signature_hash`）、地址编码 → `bech32` crate（BIP‑173/350）/ `bs58`(check) / `alloy-primitives`（EIP‑55）、WIF 解析 → `rust-bitcoin`；手写 RLP/BIP‑143/wire 组装已删除，官方规范向量保留作回归验证（SLIP‑0010 ed25519 派生暂无成熟库，保留自行开发）
 - [x] CLI: wallet create/import/derive/list/sign (`create-transaction --sign`)
 - [x] Desktop: wallet overview, address lists, QR, signing confirmations
 - [x] BIP-39 passphrase（第 25 词）与 12/24 词助记词生成/校验：桌面添加钱包
@@ -1557,7 +1557,12 @@ References
       合并存在性;真 core 协议端到端测试(信箱驱动双端入组,组密钥一致,
       中转零知识)。实机勾稽 `scripts/verify-sync-group-pairing.sh`
       8 断言真实进程全过。core 9 例 + server 5 例测试,core 1025/server
-      130 全绿。余项:桌面命令层 + 设置页配对 UI(出码/输码/指纹比对/
+      130 全绿。
+      relay client 已落(2026-10-04,`PairingRelayClient` cfg remote-auth):
+      邀请串 `persona-pair-1.<b64url(json{code,relay_url,session_id})>`、
+      drive_host 一步到位、guest join_begin/join_confirm 两段式(指纹比对
+      通过才投 ClientProof 入组);11 例含手搓 HTTP mock 端到端。
+      余项:桌面命令层 + 设置页配对 UI(出码/输码/指纹比对/
       入组)、账号模式显式可选口径文案、组密钥退出销毁/轮换语义接 S4。
 - [ ] S2 指令流收敛:增/删/改条目走指令(op_id 幂等+定序+位点续传),复用 M3 E2EE 同步管线成果,快照+指令压缩
       收敛对象=M3 oplog/engine;零知识核查(条目名/域名密文化)入测试;

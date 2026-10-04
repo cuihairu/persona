@@ -24,14 +24,28 @@
 - [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md) – CI/CD 非交互模式指南
 - [REMOTE_AUTH](./REMOTE_AUTH.md) – 远程认证抽象
 - [KEY_HIERARCHY](./KEY_HIERARCHY.md) – 密钥层级与 KDF 路径
-- [E2EE_SYNC_DESIGN](./E2EE_SYNC_DESIGN.md) – E2EE 同步设计稿（阶段 0：设备密钥/SRP 选型/组密钥信封/冲突解决四决策，未实现）
+- [E2EE_SYNC_DESIGN](./E2EE_SYNC_DESIGN.md) – E2EE 同步设计稿（阶段 1–4 已落地：设备密钥/SRP 选型/组密钥信封/冲突解决四决策，状态与证据见文内 §10）
+- [sync-group-mode](./sync-group-mode.md) – 同步组模式（默认同步方式）：动态密码+PAKE 零账号配对；实现状态随批次标注（S1 协议+中转已实现，桌面接线/S2+ 未实现）
+- [SELF_HOST_SERVER](./SELF_HOST_SERVER.md) – 自建服务端（部署、环境变量、API 端点）
+- [CONNECT_AUTOMATION_DESIGN](./CONNECT_AUTOMATION_DESIGN.md) – 本机 Connect 自动化端点设计（127.0.0.1 HTTP + scope token）
+- [CONTEXT_AWARE_DESIGN](./CONTEXT_AWARE_DESIGN.md) – 上下文感知（按环境推荐身份）设计
 
 ## 安全
 
 - [THREAT_MODEL](./THREAT_MODEL.md) – 威胁模型与周期性安全审查
 - [SSH_AGENT_FEATURES](./SSH_AGENT_FEATURES.md) – SSH Agent 完整文档
 - [BIOMETRIC_HOOKS](./BIOMETRIC_HOOKS.md) – 生物识别解锁抽象
+- [biometric-unlock-design](./biometric-unlock-design.md) – 生物识别解锁设计稿
+- [PASSKEYS_DESIGN](./PASSKEYS_DESIGN.md) – Passkey（WebAuthn）设计稿
+- [PASSKEY_GATE_AUDIT](./PASSKEY_GATE_AUDIT.md) – Passkey 门禁审计
 - [SUPPLY_CHAIN_SECURITY](./SUPPLY_CHAIN_SECURITY.md) – 供应链安全检查
+
+## 构建与发布
+
+- [REPRODUCIBLE_BUILDS](./REPRODUCIBLE_BUILDS.md) – 可复现构建（工具链钉版）
+- [WINDOWS_INSTALLER](./WINDOWS_INSTALLER.md) – Windows 安装器
+- [CONTRIBUTING](./CONTRIBUTING.md) – 贡献指南（Conventional Commits、PR 要求）
+- [UNINSTALL](./UNINSTALL.md) – 卸载与数据保留（卸载不删数据，重装接续；显式 purge 步骤）
 
 ## 品牌
 

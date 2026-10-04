@@ -21,6 +21,9 @@ The product focuses on identity-scoped credentials and developer workflows: pass
 - Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata
 - Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access
 - Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults
+- Passkeys (WebAuthn): ES256/P-256 keys sealed under the per-item key hierarchy, create/list/self-test from the CLI
+- End-to-end encrypted sync: multi-device credential sync with server-sees-ciphertext-only, conflict adjudication UI, and group key rotation
+- Self-host optional: Persona Server (Rust + Axum) for sync, accounts, backups, and a zero-knowledge pairing relay
 - Import/export: JSON/YAML/CSV with optional gzip compression and passphrase encryption (Argon2id + AES-GCM)
 - Audit log: critical operations and signing events (with digest)
 - Local-first security: zero-knowledge storage, auto-lock, confirmation, and supply chain checks
@@ -58,11 +61,11 @@ persona/
 ├── core/               # Rust core library: models, crypto, storage, service layer
 ├── cli/                # Persona CLI: init/add/list/show/switch/export/import/ssh/...
 ├── agents/ssh-agent/   # Built-in SSH agent (UNIX socket, ed25519)
-├── desktop/            # Tauri + React desktop client (prototype)
-├── browser/            # Browser clients (Chromium extension, etc.)
-│   └── chromium-extension/ # Chrome/Edge extension (Native Messaging bridge)
-├── mobile/             # Mobile placeholder
-├── server/             # Optional sync/automation service (prototype)
+├── desktop/            # Tauri + React desktop client (sync, passkeys, conflict UI)
+├── browser/            # Browser clients (Chromium extension, Safari extension)
+├── mobile/             # Mobile clients (iOS, Android, HarmonyOS)
+├── connect-server/     # Local automation endpoint (127.0.0.1 HTTP, scope token)
+├── server/             # Optional sync/automation service (Rust + Axum + SQLite)
 ├── website/            # Marketing site (UmiJS)
 └── docs/               # Documentation and roadmap
 ```
@@ -84,7 +87,7 @@ persona/
 ## Getting Started
 
 ### Requirements
-- Rust 1.75+
+- Rust 1.97+ (pinned via `rust-toolchain.toml` for reproducible builds)
 - Node.js 18+
 
 ### Build and Install (CLI + Agent)
@@ -290,6 +293,10 @@ persona ssh authorize --identity work --host deploy@prod-1.example.com
 
 - [Client Communication Architecture](./docs/CLIENT_COMMUNICATION_ARCHITECTURE.md) – unified IPC architecture
 - [Non-Interactive Mode Guide](./docs/NON_INTERACTIVE_MODE.md) – CI/CD integration guide
+- [E2EE Sync Design](./docs/E2EE_SYNC_DESIGN.md) – end-to-end encrypted sync design (phases 1–4 landed)
+- [Storage and Sync Guide](./docs/STORAGE_AND_SYNC.md) – storage and sync modes, dual-device walkthrough
+- [Sync Group Mode](./docs/sync-group-mode.md) – default sync mode: dynamic-password PAKE pairing, implementation status per batch
+- [Self-Host Server](./docs/SELF_HOST_SERVER.md) – self-hosting guide (deploy, env vars, API endpoints)
 
 ### Security Documentation
 
@@ -311,7 +318,8 @@ Priority policy: the password-manager track targets 1Password parity first; wall
 - [x] Passkeys (WebAuthn) storage + autofill
 - [x] Watchtower-class health checks (weak/reused/expired, breach checks)
 - [x] Desktop app data wiring and polished UI
-- [ ] Optional sync/automation service with a local-first design
+- [x] Optional sync/automation service with a local-first design (E2EE sync, accounts, backups, pairing relay)
+- [ ] Sync group mode (default sync): dynamic-password PAKE pairing, instruction-stream sync, three relay forms (S1 protocol + relay done; desktop wiring and S2+ in progress)
 - [ ] Wallet graduation: design doc, signing confirmations, PSBT, keystore JSON (after parity)
 
 ## Contributing
