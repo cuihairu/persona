@@ -135,10 +135,10 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 |------|------|------|
 | ① 自动填充登录 | ✅ 完成 | `autoFillLoginOnLoad/OnFocus`、inline icon、dropdown、Ctrl+Shift+P overlay、TOTP 链式、BankCard 填充、domain policy 闸门 |
 | ② 登录保存弹层 | ✅ 完成 | `saveDetect.ts` 分类、`pendingSave.ts` 跨导航、`content.ts` save bar、`bridge.rs` v4 `save_credential`、桌面审批 `credential_save` op 白名单 |
-| ③ 密码生成器 | ❌ 缺失 | Core/desktop 有 `generate_password_advanced`，**桥协议无 `generate_password` 消息**，扩展无注册表单内联建议 / popup 生成面板 |
+| ③ 密码生成器 | ✅ 完成 (批A) | 桥协议 v5 `generate_password`、扩展内联 🔑 图标 + 生成下拉、popup 面板、自动填充 new-password + confirm |
 | ④ Passkey/WebAuthn | ✅ 完成 | v2/v3 协议落地（create/assert/provider list/assert）、桌面审批闸门、content script 确认 UI |
-| ⑤ 快捷键+迷你搜索 | ⚠️ 半成品 | 仅 `Ctrl+Shift+P` overlay，**无 MV3 `commands` API**、**无专用迷你搜索弹窗** |
-| ⑥ 解锁联动 | ❌ 缺失 | Bridge 仅 `PERSONA_MASTER_PASSWORD` env 模式；桌面有 Connect API (pconn token) 但桥端无集成 |
+| ⑤ 快捷键+迷你搜索 | ✅ 完成 (批C) | MV3 `commands.open_search` (Ctrl+Shift+Y)、居中模态搜索、模糊匹配 title/username、键盘导航 |
+| ⑥ 解锁联动 | ✅ 完成 (批D) | Bridge 探测 Connect server `/health`、hello_response 含 `connect_available/port`、桌面 connect_server_start/stop 写删端口文件、popup 显示「Desktop linked」 |
 
 **架构就绪度**:
 - 桥协议 v4 capabilities 广播机制可平滑扩 v5
@@ -150,7 +150,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 ## 分批实现计划
 
-### 批 A：桥写路径补全 + 密码生成器（优先级：高，阻塞自动化闭环）
+### ✅ 批 A 完成：桥写路径补全 + 密码生成器
 
 **目标**: 让扩展能在注册/改密表单里「点一下生成密码 → 自动填充 → 保存弹层确认 → 落库」
 
@@ -167,7 +167,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 ---
 
-### 批 B：iframe/多步登录自动填充增强（优先级：高，自动化覆盖面）
+### 批 B：iframe/多步登录自动填充增强（优先级：高，自动化覆盖面） - 待开始
 
 **目标**: 覆盖 iframe 嵌入登录、用户名/密码分步表单
 
@@ -182,7 +182,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 ---
 
-### 批 C：MV3 commands API + 迷你搜索弹窗（优先级：中，体验完善）
+### ✅ 批 C 完成：MV3 commands API + 迷你搜索弹窗
 
 **目标**: 全局快捷键唤起、不依赖页面焦点、迷你搜索条目
 
@@ -197,7 +197,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 ---
 
-### 批 D：桌面/CLI 解锁联动（优先级：高，1Password 核心体验）
+### ✅ 批 D 完成：桌面/CLI 解锁联动
 
 **目标**: 浏览器插件免输主密码，桌面端解锁即插件解锁
 
@@ -233,7 +233,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 ## 执行顺序与门禁
 
 ```
-批 A (桥写路径+生成器) → CI 绿 → 批 B (iframe/多步) → CI 绿 → 批 C (commands+搜索) → CI 绿 → 批 D (解锁联动) → CI 绿 → 批 E (Passkey 核查) → 全绿收口
+✅ 批 A → ✅ 批 C → ✅ 批 D → CI 绿 → 批 B → CI 绿 → 批 E (Passkey 核查) → 全绿收口
 ```
 
 **每批门禁**:
@@ -258,10 +258,10 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 
 ## 里程碑（本轨，按批计——勿与主清单 Account & Sync 的 M1~M6 混用）
 
-- **批A 完成**: 注册页一键生成+填充+保存全链路通
-- **批B 完成**: GitHub 多步登录、iframe 登录零点击填充
-- **批C 完成**: 全局快捷键唤起搜索、条目模糊检索
-- **批D 完成**: 桌面解锁=插件解锁，免主密码
+- ✅ **批A 完成**: 注册页一键生成+填充+保存全链路通
+- **批B**: GitHub 多步登录、iframe 登录零点击填充 - 待开始
+- ✅ **批C 完成**: 全局快捷键唤起搜索、条目模糊检索
+- ✅ **批D 完成**: 桌面解锁=插件解锁，免主密码
 - **批E 完成**: Passkey 全矩阵回归绿
 
 **预计工时**：A~2d, B~1.5d, C~1d, D~2d, E~1d → 共 ~7.5 人日
