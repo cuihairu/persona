@@ -9391,7 +9391,7 @@ async fn start_ssh_agent_surfaces_bind_failure_as_error() {
 struct AccountMockRequest {
     path: String,
     auth: Option<String>,
-    _body: String,
+    body: String,
 }
 
 /// 一次性账号域假服务器：每连接读一条请求（head + Content-Length 体），
@@ -9421,8 +9421,8 @@ where
                 .lines()
                 .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
                 .map(|l| {
-                    l.splitn(2, ':')
-                        .nth(1)
+                    l.split_once(':')
+                        .map(|x| x.1)
                         .unwrap_or_default()
                         .trim()
                         .to_string()
@@ -9430,7 +9430,7 @@ where
             let content_length: usize = head
                 .lines()
                 .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-                .and_then(|l| l.splitn(2, ':').nth(1)?.trim().parse().ok())
+                .and_then(|l| l.split_once(':')?.1.trim().parse().ok())
                 .unwrap_or(0);
             let mut body = vec![0u8; content_length];
             if content_length > 0 {
@@ -9443,7 +9443,7 @@ where
                     .unwrap_or_default()
                     .to_string(),
                 auth,
-                _body: String::from_utf8_lossy(&body).into_owned(),
+                body: String::from_utf8_lossy(&body).into_owned(),
             });
             let reason = if status == 204 { "" } else { "OK" };
             let resp = format!(
@@ -9535,6 +9535,43 @@ async fn account_commands_gate_before_any_network_or_crypto() {
     assert!(
         !err.contains("Account session"),
         "public endpoint must not require a bearer, got: {err}"
+    );
+
+    // 向导式命令的引导语义：account_srp_login 走公开端点链（无 Bearer
+    // 门禁）；account_srp_register_with_password 在无账号会话时回退静态
+    // 服务器令牌（set_sync_config 已写入 keyring）——两者都过门禁、到
+    // 网络层才失败（不可达报错，而非门禁报错）
+    let resp = account_srp_login(
+        "acct-1".to_string(),
+        AccountSrpLoginRequest {
+            device_name: "laptop".to_string(),
+            password: "pw".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let err = resp.error.unwrap();
+    assert!(
+        !err.contains("Account session") && !err.contains("not configured"),
+        "srp_login 是公开端点链，门禁只到解锁/配置，got: {err}"
+    );
+    let resp = account_srp_register_with_password(
+        "acct-1".to_string(),
+        AccountSrpRegisterWithPasswordRequest {
+            device_name: "laptop".to_string(),
+            password: "pw".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let err = resp.error.unwrap();
+    assert!(
+        !err.contains("Account session") && !err.contains("No account session"),
+        "注册引导须回退静态服务器令牌并触网，got: {err}"
     );
 
     // 注入账号 bearer → Bearer 端点过令牌门禁，网络层失败（不可达报错，
@@ -9654,4 +9691,174 @@ async fn account_token_lifecycle_persists_overwrites_and_clears() {
         state.account_token_store.get(&db_path).unwrap().as_deref(),
         Some("mine")
     );
+}
+
+/// `account_srp_login` 命令端到端：mock 跑**真 SRP 服务器侧数学**（与
+/// core login 编排对拍），断言 M2 核验通过、令牌只进 keyring 不进响应、
+/// 错口令失败且不动已有令牌。
+#[tokio::test]
+async fn account_srp_login_command_round_trip_persists_keyring_token() {
+    use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
+
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    use persona_core::auth::srp;
+    const DEVICE: &str = "laptop";
+    const PASSWORD: &str = "wizard-pw-123";
+    let reg = srp::register_verifier(DEVICE, PASSWORD).unwrap();
+    // (salt, verifier) + 待决握手 session_id -> (b_priv, A) + 会话计数
+    let server = Arc::new(StdMutex::new((
+        (reg.salt, reg.verifier),
+        HashMap::<String, (Vec<u8>, Vec<u8>)>::new(),
+        0u32,
+    )));
+    let url = spawn_account_mock(move |req| {
+        let mut st = server.lock().unwrap();
+        match req.path.as_str() {
+            "/api/v1/accounts/acct-1/srp/challenge" => {
+                let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+                let client_public = decode_b64(body["client_public"].as_str().unwrap());
+                let hc = srp::server_challenge(&st.0 .1).unwrap();
+                let session_id = format!("sess-{}", st.2);
+                st.2 += 1;
+                st.1.insert(session_id.clone(), (hc.b_priv, client_public));
+                let salt = encode_b64(&st.0 .0);
+                let server_public = encode_b64(&hc.b_pub);
+                (
+                    200,
+                    serde_json::json!({
+                        "session_id": session_id,
+                        "salt": salt,
+                        "server_public": server_public,
+                    })
+                    .to_string(),
+                )
+            }
+            "/api/v1/accounts/acct-1/srp/verify" => {
+                let body: serde_json::Value = serde_json::from_str(&req.body).unwrap();
+                let session_id = body["session_id"].as_str().unwrap().to_string();
+                let client_proof = decode_b64(body["client_proof"].as_str().unwrap());
+                let Some((b_priv, client_public)) = st.1.remove(&session_id) else {
+                    return (401, r#"{"error":{"code":"unauthorized"}}"#.to_string());
+                };
+                match srp::server_verify(&b_priv, &st.0 .1, &client_public, &client_proof) {
+                    Ok(outcome) => (
+                        200,
+                        serde_json::json!({
+                            "server_proof": encode_b64(&outcome.server_proof),
+                            "token": "tok-15m",
+                            "expires_in_secs": 900,
+                        })
+                        .to_string(),
+                    ),
+                    Err(_) => (401, r#"{"error":{"code":"unauthorized"}}"#.to_string()),
+                }
+            }
+            other => panic!("unexpected path {other}"),
+        }
+    });
+    let resp = set_sync_config(true, url, "tok-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 正确口令：成功 + 响应不含令牌本体 + 令牌入 keyring
+    let resp = account_srp_login(
+        "acct-1".to_string(),
+        AccountSrpLoginRequest {
+            device_name: DEVICE.to_string(),
+            password: PASSWORD.to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let data = resp.data.unwrap();
+    assert_eq!(data.expires_in_secs, 900);
+    assert!(!data.session_key_fingerprint.is_empty());
+    assert!(
+        !serde_json::to_string(&data).unwrap().contains("tok-15m"),
+        "响应不得携带令牌本体"
+    );
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap().as_deref(),
+        Some("tok-15m")
+    );
+
+    // 错口令：命令失败，keyring 令牌原样保留（不得误清）
+    let resp = account_srp_login(
+        "acct-1".to_string(),
+        AccountSrpLoginRequest {
+            device_name: DEVICE.to_string(),
+            password: "wrong-password".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Account SRP login failed"));
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap().as_deref(),
+        Some("tok-15m")
+    );
+}
+
+/// `account_srp_register_with_password` 引导链：账号 keyring 为空（从未
+/// 登录）→ 回退静态服务器令牌作 Bearer；注册不落地任何令牌。
+#[tokio::test]
+async fn account_srp_register_with_password_falls_back_to_sync_server_token() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    let url = spawn_account_mock(|req| match req.path.as_str() {
+        "/api/v1/accounts/acct-1/srp/register" => {
+            assert_eq!(
+                req.auth.as_deref(),
+                Some("Bearer tok-sync"),
+                "引导回退必须携带静态服务器令牌"
+            );
+            (200, r#"{"device_name":"laptop"}"#.to_string())
+        }
+        other => panic!("unexpected path {other}"),
+    });
+    let resp = set_sync_config(true, url, "tok-sync".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let resp = account_srp_register_with_password(
+        "acct-1".to_string(),
+        AccountSrpRegisterWithPasswordRequest {
+            device_name: "laptop".to_string(),
+            password: "pw".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().device_name, "laptop");
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap(),
+        None,
+        "凭证注册不是登录，不落地令牌"
+    );
+}
+
+fn decode_b64(value: &str) -> Vec<u8> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .unwrap()
+}
+
+fn encode_b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }

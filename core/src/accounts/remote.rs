@@ -595,7 +595,7 @@ impl AccountsApi {
 mod tests {
     use super::*;
     use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpListener;
 
     struct CapturedRequest {
         method: String,
@@ -630,8 +630,8 @@ mod tests {
                     .lines()
                     .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
                     .map(|l| {
-                        l.splitn(2, ':')
-                            .nth(1)
+                        l.split_once(':')
+                            .map(|x| x.1)
                             .unwrap_or_default()
                             .trim()
                             .to_string()
@@ -639,7 +639,7 @@ mod tests {
                 let content_length: usize = head
                     .lines()
                     .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
-                    .and_then(|l| l.splitn(2, ':').nth(1)?.trim().parse().ok())
+                    .and_then(|l| l.split_once(':')?.1.trim().parse().ok())
                     .unwrap_or(0);
                 let mut body = vec![0u8; content_length];
                 if content_length > 0 {

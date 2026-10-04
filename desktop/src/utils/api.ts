@@ -811,6 +811,24 @@ class PersonaAPI {
     return invoke('account_srp_verify', { account_id, request });
   }
 
+  /** 向导式 SRP 凭据注册：口令在 core 推导 salt+verifier 并注册（引导
+   * Bearer：账号会话缺失时回退静态服务器令牌）。前端不接触 wire 值。 */
+  async accountSrpRegisterWithPassword(
+    account_id: string,
+    request: { device_name: string; password: string }
+  ): Promise<ApiResponse<{ device_name: string }>> {
+    return invoke('account_srp_register_with_password', { account_id, request });
+  }
+
+  /** 向导式 SRP 登录：challenge/verify 与 M2 核验在 core 编排，15 分钟
+   * 令牌直写 keyring（响应不含令牌本体）。 */
+  async accountSrpLogin(
+    account_id: string,
+    request: { device_name: string; password: string }
+  ): Promise<ApiResponse<{ expires_in_secs: number; session_key_fingerprint: string }>> {
+    return invoke('account_srp_login', { account_id, request });
+  }
+
   /** 生成恢复码（需要 Bearer）。每次调用生成新一组（8 个），旧未用的作废。 */
   async accountGenerateRecoveryCodes(
     account_id: string

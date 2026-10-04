@@ -693,6 +693,22 @@ describe('utils/api command mapping coverage', () => {
       request: { session_id: 's1', client_proof: 'cHJvb2Y' },
     });
 
+    // 向导式：口令进、wire 值不出（salt/verifier/M1 推导都在 core）
+    await personaAPI.accountSrpRegisterWithPassword(acct, {
+      device_name: 'laptop',
+      password: 'pw',
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('account_srp_register_with_password', {
+      account_id: acct,
+      request: { device_name: 'laptop', password: 'pw' },
+    });
+
+    await personaAPI.accountSrpLogin(acct, { device_name: 'laptop', password: 'pw' });
+    expect(mockInvoke).toHaveBeenCalledWith('account_srp_login', {
+      account_id: acct,
+      request: { device_name: 'laptop', password: 'pw' },
+    });
+
     await personaAPI.accountGenerateRecoveryCodes(acct);
     expect(mockInvoke).toHaveBeenCalledWith('account_generate_recovery_codes', {
       account_id: acct,

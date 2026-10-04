@@ -323,6 +323,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::account_srp_register,
             commands::account_srp_challenge,
             commands::account_srp_verify,
+            commands::account_srp_register_with_password,
+            commands::account_srp_login,
             commands::account_generate_recovery_codes,
             commands::account_verify_recovery_code,
             commands::account_authorize_device,

@@ -426,6 +426,31 @@ pub struct AccountSessionInfo {
     pub expires_in_secs: u64,
 }
 
+/// 向导式 SRP 凭证注册（口令进、wire 值不出）：salt/verifier 由 core
+/// 推导，前端只交设备名与口令。
+#[derive(Debug, Deserialize)]
+pub struct AccountSrpRegisterWithPasswordRequest {
+    pub device_name: String,
+    pub password: String,
+}
+
+/// 向导式 SRP 登录请求：challenge/verify 两跳由 core 编排，M2 核验
+/// 在 core 完成。
+#[derive(Debug, Deserialize)]
+pub struct AccountSrpLoginRequest {
+    pub device_name: String,
+    pub password: String,
+}
+
+/// `account_srp_login` 响应。**不含令牌**：15 分钟令牌由命令层直写
+/// `account_token_store`（Bearer 解析源），不随响应下发渲染层；指纹
+/// 供诊断/会话绑定展示。
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSrpLoginResponse {
+    pub expires_in_secs: u64,
+    pub session_key_fingerprint: String,
+}
+
 /// biometric unlock 状态查询响应。`available` = OS 认证栈 + keyring 均
 /// 可达（fail-closed：任一不可用即 false，前端隐藏指纹入口）；
 /// `enabled` = 本 vault 的 keyring 托管条目存在——单一真相源，

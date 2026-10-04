@@ -2478,6 +2478,40 @@ async fn account_api_with_bearer_for(
         .map_err(|e| format!("Invalid account server configuration: {e}"))
 }
 
+/// Bearer 解析（引导链闭合版）：优先账号会话令牌；没有账号会话时回退
+/// 静态服务器令牌（sync 配置写入 `token_store` 的那枚）。服务器
+/// `require_account_bearer` 对静态令牌与账号令牌一视同仁——全新账号
+/// 注册第一把 SRP 凭证时还没有任何账号会话，静态令牌是契约内的合法
+/// 引导 Bearer；不回退则 SRP 凭证永远无法创建（死锁）。仅用于引导型
+/// 命令（`account_srp_register_with_password`）；常规 Bearer 命令仍走
+/// [`account_api_with_bearer_for`] 保持"账号会话 fail-closed"语义。
+async fn account_api_with_bearer_or_bootstrap_for(
+    state: &State<'_, AppState>,
+) -> std::result::Result<persona_core::accounts::remote::AccountsApi, String> {
+    let server_url = account_server_for(state).await?;
+    let db_path = require_db_path(state)
+        .await
+        .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
+    let bearer = match state
+        .account_token_store
+        .get(&db_path)
+        .map_err(|e| format!("OS keyring read failed: {e}"))?
+        .filter(|t| !t.trim().is_empty())
+    {
+        Some(token) => token,
+        None => state
+            .token_store
+            .get(&db_path)
+            .map_err(|e| format!("OS keyring read failed: {e}"))?
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| {
+                "No account session and no server token — configure sync first".to_string()
+            })?,
+    };
+    persona_core::accounts::remote::AccountsApi::with_bearer(&server_url, &bearer)
+        .map_err(|e| format!("Invalid account server configuration: {e}"))
+}
+
 impl From<AccountRegisterRequest> for persona_core::accounts::remote::RegisterAccountRequest {
     fn from(req: AccountRegisterRequest) -> Self {
         Self {
@@ -2808,6 +2842,80 @@ pub async fn account_srp_verify(
         server_proof: resp.server_proof,
         token: resp.token,
         expires_in_secs: resp.expires_in_secs,
+    }))
+}
+
+/// 向导式 SRP 凭证注册（引导命令）：口令在 core 推导成 salt/verifier
+/// 并注册到账号，wire 值与口令都不经前端周转。Bearer 走
+/// [`account_api_with_bearer_or_bootstrap_for`]（账号会话 → 静态服务器
+/// 令牌回退）；裸 wire 的 [`account_srp_register`] 保持账号会话
+/// fail-closed 不变，两条路的 Bearer 语义不同。
+#[command(rename_all = "snake_case")]
+pub async fn account_srp_register_with_password(
+    account_id: String,
+    request: AccountSrpRegisterWithPasswordRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSrpRegisterResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_with_bearer_or_bootstrap_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api
+        .register_srp_credential(&account_id, &request.device_name, &request.password)
+        .await
+    {
+        Ok(resp) => Ok(ApiResponse::success(AccountSrpRegisterResponse {
+            device_name: resp.device_name,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account SRP register failed: {e}"
+        ))),
+    }
+}
+
+/// 向导式 SRP 登录：challenge/verify 两跳与 M2 核验全部在 core 编排
+/// （服务器证明不过不交付令牌），15 分钟令牌直写 `account_token_store`
+/// ——响应不含令牌本体，渲染层只见有效期与会话指纹。后续兑换 24h
+/// 会话走 [`account_create_session`]（带 srp_token 证据）。
+#[command(rename_all = "snake_case")]
+pub async fn account_srp_login(
+    account_id: String,
+    request: AccountSrpLoginRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSrpLoginResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let outcome = match api
+        .srp_login(&account_id, &request.device_name, &request.password)
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(e) => return Ok(ApiResponse::error(format!("Account SRP login failed: {e}"))),
+    };
+    if let Err(e) = state.account_token_store.set(&db_path, &outcome.token) {
+        return Ok(ApiResponse::error(format!(
+            "Account login succeeded but storing the session token failed: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(AccountSrpLoginResponse {
+        expires_in_secs: outcome.expires_in_secs,
+        session_key_fingerprint: outcome.session_key_fingerprint,
     }))
 }
 
