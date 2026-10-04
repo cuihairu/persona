@@ -26,15 +26,15 @@
 
 ## 四、实现状态(2026-10-04 对账,随批次更新)
 
-| 批次 | 内容 | 状态 |
-| --- | --- | --- |
-| S1 协议核心 | Crockford base32 短码(9 位,单次使用)+Argon2id 域分隔+SRP-6a PAKE+6 位短指纹防 MITM+组密钥 AES-256-GCM 包裹递交 | **已实现**(`core/src/sync/pairing.rs`;测试含全握手/错码/篡改/单次消耗/中转端到端) |
-| S1 无账号中转 | server 信箱 `/api/v1/pairing/*`(TTL 600s、单方向队列上限 4、payload ≤4KiB、GET 即消费、404 不泄存在性) | **已实现**(`server/src/api/pairing.rs`,迁移 `0009_pairing_sessions.sql`;实机勾稽 `scripts/verify-sync-group-pairing.sh`) |
-| S1 relay client | 邀请串 `persona-pair-1.<b64url>` 编解码、`PairingRelayClient` 驱动器(host 一步到位;guest 分 join_begin/两段式指纹确认后入组) | **已实现**(`core/src/sync/pairing.rs` relay 模块,cfg `remote-auth`) |
-| S1 桌面接线 | Tauri 命令层(出码/轮询/入组/取消)+设置页 UI(指纹比对/入组引导) | **未实现**(TODO S1 余项) |
-| S2 指令流收敛 | op_id 幂等指令+定序+位点续传(现状:快照+LWW oplog,E2EE_SYNC_DESIGN 阶段 2) | **未实现** |
-| S3 三形态中转 | 自建 relay(单二进制)基建即本表 S1 信箱+`/api/v1/sync/*`;官方托管(Worker)、局域网直传、客户端三选一 | **部分**(server 自建形态基建已有,其余未实现) |
-| S4 设备面 | 组内设备清单互见、自由进出组 | **未实现** |
-| S5 自救口 | 导出加密备份引导、数据丢失强提示 | **未实现** |
-| §二.5.5 状态显示 | 组版本号/本机水位/落后 N 条 UI | **未实现** |
-| §二.6.5 数据丢失强提示 | 首次启用强提示/常驻警示/双救法文案 | **未实现** |
+| 批次                   | 内容                                                                                                                         | 状态                                                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| S1 协议核心            | Crockford base32 短码(9 位,单次使用)+Argon2id 域分隔+SRP-6a PAKE+6 位短指纹防 MITM+组密钥 AES-256-GCM 包裹递交               | **已实现**(`core/src/sync/pairing.rs`;测试含全握手/错码/篡改/单次消耗/中转端到端)                                        |
+| S1 无账号中转          | server 信箱 `/api/v1/pairing/*`(TTL 600s、单方向队列上限 4、payload ≤4KiB、GET 即消费、404 不泄存在性)                       | **已实现**(`server/src/api/pairing.rs`,迁移 `0009_pairing_sessions.sql`;实机勾稽 `scripts/verify-sync-group-pairing.sh`) |
+| S1 relay client        | 邀请串 `persona-pair-1.<b64url>` 编解码、`PairingRelayClient` 驱动器(host 一步到位;guest 分 join_begin/两段式指纹确认后入组) | **已实现**(`core/src/sync/pairing.rs` relay 模块,cfg `remote-auth`)                                                      |
+| S1 桌面接线            | Tauri 命令层(出码/轮询/入组/取消)+设置页 UI(指纹比对/入组引导)                                                               | **未实现**(TODO S1 余项)                                                                                                 |
+| S2 指令流收敛          | op_id 幂等指令+定序+位点续传(现状:快照+LWW oplog,E2EE_SYNC_DESIGN 阶段 2)                                                    | **未实现**                                                                                                               |
+| S3 三形态中转          | 自建 relay(单二进制)基建即本表 S1 信箱+`/api/v1/sync/*`;官方托管(Worker)、局域网直传、客户端三选一                           | **部分**(server 自建形态基建已有,其余未实现)                                                                             |
+| S4 设备面              | 组内设备清单互见、自由进出组                                                                                                 | **未实现**                                                                                                               |
+| S5 自救口              | 导出加密备份引导、数据丢失强提示                                                                                             | **未实现**                                                                                                               |
+| §二.5.5 状态显示       | 组版本号/本机水位/落后 N 条 UI                                                                                               | **未实现**                                                                                                               |
+| §二.6.5 数据丢失强提示 | 首次启用强提示/常驻警示/双救法文案                                                                                           | **未实现**                                                                                                               |
