@@ -18,6 +18,7 @@ use url::Url;
 
 use persona_core::crypto::{parse_creation_options, validate_origin_matches_rp_id};
 use persona_core::models::{CredentialData, CredentialType, PasswordCredentialData, TwoFactorData};
+use persona_core::password::{PasswordGenerator, PasswordGeneratorOptions};
 use persona_core::storage::{CredentialRepository, WorkspaceRepository};
 use persona_core::{Database, PersonaError, PersonaService, Repository};
 
@@ -278,6 +279,53 @@ struct SaveCredentialResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Bridge protocol v5: password generator (inline registration form support).
+// The extension calls this when the user clicks the inline generator icon on
+// a `new-password` field; the host returns a generated password that the
+// extension auto-fills into both password + confirm fields.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct GeneratePasswordPayload {
+    /// Total password length (default 16).
+    #[serde(default = "default_gen_length")]
+    length: usize,
+    /// Include lowercase (default true).
+    #[serde(default = "default_gen_true")]
+    include_lowercase: bool,
+    /// Include uppercase (default true).
+    #[serde(default = "default_gen_true")]
+    include_uppercase: bool,
+    /// Include digits (default true).
+    #[serde(default = "default_gen_true")]
+    include_digits: bool,
+    /// Include symbols (default true).
+    #[serde(default = "default_gen_true")]
+    include_symbols: bool,
+    /// Pronounceable alternating consonant/vowel pattern (default false).
+    #[serde(default)]
+    pronounceable: bool,
+    /// Diceware-style passphrase word count (3-10). Overrides length/sets.
+    #[serde(default)]
+    words: Option<usize>,
+}
+
+fn default_gen_length() -> usize {
+    16
+}
+
+fn default_gen_true() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct GeneratePasswordResponse {
+    password: String,
+}
+
+// ---------------------------------------------------------------------------
 // Bridge protocol v2: passkey (WebAuthn software authenticator) messages
 // ---------------------------------------------------------------------------
 
@@ -460,8 +508,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "protocol_version": 4,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential"],
+                "protocol_version": 5,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -867,6 +915,12 @@ async fn handle_request(
             let parsed: SaveCredentialPayload = serde_json::from_value(req.payload)
                 .context("invalid payload for save_credential")?;
             run_save_credential(db_path, req.request_id, parsed).await
+        }
+        "generate_password" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: GeneratePasswordPayload = serde_json::from_value(req.payload)
+                .context("invalid payload for generate_password")?;
+            run_generate_password(db_path, req.request_id, parsed).await
         }
         "passkey_list" => {
             require_authenticated_session(state_dir, &req)?;
@@ -2288,6 +2342,67 @@ async fn run_save_credential(
             action: action.to_string(),
             name,
         })?,
+    ))
+}
+
+/// Generate a password/passphrase via the bridge (protocol v5).
+/// No vault write — pure generation. Still requires authenticated session
+/// (pairing + gesture gate) so only authorized extensions can use it.
+async fn run_generate_password(
+    _db_path: &Path,
+    request_id: Option<String>,
+    parsed: GeneratePasswordPayload,
+) -> Result<BridgeResponse<serde_json::Value>> {
+    // Validate words mode range (core enforces 3-10).
+    if let Some(words) = parsed.words {
+        if !(3..=10).contains(&words) {
+            return Err(anyhow!("invalid_payload: words must be between 3 and 10"));
+        }
+    }
+
+    // Validate length bounds.
+    if parsed.length == 0 || parsed.length > 10_000 {
+        return Err(anyhow!("invalid_payload: length must be 1..10000"));
+    }
+
+    // At least one character set must be enabled unless words mode.
+    if parsed.words.is_none() {
+        let any_set = parsed.include_lowercase
+            || parsed.include_uppercase
+            || parsed.include_digits
+            || parsed.include_symbols;
+        if !any_set {
+            return Err(anyhow!(
+                "invalid_payload: at least one character set must be enabled (or use words mode)"
+            ));
+        }
+    }
+
+    let options = PasswordGeneratorOptions {
+        length: parsed.length,
+        include_lowercase: parsed.include_lowercase,
+        include_uppercase: parsed.include_uppercase,
+        include_numbers: parsed.include_digits,
+        include_symbols: parsed.include_symbols,
+        pronounceable: parsed.pronounceable,
+        words: parsed.words,
+    };
+
+    let password =
+        PasswordGenerator::generate(&options).map_err(|e| anyhow!("generation_failed: {e}"))?;
+
+    info!(
+        event = "bridge_generate_password",
+        length = parsed.length,
+        words = parsed.words,
+        pronounceable = parsed.pronounceable,
+        "password generated via bridge"
+    );
+
+    Ok(ok(
+        request_id,
+        "generate_password_response",
+        serde_json::to_value(GeneratePasswordResponse { password })?,
     ))
 }
 

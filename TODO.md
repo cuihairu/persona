@@ -122,62 +122,150 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
       冲突合并正确、吊销流程走查，截图输出
 
-浏览器插件推进（2026-10-04 用户令：对齐 1Password，**自动化优先**——填充/保存/生成尽量全自动，用户只点一下；每批 = 桥协议+扩展+测试+文档全链，CI 绿门禁）
+浏览器插件推进（2026-10-04 用户令：对齐 1Password，自动化优先——先列分批计划进 todo，再逐批做，CI 绿门禁）
 
-> 勘察结论（2026-10-04）：已有 = 填充（load/focus 自动 + 手动、per-origin 默认
-> 条目）、TOTP 链填、银行卡填充（CVV copy-only）、passkey v2/v3（create/assert/
-> provider/conditional mediation/桌面审批闸门）、页内 Ctrl+Shift+P overlay。
-> 缺口 = ① iframe 不覆盖（manifest all_frames:false 主 frame only）；
-> ② 写路径整条缺失（桥无 save/update 消息→登录保存弹层无从谈起）；
-> ③ 无生成器（`PersonaService.generate_password` 在、桥未接）；
-> ⑤ 无浏览器 commands 快捷键（manifest 无 commands 键）；⑥ 解锁模型 =
-> `PERSONA_MASTER_PASSWORD` env，无桌面联动。基础设施可复用：桥协议 v3
-> hello 广播 capabilities（扩消息向后兼容，旧扩展收 unknown_type）、
-> pairing+HMAC 会话、core 写路径全在（create_credential / 
-> update_credential_data / search_credentials / generate_password）、桌面
-> 审批 Unix socket（passkey-approval.sock，op 泛化即可复用）。
+**需求来源**: 2026-10-04 用户需求（参考 1Password，自动化为重点）  
+**六能力单**: ① 自动填充登录 ② 登录保存弹层 ③ 密码生成器 ④ Passkey/WebAuthn ⑤ 快捷键+迷你搜索 ⑥ 桌面/CLI 解锁联动
 
-- [x] **批A 桥写路径 + 登录保存弹层（能力②，自动化主缺口）**：桥协议
-      v4 新消息 `find_for_save`（origin+username 查既有同站同名条目，纯元数据、
-      不要求 gesture）+ `save_credential`（item_id 缺省=新建绑 origin、
-      item_id 在=只换 password 字段保留 email/安全问题）；闸门 = user_gesture
-      + 桌面审批（op=`credential_save` 进 passkey_bridge.rs 白名单）+
-      活动身份 + TLD+1 origin 绑定 + 审计 `bridge_save_credential`。扩展侧：
-      saveDetect.ts 纯函数分类（login/new/change，autocomplete 优先、改密取
-      最后一个已填密码）+ 提交捕获（submit 事件 + SPA 提交按钮点击，
-      capture phase 抢在页面清空前读值）+ 保存条 shadow UI（保存/更新/此站
-      永不/关闭，一次显式点击才写）+ 跨导航暂存（pendingSave.ts 走
-      chrome.storage.session 内存区，2 分钟 TTL、origin 严格相等、read-and-clear，
-      dismiss 即丢弃）+ settings 开关（popup 默认开）。测试：jest 105 全绿
-      （新增 saveDetect/pendingSave 用例）+ bridge.rs `save_credential_protocol_cases`
-      （gesture/空密码/origin 绑定/身份归属/更新语义）+ parse_query 钉 credential_save。
-      ci.yml web job 补扩展 jest 步骤——此前扩展测试只在本地跑、不设门禁。
-      版本 0.1.0 → 0.2.0。
-- [ ] **批B iframe + 多步登录（能力①）**：content script all_frames:true
-      + 逐 frame 自己的 origin 校验（frame origin ≠ top origin，桥的
-      origin 绑定必须按各 frame 的来）；同 host 多 frame UI 去重（overlay
-      只出一份）；多步登录状态机：用户名页→密码页分步自动接续（复用
-      per-origin 默认条目记忆，focus 阶段先填用户名、密码字段出现时自动
-      接力填密码）
-- [ ] **批C 密码生成器（能力③）**：桥 v4 `generate_password` 消息（走
-      `PersonaService.generate_password`；桌面 generate_password_advanced
-      的策略参数若要全集，考虑下沉 core 共享实现）；注册表单
-      new-password 字段内联"生成"入口 + popup 生成器面板（复制/直填）；
-      与批A联动"生成并保存"一键流
-- [ ] **批D commands 快捷键 + 迷你搜索弹窗（能力⑤）**：manifest commands
-      （唤起/一键填充，避开页内已占的 Ctrl+Shift+P）；background 接
-      command → 当前 tab 注入 overlay 搜索条（复用 shadowUi）；新增桥
-      `search_credentials` 消息（服务端模糊搜索）或 get_suggestions 全量
-      兜底；popup 列表补搜索框
-- [ ] **批E 桌面解锁联动（能力⑥）**：桥解锁模型升级——桌面审批 socket
-      泛化为 persona 本地 IPC：桥收到请求而 env 未带主密码时向桌面询问
-      解锁态，桌面已解锁则用其内存会话代答（首次需桌面确认"允许浏览器
-      插件"，可撤销）；`PERSONA_MASTER_PASSWORD` env 降级为无桌面后备；
-      涉及 cli bridge.rs + desktop 审批/解锁服务 + 协议文档；形态对齐
-      1Password = 桌面解锁一次、浏览器跟随
-- [ ] **能力④ passkey 缺口核查**：v2/v3 已落地大半，核查清单 =
-      allowCredentials 过滤、transports 提示、prf 扩展、Safari 侧对齐
-      （低优先；browser/safari-extension 分批落地后单独对齐）
+---
+
+## 现状清单（2026-10-04 勘察结论）
+
+| 能力 | 状态 | 说明 |
+|------|------|------|
+| ① 自动填充登录 | ✅ 完成 | `autoFillLoginOnLoad/OnFocus`、inline icon、dropdown、Ctrl+Shift+P overlay、TOTP 链式、BankCard 填充、domain policy 闸门 |
+| ② 登录保存弹层 | ✅ 完成 | `saveDetect.ts` 分类、`pendingSave.ts` 跨导航、`content.ts` save bar、`bridge.rs` v4 `save_credential`、桌面审批 `credential_save` op 白名单 |
+| ③ 密码生成器 | ❌ 缺失 | Core/desktop 有 `generate_password_advanced`，**桥协议无 `generate_password` 消息**，扩展无注册表单内联建议 / popup 生成面板 |
+| ④ Passkey/WebAuthn | ✅ 完成 | v2/v3 协议落地（create/assert/provider list/assert）、桌面审批闸门、content script 确认 UI |
+| ⑤ 快捷键+迷你搜索 | ⚠️ 半成品 | 仅 `Ctrl+Shift+P` overlay，**无 MV3 `commands` API**、**无专用迷你搜索弹窗** |
+| ⑥ 解锁联动 | ❌ 缺失 | Bridge 仅 `PERSONA_MASTER_PASSWORD` env 模式；桌面有 Connect API (pconn token) 但桥端无集成 |
+
+**架构就绪度**:
+- 桥协议 v4 capabilities 广播机制可平滑扩 v5
+- 桌面审批 socket 泛化（`credential_save` 已在白名单）
+- Core/desktop `generate_password_advanced` 现成可复用
+- Connect API (pconn token) 是解锁联动的候选通道
+
+---
+
+## 分批实现计划
+
+### 批 A：桥写路径补全 + 密码生成器（优先级：高，阻塞自动化闭环）
+
+**目标**: 让扩展能在注册/改密表单里「点一下生成密码 → 自动填充 → 保存弹层确认 → 落库」
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| A1. 桥协议 v5：新增 `generate_password` 消息族 | `cli/src/commands/bridge.rs` | 参数：`length, include_symbols, pronounceable, words`；返回 `password`；复用 `PasswordGeneratorOptions` |
+| A2. 桥能力广播：hello_response capabilities + protocol_version=5 | `cli/src/commands/bridge.rs` | 同步扩展侧 nativeBridge.ts 能力检测 |
+| A3. 扩展 nativeBridge.ts：`generatePassword()` 调用 | `browser/chromium-extension/src/nativeBridge.ts` | 复用 `sendAuthedNativeMessage` |
+| A4. 扩展 content.ts：注册表单检测 + 密码输入框内联生成建议 | `browser/chromium-extension/src/content.ts` | `autocomplete="new-password"` 触发，内联 🛡️ 图标 → 点击生成 → 自动填充两个密码框 |
+| A5. 扩展 popup.ts：密码生成器面板（备选/兜底） | `browser/chromium-extension/src/popup.ts` | 长度/字符集/可读/词模式，生成后复制/填充 |
+| A6. 背景脚本 policy 闸门同 fill | `browser/chromium-extension/src/background.ts` | suspicious/blocked 域拒写 |
+
+**验收**：注册页点击 new-password 框 → 内联建议生成 → 两框自动填同一密码 → 提交触发保存弹层 → 点保存 → 桥写库 → 桌面审批弹窗通过 → vault 新增条目
+
+---
+
+### 批 B：iframe/多步登录自动填充增强（优先级：高，自动化覆盖面）
+
+**目标**: 覆盖 iframe 嵌入登录、用户名/密码分步表单
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| B1. manifest.json：content_scripts `all_frames: true` | `browser/chromium-extension/public/manifest.json` | 仅 ISOLATED world content.js；MAIN world webauthnHook 保持 top frame |
+| B2. content.ts：逐 frame origin 校验 + 只在顶层/同源 frame 触发填充 | `browser/chromium-extension/src/content.ts` | `window.top !== window.self` 时向父 frame 请求建议，父 frame 回填 |
+| B3. 多步登录：检测「仅用户名」表单 → 填用户名 → 监听导航/SPA 切换 → 再填密码 | `browser/chromium-extension/src/content.ts` | 复用 `pendingSave.ts` 跨导航机制；formScanner 识别 `autocomplete="username"` 单字段表单 |
+| B4. autofillUx.ts：步进式自动填充状态机 | `browser/chromium-extension/src/autofillUx.ts` | `step: 'username' | 'password' | 'totp'` 记忆 |
+
+**验收**：GitHub 登录（用户名页 → 密码页）全程零点击；iframe 嵌入的 Stripe/Shopify 登录自动填充
+
+---
+
+### 批 C：MV3 commands API + 迷你搜索弹窗（优先级：中，体验完善）
+
+**目标**: 全局快捷键唤起、不依赖页面焦点、迷你搜索条目
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| C1. manifest.json：`commands` 定义（`_execute_action` + 自定义 `open_search`） | `browser/chromium-extension/public/manifest.json` | 默认 `Ctrl+Shift+Y`（不与 `Ctrl+Shift+P` 冲突） |
+| C2. background.ts：`chrome.commands.onCommand` 监听 → 打开搜索弹窗 | `browser/chromium-extension/src/background.ts` | `chrome.action.openPopup()` 不可编程 → 用 offscreen document 或 content script 全层浮层 |
+| C3. content.ts：`persona_search_overlay` 消息类型 + 搜索 UI | `browser/chromium-extension/src/content.ts` | 复用 SuggestionItem 渲染，加搜索框过滤（本地 fuzzy match title/username） |
+| C4. 扩展 popup.ts：同步快捷键提示 | `browser/chromium-extension/src/popup.ts` | 显示当前绑定 |
+
+**验收**：任意页面 `Ctrl+Shift+Y` → 中部浮层搜索框 → 输入 "github" → 列出匹配条目 → 回车填充/复制
+
+---
+
+### 批 D：桌面/CLI 解锁联动（优先级：高，1Password 核心体验）
+
+**目标**: 浏览器插件免输主密码，桌面端解锁即插件解锁
+
+**架构决策**：复用桌面 Connect API (pconn token)。Bridge 启动时：
+1. 尝试连桌面 approval socket（现有 `PERSONA_BRIDGE_DESKTOP_APPROVAL=auto`）
+2. 同时探测 Connect server `/api/v1/connect/health`（localhost 随机端口，桌面 `connect_server_start` 返回端口）
+3. Connect server 返回 token 列表 → bridge 自动用首个 `read` scope token 换取临时会话 → 后续 bridge 请求走 `Authorization: Bearer <pconn_token>` 而非 `PERSONA_MASTER_PASSWORD`
+
+| 任务 | 文件 | 说明 |
+|------|------|------|
+| D1. 桌面 connect_server：健康检查端点返回端口 + token 指纹列表（不含明文） | `persona_connect_server` crate | 现有 `/health` 已有；新增 `/api/v1/connect/tokens`（需有效 pconn token 访问，鸡蛋问题→桌面启动时把端口写入 known 文件 `~/.persona/connect.port`） |
+| D2. Bridge 启动探测：读 `~/.persona/connect.port` → `/health` → `/tokens` | `cli/src/commands/bridge.rs` | 成功则缓存 token，后续 `sendAuthedNativeMessage` 走 Bearer token |
+| D3. Bridge hello_response：新增 `connect_available: true` + `connect_port` | `cli/src/commands/bridge.rs` | 扩展侧显示「已联动桌面」状态 |
+| D4. 桌面审批 socket：复用现有 `credential_save` op（已在白名单） | `desktop/src-tauri/src/passkey_bridge.rs` | 无需改动 |
+| D5. CLI `connect serve`：支持 `--passphrase-env` 供 systemd/launchd 用 | `cli/src/commands/connect.rs` | 已有 `--passphrase-env` |
+
+**验收**：桌面解锁 → 打开浏览器插件 popup 显示「已联动桌面」 → 无需输主密码即可填充/保存/生成密码；桌面锁定 → 插件自动切回 locked 状态
+
+---
+
+### 批 E：Passkey 补缺口核查 + 端到端测试（优先级：中）
+
+**目标**: 确保 v2/v3 无回归，补充缺失边界
+
+| 任务 | 说明 |
+|------|------|
+| E1. 扩展侧 passkey 创建/断言：手势闸门 + 桌面审批双闸门回归测试 | 现有 `passkeyCreate/Assert` 已接手势 + 桌面审批 |
+| E2. OS passkey provider（v3）Windows/macOS 真机验收 | 需真机；CI 仅 Linux |
+| E3. 跨源 iframe passkey：`all_frames: true` 下 MAIN world hook 行为 | `webauthnHook.ts` 仅 top frame，需确认 provider 场景 |
+
+---
+
+## 执行顺序与门禁
+
+```
+批 A (桥写路径+生成器) → CI 绿 → 批 B (iframe/多步) → CI 绿 → 批 C (commands+搜索) → CI 绿 → 批 D (解锁联动) → CI 绿 → 批 E (Passkey 核查) → 全绿收口
+```
+
+**每批门禁**:
+- `cargo test --workspace --all-features`（含 bridge tests、desktop approval tests）
+- `pnpm --filter persona-chromium-extension test`（jest 单测：saveDetect/pendingSave/autofillDefaults/nativeBridge/formScanner/shadowUi/domainPolicy）
+- `cargo fmt --all -- --check` + `cd desktop/src-tauri && cargo fmt -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- CI 绿才 commit/push；禁 force push；禁版本 tag/release
+
+---
+
+## 风险与对策
+
+| 风险 | 对策 |
+|------|------|
+| Connect server 端口发现竞态（桌面未启动/端口文件过期） | Bridge 侧优雅降级：connect 失败回退 `PERSONA_MASTER_PASSWORD` env，不阻塞主流程 |
+| iframe 填充同源策略限制 | 仅同源/允许嵌入的 frame 填充；跨源 frame 只记录 form snapshot 不自动填 |
+| 密码生成器参数过度暴露给页面 | 仅内联 UI 注入 shadow root；页面脚本无法访问生成参数 |
+| MV3 commands API 与现有 `Ctrl+Shift+P` 冲突 | 用 `Ctrl+Shift+Y` 默认，用户可在 chrome://extensions/shortcuts 自改 |
+
+---
+
+## 里程碑（本轨，按批计——勿与主清单 Account & Sync 的 M1~M6 混用）
+
+- **批A 完成**: 注册页一键生成+填充+保存全链路通
+- **批B 完成**: GitHub 多步登录、iframe 登录零点击填充
+- **批C 完成**: 全局快捷键唤起搜索、条目模糊检索
+- **批D 完成**: 桌面解锁=插件解锁，免主密码
+- **批E 完成**: Passkey 全矩阵回归绿
+
+**预计工时**：A~2d, B~1.5d, C~1d, D~2d, E~1d → 共 ~7.5 人日
+
 - 备注：M5（插件接账号读写云端）与本轨并行不冲突——本轨全部走本地桥，
   M5 落地后同一能力面平移到 HTTP 通道；隐私红线（本轨不涉及账号/云）。
 

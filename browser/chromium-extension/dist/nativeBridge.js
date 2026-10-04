@@ -287,4 +287,12 @@ export async function findForSave(origin, username, host = DEFAULT_NATIVE_HOST) 
 export async function saveCredential(request, host = DEFAULT_NATIVE_HOST) {
     return sendAuthedNativeMessage('save_credential', request, host);
 }
+// ============ Password generator (bridge protocol v5) ============
+/**
+ * Generate a password or passphrase via the bridge.
+ * No vault write — pure generation. Requires authenticated session.
+ */
+export async function generatePassword(request, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('generate_password', request, host);
+}
 //# sourceMappingURL=nativeBridge.js.map

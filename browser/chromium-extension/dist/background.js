@@ -1,4 +1,4 @@
-import { sendNativeMessage, getSuggestions, requestFill, getTotp, copyToClipboard, passkeyList, passkeyCreate, passkeyAssert, findForSave, saveCredential } from './nativeBridge';
+import { sendNativeMessage, getSuggestions, requestFill, getTotp, copyToClipboard, passkeyList, passkeyCreate, passkeyAssert, findForSave, saveCredential, generatePassword } from './nativeBridge';
 import { evaluateDomain, upsertPolicy, removePolicy } from './domainPolicy';
 import { clearPendingSave, stashPendingSave, takePendingSave } from './pendingSave';
 import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings';
@@ -25,7 +25,7 @@ chrome.runtime.onInstalled.addListener(() => {
         chrome.storage.local.set({ [AUTOFILL_SETTINGS_KEY]: DEFAULT_AUTOFILL_SETTINGS });
     });
 });
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'persona_ping') {
         handleBridgePing(message?.endpoint).then(sendResponse);
         return true; // keep channel open for async response
@@ -37,7 +37,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return true;
     }
     if (message?.type === 'persona_forms_snapshot') {
-        void updateFormsSnapshot(message.host, message.forms);
+        // The content script runs in every frame (batch B); frameId 0 is the
+        // top document. Snapshots are kept per frame so an ad iframe can't
+        // overwrite what the popup shows for the page.
+        void updateFormsSnapshot(message.host, message.forms, sender?.frameId ?? 0);
         return false;
     }
     if (message?.type === 'persona_forms_request') {
@@ -101,10 +104,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         handleSaveCredential(message.request).then(sendResponse);
         return true;
     }
+    // ============ Password generator (bridge protocol v5) ============
+    if (message?.type === 'persona_generate_password') {
+        handleGeneratePassword(message.request).then(sendResponse);
+        return true;
+    }
     // Pending-save hand-off across navigations (memory-backed session area).
     if (message?.type === 'persona_stash_pending_save') {
         handleStashPendingSave(message.entry)
-            .then(() => sendResponse({ success: true }))
+            .then((result) => sendResponse({ success: true, data: result }))
             .catch((error) => sendResponse({
             success: false,
             error: error instanceof Error ? error.message : 'Unknown error'
@@ -203,16 +211,42 @@ async function getFormsSnapshot() {
         chrome.storage.local.get(FORMS_KEY, (value) => resolve(value?.[FORMS_KEY]));
     });
 }
-async function updateFormsSnapshot(host, forms) {
+const MAX_TRACKED_FRAMES = 8;
+/**
+ * Store the newest snapshot per frame and derive the payload the popup reads.
+ * The top frame (id 0) always wins when it has reported; otherwise the most
+ * recent frame does, so a page whose form lives in an iframe still shows
+ * something useful before/without a top-frame scan. Frames are pruned to a
+ * handful of newest entries — ad-heavy pages can host dozens.
+ */
+async function updateFormsSnapshot(host, forms, frameId) {
     const policies = await getPolicies();
     const assessment = evaluateDomain(host, policies);
+    const existing = (await getFormsSnapshot());
+    const frames = { ...(existing?.frames ?? {}) };
+    frames[String(frameId)] = { host, forms, capturedAt: Date.now() };
+    const keys = Object.keys(frames);
+    if (keys.length > MAX_TRACKED_FRAMES) {
+        const newestFirst = keys.sort((a, b) => (frames[b].capturedAt ?? 0) - (frames[a].capturedAt ?? 0));
+        const kept = newestFirst.slice(0, MAX_TRACKED_FRAMES);
+        if (frames['0'])
+            kept.push('0');
+        for (const key of keys) {
+            if (!kept.includes(key))
+                delete frames[key];
+        }
+    }
+    const primary = frames['0'] ?? frames[Object.keys(frames).sort((a, b) => (frames[b].capturedAt ?? 0) - (frames[a].capturedAt ?? 0))[0]];
+    if (!primary)
+        return;
     const payload = {
-        host,
-        forms,
-        capturedAt: Date.now(),
-        assessment
+        host: primary.host,
+        forms: primary.forms,
+        capturedAt: primary.capturedAt,
+        assessment: evaluateDomain(primary.host, policies),
+        frameCount: Object.keys(frames).length
     };
-    await chrome.storage.local.set({ [FORMS_KEY]: payload });
+    await chrome.storage.local.set({ [FORMS_KEY]: { ...payload, frames } });
 }
 async function refreshAssessment() {
     const [snapshot, policies] = await Promise.all([getFormsSnapshot(), getPolicies()]);
@@ -497,8 +531,8 @@ async function handleFindForSave(origin, username) {
  */
 async function handleStashPendingSave(entry) {
     if (!entry?.origin || !entry?.password)
-        return;
-    await stashPendingSave(entry);
+        return { duplicate: false };
+    return stashPendingSave(entry);
 }
 async function handleSaveCredential(request) {
     try {
@@ -508,6 +542,21 @@ async function handleSaveCredential(request) {
         const response = await saveCredential(request);
         if (!response.ok) {
             return { success: false, error: response.error ?? 'Save failed' };
+        }
+        return { success: true, data: response.payload };
+    }
+    catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+}
+// ============ Password generator (bridge protocol v5) ============
+async function handleGeneratePassword(request) {
+    try {
+        // No domain policy gate for generation (no vault write), but still
+        // require authenticated session via nativeBridge.sendAuthedNativeMessage.
+        const response = await generatePassword(request);
+        if (!response.ok) {
+            return { success: false, error: response.error ?? 'Generation failed' };
         }
         return { success: true, data: response.payload };
     }

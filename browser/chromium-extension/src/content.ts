@@ -20,6 +20,7 @@ import {
     totpFilledNotice
 } from './autofillUx';
 import { extractSaveProposal, type SaveProposal, type SaveScanInput } from './saveDetect';
+import { planLoginStep } from './loginSteps';
 import { mountPersonaUi } from './shadowUi';
 
 interface SuggestionItem {
@@ -62,7 +63,25 @@ let lastLoginAutofillAttemptAt = 0;
 let lastTotpAutofillAttemptAt = 0;
 let lastSuggestionsFetchAt = 0;
 let suggestionsFetchInFlight: Promise<void> | null = null;
+// Backoff after a lookup that came back empty or failed — see fetchSuggestions.
+const EMPTY_SUGGESTIONS_BACKOFF_MS = 30_000;
+const FAILED_SUGGESTIONS_BACKOFF_MS = 10_000;
+let suggestionsRetryAfterAt = 0;
 let currentOriginDefaults: OriginAutofillDefaults | null = null;
+
+// Frame role (batch B: the content script now runs in every frame).
+// `window.top` throws on cross-origin parents, hence the guarded read. Frame
+// forms fill themselves — each frame talks to the bridge with its OWN origin,
+// which is exactly what the origin binding checks. Only page-level chrome
+// (the Ctrl+Shift+P overlay, the post-navigation save-bar restore) belongs to
+// the top frame, or one bar/overlay per frame would appear.
+const IS_TOP_FRAME = (() => {
+    try {
+        return window.top === window;
+    } catch {
+        return false;
+    }
+})();
 
 // Initialize content script
 function init() {
@@ -81,6 +100,9 @@ function init() {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (message?.type === 'persona_status') {
             console.debug('[Persona] Status update', message.status);
+            // Unlocking (or connecting) must take effect on the very next
+            // focus, so drop the lookup backoff.
+            suggestionsRetryAfterAt = 0;
             sendResponse({ ok: true });
         }
 
@@ -180,6 +202,7 @@ async function fetchSuggestions() {
     const now = Date.now();
     if (suggestionsFetchInFlight) return suggestionsFetchInFlight;
     if (now - lastSuggestionsFetchAt < 1500) return;
+    if (now < suggestionsRetryAfterAt) return;
 
     suggestionsFetchInFlight = (async () => {
         try {
@@ -191,9 +214,18 @@ async function fetchSuggestions() {
             if (response?.success && response.data?.items) {
                 currentSuggestions = response.data.items;
                 console.debug('[Persona] Got suggestions:', currentSuggestions.length);
+                // Nothing for this origin (or the bridge is locked): every
+                // lookup spawns a `persona bridge` process, so back off
+                // instead of re-asking on each focus. Unlocking Persona clears
+                // the backoff immediately (see the status listener).
+                suggestionsRetryAfterAt =
+                    Date.now() + (currentSuggestions.length === 0 ? EMPTY_SUGGESTIONS_BACKOFF_MS : 0);
+            } else {
+                suggestionsRetryAfterAt = Date.now() + FAILED_SUGGESTIONS_BACKOFF_MS;
             }
         } catch (error) {
             console.error('[Persona] Failed to fetch suggestions:', error);
+            suggestionsRetryAfterAt = Date.now() + FAILED_SUGGESTIONS_BACKOFF_MS;
         } finally {
             lastSuggestionsFetchAt = Date.now();
             suggestionsFetchInFlight = null;
@@ -294,6 +326,95 @@ function getBestLoginInputs(): { usernameInput?: HTMLInputElement; passwordInput
     return {};
 }
 
+/**
+ * Step 1 of a multi-step login: the page asks for a username only. Fill just
+ * that field and remember the item as this origin's default so the password
+ * page (a fresh document, a fresh content script) can finish the job with no
+ * further interaction — see `loginSteps.ts` for when this is allowed at all.
+ */
+async function fillUsernameStep(itemId: string, input: HTMLInputElement, userGesture: boolean) {
+    const response = await chrome.runtime
+        .sendMessage({
+            type: 'persona_request_fill',
+            origin: location.origin,
+            itemId,
+            userGesture
+        })
+        .catch(() => null);
+
+    const username = response?.success ? (response.data?.username as string | undefined) : undefined;
+    if (!username) {
+        showNotification('Could not read the username from Persona', 'error');
+        return false;
+    }
+
+    fillInput(input, username);
+    showNotification('Username filled — continue to the next step', 'success');
+    // The site accepted this identity; remember it as the origin default so
+    // the password step can resolve the item without asking.
+    await setAutofillDefaultsForOrigin(location.origin, { passwordItemId: itemId }).catch(() => null);
+    void refreshOriginDefaults();
+    return true;
+}
+
+/**
+ * Identity field of a frame when no password field is present yet. Prefers
+ * the form scanner's classification (which honours autocomplete), falls back
+ * to the same name/id/placeholder hints the focus handler uses so SPA
+ * username steps — which produce no scanned form — still resolve.
+ */
+function findIdentityInput(focusedInput?: HTMLInputElement): HTMLInputElement | null {
+    if (focusedInput instanceof HTMLInputElement && isFillableInput(focusedInput) &&
+        focusedInput.type.toLowerCase() !== 'password') {
+        const kind = classifyIdentityInput(focusedInput);
+        if (kind !== 'none') return focusedInput;
+    }
+
+    for (const form of currentForms) {
+        const field = form.fields.find((f) => f.type === 'username' || f.type === 'email');
+        if (!field?.selector) continue;
+        const el = document.querySelector(field.selector);
+        if (el instanceof HTMLInputElement && isFillableInput(el)) return el;
+    }
+
+    // Last resort for forms the scanner never grouped (SPA step-1 forms are
+    // invisible to it without a password/OTP seed). Restricted to inputs
+    // inside a real <form>: a loose search/filter box in a page header has
+    // no form around it and must never receive an identity.
+    for (const el of document.querySelectorAll('input')) {
+        if (!(el instanceof HTMLInputElement) || !isFillableInput(el)) continue;
+        if (el.type.toLowerCase() === 'password') continue;
+        if (!el.closest('form')) continue;
+        if (classifyIdentityInput(el) === 'none') continue;
+        return el;
+    }
+    return null;
+}
+
+function classifyIdentityInput(input: HTMLInputElement): 'username' | 'email' | 'text' | 'none' {
+    const type = input.type.toLowerCase();
+    if (type === 'password' || type === 'number') return 'none';
+    const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
+    if (autocomplete === 'username' || autocomplete === 'email') {
+        return autocomplete === 'email' ? 'email' : 'username';
+    }
+    if (type === 'email') return 'email';
+    const haystack = [
+        input.name,
+        input.id,
+        input.placeholder,
+        input.getAttribute('aria-label')
+    ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+    if (['user', 'login', 'identifier', 'account', 'email', 'mail'].some((hint) => haystack.includes(hint))) {
+        return haystack.includes('mail') || haystack.includes('email') ? 'email' : 'username';
+    }
+    if (type === 'text' || type === 'search' || type === 'tel') return 'text';
+    return 'none';
+}
+
 async function maybeAutoFillLogin(trigger: 'load' | 'focus', focusedInput?: HTMLInputElement) {
     if (trigger === 'load' && !currentSettings.autoFillLoginOnLoad) return;
     if (trigger === 'focus' && !currentSettings.autoFillLoginOnFocus) return;
@@ -304,19 +425,40 @@ async function maybeAutoFillLogin(trigger: 'load' | 'focus', focusedInput?: HTML
     if (!(await isDomainAllowedForAutoFill())) return;
 
     const { usernameInput, passwordInput } = getBestLoginInputs();
-    if (!passwordInput) return;
-    if (hasValue(passwordInput)) return;
-
     const typedUsername = usernameInput?.value?.trim();
     const suggestion = await selectLoginSuggestion(currentSettings.minMatchStrengthLogin, typedUsername);
     if (!suggestion) return;
 
-    if (focusedInput && focusedInput.type === 'password' && focusedInput !== passwordInput) {
+    if (passwordInput) {
+        if (hasValue(passwordInput)) return;
+        if (focusedInput && focusedInput.type === 'password' && focusedInput !== passwordInput) {
+            return;
+        }
+        lastLoginAutofillAttemptAt = now;
+        await requestFill(suggestion.item_id, usernameInput ?? passwordInput, trigger === 'focus');
         return;
     }
 
+    // No password field in this frame/document: either step 1 of a multi-step
+    // login, or nothing to do. `planLoginStep` owns that judgement.
+    const identityInput = findIdentityInput(focusedInput);
+    const action = planLoginStep({
+        trigger,
+        hasPasswordField: false,
+        identityField: identityInput
+            ? {
+                kind: classifyIdentityInput(identityInput),
+                autocomplete: (identityInput.getAttribute('autocomplete') || '').toLowerCase(),
+                hasValue: hasValue(identityInput),
+                isFocused: identityInput === focusedInput
+            }
+            : null,
+        hasResolvableSuggestion: Boolean(suggestion)
+    });
+    if (action !== 'username') return;
+
     lastLoginAutofillAttemptAt = now;
-    await requestFill(suggestion.item_id, usernameInput ?? passwordInput, trigger === 'focus');
+    await fillUsernameStep(suggestion.item_id, identityInput!, trigger === 'focus');
 }
 
 async function maybeAutoFillTotp(_trigger: 'focus', focusedInput?: HTMLInputElement) {
@@ -345,8 +487,10 @@ async function maybeAutoFillTotp(_trigger: 'focus', focusedInput?: HTMLInputElem
 
 // Handle keyboard shortcuts
 function handleKeydown(event: KeyboardEvent) {
-    // Ctrl/Cmd + Shift + P to show Persona overlay
-    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'p') {
+    // Ctrl/Cmd + Shift + P to show Persona overlay (top frame only — see
+    // IS_TOP_FRAME: key events inside a cross-origin iframe never reach the
+    // parent document, and one overlay per frame would be noise).
+    if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key === 'p' && IS_TOP_FRAME) {
         event.preventDefault();
         toggleOverlay();
     }
@@ -357,6 +501,24 @@ function handleKeydown(event: KeyboardEvent) {
     }
 }
 
+/**
+ * Focus path: make sure this frame has suggestions before planning a fill.
+ * The load-time scan only asks the bridge for origins whose forms carry a
+ * password/OTP field, so a username-only step would otherwise never see the
+ * user's own accounts. Focus is user-initiated, so paying for one lookup
+ * here is the right trade — and it stays bounded by fetchSuggestions' own
+ * 1.5s throttle.
+ */
+async function ensureSuggestionsThenAutofill(
+    trigger: 'load' | 'focus',
+    focusedInput?: HTMLInputElement
+) {
+    if (currentSuggestions.length === 0) {
+        await fetchSuggestions();
+    }
+    await maybeAutoFillLogin(trigger, focusedInput);
+}
+
 // Handle focus on input fields
 function handleInputFocus(event: FocusEvent) {
     const target = event.target as HTMLElement;
@@ -365,15 +527,26 @@ function handleInputFocus(event: FocusEvent) {
     // Check if this is a password or username field
     const fieldType = target.type.toLowerCase();
     const fieldName = (target.name || target.id || '').toLowerCase();
+    const autocomplete = (target.getAttribute('autocomplete') || '').toLowerCase();
 
     const isPasswordField = fieldType === 'password';
+    const isNewPasswordField = isPasswordField && autocomplete === 'new-password';
     const isUsernameField = fieldType === 'text' || fieldType === 'email' ||
         ['user', 'login', 'email', 'identifier'].some(hint => fieldName.includes(hint));
     const isTotpField = isLikelyTotpInput(target, fieldName);
 
-    if ((isPasswordField || isUsernameField) && currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'password')) {
-        showInlineIcon(target, 'password');
-        void maybeAutoFillLogin('focus', target);
+    if (isPasswordField || isUsernameField) {
+        if (currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'password')) {
+            showInlineIcon(target, 'password');
+        }
+        // A username-only step (multi-step login) has no password field, so
+        // the load-time scan never fetched suggestions for this frame. A
+        // focus is a real user action: fetch once, then let the planner decide.
+        void ensureSuggestionsThenAutofill('focus', target);
+    }
+    // Show password generator icon on registration forms (new-password field)
+    if (isNewPasswordField && currentSettings.savePromptEnabled) {
+        showGeneratorIcon(target);
     }
     if (isTotpField && currentSuggestions.some((s) => (s.credential_type ?? 'password') === 'totp')) {
         showInlineIcon(target, 'totp');
@@ -458,6 +631,246 @@ function showInlineIcon(input: HTMLInputElement, mode: 'password' | 'totp') {
         }, 200);
     };
     input.addEventListener('blur', removeIcon, { once: true });
+}
+
+// Show password generator icon on new-password fields (registration forms)
+let generatorIcon: HTMLElement | null = null;
+
+function showGeneratorIcon(input: HTMLInputElement) {
+    // Remove existing generator icon
+    if (generatorIcon) {
+        generatorIcon.remove();
+        generatorIcon = null;
+    }
+
+    // Create icon element
+    const icon = document.createElement('div');
+    icon.className = 'persona-generator-icon';
+    icon.innerHTML = '🔑';
+    icon.title = 'Generate a secure password';
+    icon.style.cssText = `
+        position: absolute;
+        width: 24px;
+        height: 24px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        z-index: 999999;
+        background: white;
+        border-radius: 4px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    `;
+
+    // Position the icon
+    const rect = input.getBoundingClientRect();
+    icon.style.left = `${rect.right + window.scrollX - 28}px`;
+    icon.style.top = `${rect.top + window.scrollY + (rect.height - 24) / 2}px`;
+
+    icon.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showGeneratorDropdown(input, icon);
+    });
+
+    mountPersonaUi(document).root.appendChild(icon);
+    generatorIcon = icon;
+
+    // Remove icon when input loses focus
+    const removeIcon = () => {
+        setTimeout(() => {
+            if (!icon.matches(':hover')) {
+                icon.remove();
+                if (generatorIcon === icon) {
+                    generatorIcon = null;
+                }
+            }
+        }, 200);
+    };
+    input.addEventListener('blur', removeIcon, { once: true });
+}
+
+// Show password generator dropdown near input
+function showGeneratorDropdown(input: HTMLInputElement, genIcon: HTMLElement) {
+    hideOverlay();
+
+    const dropdown = document.createElement('div');
+    dropdown.className = 'persona-generator-dropdown';
+    dropdown.style.cssText = `
+        position: absolute;
+        background: white;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        z-index: 999999;
+        width: 280px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    `;
+
+    // Position dropdown
+    const rect = input.getBoundingClientRect();
+    dropdown.style.left = `${rect.left + window.scrollX}px`;
+    dropdown.style.top = `${rect.bottom + window.scrollY + 4}px`;
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = `
+        padding: 12px 16px;
+        border-bottom: 1px solid #e2e8f0;
+        font-weight: 600;
+        color: #1a1a1a;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    `;
+    header.innerHTML = '🔑 Generate Password';
+    dropdown.appendChild(header);
+
+    // Quick generate button (default settings)
+    const quickBtn = document.createElement('button');
+    quickBtn.style.cssText = `
+        width: 100%;
+        padding: 12px 16px;
+        border: none;
+        border-radius: 0;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+        color: white;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        text-align: left;
+    `;
+    quickBtn.innerHTML = '🎲 Generate (16 chars, all sets)';
+    dropdown.appendChild(quickBtn);
+
+    // Separator
+    const sep = document.createElement('div');
+    sep.style.cssText = 'height: 1px; background: #e2e8f0; margin: 8px 0;';
+    dropdown.appendChild(sep);
+
+    // Custom options
+    const optionsDiv = document.createElement('div');
+    optionsDiv.style.cssText = 'padding: 12px 16px;';
+    optionsDiv.innerHTML = `
+        <label style="display: block; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            Length: <input type="number" id="gen-length" value="16" min="4" max="128" style="width: 60px; margin-left: 8px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            <input type="checkbox" id="gen-lower" checked> Lowercase
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            <input type="checkbox" id="gen-upper" checked> Uppercase
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            <input type="checkbox" id="gen-digits" checked> Digits
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            <input type="checkbox" id="gen-symbols" checked> Symbols
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            <input type="checkbox" id="gen-pronounceable"> Pronounceable
+        </label>
+        <label style="display: block; margin-bottom: 8px; font-size: 13px; color: #374151;">
+            Passphrase (words): <input type="number" id="gen-words" value="" min="3" max="10" placeholder="3-10 (overrides above)" style="width: 60px; margin-left: 8px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 4px;">
+        </label>
+        <button id="gen-custom" style="width: 100%; padding: 10px; border: 1px solid #e2e8f0; border-radius: 6px; background: white; color: #374151; cursor: pointer; font-size: 13px; font-weight: 500;">Generate Custom</button>
+    `;
+    dropdown.appendChild(optionsDiv);
+
+    // Status line
+    const statusLine = document.createElement('div');
+    statusLine.style.cssText = 'padding: 8px 16px; color: #64748b; font-size: 12px; display: none;';
+    dropdown.appendChild(statusLine);
+
+    const generateAndFill = async (request: any) => {
+        quickBtn.disabled = true;
+        (dropdown.querySelector('#gen-custom') as HTMLButtonElement).disabled = true;
+        statusLine.style.display = 'block';
+        statusLine.textContent = 'Generating…';
+
+        try {
+            const response = await chrome.runtime.sendMessage({
+                type: 'persona_generate_password',
+                request
+            });
+
+            if (response?.success && response.data?.password) {
+                const password = response.data.password;
+                // Fill the target new-password field
+                fillInput(input, password);
+                // Also fill any other new-password / confirm password fields in the same form
+                const form = input.form;
+                if (form) {
+                    const confirmFields = Array.from(form.querySelectorAll('input[type="password"][autocomplete="new-password"]'))
+                        .filter((el): el is HTMLInputElement => el instanceof HTMLInputElement && el !== input);
+                    for (const field of confirmFields) {
+                        if (!hasValue(field)) fillInput(field, password);
+                    }
+                }
+                statusLine.textContent = 'Generated & filled!';
+                statusLine.style.color = '#22c55e';
+                setTimeout(() => {
+                    dropdown.remove();
+                    if (generatorIcon === genIcon) generatorIcon = null;
+                }, 1500);
+            } else {
+                statusLine.textContent = response?.error || 'Generation failed';
+                statusLine.style.color = '#ef4444';
+            }
+        } catch (error) {
+            statusLine.textContent = error instanceof Error ? error.message : 'Generation failed';
+            statusLine.style.color = '#ef4444';
+        } finally {
+            quickBtn.disabled = false;
+            (dropdown.querySelector('#gen-custom') as HTMLButtonElement).disabled = false;
+        }
+    };
+
+    // Quick generate (defaults)
+    quickBtn.addEventListener('click', () => {
+        generateAndFill({
+            length: 16,
+            include_lowercase: true,
+            include_uppercase: true,
+            include_digits: true,
+            include_symbols: true,
+            pronounceable: false
+        });
+    });
+
+    // Custom generate
+    const customBtn = dropdown.querySelector('#gen-custom') as HTMLButtonElement;
+    customBtn.addEventListener('click', () => {
+        const length = parseInt((dropdown.querySelector('#gen-length') as HTMLInputElement).value, 10);
+        const wordsVal = (dropdown.querySelector('#gen-words') as HTMLInputElement).value;
+        const words = wordsVal ? parseInt(wordsVal, 10) : undefined;
+
+        generateAndFill({
+            length,
+            include_lowercase: (dropdown.querySelector('#gen-lower') as HTMLInputElement).checked,
+            include_uppercase: (dropdown.querySelector('#gen-upper') as HTMLInputElement).checked,
+            include_digits: (dropdown.querySelector('#gen-digits') as HTMLInputElement).checked,
+            include_symbols: (dropdown.querySelector('#gen-symbols') as HTMLInputElement).checked,
+            pronounceable: (dropdown.querySelector('#gen-pronounceable') as HTMLInputElement).checked,
+            words
+        });
+    });
+
+    mountPersonaUi(document).root.appendChild(dropdown);
+    autofillOverlay = dropdown;
+
+    // Close on click outside
+    setTimeout(() => {
+        document.addEventListener('click', function closeDropdown(e) {
+            if (!dropdown.contains(e.target as Node)) {
+                dropdown.remove();
+                autofillOverlay = null;
+                if (generatorIcon === genIcon) generatorIcon = null;
+                document.removeEventListener('click', closeDropdown);
+            }
+        });
+    }, 100);
 }
 
 // Show suggestions dropdown near input
@@ -1483,13 +1896,20 @@ async function offerSaveBar(proposal: SaveProposal | null) {
     }
 
     // Hand the proposal to the background so a redirect (the common case)
-    // can re-offer the bar on the landing page. Origin-bound + TTL'd.
-    void chrome.runtime
-        .sendMessage({
+    // can re-offer the bar on the landing page. Origin-bound + TTL'd. A
+    // duplicate verdict means another frame of this origin already owns the
+    // slot and shows the bar — rendering again would stack a second one.
+    let duplicate = false;
+    try {
+        const stashed = await chrome.runtime.sendMessage({
             type: 'persona_stash_pending_save',
             entry: { ...proposal, origin: location.origin, at: Date.now() }
-        })
-        .catch(() => null);
+        });
+        duplicate = Boolean(stashed?.data?.duplicate);
+    } catch {
+        // Stash failed (service worker asleep): still show the in-page bar.
+    }
+    if (duplicate) return;
 
     renderSaveBar(proposal, updateTarget);
 }
@@ -1501,6 +1921,9 @@ async function offerSaveBar(proposal: SaveProposal | null) {
  * check and the find_for_save lookup itself.
  */
 async function restorePendingSaveBar() {
+    // Top frame only: a same-origin iframe would otherwise claim the stash
+    // for the same origin and render a second, duplicate bar.
+    if (!IS_TOP_FRAME) return;
     if (!currentSettings.savePromptEnabled) return;
     // Per-origin "never" wins over anything the background still holds.
     await refreshOriginDefaults();

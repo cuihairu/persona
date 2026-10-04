@@ -126,6 +126,29 @@ export interface SaveCredentialResponsePayload {
     name: string;
 }
 
+// ============ Password generator (bridge protocol v5) ============
+
+export interface GeneratePasswordRequest {
+    /** Total password length (default 16). */
+    length?: number;
+    /** Include lowercase (default true). */
+    include_lowercase?: boolean;
+    /** Include uppercase (default true). */
+    include_uppercase?: boolean;
+    /** Include digits (default true). */
+    include_digits?: boolean;
+    /** Include symbols (default true). */
+    include_symbols?: boolean;
+    /** Pronounceable alternating consonant/vowel pattern (default false). */
+    pronounceable?: boolean;
+    /** Diceware-style passphrase word count (3-10). Overrides length/sets. */
+    words?: number;
+}
+
+export interface GeneratePasswordResponsePayload {
+    password: string;
+}
+
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 
@@ -550,4 +573,17 @@ export async function saveCredential(
     host = DEFAULT_NATIVE_HOST
 ): Promise<NativeBridgeResponse<SaveCredentialResponsePayload>> {
     return sendAuthedNativeMessage<SaveCredentialResponsePayload>('save_credential', request, host);
+}
+
+// ============ Password generator (bridge protocol v5) ============
+
+/**
+ * Generate a password or passphrase via the bridge.
+ * No vault write — pure generation. Requires authenticated session.
+ */
+export async function generatePassword(
+    request: GeneratePasswordRequest,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<GeneratePasswordResponsePayload>> {
+    return sendAuthedNativeMessage<GeneratePasswordResponsePayload>('generate_password', request, host);
 }
