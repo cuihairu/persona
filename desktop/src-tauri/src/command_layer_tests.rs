@@ -9420,7 +9420,13 @@ where
             let auth = head
                 .lines()
                 .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
-                .map(|l| l.splitn(2, ':').nth(1).unwrap_or_default().trim().to_string());
+                .map(|l| {
+                    l.splitn(2, ':')
+                        .nth(1)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string()
+                });
             let content_length: usize = head
                 .lines()
                 .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
@@ -9482,12 +9488,18 @@ async fn account_commands_gate_before_any_network_or_crypto() {
     .await
     .unwrap();
     assert!(!resp.success);
-    assert!(resp.error.unwrap().contains("Sync server URL is not configured"));
+    assert!(resp
+        .error
+        .unwrap()
+        .contains("Sync server URL is not configured"));
     let resp = account_list_devices("acct-1".to_string(), state.clone())
         .await
         .unwrap();
     assert!(!resp.success);
-    assert!(resp.error.unwrap().contains("Sync server URL is not configured"));
+    assert!(resp
+        .error
+        .unwrap()
+        .contains("Sync server URL is not configured"));
 
     // 配置服务器（不可达端口）→ Bearer 端点因无账号令牌先拒绝（fail-closed，
     // 不触网）；公开端点过门禁、网络层失败
@@ -9527,10 +9539,7 @@ async fn account_commands_gate_before_any_network_or_crypto() {
 
     // 注入账号 bearer → Bearer 端点过令牌门禁，网络层失败（不可达报错，
     // 而非门禁报错）
-    state
-        .account_token_store
-        .set(&db_path, "tok-acct")
-        .unwrap();
+    state.account_token_store.set(&db_path, "tok-acct").unwrap();
     let resp = account_list_devices("acct-1".to_string(), state.clone())
         .await
         .unwrap();
@@ -9580,6 +9589,7 @@ async fn account_token_lifecycle_persists_overwrites_and_clears() {
             r#"{"session_token":"sess-24h","expires_in_secs":86400}"#.to_string(),
         ),
         "/api/v1/accounts/acct-1/sessions/sess-24h" => (204, String::new()),
+        "/api/v1/accounts/acct-1/sessions/other-sess" => (204, String::new()),
         other => panic!("unexpected path {other}"),
     });
     let resp = set_sync_config(true, url, "tok-1".to_string(), state.clone())
@@ -9624,13 +9634,9 @@ async fn account_token_lifecycle_persists_overwrites_and_clears() {
     );
 
     // 自吊销本机会话 → keyring 清除（本机退出账号登录）
-    let resp = account_revoke_session(
-        "acct-1".to_string(),
-        "sess-24h".to_string(),
-        state.clone(),
-    )
-    .await
-    .unwrap();
+    let resp = account_revoke_session("acct-1".to_string(), "sess-24h".to_string(), state.clone())
+        .await
+        .unwrap();
     assert!(resp.success, "{:?}", resp.error);
     assert_eq!(state.account_token_store.get(&db_path).unwrap(), None);
 

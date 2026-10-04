@@ -2478,9 +2478,7 @@ async fn account_api_with_bearer_for(
         .map_err(|e| format!("Invalid account server configuration: {e}"))
 }
 
-impl From<AccountRegisterRequest>
-    for persona_core::accounts::remote::RegisterAccountRequest
-{
+impl From<AccountRegisterRequest> for persona_core::accounts::remote::RegisterAccountRequest {
     fn from(req: AccountRegisterRequest) -> Self {
         Self {
             username: req.username,
@@ -2653,7 +2651,10 @@ pub async fn account_passkey_create_options(
         Ok(api) => api,
         Err(message) => return Ok(ApiResponse::error(message)),
     };
-    match api.passkey_create_options(&account_id, &request.into()).await {
+    match api
+        .passkey_create_options(&account_id, &request.into())
+        .await
+    {
         Ok(options) => Ok(ApiResponse::success(options)),
         Err(e) => Ok(ApiResponse::error(format!(
             "Account passkey create-options failed: {e}"
@@ -2680,7 +2681,9 @@ pub async fn account_passkey_register(
         Ok(resp) => Ok(ApiResponse::success(AccountPasskeyRegisterResponse {
             passkey_id: resp.passkey_id,
         })),
-        Err(e) => Ok(ApiResponse::error(format!("Account passkey register failed: {e}"))),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account passkey register failed: {e}"
+        ))),
     }
 }
 
@@ -2699,7 +2702,10 @@ pub async fn account_passkey_login_options(
         Ok(api) => api,
         Err(message) => return Ok(ApiResponse::error(message)),
     };
-    match api.passkey_login_options(&account_id, &request.into()).await {
+    match api
+        .passkey_login_options(&account_id, &request.into())
+        .await
+    {
         Ok(resp) => Ok(ApiResponse::success(AccountPasskeyLoginOptionsResponse {
             challenge: resp.challenge,
             rp_id: resp.rp_id,
@@ -2729,7 +2735,9 @@ pub async fn account_srp_register(
         Ok(resp) => Ok(ApiResponse::success(AccountSrpRegisterResponse {
             device_name: resp.device_name,
         })),
-        Err(e) => Ok(ApiResponse::error(format!("Account SRP register failed: {e}"))),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account SRP register failed: {e}"
+        ))),
     }
 }
 
@@ -2753,7 +2761,9 @@ pub async fn account_srp_challenge(
             salt: resp.salt,
             server_public: resp.server_public,
         })),
-        Err(e) => Ok(ApiResponse::error(format!("Account SRP challenge failed: {e}"))),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account SRP challenge failed: {e}"
+        ))),
     }
 }
 
@@ -2783,7 +2793,11 @@ pub async fn account_srp_verify(
     };
     let resp = match api.srp_verify(&account_id, &request.into()).await {
         Ok(resp) => resp,
-        Err(e) => return Ok(ApiResponse::error(format!("Account SRP verify failed: {e}"))),
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Account SRP verify failed: {e}"
+            )))
+        }
     };
     if let Err(e) = state.account_token_store.set(&db_path, &resp.token) {
         return Ok(ApiResponse::error(format!(
@@ -2811,7 +2825,9 @@ pub async fn account_generate_recovery_codes(
         Err(message) => return Ok(ApiResponse::error(message)),
     };
     match api.generate_recovery_codes(&account_id).await {
-        Ok(resp) => Ok(ApiResponse::success(AccountRecoveryCodes { codes: resp.codes })),
+        Ok(resp) => Ok(ApiResponse::success(AccountRecoveryCodes {
+            codes: resp.codes,
+        })),
         Err(e) => Ok(ApiResponse::error(format!(
             "Account recovery-codes failed: {e}"
         ))),
@@ -2937,7 +2953,10 @@ pub async fn account_create_session(
         Ok(api) => api,
         Err(message) => return Ok(ApiResponse::error(message)),
     };
-    let resp = match api.create_account_session(&account_id, &request.into()).await {
+    let resp = match api
+        .create_account_session(&account_id, &request.into())
+        .await
+    {
         Ok(resp) => resp,
         Err(e) => {
             return Ok(ApiResponse::error(format!(
@@ -2976,7 +2995,10 @@ pub async fn account_revoke_session(
         Ok(api) => api,
         Err(message) => return Ok(ApiResponse::error(message)),
     };
-    match api.revoke_account_session(&account_id, &session_token).await {
+    match api
+        .revoke_account_session(&account_id, &session_token)
+        .await
+    {
         Ok(ok) => {
             let stored = state
                 .account_token_store
