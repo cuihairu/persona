@@ -1,8 +1,13 @@
 ; Persona 定制 NSIS 安装模板（完整说明见 docs/WINDOWS_INSTALLER.md）。
 ;
-; 基线：tauri-apps/tauri 标签 tauri-cli-v2.11.4 的
+; 基线：tauri-apps/tauri 标签 tauri-cli-v2.12.1 的
 ; crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi
-; （pnpm-lock.yaml 锁定的 @tauri-apps/cli 2.11.4 内嵌同一份模板）。
+; （pnpm-lock.yaml 锁定的 @tauri-apps/cli 2.12.1 内嵌同一份模板）。
+; 2026-10-04 从 2.11.4 基线升到 2.12.1：CLI 2.12.x 的 utils.nsh
+; （staging 时由 CLI 强制写入，不受本模板控制）CheckIfAppIsRunning
+; 改用 Restart Manager 宏，模板必须同步 `!include "Win\RestartManager.nsh"`
+; 且调用点传完整路径——否则 makensis 直接 "macro named
+; RestartManager_StartSession not found"（2026-10-03 每日构建实锤）。
 ; 相对基线共三处「Persona 定制」：
 ;   1) 升级路径默认静默卸载旧版：重装页默认勾选"卸载后安装"，且给
 ;      旧卸载器追加 /S（无 UI、确认页不出现、"删除应用数据"恒为默认
@@ -45,6 +50,7 @@ ManifestDPIAwareness PerMonitorV2
 !include "FileAssociation.nsh"
 !include "Win\COM.nsh"
 !include "Win\Propkey.nsh"
+!include "Win\RestartManager.nsh"
 !include "StrFunc.nsh"
 ${StrCase}
 ${StrLoc}
@@ -681,7 +687,7 @@ Section Install
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
   ; Copy main executable
   File "${MAINBINARYSRCPATH}"
@@ -824,7 +830,7 @@ Section Uninstall
     !insertmacro NSIS_HOOK_PREUNINSTALL
   !endif
 
-  !insertmacro CheckIfAppIsRunning "${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
   ; Delete the app directory and its content from disk
   ; Copy main executable

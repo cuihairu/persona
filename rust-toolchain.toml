@@ -2,7 +2,12 @@
 # 「剩余差距」第 2 条）。CI 侧同步钉死在 .github/workflows/* 的
 # dtolnay/rust-toolchain@<同版本>；升级 = 两处一起改，新编译器带来的新 lint
 # / 行为变化显式过一遍再进。
+# 注意：workflow 里钉 @stable 不会生效——本文件是目录级 override，cargo
+# 经 rustup 解析时永远压过 dtolnay action 装的 stable（run 37155098351 的
+# android E0463 根因：stable 只给 stable 装了 android target，实际编译走
+# 1.97.0 → rustup 按需补装时无 target）。
 [toolchain]
 channel = "1.97.0"
 profile = "minimal"
 components = ["clippy", "rustfmt"]
+targets = ["aarch64-linux-android"]

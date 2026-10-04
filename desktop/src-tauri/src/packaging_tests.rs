@@ -92,6 +92,32 @@ fn custom_nsis_template_keeps_persona_upgrade_diffs() {
     );
 }
 
+/// CLI ≥2.12 的 utils.nsh 契约（2026-10-03 每日构建 Windows 腿实锤）：
+/// tauri-bundler 在 staging 强制写入 CLI 内嵌的 utils.nsh（不受自定义模板
+/// 控制），其 CheckIfAppIsRunning 改用 Restart Manager 宏——本模板必须
+/// include `Win\RestartManager.nsh`，且两处调用点传完整二进制路径（新宏
+/// 按路径注册文件）。缺 include 时 makensis 直接报 "macro named
+/// RestartManager_StartSession not found"（run 37155098351）。已按真实
+/// 2.12.1 utils.nsh + nsis_tauri_utils.dll 在本机 makensis 复现旧模板失败
+/// /新模板编译通过（2026-10-04）。升级 CLI 换基线时此契约需重核。
+#[test]
+fn custom_nsis_template_satisfies_cli_utils_nsh_contract() {
+    let nsi = manifest_file("nsis/installer.nsi");
+    assert!(
+        nsi.contains("!include \"Win\\RestartManager.nsh\""),
+        "CLI 2.12.x utils.nsh uses RestartManager macros; \
+         template must include Win\\RestartManager.nsh"
+    );
+    assert_eq!(
+        nsi.matches(
+            "!insertmacro CheckIfAppIsRunning \"$INSTDIR\\${MAINBINARYNAME}.exe\" \"${PRODUCTNAME}\""
+        )
+        .count(),
+        2,
+        "both CheckIfAppIsRunning call sites must pass the full binary path (2.12 macro signature)"
+    );
+}
+
 /// 卸载不删 vault 数据（docs/UNINSTALL.md 的承诺）：
 /// NSIS 模板里所有递归删除（`RmDir /r`）必须只指向 `${BUNDLEID}`
 /// 缓存目录（WebView 缓存 + 日志），vault 所在的 `%APPDATA%\persona`

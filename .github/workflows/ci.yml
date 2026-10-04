@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - name: Cache cargo
@@ -45,6 +45,10 @@ jobs:
       - name: Upload coverage (rust) to Codecov
         uses: codecov/codecov-action@v7
         with:
+          # token 必须显式传：tokenless 上传对默认分支被 codecov 拒绝
+          # （"Token required because branch is protected"，2026-10-03 实锤，
+          # 徽章因此长期 unknown）。secrets.CODECOV_TOKEN 早已配置但从未接线。
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage/rust-lcov.info
           flags: rust
           fail_ci_if_error: false
@@ -55,7 +59,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: clippy
       - name: Cache cargo
@@ -106,7 +110,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
       - name: Install cargo-audit
@@ -134,7 +138,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       # --- Desktop Rust (src-tauri is its own workspace, invisible to the
       # `rust` job's --workspace runs) ---
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.97.0
         with:
           components: rustfmt, clippy
       - name: Install Tauri system dependencies
@@ -165,6 +169,8 @@ jobs:
       - name: Upload coverage (desktop) to Codecov
         uses: codecov/codecov-action@v7
         with:
+          # 同上：默认分支上传必须带 token，否则徽章 unknown
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: desktop/coverage/lcov.info
           flags: desktop
           fail_ci_if_error: false
