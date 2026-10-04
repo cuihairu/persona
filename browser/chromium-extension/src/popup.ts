@@ -1,6 +1,6 @@
 import type { BridgeStatus } from './nativeBridge';
 import type { DomainAssessment } from './domainPolicy';
-import { hello, requestPairingCode, finalizePairing, getPairingState } from './nativeBridge';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults';
 
@@ -39,8 +39,11 @@ function describeStatus(status?: BridgeStatus | null) {
     if (!status) return 'Bridge unavailable';
     const ts = new Date(status.lastChecked).toLocaleTimeString();
     const base = status.connected ? 'Connected' : 'Disconnected';
+    const connectInfo = status.payload?.connect_available
+        ? ` • Desktop linked (port ${status.payload.connect_port})`
+        : ' • Desktop not linked';
     const detail = status.message ? ` – ${status.message}` : '';
-    return `${base}${detail} (${ts})`;
+    return `${base}${connectInfo}${detail} (${ts})`;
 }
 
 function updateStatus(status?: BridgeStatus | null) {
@@ -244,6 +247,43 @@ if (blockButton) {
 
 if (clearPolicyButton) {
     clearPolicyButton.addEventListener('click', () => clearPolicy());
+}
+
+// ============ Password generator (bridge protocol v5) ============
+
+const genLengthEl = document.getElementById('genLength') as HTMLInputElement | null;
+const genLowerEl = document.getElementById('genLower') as HTMLInputElement | null;
+const genUpperEl = document.getElementById('genUpper') as HTMLInputElement | null;
+const genDigitsEl = document.getElementById('genDigits') as HTMLInputElement | null;
+const genSymbolsEl = document.getElementById('genSymbols') as HTMLInputElement | null;
+const genPronounceableEl = document.getElementById('genPronounceable') as HTMLInputElement | null;
+const genWordsEl = document.getElementById('genWords') as HTMLInputElement | null;
+const genGenerateButton = document.getElementById('genGenerate');
+const genResultEl = document.getElementById('genResult');
+
+if (genGenerateButton) {
+    genGenerateButton.addEventListener('click', async () => {
+        if (!genResultEl) return;
+        genGenerateButton.toggleAttribute('disabled', true);
+        genResultEl.textContent = 'Generating…';
+        const wordsRaw = genWordsEl?.value?.trim();
+        const words = wordsRaw ? Number.parseInt(wordsRaw, 10) : undefined;
+        const response = await generatePassword({
+            length: Number.parseInt(genLengthEl?.value ?? '16', 10),
+            include_lowercase: genLowerEl?.checked ?? true,
+            include_uppercase: genUpperEl?.checked ?? true,
+            include_digits: genDigitsEl?.checked ?? true,
+            include_symbols: genSymbolsEl?.checked ?? true,
+            pronounceable: genPronounceableEl?.checked ?? false,
+            words
+        }).catch((e: unknown) => ({ ok: false, error: String(e) }) as any);
+        if (response?.ok && response.payload?.password) {
+            genResultEl.textContent = response.payload.password;
+        } else {
+            genResultEl.textContent = `Error: ${response?.error ?? 'generation failed'}`;
+        }
+        genGenerateButton.toggleAttribute('disabled', false);
+    });
 }
 
 document.addEventListener('DOMContentLoaded', () => {

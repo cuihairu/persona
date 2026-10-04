@@ -13,6 +13,10 @@ export interface HelloResponsePayload {
     paired?: boolean;
     session_id?: string | null;
     session_expires_at_ms?: number | null;
+    /** Desktop/CLI Connect server available for unlock linkage (Batch D). */
+    connect_available?: boolean;
+    /** Connect server port if available. */
+    connect_port?: number | null;
 }
 
 export interface SuggestionItem {
@@ -37,6 +41,10 @@ export interface StatusPayload {
     locked: boolean;
     active_identity?: string;
     active_identity_name?: string;
+    /** Desktop/CLI Connect server available for unlock linkage (Batch D). */
+    connect_available?: boolean;
+    /** Connect server port if available. */
+    connect_port?: number | null;
 }
 
 /** Popup/background 共用的桥状态快照（原 bridge.ts 的 HTTP 探测已删——

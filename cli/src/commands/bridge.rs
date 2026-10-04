@@ -5,6 +5,7 @@ use clap::Args;
 use data_encoding::{BASE32, BASE32_NOPAD};
 use hmac::{Hmac, Mac};
 use rand::Rng;
+use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sha2::Sha512;
@@ -506,6 +507,9 @@ async fn handle_request(
                 None
             };
 
+            // Detect running desktop/cli Connect server for unlock linkage.
+            let connect_port = detect_connect_server().await;
+
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
                 "protocol_version": 5,
@@ -514,6 +518,8 @@ async fn handle_request(
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
                 "session_expires_at_ms": session.as_ref().map(|s| s.expires_at_ms),
+                "connect_available": connect_port.is_some(),
+                "connect_port": connect_port,
             });
             Ok(ok(req.request_id, "hello_response", payload))
         }
@@ -1261,6 +1267,65 @@ fn resolve_state_dir(override_path: Option<PathBuf>) -> PathBuf {
                 .join(".persona")
                 .join("bridge")
         })
+}
+
+/// Path to the Connect server port file written by desktop/cli `connect_server_start`.
+const CONNECT_PORT_FILE: &str = "connect.port";
+
+/// Detect a running Connect server (desktop or CLI) by reading the port file
+/// and probing `/health`. Returns `Some(port)` if the server is reachable and
+/// the vault is unlocked (health returns 200), `None` otherwise.
+async fn detect_connect_server() -> Option<u16> {
+    // Allow explicit override via env (useful for tests / non-standard setups).
+    if let Ok(port_str) = std::env::var("PERSONA_CONNECT_PORT") {
+        if let Ok(port) = port_str.parse::<u16>() {
+            if probe_connect_health(port).await {
+                return Some(port);
+            }
+        }
+    }
+
+    // Default: read from ~/.persona/connect.port (written by desktop/cli on start).
+    let port_path = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".persona")
+        .join(CONNECT_PORT_FILE);
+
+    if let Ok(content) = std::fs::read_to_string(&port_path) {
+        if let Ok(port) = content.trim().parse::<u16>() {
+            if probe_connect_health(port).await {
+                return Some(port);
+            }
+        }
+    }
+
+    None
+}
+
+/// Probe the Connect server's `/health` endpoint. Returns true if the server
+/// responds with 200 and `ok: true` (meaning the vault is unlocked and the
+/// server is healthy). Any error / non-200 / `ok: false` returns false.
+async fn probe_connect_health(port: u16) -> bool {
+    let url = format!("http://127.0.0.1:{}/api/v1/connect/health", port);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(500))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let resp = match client.get(&url).send().await {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    if !resp.status().is_success() {
+        return false;
+    }
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return false,
+    };
+    json.get("ok").and_then(|v| v.as_bool()).unwrap_or(false)
 }
 
 async fn open_db(db_path: &Path) -> Result<Database> {

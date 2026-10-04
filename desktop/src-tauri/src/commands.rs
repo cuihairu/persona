@@ -6235,9 +6235,10 @@ pub async fn connect_server_start(
         .await
     {
         Ok(handle) => {
+            let port = handle.port;
             let status = ConnectServerStatus {
                 running: true,
-                port: Some(handle.port),
+                port: Some(port),
             };
             let mut guard = state.connect_server.lock().await;
             // 竞态防御：重入时后到者不写槽（先到者已持有 listener），
@@ -6250,6 +6251,15 @@ pub async fn connect_server_start(
                 ));
             }
             *guard = Some(handle);
+            // Write port file for bridge unlock linkage (read by CLI bridge on hello).
+            let port_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".persona")
+                .join("connect.port");
+            if let Some(parent) = port_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&port_path, port.to_string());
             Ok(ApiResponse::success(status))
         }
         Err(e) => Ok(ApiResponse::error(format!("Failed to start: {}", e))),
@@ -6265,6 +6275,12 @@ pub async fn connect_server_stop(
     if let Some(handle) = handle {
         handle.stop();
     }
+    // Remove port file on stop so bridge detects locked state on next hello.
+    let port_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".persona")
+        .join("connect.port");
+    let _ = std::fs::remove_file(&port_path);
     Ok(ApiResponse::success(ConnectServerStatus {
         running: false,
         port: None,
