@@ -109,9 +109,17 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       （隐私红线照旧：默认关闭、显式开启）。同批：business.rs 的
       ~12 个业务 extern 尚无 panic 防线（无单一收口点，逐个包
       guard_result 的后续项）
-- [ ] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）**：设备管理页 +
-      授权/吊销全流程 UI 走查、冲突裁决 UI 走查、`STORAGE_AND_SYNC.md`
-      与实现一致性复查——设计稿阶段 3 验收面收口
+- [x] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）——2026-10-04 复核收口**：
+      设备管理/授权/吊销/离开命令（`commands.rs` 的 `sync_device_status/
+      join/leave/list_devices/authorize/revoke`）+ 设置页接线（SettingsModal：
+      加入前 DataScopeConsent 数据范围披露、立即同步、组密钥轮换）；冲突裁决
+      弹窗 `SyncConflictsModal`；`record_local_change` 真实接线（service
+      `attach_sync_capture` → `capture.rs`/`runtime.rs` 记账）；命令层测试
+      8 组（sync_join 部分状态清理/leave 离线可清/授权吊销需成员态/sync_now
+      与 rotate 先闸后网/conflict 命令同门禁）随桌面全量 216 绿；设计稿
+      阶段 3 的 `STORAGE_AND_SYNC.md` 重写早已入库且与实现一致。
+      **余项**：实机桌面会话的授权/吊销/裁决点击走查（需显示环境，
+      与 E2E 基建一并登记重启）
 - [ ] **M4 隐私红线（落地⑤，贯穿 M2/M3 UI）**：账号/同步功能默认关闭、
       显式开启、开启时明示数据范围（哪些元数据上服务器见 §9 可见面）；
       本地模式（不开启）全功能可用的断言/走查；默认关闭入测试

@@ -47,7 +47,7 @@ Milestone 6 – Server & Sync (optional)
 - [ ] Connect-like local-first secrets automation endpoint (design doc `CONNECT_AUTOMATION_DESIGN.md` stage 0, 2026-09-22; implementation stages 1–4 pending)
 - [ ] End-to-end encrypted sync (key envelopes, conflict resolution)
   - [x] Sync phase 2 core (2026-09-22): device envelopes (DR-1, X25519 `persona-dev-env-1`) + group-key hierarchy; oplog + LWW/conflict dual-version pure logic (DR-4); local sync storage (migration 014); server ciphertext relay `/api/v1/sync/*` (migration 0004: device registry / envelope custody / idempotent oplog push / cursor-paginated pull); client engine (push/pull cycles + Lamport clock + travel gate); server-holds-ciphertext-only, replay idempotence, out-of-order tolerance, master-password-rotation immunity, and two-device convergence over real TCP (offline concurrent edits keep both versions); THREAT_MODEL "E2EE sync relay" section
-  - [ ] Stage 3 wiring: desktop device-management UI + conflict-resolution UI; service write paths feed `record_local_change`; group-key rotation
+  - [x] Stage 3 wiring (2026-10-04 audit): desktop device-management UI (SettingsModal sync section + SyncConflictsModal), service write paths feed `record_local_change` via `attach_sync_capture`, group-key rotation with epoch optimistic-lock mutual exclusion — command-layer tests green; STORAGE_AND_SYNC.md consistent
 - [x] Documented storage/sync options: pure local, self-hosted cloud, Persona-server-assisted (`STORAGE_AND_SYNC.md`, 2026-09)
 
 Milestone 7 – Identity Runtime (positioning & concepts; feature track follows)
