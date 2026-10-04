@@ -451,6 +451,21 @@ pub struct AccountSrpLoginResponse {
     pub session_key_fingerprint: String,
 }
 
+/// `account_exchange_session` 响应。**不含会话令牌**：24h 会话由命令层
+/// 直写 keyring 覆盖 15 分钟短期令牌，渲染层只见有效期。
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSessionExchangeResponse {
+    pub expires_in_secs: u64,
+}
+
+/// `account_sign_out` 响应：本机令牌必清（否则返回错误）；服务器侧吊销
+/// 是尽力而为——令牌已过期/已不存在时照样算退出成功（false 仅说明
+/// 服务器那边无可吊销项），本地状态永不因远端 4xx 卡死。
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSignOutResponse {
+    pub revoked_on_server: bool,
+}
+
 /// biometric unlock 状态查询响应。`available` = OS 认证栈 + keyring 均
 /// 可达（fail-closed：任一不可用即 false，前端隐藏指纹入口）；
 /// `enabled` = 本 vault 的 keyring 托管条目存在——单一真相源，

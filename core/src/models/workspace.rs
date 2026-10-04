@@ -61,6 +61,20 @@ pub struct SyncConfig {
     pub server_token: String,
 }
 
+/// 账号域绑定（本 vault 关联的账号身份）。非敏感标识存盘：account_id
+/// 是登录唯一标识（persona-server 无 username→account_id 解析端点，登录
+/// 仪式按 account_id 作用域发起）；username/device_name 仅供展示。令牌
+/// 真值**不在盘上**——desktop 在 OS keyring（ACCOUNT_SERVICE），与 sync
+/// 配置的 token 同纪律。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AccountBinding {
+    pub account_id: String,
+    pub username: String,
+    /// 本机 SRP 凭证的设备名（SRP identity + 多设备管理里的展示位）
+    #[serde(default)]
+    pub device_name: Option<String>,
+}
+
 /// Workspace configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
@@ -125,6 +139,11 @@ pub struct WorkspaceSettings {
     /// 绑定——core 是平台无关层，不内置具体键位
     #[serde(default)]
     pub quick_access_hotkey: Option<String>,
+
+    /// 账号域绑定（旧 JSON 缺键时为 None = 未绑定任何账号；隐私红线：
+    /// 账号功能默认关闭，绑定由用户在设置页显式完成）
+    #[serde(default)]
+    pub account: Option<AccountBinding>,
 }
 
 impl Default for WorkspaceSettings {
@@ -144,6 +163,7 @@ impl Default for WorkspaceSettings {
             travel_entered_at: None,
             quick_access_enabled: false,
             quick_access_hotkey: None,
+            account: None,
         }
     }
 }
@@ -292,6 +312,36 @@ mod tests {
         // None = 桌面端按平台取默认绑定
         assert!(!settings.quick_access_enabled);
         assert_eq!(settings.quick_access_hotkey, None);
+        // 账号域绑定缺键回退未绑定（M2 批次；默认关闭红线）
+        assert_eq!(settings.account, None);
+    }
+
+    #[test]
+    fn test_account_binding_round_trip_and_legacy_default() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        // 默认：未绑定（账号功能默认关闭，绑定是显式动作）
+        assert_eq!(ws.settings.account, None);
+
+        ws.settings.account = Some(AccountBinding {
+            account_id: "acct-1".to_string(),
+            username: "alice@example.com".to_string(),
+            device_name: Some("laptop".to_string()),
+        });
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.settings.account,
+            Some(AccountBinding {
+                account_id: "acct-1".to_string(),
+                username: "alice@example.com".to_string(),
+                device_name: Some("laptop".to_string()),
+            })
+        );
+
+        // device_name 缺键（旧绑定 JSON）回退 None
+        let minimal = r#"{"account_id":"acct-1","username":"alice@example.com"}"#;
+        let binding: AccountBinding = serde_json::from_str(minimal).unwrap();
+        assert_eq!(binding.device_name, None);
     }
 
     #[test]

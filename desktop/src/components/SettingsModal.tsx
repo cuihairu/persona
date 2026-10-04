@@ -21,6 +21,7 @@ import ChangeMasterPasswordModal from './ChangeMasterPasswordModal';
 import ReauthModal from './ReauthModal';
 import TravelPassphraseModal from './TravelPassphraseModal';
 import ConnectAutomationSection from './ConnectAutomationSection';
+import AccountSection from './AccountSection';
 import QuickAccessSection from './QuickAccessSection';
 import UpdateCheckSection from './UpdateCheckSection';
 import SyncConflictsModal from './SyncConflictsModal';
@@ -1136,6 +1137,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <SyncDevicesSection />
+      </section>
+
+      <section className="mb-5">
+        <AccountSection />
       </section>
 
       <section className="mb-5">

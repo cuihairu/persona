@@ -709,6 +709,30 @@ describe('utils/api command mapping coverage', () => {
       request: { device_name: 'laptop', password: 'pw' },
     });
 
+    await personaAPI.accountExchangeSession(acct);
+    expect(mockInvoke).toHaveBeenCalledWith('account_exchange_session', {
+      account_id: acct,
+    });
+
+    await personaAPI.accountSignOut(acct);
+    expect(mockInvoke).toHaveBeenCalledWith('account_sign_out', {
+      account_id: acct,
+    });
+
+    await personaAPI.accountSetBinding({
+      account_id: acct,
+      username: acct,
+      device_name: 'laptop',
+    });
+    expect(mockInvoke).toHaveBeenCalledWith('set_account_binding', {
+      binding: { account_id: acct, username: acct, device_name: 'laptop' },
+    });
+
+    await personaAPI.accountSetBinding(null);
+    expect(mockInvoke).toHaveBeenCalledWith('set_account_binding', {
+      binding: null,
+    });
+
     await personaAPI.accountGenerateRecoveryCodes(acct);
     expect(mockInvoke).toHaveBeenCalledWith('account_generate_recovery_codes', {
       account_id: acct,

@@ -208,6 +208,17 @@ export interface WorkspaceSettings {
   quick_access_enabled: boolean;
   /** Quick Access 全局热键绑定串；null = 用桌面端平台默认绑定 */
   quick_access_hotkey: string | null;
+  /** 账号域绑定（null = 未绑定；账号功能默认关闭，绑定是显式动作） */
+  account: AccountBinding | null;
+}
+
+/** 账号域绑定（core `AccountBinding` 镜像）。非敏感标识；令牌真值在
+ * OS keyring，不经前端。 */
+export interface AccountBinding {
+  account_id: string;
+  username: string;
+  /** 本机 SRP 凭证的设备名 */
+  device_name?: string | null;
 }
 
 /**

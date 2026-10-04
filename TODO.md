@@ -121,9 +121,21 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       未解锁先于任何网络拒绝。已知服务器侧语义如实镜像：sessions 端点
       本身也在 require_account_bearer 之下，纯 passkey 首次登录无既有
       令牌走不通（需静态服务器令牌或先完成一次 SRP 登录）——server 域
-      设计边界，UI 批决定是否默示（如登录向导先 SRP）。剩余：桌面账号
-      UI（M2 UI 批）、M4 口径的账号侧红线复查（默认关闭/显式开启）、
-      实机勾稽
+      设计边界，UI 批决定是否默示（如登录向导先 SRP）。
+      ——2026-10-04 M2 编排+UI 批收口（ab03415 + 后续提交）：core
+      accounts::login（register_srp_credential / srp_login：challenge→M1→
+      verify→**M2 核验**→交付令牌，SRP 数学不出 core，mock 跑真服务器侧
+      数学对拍）；桌面编排命令 account_srp_register_with_password（引导
+      链闭合：无账号会话回退静态服务器令牌，require_account_bearer 契约
+      内）/ account_srp_login（15min 令牌直写 keyring，响应不含令牌本体）/
+      account_exchange_session（keyring 令牌同作 Bearer 与证据换 24h 会话）/
+      account_sign_out（尽力服务器吊销 + keyring 必清，退出不因远端 4xx
+      卡死）/ set_account_binding（绑定进 WorkspaceSettings.account，旧
+      JSON 缺键回退 None）；设置页 AccountSection（注册/登录向导 + 重新
+      登录 + 设备管理 + 恢复码 + 退出解绑；i18n zh/en；组件测试 3 例 +
+      命令层 3 例 + 前端 seam 覆盖）。登录 UX 以 account_id 为标识（服务器
+      无 username→id 解析端点，向导明示）。剩余：M4 口径的账号侧红线
+      复查（默认关闭/显式开启）、实机勾稽
 - [x] **M3 E2EE 同步接线核查（落地②收尾，设计稿阶段 3）——2026-10-04 复核收口**：
       设备管理/授权/吊销/离开命令（`commands.rs` 的 `sync_device_status/
       join/leave/list_devices/authorize/revoke`）+ 设置页接线（SettingsModal：

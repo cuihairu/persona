@@ -829,6 +829,28 @@ class PersonaAPI {
     return invoke('account_srp_login', { account_id, request });
   }
 
+  /** 账号域绑定写入：绑定（向导成功后）/ 解绑（退出账号，传 null）。
+   * 读取走 getWorkspaceSettings（settings.account 直出）。 */
+  async accountSetBinding(
+    binding: { account_id: string; username: string; device_name?: string | null } | null
+  ): Promise<ApiResponse<WorkspaceSettings>> {
+    return invoke('set_account_binding', { binding });
+  }
+
+  /** 兑换 24h 会话（编排命令）：keyring 的 15 分钟令牌同时作 Bearer 与
+   * 证据，24h 会话直写 keyring。响应不含令牌本体。 */
+  async accountExchangeSession(
+    account_id: string
+  ): Promise<ApiResponse<{ expires_in_secs: number }>> {
+    return invoke('account_exchange_session', { account_id });
+  }
+
+  /** 退出账号（编排命令）：自吊销 keyring 令牌（服务器尽力而为）并清
+   * keyring。revoked_on_server=false = 服务器侧无可吊销项。 */
+  async accountSignOut(account_id: string): Promise<ApiResponse<{ revoked_on_server: boolean }>> {
+    return invoke('account_sign_out', { account_id });
+  }
+
   /** 生成恢复码（需要 Bearer）。每次调用生成新一组（8 个），旧未用的作废。 */
   async accountGenerateRecoveryCodes(
     account_id: string

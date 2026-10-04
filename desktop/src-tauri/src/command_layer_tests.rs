@@ -9389,6 +9389,7 @@ async fn start_ssh_agent_surfaces_bind_failure_as_error() {
 // 透传）由 core accounts::remote 的 16 个用例覆盖，这里不重复。
 
 struct AccountMockRequest {
+    method: String,
     path: String,
     auth: Option<String>,
     body: String,
@@ -9437,6 +9438,11 @@ where
                 let _ = stream.read_exact(&mut body);
             }
             let (status, resp_body) = handler(&AccountMockRequest {
+                method: request_line
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
                 path: request_line
                     .split_whitespace()
                     .nth(1)
@@ -9849,6 +9855,131 @@ async fn account_srp_register_with_password_falls_back_to_sync_server_token() {
         None,
         "凭证注册不是登录，不落地令牌"
     );
+}
+
+/// `account_exchange_session`：keyring 的 15 分钟令牌作证据换 24h 会话，
+/// 会话令牌直写 keyring、响应不含令牌本体。
+#[tokio::test]
+async fn account_exchange_session_overwrites_keyring_with_session() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    let url = spawn_account_mock(|req| match req.path.as_str() {
+        "/api/v1/accounts/acct-1/sessions" => {
+            assert_eq!(
+                req.auth.as_deref(),
+                Some("Bearer tok-15m"),
+                "Bearer 与证据是同一枚 keyring 令牌"
+            );
+            (
+                200,
+                r#"{"session_token":"sess-24h","expires_in_secs":86400}"#.to_string(),
+            )
+        }
+        other => panic!("unexpected path {other}"),
+    });
+    let resp = set_sync_config(true, url, "tok-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    state.account_token_store.set(&db_path, "tok-15m").unwrap();
+
+    let resp = account_exchange_session("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().expires_in_secs, 86400);
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap().as_deref(),
+        Some("sess-24h")
+    );
+}
+
+/// `account_sign_out`：尽力服务器吊销 + 本机 keyring 必清；服务器 401
+/// （令牌已过期）不拦退出；无令牌时幂等成功。
+#[tokio::test]
+async fn account_sign_out_clears_keyring_best_effort_revoke() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    let url = spawn_account_mock(|req| match req.method.as_str() {
+        "DELETE" if req.path == "/api/v1/accounts/acct-1/sessions/tok-15m" => {
+            assert_eq!(req.auth.as_deref(), Some("Bearer tok-15m"));
+            (204, String::new())
+        }
+        "DELETE" if req.path == "/api/v1/accounts/acct-1/sessions/expired" => {
+            (401, r#"{"error":{"code":"unauthorized"}}"#.to_string())
+        }
+        other => panic!("unexpected request {other}"),
+    });
+    let resp = set_sync_config(true, url, "tok-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 正常路径：吊销 + 清 keyring
+    state.account_token_store.set(&db_path, "tok-15m").unwrap();
+    let resp = account_sign_out("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.unwrap().revoked_on_server);
+    assert_eq!(state.account_token_store.get(&db_path).unwrap(), None);
+
+    // 服务器 401（过期）：照样退出成功，keyring 仍被清
+    state.account_token_store.set(&db_path, "expired").unwrap();
+    let resp = account_sign_out("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(!resp.data.unwrap().revoked_on_server);
+    assert_eq!(state.account_token_store.get(&db_path).unwrap(), None);
+
+    // 无令牌：幂等成功（不再触网）
+    let resp = account_sign_out("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(!resp.data.unwrap().revoked_on_server);
+}
+
+/// `set_account_binding`：写 vault JSON（get_workspace_settings 直出可读），
+/// None 解绑；锁户拒绝。
+#[tokio::test]
+async fn set_account_binding_round_trips_through_workspace_settings() {
+    let app = mock_app();
+    let _db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    let binding = persona_core::models::workspace::AccountBinding {
+        account_id: "acct-1".to_string(),
+        username: "alice@example.com".to_string(),
+        device_name: Some("laptop".to_string()),
+    };
+    let resp = set_account_binding(Some(binding.clone()), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().account, Some(binding.clone()));
+
+    let resp = get_workspace_settings(state.clone()).await.unwrap();
+    assert_eq!(resp.data.unwrap().account, Some(binding.clone()));
+
+    // 解绑
+    let resp = set_account_binding(None, state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().account, None);
+
+    // 锁户拒绝
+    let resp = lock_service(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = set_account_binding(Some(binding), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("locked"));
 }
 
 fn decode_b64(value: &str) -> Vec<u8> {

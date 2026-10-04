@@ -2647,6 +2647,30 @@ impl From<persona_core::accounts::remote::AccountDeviceInfo> for AccountDeviceIn
     }
 }
 
+/// 账号域绑定写入（显式动作）：`Some` = 绑定（向导注册/登录成功后由
+/// 前端调用），`None` = 解绑（退出账号时随 revoke_session 一起）。
+/// 非敏感标识存 vault JSON（`WorkspaceSettings.account`）；令牌真值在
+/// OS keyring（ACCOUNT_SERVICE），不经此命令。读取走
+/// `get_workspace_settings`（同一条 settings 直出）。
+#[command(rename_all = "snake_case")]
+pub async fn set_account_binding(
+    binding: Option<persona_core::models::workspace::AccountBinding>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<WorkspaceSettings>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = workspace_or_return!(db, workspace_path);
+    ws.settings.account = binding;
+    ws.touch();
+    let updated = ok_or_error_response!(repo.update(&ws).await);
+    Ok(ApiResponse::success(updated.settings))
+}
+
 /// 公开注册新账号（无需认证）。
 #[command(rename_all = "snake_case")]
 pub async fn account_register(
@@ -2916,6 +2940,113 @@ pub async fn account_srp_login(
     Ok(ApiResponse::success(AccountSrpLoginResponse {
         expires_in_secs: outcome.expires_in_secs,
         session_key_fingerprint: outcome.session_key_fingerprint,
+    }))
+}
+
+/// 兑换 24h 账号会话（编排命令）：keyring 里的 15 分钟 SRP 令牌同时作
+/// Bearer 与 body 证据（服务器 sessions 端点是 Bearer + 恰好一种证据的
+/// 双闸，SRP 路径下两者是同一枚令牌），换得的 24h 会话令牌直写 keyring
+/// 覆盖短期令牌。令牌本体全程不过 IPC；passkey 断言证据路径仍走裸
+/// [`account_create_session`]（断言由渲染层的 WebAuthn 仪式产出）。
+#[command(rename_all = "snake_case")]
+pub async fn account_exchange_session(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSessionExchangeResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let server_url = account_server_for(&state).await?;
+    let bearer = state
+        .account_token_store
+        .get(&db_path)
+        .map_err(|e| format!("OS keyring read failed: {e}"))?
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| {
+            "Account session is not configured — finish the account login first".to_string()
+        })?;
+    let api = persona_core::accounts::remote::AccountsApi::with_bearer(&server_url, &bearer)
+        .map_err(|e| format!("Invalid account server configuration: {e}"))?;
+    let evidence = persona_core::accounts::remote::CreateAccountSessionRequest {
+        srp_token: Some(bearer),
+        passkey_assertion: None,
+    };
+    let resp = match api.create_account_session(&account_id, &evidence).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Account session exchange failed: {e}"
+            )))
+        }
+    };
+    if let Err(e) = state.account_token_store.set(&db_path, &resp.session_token) {
+        return Ok(ApiResponse::error(format!(
+            "Account session created but storing the session token failed: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(AccountSessionExchangeResponse {
+        expires_in_secs: resp.expires_in_secs,
+    }))
+}
+
+/// 退出账号（编排命令）：吊销 keyring 里的当前令牌（15 分钟短期令牌与
+/// 24h 会话都在服务器 `account_sessions` 表里，同一 DELETE 自吊销）并
+/// 清除本机 keyring。服务器吊销尽力而为（过期/不存在不拦退出），本机
+/// 清理是硬性语义——keyring 清除失败才报错。绑定（settings.account）
+/// 由前端随成功响应一并清除。
+#[command(rename_all = "snake_case")]
+pub async fn account_sign_out(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSignOutResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let bearer = state
+        .account_token_store
+        .get(&db_path)
+        .map_err(|e| format!("OS keyring read failed: {e}"))?
+        .filter(|t| !t.trim().is_empty());
+    let Some(bearer) = bearer else {
+        // 本机已无令牌 = 已退出；幂等成功（revoked_on_server=false）
+        return Ok(ApiResponse::success(AccountSignOutResponse {
+            revoked_on_server: false,
+        }));
+    };
+    let mut revoked_on_server = false;
+    if let Ok(server_url) = account_server_for(&state).await {
+        if let Ok(api) =
+            persona_core::accounts::remote::AccountsApi::with_bearer(&server_url, &bearer)
+        {
+            revoked_on_server = api
+                .revoke_account_session(&account_id, &bearer)
+                .await
+                .is_ok();
+        }
+    }
+    if let Err(e) = state.account_token_store.delete(&db_path) {
+        return Ok(ApiResponse::error(format!(
+            "Failed to clear the local account token: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(AccountSignOutResponse {
+        revoked_on_server,
     }))
 }
 

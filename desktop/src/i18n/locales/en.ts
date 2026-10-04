@@ -251,6 +251,41 @@ export default {
       rotateConcurrentConflict:
         'Another device just rotated the group key — your data is unaffected, please retry.',
     },
+    account: {
+      title: 'Account',
+      description:
+        'persona-server account: registration, password login (SRP; the master password never leaves this device) and device management. Unbound by default — binding is an explicit action.',
+      loadFailed: 'Failed to load account state',
+      formIncomplete: 'Please fill in the whole form',
+      busy: 'Working…',
+      modeRegister: 'Register a new account',
+      modeLogin: 'Sign in to an existing account',
+      usernameLabel: 'Username (email)',
+      usernamePlaceholder: 'alice@example.com',
+      passwordLabel: 'Account password',
+      passwordPlaceholder: 'Independent of the master password; never leaves this device (SRP only)',
+      deviceNameLabel: 'Device name',
+      deviceNamePlaceholder: 'e.g. My laptop',
+      accountIdLabel: 'Account ID',
+      accountIdPlaceholder: 'acct-…',
+      accountIdHint:
+        'The account ID is generated at registration (no username lookup on the server) — copy it from the registering device.',
+      registerSubmit: 'Register and bind this device',
+      loginSubmit: 'Sign in',
+      boundAs: 'Bound: {{username}}',
+      accountId: 'Account ID',
+      device: 'This device',
+      signIn: 'Sign in again',
+      signedIn: 'Signed in',
+      signedOut: 'Signed out and unbound',
+      signOut: 'Sign out and unbind',
+      devices: 'Account devices',
+      devicesEmpty: 'No authorized devices yet',
+      revokeDevice: 'Revoke',
+      recoveryGenerate: 'Generate recovery codes',
+      recoveryHint:
+        'New recovery codes generated; previous unused ones are void. Shown only this once — save them now.',
+    },
     syncConflicts: {
       title: 'Sync conflicts',
       description:
