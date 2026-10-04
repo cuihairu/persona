@@ -47,6 +47,8 @@ fn mock_app() -> tauri::App<tauri::test::MockRuntime> {
         account_token_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
         quick_access: StdMutex::new(persona_desktop::quick_access::QuickAccessRuntime::default()),
+        pairing_sessions: Arc::new(StdMutex::new(HashMap::new())),
+        sync_group_store: Arc::new(InMemoryTokenStore::default()),
     });
     app
 }
