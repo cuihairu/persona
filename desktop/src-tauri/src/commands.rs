@@ -2411,6 +2411,589 @@ pub async fn sync_conflict_resolve(
     }
 }
 
+// ---- 账号体系（M2：persona-server /api/v1/accounts/* 的 desktop 代理
+//      层）----
+//
+// 职责切分与 sync 命令族同一纪律：协议/wire 全在 core（`AccountsApi`），
+// 这里只做宿主编排——settings.sync 的 server_url 取用、keyring 账号
+// bearer 读写、错误映射。门禁：已解锁起步（数据敏感，与 sync_now 同级）；
+// server_url 未配置 = 未启用（与 sync 实验同一「默认关」语义，M4 隐私
+// 红线）；Bearer 门禁端点再要求 keyring 有账号 bearer（fail-closed，
+// 无令牌不猜不带病运行）。
+//
+// 端点认证面按服务器契约分两类（公开免 Bearer / Bearer 三选一：静态
+// 服务器令牌、SRP 15 分钟短期令牌、账号 24h 会话令牌——本层只负责原样
+// 携带，服务器裁决）。令牌生命周期：`account_srp_verify` 成功后把 15
+// 分钟令牌写入 keyring，`account_create_session` 成功后用 24h 会话令牌
+// 覆盖，`account_revoke_session` 自吊销时清除。
+//
+// 已知服务器侧语义（如实镜像，不绕过）：sessions 端点本身也在
+// `require_account_bearer` 之下——纯 passkey 首次登录（无任何既有令牌）
+// 走不通，需静态服务器令牌或先完成一次 SRP 登录；此属 server 设计
+// 边界，宿主层不改判。
+
+/// settings.sync.server_url（账号与 sync 共用同一服务器地址）。只用
+/// url，不读 token——账号 bearer 独立存 account token store。
+async fn account_server_for(state: &State<'_, AppState>) -> std::result::Result<String, String> {
+    let db_path = require_db_path(state)
+        .await
+        .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
+    let sync_config = match read_sync_config(state, &db_path).await {
+        Some(config) => config,
+        None => return Err("Sync server URL is not configured".to_string()),
+    };
+    let server_url = sync_config.server_url.trim().to_string();
+    if server_url.is_empty() {
+        return Err("Sync server URL is not configured".to_string());
+    }
+    Ok(server_url)
+}
+
+/// 账号公开端点客户端（免 Bearer）。
+async fn account_api_for(
+    state: &State<'_, AppState>,
+) -> std::result::Result<persona_core::accounts::remote::AccountsApi, String> {
+    let server_url = account_server_for(state).await?;
+    persona_core::accounts::remote::AccountsApi::new(&server_url)
+        .map_err(|e| format!("Invalid account server configuration: {e}"))
+}
+
+/// 账号 Bearer 端点客户端：从 keyring 解析账号 bearer（fail-closed）。
+async fn account_api_with_bearer_for(
+    state: &State<'_, AppState>,
+) -> std::result::Result<persona_core::accounts::remote::AccountsApi, String> {
+    let server_url = account_server_for(state).await?;
+    let db_path = require_db_path(state)
+        .await
+        .ok_or_else(|| "Database path unavailable. Initialize the service first.".to_string())?;
+    let bearer = state
+        .account_token_store
+        .get(&db_path)
+        .map_err(|e| format!("OS keyring read failed: {e}"))?
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| {
+            "Account session is not configured — finish the account login first".to_string()
+        })?;
+    persona_core::accounts::remote::AccountsApi::with_bearer(&server_url, &bearer)
+        .map_err(|e| format!("Invalid account server configuration: {e}"))
+}
+
+impl From<AccountRegisterRequest>
+    for persona_core::accounts::remote::RegisterAccountRequest
+{
+    fn from(req: AccountRegisterRequest) -> Self {
+        Self {
+            username: req.username,
+            display_name: req.display_name,
+        }
+    }
+}
+
+impl From<AccountPasskeyCreateOptionsRequest>
+    for persona_core::accounts::remote::PasskeyCreateOptionsRequest
+{
+    fn from(req: AccountPasskeyCreateOptionsRequest) -> Self {
+        Self {
+            rp_id: req.rp_id,
+            rp_name: req.rp_name,
+            user_handle: req.user_handle,
+            user_name: req.user_name,
+            user_display_name: req.user_display_name,
+        }
+    }
+}
+
+impl From<AccountPasskeyRegisterRequest>
+    for persona_core::accounts::remote::PasskeyRegisterRequest
+{
+    fn from(req: AccountPasskeyRegisterRequest) -> Self {
+        Self {
+            attestation_response: req.attestation_response,
+            client_data_json: req.client_data_json,
+            origin: req.origin,
+        }
+    }
+}
+
+impl From<AccountPasskeyLoginOptionsRequest>
+    for persona_core::accounts::remote::PasskeyLoginOptionsRequest
+{
+    fn from(req: AccountPasskeyLoginOptionsRequest) -> Self {
+        Self {
+            credential_id: req.credential_id,
+        }
+    }
+}
+
+impl From<AccountSrpRegisterRequest> for persona_core::accounts::remote::SrpRegisterRequest {
+    fn from(req: AccountSrpRegisterRequest) -> Self {
+        Self {
+            device_name: req.device_name,
+            salt: req.salt,
+            verifier: req.verifier,
+        }
+    }
+}
+
+impl From<AccountSrpChallengeRequest> for persona_core::accounts::remote::SrpChallengeRequest {
+    fn from(req: AccountSrpChallengeRequest) -> Self {
+        Self {
+            device_name: req.device_name,
+            client_public: req.client_public,
+        }
+    }
+}
+
+impl From<AccountSrpVerifyRequest> for persona_core::accounts::remote::SrpVerifyRequest {
+    fn from(req: AccountSrpVerifyRequest) -> Self {
+        Self {
+            session_id: req.session_id,
+            client_proof: req.client_proof,
+        }
+    }
+}
+
+impl From<AccountVerifyRecoveryCodeRequest>
+    for persona_core::accounts::remote::VerifyRecoveryCodeRequest
+{
+    fn from(req: AccountVerifyRecoveryCodeRequest) -> Self {
+        Self { code: req.code }
+    }
+}
+
+impl From<AccountAuthorizeDeviceRequest>
+    for persona_core::accounts::remote::AuthorizeDeviceRequest
+{
+    fn from(req: AccountAuthorizeDeviceRequest) -> Self {
+        Self {
+            device_id: req.device_id,
+            public_key: req.public_key,
+        }
+    }
+}
+
+impl From<AccountSessionEvidence> for persona_core::accounts::remote::CreateAccountSessionRequest {
+    fn from(req: AccountSessionEvidence) -> Self {
+        Self {
+            srp_token: req.srp_token,
+            passkey_assertion: req.passkey_assertion.map(|assertion| {
+                persona_core::accounts::remote::PasskeyAssertionRequest {
+                    credential_id: assertion.credential_id,
+                    client_data_json: assertion.client_data_json,
+                    origin: assertion.origin,
+                    authenticator_data: assertion.authenticator_data,
+                    signature: assertion.signature,
+                }
+            }),
+        }
+    }
+}
+
+impl From<persona_core::accounts::remote::AccountSessionInfo> for AccountSessionInfo {
+    fn from(info: persona_core::accounts::remote::AccountSessionInfo) -> Self {
+        Self {
+            session_token: info.session_token,
+            expires_in_secs: info.expires_in_secs,
+        }
+    }
+}
+
+impl From<persona_core::accounts::remote::AccountDeviceInfo> for AccountDeviceInfo {
+    fn from(dev: persona_core::accounts::remote::AccountDeviceInfo) -> Self {
+        Self {
+            id: dev.id,
+            device_id: dev.device_id,
+            device_name: dev.device_name,
+            public_key: dev.public_key,
+            status: dev.status,
+            authorized_by: dev.authorized_by,
+            authorized_at: dev.authorized_at,
+            revoked_at: dev.revoked_at,
+            revoked_by: dev.revoked_by,
+            created_at: dev.created_at,
+        }
+    }
+}
+
+/// 公开注册新账号（无需认证）。
+#[command(rename_all = "snake_case")]
+pub async fn account_register(
+    request: AccountRegisterRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountRegistrationResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.register_account(&request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountRegistrationResponse {
+            account_id: resp.account_id,
+            username: resp.username,
+            display_name: resp.display_name,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!("Account register failed: {e}"))),
+    }
+}
+
+/// passkey 注册选项（公开端点）。响应是服务器签发的裸 WebAuthn
+/// creation options（120s 一次性挑战），原样透传。
+#[command(rename_all = "snake_case")]
+pub async fn account_passkey_create_options(
+    account_id: String,
+    request: AccountPasskeyCreateOptionsRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<serde_json::Value>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.passkey_create_options(&account_id, &request.into()).await {
+        Ok(options) => Ok(ApiResponse::success(options)),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account passkey create-options failed: {e}"
+        ))),
+    }
+}
+
+/// passkey 注册完成（公开端点）。提交认证器 attestation，服务器做 RP 侧
+/// 完整验证后存公钥材料。
+#[command(rename_all = "snake_case")]
+pub async fn account_passkey_register(
+    account_id: String,
+    request: AccountPasskeyRegisterRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountPasskeyRegisterResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.passkey_register(&account_id, &request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountPasskeyRegisterResponse {
+            passkey_id: resp.passkey_id,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!("Account passkey register failed: {e}"))),
+    }
+}
+
+/// passkey 登录选项（公开端点，登录仪式第一步）。按凭据 id 换取服务器
+/// 挑战（120s 一次性），断言时消费。
+#[command(rename_all = "snake_case")]
+pub async fn account_passkey_login_options(
+    account_id: String,
+    request: AccountPasskeyLoginOptionsRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountPasskeyLoginOptionsResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.passkey_login_options(&account_id, &request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountPasskeyLoginOptionsResponse {
+            challenge: resp.challenge,
+            rp_id: resp.rp_id,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account passkey login-options failed: {e}"
+        ))),
+    }
+}
+
+/// SRP 凭据登记（Bearer 端点）。账号内设备的 SRP salt+verifier 登记
+/// （密码登录的兜底凭据）。
+#[command(rename_all = "snake_case")]
+pub async fn account_srp_register(
+    account_id: String,
+    request: AccountSrpRegisterRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSrpRegisterResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.srp_register(&account_id, &request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountSrpRegisterResponse {
+            device_name: resp.device_name,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!("Account SRP register failed: {e}"))),
+    }
+}
+
+/// SRP 挑战请求（公开端点，登录步骤）。发起账号 SRP 登录握手。
+#[command(rename_all = "snake_case")]
+pub async fn account_srp_challenge(
+    account_id: String,
+    request: AccountSrpChallengeRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSrpChallengeResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.srp_challenge(&account_id, &request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountSrpChallengeResponse {
+            session_id: resp.session_id,
+            salt: resp.salt,
+            server_public: resp.server_public,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!("Account SRP challenge failed: {e}"))),
+    }
+}
+
+/// SRP 验证完成（公开端点，登录步骤）。完成握手，返回 15 分钟 SRP 登录
+/// 令牌；本命令除透传外，把令牌写入 keyring 作为账号 bearer 的解析源
+/// （后续 Bearer 门禁命令免前端回传）。
+#[command(rename_all = "snake_case")]
+pub async fn account_srp_verify(
+    account_id: String,
+    request: AccountSrpVerifyRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSrpVerifyResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let resp = match api.srp_verify(&account_id, &request.into()).await {
+        Ok(resp) => resp,
+        Err(e) => return Ok(ApiResponse::error(format!("Account SRP verify failed: {e}"))),
+    };
+    if let Err(e) = state.account_token_store.set(&db_path, &resp.token) {
+        return Ok(ApiResponse::error(format!(
+            "Account login succeeded but storing the session token failed: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(AccountSrpVerifyResponse {
+        server_proof: resp.server_proof,
+        token: resp.token,
+        expires_in_secs: resp.expires_in_secs,
+    }))
+}
+
+/// 生成恢复码（Bearer 端点）。每次调用生成新一组（8 个），旧未用的作废。
+#[command(rename_all = "snake_case")]
+pub async fn account_generate_recovery_codes(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountRecoveryCodes>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.generate_recovery_codes(&account_id).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountRecoveryCodes { codes: resp.codes })),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account recovery-codes failed: {e}"
+        ))),
+    }
+}
+
+/// 验证恢复码（公开端点）。一次性消费，验证成功后标记为已用。
+#[command(rename_all = "snake_case")]
+pub async fn account_verify_recovery_code(
+    account_id: String,
+    request: AccountVerifyRecoveryCodeRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountVerifyRecoveryCodeResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.verify_recovery_code(&account_id, &request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountVerifyRecoveryCodeResponse {
+            success: resp.success,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account recovery-code verify failed: {e}"
+        ))),
+    }
+}
+
+/// 为账号授权设备（Bearer 端点）。把已登记的 sync 设备（按 device_id +
+/// 公钥比对）关联到账号。
+#[command(rename_all = "snake_case")]
+pub async fn account_authorize_device(
+    account_id: String,
+    request: AccountAuthorizeDeviceRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountAuthorizeDeviceResponse>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.authorize_device(&account_id, &request.into()).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountAuthorizeDeviceResponse {
+            id: resp.id,
+            status: resp.status,
+        })),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account authorize-device failed: {e}"
+        ))),
+    }
+}
+
+/// 获取账号下的已授权设备列表（Bearer 端点）。
+#[command(rename_all = "snake_case")]
+pub async fn account_list_devices(
+    account_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountDevicesList>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.list_account_devices(&account_id).await {
+        Ok(resp) => Ok(ApiResponse::success(AccountDevicesList {
+            devices: resp.devices.into_iter().map(Into::into).collect(),
+        })),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account list-devices failed: {e}"
+        ))),
+    }
+}
+
+/// 吊销账号下的设备（Bearer 端点）。204 无体成功。
+#[command(rename_all = "snake_case")]
+pub async fn account_revoke_device(
+    account_id: String,
+    device_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.revoke_account_device(&account_id, &device_id).await {
+        Ok(ok) => Ok(ApiResponse::success(ok)),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account revoke-device failed: {e}"
+        ))),
+    }
+}
+
+/// 创建账号会话（Bearer 端点）。凭恰好一种登录证据（SRP 15 分钟令牌或
+/// passkey 断言）兑换 24h 账号会话令牌；成功后令牌覆盖 keyring 的账号
+/// bearer（登出/续期语义：最后一次登录的会话为本机有效会话）。
+#[command(rename_all = "snake_case")]
+pub async fn account_create_session(
+    account_id: String,
+    request: AccountSessionEvidence,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<AccountSessionInfo>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    let resp = match api.create_account_session(&account_id, &request.into()).await {
+        Ok(resp) => resp,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Account create-session failed: {e}"
+            )))
+        }
+    };
+    if let Err(e) = state.account_token_store.set(&db_path, &resp.session_token) {
+        return Ok(ApiResponse::error(format!(
+            "Account session created but storing the session token failed: {e}"
+        )));
+    }
+    Ok(ApiResponse::success(AccountSessionInfo::from(resp)))
+}
+
+/// 吊销账号会话（Bearer 端点）。登出该会话令牌；若吊销的正是本机
+/// keyring 里存的有效会话，一并清除（自吊销 = 本机退出账号登录）。
+#[command(rename_all = "snake_case")]
+pub async fn account_revoke_session(
+    account_id: String,
+    session_token: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    let api = match account_api_with_bearer_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.revoke_account_session(&account_id, &session_token).await {
+        Ok(ok) => {
+            let stored = state
+                .account_token_store
+                .get(&db_path)
+                .unwrap_or(None)
+                .unwrap_or_default();
+            if stored == session_token {
+                let _ = state.account_token_store.delete(&db_path);
+            }
+            Ok(ApiResponse::success(ok))
+        }
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Account revoke-session failed: {e}"
+        ))),
+    }
+}
+
 /// 前端错误上报：production 构建里 ErrorBoundary / handleError 落本地
 /// 日志文件（setup 安装的脱敏 subscriber）。各字段截断防日志爆炸；上报
 /// 路径永不失败——错误已经发生，上报再报错只会制造二次噪声。

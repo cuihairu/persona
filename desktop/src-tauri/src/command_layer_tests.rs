@@ -69,6 +69,10 @@ fn mock_app_with_wrap_parts(
         // E2EE sync 设备身份槽：默认内存 fake，sync 命令族测试直接从
         // AppState 取 Arc 写入/断言条目
         device_store: Arc::new(InMemoryTokenStore::default()),
+        // 账号 bearer 槽：默认内存 fake，account 命令族测试跨命令断言
+        // 令牌生命周期（srp_verify 写入 / create_session 覆盖 /
+        // revoke_session 自吊销清除）
+        account_token_store: Arc::new(InMemoryTokenStore::default()),
         connect_server: Mutex::new(None),
         // Quick Access 运行态：测试里没有 OS 全局热键可抢注，默认空态
         // （quick_access_* 命令测试直接读写这个槽位断言语义）
@@ -9373,4 +9377,275 @@ async fn start_ssh_agent_surfaces_bind_failure_as_error() {
     let resp = get_ssh_agent_status(app.state::<AppState>()).await.unwrap();
     assert!(resp.success);
     assert!(!resp.data.unwrap().running);
+}
+
+// ---- 账号体系（M2 tauri 代理层）----
+//
+// 门禁语义与 sync 命令族同门第：未初始化/未配置服务器/未解锁各态先于
+// 任何网络访问被拒；Bearer 端点额外要求 keyring 有账号 bearer（
+// fail-closed）。令牌生命周期（srp_verify 写入 → create_session 覆盖
+// → revoke_session 自吊销清除、吊销他人会话不动本机令牌）用一次性
+// TCP 假服务器做端到端断言。wire 契约（路径/方法/Bearer 有无/请求体
+// 透传）由 core accounts::remote 的 16 个用例覆盖，这里不重复。
+
+struct AccountMockRequest {
+    path: String,
+    auth: Option<String>,
+    _body: String,
+}
+
+/// 一次性账号域假服务器：每连接读一条请求（head + Content-Length 体），
+/// 调 handler 得 (状态码, 响应体)，回写极简 HTTP/1.1 响应，循环至测试
+/// 结束（监听器随线程生命周期）。
+fn spawn_account_mock<F>(handler: F) -> String
+where
+    F: Fn(&AccountMockRequest) -> (u16, String) + Send + 'static,
+{
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                if stream.read(&mut byte).unwrap_or(0) == 0 {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&buf).into_owned();
+            let request_line = head.lines().next().unwrap_or_default().to_string();
+            let auth = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                .map(|l| l.splitn(2, ':').nth(1).unwrap_or_default().trim().to_string());
+            let content_length: usize = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.splitn(2, ':').nth(1)?.trim().parse().ok())
+                .unwrap_or(0);
+            let mut body = vec![0u8; content_length];
+            if content_length > 0 {
+                let _ = stream.read_exact(&mut body);
+            }
+            let (status, resp_body) = handler(&AccountMockRequest {
+                path: request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string(),
+                auth,
+                _body: String::from_utf8_lossy(&body).into_owned(),
+            });
+            let reason = if status == 204 { "" } else { "OK" };
+            let resp = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{resp_body}",
+                resp_body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[tokio::test]
+async fn account_commands_gate_before_any_network_or_crypto() {
+    let app = mock_app();
+
+    // 未初始化 service → 拒绝（先于任何配置/网络访问）
+    let resp = account_register(
+        AccountRegisterRequest {
+            username: "alice@example.com".to_string(),
+            display_name: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success, "must reject before init");
+    assert!(resp.error.unwrap().contains("not initialized"));
+
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    // 已初始化但服务器未配置 → 拒绝（账号与 sync 共用 server_url，
+    // 未配置 = 功能未启用；公开与 Bearer 端点同门禁）
+    let resp = account_register(
+        AccountRegisterRequest {
+            username: "alice@example.com".to_string(),
+            display_name: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Sync server URL is not configured"));
+    let resp = account_list_devices("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("Sync server URL is not configured"));
+
+    // 配置服务器（不可达端口）→ Bearer 端点因无账号令牌先拒绝（fail-closed，
+    // 不触网）；公开端点过门禁、网络层失败
+    let resp = set_sync_config(
+        true,
+        "http://127.0.0.1:1".to_string(),
+        "tok-1".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = account_list_devices("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    let err = resp.error.unwrap();
+    assert!(
+        err.contains("Account session is not configured"),
+        "no bearer yet -> account session gate, got: {err}"
+    );
+    let resp = account_register(
+        AccountRegisterRequest {
+            username: "alice@example.com".to_string(),
+            display_name: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let err = resp.error.unwrap();
+    assert!(
+        !err.contains("Account session"),
+        "public endpoint must not require a bearer, got: {err}"
+    );
+
+    // 注入账号 bearer → Bearer 端点过令牌门禁，网络层失败（不可达报错，
+    // 而非门禁报错）
+    state
+        .account_token_store
+        .set(&db_path, "tok-acct")
+        .unwrap();
+    let resp = account_list_devices("acct-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(!resp.success);
+    let err = resp.error.unwrap();
+    assert!(
+        !err.contains("Account session is not configured"),
+        "gate should pass with a bearer, got: {err}"
+    );
+
+    // 锁定后 → 拒绝（门禁在编排之前）
+    let resp = lock_service(state.clone()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = account_register(
+        AccountRegisterRequest {
+            username: "alice@example.com".to_string(),
+            display_name: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(resp.error.unwrap().contains("locked"));
+}
+
+#[tokio::test]
+async fn account_token_lifecycle_persists_overwrites_and_clears() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "master-pw-123").await;
+    let state = app.state::<AppState>();
+
+    let url = spawn_account_mock(|req| match req.path.as_str() {
+        "/api/v1/accounts/acct-1/srp/verify" => {
+            assert!(
+                req.auth.is_none(),
+                "srp/verify is public: bearer must not be sent"
+            );
+            (
+                200,
+                r#"{"server_proof":"cHJvb2Y=","token":"tok-15m","expires_in_secs":900}"#
+                    .to_string(),
+            )
+        }
+        "/api/v1/accounts/acct-1/sessions" => (
+            200,
+            r#"{"session_token":"sess-24h","expires_in_secs":86400}"#.to_string(),
+        ),
+        "/api/v1/accounts/acct-1/sessions/sess-24h" => (204, String::new()),
+        other => panic!("unexpected path {other}"),
+    });
+    let resp = set_sync_config(true, url, "tok-1".to_string(), state.clone())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // srp verify 成功 → 15 分钟令牌入 keyring（Bearer 解析源）
+    let resp = account_srp_verify(
+        "acct-1".to_string(),
+        AccountSrpVerifyRequest {
+            session_id: "s1".to_string(),
+            client_proof: "cA==".to_string(),
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().token, "tok-15m");
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap().as_deref(),
+        Some("tok-15m")
+    );
+
+    // create session 成功 → 24h 会话令牌覆盖（本机有效会话切换）
+    let resp = account_create_session(
+        "acct-1".to_string(),
+        AccountSessionEvidence {
+            srp_token: Some("tok-15m".to_string()),
+            passkey_assertion: None,
+        },
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data.unwrap().session_token, "sess-24h");
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap().as_deref(),
+        Some("sess-24h")
+    );
+
+    // 自吊销本机会话 → keyring 清除（本机退出账号登录）
+    let resp = account_revoke_session(
+        "acct-1".to_string(),
+        "sess-24h".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(state.account_token_store.get(&db_path).unwrap(), None);
+
+    // 吊销他人会话不动本机令牌
+    state.account_token_store.set(&db_path, "mine").unwrap();
+    let resp = account_revoke_session(
+        "acct-1".to_string(),
+        "other-sess".to_string(),
+        state.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(
+        state.account_token_store.get(&db_path).unwrap().as_deref(),
+        Some("mine")
+    );
 }

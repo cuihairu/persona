@@ -26,6 +26,11 @@ pub const BIOMETRIC_WRAP_SERVICE: &str = "persona-biometric-wrap";
 /// 口径：设备私钥持久化由宿主负责）。值 = `DeviceIdentity::to_stored_json`，
 /// 键同 token_store = vault db_path（拷机后自然失效，需重新 join）。
 pub const DEVICE_SERVICE: &str = "persona-device";
+/// 账号域 bearer（静态服务器令牌 / SRP 短期令牌 / 账号 24h 会话令牌，按
+/// 服务器 require_account_bearer 三选一）的 keyring service。条目键同
+/// token_store = vault db_path。条目存在与否 = 账号是否已在本机登录
+/// （单一真相源；vault 拷机后 keyring 无条目 = 需重新登录）。
+pub const ACCOUNT_SERVICE: &str = "persona-account";
 
 /// 同步服务器上报令牌的存取接口。
 ///

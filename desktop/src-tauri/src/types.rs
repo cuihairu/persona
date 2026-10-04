@@ -66,6 +66,11 @@ pub struct AppState {
     /// token_store = vault db_path。条目存在与否 = 本 vault 是否已加入
     /// 同步（单一真相源，settings 不存开关）。
     pub device_store: Arc<dyn crate::token_store::TokenStore>,
+    /// 账号域 bearer 的 keyring 存储（service `persona-account`，键同
+    /// token_store = vault db_path）。`account_srp_verify` /
+    /// `account_create_session` 成功后写入，`account_revoke_session`
+    /// 自吊销时清除；Bearer 门禁的账号命令从这里解析（fail-closed）。
+    pub account_token_store: Arc<dyn crate::token_store::TokenStore>,
     /// Quick Access 全局热键的进程内运行态（实际抢注结果 + 失败原因）。
     /// 绑定与开关的持久化真值在 workspace settings，本字段只反映"这一
     /// 进程里 OS 抢注成功没有"——见 `quick_access` 模块注释。用 std Mutex
@@ -238,6 +243,187 @@ pub struct PasskeyApprovalRequest {
     pub user_name: Option<String>,
     /// assert 时对应 vault item 的 UUID
     pub item_id: Option<String>,
+}
+
+// ---- 账号体系（M2：persona-server /api/v1/accounts/* 的 tauri 代理层
+//      契约。字段名/形状与 desktop/src/utils/api.ts 的 account seam 及
+//      server/src/api/accounts.rs 一一对应；命令侧见 commands.rs 的
+//      account_* 族）----
+
+/// account_register 请求（公开注册，无需认证）。
+#[derive(Debug, Deserialize)]
+pub struct AccountRegisterRequest {
+    pub username: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountRegistrationResponse {
+    pub account_id: String,
+    pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+}
+
+/// account_passkey_create_options 请求。响应是裸 WebAuthn creation
+/// options JSON（服务器未类型化的 json! 对象），命令层原样透传
+/// `serde_json::Value`（= 前端 AccountPasskeyCreationOptions）。
+#[derive(Debug, Deserialize)]
+pub struct AccountPasskeyCreateOptionsRequest {
+    pub rp_id: String,
+    #[serde(default)]
+    pub rp_name: Option<String>,
+    pub user_handle: String,
+    #[serde(default)]
+    pub user_name: Option<String>,
+    #[serde(default)]
+    pub user_display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountPasskeyRegisterRequest {
+    /// 认证器 attestation 响应（{credentialId, attestationObject}，均
+    /// base64url 串），服务器按不透明 Value 接收。
+    pub attestation_response: serde_json::Value,
+    pub client_data_json: String,
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountPasskeyRegisterResponse {
+    pub passkey_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountPasskeyLoginOptionsRequest {
+    pub credential_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountPasskeyLoginOptionsResponse {
+    pub challenge: String,
+    pub rp_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountSrpRegisterRequest {
+    pub device_name: String,
+    pub salt: String,
+    pub verifier: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSrpRegisterResponse {
+    pub device_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountSrpChallengeRequest {
+    pub device_name: String,
+    pub client_public: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSrpChallengeResponse {
+    pub session_id: String,
+    pub salt: String,
+    pub server_public: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountSrpVerifyRequest {
+    pub session_id: String,
+    pub client_proof: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSrpVerifyResponse {
+    pub server_proof: String,
+    /// 15 分钟账号登录令牌：命令层除透传外，还会写入
+    /// `account_token_store`（Bearer 门禁命令的解析源）。
+    pub token: String,
+    pub expires_in_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountRecoveryCodes {
+    pub codes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountVerifyRecoveryCodeRequest {
+    pub code: String,
+}
+
+/// verify_recovery_code 响应（= 前端内联 `{ success: boolean }`；core 侧
+/// 同形 wire 类型只 Deserialize，不进命令返回位）。
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountVerifyRecoveryCodeResponse {
+    pub success: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AccountAuthorizeDeviceRequest {
+    /// sync_devices.id
+    pub device_id: String,
+    /// base64，32 字节 X25519
+    pub public_key: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountAuthorizeDeviceResponse {
+    pub id: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountDeviceInfo {
+    pub id: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub public_key: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorized_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorized_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revoked_by: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountDevicesList {
+    pub devices: Vec<AccountDeviceInfo>,
+}
+
+/// sessions 端点的 passkey 断言证据（字段全为 base64url 编码）。
+#[derive(Debug, Deserialize)]
+pub struct AccountPasskeyAssertion {
+    pub credential_id: String,
+    pub client_data_json: String,
+    pub origin: String,
+    pub authenticator_data: String,
+    pub signature: String,
+}
+
+/// sessions 端点证据：SRP 15 分钟令牌或 passkey 断言，恰好一种（服务器
+/// 两者同给/都缺 = 422）。serde 默认忽略未知字段，两种形状都收。
+#[derive(Debug, Default, Deserialize)]
+pub struct AccountSessionEvidence {
+    #[serde(default)]
+    pub srp_token: Option<String>,
+    #[serde(default)]
+    pub passkey_assertion: Option<AccountPasskeyAssertion>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountSessionInfo {
+    pub session_token: String,
+    pub expires_in_secs: u64,
 }
 
 /// biometric unlock 状态查询响应。`available` = OS 认证栈 + keyring 均
