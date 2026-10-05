@@ -257,6 +257,35 @@ export default {
       rotateConcurrentConflict:
         'Another device just rotated the group key — your data is unaffected, please retry.',
     },
+    sshIntegration: {
+      title: 'SSH via persona agent',
+      description:
+        'Point SSH in ~/.ssh/config at the persona agent with the OpenSSH IdentityAgent directive — the same effect as a per-host SSH_AUTH_SOCK: private keys never leave the vault.',
+      enabled: 'Enabled',
+      disabled: 'Not enabled',
+      anomaly: 'Misconfigured',
+      socketLabel: 'Socket:',
+      configLabel: 'Config file:',
+      manualHint: 'Only the one line inside the managed anchor block is rewritten; everything else is untouched.',
+      anomalyHint:
+        'The managed block points at {{found}}, which does not match the current agent socket (path changed or file edited) — re-enable to fix it.',
+      manualEntryHint:
+        'There is also a hand-written persona IdentityAgent outside the managed block — enable only manages the anchor block and will not edit it; remove it yourself if it points at a stale path.',
+      enable: 'Enable',
+      disable: 'Disable',
+      enabling: 'Enabling…',
+      disabling: 'Disabling…',
+      enableSuccess: 'Enabled — SSH connections now use the persona agent',
+      disableSuccess: 'Disabled — managed block removed',
+      enableFailed: 'Enable failed',
+      disableFailed: 'Disable failed',
+      showManual: 'Manual setup',
+      hideManual: 'Hide manual setup',
+      manualConfigHint:
+        'Prefer to write it yourself: paste these three lines into ~/.ssh/config (at the top or inside a Host block; without a Host it applies to every connection) —',
+      compatNote:
+        'Requires OpenSSH 8.3+ (the built-in Windows 10/11 OpenSSH client supports IdentityAgent too, via the \\\\.\\pipe\\persona-ssh-agent named pipe). Equivalent env-var option: export SSH_AUTH_SOCK=<the socket path above> in your shell.',
+    },
     syncGroup: {
       title: 'Sync group pairing',
       description: 'Pair devices with a one-time dynamic password — no account, no sign-up. Both sides verify a 6-digit fingerprint to stop man-in-the-middle.',

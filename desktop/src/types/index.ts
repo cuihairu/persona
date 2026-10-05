@@ -1012,3 +1012,22 @@ export interface SyncStatusReport {
   /** 最近一次成功同步（RFC3339；null = 从未同步） */
   lastSyncAt: string | null;
 }
+
+/** `ssh_agent_integration_status` 返回（对应 Rust SshIntegrationStatus）：
+ *  ~/.ssh/config 的 IdentityAgent 锚点块三态快照 */
+export interface SshIntegrationStatus {
+  /** 锚点块存在且指向当前 agent socket */
+  enabled: boolean;
+  /** 锚点块存在但指向别处（旧路径/手改）——重新启用即修复 */
+  anomaly: string | null;
+  /** 锚点块之外用户手写的 persona IdentityAgent（提示，不自动动它） */
+  manualEntry: boolean;
+  /** ~/.ssh/config 实际路径 */
+  configPath: string;
+  /** agent 稳定 socket（写入值/比对基准） */
+  socketPath: string;
+  /** 锚点块当前 IdentityAgent 值（未启用 null） */
+  identityAgent: string | null;
+  /** OpenSSH 版本（探测失败 null；IdentityAgent 需 8.3+） */
+  sshVersion: string | null;
+}

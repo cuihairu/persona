@@ -20,6 +20,7 @@ mod error;
 mod packaging_tests;
 pub mod passkey_bridge;
 pub mod quick_access;
+pub mod ssh_integration;
 #[cfg(test)]
 mod test_support;
 pub mod token_store;
@@ -372,6 +373,9 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::get_ssh_agent_status,
             commands::start_ssh_agent,
             commands::stop_ssh_agent,
+            commands::ssh_agent_integration_status,
+            commands::ssh_agent_integration_enable,
+            commands::ssh_agent_integration_disable,
             commands::ssh_approval_respond,
             commands::passkey_approval_respond,
             commands::inspect_ssh_key_file,

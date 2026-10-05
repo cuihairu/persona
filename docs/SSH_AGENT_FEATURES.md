@@ -383,6 +383,37 @@ export SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
 ssh -T git@github.com
 ```
 
+#### 桌面端：一键「SSH 走 persona agent」（已实现，2026-10-05）
+
+桌面「设置 → 通用」提供 **SSH 走 persona agent** 区块：检测 `~/.ssh/config`
+的 IdentityAgent 配置并一键启用/停用。
+
+- **原理**：OpenSSH 8.3+ 的 `IdentityAgent` 指令为连接指定 agent socket，
+  等效于对该 host 单独设置 `SSH_AUTH_SOCK`。Windows 10/11 自带的 OpenSSH
+  客户端同样支持（socket 用命名管道 `\\.\pipe\persona-ssh-agent`）。
+- **稳定 socket**：桌面壳启动 agent 时经 `PERSONA_AGENT_SOCKET_PATH` 注入
+  稳定路径（Linux `$XDG_RUNTIME_DIR/persona/ssh-agent.sock`，缺省回退
+  `~/.persona/run/ssh-agent.sock`；Windows 命名管道 `persona-ssh-agent`），
+  与 CLI 每次 pid 化路径不同——写入 config 的值跨重启不变。
+- **锚点块**：启用即幂等写入下面三行（损坏块自动收敛重写），停用整块移除；
+  块外配置一律只读不动：
+
+  ```
+  # persona managed begin
+  IdentityAgent /run/user/1000/persona/ssh-agent.sock
+  # persona managed end
+  ```
+
+- **状态三态**：已启用（锚点块指向当前 socket）/ 未启用（无块）/
+  配置异常（块存在但指向别处——重新启用即修复）；查询失败时区块整体隐藏，
+  不谎报状态。
+- **验收**：`ssh -G <host>` 输出 `identityagent <稳定 socket>`（集成测试
+  `ssh_G_resolves_identity_agent_from_managed_block` 以真实 OpenSSH 往返
+  验证）。
+
+手动配置（不想用桌面开关）：把上面三行粘进 `~/.ssh/config` 顶部或对应
+Host 段落；shell 环境变量方案 `export SSH_AUTH_SOCK=<socket>` 等效。
+
 ### 3. 配置策略
 
 创建 `~/.persona/agent-policy.toml`:

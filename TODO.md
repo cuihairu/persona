@@ -465,6 +465,18 @@ SSH Agent (developer focus)
       输出路径）/`ssh_authorize`（host+action）。测试 +4（假 ssh 桩真脚本
       round-trip：add 幂等/list 只读/remove 幂等 + 审计计数），全仓 1602 绿
       后提交。
+- [x] 桌面「SSH 走 persona agent」一键集成（2026-10-05）：`~/.ssh/config`
+      的 IdentityAgent 锚点块（`# persona managed begin/end`，只动块内，
+      损坏块收敛重写，停用整块移除）+ 设置页三态（已启用/未启用/配置异常，
+      异常=块指向旧路径，重新启用即修复；查询失败整区隐藏不谎报）+
+      原理与手动配置文案（OpenSSH 8.3+，Windows 内置 OpenSSH 走命名管道
+      `\\.\pipe\persona-ssh-agent` 等效）。稳定 socket：desktop 壳启动 agent
+      注入 `PERSONA_AGENT_SOCKET_PATH`（XDG_RUNTIME_DIR 优先，回退
+      `~/.persona/run/ssh-agent.sock`；外部预设尊重不覆盖——测试 guard
+      bind 失败路径靠这个语义），daemon 缺省 pid 化路径留给一次性 CLI。
+      原子写 config（tmp+rename，权限保留/0600）。验收：集成测试以真实
+      `ssh -G -F` 往返断言 `identityagent <稳定路径>` 且用户配置照常生效；
+      设置页两态×亮暗截图。desktop 231+5、jest 642、tsc、fmt、clippy 绿。
 - [ ] Windows-specific testing and optimization
       · 编译层已收口（2026-09-28）：`rustup target add x86_64-pc-windows-gnu`
       后 `cargo check --workspace --all-targets --all-features --target

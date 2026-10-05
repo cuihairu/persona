@@ -253,6 +253,35 @@ export default {
       rotateConcurrentConflict:
         '另一台设备刚刚完成了组密钥轮换——你的数据未受影响，请重试轮换。',
     },
+    sshIntegration: {
+      title: 'SSH 走 persona agent',
+      description:
+        '用 OpenSSH 的 IdentityAgent 指令把 ~/.ssh/config 中的 SSH 指向 persona agent——效果等同为该 host 设置 SSH_AUTH_SOCK：私钥不出库，agent 停机时连接自动用不上密钥。',
+      enabled: '已启用',
+      disabled: '未启用',
+      anomaly: '配置异常',
+      socketLabel: 'Socket：',
+      configLabel: '配置文件：',
+      manualHint: '只改写锚点注释块内的一行，块外配置一律不动。',
+      anomalyHint:
+        '锚点块指向 {{found}}，与当前 agent socket 不符（agent 路径变更/文件被手改）——重新启用即可修复。',
+      manualEntryHint:
+        '配置文件里还有一处块外的 persona IdentityAgent 手写条目——启用只维护锚点块，不会替你改它，可自行删除以免指向过期路径。',
+      enable: '一键启用',
+      disable: '一键停用',
+      enabling: '启用中…',
+      disabling: '停用中…',
+      enableSuccess: '已启用——SSH 连接将走 persona agent',
+      disableSuccess: '已停用——锚点块已移除',
+      enableFailed: '启用失败',
+      disableFailed: '停用失败',
+      showManual: '手动配置说明',
+      hideManual: '收起手动配置',
+      manualConfigHint:
+        '想自己写：把下面三行粘进 ~/.ssh/config（可放文件顶部或 Host 段落内；无 Host 时对所有连接生效）——',
+      compatNote:
+        '需要 OpenSSH 8.3+（Windows 10/11 自带的 OpenSSH 客户端同样支持 IdentityAgent，socket 用命名管道 \\\\.\\pipe\\persona-ssh-agent）。等效的环境变量方案：在 shell 里 export SSH_AUTH_SOCK=<上面的 socket 路径>。',
+    },
     syncGroup: {
       title: '同步组配对',
       description: '动态密码配对入组，零账号零注册。双方核对 6 位数字指纹，防止中间人。',

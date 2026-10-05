@@ -45,6 +45,10 @@ jest.mock('@/utils/api', () => ({
     syncRotate: jest.fn(),
     syncConflictsList: jest.fn(),
     syncConflictResolve: jest.fn(),
+    // SSH 走 persona agent（~/.ssh/config IdentityAgent 锚点块）
+    sshAgentIntegrationStatus: jest.fn(),
+    sshAgentIntegrationEnable: jest.fn(),
+    sshAgentIntegrationDisable: jest.fn(),
   },
 }));
 
@@ -128,6 +132,43 @@ describe('components/SettingsModal', () => {
     });
     // 默认水位查询无数据（行隐藏；用例按需覆盖成具体快照）
     mockSyncStatusReport.mockResolvedValue({ success: true, data: null });
+    // 默认 SSH 集成区未启用（section 按 data 渲染常态徽标）
+    (personaAPI.sshAgentIntegrationStatus as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        enabled: false,
+        anomaly: null,
+        manualEntry: false,
+        configPath: '/home/user/.ssh/config',
+        socketPath: '/run/user/1000/persona/ssh-agent.sock',
+        identityAgent: null,
+        sshVersion: null,
+      },
+    });
+    (personaAPI.sshAgentIntegrationEnable as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        enabled: true,
+        anomaly: null,
+        manualEntry: false,
+        configPath: '/home/user/.ssh/config',
+        socketPath: '/run/user/1000/persona/ssh-agent.sock',
+        identityAgent: '/run/user/1000/persona/ssh-agent.sock',
+        sshVersion: null,
+      },
+    });
+    (personaAPI.sshAgentIntegrationDisable as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        enabled: false,
+        anomaly: null,
+        manualEntry: false,
+        configPath: '/home/user/.ssh/config',
+        socketPath: '/run/user/1000/persona/ssh-agent.sock',
+        identityAgent: null,
+        sshVersion: null,
+      },
+    });
   });
 
   it('renders nothing when closed', () => {

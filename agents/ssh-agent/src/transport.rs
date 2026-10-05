@@ -150,17 +150,25 @@ impl AgentListener {
 }
 
 /// Get default agent socket path for the current platform
+///
+/// 宿主壳（desktop）通过 `PERSONA_AGENT_SOCKET_PATH` 注入稳定路径——写进
+/// `~/.ssh/config` 的 `IdentityAgent` 必须跨重启不变；缺省的 pid 化路径只
+/// 适合一次性 CLI 场景。Windows 的值是稳定管道名（bind 取 `file_name`
+/// 造 `\\.\pipe\{name}`），与 pid 无关。
 pub fn default_agent_path() -> std::path::PathBuf {
+    if let Some(p) = std::env::var("PERSONA_AGENT_SOCKET_PATH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+    {
+        return p;
+    }
+
     #[cfg(unix)]
     {
-        std::env::var("PERSONA_AGENT_SOCKET_PATH")
-            .ok()
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                let mut p = std::env::temp_dir();
-                p.push(format!("persona-ssh-agent-{}.sock", std::process::id()));
-                p
-            })
+        let mut p = std::env::temp_dir();
+        p.push(format!("persona-ssh-agent-{}.sock", std::process::id()));
+        p
     }
 
     #[cfg(windows)]

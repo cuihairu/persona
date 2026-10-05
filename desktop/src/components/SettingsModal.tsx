@@ -27,6 +27,7 @@ import QuickAccessSection from './QuickAccessSection';
 import UpdateCheckSection from './UpdateCheckSection';
 import SyncConflictsModal from './SyncConflictsModal';
 import SyncGroupSection from './SyncGroupSection';
+import SshIntegrationSection from './SshIntegrationSection';
 import DataScopeConsentModal from './DataScopeConsentModal';
 import { useEscapeToClose } from '@/hooks/useEscapeToClose';
 
@@ -1213,6 +1214,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <ConnectAutomationSection />
+      </section>
+
+      <section className="mb-5">
+        <SshIntegrationSection />
       </section>
 
       <section>

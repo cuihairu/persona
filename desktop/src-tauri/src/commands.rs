@@ -4987,6 +4987,17 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         }
         std::env::set_var("PERSONA_DB_PATH", &db_path_clone);
         std::env::set_var("PERSONA_AGENT_STATE_DIR", &state_dir);
+        // 稳定 socket 路径：写进 ~/.ssh/config 的 IdentityAgent 必须跨重启
+        // 不变；daemon 缺省路径带 pid，只留给一次性 CLI 场景。外部已指定
+        // （测试 guard 预占 bind 失败路径/自定义部署）则尊重不覆盖。
+        let injected_socket_path =
+            std::env::var_os("PERSONA_AGENT_SOCKET_PATH").map_or(true, |v| v.is_empty());
+        if injected_socket_path {
+            std::env::set_var(
+                "PERSONA_AGENT_SOCKET_PATH",
+                crate::ssh_integration::agent_stable_socket(),
+            );
+        }
         if let Err(err) = persona_ssh_agent::run_agent_with_hooks(
             Some(handler as Arc<dyn persona_ssh_agent::ApprovalHandler>),
             Some(biometric as Arc<dyn persona_core::BiometricProvider>),
@@ -4997,6 +5008,9 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
             if let Ok(mut slot) = startup_error_task.lock() {
                 *slot = Some(err.to_string());
             }
+        }
+        if injected_socket_path {
+            std::env::remove_var("PERSONA_AGENT_SOCKET_PATH");
         }
         std::env::remove_var("PERSONA_AGENT_STATE_DIR");
         std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
@@ -5073,6 +5087,8 @@ async fn stop_ssh_agent_internal(state: &State<'_, AppState>) {
         map.clear();
     }
     std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
+    // PERSONA_AGENT_SOCKET_PATH 不在这里清：测试 guard 预设的值由其 Drop
+    // 恢复；未预设时的注入值由 agent task 尾部回收。
     cleanup_agent_state_files();
 }
 
@@ -5084,6 +5100,71 @@ async fn stop_ssh_agent_internal(state: &State<'_, AppState>) {
 pub struct SshApprovalRespondRequest {
     pub request_id: String,
     pub allow: bool,
+}
+
+// ---------------------------------------------------------------------------
+// 「SSH 走 persona agent」的 ~/.ssh/config 集成（IdentityAgent 锚点块）
+// ---------------------------------------------------------------------------
+
+/// 集成状态三态检测：已启用（锚点块指向当前 socket）/ 未启用（无块）/
+/// 配置异常（块存在但指向别处，重新启用即修复）。用户块外的配置一律只读。
+#[command(rename_all = "snake_case")]
+pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::SshIntegrationStatus> {
+    use crate::ssh_integration as si;
+
+    let config_path = si::ssh_config_path();
+    let config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let value = si::identity_agent_value();
+    let managed = si::managed_block_identity_agent(&config);
+    let enabled = managed.as_deref() == Some(value.as_str());
+    // anomaly 存实际指向值（非句子）：前端按 locale 渲染提示文案
+    let anomaly = managed.as_ref().filter(|v| *v != value.as_str()).cloned();
+    ApiResponse::success(si::SshIntegrationStatus {
+        enabled,
+        anomaly,
+        manual_entry: si::has_manual_persona_entry(&config),
+        config_path: config_path.display().to_string(),
+        socket_path: value.clone(),
+        identity_agent: managed,
+        ssh_version: None,
+    })
+}
+
+/// 一键启用：幂等 upsert 锚点块（损坏块收敛重写），原子写回。
+/// 纯文件操作不解锁；agent 是否运行不影响写入（socket 路径是常量）。
+#[command(rename_all = "snake_case")]
+pub fn ssh_agent_integration_enable(
+) -> std::result::Result<ApiResponse<crate::ssh_integration::SshIntegrationStatus>, String> {
+    use crate::ssh_integration as si;
+
+    let config_path = si::ssh_config_path();
+    let config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    let new = si::upsert_managed_block(&config, &si::identity_agent_value());
+    si::write_config_atomic(&config_path, &new)
+        .map_err(|e| format!("Failed to write {}: {e}", config_path.display()))?;
+    Ok(ssh_agent_integration_status())
+}
+
+/// 一键停用：整块移除锚点块（只动块内），用户其余配置不碰。
+#[command(rename_all = "snake_case")]
+pub fn ssh_agent_integration_disable(
+) -> std::result::Result<ApiResponse<crate::ssh_integration::SshIntegrationStatus>, String> {
+    use crate::ssh_integration as si;
+
+    let config_path = si::ssh_config_path();
+    let config = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ssh_agent_integration_status());
+        }
+        Err(e) => return Err(format!("Failed to read {}: {e}", config_path.display())),
+    };
+    let new = si::remove_managed_block(&config);
+    if new != config {
+        si::write_config_atomic(&config_path, &new)
+            .map_err(|e| format!("Failed to write {}: {e}", config_path.display()))?;
+    }
+    Ok(ssh_agent_integration_status())
 }
 
 // ---------------------------------------------------------------------------
