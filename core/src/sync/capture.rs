@@ -202,4 +202,107 @@ mod tests {
         assert_eq!(ops[0].op, OpType::Delete);
         assert!(ops[0].payload.is_none());
     }
+
+    /// S2 零知识核查：捕获落库后的 oplog 原始字节里搜不到条目名/域名/
+    /// 用户名/口令明文，也搜不到 item key / group key 原始字节。本地落库
+    /// 字节=server 所存（服务器只是转发存储），此断言把「中转零知识」
+    /// 钉进测试而非只留在文档。
+    #[tokio::test]
+    async fn oplog_bytes_never_contain_entry_plaintext_or_keys() {
+        use sqlx::Row;
+
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let engine = Arc::new(SyncEngine::new(
+            SyncRepository::new(db.clone()),
+            DeadRemote,
+            Uuid::new_v4(),
+            Box::new(|| false),
+        ));
+        let group = GroupKey::generate().unwrap();
+        let capture = OplogCapture::new(engine.clone(), group.clone());
+
+        let item_key = EncryptionService::generate_key();
+        let snapshot = SyncItemSnapshot {
+            name: "机密条目Alpha".to_string(),
+            url: Some("https://secret-site.example/login".to_string()),
+            username: Some("alice@example.com".to_string()),
+            notes: Some("备注里有域名 wordle.example.org".to_string()),
+            data: CredentialData::Password(PasswordCredentialData {
+                password: "特征口令-s3cret-π".to_string(),
+                email: None,
+                security_questions: vec![],
+            }),
+            ..sample_snapshot()
+        };
+        capture
+            .capture(
+                Uuid::new_v4(),
+                ItemKind::Credential,
+                OpType::Put,
+                Some(snapshot.seal(&item_key).unwrap()),
+                Some(Zeroizing::new(item_key)),
+            )
+            .await;
+
+        // 聚合 sync_oplog 全部存储字节（密文两级 + wrapped key + 文本列）
+        let rows =
+            sqlx::query("SELECT ciphertext, wrapped_item_key, item_id, device_id FROM sync_oplog")
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(rows.len(), 1);
+        let mut stored: Vec<u8> = Vec::new();
+        for row in &rows {
+            stored.extend(
+                row.get::<Option<Vec<u8>>, _>("ciphertext")
+                    .unwrap_or_default(),
+            );
+            stored.extend(
+                row.get::<Option<Vec<u8>>, _>("wrapped_item_key")
+                    .unwrap_or_default(),
+            );
+            stored.extend(row.get::<String, _>("item_id").as_bytes());
+            stored.extend(row.get::<String, _>("device_id").as_bytes());
+        }
+
+        // 明文特征：条目名/域名/用户名/备注域名/口令一律搜不到
+        for plaintext in [
+            "机密条目Alpha".as_bytes(),
+            b"secret-site.example",
+            b"alice@example.com",
+            b"wordle.example.org",
+            "特征口令-s3cret-π".as_bytes(),
+        ] {
+            assert!(
+                !stored.windows(plaintext.len()).any(|w| w == plaintext),
+                "oplog 落库字节泄露明文: {}",
+                String::from_utf8_lossy(plaintext)
+            );
+        }
+        // 密钥原始字节同样不得出现（wrapped 必须真包过）
+        assert!(
+            !stored.windows(32).any(|w| w == item_key.as_slice()),
+            "item key 原始字节泄露"
+        );
+        assert!(
+            !stored.windows(32).any(|w| w == group.as_bytes().as_slice()),
+            "group key 原始字节泄露"
+        );
+
+        // 反向对照：group key 解出 item key、item key 解出快照明文——
+        // 落库字节确实两级加密过（而非特征字段被丢掉）
+        let payload_row = sqlx::query("SELECT ciphertext, wrapped_item_key FROM sync_oplog")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+        let recovered =
+            unwrap_item_key_with_group(&payload_row.get::<Vec<u8>, _>("wrapped_item_key"), &group)
+                .unwrap();
+        let opened =
+            SyncItemSnapshot::open(&payload_row.get::<Vec<u8>, _>("ciphertext"), &recovered)
+                .unwrap();
+        assert_eq!(opened.name, "机密条目Alpha");
+        assert_eq!(opened.username.as_deref(), Some("alice@example.com"));
+    }
 }
