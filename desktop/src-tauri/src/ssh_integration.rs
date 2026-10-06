@@ -338,7 +338,7 @@ mod tests {
     /// `ssh -G -F <file> <host>` 输出归一化配置；无 ssh（精简 CI 容器）则跳过。
     #[cfg(unix)]
     #[test]
-    fn ssh_G_resolves_identity_agent_from_managed_block() {
+    fn ssh_g_resolves_identity_agent_from_managed_block() {
         let Some(ssh) = which_ssh() else {
             eprintln!("ssh not on PATH; skipping OpenSSH round-trip");
             return;

@@ -4991,7 +4991,7 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
         // 不变；daemon 缺省路径带 pid，只留给一次性 CLI 场景。外部已指定
         // （测试 guard 预占 bind 失败路径/自定义部署）则尊重不覆盖。
         let injected_socket_path =
-            std::env::var_os("PERSONA_AGENT_SOCKET_PATH").map_or(true, |v| v.is_empty());
+            std::env::var_os("PERSONA_AGENT_SOCKET_PATH").is_none_or(|v| v.is_empty());
         if injected_socket_path {
             std::env::set_var(
                 "PERSONA_AGENT_SOCKET_PATH",
