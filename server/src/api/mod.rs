@@ -30,9 +30,10 @@ pub use pairing::{
 };
 pub use sync::{
     delete_device as sync_delete_device, get_group_keys as sync_get_group_keys,
-    list_devices as sync_list_devices, pull as sync_pull, push as sync_push,
-    put_group_key as sync_put_group_key, register_device as sync_register_device,
-    rotate_begin as sync_rotate_begin, status as sync_status,
+    get_snapshot as sync_get_snapshot, list_devices as sync_list_devices, pull as sync_pull,
+    push as sync_push, put_group_key as sync_put_group_key, put_snapshot as sync_put_snapshot,
+    register_device as sync_register_device, rotate_begin as sync_rotate_begin,
+    status as sync_status,
 };
 
 /// 请求体上限（线上字节）。带 Content-Length 的请求由
@@ -186,6 +187,12 @@ impl ApiError {
             "no such route",
             Vec::new(),
         )
+    }
+
+    /// 404：资源不存在（路由在，当前没有可返回的资源——如尚未上传的
+    /// 库级快照）。与 fallback 的 not_found 同状态不同 code，客户端可辨。
+    pub fn absent(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::NOT_FOUND, "absent", message, Vec::new())
     }
 
     /// 500：内部错误，细节只进日志不外泄。

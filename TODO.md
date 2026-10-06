@@ -1606,11 +1606,19 @@ References
       库级快照+指令压缩**设计定稿**(2026-10-07,E2EE_SYNC_DESIGN §5 末
       「库级快照与指令压缩」):覆盖位点=push ack 的 seq(先 pull 后 push 的
       周期顺序消竞态,无需快照点协议);服务器只留最新快照+事务删 `seq ≤ S`
-      ops;pull 落已删区间 410+快照指针引导重对齐;格式=entries(单条 seal
-      格式不变)整包 group key 加密,零知识面不变;触发阈值 1000 ops 配置
-      化;失败面/测试锚点(收敛等价性/410 路径/零知识平移)已列。实现
-      待做(server 00010 迁移+两端点、core engine 快照打包/装快照/410
-      重对齐)。
+      ops;**与既有 oplog retention 合流**(修订:pull 不拒绝不 410——
+      「缩水子集也收敛」是既有宽容口径,快照补的是空库新设备被 retention
+      删段的真丢数据洞);格式=entries(单条 seal 格式不变)整包 group key
+      加密,零知识面不变;触发阈值 1000 ops 配置化;失败面/测试锚点
+      (收敛等价性/410 路径→bootstrap 快照起步/零知识平移)已列。
+      **server 侧已落**(2026-10-07):00010 迁移(sync_snapshots 单行表
+      id=1)、`PUT /sync/snapshot`(seq<0/空白 device_id/坏 base64/空字节
+      422、16MiB 上限 413;事务=单行 upsert+删 seq≤S ops——「快照已换
+      ops 未删」与反向中间态都不允许)、`GET /sync/snapshot`(404
+      code=absent,区别于路由 404)、`ApiError::absent` 新构造。测试:
+      roundtrip/压缩计数/单快照不堆积/校验拒绝/404 absent。server 133
+      绿。core 侧待做(SyncRemote 加 snapshot 方法、快照打包/装快照/
+      bootstrap 起步、remote_http wire)。
 - [ ] S3 三形态中转:官方托管(Worker)/自建 relay(单二进制开源随仓)/局域网直传,同一协议,客户端三选一
       验收=三形态一致性测试(同一客户端协议,同步行为完全一致)。
 - [ ] S4 设备面:组内设备清单互见(仅改自己备注)、同等权限自由进出组

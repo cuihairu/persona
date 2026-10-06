@@ -18,7 +18,7 @@ use axum::extract::{DefaultBodyLimit, MatchedPath, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{middleware, Router};
 
 pub use state::AppState;
@@ -175,6 +175,10 @@ pub fn build_router(state: AppState) -> Router {
                 )
                 .route("/group-key/rotate-begin", post(api::sync_rotate_begin))
                 .route("/oplog", post(api::sync_push).get(api::sync_pull))
+                .route(
+                    "/snapshot",
+                    put(api::sync_put_snapshot).get(api::sync_get_snapshot),
+                )
                 .route("/status", get(api::sync_status))
                 .layer(DefaultBodyLimit::max(api::MAX_BODY_BYTES))
                 .layer(middleware::from_fn_with_state(
