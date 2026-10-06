@@ -844,6 +844,9 @@ pub struct SshKeySummary {
     pub ssh_algorithm: Option<String>,
     /// 展示用：SHA256 指纹（`SHA256:…`），与导入/生成确认处同口径
     pub fingerprint: Option<String>,
+    /// 展示用：位数/曲线标签（Ed25519→`256`、RSA→`4096`、ECDSA→`P-256`）；
+    /// 证书等不适用的容器为 null
+    pub key_size: Option<String>,
     /// 完整公钥行，供一键复制到 authorized_keys / GitHub
     pub public_key: Option<String>,
 }

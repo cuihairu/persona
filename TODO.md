@@ -477,6 +477,14 @@ SSH Agent (developer focus)
       原子写 config（tmp+rename，权限保留/0600）。验收：集成测试以真实
       `ssh -G -F` 往返断言 `identityagent <稳定路径>` 且用户配置照常生效；
       设置页两态×亮暗截图。desktop 231+5、jest 642、tsc、fmt、clippy 绿。
+- [x] SSH 密钥列表类型徽标（2026-10-07，BUGS P2-⑤）：core
+      `describe_public_key_line` 三元组（算法/SHA256 指纹/位数曲线标签）
+      ——Ed25519→`256`、RSA→模长位长（crate 自带 key_size）、ECDSA→
+      `P-256/P-384/P-521`、DSA→素数位长（Mpint 正数位长）、SK 跟随内部
+      算法、证书/opaque→null。`SshKeySummary.key_size` 新字段，类型列算法
+      名旁徽标（`ssh-key-size-{id}`）；导入/新建/列表三路径同源现算自动
+      带标签。core 测试（ed25519/RSA 位长与私钥自报交叉验证/P-256/垃圾
+      None）+ jest 徽标两态。jest 646、tsc、vite build、fmt、stable clippy 绿。
 - [ ] Windows-specific testing and optimization
       · 编译层已收口（2026-09-28）：`rustup target add x86_64-pc-windows-gnu`
       后 `cargo check --workspace --all-targets --all-features --target

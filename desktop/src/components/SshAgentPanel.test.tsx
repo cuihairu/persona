@@ -74,6 +74,7 @@ const LIST_KEY = {
   updated_at: '2026-10-05T00:00:00Z',
   ssh_algorithm: 'ssh-ed25519',
   fingerprint: 'SHA256:AAAA',
+  key_size: '256',
   public_key: 'ssh-ed25519 AAAA test',
 };
 
@@ -190,6 +191,23 @@ describe('components/SshAgentPanel', () => {
     await waitFor(() => expect(loadSshKeys).toHaveBeenCalled());
     expect(toast.success).toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  // -----------------------------------------------------------------
+  // P2-⑤：类型列位数/曲线徽标（后端现算，前端纯展示）
+  // -----------------------------------------------------------------
+
+  it('renders key size badge and hides it when backend reports none (P2-⑤)', () => {
+    (usePersonaService as jest.Mock).mockReturnValue(makeService({ sshKeys: [LIST_KEY] }));
+    const { getByTestId } = render(<SshAgentPanel />);
+    expect(getByTestId('ssh-key-size-k1')).toHaveTextContent('256');
+
+    // 证书等不适用容器：key_size 为 null → 徽标不渲染
+    cleanup();
+    const noSize = { ...LIST_KEY, id: 'k2', ssh_algorithm: 'cert-authority', key_size: null };
+    (usePersonaService as jest.Mock).mockReturnValue(makeService({ sshKeys: [noSize] }));
+    const { queryByTestId } = render(<SshAgentPanel />);
+    expect(queryByTestId('ssh-key-size-k2')).toBeNull();
   });
 
   it('disables the start button while running, re-enables after stop (BUG ⑦)', async () => {

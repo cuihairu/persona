@@ -5509,9 +5509,9 @@ pub async fn get_ssh_keys(
                     }
                 };
                 let (public_key, describe) = key_info;
-                let (ssh_algorithm, fingerprint) = match describe {
-                    Some((algo, fp)) => (Some(algo), Some(fp)),
-                    None => (None, None),
+                let (ssh_algorithm, fingerprint, key_size) = match describe {
+                    Some((algo, fp, size)) => (Some(algo), Some(fp), size),
+                    None => (None, None, None),
                 };
                 summaries.push(SshKeySummary {
                     id: credential.id.to_string(),
@@ -5526,6 +5526,7 @@ pub async fn get_ssh_keys(
                     updated_at: credential.updated_at.to_rfc3339(),
                     ssh_algorithm,
                     fingerprint,
+                    key_size,
                     public_key,
                 });
             }

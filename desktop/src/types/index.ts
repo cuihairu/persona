@@ -679,6 +679,8 @@ export interface SshAgentKey {
   ssh_algorithm?: string | null;
   /** SHA256 指纹（SHA256:…），与导入/生成确认处同口径 */
   fingerprint?: string | null;
+  /** 位数/曲线标签（Ed25519→256、RSA→4096、ECDSA→P-256）；不适用为 null */
+  key_size?: string | null;
   /** 完整公钥行，供一键复制 */
   public_key?: string | null;
 }

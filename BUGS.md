@@ -39,8 +39,9 @@
 
 - **现象**：无类型徽标（算法+位数/曲线，`ssh-keygen -l` 风格：ED25519 256 / RSA 4096 / ECDSA P-256）。
 - **要求**：从公钥元数据解析；列表行或详情可见；导入与新建两路径都正确识别。
-- **备注**：列表已有「类型 / 指纹」列（线格式算法名+SHA256 指纹），本项增量是位数/曲线徽标。
-- **状态**：待修。
+- **修复**：core `describe_public_key_line` 升级三元组（算法/SHA256 指纹/位数曲线标签）——Ed25519→`256`、RSA→模长位长、ECDSA→`P-256/P-384/P-521`、DSA→素数位长、SK 跟随内部算法、证书/opaque 为 null；`SshKeySummary.key_size` 新字段，列表类型列算法名旁徽标展示（`ssh-key-size-{id}`）。
+- **验收**：core 测试（ed25519 256 / RSA 位长与私钥自报交叉验证 / P-256 / 垃圾 None）+ jest 徽标渲染与 null 不渲染两态；导入与新建路径同走 `describe_public_key_line`/`fingerprint_of` 现算，自动带标签。
+- **状态**：已修（2026-10-07）。
 
 ## P2-⑥ PEM 格式 SSH 密钥无法导入
 

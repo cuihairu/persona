@@ -201,14 +201,49 @@ pub(crate) fn encode_public_line(key: &ssh_key::private::PrivateKey) -> PersonaR
     })
 }
 
-/// 公钥单行（`ssh-ed25519 AAAA… comment`）→（线格式算法名，SHA256 指纹）。
-/// 供列表/详情展示与指纹核对；解析失败返回 None（调用方按空列展示，不报错）。
-pub fn describe_public_key_line(line: &str) -> Option<(String, String)> {
+/// 公钥单行（`ssh-ed25519 AAAA… comment`）→（线格式算法名，SHA256 指纹，
+/// 位数/曲线标签）。供列表/详情展示与指纹核对；解析失败返回 None
+/// （调用方按空列展示，不报错）。
+///
+/// 标签口径：Ed25519→`256`，RSA→模长位数十进制，ECDSA→`P-256` 曲线名，
+/// DSA→素数位长；SK 硬件钥跟随其内部算法，证书/opaque 容器不适用为 None。
+pub fn describe_public_key_line(line: &str) -> Option<(String, String, Option<String>)> {
     let pk = ssh_key::PublicKey::from_openssh(line.trim()).ok()?;
     Some((
         pk.algorithm().to_string(),
         pk.fingerprint(HashAlg::Sha256).to_string(),
+        key_size_label(pk.key_data()),
     ))
+}
+
+/// 位长/曲线标签（纯展示口径，不参与任何校验）。
+fn key_size_label(key_data: &ssh_key::public::KeyData) -> Option<String> {
+    match key_data {
+        ssh_key::public::KeyData::Ed25519(_) | ssh_key::public::KeyData::SkEd25519(_) => {
+            Some("256".to_string())
+        }
+        ssh_key::public::KeyData::Rsa(rsa) => Some(rsa.key_size().to_string()),
+        ssh_key::public::KeyData::Ecdsa(ecdsa) => Some(
+            match ecdsa.curve() {
+                EcdsaCurve::NistP256 => "P-256",
+                EcdsaCurve::NistP384 => "P-384",
+                EcdsaCurve::NistP521 => "P-521",
+            }
+            .to_string(),
+        ),
+        ssh_key::public::KeyData::SkEcdsaSha2NistP256(_) => Some("P-256".to_string()),
+        ssh_key::public::KeyData::Dsa(dsa) => Some(mpint_bits(dsa.p()).to_string()),
+        // 证书/opaque 容器：算法名仍可展示，位数不适用
+        _ => None,
+    }
+}
+
+/// 正整数 Mpint 的位长（`as_positive_bytes` 剥掉符号零字节，首字节必非零）。
+fn mpint_bits(n: &ssh_key::Mpint) -> u32 {
+    let Some(bytes) = n.as_positive_bytes() else {
+        return 0;
+    };
+    (bytes.len() as u32 - 1) * 8 + (8 - bytes[0].leading_zeros())
 }
 
 pub(crate) fn fingerprint_of(key: &ssh_key::private::PrivateKey) -> String {
@@ -381,5 +416,40 @@ mod tests {
     #[test]
     fn inspect_rejects_garbage() {
         assert!(inspect_openssh_private_key("garbage").is_err());
+    }
+
+    #[test]
+    fn describe_public_key_reports_size_and_curve() {
+        // Ed25519：固定位长 256
+        let ed = PrivateKey::from_openssh(&generate_pem(Algorithm::Ed25519)).unwrap();
+        let (algo, fp, size) =
+            describe_public_key_line(&ed.public_key().to_openssh().unwrap()).unwrap();
+        assert_eq!(algo, "ssh-ed25519");
+        assert_eq!(fp, ed.public_key().fingerprint(HashAlg::Sha256).to_string());
+        assert_eq!(size.as_deref(), Some("256"));
+
+        // RSA：模长位数（与私钥自报的 key_size 交叉验证）
+        let rsa = PrivateKey::from_openssh(&generate_pem(Algorithm::Rsa { hash: None })).unwrap();
+        let expected_bits = match rsa.key_data() {
+            ssh_key::private::KeypairData::Rsa(rsa) => rsa.key_size().to_string(),
+            other => panic!("expected rsa keypair, got {other:?}"),
+        };
+        let (algo, _, size) =
+            describe_public_key_line(&rsa.public_key().to_openssh().unwrap()).unwrap();
+        assert_eq!(algo, "ssh-rsa");
+        assert_eq!(size.as_deref(), Some(expected_bits.as_str()));
+
+        // ECDSA：曲线标签
+        let ecdsa = PrivateKey::from_openssh(&generate_pem(Algorithm::Ecdsa {
+            curve: EcdsaCurve::NistP256,
+        }))
+        .unwrap();
+        let (algo, _, size) =
+            describe_public_key_line(&ecdsa.public_key().to_openssh().unwrap()).unwrap();
+        assert_eq!(algo, "ecdsa-sha2-nistp256");
+        assert_eq!(size.as_deref(), Some("P-256"));
+
+        // 垃圾输入 → None（调用方按空列展示，不报错）
+        assert!(describe_public_key_line("not a key").is_none());
     }
 }

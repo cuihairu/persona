@@ -444,7 +444,17 @@ const SshAgentPanel: React.FC = () => {
                     <td className="px-6 py-3 text-sm text-gray-700 dark:text-gray-300">
                       {key.ssh_algorithm ? (
                         <div className="space-y-0.5">
-                          <span className="block font-medium">{key.ssh_algorithm}</span>
+                          <span className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-medium">{key.ssh_algorithm}</span>
+                            {key.key_size && (
+                              <span
+                                className="inline-flex items-center rounded bg-primary-50 dark:bg-primary-900/30 px-1.5 py-0.5 text-xs font-medium text-primary-700 dark:text-primary-300"
+                                data-testid={`ssh-key-size-${key.id}`}
+                              >
+                                {key.key_size}
+                              </span>
+                            )}
+                          </span>
                           {key.fingerprint && (
                             <span
                               className="block font-mono text-xs text-gray-500 dark:text-gray-400 truncate max-w-[16rem]"
