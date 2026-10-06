@@ -3,6 +3,7 @@ import SshAgentPanel from './SshAgentPanel';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { useAppStore } from '@/stores/appStore';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
+import { personaAPI } from '@/utils/api';
 import toast from 'react-hot-toast';
 
 const noop = jest.fn();
@@ -20,6 +21,14 @@ jest.mock('react-hot-toast', () => ({
 // 原生文件对话框只在点击导入按钮时触发；jsdom 下由用例编排返回值
 jest.mock('@tauri-apps/plugin-dialog', () => ({
   open: jest.fn(),
+}));
+
+// 条目编辑/删除（P1-③）走 personaAPI 直调（不经 service hook）
+jest.mock('@/utils/api', () => ({
+  personaAPI: {
+    updateCredential: jest.fn(),
+    deleteCredential: jest.fn(),
+  },
 }));
 
 // 拖拽事件挂在 webview 上；这里捕获处理器供用例手动派发
@@ -54,6 +63,19 @@ const makeService = (over: Record<string, any> = {}) => ({
   importSshKey: noop,
   ...over,
 });
+
+const LIST_KEY = {
+  id: 'k1',
+  identity_id: 'identity-1',
+  identity_name: 'work',
+  name: 'laptop',
+  tags: ['dev'],
+  created_at: '2026-10-05T00:00:00Z',
+  updated_at: '2026-10-05T00:00:00Z',
+  ssh_algorithm: 'ssh-ed25519',
+  fingerprint: 'SHA256:AAAA',
+  public_key: 'ssh-ed25519 AAAA test',
+};
 
 describe('components/SshAgentPanel', () => {
   beforeEach(() => {
@@ -93,6 +115,81 @@ describe('components/SshAgentPanel', () => {
 
     expect(startSshAgent).toHaveBeenCalledWith('pw');
     expect(refreshSshAgentStatus).toHaveBeenCalled();
+  });
+
+  // -----------------------------------------------------------------
+  // P1-③：条目元数据编辑与删除（二次确认；私钥本体不提供编辑）
+  // -----------------------------------------------------------------
+
+  it('edits entry name/tags via updateCredential and refreshes (P1-③)', async () => {
+    const loadSshKeys = jest.fn();
+    (personaAPI.updateCredential as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { ...LIST_KEY, name: 'laptop-work' },
+    });
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ sshKeys: [LIST_KEY], loadSshKeys }),
+    );
+
+    const { getByTestId, queryByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-key-edit-k1'));
+    const modal = getByTestId('ssh-edit-modal');
+    expect(modal).toBeTruthy();
+    // 名称预填、标签逗号串预填；i18n 键命中（裸 key= 漏键回归）
+    expect((getByTestId('ssh-edit-name') as HTMLInputElement).value).toBe('laptop');
+    expect((getByTestId('ssh-edit-tags') as HTMLInputElement).value).toBe('dev');
+    expect(getByTestId('ssh-edit-cancel')).toHaveTextContent('取消');
+
+    fireEvent.change(getByTestId('ssh-edit-name'), { target: { value: 'laptop-work' } });
+    fireEvent.change(getByTestId('ssh-edit-tags'), { target: { value: 'dev, work' } });
+    fireEvent.click(getByTestId('ssh-edit-save'));
+
+    // snake_case 契约：只传 id/name/tags（其余元数据字段不动）
+    await waitFor(() =>
+      expect(personaAPI.updateCredential).toHaveBeenCalledWith({
+        id: 'k1',
+        name: 'laptop-work',
+        tags: ['dev', 'work'],
+      }),
+    );
+    await waitFor(() => expect(queryByTestId('ssh-edit-modal')).toBeNull());
+    expect(loadSshKeys).toHaveBeenCalled();
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it('rejects an empty name without calling update (P1-③ guard)', async () => {
+    (usePersonaService as jest.Mock).mockReturnValue(makeService({ sshKeys: [LIST_KEY] }));
+    const { getByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-key-edit-k1'));
+    fireEvent.change(getByTestId('ssh-edit-name'), { target: { value: '   ' } });
+    fireEvent.click(getByTestId('ssh-edit-save'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(personaAPI.updateCredential).not.toHaveBeenCalled();
+    expect(getByTestId('ssh-edit-modal')).toBeTruthy();
+  });
+
+  it('deletes after confirm and refreshes; cancel keeps the row (P1-③)', async () => {
+    const loadSshKeys = jest.fn();
+    (personaAPI.deleteCredential as jest.Mock).mockResolvedValue({ success: true, data: true });
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ sshKeys: [LIST_KEY], loadSshKeys }),
+    );
+
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    const { getByTestId } = render(<SshAgentPanel />);
+    fireEvent.click(getByTestId('ssh-key-delete-k1'));
+    await waitFor(() => expect(window.confirm).toHaveBeenCalled());
+    expect(personaAPI.deleteCredential).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(getByTestId('ssh-key-delete-k1'));
+    await waitFor(() =>
+      expect(personaAPI.deleteCredential).toHaveBeenCalledWith('k1'),
+    );
+    await waitFor(() => expect(loadSshKeys).toHaveBeenCalled());
+    expect(toast.success).toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it('disables the start button while running, re-enables after stop (BUG ⑦)', async () => {

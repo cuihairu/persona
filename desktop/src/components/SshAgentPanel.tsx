@@ -8,14 +8,17 @@ import {
   PlusIcon,
   ClipboardDocumentIcon,
   CheckIcon,
+  PencilSquareIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { usePersonaService } from '@/hooks/usePersonaService';
+import { personaAPI } from '@/utils/api';
 import toast from 'react-hot-toast';
 import { useAppStore } from '@/stores/appStore';
-import type { SshKeyGenerated, SshKeyInspection } from '@/types';
+import type { SshAgentKey, SshKeyGenerated, SshKeyInspection } from '@/types';
 import { clsx } from 'clsx';
 
 /// 导入确认弹框的会话状态：文件路径 + 预览 + 表单输入 + 就地错误。
@@ -40,6 +43,15 @@ interface GenerateSession {
   result: SshKeyGenerated | null;
 }
 
+/// 编辑弹框会话：只动元数据（名称/标签），私钥本体与公钥不可改
+/// （payload 编辑走独立的敏感门禁路径，这里刻意不提供）。
+interface EditSession {
+  key: SshAgentKey;
+  name: string;
+  tags: string;
+  saving: boolean;
+}
+
 const SshAgentPanel: React.FC = () => {
   const { t } = useTranslation();
   const {
@@ -60,6 +72,7 @@ const SshAgentPanel: React.FC = () => {
   const [isStopping, setIsStopping] = useState(false);
   const [importSession, setImportSession] = useState<ImportSession | null>(null);
   const [generateSession, setGenerateSession] = useState<GenerateSession | null>(null);
+  const [editSession, setEditSession] = useState<EditSession | null>(null);
   const [copied, setCopied] = useState(false);
   // 列表行内公钥复制的反馈：记录刚复制的行 id（单例 copied 态是生成结果用的）
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
@@ -165,6 +178,59 @@ const SshAgentPanel: React.FC = () => {
     setIsStarting(false);
   };
 
+  // ---------------------------------------------------------------
+  // 条目元数据编辑与删除（P1-③）：只动名称/标签；删除二次确认防误删。
+  // 私钥本体与公钥不可改——payload 编辑有独立敏感门禁，此处刻意不提供。
+  // ---------------------------------------------------------------
+
+  const beginEdit = (key: SshAgentKey) => {
+    setEditSession({ key, name: key.name, tags: key.tags.join(', '), saving: false });
+  };
+
+  const saveEdit = async () => {
+    if (!editSession || editSession.saving) return;
+    const name = editSession.name.trim();
+    if (!name) {
+      toast.error(t('sshAgent.editNameRequired'));
+      return;
+    }
+    setEditSession({ ...editSession, saving: true });
+    try {
+      const resp = await personaAPI.updateCredential({
+        id: editSession.key.id,
+        name,
+        tags: editSession.tags.split(',').map((s) => s.trim()).filter(Boolean),
+      });
+      if (resp.success) {
+        toast.success(t('sshAgent.editSaved'));
+        setEditSession(null);
+        loadSshKeys();
+      } else {
+        toast.error(resp.error || t('sshAgent.editFailed'));
+        setEditSession((s) => (s ? { ...s, saving: false } : s));
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+      setEditSession((s) => (s ? { ...s, saving: false } : s));
+    }
+  };
+
+  const removeKey = async (key: SshAgentKey) => {
+    // 二次确认：删除不可恢复（连同密文私钥一并清出库）
+    if (!window.confirm(t('sshAgent.deleteConfirm', { name: key.name }))) return;
+    try {
+      const resp = await personaAPI.deleteCredential(key.id);
+      if (resp.success) {
+        toast.success(t('sshAgent.deleted'));
+        loadSshKeys();
+      } else {
+        toast.error(resp.error || t('sshAgent.deleteFailed'));
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const handleGenerateButtonClick = () => {
     if (!currentIdentity) {
       toast.error(t('sshAgent.generateNoIdentity'));
@@ -267,7 +333,7 @@ const SshAgentPanel: React.FC = () => {
                 placeholder={t('sshAgent.passwordPlaceholder')}
                 value={masterPassword}
                 onChange={(e) => setMasterPassword(e.target.value)}
-                className="input-field w-full sm:w-64"
+                className="input w-full sm:w-64"
               />
               <button
                 onClick={handleStart}
@@ -362,6 +428,9 @@ const SshAgentPanel: React.FC = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                     {t('sshAgent.updatedCol')}
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    {t('sshAgent.actionsCol')}
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
@@ -431,6 +500,26 @@ const SshAgentPanel: React.FC = () => {
                     </td>
                     <td className="px-6 py-3 text-sm text-gray-500 dark:text-gray-400">
                       {new Date(key.updated_at).toLocaleString()}
+                    </td>
+                    <td className="px-6 py-3 text-sm whitespace-nowrap">
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => beginEdit(key)}
+                          className="btn-ghost inline-flex items-center h-8 px-2 text-xs"
+                          data-testid={`ssh-key-edit-${key.id}`}
+                        >
+                          <PencilSquareIcon className="w-4 h-4 mr-1" />
+                          {t('sshAgent.edit')}
+                        </button>
+                        <button
+                          onClick={() => void removeKey(key)}
+                          className="btn-ghost inline-flex items-center h-8 px-2 text-xs text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
+                          data-testid={`ssh-key-delete-${key.id}`}
+                        >
+                          <TrashIcon className="w-4 h-4 mr-1" />
+                          {t('sshAgent.delete')}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -507,7 +596,7 @@ const SshAgentPanel: React.FC = () => {
                 onChange={(e) =>
                   setImportSession((s) => (s ? { ...s, name: e.target.value } : s))
                 }
-                className="input-field mt-1 w-full"
+                className="input mt-1 w-full"
                 data-testid="ssh-import-name"
               />
             </div>
@@ -523,7 +612,7 @@ const SshAgentPanel: React.FC = () => {
                   onChange={(e) =>
                     setImportSession((s) => (s ? { ...s, passphrase: e.target.value } : s))
                   }
-                  className="input-field mt-1 w-full"
+                  className="input mt-1 w-full"
                   data-testid="ssh-import-passphrase"
                 />
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
@@ -700,7 +789,7 @@ const SshAgentPanel: React.FC = () => {
                       setGenerateSession((s) => (s ? { ...s, comment: e.target.value } : s))
                     }
                     disabled={generateSession.generating}
-                    className="input-field mt-1 w-full"
+                    className="input mt-1 w-full"
                     data-testid="ssh-generate-comment"
                   />
                 </div>
@@ -716,7 +805,7 @@ const SshAgentPanel: React.FC = () => {
                       setGenerateSession((s) => (s ? { ...s, name: e.target.value } : s))
                     }
                     disabled={generateSession.generating}
-                    className="input-field mt-1 w-full"
+                    className="input mt-1 w-full"
                     data-testid="ssh-generate-name"
                   />
                 </div>
@@ -749,6 +838,79 @@ const SshAgentPanel: React.FC = () => {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {editSession && (
+        <div
+          data-testid="ssh-edit-modal"
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+          onMouseDown={(e) => {
+            // 点空白（遮罩自身）= 取消；保存中不关（防误触丢输入）
+            if (e.target === e.currentTarget && !editSession.saving) setEditSession(null);
+          }}
+        >
+          <div className="bg-white dark:bg-gray-900 rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                {t('sshAgent.editTitle')}
+              </h3>
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {t('sshAgent.editSubtitle', { algorithm: editSession.key.ssh_algorithm ?? '—' })}
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t('sshAgent.editNameLabel')}
+              </label>
+              <input
+                type="text"
+                value={editSession.name}
+                onChange={(e) => setEditSession({ ...editSession, name: e.target.value })}
+                disabled={editSession.saving}
+                className="input mt-1 w-full"
+                data-testid="ssh-edit-name"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                {t('sshAgent.editTagsLabel')}
+              </label>
+              <input
+                type="text"
+                value={editSession.tags}
+                onChange={(e) => setEditSession({ ...editSession, tags: e.target.value })}
+                disabled={editSession.saving}
+                placeholder={t('sshAgent.editTagsHint')}
+                className="input mt-1 w-full"
+                data-testid="ssh-edit-tags"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {t('sshAgent.editTagsHint')}
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                className="btn-ghost"
+                disabled={editSession.saving}
+                onClick={() => setEditSession(null)}
+                data-testid="ssh-edit-cancel"
+              >
+                {t('sshAgent.cancel')}
+              </button>
+              <button
+                className="btn-primary"
+                disabled={editSession.saving}
+                onClick={() => void saveEdit()}
+                data-testid="ssh-edit-save"
+              >
+                {editSession.saving ? t('sshAgent.saving') : t('sshAgent.save')}
+              </button>
+            </div>
           </div>
         </div>
       )}
