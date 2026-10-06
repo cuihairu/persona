@@ -84,13 +84,43 @@ pub fn import_private_key_file(
     } else if let Some(kind) = super::ssh_import_pem::sniff_pem(content) {
         super::ssh_import_pem::decode(kind, content, passphrase)?
     } else {
-        return Err(PersonaError::InvalidInput(
-            "Unrecognized private key file format (supported: OpenSSH, \
-             PKCS#8/PKCS#1 PEM, SEC1 EC; algorithms: Ed25519, RSA, ECDSA P-256)"
-                .to_string(),
-        ));
+        return Err(unrecognized_format_error(content));
     };
     finish_import(key)
+}
+
+/// 未知格式错误：点名实际看到的 PEM 头（用户拿错文件时一眼定位——
+/// 公钥/证书/ssh.com 格式各有典型头），再列全部期望格式。label 来自
+/// 用户自己的输入，回显无泄密面；截断防畸形超长行撑爆提示。
+fn unrecognized_format_error(content: &str) -> PersonaError {
+    const SUPPORTED: &str = "supported PEM headers: \"BEGIN OPENSSH PRIVATE KEY\", \
+         \"BEGIN PRIVATE KEY\" (PKCS#8), \"BEGIN ENCRYPTED PRIVATE KEY\" (encrypted PKCS#8), \
+         \"BEGIN RSA PRIVATE KEY\" (PKCS#1), \"BEGIN EC PRIVATE KEY\" (SEC1 EC); \
+         algorithms: Ed25519, RSA, ECDSA P-256";
+
+    let label = content
+        .lines()
+        .map(str::trim_start)
+        .find_map(|l| l.strip_prefix("-----BEGIN "))
+        .map(|rest| rest.split("-----").next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            let mut truncated: String = l.chars().take(64).collect();
+            if l.chars().count() > 64 {
+                truncated.push('…');
+            }
+            format!("-----BEGIN {truncated}-----")
+        });
+
+    match label {
+        Some(header) => PersonaError::InvalidInput(format!(
+            "Unrecognized private key file format: PEM header \"{header}\" is not supported \
+             ({SUPPORTED})"
+        )),
+        None => PersonaError::InvalidInput(format!(
+            "Unrecognized private key file format: not a PEM private key file ({SUPPORTED})"
+        )),
+    }
 }
 
 /// 导入前预览（格式自动识别）：不解锁也能给指纹/类型/是否受保护。
@@ -106,13 +136,7 @@ pub fn inspect_private_key_file(content: &str) -> PersonaResult<SshKeyInspection
     }
     let key = match super::ssh_import_pem::sniff_pem(content) {
         Some(kind) => super::ssh_import_pem::decode(kind, content, None)?,
-        None => {
-            return Err(PersonaError::InvalidInput(
-                "Unrecognized private key file format (supported: OpenSSH, \
-                 PKCS#8/PKCS#1 PEM, SEC1 EC; algorithms: Ed25519, RSA, ECDSA P-256)"
-                    .to_string(),
-            ))
-        }
+        None => return Err(unrecognized_format_error(content)),
     };
     let (key_type, ssh_algorithm) = classify(key.algorithm())?;
 
@@ -419,9 +443,43 @@ mod tests {
     }
 
     #[test]
+    fn unrecognized_format_error_names_the_header() {
+        // 拿错文件最常见：证书/公钥而非私钥——错误里点名实际看到的头
+        let err = import_private_key_file(
+            "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----",
+            None,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("\"-----BEGIN CERTIFICATE-----\""), "{msg}");
+        assert!(msg.contains("is not supported"), "{msg}");
+        // 期望格式清单照列
+        assert!(msg.contains("BEGIN OPENSSH PRIVATE KEY"), "{msg}");
+        assert!(msg.contains("BEGIN EC PRIVATE KEY"), "{msg}");
+
+        // OpenSSL 老式 DSA（严格 PEM 头、不支持的算法）同样点名
+        let err = import_private_key_file(
+            "-----BEGIN DSA PRIVATE KEY-----\nAAAA\n-----END DSA PRIVATE KEY-----",
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("\"-----BEGIN DSA PRIVATE KEY-----\""),
+            "{err}"
+        );
+
+        // 彻底没有 PEM 头的文件：明说不是 PEM 私钥文件（PPK 有专门提示在前拦）
+        let err = inspect_private_key_file("random binary bytes").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not a PEM private key file"), "{msg}");
+        assert!(msg.contains("BEGIN RSA PRIVATE KEY"), "{msg}");
+    }
+
+    #[test]
     fn describe_public_key_reports_size_and_curve() {
         // Ed25519：固定位长 256
-        let ed = PrivateKey::from_openssh(&generate_pem(Algorithm::Ed25519)).unwrap();
+        let ed = PrivateKey::from_openssh(generate_pem(Algorithm::Ed25519)).unwrap();
         let (algo, fp, size) =
             describe_public_key_line(&ed.public_key().to_openssh().unwrap()).unwrap();
         assert_eq!(algo, "ssh-ed25519");
@@ -429,7 +487,7 @@ mod tests {
         assert_eq!(size.as_deref(), Some("256"));
 
         // RSA：模长位数（与私钥自报的 key_size 交叉验证）
-        let rsa = PrivateKey::from_openssh(&generate_pem(Algorithm::Rsa { hash: None })).unwrap();
+        let rsa = PrivateKey::from_openssh(generate_pem(Algorithm::Rsa { hash: None })).unwrap();
         let expected_bits = match rsa.key_data() {
             ssh_key::private::KeypairData::Rsa(rsa) => rsa.key_size().to_string(),
             other => panic!("expected rsa keypair, got {other:?}"),
@@ -440,7 +498,7 @@ mod tests {
         assert_eq!(size.as_deref(), Some(expected_bits.as_str()));
 
         // ECDSA：曲线标签
-        let ecdsa = PrivateKey::from_openssh(&generate_pem(Algorithm::Ecdsa {
+        let ecdsa = PrivateKey::from_openssh(generate_pem(Algorithm::Ecdsa {
             curve: EcdsaCurve::NistP256,
         }))
         .unwrap();

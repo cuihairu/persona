@@ -46,8 +46,9 @@
 ## P2-⑥ PEM 格式 SSH 密钥无法导入
 
 - **现象**：PEM 系私钥（BEGIN RSA PRIVATE KEY / BEGIN EC PRIVATE KEY / BEGIN PRIVATE KEY）导入失败。
-- **现状**：主体已闭环（PKCS#8/PKCS#1/SEC1 + PBES2 加密件 + PPK 明确拒绝，25 个 core 测试真实 openssl fixture 覆盖）。剩余核对：格式识别错误的提示要点名「哪个头不认识、期望什么格式」；导入+新建两路径的类型徽标识别随 P2-⑤ 一并验收。
-- **状态**：核对中。
+- **闭环**：PKCS#8/PKCS#1/SEC1 + PBES2 加密件 + PPK 明确拒绝（27 个 core 测试，真实 openssl fixture 覆盖）；导入+新建两路径类型徽标随 P2-⑤ 一并落地（同源现算）。
+- **收尾（2026-10-07）**：格式识别错误点名实际看到的 PEM 头——`Unrecognized private key file format: PEM header "-----BEGIN CERTIFICATE-----" is not supported (supported PEM headers: …)`；无头的文件明说 `not a PEM private key file` 并列全部期望头与算法；label 截断 64 字符防畸形超长行（内容是用户自己的输入，回显无泄密面）。
+- **状态**：已修（2026-10-07）。
 
 ## P1-⑦ SSH agent 启动按钮启动后仍可点（用户以为能重复启动）
 

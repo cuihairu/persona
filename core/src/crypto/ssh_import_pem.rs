@@ -412,7 +412,11 @@ qkbvrvWWzBSQPEC0FxGXt6QnwJvTdA==
     #[test]
     fn unrecognized_content_lists_supported_formats() {
         let err = import_private_key_file("hello world", None).unwrap_err();
-        assert!(err.to_string().contains("OpenSSH"), "{err}");
+        let msg = err.to_string();
+        // 无 PEM 头：明说不是 PEM + 期望格式清单全列
+        assert!(msg.contains("not a PEM private key file"), "{msg}");
+        assert!(msg.contains("BEGIN OPENSSH PRIVATE KEY"), "{msg}");
+        assert!(msg.contains("BEGIN RSA PRIVATE KEY"), "{msg}");
     }
 
     #[test]
