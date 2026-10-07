@@ -1536,6 +1536,32 @@ Quality & Security
       **坑**：pnpm `link:` 目标的依赖不代装（braces 依赖 fill-range 会断），
       `file:` 会装——有依赖用 file:，零依赖空壳才可用 link:。
       门禁：website build / desktop tsc+vite build / desktop jest 全绿；告警待自动关不手关。
+- [x] Dependabot 第二波清账·4 包 6 告警（2026-10-07，#306-311，braces/elliptic 重扫闭环
+      时同波新开）：全部无修复版或换线修复——
+      source-map-js GHSA-68fv（事件循环 DoS，修复版 1.2.2）：pnpm 树已是 1.2.2，
+      仅 desktop/docs 两份 npm 锁钉在 ^1.2.1 → docs overrides 升 ^1.2.2。
+      katex GHSA-238p（read 侧原型污染 gadget，修复版 0.18.2）：唯一链
+      mermaid→katex@0.16.47（docs）→ docs overrides 升 ^0.18.2（装到 0.18.10）。
+      postcss-selector-parser GHSA-rj75（flat 选择器二次复杂度 CPU 耗尽，
+      修复版 7.1.6，6.x 全系在受影响范围）：唯一消费者 umi→postcss-preset-env
+      7.5.0 的 csstools 插件群 → pnpm overrides `@<7.1.6`→7.1.6 整树替换。
+      sprintf-js GHSA-hp3w（精度说明符直传 toFixed/toExponential/toPrecision，
+      未捕获 RangeError，**through 1.1.3 全系无修复**）：唯一链
+      jest→babel-plugin-istanbul→@istanbuljs/load-nyc-config→js-yaml3→argparse
+      （argparse 只在报错文案用 %s/%d）→ `vendor/sprintf-js-patched` fork：
+      clamp_precision 夹紧到引擎合法域 0..100（toPrecision 1..100），其余逐字节
+      上游原样，12 格式等价 + `%.999999999999e`/`%.0g` PoC 上游崩/fork 归零，
+      版本记 1.0.4、overrides file: 指入。
+      desktop/package-lock.json **删除**：CI 走 `pnpm install --frozen-lockfile
+      --filter persona-desktop`，该锁零引用（dependabot.yml 也无 desktop 条目），
+      纯死元数据还在喂两条告警（#306/#307）——与 docs 漂移第二锁同性质（8e24eb6
+      先例）。锁内 sprintf-js→file: 归零、postcss-selector-parser 仅 7.1.6。
+      **插单**：验收 desktop 门禁时撞上并发会话 26264c9（S5-b）把 zh-CN.ts
+      hostAction 后误插 `},`+dataLoss 块（第二处才是意图位，纯 + 行未删旧位），
+      tsc TS1005 雪崩、jest 因 babel-jest 不查类型而漏检——删除误插块修复，
+      en.ts 单块位置正确未动。
+      门禁：website build / docs `npm ci`+build（101.5s）/ desktop build+jest /
+      chromium-extension jest 129 全绿。
 - [x] 覆盖率轮次·基线与 connect-server（2026-09-27，CI 同口径
       `cargo llvm-cov --workspace --all-features --ignore-filename-regex '…'`）：
       全仓 **TOTAL 行覆盖 95.88%**（missed 1979/68783；functions 88.89%、regions 97.12%）。

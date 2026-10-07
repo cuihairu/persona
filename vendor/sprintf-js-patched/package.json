@@ -1,0 +1,8 @@
+{
+  "name": "sprintf-js",
+  "version": "1.0.4",
+  "description": "Self-maintained fork of sprintf-js 1.0.3. GHSA-hp3w-g68c-fv3c: precision specifiers reach toFixed/toExponential/toPrecision unvalidated, uncaught RangeError on out-of-range values (DoS via attacker-controlled format strings); no fixed upstream release exists. Patch: clamp precision to the engine-accepted 0..100 (1..100 for toPrecision). Version bumped to 1.0.4 only to mark the fork and satisfy ^1.0.x ranges.",
+  "license": "BSD-3-Clause",
+  "main": "src/sprintf.js",
+  "private": true
+}
