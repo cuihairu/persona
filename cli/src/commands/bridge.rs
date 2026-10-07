@@ -5136,15 +5136,23 @@ pub(crate) mod tests {
 
     #[cfg(target_os = "windows")]
     fn clipboard_available() -> bool {
-        // `cmd /C clip` is always present on Windows; verify it is
-        // callable rather than just checking the binary exists.
-        Command::new("cmd")
-            .args(["/C", "echo", "test", "|", "clip"])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
+        // `clip` / `Set-Clipboard` take the clipboard while running; under
+        // parallel tests a sibling can hold the lock and make a live probe
+        // exit non-zero while the real copy (same tools a moment later,
+        // with a powershell fallback) succeeds — probe said no, copy said
+        // yes, and the outcome-branching assertion flapped (observed on
+        // CI runners). Probe PATH resolution instead: `where` touches no
+        // clipboard, so the verdict is stable, and it covers both tools
+        // the real copy path tries.
+        ["clip", "powershell"].iter().any(|cmd| {
+            Command::new("where")
+                .arg(cmd)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
