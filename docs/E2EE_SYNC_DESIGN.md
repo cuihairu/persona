@@ -184,24 +184,38 @@ oplog——元数据明文只留在本地 change_history，oplog 只持有 §5 �
 
 **实现进度**（2026-10-07）：✅ 00010 迁移 + server PUT/GET 端点（事务删
 `seq ≤ S`，a30a2ca）；✅ core 格式层 `LibrarySnapshotPayload`（seal/open
-fail-closed + 零知识测试）；✅ `SyncRemote` wire（HttpSyncRemote
-PUT/GET，404→None）；✅ engine 原语 `upload_library_snapshot` /
-`install_library_snapshot`（哨兵游标续拉）。⬜ service 装配层（整库打包
-循环 + bootstrap 触发接线到桌面/CLI）、⬜ 双设备收敛等价性集成测试。
+fail-closed + 零知识测试；条目 = oplog 视图充分集原 op，见下）；✅
+`SyncRemote` wire（HttpSyncRemote PUT/GET，404→None）；✅ engine 原语
+`upload_library_snapshot` / `install_library_snapshot`（哨兵游标续拉、
+travel 双闸）；✅ 触发基线与阈值判定（迁移 018 `sync_state.last_snapshot_seq`
+MAX 语义 + `UPLOAD_THRESHOLD_OPS` + `engine::library_snapshot_needed`）。
+⬜ service 装配层（整库打包循环 + bootstrap/run_cycle 触发接线到桌面/
+CLI）、⬜ 双设备收敛等价性集成测试。
 
-**快照格式**（服务器只见一个 BLOB，零知识不变）：
+**快照格式**（服务器只见一个 BLOB，零知识不变；**2026-10-07 实现修订**：
+条目从初稿的「凭据表行快照」改为**本机 oplog 的视图充分集**）：
 
 ```
 LibrarySnapshotPayload {          // bincode 后用 group key AES-256-GCM 整包加密
   created_at: rfc3339,
-  entries: Vec<SnapshotEntry>,    // 只含存活条目；tombstone 不进快照
-}
-SnapshotEntry {
-  item_id: uuid,
-  ciphertext: bytes,              // SyncItemSnapshot::seal(item_key)——单条格式不变
-  wrapped_item_key: bytes,        // group key 包裹——从 oplog 原样搬运
+  ops: Vec<SyncOp>,               // 每条目：主位 op（put 或 tombstone）+ 未裁决冲突副本
 }
 ```
+
+打包原 op 而非凭据表行（装包 = 按 op_id 幂等入本地 oplog + 既有物化路径，
+全链路复用）：
+
+- **pending identity 不丢**：新设备缺身份行时物化会 `SkippedPendingIdentity`
+  ——凭据表快照会把条目直接丢弃而其 op 已被压缩（真数据洞）；op 入
+  oplog 与全量重放同款挂起重试。
+- **冲突副本不丢**：未裁决双版本是「数据不丢」底线的一部分，快照点前的
+  冲突 ops 同样会被压缩。
+- **tombstone 在场防复活**（修订：初稿「tombstone 不进快照」作废）：
+  `seq ≤ S` 被压缩后「点后增量」并不携带快照点前的删除，快照缺席删除
+  会让装到非空库的设备复活已删条目。
+- **LWW 全序原样**：op_id/lamport/device_id 原封搬运——「快照起步 + 点后
+  增量 == 全量重放」按 `item_view` 逐条相等（收敛等价性锚点的口径）。
+  被 GC 的旧版本视图中性，缺席不改变视图。
 
 **覆盖语义（竞态的核心解法，实现精化为水位口径）**：客户端**先推平本机
 待推队列、再拉平远端增量**（`upload_library_snapshot` 内的周期顺序），
@@ -233,19 +247,34 @@ bootstrap 时先 GET 快照（404 则照旧从空拉），命中则装快照、�
 
 **触发时机**（客户端 engine，第一版保守口径）：① push ack 后
 `head_seq − last_snapshot_seq > 1000` → 打包上传（防频繁重打包）；② pull
-时落后且本地无对应条目基数大（新设备/空库）→ 先拉快照。阈值放配置
-（`sync::snapshot::UPLOAD_THRESHOLD_OPS` 等），CLI/桌面不暴露。
+时落后且本地无对应条目基数大（新设备/空库）→ 先拉快照。判定已落
+（2026-10-07）：阈值常量 `sync::snapshot::UPLOAD_THRESHOLD_OPS`（=1000，
+CLI/桌面不暴露）+ `engine::library_snapshot_needed(threshold)`（travel 恒
+false；基线 = 迁移 018 的 `sync_state.last_snapshot_seq`，上传/装包成功
+记账，MAX 语义只进不退）；判定挂进 run_cycle 尾部与 ② 的 bootstrap
+调用（游标为空才试）都待装配层批次接线。
 
 **失败面**：快照上传失败不阻断同步周期（尽力而为旁路，与捕获同语义）；
-快照下载/解封失败 fail-closed 报错（与单条 `SyncItemSnapshot::open` 同口径
-——key 不对或被篡改不许静默降级为全量重放，因为重放区间可能已被压缩
-删除）。服务器存储放大系数 = 1 份快照 ≈ 当前库密文总量，个人库量级
+travel 激活期间上传直接报错拒绝、装包整体跳过（与 pull 同闸，退 travel
+后下次 bootstrap 照试——游标未动）。快照下载/解封失败 fail-closed 报错
+（与单条 `SyncItemSnapshot::open` 同口径——key 不对或被篡改不许静默降级
+为全量重放，因为重放区间可能已被压缩删除）；装包回调失败游标不动
+（fail-closed 保住全量重放路径，不留半装状态）。服务器存储放大系数 =
+1 份快照 ≈ oplog 视图充分集（GC 后 ≈ 当前库密文总量），个人库量级
 （几 MB）可接受。
 
-**测试锚点**（实现批次的验收口径）：零知识核查同样适用于快照 BLOB
-（`capture.rs` 测试口径平移）；快照起步 + 点后增量 == 全量重放的最终
-收敛等价性（双真 TCP 设备，一方走快照路径）；410 重对齐路径；并发
-PUT 快照（后到覆盖前者，head 单调）；压缩后老设备增量拉取不受影响。
+**测试锚点**（实现批次的验收口径）：
+
+- 零知识核查同样适用于快照 BLOB（`capture.rs` 测试口径平移）——✅ 已落
+  （`snapshot.rs::library_snapshot_bytes_never_leak_entry_plaintext` 与
+  错 key/篡改/截断 fail-closed 回归）。
+- 快照起步 + 点后增量 == 全量重放的最终收敛等价性（双真 TCP 设备，一方
+  走快照路径）——⬜ 待装配层批次。
+- 404 → 全量重放回退（初稿「410 重对齐」随 retention 合流修订取消）——
+  ✅ 引擎级已落（`install_without_snapshot_keeps_full_replay_path`）。
+- 并发 PUT 快照（后到覆盖前者，head 单调）——⬜。
+- 压缩后老设备增量拉取不受影响——✅ server 端点测试（重传压缩与压缩后
+  续拉）+ engine 快照点后续拉增量已落；跨端真 TCP 回归随收敛等价性一并补。
 
 ## 6. 设备生命周期
 

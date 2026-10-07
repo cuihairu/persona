@@ -1618,10 +1618,15 @@ References
       code=absent,区别于路由 404)、`ApiError::absent` 新构造。测试:
       roundtrip/压缩计数/单快照不堆积/校验拒绝/404 absent。server 133
       绿。
-      **core 侧已落**(2026-10-07):`LibrarySnapshotPayload`/`Entry`
-      格式层(snapshot.rs,bincode→group key AES-256-GCM 整包 seal/open
-      fail-closed,零知识测试平移:整包字节搜不到条目明文/密钥原字节、
-      错 key/篡改/截断报错);`SyncRemote` 加 `put/get_library_snapshot`
+      **core 侧已落**(2026-10-07,两增量):①格式层 `LibrarySnapshotPayload`
+      (bincode→group key AES-256-GCM 整包 seal/open fail-closed,零知识
+      测试平移:整包字节搜不到条目明文/密钥原字节、错 key/篡改/截断报错)
+      ——条目修订为 `ops: Vec<SyncOp>`(**本机 oplog 视图充分集**:主位
+      put/tombstone+未裁决冲突副本;凭据表行打包会丢 pending identity
+      (新设备缺身份行物化挂起而其 op 已被压缩=真数据洞)、丢冲突副本、
+      快照缺删除导致装到非空库复活已删条目;原 op 原封搬运保 LWW 全序,
+      「快照起步+点后增量==全量重放」按 item_view 逐条相等——修订已进
+      设计稿);`SyncRemote` 加 `put/get_library_snapshot`
       (四个实现同步改:HttpSyncRemote wire——PUT 走 /snapshot 带回显
       seq 一致性校验、GET 404 两成因收敛 Ok(None);DeadRemote;内存
       remote 两处,put 记账不真删保 append-only 位点语义);engine 原语
@@ -1629,12 +1634,19 @@ References
       位点=local_watermark——比设计初版 push-ack-seq 严格不超 claim,
       设计稿已同步精化)与 `install_library_snapshot`(AsyncFnOnce 装
       包回调,成功才推游标到哨兵 `(S,"0")`——UUID 串恒大于 "0",水位
-      直读快照位点;回调失败/无快照游标不动全量重放原状,fail-closed)。
-      测试:engine 5 个(收敛水位/travel 闸/装包游标推进+增量续拉/无快
-      照路径/装包失败不动游标)+wire 4 个(mock TCP:wire 正面/404→
-      None/seq 回显不符/三臂 malformed)。core 全量 1094 绿。余:service
-      装配层(整库打包循环+bootstrap 触发接线桌面/CLI)、双设备收敛等
-      价性集成测试、LWW 衔接语义。
+      直读快照位点,并记水位基线;回调失败/无快照/travel 跳过一律游标
+      不动全量重放原状,fail-closed)。②触发基线+阈值判定:迁移 018
+      `sync_state.last_snapshot_seq`(MAX 语义只进不退,上传/装包成功
+      记账)、`sync::snapshot::UPLOAD_THRESHOLD_OPS=1000`、engine
+      `library_snapshot_needed(threshold)`(head−基线>阈值;travel 恒
+      false)。测试:engine 7 个(收敛水位/travel 闸拒上传/装包游标推进
+      +增量续拉/无快照路径/装包失败不动游标/travel 跳装包/阈值边界含
+      上传记账)+wire 4 个(mock TCP:wire 正面/404→None/seq 回显不符/
+      三臂 malformed)+整包格式 3 个(roundtrip 含 tombstone 在场/
+      fail-closed/零知识平移)。core 全量 1096 绿(fmt+钉版/stable 双
+      clippy+workspace check 干净)。余:service 装配层(整库打包循环+
+      bootstrap/run_cycle 触发接线桌面/CLI)、双设备收敛等价性集成测
+      试、LWW 衔接语义。
 - [ ] S3 三形态中转:官方托管(Worker)/自建 relay(单二进制开源随仓)/局域网直传,同一协议,客户端三选一
       验收=三形态一致性测试(同一客户端协议,同步行为完全一致)。
 - [ ] S4 设备面:组内设备清单互见(仅改自己备注)、同等权限自由进出组
