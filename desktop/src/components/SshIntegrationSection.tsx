@@ -65,8 +65,11 @@ const SshIntegrationSection: React.FC = () => {
   if (!status) return null;
 
   const { enabled, anomaly, manualEntry, socketPath, configPath } = status;
+  // Host * 作用域行与后端锚点块同构：块追加在 EOF，若无它会落入用户
+  // 最后一个 Host 块的作用域（见 ssh_integration.rs 模块注释）
   const manualSnippet = [
     '# persona managed begin',
+    'Host *',
     `IdentityAgent ${socketPath}`,
     '# persona managed end',
   ].join('\n');

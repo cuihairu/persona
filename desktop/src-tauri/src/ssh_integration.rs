@@ -5,6 +5,12 @@
 //! 稳定路径（见 [`agent_stable_socket`]），本模块把该路径写进 `~/.ssh/config`
 //! 的 `# persona managed begin/end` 锚点注释块——只动块内，用户其余配置
 //! 一律不碰；停用即整块移除。
+//!
+//! 作用域：OpenSSH 按文件顺序取「首个匹配该 host 的值」，而追加到 EOF 的
+//! 配置行会落入用户**最后一个 Host/Match 块**的作用域（若用户 config 以
+//! `Host github.com` 结尾，其他 host 根本拿不到 persona agent）。因此块内
+//! 带一行 `Host *`：EOF 处的全域匹配对所有 host 生效，且用户写在文件更前
+//! 面的 host 级 `IdentityAgent` 按 first-wins 语义原样优先。
 
 use std::path::{Path, PathBuf};
 
@@ -124,7 +130,8 @@ pub fn has_manual_persona_entry(config: &str) -> bool {
 /// 幂等替换锚点块内容（保留块外一切）。无块则 append（前置空行分隔）；
 /// 损坏块（begin 无 end）按删到 EOF 收敛。
 pub fn upsert_managed_block(config: &str, identity_agent_value: &str) -> String {
-    let block = format!("{BLOCK_BEGIN}\nIdentityAgent {identity_agent_value}\n{BLOCK_END}\n");
+    let block =
+        format!("{BLOCK_BEGIN}\nHost *\nIdentityAgent {identity_agent_value}\n{BLOCK_END}\n");
 
     match (
         config.lines().position(|l| l.trim() == BLOCK_BEGIN),
@@ -334,6 +341,23 @@ mod tests {
         assert!(!has_manual_persona_entry(other));
     }
 
+    #[test]
+    fn upsert_block_carries_host_star_so_eof_append_reaches_all_hosts() {
+        // 用户 config 以具体 Host 块结尾：EOF 追加若无 Host * 会落入该块
+        // 作用域，其他 host 静默拿不到 persona agent（走查实证的缺口）
+        let cfg =
+            "Host github.com\n  User git\n\nHost bastion.example.com\n  ProxyJump github.com\n";
+        let out = upsert_managed_block(cfg, AGENT);
+        let begin = out.find(BLOCK_BEGIN).unwrap();
+        let end = out.find(BLOCK_END).unwrap();
+        let block = &out[begin..end];
+        let star = block.find("Host *").expect("块内应有 Host * 作用域行");
+        let agent = block.find("IdentityAgent").expect("块内应有 IdentityAgent");
+        assert!(star < agent, "Host * 必须排在 IdentityAgent 之前才生效");
+        // 幂等：再跑一遍不重复
+        assert_eq!(upsert_managed_block(&out, AGENT), out);
+    }
+
     /// 硬验收：OpenSSH 真实解析锚点块（注释行不得干扰 IdentityAgent）。
     /// `ssh -G -F <file> <host>` 输出归一化配置；无 ssh（精简 CI 容器）则跳过。
     #[cfg(unix)]
@@ -351,7 +375,7 @@ mod tests {
         );
         std::fs::write(&config_path, &cfg).unwrap();
 
-        let out = std::process::Command::new(ssh)
+        let out = std::process::Command::new(&ssh)
             .args(["-G", "-F"])
             .arg(&config_path)
             .arg("example.test")
@@ -366,6 +390,22 @@ mod tests {
         assert_eq!(line, format!("identityagent {AGENT}"));
         // 用户配置照常生效
         assert!(stdout.lines().any(|l| l == "user git"));
+
+        // 块外无关 host 同样解析到（Host * 作用域；块落在 Host example.test
+        // 之后但不得被其作用域吞掉）
+        let out2 = std::process::Command::new(&ssh)
+            .args(["-G", "-F"])
+            .arg(&config_path)
+            .arg("unrelated.test")
+            .output()
+            .expect("ssh -G runs");
+        assert!(out2.status.success(), "ssh -G failed: {out2:?}");
+        let stdout2 = String::from_utf8_lossy(&out2.stdout);
+        let line2 = stdout2
+            .lines()
+            .find(|l| l.starts_with("identityagent "))
+            .unwrap_or_else(|| panic!("identityagent missing for unrelated host:\n{stdout2}"));
+        assert_eq!(line2, format!("identityagent {AGENT}"));
     }
 
     #[cfg(unix)]

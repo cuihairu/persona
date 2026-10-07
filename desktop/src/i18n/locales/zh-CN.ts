@@ -296,7 +296,7 @@ export default {
       showManual: '手动配置说明',
       hideManual: '收起手动配置',
       manualConfigHint:
-        '想自己写：把下面三行粘进 ~/.ssh/config（可放文件顶部或 Host 段落内；无 Host 时对所有连接生效）——',
+        '想自己写：把下面四行粘进 ~/.ssh/config（块内自带 Host * 对所有连接生效；写在文件更前面的手写 IdentityAgent 按「先出现先生效」仍优先）——',
       compatNote:
         '需要 OpenSSH 8.3+（Windows 10/11 自带的 OpenSSH 客户端同样支持 IdentityAgent，socket 用命名管道 \\\\.\\pipe\\persona-ssh-agent）。等效的环境变量方案：在 shell 里 export SSH_AUTH_SOCK=<上面的 socket 路径>。',
     },

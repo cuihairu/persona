@@ -301,7 +301,7 @@ export default {
       showManual: 'Manual setup',
       hideManual: 'Hide manual setup',
       manualConfigHint:
-        'Prefer to write it yourself: paste these three lines into ~/.ssh/config (at the top or inside a Host block; without a Host it applies to every connection) —',
+        "Prefer to write it yourself: paste these four lines into ~/.ssh/config (the block's own Host * applies to every connection; an IdentityAgent you wrote earlier in the file still wins under first-obtained-value semantics) —",
       compatNote:
         'Requires OpenSSH 8.3+ (the built-in Windows 10/11 OpenSSH client supports IdentityAgent too, via the \\\\.\\pipe\\persona-ssh-agent named pipe). Equivalent env-var option: export SSH_AUTH_SOCK=<the socket path above> in your shell.',
     },

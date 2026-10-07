@@ -110,6 +110,8 @@ describe('components/SshIntegrationSection', () => {
 
     const snippet = getByTestId('ssh-integration-snippet');
     expect(snippet).toHaveTextContent('# persona managed begin');
+    // Host * 作用域行与后端锚点块同构（缺它块会落入最后一个 Host 块作用域）
+    expect(snippet).toHaveTextContent('Host *');
     expect(snippet).toHaveTextContent(
       'IdentityAgent /run/user/1000/persona/ssh-agent.sock',
     );

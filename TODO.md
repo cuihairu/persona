@@ -481,6 +481,18 @@ SSH Agent (developer focus)
       原子写 config（tmp+rename，权限保留/0600）。验收：集成测试以真实
       `ssh -G -F` 往返断言 `identityagent <稳定路径>` 且用户配置照常生效；
       设置页两态×亮暗截图。desktop 231+5、jest 642、tsc、fmt、clippy 绿。
+- [x] SSH 集成走查补强（2026-10-07）：走查实证锚点块 EOF 追加会落入用户
+      最后一个 Host 块作用域（其余 host 静默拿不到 persona agent）——块内
+      补 `Host *` 作用域行（全域生效，用户写在更前面的 host 级
+      IdentityAgent 按 first-wins 仍优先），手动片段/i18n 文案/docs 示例
+      同步四行块；模块测试加「块外无关 host 同样解析到位」断言。新增
+      `tests/ssh_agent_walkthrough.rs` 端到端走查：临时 HOME 驱动真实命令层
+      enable/disable，真 OpenSSH `ssh -G -F` 断言 identityagent 指向稳定
+      socket、停用后用户配置逐字节还原（OpenSSH 定位 ~/.ssh/config 走
+      passwd home 而非 $HOME，须 -F 显式指定）。lib 234、walkthrough、
+      desktop_integration、jest 653、tsc、fmt、stable clippy 绿；UI
+      关→开→关三态截图经徽章区像素取样取证（Read 工具投递图像会错乱，
+      以盘上文件像素为准）。
 - [x] SSH 密钥列表类型徽标（2026-10-07，BUGS P2-⑤）：core
       `describe_public_key_line` 三元组（算法/SHA256 指纹/位数曲线标签）
       ——Ed25519→`256`、RSA→模长位长（crate 自带 key_size）、ECDSA→

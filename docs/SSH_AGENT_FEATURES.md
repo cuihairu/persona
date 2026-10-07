@@ -395,17 +395,21 @@ ssh -T git@github.com
 的 IdentityAgent 配置并一键启用/停用。
 
 - **原理**：OpenSSH 8.3+ 的 `IdentityAgent` 指令为连接指定 agent socket，
-  等效于对该 host 单独设置 `SSH_AUTH_SOCK`。Windows 10/11 自带的 OpenSSH
-  客户端同样支持（socket 用命名管道 `\\.\pipe\persona-ssh-agent`）。
+  等效于对单个 host 单独设置 `SSH_AUTH_SOCK`；锚点块内带 `Host *`，对所有
+  连接生效（写在文件更前面的手写 `IdentityAgent` 按 OpenSSH「先出现先生效」
+  语义仍优先）。Windows 10/11 自带的 OpenSSH 客户端同样支持（socket 用
+  命名管道 `\\.\pipe\persona-ssh-agent`）。
 - **稳定 socket**：桌面壳启动 agent 时经 `PERSONA_AGENT_SOCKET_PATH` 注入
   稳定路径（Linux `$XDG_RUNTIME_DIR/persona/ssh-agent.sock`，缺省回退
   `~/.persona/run/ssh-agent.sock`；Windows 命名管道 `persona-ssh-agent`），
   与 CLI 每次 pid 化路径不同——写入 config 的值跨重启不变。
-- **锚点块**：启用即幂等写入下面三行（损坏块自动收敛重写），停用整块移除；
-  块外配置一律只读不动：
+- **锚点块**：启用即幂等写入下面四行（损坏块自动收敛重写），停用整块移除；
+  块外配置一律只读不动。块内 `Host *` 不可省：块追加在文件末尾，若无它会
+  落入用户**最后一个 Host 块**的作用域，其余 host 静默拿不到 persona agent：
 
   ```
   # persona managed begin
+  Host *
   IdentityAgent /run/user/1000/persona/ssh-agent.sock
   # persona managed end
   ```
@@ -413,12 +417,14 @@ ssh -T git@github.com
 - **状态三态**：已启用（锚点块指向当前 socket）/ 未启用（无块）/
   配置异常（块存在但指向别处——重新启用即修复）；查询失败时区块整体隐藏，
   不谎报状态。
-- **验收**：`ssh -G <host>` 输出 `identityagent <稳定 socket>`（集成测试
-  `ssh_G_resolves_identity_agent_from_managed_block` 以真实 OpenSSH 往返
-  验证）。
+- **验收**：`ssh -G <host>` 输出 `identityagent <稳定 socket>`（模块测试
+  `ssh_g_resolves_identity_agent_from_managed_block` 以真实 OpenSSH 往返
+  验证，含块外无关 host；端到端走查 `ssh_agent_walkthrough` 覆盖命令层
+  启用/停用 + 用户配置逐字节还原）。
 
-手动配置（不想用桌面开关）：把上面三行粘进 `~/.ssh/config` 顶部或对应
-Host 段落；shell 环境变量方案 `export SSH_AUTH_SOCK=<socket>` 等效。
+手动配置（不想用桌面开关）：把上面四行粘进 `~/.ssh/config` 文件末尾
+（`Host *` 让它对所有连接生效）；shell 环境变量方案
+`export SSH_AUTH_SOCK=<socket>` 等效。
 
 ### 3. 配置策略
 
