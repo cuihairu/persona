@@ -1648,9 +1648,15 @@ References
       上传记账)+wire 4 个(mock TCP:wire 正面/404→None/seq 回显不符/
       三臂 malformed)+整包格式 3 个(roundtrip 含 tombstone 在场/
       fail-closed/零知识平移)。core 全量 1096 绿(fmt+钉版/stable 双
-      clippy+workspace check 干净)。余:service 装配层(整库打包循环+
-      bootstrap/run_cycle 触发接线桌面/CLI)、双设备收敛等价性集成测
-      试、LWW 衔接语义。
+      clippy+workspace check 干净)。**service 装配层已落**(2026-10-07):
+      `SyncSession::snapshot_payload`(逐 item `item_view` 主位+未裁决冲突
+      副本的视图充分集打包)、`install_snapshot_ops`(group key 拆包
+      fail-closed→op_id 幂等入 oplog)、run_cycle 挂接——bootstrap
+      (last_pull_cursor 为空才试装,失败/缺快照游标不动走全量重放)
+      +阈值触发上传(>1000 ops 重打包,失败仅记日志不阻断)。双设备
+      收敛等价性集成测试 `snapshot_bootstrap_converges_like_full_replay`
+      (A 打包上传→B 空库装快照起步→主库逐行一致+水位在覆盖位点)。
+      core 全量 1044 绿(fmt+双 clippy 干净)。余:LWW 衔接语义。
 - [ ] S3 三形态中转:官方托管(Worker)/自建 relay(单二进制开源随仓)/局域网直传,同一协议,客户端三选一
       验收=三形态一致性测试(同一客户端协议,同步行为完全一致)。
 - [ ] S4 设备面:组内设备清单互见(仅改自己备注)、同等权限自由进出组
