@@ -109,6 +109,9 @@ import type {
   WorkspaceSettings,
   BackupExportOutcome,
   BackupRestoreOutcome,
+  BackupPushOutcome,
+  BackupVersionView,
+  BackupServerDeleteOutcome,
   QuickAccessStatus,
   SshAgentStatus,
   SshAgentKey,
@@ -220,6 +223,43 @@ class PersonaAPI {
     passphrase: string,
   ): Promise<ApiResponse<BackupRestoreOutcome>> {
     return invoke('backup_restore_from_file', { request: { path, passphrase } });
+  }
+
+  /** 整库加密备份推送到服务器密文仓（S5-d）。快照加密在本地完成后才出网，
+   * 口令与主密码不出本机；成功后 settings.backup 落 destination=server 凭证。 */
+  async backupPushToServer(
+    passphrase: string,
+  ): Promise<ApiResponse<BackupPushOutcome>> {
+    return invoke('backup_push_to_server', { request: { passphrase } });
+  }
+
+  /** 列出服务器密文仓的备份版本（倒序）。免解锁——锁屏救库也要能先看清单。 */
+  async backupListServerVersions(
+    limit?: number,
+  ): Promise<ApiResponse<BackupVersionView[]>> {
+    return invoke('backup_list_server_versions', {
+      request: { limit: limit ?? null },
+    });
+  }
+
+  /** 从服务器密文仓恢复整库。免解锁（锁屏救库同文件恢复口径）；换库成功后
+   * 后端 service 被取下，调用方须随后 `checkServiceStatus` 驱动回解锁屏。 */
+  async backupRestoreFromServer(
+    backupId: string,
+    passphrase: string,
+  ): Promise<ApiResponse<BackupRestoreOutcome>> {
+    return invoke('backup_restore_from_server', {
+      request: { backup_id: backupId, passphrase },
+    });
+  }
+
+  /** 删除服务器上的备份版本（幂等：已删除视为成功）。 */
+  async backupDeleteServerVersion(
+    backupId: string,
+  ): Promise<ApiResponse<BackupServerDeleteOutcome>> {
+    return invoke('backup_delete_server_version', {
+      request: { backup_id: backupId },
+    });
   }
 
   /** 窄写 features 四个开关位，返回更新后的全量设置作为服务端真相 */

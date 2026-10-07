@@ -1841,8 +1841,21 @@ References
       `finalizeVaultRestore`(lockService 同口径清内存+重探解锁态驱动回
       解锁屏,.bak 路径走 toast——解锁屏有独立 Toaster,节内 state 随卸载
       不可见)+i18n en/zh-CN;命令 3 测试+组件 12 测试(成功链/文件与口令
-      双校验先于确认/拒绝恢复不动/取消选文件/失败保会话)。余:服务器
-      密文仓目标。）
+      双校验先于确认/拒绝恢复不动/取消选文件/失败保会话)。S5-d 服务器
+      密文仓桌面接线已落 2026-10-08:换库段抽共享 `restore_vault_staged`
+      (文件/服务器恢复同语义,错误口径逐字保留)+四命令
+      `backup_push_to_server`(require_unlocked,本地快照加密后
+      BackupClient.push,凭证 destination="server")/
+      `backup_list_server_versions`(免解锁,limit clamp 1-100)/
+      `backup_restore_from_server`(免解锁锁屏救库,下载 ETag sha256
+      自检后走共享 staged 换库)/`backup_delete_server_version`(404
+      幂等)。备份边界:未配置 persona-server 四命令全拒(默认关闭、
+      显式开启);出网的只有口令加密后的密文,备份口令与主密码不出本机
+      (serverDescription 明示数据范围)。BackupSection 服务器子区(推送
+      复用导出口令对/版本列表空态/行内恢复二次确认/删除确认即刷新);
+      命令 5 测试(TCP 假服务 Bearer 校验+单槽备份含 401/404/幂等)+
+      组件 10 测试;桌面 242+前端组件 24 全绿。S5 全链(文件导出/文件
+      恢复/服务器密文仓)闭环。）
       数据丢失强提示(设计稿 §6.5 硬要求,2026-10-04 补;已由 26264c9 落地,
       见 S5-b 注记):① 首次启用同步组
       强提示「单设备=高危!密码一旦丢失无法找回——请再连一台设备,或立即

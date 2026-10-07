@@ -180,6 +180,29 @@ export default {
       restoredWithBak:
         'Backup restored (previous vault kept at {{path}}) — unlock with the backup’s master password',
       restoreFailed: 'Restore failed',
+      serverTitle: 'Server encrypted vault',
+      serverDescription:
+        'Push the encrypted vault snapshot to your persona-server as an off-device recovery copy. Only ciphertext travels — the backup passphrase and master password never leave this machine.',
+      serverPushNow: 'Push backup to server',
+      serverPushing: 'Pushing…',
+      serverPushed: 'Backup pushed to server',
+      serverPushedDedup:
+        'The server already had this exact version — deduplicated, nothing new stored',
+      serverPushFailed: 'Push failed',
+      serverRefresh: 'Refresh server versions',
+      serverListing: 'Listing…',
+      serverEmpty: 'No backup versions on the server yet.',
+      serverListFailed: 'Failed to list server versions',
+      serverRestore: 'Restore',
+      serverRestoreConfirm:
+        'Replace the entire current vault with the server version from {{created}}? The current vault is kept as a .bak copy; afterwards unlock with that backup’s master password.',
+      serverRestorePassphrase: 'Backup passphrase for this version',
+      serverDelete: 'Delete',
+      serverDeleteConfirm:
+        'Delete this server backup version ({{created}})? Recovery copies on other devices go with it.',
+      serverDeleted: 'Deleted from server',
+      serverDeleteFailed: 'Delete failed',
+      serverRow: '{{device}} · {{time}} · {{size}}',
     },
     noIdentitiesYet: 'No identities yet.',
     name: 'Name',

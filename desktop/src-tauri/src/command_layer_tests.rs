@@ -1385,6 +1385,583 @@ async fn backup_restore_command_rejects_bad_inputs_and_rescues_from_locked_state
     assert!(!staged.exists());
 }
 
+// ---------------------------------------------------------------------------
+// S5-d 服务器密文仓（persona-server /api/v1/backups 桌面接线）
+//
+// 协议正确性归 core（BackupClient）与 server（backups.rs E2E）；这里只测
+// 宿主编排：门禁（未初始化/未配置/锁定）、快照+推送+凭证回写、列表映射、
+// 下载 → staged 换库（与文件恢复同口径）、删除幂等。中转用手搓 TCP 假
+// 服务（与 pairing relay 假服务同构：Bearer 校验 + 内存单槽备份）。
+// ---------------------------------------------------------------------------
+
+/// 内存单槽假备份服务：返回 base_url。备份 ID 恒 `bk-1`（push 覆盖写，
+/// delete 后 404）；Bearer token 恒 `tok-persona-1`（不符回 401 信封）。
+fn spawn_mock_backup_server() -> String {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        let digest = hasher.finalize();
+        digest.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    struct Stub {
+        body: Option<Vec<u8>>,
+        deleted: bool,
+    }
+    let state = Arc::new(std::sync::Mutex::new(Stub {
+        body: None,
+        deleted: false,
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { break };
+            let mut buf = Vec::new();
+            let mut byte = [0u8; 1];
+            while !buf.ends_with(b"\r\n\r\n") {
+                if stream.read(&mut byte).unwrap_or(0) == 0 {
+                    break;
+                }
+                buf.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&buf).into_owned();
+            let request_line = head.lines().next().unwrap_or_default().to_string();
+            let content_length: usize = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+                .and_then(|l| l.split_once(':').and_then(|(_, v)| v.trim().parse().ok()))
+                .unwrap_or(0);
+            let mut body = vec![0u8; content_length];
+            if content_length > 0 {
+                let _ = stream.read_exact(&mut body);
+            }
+            let method = request_line
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let path = request_line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            let auth = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                .and_then(|l| l.split_once(':'))
+                .map(|(_, v)| v.trim().to_string())
+                .unwrap_or_default();
+
+            let mut st = state.lock().unwrap();
+            let meta = |bytes: &[u8], id: &str| {
+                serde_json::json!({
+                    "id": id,
+                    "device_name": "stub-device",
+                    "size_bytes": bytes.len() as i64,
+                    "sha256": sha256_hex(bytes),
+                    "created_at": "2026-10-08T00:00:00Z",
+                })
+            };
+            let err = |code: &str, message: &str| {
+                serde_json::json!({ "error": { "code": code, "message": message } })
+                    .to_string()
+                    .into_bytes()
+            };
+            let (status, content_type, resp_body, etag): (u16, &'static str, Vec<u8>, String) =
+                if auth != "Bearer tok-persona-1" {
+                    (
+                        401,
+                        "application/json",
+                        err("unauthorized", "bad token"),
+                        String::new(),
+                    )
+                } else if method == "POST" && path == "/api/v1/backups" {
+                    st.body = Some(body.clone());
+                    st.deleted = false;
+                    let mut json = meta(&body, "bk-1");
+                    json["deduplicated"] = serde_json::json!(false);
+                    (
+                        201,
+                        "application/json",
+                        json.to_string().into_bytes(),
+                        String::new(),
+                    )
+                } else if method == "GET" && path.starts_with("/api/v1/backups?") {
+                    let items: Vec<serde_json::Value> = match st.body.as_ref() {
+                        Some(bytes) if !st.deleted => vec![meta(bytes, "bk-1")],
+                        _ => vec![],
+                    };
+                    let json = serde_json::json!({ "backups": items, "next_cursor": null });
+                    (
+                        200,
+                        "application/json",
+                        json.to_string().into_bytes(),
+                        String::new(),
+                    )
+                } else if method == "GET" && path == "/api/v1/backups/bk-1" {
+                    match st.body.as_ref() {
+                        Some(bytes) if !st.deleted => {
+                            let etag = format!("ETag: \"{}\"\r\n", sha256_hex(bytes));
+                            (200, "application/octet-stream", bytes.clone(), etag)
+                        }
+                        _ => (
+                            404,
+                            "application/json",
+                            err("not_found", "no such backup"),
+                            String::new(),
+                        ),
+                    }
+                } else if method == "DELETE" && path == "/api/v1/backups/bk-1" {
+                    if st.deleted {
+                        (
+                            404,
+                            "application/json",
+                            err("not_found", "no such backup"),
+                            String::new(),
+                        )
+                    } else {
+                        st.deleted = true;
+                        (204, "application/json", Vec::new(), String::new())
+                    }
+                } else {
+                    (
+                        404,
+                        "application/json",
+                        err("not_found", "no such route"),
+                        String::new(),
+                    )
+                };
+            drop(st);
+
+            let reason = match status {
+                201 => "Created",
+                204 => "No Content",
+                401 => "Unauthorized",
+                404 => "Not Found",
+                _ => "OK",
+            };
+            let response = format!(
+                "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\n{etag}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                resp_body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            if !resp_body.is_empty() {
+                let _ = stream.write_all(&resp_body);
+            }
+        }
+    });
+    format!("http://{addr}")
+}
+
+/// S5-d 前置：sync 配置指向假服务（URL 进 settings，token 进 keyring）。
+async fn configure_backup_server(
+    app: &tauri::App<tauri::test::MockRuntime>,
+    base_url: &str,
+    token: &str,
+) {
+    let resp = set_sync_config(
+        true,
+        base_url.to_string(),
+        token.to_string(),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "set_sync_config: {:?}", resp.error);
+}
+
+#[tokio::test]
+async fn backup_server_push_round_trip_and_records_evidence() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Work".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let base_url = spawn_mock_backup_server();
+    configure_backup_server(&app, &base_url, "tok-persona-1").await;
+
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: "backup-pass-Δ".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let outcome = resp.data.expect("outcome");
+    assert_eq!(outcome.backup_id, "bk-1");
+    assert_eq!(outcome.device_name, "stub-device");
+    assert!(!outcome.deduplicated);
+    assert_eq!(outcome.sha256.len(), 64);
+    assert_eq!(outcome.created_at, "2026-10-08T00:00:00Z");
+
+    // 列表对账：服务器侧元数据与推送响应一致（快照加密在推送前完成，
+    // 服务器只见密文——通过下载端点密文长度对账 size_bytes）
+    let resp = backup_list_server_versions(
+        BackupServerListRequest { limit: Some(10) },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let list = resp.data.expect("list");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].backup_id, "bk-1");
+    assert_eq!(list[0].device_name, "stub-device");
+    assert_eq!(list[0].sha256, outcome.sha256);
+    assert_eq!(list[0].size_bytes, outcome.size_bytes);
+
+    // 空口令在碰服务器之前就被拒（下载都不发起）
+    let resp = backup_restore_from_server(
+        BackupServerRestoreRequest {
+            backup_id: "bk-1".to_string(),
+            passphrase: String::new(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success, "empty passphrase rejected before download");
+
+    // 凭证回写 destination=server（与文件导出同一 BackupEvidence 槽）
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let evidence = resp.data.expect("settings").backup.expect("evidence");
+    assert_eq!(evidence.destination, "server");
+    assert_eq!(evidence.exported_at, outcome.exported_at);
+    assert_eq!(evidence.size_bytes, outcome.size_bytes as u64);
+}
+
+#[tokio::test]
+async fn backup_server_commands_gate_on_init_config_token_and_lock() {
+    let app = mock_app();
+    let base_url = spawn_mock_backup_server();
+
+    // 未初始化（无 db_path）→ 拒
+    let resp = backup_list_server_versions(
+        BackupServerListRequest { limit: None },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
+    );
+
+    init_service_ok(&app, "correct-horse").await;
+
+    // 未配置 sync 服务器 → 拒（push 与 list 同门禁口径）
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Sync server URL is not configured")
+    );
+    let resp = backup_list_server_versions(
+        BackupServerListRequest { limit: None },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Sync server URL is not configured")
+    );
+
+    // 空口令 → 拒（在碰服务器之前）
+    configure_backup_server(&app, &base_url, "tok-persona-1").await;
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: String::new(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+
+    // 错 token → 服务器 401，信封消息透传
+    configure_backup_server(&app, &base_url, "wrong-token").await;
+    let resp = backup_list_server_versions(
+        BackupServerListRequest { limit: None },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("401")),
+        "{:?}",
+        resp.error
+    );
+
+    // push 要求解锁；锁定态 → 拒
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+}
+
+#[tokio::test]
+async fn backup_restore_from_server_swaps_vault_and_rescues_from_locked_state() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "correct-horse").await;
+
+    // 快照基线：1 身份 "Work"，推送到服务器
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Work".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let base_url = spawn_mock_backup_server();
+    configure_backup_server(&app, &base_url, "tok-persona-1").await;
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: "rescue-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 快照后继续变化：当前库 2 身份——恢复应回到快照的 1 身份
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Personal".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 锁屏 → 从服务器恢复（自救口不要求解锁）
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = backup_restore_from_server(
+        BackupServerRestoreRequest {
+            backup_id: "bk-1".to_string(),
+            passphrase: "rescue-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let outcome = resp.data.expect("outcome");
+    let bak = outcome.backup_copy.expect("pre-restore copy kept");
+    assert!(std::path::Path::new(&bak).is_file(), ".bak must exist");
+    let mut staged = std::path::PathBuf::from(&db_path);
+    staged.set_extension("restore.tmp");
+    assert!(!staged.exists(), "staged file must be consumed by rename");
+
+    // 换库后 service 已取下；重新解锁后库回到快照形态
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(false), "restore must take the session down");
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(db_path.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "re-init on restored vault: {:?}", resp.error);
+    let resp = get_identities(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let names: Vec<String> = resp
+        .data
+        .expect("identities")
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    assert_eq!(names, vec!["Work"], "restored vault matches the snapshot");
+}
+
+#[tokio::test]
+async fn backup_restore_from_server_wrong_passphrase_leaves_vault_intact() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "correct-horse").await;
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Work".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let base_url = spawn_mock_backup_server();
+    configure_backup_server(&app, &base_url, "tok-persona-1").await;
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: "right-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 口令错：staged 复验阶段就失败——库未动、会话不降锁
+    let resp = backup_restore_from_server(
+        BackupServerRestoreRequest {
+            backup_id: "bk-1".to_string(),
+            passphrase: "wrong-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not touched")),
+        "{:?}",
+        resp.error
+    );
+
+    // 会话仍解锁、库分毫未动、无 .bak / staged 残留
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(
+        resp.data,
+        Some(true),
+        "failed restore must not drop the session"
+    );
+    let resp = get_identities(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data.expect("identities").len(), 1, "vault untouched");
+    let mut bak = std::path::PathBuf::from(&db_path);
+    bak.set_extension("bak");
+    assert!(!bak.exists(), "no .bak on failed restore");
+    let mut staged = std::path::PathBuf::from(&db_path);
+    staged.set_extension("restore.tmp");
+    assert!(!staged.exists(), "no staged leftover on failed restore");
+}
+
+#[tokio::test]
+async fn backup_server_delete_is_idempotent_and_deleted_versions_stop_serving() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    let base_url = spawn_mock_backup_server();
+    configure_backup_server(&app, &base_url, "tok-persona-1").await;
+    let resp = backup_push_to_server(
+        BackupPushRequest {
+            passphrase: "pass-1".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 空 ID → 拒（在碰服务器之前）
+    let resp = backup_delete_server_version(
+        BackupServerDeleteRequest {
+            backup_id: "  ".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+
+    // 删除成功；再删同 ID 仍成功（服务器 404 → 客户端幂等）
+    for _ in 0..2 {
+        let resp = backup_delete_server_version(
+            BackupServerDeleteRequest {
+                backup_id: "bk-1".to_string(),
+            },
+            app.state::<AppState>(),
+        )
+        .await
+        .unwrap();
+        assert!(resp.success, "{:?}", resp.error);
+        assert!(resp.data.expect("outcome").deleted);
+    }
+
+    // 已删版本：列表清空、恢复/下载 404 透传
+    let resp = backup_list_server_versions(
+        BackupServerListRequest { limit: None },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert!(resp.data.expect("list").is_empty());
+    let resp = backup_restore_from_server(
+        BackupServerRestoreRequest {
+            backup_id: "bk-1".to_string(),
+            passphrase: "pass-1".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error.as_deref().is_some_and(|e| e.contains("404")),
+        "{:?}",
+        resp.error
+    );
+}
+
 #[tokio::test]
 async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
     use base64::Engine;

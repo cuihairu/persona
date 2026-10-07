@@ -241,6 +241,32 @@ export interface BackupRestoreOutcome {
   backup_copy: string | null;
 }
 
+/** `backup_push_to_server` 的返回（服务器返回元数据 + 本地导出凭证时刻）。 */
+export interface BackupPushOutcome {
+  backup_id: string;
+  device_name: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+  /** 同设备最新版本 sha256 相同时服务器去重（未产生新版本） */
+  deduplicated: boolean;
+  exported_at: string;
+}
+
+/** 服务器密文仓里的一个备份版本（列表视图）。 */
+export interface BackupVersionView {
+  backup_id: string;
+  device_name: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+}
+
+/** `backup_delete_server_version` 的返回（服务器 404 幂等，恒 true）。 */
+export interface BackupServerDeleteOutcome {
+  deleted: boolean;
+}
+
 /** 账号域绑定（core `AccountBinding` 镜像）。非敏感标识；令牌真值在
  * OS keyring，不经前端。 */
 export interface AccountBinding {

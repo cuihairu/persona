@@ -3,13 +3,22 @@ import BackupSection from './BackupSection';
 import { personaAPI } from '@/utils/api';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog';
-import type { BackupEvidence, BackupExportOutcome, BackupRestoreOutcome } from '@/types';
+import type {
+  BackupEvidence,
+  BackupExportOutcome,
+  BackupRestoreOutcome,
+  BackupVersionView,
+} from '@/types';
 
 jest.mock('@/utils/api', () => ({
   personaAPI: {
     getWorkspaceSettings: jest.fn(),
     backupExportToFile: jest.fn(),
     backupRestoreFromFile: jest.fn(),
+    backupPushToServer: jest.fn(),
+    backupListServerVersions: jest.fn(),
+    backupRestoreFromServer: jest.fn(),
+    backupDeleteServerVersion: jest.fn(),
   },
 }));
 
@@ -27,6 +36,10 @@ jest.mock('@tauri-apps/plugin-dialog', () => ({
 const mockGetSettings = personaAPI.getWorkspaceSettings as jest.Mock;
 const mockExport = personaAPI.backupExportToFile as jest.Mock;
 const mockRestore = personaAPI.backupRestoreFromFile as jest.Mock;
+const mockPush = personaAPI.backupPushToServer as jest.Mock;
+const mockListServer = personaAPI.backupListServerVersions as jest.Mock;
+const mockRestoreServer = personaAPI.backupRestoreFromServer as jest.Mock;
+const mockDeleteServer = personaAPI.backupDeleteServerVersion as jest.Mock;
 const mockSave = saveDialog as jest.Mock;
 const mockOpen = openDialog as jest.Mock;
 const mockFinalizeVaultRestore = jest.fn();
@@ -56,11 +69,35 @@ const restoreOutcome = (overrides: Partial<BackupRestoreOutcome> = {}): BackupRe
   ...overrides,
 });
 
+const version = (overrides: Partial<BackupVersionView> = {}): BackupVersionView => ({
+  backup_id: 'bk-1',
+  device_name: 'Study desktop',
+  size_bytes: 20480,
+  sha256: 'cd'.repeat(32),
+  created_at: '2026-10-08T00:00:00Z',
+  ...overrides,
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockGetSettings.mockResolvedValue(settingsWith(null));
   mockSave.mockResolvedValue('/tmp/vault-backup.enc');
   mockRestore.mockResolvedValue({ success: true, data: restoreOutcome() });
+  mockPush.mockResolvedValue({
+    success: true,
+    data: {
+      backup_id: 'bk-1',
+      device_name: 'Study desktop',
+      size_bytes: 20480,
+      sha256: 'cd'.repeat(32),
+      created_at: '2026-10-08T00:00:00Z',
+      deduplicated: false,
+      exported_at: '2026-10-08T00:00:00Z',
+    },
+  });
+  mockListServer.mockResolvedValue({ success: true, data: [] });
+  mockRestoreServer.mockResolvedValue({ success: true, data: restoreOutcome() });
+  mockDeleteServer.mockResolvedValue({ success: true, data: { deleted: true } });
   (usePersonaService as jest.Mock).mockReturnValue({
     finalizeVaultRestore: mockFinalizeVaultRestore,
   });
@@ -300,5 +337,192 @@ describe('components/BackupSection', () => {
     );
     expect(mockFinalizeVaultRestore).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
+  });
+
+  /** 点「刷新服务器版本」并等列表渲染出给定条目 */
+  async function loadServerVersions(items: BackupVersionView[]): Promise<void> {
+    mockListServer.mockResolvedValue({ success: true, data: items });
+    fireEvent.click(screen.getByTestId('backup-server-refresh'));
+    await waitFor(() => {
+      expect(screen.getAllByTestId('backup-server-item')).toHaveLength(items.length);
+    });
+  }
+
+  describe('server encrypted vault (S5-d)', () => {
+    it('pushes with the export passphrase pair and refreshes evidence + list', async () => {
+      mockGetSettings
+        .mockResolvedValueOnce(settingsWith(null))
+        .mockResolvedValueOnce(settingsWith(evidence({ destination: 'server' })));
+      render(<BackupSection />);
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-evidence')).toHaveTextContent('尚未在本机导出过备份');
+      });
+
+      fillValidPassphrases();
+      fireEvent.click(screen.getByTestId('backup-server-push'));
+
+      await waitFor(() => expect(mockPush).toHaveBeenCalledWith('long-enough-pass'));
+      await waitFor(() => expect(mockListServer).toHaveBeenCalled());
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-evidence')).toHaveTextContent('上次导出');
+      });
+      // 成功后口令输入清空（不在 state 留密）
+      expect((screen.getByTestId('backup-passphrase') as HTMLInputElement).value).toBe('');
+      expect((screen.getByTestId('backup-passphrase-confirm') as HTMLInputElement).value).toBe('');
+    });
+
+    it('rejects a short passphrase for push before touching the server', async () => {
+      render(<BackupSection />);
+      fireEvent.change(screen.getByTestId('backup-passphrase'), {
+        target: { value: 'short' },
+      });
+      fireEvent.change(screen.getByTestId('backup-passphrase-confirm'), {
+        target: { value: 'short' },
+      });
+      fireEvent.click(screen.getByTestId('backup-server-push'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-error')).toHaveTextContent('至少需要 8 位');
+      });
+      expect(mockPush).not.toHaveBeenCalled();
+      expect(mockListServer).not.toHaveBeenCalled();
+    });
+
+    it('surfaces push failures in the server error slot', async () => {
+      mockPush.mockResolvedValue({
+        success: false,
+        error: 'Sync server URL is not configured',
+      });
+      render(<BackupSection />);
+
+      fillValidPassphrases();
+      fireEvent.click(screen.getByTestId('backup-server-push'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-server-error')).toHaveTextContent(
+          'Sync server URL is not configured',
+        );
+      });
+    });
+
+    it('lists server versions and shows the empty state', async () => {
+      render(<BackupSection />);
+
+      fireEvent.click(screen.getByTestId('backup-server-refresh'));
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-server-empty')).toBeInTheDocument();
+      });
+      expect(screen.queryByTestId('backup-server-item')).not.toBeInTheDocument();
+
+      await loadServerVersions([version()]);
+      expect(screen.getByTestId('backup-server-list')).toHaveTextContent('Study desktop');
+      expect(screen.queryByTestId('backup-server-empty')).not.toBeInTheDocument();
+    });
+
+    it('surfaces list failures inline', async () => {
+      mockListServer.mockResolvedValue({
+        success: false,
+        error: 'list backups failed: bad token (401 Unauthorized)',
+      });
+      render(<BackupSection />);
+
+      fireEvent.click(screen.getByTestId('backup-server-refresh'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-server-error')).toHaveTextContent('401');
+      });
+    });
+
+    it('restores a server version after confirmation, then finalizes the session', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+      render(<BackupSection />);
+      await loadServerVersions([version()]);
+
+      // 无口令 → 先拒（不弹确认、不发请求）
+      fireEvent.click(screen.getByTestId('backup-server-restore'));
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-server-error')).toHaveTextContent('请输入备份口令');
+      });
+      expect(confirmSpy).not.toHaveBeenCalled();
+
+      fireEvent.change(screen.getByTestId('backup-server-passphrase'), {
+        target: { value: 'server-pass' },
+      });
+      fireEvent.click(screen.getByTestId('backup-server-restore'));
+
+      await waitFor(() => {
+        expect(mockRestoreServer).toHaveBeenCalledWith('bk-1', 'server-pass');
+      });
+      expect(confirmSpy).toHaveBeenCalled();
+      // 换库段成功：清旧库内存 + 重探解锁态
+      await waitFor(() => expect(mockFinalizeVaultRestore).toHaveBeenCalledTimes(1));
+      expect((screen.getByTestId('backup-server-passphrase') as HTMLInputElement).value).toBe('');
+      confirmSpy.mockRestore();
+    });
+
+    it('does nothing when the server restore confirmation is declined', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+      render(<BackupSection />);
+      await loadServerVersions([version()]);
+
+      fireEvent.change(screen.getByTestId('backup-server-passphrase'), {
+        target: { value: 'server-pass' },
+      });
+      fireEvent.click(screen.getByTestId('backup-server-restore'));
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      expect(mockRestoreServer).not.toHaveBeenCalled();
+      expect(mockFinalizeVaultRestore).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+
+    it('surfaces server restore failures inline and keeps the session untouched', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+      mockRestoreServer.mockResolvedValue({
+        success: false,
+        error: 'Backup restore failed; the current vault was not touched: bad passphrase',
+      });
+      render(<BackupSection />);
+      await loadServerVersions([version()]);
+
+      fireEvent.change(screen.getByTestId('backup-server-passphrase'), {
+        target: { value: 'wrong-pass' },
+      });
+      fireEvent.click(screen.getByTestId('backup-server-restore'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('backup-server-error')).toHaveTextContent('was not touched');
+      });
+      // staged 复验失败 = 库与会话都没动：口令保留、收尾不跑
+      expect((screen.getByTestId('backup-server-passphrase') as HTMLInputElement).value).toBe(
+        'wrong-pass',
+      );
+      expect(mockFinalizeVaultRestore).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
+
+    it('deletes a server version after confirmation and refreshes the list', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+      render(<BackupSection />);
+      await loadServerVersions([version()]);
+
+      fireEvent.click(screen.getByTestId('backup-server-delete'));
+
+      await waitFor(() => expect(mockDeleteServer).toHaveBeenCalledWith('bk-1'));
+      await waitFor(() => expect(mockListServer).toHaveBeenCalledTimes(2));
+      confirmSpy.mockRestore();
+    });
+
+    it('does nothing when the delete confirmation is declined', async () => {
+      const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+      render(<BackupSection />);
+      await loadServerVersions([version()]);
+
+      fireEvent.click(screen.getByTestId('backup-server-delete'));
+
+      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+      expect(mockDeleteServer).not.toHaveBeenCalled();
+      confirmSpy.mockRestore();
+    });
   });
 });

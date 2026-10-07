@@ -54,6 +54,35 @@ describe('utils/api PersonaAPI', () => {
     });
   });
 
+  it('server backup commands wrap args in request envelopes (S5-d)', async () => {
+    mockInvoke.mockResolvedValue({ success: true, data: null });
+
+    await personaAPI.backupPushToServer('pw');
+    expect(mockInvoke).toHaveBeenCalledWith('backup_push_to_server', {
+      request: { passphrase: 'pw' },
+    });
+
+    await personaAPI.backupListServerVersions();
+    expect(mockInvoke).toHaveBeenCalledWith('backup_list_server_versions', {
+      request: { limit: null },
+    });
+
+    await personaAPI.backupListServerVersions(50);
+    expect(mockInvoke).toHaveBeenCalledWith('backup_list_server_versions', {
+      request: { limit: 50 },
+    });
+
+    await personaAPI.backupRestoreFromServer('bk-1', 'pw');
+    expect(mockInvoke).toHaveBeenCalledWith('backup_restore_from_server', {
+      request: { backup_id: 'bk-1', passphrase: 'pw' },
+    });
+
+    await personaAPI.backupDeleteServerVersion('bk-1');
+    expect(mockInvoke).toHaveBeenCalledWith('backup_delete_server_version', {
+      request: { backup_id: 'bk-1' },
+    });
+  });
+
   it('active identity commands map to tauri invokes', async () => {
     mockInvoke.mockResolvedValue({ success: true, data: null });
 
