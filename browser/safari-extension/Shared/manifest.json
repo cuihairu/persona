@@ -1,23 +1,53 @@
 {
   "manifest_version": 3,
   "name": "Persona Autofill (Safari)",
-  "version": "0.1.0",
-  "description": "Safari WebExtension shell for Persona autofill and identity switching.",
+  "description": "Preview extension for switching Persona identities, autofilling credentials, and initiating SSH workflows.",
+  "version": "0.2.0",
   "action": {
     "default_title": "Persona",
     "default_popup": "popup.html"
   },
-  "permissions": ["storage", "scripting", "activeTab"],
+  "permissions": [
+    "activeTab",
+    "nativeMessaging",
+    "storage",
+    "scripting"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "js": ["webauthnHook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
       "js": ["content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
+  "commands": {
+    "open_search": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "Open Persona mini search"
+    }
+  },
+  "icons": {
+    "128": "icons/icon128.png"
+  },
   "safari_web_extension": {
     "page": "popup.html"
   }

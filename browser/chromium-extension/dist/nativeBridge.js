@@ -2,51 +2,80 @@
  * 从本地桥取云端同步参数（配对会话 + HMAC + user_gesture 三重门禁）。
  * 成功后扩展自己直连 server 的 /api/v1/sync/*（出 native messaging 桥）。
  */
-export async function syncConnect(host = DEFAULT_NATIVE_HOST) {
+export async function syncConnect(host = defaultNativeHost()) {
     return sendAuthedNativeMessage('sync_connect', { user_gesture: true }, host);
 }
 /**
  * SRP 登录账号域（challenge/verify 两跳与 M2 核验全在宿主 Rust 侧）。
  * 必须由显式用户点击触发——口令换会话令牌，属敏感操作。
  */
-export async function accountLogin(request, host = DEFAULT_NATIVE_HOST) {
+export async function accountLogin(request, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('account_login', { ...request, user_gesture: true }, host);
 }
 /** 查询本机账号会话在场与否 + 服务器配置状态（轻量，未登录也安全）。 */
-export async function accountStatus(host = DEFAULT_NATIVE_HOST) {
+export async function accountStatus(host = defaultNativeHost()) {
     return sendAuthedNativeMessage('account_status', {}, host);
 }
 /**
  * 立即同步（写路径）：宿主跑 backfill+pull/materialize/push 周期，把主库
  * （含经 save_credential 落库的扩展侧写入）推上云。须显式用户触发。
  */
-export async function syncPushNow(host = DEFAULT_NATIVE_HOST) {
+export async function syncPushNow(host = defaultNativeHost()) {
     return sendAuthedNativeMessage('sync_push_now', { user_gesture: true }, host);
 }
 /**
  * 冲突裁决（M5 批4）：采纳并发双版本之一（adopt_op_id = 落选副本的 op id，
  * 采纳后其余版本淘汰出视图）。须显式用户触发。
  */
-export async function syncResolveConflict(itemId, adoptOpId, host = DEFAULT_NATIVE_HOST) {
+export async function syncResolveConflict(itemId, adoptOpId, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('sync_resolve_conflict', { item_id: itemId, adopt_op_id: adoptOpId, user_gesture: true }, host);
 }
 /** 登出：宿主侧吊销服务器会话（best-effort）+ 清 keyring 令牌。 */
-export async function accountLogout(accountId, host = DEFAULT_NATIVE_HOST) {
+export async function accountLogout(accountId, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('account_logout', { account_id: accountId, user_gesture: true }, host);
 }
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
+// ---- 传输层平台适配（chromium 与 Safari 同份，M5 批5a）----
+// chromium：NMH stdio 桥（com.persona.native，每请求新进程）。
+// Safari：browser.runtime.sendNativeMessage 把同一份 JSON 报文交给宿主 app
+// 的 SafariWebExtensionHandler（宿主进程代为拉起 `persona bridge`）——
+// 报文格式与桥协议完全同构，只有 host 名（app bundle id）与全局对象
+// （browser 优先于 chrome）分叉，协议层零改动。
+let nativeHostOverride = null;
+/** Safari 宿主 bundle id 与 chromium NMH 名不同；扩展入口按平台注入，
+ * 传 null 恢复 chromium 默认。 */
+export function setNativeHost(host) {
+    nativeHostOverride = host;
+}
+function defaultNativeHost() {
+    return nativeHostOverride ?? DEFAULT_NATIVE_HOST;
+}
+/** browser.*（Safari/标准 WebExtension）优先，chrome.*（chromium）兜底。 */
+function extensionRuntime() {
+    const g = globalThis;
+    const candidate = g.browser?.runtime?.sendNativeMessage ? g.browser : g.chrome;
+    if (!candidate?.runtime?.sendNativeMessage) {
+        throw new Error('native_messaging_unavailable');
+    }
+    return candidate;
+}
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 function generateRequestId() {
     return crypto.randomUUID?.() ?? String(Date.now());
 }
+/** 全局 WebExtension 命名空间：browser（Safari/标准）优先，chrome（chromium）兜底。 */
+function extensionGlobal() {
+    const g = globalThis;
+    return g.browser ?? g.chrome;
+}
 function storageGet(key) {
     return new Promise((resolve) => {
-        chrome.storage.local.get(key, (value) => resolve(value?.[key]));
+        extensionGlobal().storage.local.get(key, (value) => resolve(value?.[key]));
     });
 }
 function storageSet(key, value) {
     return new Promise((resolve) => {
-        chrome.storage.local.set({ [key]: value }, () => resolve());
+        extensionGlobal().storage.local.set({ [key]: value }, () => resolve());
     });
 }
 async function loadPairingState() {
@@ -112,11 +141,20 @@ async function buildAuth(kind, requestId, payload, sessionId, pairingKeyB64) {
     const signature = await hmacSha256Base64Url(keyBytes, signingInput);
     return { session_id: sessionId, ts_ms: tsMs, nonce, signature };
 }
-export async function sendNativeMessage(message, host = DEFAULT_NATIVE_HOST) {
+export async function sendNativeMessage(message, host = defaultNativeHost()) {
     return new Promise((resolve) => {
+        let runtime;
         try {
-            chrome.runtime.sendNativeMessage(host, message, (response) => {
-                const err = chrome.runtime.lastError;
+            runtime = extensionRuntime();
+        }
+        catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            resolve({ ok: false, error: msg });
+            return;
+        }
+        try {
+            runtime.runtime.sendNativeMessage(host, message, (response) => {
+                const err = runtime.runtime.lastError;
                 if (err) {
                     resolve({
                         ok: false,
@@ -136,14 +174,14 @@ export async function sendNativeMessage(message, host = DEFAULT_NATIVE_HOST) {
 /**
  * Send hello handshake to the native bridge.
  */
-export async function hello(host = DEFAULT_NATIVE_HOST) {
+export async function hello(host = defaultNativeHost()) {
     const state = await loadPairingState();
     const response = await sendNativeMessage({
         type: 'hello',
         request_id: generateRequestId(),
         payload: {
-            extension_id: chrome.runtime.id,
-            extension_version: chrome.runtime.getManifest().version,
+            extension_id: extensionGlobal().runtime.id,
+            extension_version: extensionGlobal().runtime.getManifest().version,
             protocol_version: 2,
             client_instance_id: state.clientInstanceId
         }
@@ -160,14 +198,14 @@ export async function hello(host = DEFAULT_NATIVE_HOST) {
 /**
  * Get vault status (locked/unlocked, active identity).
  */
-export async function getStatus(host = DEFAULT_NATIVE_HOST) {
+export async function getStatus(host = defaultNativeHost()) {
     return sendNativeMessage({
         type: 'status',
         request_id: generateRequestId(),
         payload: {}
     }, host);
 }
-export async function requestPairingCode(host = DEFAULT_NATIVE_HOST) {
+export async function requestPairingCode(host = defaultNativeHost()) {
     const state = await loadPairingState();
     const response = await sendNativeMessage({
         type: 'pairing_request',
@@ -186,7 +224,7 @@ export async function requestPairingCode(host = DEFAULT_NATIVE_HOST) {
     }
     return response;
 }
-export async function finalizePairing(code, host = DEFAULT_NATIVE_HOST) {
+export async function finalizePairing(code, host = defaultNativeHost()) {
     const state = await loadPairingState();
     const response = await sendNativeMessage({
         type: 'pairing_finalize',
@@ -209,7 +247,7 @@ export async function finalizePairing(code, host = DEFAULT_NATIVE_HOST) {
     }
     return response;
 }
-async function ensureSession(host = DEFAULT_NATIVE_HOST) {
+async function ensureSession(host = defaultNativeHost()) {
     const state = await loadPairingState();
     if (!state.pairingKeyB64) {
         return state;
@@ -222,7 +260,7 @@ async function ensureSession(host = DEFAULT_NATIVE_HOST) {
     await hello(host);
     return loadPairingState();
 }
-async function sendAuthedNativeMessage(kind, payload, host = DEFAULT_NATIVE_HOST) {
+async function sendAuthedNativeMessage(kind, payload, host = defaultNativeHost()) {
     const requestId = generateRequestId();
     const state = await ensureSession(host);
     if (!state.pairingKeyB64 || !state.sessionId) {
@@ -239,7 +277,7 @@ async function sendAuthedNativeMessage(kind, payload, host = DEFAULT_NATIVE_HOST
 /**
  * Get autofill suggestions for the given origin.
  */
-export async function getSuggestions(origin, formType = 'login', host = DEFAULT_NATIVE_HOST) {
+export async function getSuggestions(origin, formType = 'login', host = defaultNativeHost()) {
     return sendAuthedNativeMessage('get_suggestions', {
         origin,
         form_type: formType
@@ -251,7 +289,7 @@ export async function getSuggestions(origin, formType = 'login', host = DEFAULT_
  * @param itemId - UUID of the credential to fill
  * @param userGesture - Whether this was triggered by explicit user action
  */
-export async function requestFill(origin, itemId, userGesture = true, host = DEFAULT_NATIVE_HOST) {
+export async function requestFill(origin, itemId, userGesture = true, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('request_fill', {
         origin,
         item_id: itemId,
@@ -261,7 +299,7 @@ export async function requestFill(origin, itemId, userGesture = true, host = DEF
 /**
  * Request TOTP code for a specific item.
  */
-export async function getTotp(origin, itemId, userGesture = true, host = DEFAULT_NATIVE_HOST) {
+export async function getTotp(origin, itemId, userGesture = true, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('get_totp', {
         origin,
         item_id: itemId,
@@ -271,7 +309,7 @@ export async function getTotp(origin, itemId, userGesture = true, host = DEFAULT
 /**
  * Request copy to clipboard (handled by native app).
  */
-export async function copyToClipboard(origin, itemId, field, userGesture = true, host = DEFAULT_NATIVE_HOST) {
+export async function copyToClipboard(origin, itemId, field, userGesture = true, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('copy', {
         origin,
         item_id: itemId,
@@ -284,7 +322,7 @@ export async function copyToClipboard(origin, itemId, field, userGesture = true,
  * List passkeys for a relying party (non-sensitive summaries only).
  * @param rpId - Optional RP id; defaults to the origin's effective domain
  */
-export async function passkeyList(origin, rpId, host = DEFAULT_NATIVE_HOST) {
+export async function passkeyList(origin, rpId, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('passkey_list', {
         origin,
         user_gesture: true,
@@ -295,13 +333,13 @@ export async function passkeyList(origin, rpId, host = DEFAULT_NATIVE_HOST) {
  * Create a passkey for the active identity.
  * @param request - Options serialized by the MAIN-world hook
  */
-export async function passkeyCreate(request, host = DEFAULT_NATIVE_HOST) {
+export async function passkeyCreate(request, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('passkey_create', request, host);
 }
 /**
  * Sign a WebAuthn assertion with a specific passkey.
  */
-export async function passkeyAssert(request, host = DEFAULT_NATIVE_HOST) {
+export async function passkeyAssert(request, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('passkey_assert', request, host);
 }
 // ============ Vault write path (bridge protocol v4) ============
@@ -309,7 +347,7 @@ export async function passkeyAssert(request, host = DEFAULT_NATIVE_HOST) {
  * Look up existing password items for this host+username so the save bar can
  * offer "update" instead of piling up duplicates. Metadata only — no secrets.
  */
-export async function findForSave(origin, username, host = DEFAULT_NATIVE_HOST) {
+export async function findForSave(origin, username, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('find_for_save', {
         origin,
         username
@@ -320,7 +358,7 @@ export async function findForSave(origin, username, host = DEFAULT_NATIVE_HOST) 
  * form. Must ride an explicit user click on the save bar — the host refuses
  * silent writes (`user_gesture_required`).
  */
-export async function saveCredential(request, host = DEFAULT_NATIVE_HOST) {
+export async function saveCredential(request, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('save_credential', request, host);
 }
 // ============ Password generator (bridge protocol v5) ============
@@ -328,7 +366,7 @@ export async function saveCredential(request, host = DEFAULT_NATIVE_HOST) {
  * Generate a password or passphrase via the bridge.
  * No vault write — pure generation. Requires authenticated session.
  */
-export async function generatePassword(request, host = DEFAULT_NATIVE_HOST) {
+export async function generatePassword(request, host = defaultNativeHost()) {
     return sendAuthedNativeMessage('generate_password', request, host);
 }
 //# sourceMappingURL=nativeBridge.js.map

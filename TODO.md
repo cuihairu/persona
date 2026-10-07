@@ -230,6 +230,20 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         sync_resolve_conflict + 错误码表 sync_resolve_failed + hello 示例
         capabilities 对齐 v7 实况
       - [ ] **M5-批5 safari 同份**
+        - [x] **批5a JS 侧同份地基**（2026-10-07）：nativeBridge 传输入口
+          platform shim——`browser`（Safari/标准）优先 `chrome`（chromium）
+          兜底（native messaging + storage.local + runtime.id 三处）；
+          `setNativeHost(bundleId)` 注入 Safari 宿主包名（null 恢复
+          com.persona.native）；无 WebExtension 全局如实回
+          native_messaging_unavailable；3 例传输对齐测试（browser 回落报文
+          同构/host 注入与恢复/双全局缺席）。Shared/manifest.json 与
+          chromium v0.2.0 对齐（nativeMessaging/optional_host_permissions/
+          webauthnHook MAIN-world/commands）；safari README 写明传输映射
+          （sendNativeMessage → SafariWebExtensionHandler → 每请求拉起
+          `persona bridge`，协议零分叉）
+        - [ ] **批5b Swift 宿主端**（挂起，需 macOS/Xcode 实机）：
+          SafariWebExtensionHandler 实现桥协议 v7 宿主端 + Xcode 工程 +
+          签名分发；与 P4.2/P4.3、iOS/鸿蒙同批推进
 - [ ] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
       冲突合并正确、吊销流程走查，截图输出

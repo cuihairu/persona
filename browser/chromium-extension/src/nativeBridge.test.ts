@@ -17,6 +17,7 @@ import {
     accountLogin,
     accountStatus,
     accountLogout,
+    setNativeHost,
     type NativeBridgeResponse
 } from './nativeBridge';
 
@@ -372,5 +373,75 @@ describe('account domain (protocol v7)', () => {
 
         const call = authedCall('account_logout');
         expect(call.message.payload).toEqual({ account_id: 'acct-1', user_gesture: true });
+    });
+});
+
+describe('transport parity（chromium 与 Safari 同份，M5 批5a）', () => {
+    /** 与 chrome mock 同构的最小 browser.* 实现（Safari 形态：报文交给
+     * SafariWebExtensionHandler，而非 NMH stdio 进程）。 */
+    function installBrowserBridgeMock() {
+        const data = new Map<string, unknown>();
+        const calls: NativeCall[] = [];
+        (globalThis as any).browser = {
+            runtime: {
+                id: 'safari-ext-id',
+                getManifest: () => ({ version: '0.1.0' }),
+                sendNativeMessage: (
+                    host: string,
+                    message: Record<string, any>,
+                    cb: (response: any) => void
+                ) => {
+                    calls.push({ host, message });
+                    setTimeout(() => cb({ ok: true, payload: { paired: true } }), 0);
+                }
+            },
+            storage: {
+                local: {
+                    get: (keys: unknown, cb: (items: Record<string, unknown>) => void) => {
+                        const key = keys as string;
+                        setTimeout(() => cb(data.has(key) ? { [key]: data.get(key) } : {}), 0);
+                    },
+                    set: (items: Record<string, unknown>, cb?: () => void) => {
+                        for (const [k, v] of Object.entries(items)) data.set(k, v);
+                        setTimeout(() => cb?.(), 0);
+                    }
+                }
+            }
+        };
+        return { calls, stored: (key: string) => data.get(key) };
+    }
+
+    afterEach(() => {
+        delete (globalThis as any).browser;
+        setNativeHost(null);
+    });
+
+    it('chrome 不在场时回落 browser.*（Safari 传输），报文同构', async () => {
+        mock.teardown();
+        const bmock = installBrowserBridgeMock();
+        const response = await hello();
+        expect(response.ok).toBe(true);
+        expect(bmock.calls[0].host).toBe('com.persona.native');
+        expect(bmock.calls[0].message.type).toBe('hello');
+        expect(bmock.calls[0].message.payload.extension_id).toBe('safari-ext-id');
+        expect(bmock.calls[0].message.payload.protocol_version).toBe(2);
+    });
+
+    it('setNativeHost 注入 Safari bundle id，null 恢复默认', async () => {
+        mock.teardown();
+        const bmock = installBrowserBridgeMock();
+        setNativeHost('app.persona.safari');
+        await hello();
+        expect(bmock.calls[0].host).toBe('app.persona.safari');
+        setNativeHost(null);
+        await getStatus();
+        expect(bmock.calls[1].host).toBe('com.persona.native');
+    });
+
+    it('两个全局都不在场 → native_messaging_unavailable（不抛）', async () => {
+        mock.teardown();
+        const response = await sendNativeMessage({ type: 'status', request_id: 'r1', payload: {} });
+        expect(response.ok).toBe(false);
+        expect(response.error).toBe('native_messaging_unavailable');
     });
 });

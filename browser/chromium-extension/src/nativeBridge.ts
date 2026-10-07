@@ -180,7 +180,7 @@ export interface SyncConnectPayload {
  * 成功后扩展自己直连 server 的 /api/v1/sync/*（出 native messaging 桥）。
  */
 export async function syncConnect(
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<SyncConnectPayload>> {
     return sendAuthedNativeMessage<SyncConnectPayload>(
         'sync_connect',
@@ -220,7 +220,7 @@ export interface AccountLogoutPayload {
  */
 export async function accountLogin(
     request: Omit<AccountLoginRequest, 'user_gesture'>,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<AccountLoginPayload>> {
     return sendAuthedNativeMessage<AccountLoginPayload>(
         'account_login',
@@ -231,7 +231,7 @@ export async function accountLogin(
 
 /** 查询本机账号会话在场与否 + 服务器配置状态（轻量，未登录也安全）。 */
 export async function accountStatus(
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<AccountStatusPayload>> {
     return sendAuthedNativeMessage<AccountStatusPayload>('account_status', {}, host);
 }
@@ -253,7 +253,7 @@ export interface SyncPushNowPayload {
  * （含经 save_credential 落库的扩展侧写入）推上云。须显式用户触发。
  */
 export async function syncPushNow(
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<SyncPushNowPayload>> {
     return sendAuthedNativeMessage<SyncPushNowPayload>(
         'sync_push_now',
@@ -269,7 +269,7 @@ export async function syncPushNow(
 export async function syncResolveConflict(
     itemId: string,
     adoptOpId: string,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<{ resolved: boolean }>> {
     return sendAuthedNativeMessage<{ resolved: boolean }>(
         'sync_resolve_conflict',
@@ -281,7 +281,7 @@ export async function syncResolveConflict(
 /** 登出：宿主侧吊销服务器会话（best-effort）+ 清 keyring 令牌。 */
 export async function accountLogout(
     accountId: string,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<AccountLogoutPayload>> {
     return sendAuthedNativeMessage<AccountLogoutPayload>(
         'account_logout',
@@ -291,6 +291,46 @@ export async function accountLogout(
 }
 
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
+
+// ---- 传输层平台适配（chromium 与 Safari 同份，M5 批5a）----
+// chromium：NMH stdio 桥（com.persona.native，每请求新进程）。
+// Safari：browser.runtime.sendNativeMessage 把同一份 JSON 报文交给宿主 app
+// 的 SafariWebExtensionHandler（宿主进程代为拉起 `persona bridge`）——
+// 报文格式与桥协议完全同构，只有 host 名（app bundle id）与全局对象
+// （browser 优先于 chrome）分叉，协议层零改动。
+
+let nativeHostOverride: string | null = null;
+
+/** Safari 宿主 bundle id 与 chromium NMH 名不同；扩展入口按平台注入，
+ * 传 null 恢复 chromium 默认。 */
+export function setNativeHost(host: string | null): void {
+    nativeHostOverride = host;
+}
+
+function defaultNativeHost(): string {
+    return nativeHostOverride ?? DEFAULT_NATIVE_HOST;
+}
+
+interface NativeMessagingRuntime {
+    runtime: {
+        sendNativeMessage: (
+            host: string,
+            message: Record<string, any>,
+            callback: (response: any) => void
+        ) => void;
+        lastError?: { message: string } | undefined;
+    };
+}
+
+/** browser.*（Safari/标准 WebExtension）优先，chrome.*（chromium）兜底。 */
+function extensionRuntime(): NativeMessagingRuntime {
+    const g = globalThis as any;
+    const candidate = g.browser?.runtime?.sendNativeMessage ? g.browser : g.chrome;
+    if (!candidate?.runtime?.sendNativeMessage) {
+        throw new Error('native_messaging_unavailable');
+    }
+    return candidate as NativeMessagingRuntime;
+}
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 
 function generateRequestId(): string {
@@ -306,15 +346,23 @@ interface PairingState {
     lastPairingExpiresAtMs?: number;
 }
 
+/** 全局 WebExtension 命名空间：browser（Safari/标准）优先，chrome（chromium）兜底。 */
+function extensionGlobal(): { runtime: any; storage?: any } {
+    const g = globalThis as any;
+    return g.browser ?? g.chrome;
+}
+
 function storageGet<T>(key: string): Promise<T | undefined> {
     return new Promise((resolve) => {
-        chrome.storage.local.get(key, (value) => resolve(value?.[key] as T | undefined));
+        extensionGlobal().storage.local.get(key, (value: any) =>
+            resolve(value?.[key] as T | undefined)
+        );
     });
 }
 
 function storageSet<T>(key: string, value: T): Promise<void> {
     return new Promise((resolve) => {
-        chrome.storage.local.set({ [key]: value }, () => resolve());
+        extensionGlobal().storage.local.set({ [key]: value }, () => resolve());
     });
 }
 
@@ -398,12 +446,20 @@ async function buildAuth(
 
 export async function sendNativeMessage<T = any>(
     message: Record<string, any>,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<T>> {
     return new Promise((resolve) => {
+        let runtime: NativeMessagingRuntime;
         try {
-            chrome.runtime.sendNativeMessage(host, message, (response) => {
-                const err = chrome.runtime.lastError;
+            runtime = extensionRuntime();
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : String(error);
+            resolve({ ok: false, error: msg });
+            return;
+        }
+        try {
+            runtime.runtime.sendNativeMessage(host, message, (response) => {
+                const err = runtime.runtime.lastError;
                 if (err) {
                     resolve({
                         ok: false,
@@ -423,14 +479,14 @@ export async function sendNativeMessage<T = any>(
 /**
  * Send hello handshake to the native bridge.
  */
-export async function hello(host = DEFAULT_NATIVE_HOST): Promise<NativeBridgeResponse<HelloResponsePayload>> {
+export async function hello(host = defaultNativeHost()): Promise<NativeBridgeResponse<HelloResponsePayload>> {
     const state = await loadPairingState();
     const response = await sendNativeMessage<HelloResponsePayload>({
         type: 'hello',
         request_id: generateRequestId(),
         payload: {
-            extension_id: chrome.runtime.id,
-            extension_version: chrome.runtime.getManifest().version,
+            extension_id: extensionGlobal().runtime.id,
+            extension_version: extensionGlobal().runtime.getManifest().version,
             protocol_version: 2,
             client_instance_id: state.clientInstanceId
         }
@@ -450,7 +506,7 @@ export async function hello(host = DEFAULT_NATIVE_HOST): Promise<NativeBridgeRes
 /**
  * Get vault status (locked/unlocked, active identity).
  */
-export async function getStatus(host = DEFAULT_NATIVE_HOST): Promise<NativeBridgeResponse<StatusPayload>> {
+export async function getStatus(host = defaultNativeHost()): Promise<NativeBridgeResponse<StatusPayload>> {
     return sendNativeMessage<StatusPayload>({
         type: 'status',
         request_id: generateRequestId(),
@@ -459,7 +515,7 @@ export async function getStatus(host = DEFAULT_NATIVE_HOST): Promise<NativeBridg
 }
 
 export async function requestPairingCode(
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<{ code: string; expires_at_ms: number; approval_command: string }>> {
     const state = await loadPairingState();
     const response = await sendNativeMessage({
@@ -484,7 +540,7 @@ export async function requestPairingCode(
 
 export async function finalizePairing(
     code: string,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<
     NativeBridgeResponse<{
         paired: boolean;
@@ -518,7 +574,7 @@ export async function finalizePairing(
     return response as any;
 }
 
-async function ensureSession(host = DEFAULT_NATIVE_HOST): Promise<PairingState> {
+async function ensureSession(host = defaultNativeHost()): Promise<PairingState> {
     const state = await loadPairingState();
     if (!state.pairingKeyB64) {
         return state;
@@ -536,7 +592,7 @@ async function ensureSession(host = DEFAULT_NATIVE_HOST): Promise<PairingState> 
 async function sendAuthedNativeMessage<T = any>(
     kind: string,
     payload: any,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<T>> {
     const requestId = generateRequestId();
     const state = await ensureSession(host);
@@ -563,7 +619,7 @@ async function sendAuthedNativeMessage<T = any>(
 export async function getSuggestions(
     origin: string,
     formType = 'login',
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<SuggestionsPayload>> {
     return sendAuthedNativeMessage<SuggestionsPayload>(
         'get_suggestions',
@@ -585,7 +641,7 @@ export async function requestFill(
     origin: string,
     itemId: string,
     userGesture = true,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<FillPayload>> {
     return sendAuthedNativeMessage<FillPayload>(
         'request_fill',
@@ -605,7 +661,7 @@ export async function getTotp(
     origin: string,
     itemId: string,
     userGesture = true,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<{ code: string; remaining_seconds: number; period: number }>> {
     return sendAuthedNativeMessage(
         'get_totp',
@@ -626,7 +682,7 @@ export async function copyToClipboard(
     itemId: string,
     field: 'password' | 'username' | 'totp',
     userGesture = true,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<{ copied: boolean; clear_after_seconds?: number }>> {
     return sendAuthedNativeMessage(
         'copy',
@@ -649,7 +705,7 @@ export async function copyToClipboard(
 export async function passkeyList(
     origin: string,
     rpId?: string,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<PasskeyListResponsePayload>> {
     return sendAuthedNativeMessage<PasskeyListResponsePayload>(
         'passkey_list',
@@ -668,7 +724,7 @@ export async function passkeyList(
  */
 export async function passkeyCreate(
     request: PasskeyCreateRequest,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<PasskeyCreateResponsePayload>> {
     return sendAuthedNativeMessage<PasskeyCreateResponsePayload>('passkey_create', request, host);
 }
@@ -678,7 +734,7 @@ export async function passkeyCreate(
  */
 export async function passkeyAssert(
     request: PasskeyAssertRequest,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<PasskeyAssertResponsePayload>> {
     return sendAuthedNativeMessage<PasskeyAssertResponsePayload>('passkey_assert', request, host);
 }
@@ -692,7 +748,7 @@ export async function passkeyAssert(
 export async function findForSave(
     origin: string,
     username?: string,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<FindForSaveResponsePayload>> {
     return sendAuthedNativeMessage<FindForSaveResponsePayload>(
         'find_for_save',
@@ -711,7 +767,7 @@ export async function findForSave(
  */
 export async function saveCredential(
     request: SaveCredentialRequest,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<SaveCredentialResponsePayload>> {
     return sendAuthedNativeMessage<SaveCredentialResponsePayload>('save_credential', request, host);
 }
@@ -724,7 +780,7 @@ export async function saveCredential(
  */
 export async function generatePassword(
     request: GeneratePasswordRequest,
-    host = DEFAULT_NATIVE_HOST
+    host = defaultNativeHost()
 ): Promise<NativeBridgeResponse<GeneratePasswordResponsePayload>> {
     return sendAuthedNativeMessage<GeneratePasswordResponsePayload>('generate_password', request, host);
 }

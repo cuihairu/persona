@@ -1160,6 +1160,15 @@ manifest 文件内容示例：
 - macOS / Linux: `scripts/native-messaging/install-native-host.sh <EXTENSION_ID>`
 - Windows: `scripts/native-messaging/install-native-host.ps1 -ExtensionId <EXTENSION_ID>`
 
+### Safari 传输映射（协议同份，宿主端待实机）
+
+Safari Web Extension 没有 NMH stdio 通道：`browser.runtime.sendNativeMessage(<app
+bundle id>, …)` 把同一份 JSON 报文交给宿主 app 的 `SafariWebExtensionHandler`，
+由宿主进程代为拉起 `persona bridge`（一请求一进程语义不变，桥协议层零改动）。
+扩展侧已按 `browser` 优先/`chrome` 兜底做传输 shim 并可用 `setNativeHost(bundleId)`
+注入宿主包名；Swift 宿主端（报文 → `persona bridge` 子进程封装）依赖 macOS/Xcode，
+挂起待实机批次（见 `browser/safari-extension/README.md`）。
+
 ## 参考
 
 - [Chrome Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
