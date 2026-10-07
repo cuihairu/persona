@@ -1020,4 +1020,38 @@ describe('hooks/usePersonaService', () => {
     // 失败不 toast：解锁屏的错误条是唯一反馈面
     expect(toastError).not.toHaveBeenCalled();
   });
+
+  it('finalizeVaultRestore clears stale vault state and re-probes unlock status', async () => {
+    // 旧库的内存残留（恢复换库后不得跨库存活）
+    useAppStore.setState({
+      isUnlocked: true,
+      identities: [{ id: 'old-id', name: 'Old' } as any],
+      currentIdentity: { id: 'old-id', name: 'Old' } as any,
+      credentials: [{ id: 'old-cred' } as any],
+      passwordChangeRequired: true,
+    });
+    const isUnlockedSpy = jest
+      .spyOn(personaAPI, 'isServiceUnlocked')
+      .mockResolvedValue({ success: true, data: false, error: undefined });
+    jest.spyOn(personaAPI, 'getIdentities').mockResolvedValue({
+      success: true,
+      data: [],
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.finalizeVaultRestore();
+    });
+
+    // 后端换库段已取下 service（is_service_unlocked=false）→ 前端回解锁屏
+    expect(isUnlockedSpy).toHaveBeenCalled();
+    expect(useAppStore.getState().isUnlocked).toBe(false);
+    expect(useAppStore.getState().isInitialized).toBe(true);
+    // 旧库身份/凭据清空，重新解锁时 loadIdentities 才会按新库重选
+    expect(useAppStore.getState().identities).toEqual([]);
+    expect(useAppStore.getState().currentIdentity).toBeNull();
+    expect(useAppStore.getState().credentials).toEqual([]);
+    expect(useAppStore.getState().passwordChangeRequired).toBe(false);
+  });
 });

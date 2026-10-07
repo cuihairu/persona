@@ -1829,9 +1829,22 @@ References
       备份口令永不落盘,同目录 .part 原子落盘)+`settings.backup` 导出凭证
       (BackupEvidence 非敏感元数据)+设置页 BackupSection(双输口令/校验/
       saveFileDialog/上次导出回读/「设备全丢」风险披露常驻);命令 2 测试+
-      组件 7 测试,桌面 233+前端 653 全绿。余:restore-from-file 桌面接线
-      (连接排空约束)、服务器密文仓目标、下方强提示三件套。）
-      数据丢失强提示(设计稿 §6.5 硬要求,2026-10-04 补):① 首次启用同步组
+      组件 7 测试,桌面 233+前端 653 全绿。S5-b 强提示三件套已由并发会话
+      26264c9 落地(见上方插单注记:useDataLossRisk 三 API 合算+
+      DataLossWarning strong/banner 两变体,挂 SyncGroupSection 与
+      SettingsModal GeneralPane 顶)。S5-c restore-from-file 桌面接线已落
+      2026-10-07:`backup_restore_from_file` 命令(staged `.restore.tmp`
+      复验失败库与会话都不动;换库段先取下 service 再持 db_path 锁到
+      rename、原库 fs::copy 留 `.bak`、同目录原子换入;换库后 service 保持
+      未初始化)+api wrapper+BackupSection 恢复区(选文件/恢复口令/
+      window.confirm 二次确认/常驻警示/错误就地展示)+hook
+      `finalizeVaultRestore`(lockService 同口径清内存+重探解锁态驱动回
+      解锁屏,.bak 路径走 toast——解锁屏有独立 Toaster,节内 state 随卸载
+      不可见)+i18n en/zh-CN;命令 3 测试+组件 12 测试(成功链/文件与口令
+      双校验先于确认/拒绝恢复不动/取消选文件/失败保会话)。余:服务器
+      密文仓目标。）
+      数据丢失强提示(设计稿 §6.5 硬要求,2026-10-04 补;已由 26264c9 落地,
+      见 S5-b 注记):① 首次启用同步组
       强提示「单设备=高危!密码一旦丢失无法找回——请再连一台设备,或立即
       导出加密备份」;② 未具备第二设备或备份前,设置页横幅/红点常驻警示
       (不做一次性弹窗);③ 加设备或已导出备份后自动解除;④ 文案明示两种

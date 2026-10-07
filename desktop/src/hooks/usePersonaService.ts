@@ -176,6 +176,25 @@ export const usePersonaService = () => {
     }
   };
 
+  /** 恢复换库后的前端收尾（S5 restore-from-file）：后端换库段已取下
+   * service（连接排空，主密码可能来自备份）。与 lockService 同口径清
+   * 旧库在内存里的身份/凭据（currentIdentity 残留会让解锁后 loadIdentities
+   * 跳过重选），但**不调 lockService**——后端槽位已是 None，锁命令必败；
+   * 最后重探解锁态把 App 驱回解锁屏（is_service_unlocked 免解锁可查）。 */
+  const finalizeVaultRestore = async () => {
+    setPasswordChangeRequired(false);
+    setIdentities([]);
+    setCurrentIdentity(null);
+    setCredentials([]);
+    clearFaviconCache();
+    clearPendingCredentialSelection();
+    setSelectedCredentialId(null);
+    resetSidebarFilter();
+    setCredentialSearchQuery('');
+    setEditingCredential(null);
+    await checkServiceStatus();
+  };
+
   const loadIdentities = async () => {
     try {
       const response = await personaAPI.getIdentities();
@@ -717,6 +736,8 @@ export const usePersonaService = () => {
     /** 重新探一次后端解锁态（Quick Access 浮窗每次被唤起都要问一遍：两个
      *  窗口各有独立 store，主窗口那边解锁/锁定本窗口不会自动知道） */
     checkServiceStatus,
+    /** 恢复换库后的清内存 + 重探解锁态（BackupSection 恢复成功后调用） */
+    finalizeVaultRestore,
     loadIdentities,
     createIdentity,
     updateIdentity,

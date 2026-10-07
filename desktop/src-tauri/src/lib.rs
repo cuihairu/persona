@@ -285,6 +285,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::clear_active_identity,
             commands::get_workspace_settings,
             commands::backup_export_to_file,
+            commands::backup_restore_from_file,
             commands::set_feature_flags,
             commands::set_password_expiry,
             commands::set_locale,

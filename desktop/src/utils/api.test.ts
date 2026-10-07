@@ -37,6 +37,23 @@ describe('utils/api PersonaAPI', () => {
     expect(mockInvoke).toHaveBeenCalledWith('delete_identity', { identity_id: 'abc' });
   });
 
+  it('backup export/restore wrap path+passphrase in request envelope', async () => {
+    mockInvoke.mockResolvedValue({
+      success: true,
+      data: { path: '/tmp/b.enc', size_bytes: 1, sha256: 'ab', exported_at: 't' },
+    });
+    await personaAPI.backupExportToFile('/tmp/b.enc', 'pw');
+    expect(mockInvoke).toHaveBeenCalledWith('backup_export_to_file', {
+      request: { path: '/tmp/b.enc', passphrase: 'pw' },
+    });
+
+    mockInvoke.mockResolvedValue({ success: true, data: { backup_copy: '/v/db.bak' } });
+    await personaAPI.backupRestoreFromFile('/tmp/b.enc', 'pw');
+    expect(mockInvoke).toHaveBeenCalledWith('backup_restore_from_file', {
+      request: { path: '/tmp/b.enc', passphrase: 'pw' },
+    });
+  });
+
   it('active identity commands map to tauri invokes', async () => {
     mockInvoke.mockResolvedValue({ success: true, data: null });
 

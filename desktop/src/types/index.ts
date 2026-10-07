@@ -235,6 +235,12 @@ export interface BackupExportOutcome {
   exported_at: string;
 }
 
+/** `backup_restore_from_file` 的返回：换库段留下的原库副本 `.bak` 路径
+ * （原库不存在时为 null——全新安装上的首次恢复没有可留存的旧库）。 */
+export interface BackupRestoreOutcome {
+  backup_copy: string | null;
+}
+
 /** 账号域绑定（core `AccountBinding` 镜像）。非敏感标识；令牌真值在
  * OS keyring，不经前端。 */
 export interface AccountBinding {

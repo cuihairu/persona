@@ -1115,6 +1115,276 @@ async fn backup_export_command_rejects_empty_passphrase_path_and_locked_state() 
     assert!(!dest.exists());
 }
 
+// ---- S5 自救口：从本地文件恢复整库（backup_restore_from_file）----
+
+#[tokio::test]
+async fn backup_restore_command_swaps_vault_and_keeps_bak() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "correct-horse").await;
+
+    // 快照基线：身份 A + 其凭据，导出成备份
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Work".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let identity_id = resp.data.expect("identity id").id.to_string();
+    let resp = create_credential(
+        password_credential_request(&identity_id),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("vault-backup.enc");
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "backup-pass-Δ".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 导出后继续变化：当前库变成 2 身份——恢复应回到快照的 1 身份
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Personal".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 恢复：换文件成功 + 原库留 .bak + staged 已消费
+    let resp = backup_restore_from_file(
+        BackupRestoreRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "backup-pass-Δ".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let outcome = resp.data.expect("outcome");
+    let bak = outcome.backup_copy.expect("pre-restore copy kept");
+    assert!(std::path::Path::new(&bak).is_file(), ".bak must exist");
+    let mut staged = std::path::PathBuf::from(&db_path);
+    staged.set_extension("restore.tmp");
+    assert!(!staged.exists(), "staged file must be consumed by rename");
+
+    // 换库后 service 已取下（主密码可能来自备份，必须重新走解锁）
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(resp.data, Some(false), "restore must take the session down");
+
+    // 重新解锁（同一会话建的备份 = 同主密码；不能用 init_service_ok——
+    // 它每次开新 tempdir，会指到空库），库回到快照形态
+    let resp = init_service(
+        InitRequest {
+            master_password: "correct-horse".to_string(),
+            db_path: Some(db_path.clone()),
+        },
+        app.state::<AppState>(),
+        app.handle().clone(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "re-init on restored vault: {:?}", resp.error);
+    let resp = get_identities(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let names: Vec<String> = resp
+        .data
+        .expect("identities")
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    assert_eq!(names, vec!["Work"], "restored vault matches the snapshot");
+}
+
+#[tokio::test]
+async fn backup_restore_command_wrong_passphrase_leaves_vault_and_session_intact() {
+    let app = mock_app();
+    let db_path = init_service_ok(&app, "correct-horse").await;
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Work".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("vault-backup.enc");
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "right-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    // 口令错：staged 复验阶段就失败——库未动、会话不降锁
+    let resp = backup_restore_from_file(
+        BackupRestoreRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "wrong-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not touched")),
+        "{:?}",
+        resp.error
+    );
+
+    // 会话仍解锁、库分毫未动、无 .bak / staged 残留
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(
+        resp.data,
+        Some(true),
+        "failed restore must not drop the session"
+    );
+    let resp = get_identities(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data.expect("identities").len(), 1, "vault untouched");
+    let mut bak = std::path::PathBuf::from(&db_path);
+    bak.set_extension("bak");
+    assert!(!bak.exists(), "no .bak on failed restore");
+    let mut staged = std::path::PathBuf::from(&db_path);
+    staged.set_extension("restore.tmp");
+    assert!(!staged.exists(), "no staged leftover on failed restore");
+}
+
+#[tokio::test]
+async fn backup_restore_command_rejects_bad_inputs_and_rescues_from_locked_state() {
+    let app = mock_app();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("v.enc");
+
+    // 服务从未初始化（无 db_path）→ 拒（文件在、输入合法才轮到库路径检查）
+    std::fs::write(&dest, b"placeholder").unwrap();
+    let resp = backup_restore_from_file(
+        BackupRestoreRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(
+        resp.error.as_deref(),
+        Some("Database path unavailable. Initialize the service first.")
+    );
+
+    let db_path = init_service_ok(&app, "correct-horse").await;
+
+    // 空口令 / 空路径 / 文件不存在 → 拒（都在动库之前）
+    for bad in [
+        BackupRestoreRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: String::new(),
+        },
+        BackupRestoreRequest {
+            path: "   ".to_string(),
+            passphrase: "x".to_string(),
+        },
+        BackupRestoreRequest {
+            path: dir.path().join("missing.enc").to_string_lossy().to_string(),
+            passphrase: "x".to_string(),
+        },
+    ] {
+        let resp = backup_restore_from_file(bad, app.state::<AppState>())
+            .await
+            .unwrap();
+        assert!(!resp.success);
+    }
+
+    // 不是 PERSENC1 的文件：staged 复验失败 → 库未动
+    let garbage = dir.path().join("garbage.enc");
+    std::fs::write(&garbage, b"not a backup").unwrap();
+    let resp = backup_restore_from_file(
+        BackupRestoreRequest {
+            path: garbage.to_string_lossy().to_string(),
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("not touched")),
+        "{:?}",
+        resp.error
+    );
+
+    // 锁定态也能救（设备没丢，只是会话锁着/库坏了——自救口不要求解锁）：
+    // 解锁态导出 → 锁定 → 恢复成功（service 随之取下）
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "rescue-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = backup_restore_from_file(
+        BackupRestoreRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "rescue-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "restore from locked state: {:?}", resp.error);
+    let resp = is_service_unlocked(app.state::<AppState>()).await.unwrap();
+    assert_eq!(resp.data, Some(false), "service taken down after swap");
+    let mut staged = std::path::PathBuf::from(&db_path);
+    staged.set_extension("restore.tmp");
+    assert!(!staged.exists());
+}
+
 #[tokio::test]
 async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
     use base64::Engine;

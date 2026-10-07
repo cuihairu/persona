@@ -108,6 +108,7 @@ import type {
   ConnectTokenCreatedView,
   WorkspaceSettings,
   BackupExportOutcome,
+  BackupRestoreOutcome,
   QuickAccessStatus,
   SshAgentStatus,
   SshAgentKey,
@@ -208,6 +209,17 @@ class PersonaAPI {
     passphrase: string,
   ): Promise<ApiResponse<BackupExportOutcome>> {
     return invoke('backup_export_to_file', { request: { path, passphrase } });
+  }
+
+  /** 从本地备份文件恢复整库（S5 自救口第二批，与 CLI `restore --file` 同语义）。
+   * 口令错/文件坏在 staged 复验阶段就报错——现有库与会话都不受影响；换库成功后
+   * 后端 service 被取下，调用方须随后 `checkServiceStatus` 驱动回解锁屏
+   * （恢复出的库主密码可能与当前会话不同）。 */
+  async backupRestoreFromFile(
+    path: string,
+    passphrase: string,
+  ): Promise<ApiResponse<BackupRestoreOutcome>> {
+    return invoke('backup_restore_from_file', { request: { path, passphrase } });
   }
 
   /** 窄写 features 四个开关位，返回更新后的全量设置作为服务端真相 */

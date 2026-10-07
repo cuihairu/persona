@@ -7171,6 +7171,119 @@ pub async fn backup_export_to_file(
     }))
 }
 
+/// `backup_restore_from_file` 请求：本地备份文件路径 + 备份口令。
+/// 口令是既有的（导出时用户自定）——不做双录，前端仍应二次确认。
+#[derive(Debug, Deserialize)]
+pub struct BackupRestoreRequest {
+    pub path: String,
+    pub passphrase: String,
+}
+
+/// 恢复结果：原库副本 `.bak` 的路径（原库不存在 = 无副本，None）。
+#[derive(Debug, Serialize)]
+pub struct BackupRestoreOutcome {
+    pub backup_copy: Option<String>,
+}
+
+/// 从本地文件恢复整库（S5 自救口第二批，与 CLI `restore --file` 同语义）。
+///
+/// 失败口径分两段：
+/// - **口令错 / 文件坏 / 头校验失败**：staged `.restore.tmp` 复验阶段就
+///   报错——现有库分毫未动、会话不受影响（`current vault was not
+///   touched`）。
+/// - **换库段**（staged 成功后）：① 排空——先取下 `service` 槽位（drop
+///   活跃连接池；正跑持锁的命令等它自然跑完），再**持有 `db_path` 锁到
+///   rename 完成**——期间其他需要开库的命令一律排队（这是「连接排空
+///   约束」的两半，未排空在 Windows 上 rename 会撞 Access denied）；
+///   ② 原库 `fs::copy` 成 `.bak`（留存对价）；③ staged → 原路径同目录
+///   原子 rename。
+///
+/// 换库后 `service` 保持未初始化：恢复出的库主密码可能与当前会话不同，
+/// 由前端 `checkServiceStatus` → 解锁屏 → `init_service` 重新走解锁。
+/// 命令不持有主密码无法代答；换库段失败同口径（库已保全/未动，会话降锁）。
+#[command(rename_all = "snake_case")]
+pub async fn backup_restore_from_file(
+    request: BackupRestoreRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<BackupRestoreOutcome>, String> {
+    if request.passphrase.is_empty() {
+        return Ok(ApiResponse::error(
+            "Backup passphrase must not be empty".to_string(),
+        ));
+    }
+    if request.path.trim().is_empty() {
+        return Ok(ApiResponse::error(
+            "Backup file path must not be empty".to_string(),
+        ));
+    }
+    let src = std::path::Path::new(&request.path);
+    if !src.is_file() {
+        return Ok(ApiResponse::error(format!(
+            "Backup file not found: {}",
+            src.display()
+        )));
+    }
+    let db_path = db_path_or_return!(state);
+
+    // staged 复验：解密 + gzip + SQLite 头校验写到同目录 `.restore.tmp`。
+    // 这一步只碰 staged 文件——失败时现有库与会话都不受影响。
+    let ciphertext = match std::fs::read(src) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            return Ok(ApiResponse::error(format!(
+                "Failed to read backup file: {e}"
+            )))
+        }
+    };
+    let mut staged = std::path::PathBuf::from(&db_path);
+    staged.set_extension("restore.tmp");
+    if let Err(e) =
+        persona_core::backup::restore_backup_bytes(&ciphertext, &request.passphrase, &staged)
+    {
+        let _ = std::fs::remove_file(&staged);
+        return Ok(ApiResponse::error(format!(
+            "Backup restore failed; the current vault was not touched: {e}"
+        )));
+    }
+
+    // ---- 换库段：排空（service 取下在前，db_path 闸持到 rename 完成）----
+    *state.service.lock().await = None;
+    let db_path_guard = state.db_path.lock().await;
+    let db_path = db_path_guard.clone().unwrap_or(db_path);
+    let dbp = std::path::Path::new(&db_path);
+
+    if let Some(parent) = dbp.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            let _ = std::fs::remove_file(&staged);
+            return Ok(ApiResponse::error(format!(
+                "Failed to prepare vault directory; restore aborted: {e}"
+            )));
+        }
+    }
+
+    let mut backup_copy = None;
+    if dbp.exists() {
+        let mut bak = std::path::PathBuf::from(&db_path);
+        bak.set_extension("bak");
+        if let Err(e) = std::fs::copy(dbp, &bak) {
+            let _ = std::fs::remove_file(&staged);
+            return Ok(ApiResponse::error(format!(
+                "Failed to back up the current vault; restore aborted: {e}"
+            )));
+        }
+        backup_copy = Some(bak.to_string_lossy().to_string());
+    }
+    if let Err(e) = std::fs::rename(&staged, dbp) {
+        let _ = std::fs::remove_file(&staged);
+        return Ok(ApiResponse::error(format!(
+            "Failed to move the restored file into place; the previous vault is kept as .bak: {e}"
+        )));
+    }
+    drop(db_path_guard);
+
+    Ok(ApiResponse::success(BackupRestoreOutcome { backup_copy }))
+}
+
 // ---------------------------------------------------------------------------
 // 敏感字段 reveal + 重新认证
 // ---------------------------------------------------------------------------

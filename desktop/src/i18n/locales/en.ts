@@ -163,6 +163,23 @@ export default {
       exporting: 'Exporting…',
       exported: 'Backup exported',
       sha256: 'SHA-256: {{sha}}',
+      restoreTitle: 'Restore from a backup file',
+      restoreDisclosure:
+        'Restoring replaces the entire current vault with the backup file. The current vault is first kept as a .bak copy alongside it; you will then need to unlock with the backup’s master password (it may differ from the current one).',
+      restorePick: 'Choose backup file',
+      restorePickTitle: 'Choose the backup file to restore',
+      restorePathPlaceholder: 'No file selected',
+      restorePassphrase: 'Backup passphrase',
+      restoreNeedFile: 'Choose a backup file first.',
+      restoreNeedPass: 'Enter the backup passphrase.',
+      restoreConfirm:
+        'Replace the entire current vault with this backup? The current vault is kept as a .bak copy.',
+      restoreNow: 'Restore this backup',
+      restoring: 'Restoring…',
+      restored: 'Backup restored — unlock with the backup’s master password',
+      restoredWithBak:
+        'Backup restored (previous vault kept at {{path}}) — unlock with the backup’s master password',
+      restoreFailed: 'Restore failed',
     },
     noIdentitiesYet: 'No identities yet.',
     name: 'Name',
