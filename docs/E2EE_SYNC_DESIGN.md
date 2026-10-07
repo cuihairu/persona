@@ -217,6 +217,14 @@ LibrarySnapshotPayload {          // bincode 后用 group key AES-256-GCM 整包
   增量 == 全量重放」按 `item_view` 逐条相等（收敛等价性锚点的口径）。
   被 GC 的旧版本视图中性，缺席不改变视图。
 
+**LWW 衔接语义（FAQ 收口，2026-10-07）**：指令流（oplog）下冲突
+**显式化**——真冲突（同 lamport 并发双写）双版本留驻 oplog，
+`item_view` 推出 primary + conflicts，裁决 UI 消费；定型（非冲突
+的先后写）**静默 LWW**——`compare_ops` 全序、回放顺序无关。
+「静默 LWW 为可选项」落实在用户裁决界面：默认自动采高位，裁决
+落到败方副本删除 = 用户显式认可 LWW 结果；不另开自动解决策略
+开关。
+
 **覆盖语义（竞态的核心解法，实现精化为水位口径）**：客户端**先推平本机
 待推队列、再拉平远端增量**（`upload_library_snapshot` 内的周期顺序），
 以收敛后的「本机已同步水位」（`local_watermark`，最后一条已消费 op 的
