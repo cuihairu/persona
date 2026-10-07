@@ -120,6 +120,8 @@ export interface SyncDeviceView {
   id: string;
   device_name: string;
   created_at: string;
+  /** 设备主人的自由备注（仅设备本人可写，全员可读） */
+  remark: string;
   authorized: boolean;
   this_device: boolean;
 }

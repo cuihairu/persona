@@ -31,7 +31,8 @@ pub use pairing::{
 pub use sync::{
     delete_device as sync_delete_device, get_group_keys as sync_get_group_keys,
     get_snapshot as sync_get_snapshot, list_devices as sync_list_devices, pull as sync_pull,
-    push as sync_push, put_group_key as sync_put_group_key, put_snapshot as sync_put_snapshot,
+    push as sync_push, put_device_remark as sync_put_device_remark,
+    put_group_key as sync_put_group_key, put_snapshot as sync_put_snapshot,
     register_device as sync_register_device, rotate_begin as sync_rotate_begin,
     status as sync_status,
 };

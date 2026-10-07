@@ -262,6 +262,9 @@ const SyncDevicesSection: React.FC = () => {
   const [syncStatus, setSyncStatus] = useState<SyncStatusReport | null>(null);
   // 隐私红线：加入 E2EE 同步前先过数据范围披露，确认才执行 sync_join
   const [consentOpen, setConsentOpen] = useState(false);
+  // 本机备注行内编辑（S4：备注只允许设备本人写，服务端按令牌归属锁定）
+  const [editingRemark, setEditingRemark] = useState(false);
+  const [remarkDraft, setRemarkDraft] = useState('');
 
   const refreshStatus = async (): Promise<SyncDeviceStatus | null> => {
     try {
@@ -456,6 +459,26 @@ const SyncDevicesSection: React.FC = () => {
     }
   };
 
+  /** 保存本机备注：成功后用服务端规整值（trim）回填行，退出编辑态 */
+  const saveRemark = async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const resp = await personaAPI.syncSetDeviceRemark(remarkDraft);
+      if (resp.success && resp.data !== undefined) {
+        const stored = resp.data;
+        setDevices((prev) => prev.map((d) => (d.this_device ? { ...d, remark: stored } : d)));
+        setEditingRemark(false);
+        toast.success(t('settings.syncDevices.remarkSaved'));
+      } else {
+        toast.error(resp.error || t('settings.syncDevices.remarkFailed'));
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('settings.syncDevices.remarkFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div data-testid="sync-devices-section">
       <div className="flex items-center justify-between gap-4 mb-2">
@@ -587,25 +610,80 @@ const SyncDevicesSection: React.FC = () => {
                   data-testid={`sync-device-row-${device.id}`}
                 >
                   <div className="min-w-0">
-                    <p className="text-sm text-gray-900 dark:text-gray-100 truncate">
-                      {device.device_name}
-                      {device.this_device && (
-                        <span
-                          className="ml-2 text-xs text-blue-600 dark:text-blue-400"
-                          data-testid="sync-device-this-badge"
+                    {editingRemark && device.this_device ? (
+                      <div className="flex items-center gap-2">
+                        <input
+                          className="input py-1 text-sm"
+                          data-testid="sync-remark-input"
+                          value={remarkDraft}
+                          onChange={(e) => setRemarkDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void saveRemark();
+                            if (e.key === 'Escape') setEditingRemark(false);
+                          }}
+                          placeholder={t('settings.syncDevices.remarkPlaceholder')}
+                        />
+                        <button
+                          type="button"
+                          data-testid="sync-remark-save"
+                          onClick={() => void saveRemark()}
+                          disabled={busy}
+                          className="btn-primary text-xs"
                         >
-                          {t('settings.syncDevices.thisDevice')}
-                        </span>
-                      )}
-                      {!device.authorized && (
-                        <span
-                          className="ml-2 text-xs text-amber-600 dark:text-amber-400"
-                          data-testid="sync-device-pending-badge"
+                          {t('settings.syncDevices.remarkSave')}
+                        </button>
+                        <button
+                          type="button"
+                          data-testid="sync-remark-cancel"
+                          onClick={() => setEditingRemark(false)}
+                          disabled={busy}
+                          className="btn-secondary text-xs"
                         >
-                          {t('settings.syncDevices.pendingBadge')}
-                        </span>
-                      )}
-                    </p>
+                          {t('settings.syncDevices.remarkCancel')}
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-sm text-gray-900 dark:text-gray-100 truncate">
+                          {device.device_name}
+                          {device.this_device && (
+                            <span
+                              className="ml-2 text-xs text-blue-600 dark:text-blue-400"
+                              data-testid="sync-device-this-badge"
+                            >
+                              {t('settings.syncDevices.thisDevice')}
+                            </span>
+                          )}
+                          {!device.authorized && (
+                            <span
+                              className="ml-2 text-xs text-amber-600 dark:text-amber-400"
+                              data-testid="sync-device-pending-badge"
+                            >
+                              {t('settings.syncDevices.pendingBadge')}
+                            </span>
+                          )}
+                        </p>
+                        {(device.remark || device.this_device) && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                            {device.remark || t('settings.syncDevices.remarkEmpty')}
+                            {device.this_device && (
+                              <button
+                                type="button"
+                                data-testid="sync-remark-edit"
+                                onClick={() => {
+                                  setRemarkDraft(device.remark);
+                                  setEditingRemark(true);
+                                }}
+                                disabled={busy}
+                                className="ml-2 text-blue-600 dark:text-blue-400 hover:underline"
+                              >
+                                {t('settings.syncDevices.remarkEdit')}
+                              </button>
+                            )}
+                          </p>
+                        )}
+                      </>
+                    )}
                   </div>
                   <div className="flex-shrink-0 flex gap-2">
                     {!device.authorized && !device.this_device && (

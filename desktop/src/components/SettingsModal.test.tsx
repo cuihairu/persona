@@ -38,6 +38,7 @@ jest.mock('@/utils/api', () => ({
     syncJoin: jest.fn(),
     syncLeave: jest.fn(),
     syncListDevices: jest.fn(),
+    syncSetDeviceRemark: jest.fn(),
     syncAuthorize: jest.fn(),
     syncRevoke: jest.fn(),
     syncNow: jest.fn(),
@@ -78,6 +79,7 @@ const mockSyncStatus = personaAPI.syncDeviceStatus as jest.Mock;
 const mockSyncJoin = personaAPI.syncJoin as jest.Mock;
 const mockSyncLeave = personaAPI.syncLeave as jest.Mock;
 const mockSyncList = personaAPI.syncListDevices as jest.Mock;
+const mockSyncSetRemark = personaAPI.syncSetDeviceRemark as jest.Mock;
 const mockSyncAuthorize = personaAPI.syncAuthorize as jest.Mock;
 const mockSyncRevoke = personaAPI.syncRevoke as jest.Mock;
 const mockSyncNow = personaAPI.syncNow as jest.Mock;
@@ -1364,8 +1366,8 @@ describe('components/SettingsModal', () => {
   const twoDevices = {
     success: true,
     data: [
-      { id: 'dev-self', device_name: 'laptop', created_at: '2026-09-23T00:00:00Z', authorized: true, this_device: true },
-      { id: 'dev-phone', device_name: 'phone', created_at: '2026-09-23T01:00:00Z', authorized: false, this_device: false },
+      { id: 'dev-self', device_name: 'laptop', created_at: '2026-09-23T00:00:00Z', remark: '', authorized: true, this_device: true },
+      { id: 'dev-phone', device_name: 'phone', created_at: '2026-09-23T01:00:00Z', remark: '备用机', authorized: false, this_device: false },
     ],
   };
 
@@ -1466,6 +1468,68 @@ describe('components/SettingsModal', () => {
 
     // leave 入口
     expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
+  });
+
+  it('edits this-device remark inline and backfills the normalized value', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncSetRemark.mockResolvedValue({ success: true, data: '书房的主力机' });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-remark-edit')).toBeInTheDocument();
+    });
+
+    // 空备注显示占位文案；他人设备只读（S4：备注只许本人写）
+    expect(screen.getByText('暂无备注')).toBeInTheDocument();
+    expect(screen.getByText('备用机')).toBeInTheDocument();
+    expect(screen.getAllByTestId('sync-remark-edit')).toHaveLength(1);
+
+    fireEvent.click(screen.getByTestId('sync-remark-edit'));
+    const input = screen.getByTestId('sync-remark-input') as HTMLInputElement;
+    expect(input.value).toBe('');
+    fireEvent.change(input, { target: { value: '  书房的主力机  ' } });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-remark-save'));
+    });
+
+    expect(mockSyncSetRemark).toHaveBeenCalledWith('  书房的主力机  ');
+    // 行内回填服务端规整值（trim 后），编辑态退出
+    await waitFor(() => {
+      expect(screen.getByText('书房的主力机')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('sync-remark-input')).not.toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledWith('备注已更新');
+  });
+
+  it('toasts on remark failure and Escape abandons the edit', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+    mockSyncSetRemark.mockResolvedValue({ success: false, error: 'remark too long' });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-remark-edit')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('sync-remark-edit'));
+    fireEvent.change(screen.getByTestId('sync-remark-input'), {
+      target: { value: '过长备注' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-remark-save'));
+    });
+    expect(toast.error).toHaveBeenCalledWith('remark too long');
+    // 失败不退出编辑态，可改后重试或 Escape 放弃
+    expect(screen.getByTestId('sync-remark-input')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByTestId('sync-remark-input'), { key: 'Escape' });
+    expect(screen.queryByTestId('sync-remark-input')).not.toBeInTheDocument();
   });
 
   it('shows the sync status row: up-to-date, behind and hidden-when-unavailable', async () => {

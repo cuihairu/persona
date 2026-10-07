@@ -169,6 +169,7 @@ pub fn build_router(state: AppState) -> Router {
                     post(api::sync_register_device).get(api::sync_list_devices),
                 )
                 .route("/devices/{id}", delete(api::sync_delete_device))
+                .route("/devices/remark", put(api::sync_put_device_remark))
                 .route(
                     "/group-keys",
                     get(api::sync_get_group_keys).put(api::sync_put_group_key),

@@ -2051,11 +2051,51 @@ pub async fn sync_list_devices(
             id: device.id.to_string(),
             device_name: device.device_name,
             created_at: device.created_at,
+            remark: device.remark,
             authorized: keys.iter().any(|k| k.device_id == device.id),
             this_device: device.id == identity.device_id,
         })
         .collect();
     Ok(ApiResponse::success(views))
+}
+
+/// 设置本设备的自由备注（S4）：服务端按令牌归属锁定设备行，无跨设备
+/// 路径——写谁的名字由令牌决定。空串/纯空白 = 清除。返回服务端规整
+/// （trim）后的备注。
+#[command]
+pub async fn sync_set_device_remark(
+    remark: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<String>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    let db_path = match require_db_path(&state).await {
+        Some(db_path) => db_path,
+        None => {
+            return Ok(ApiResponse::error(
+                "Database path unavailable. Initialize the service first.".to_string(),
+            ))
+        }
+    };
+    match local_device(&state, &db_path).await {
+        LocalDevice::Joined(_) => {}
+        LocalDevice::NotJoined | LocalDevice::Corrupted => {
+            return Ok(ApiResponse::error(
+                "This vault has not joined sync".to_string(),
+            ))
+        }
+    }
+    let api = match sync_admin_api_for(&state).await {
+        Ok(api) => api,
+        Err(message) => return Ok(ApiResponse::error(message)),
+    };
+    match api.set_device_remark(&remark).await {
+        Ok(stored) => Ok(ApiResponse::success(stored)),
+        Err(e) => Ok(ApiResponse::error(format!(
+            "Failed to set device remark: {e}"
+        ))),
+    }
 }
 
 /// 为目标设备授权：拆本机信封得 group key → 用目标公钥封新信封上传。

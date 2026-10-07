@@ -383,3 +383,54 @@ async fn revoke_device_drops_envelope_and_blocks_new_sessions() {
         "revoked device must disappear from the roster, got {devices:?}"
     );
 }
+
+/// S4 设备自备注：各端写各自令牌名下的 remark（无跨设备路径），全员
+/// 可读；空串/纯空白清除；吊销后原设备写不进（404 fail-closed）。
+#[tokio::test]
+async fn device_remark_self_service_and_isolation() {
+    let (url, _server_dir) = spawn_server().await;
+    let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
+    let admin_b = SyncAdminApi::new(&url, TOKEN_B).unwrap();
+
+    let (_identity_a, _device_id_a) = register_device(&admin_a, "device-a", TOKEN_A, true).await;
+    let (_identity_b, device_id_b) = register_device(&admin_b, "device-b", TOKEN_B, false).await;
+
+    // 各写各的（服务端 trim 规整后回显）
+    let stored_a = admin_a.set_device_remark("  书房的主力机  ").await.unwrap();
+    assert_eq!(stored_a, "书房的主力机", "server must trim the remark");
+    let stored_b = admin_b.set_device_remark("口袋里的备用机").await.unwrap();
+    assert_eq!(stored_b, "口袋里的备用机");
+
+    // 清单双向可见，值各归各（B 的写入动不了 A 的行）
+    let names: Vec<(String, String)> = admin_a
+        .list_devices()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|d| (d.device_name, d.remark))
+        .collect();
+    assert!(
+        names.contains(&("device-a".to_string(), "书房的主力机".to_string()))
+            && names.contains(&("device-b".to_string(), "口袋里的备用机".to_string())),
+        "both remarks must be visible with their own values, got {names:?}"
+    );
+
+    // 纯空白 = 清除
+    assert_eq!(admin_b.set_device_remark("   ").await.unwrap(), "");
+    let b_row = admin_b
+        .list_devices()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|d| d.device_name == "device-b")
+        .unwrap();
+    assert_eq!(b_row.remark, "", "whitespace must clear the remark");
+
+    // 吊销 B 后其令牌写不进 remark（登记行已删 → 404 absent）
+    admin_a.delete_device(device_id_b).await.unwrap();
+    let err = admin_b.set_device_remark("复活").await.unwrap_err();
+    assert!(
+        err.to_string().contains("HTTP 404"),
+        "revoked device must fail closed, got: {err}"
+    );
+}

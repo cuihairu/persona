@@ -1807,8 +1807,20 @@ References
       （收口 2026-10-07:三形态=同一 `persona-server` 二进制的三种部署,
       客户端 `base_url` 三选一;一致性=同一 router/同一 core 真 TCP 双设备
       收敛测试佐证,见 E2EE_SYNC_DESIGN §9）
-- [ ] S4 设备面:组内设备清单互见(仅改自己备注)、同等权限自由进出组
+- [x] S4 设备面:组内设备清单互见(仅改自己备注)、同等权限自由进出组
       复用 M3 device 授权/吊销面与组密钥轮换(begin/finish)。
+      （收口 2026-10-07:清单互见=既有 list_devices;「仅改自己备注」全链
+      ——服务端 remark 列(0011 迁移)+PUT /sync/devices/remark(按令牌归属
+      device_name 锁定 WHERE,>128 字节 422 validation,空串/纯空白=清除,
+      未登记 404 absent)+core SyncDevice.remark、WireDeviceInfo serde
+      default(老服务器无字段兜底空串)、SyncAdminApi::set_device_remark
+      (返回服务端 trim 后的存储值)+mock 2 测;桌面 sync_set_device_remark
+      命令+SyncDeviceView.remark+设置页设备行备注展示与本机行内编辑
+      (他人行只读;i18n en/zh-CN)+组件 2 测;E2E 第 4 例 remark 自服务+
+      隔离(真 router 双令牌:各写各的、trim 回显、空白清除、吊销后 404
+      fail-closed)。「同等权限自由进出组」= M3 既有 join/leave/authorize/
+      revoke/rotate 面,无新增端点。门禁:server 136 lib+E2E 4、core 23
+      remote、桌面 clippy/fmt、jest 51 全绿。）
 - [ ] S5 自救口:导出加密备份(设备全丢=库全丢的对价);UI:同步组为默认引导路径,账号模式藏在显式开启后
       备份复用 Export/Import 加密备份;披露面文案「设备全丢=库全丢」;
       账号模式显式开启的定位文案(挂载零网络断言已有,补同步组默认路径同口径)。

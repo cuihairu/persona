@@ -131,6 +131,8 @@ pub struct SyncDeviceView {
     pub id: String,
     pub device_name: String,
     pub created_at: String,
+    /// 设备主人的自由备注（S4：仅设备本人可写，全员可读）。
+    pub remark: String,
     /// group-keys 有该设备的信封（「有信封 = 已授权」，fail-closed）。
     pub authorized: bool,
     pub this_device: bool,

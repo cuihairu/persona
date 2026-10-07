@@ -405,6 +405,8 @@ pub struct SyncDevice {
     pub device_name: String,
     pub public_key: [u8; 32],
     pub created_at: String,
+    /// 设备主人的自由备注（S4）：只有设备本人能写，全员可读。
+    pub remark: String,
 }
 
 /// group key 信封条目（server `sync_group_keys` 行的客户端视图）。
@@ -423,6 +425,9 @@ struct WireDeviceInfo {
     device_name: String,
     public_key: String,
     created_at: String,
+    /// remark 列是后来加的（0011 迁移）——老服务器不下发，default 补空串。
+    #[serde(default)]
+    remark: String,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -470,6 +475,17 @@ struct WireRegisterDeviceResponse {
 struct WirePutGroupKey<'a> {
     device_id: String,
     envelope: &'a str,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct WirePutRemark<'a> {
+    remark: &'a str,
+}
+
+/// 服务器还回显 device_name（恒等于令牌归属名，调用方已知），不取。
+#[derive(Debug, serde::Deserialize)]
+struct WireRemarkResponse {
+    remark: String,
 }
 
 fn decode_b32(s: &str, what: &str) -> Result<[u8; 32]> {
@@ -545,6 +561,7 @@ impl SyncAdminApi {
                 device_name: wire.device_name,
                 public_key,
                 created_at: wire.created_at,
+                remark: wire.remark,
             });
         }
         Ok(devices)
@@ -561,6 +578,25 @@ impl SyncAdminApi {
             .map_err(|e| PersonaError::Io(format!("sync revoke device failed: {e}")))?;
         SyncHttp::ensure_success(resp, "revoke device").await?;
         Ok(())
+    }
+
+    /// 设置**本设备**的自由备注（S4：令牌归属即设备身份，无跨设备路径；
+    /// 服务端按令牌归属的 device_name 定位行）。空串/纯空白 = 清除。
+    /// 返回服务端规整后的备注（trim 过）。
+    pub async fn set_device_remark(&self, remark: &str) -> Result<String> {
+        let resp = self
+            .http
+            .request(reqwest::Method::PUT, "/devices/remark")
+            .json(&WirePutRemark { remark })
+            .send()
+            .await
+            .map_err(|e| PersonaError::Io(format!("sync set device remark failed: {e}")))?;
+        let resp = SyncHttp::ensure_success(resp, "set device remark").await?;
+        let body: WireRemarkResponse = resp
+            .json()
+            .await
+            .map_err(|_| PersonaError::Io("malformed sync remark response".to_string()))?;
+        Ok(body.remark)
     }
 
     /// 取全部设备信封。调用方只认自己 device_id 的那条；未授权设备拿到
@@ -795,6 +831,7 @@ mod tests {
         method: String,
         path: String,
         auth: Option<String>,
+        body: String,
     }
 
     type Handler = Arc<dyn Fn(Captured) -> (u16, String) + Send + Sync>;
@@ -857,7 +894,31 @@ mod tests {
         let auth = head
             .lines()
             .find_map(|l| l.strip_prefix("authorization: ").map(str::to_string));
-        Some(Captured { method, path, auth })
+        // body：按 Content-Length 把余量读全（PUT 的 JSON 体断言要看；
+        // 无长度的 GET 视为空）。此前 body 留在内核缓冲由连接关闭回收。
+        let content_length: usize = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length: ").map(str::to_string))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let split = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("read loop only breaks on the header terminator");
+        let mut body = buf[split + 4..].to_vec();
+        while body.len() < content_length {
+            let n = stream.read(&mut tmp).await.ok()?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&tmp[..n]);
+        }
+        Some(Captured {
+            method,
+            path,
+            auth,
+            body: String::from_utf8_lossy(&body).to_string(),
+        })
     }
 
     /// mock 基建自身的两臂：status 0（不回包直接断开——Handler 约定，
@@ -1032,6 +1093,73 @@ mod tests {
                 "expected {needle:?} in: {err}"
             );
         }
+    }
+
+    /// remark 字段：新服务器原样解析；老服务器（无该字段）default 空串。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_devices_parses_remark_and_defaults_missing_to_empty() {
+        let device_json = |remark: &str| {
+            let field = if remark.is_empty() {
+                String::new()
+            } else {
+                format!(r#","remark":"{remark}""#)
+            };
+            format!(
+                r#"{{"devices":[{{"id":"{}","device_name":"laptop","public_key":"{}","created_at":"t"{field}}}]}}"#,
+                Uuid::new_v4(),
+                B64.encode([7u8; 32]),
+            )
+        };
+        let base_with = spawn_mock(Arc::new(move |_req| (200, device_json("主力机")))).await;
+        let admin = SyncAdminApi::new(&base_with, "tok").unwrap();
+        let devices = admin.list_devices().await.unwrap();
+        assert_eq!(devices[0].remark, "主力机");
+
+        let base_without = spawn_mock(Arc::new(move |_req| (200, device_json("")))).await;
+        let admin = SyncAdminApi::new(&base_without, "tok").unwrap();
+        let devices = admin.list_devices().await.unwrap();
+        assert_eq!(devices[0].remark, "");
+    }
+
+    /// set_device_remark：PUT /devices/remark 带 bearer 与 JSON 体；回显
+    /// 的 remark 即服务端 trim 后的存储值。未登记（404）fail-closed 报错。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn set_device_remark_sends_put_and_surfaces_absent_device() {
+        let captured: Arc<Mutex<Vec<Captured>>> = Default::default();
+        let sink = captured.clone();
+        let base = spawn_mock(Arc::new(move |req| {
+            sink.lock().unwrap().push(req);
+            (
+                200,
+                r#"{"device_name":"laptop","remark":"主力机"}"#.to_string(),
+            )
+        }))
+        .await;
+        let admin = SyncAdminApi::new(&base, "tok-laptop").unwrap();
+
+        let stored = admin.set_device_remark("主力机").await.unwrap();
+        assert_eq!(stored, "主力机");
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].method, "PUT");
+        assert_eq!(reqs[0].path, "/api/v1/sync/devices/remark");
+        assert_eq!(reqs[0].auth.as_deref(), Some("Bearer tok-laptop"));
+        assert!(reqs[0].body.contains("主力机"), "{}", reqs[0].body);
+        drop(reqs);
+
+        let base = spawn_mock(Arc::new(|_req| {
+            (
+                404,
+                r#"{"error":{"code":"absent","message":"device not registered"}}"#.to_string(),
+            )
+        }))
+        .await;
+        let admin = SyncAdminApi::new(base, "tok").unwrap();
+        let err = admin.set_device_remark("孤儿").await.unwrap_err();
+        assert!(
+            err.to_string().contains("set device remark"),
+            "error should name the failed call: {err}"
+        );
     }
 
     /// group-keys 的字段防御臂：device_id 非 UUID、envelope 坏 base64。

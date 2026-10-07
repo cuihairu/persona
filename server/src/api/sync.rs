@@ -247,7 +247,6 @@ pub async fn list_devices(State(state): State<AppState>) -> Response {
 /// PUT /sync/devices/remark：改**自己**的备注（S4 设备面）。目标行由
 /// 令牌归属的设备名锁定（不接 device_id 参数——接口形态上就改不了
 /// 别人的），≤128 字节，空串 = 清除。
-#[allow(dead_code)]
 pub async fn put_device_remark(
     State(state): State<AppState>,
     Extension(device): Extension<DeviceName>,
@@ -1409,6 +1408,176 @@ mod tests {
 
         let (_, body) = send(router.clone(), get_req("/api/v1/sync/devices")).await;
         assert_eq!(body["devices"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn device_remark_self_service_round_trip() {
+        let router = router().await;
+        // 单令牌配置下令牌归属设备名是 "default"（AuthTokens::single），
+        // remark 端点按令牌归属名定位行——注册名必须一致。
+        register_device(&router, "default").await;
+
+        // 默认空备注
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/devices")).await;
+        assert_eq!(body["devices"][0]["remark"], "");
+
+        // 设置 → 回显 → 列表反映
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/devices/remark",
+                &json!({ "remark": "我的笔记本" }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["device_name"], "default");
+        assert_eq!(body["remark"], "我的笔记本");
+
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/devices")).await;
+        assert_eq!(body["devices"][0]["remark"], "我的笔记本");
+
+        // 空串 = 清除
+        let (status, _) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/devices/remark",
+                &json!({ "remark": "  " }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/devices")).await;
+        assert_eq!(body["devices"][0]["remark"], "");
+    }
+
+    /// 双设备路由：laptop=token-a，phone=token-b（S4「仅改自己备注」的
+    /// 隔离面需要两个令牌归属才验得了）。
+    async fn two_device_router() -> axum::Router {
+        let tokens = crate::auth::AuthTokens::parse("laptop:tok-laptop,phone:tok-phone").unwrap();
+        let app = crate::state::AppState::new(
+            crate::state::test_pool().await,
+            Some(tokens),
+            std::sync::Arc::new(crate::metrics::Metrics::new(0)),
+        );
+        crate::build_router(app)
+    }
+
+    fn req_with_token(
+        method: &str,
+        uri: &str,
+        token: &str,
+        body: &str,
+    ) -> axum::http::Request<String> {
+        request(
+            method,
+            uri,
+            Some(&format!("Bearer {token}")),
+            Some("application/json"),
+            body,
+        )
+    }
+
+    /// 双令牌路由用：注册名必须与令牌归属名一致（remark 端点按令牌
+    /// 归属的 device_name 定位行）。
+    async fn register_device_with_token(router: &axum::Router, name: &str, token: &str) -> Uuid {
+        let (status, body) = send(
+            router.clone(),
+            req_with_token(
+                "POST",
+                "/api/v1/sync/devices",
+                token,
+                &json!({
+                    "device_name": name,
+                    "public_key": b64(&[7u8; 32]),
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        Uuid::parse_str(body["device_id"].as_str().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn device_remark_is_locked_to_own_device() {
+        let router = two_device_router().await;
+        register_device_with_token(&router, "laptop", "tok-laptop").await;
+        register_device_with_token(&router, "phone", "tok-phone").await;
+
+        // 各自写各自的
+        let (status, _) = send(
+            router.clone(),
+            req_with_token(
+                "PUT",
+                "/api/v1/sync/devices/remark",
+                "tok-laptop",
+                &json!({ "remark": "主力机" }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = send(
+            router.clone(),
+            req_with_token(
+                "PUT",
+                "/api/v1/sync/devices/remark",
+                "tok-phone",
+                &json!({ "remark": "备用机" }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // laptop 令牌再看清单：自己的备注在，phone 的备注不归它管也没被它动
+        let (_, body) = send(
+            router.clone(),
+            request(
+                "GET",
+                "/api/v1/sync/devices",
+                Some("Bearer tok-laptop"),
+                None,
+                "",
+            ),
+        )
+        .await;
+        let rows = body["devices"].as_array().unwrap();
+        let laptop = rows.iter().find(|d| d["device_name"] == "laptop").unwrap();
+        let phone = rows.iter().find(|d| d["device_name"] == "phone").unwrap();
+        assert_eq!(laptop["remark"], "主力机");
+        assert_eq!(phone["remark"], "备用机");
+    }
+
+    #[tokio::test]
+    async fn device_remark_rejects_over_limit_and_unregistered_device() {
+        let router = router().await;
+
+        // > 128 字节 → 422 validation（字段校验的统一形状）
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/devices/remark",
+                &json!({ "remark": "长".repeat(129) }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body["error"]["code"], "validation");
+
+        // 令牌归属的设备名未登记 → 404 absent（接口形态上无跨设备路径）
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/devices/remark",
+                &json!({ "remark": "孤儿" }).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     }
 
     #[tokio::test]

@@ -340,6 +340,11 @@ class PersonaAPI {
     return invoke('sync_list_devices');
   }
 
+  /** 设置本设备备注（服务端按令牌归属锁定；空串/纯空白 = 清除；返回规整后的备注） */
+  async syncSetDeviceRemark(remark: string): Promise<ApiResponse<string>> {
+    return invoke('sync_set_device_remark', { remark });
+  }
+
   /** 为目标设备授权（拆本机信封重封目标公钥；本机未授权 fail-closed） */
   async syncAuthorize(targetDeviceId: string): Promise<ApiResponse<boolean>> {
     return invoke('sync_authorize', { targetDeviceId });
