@@ -7035,6 +7035,103 @@ pub async fn export_identity(
 }
 
 // ---------------------------------------------------------------------------
+// S5 自救口——整库加密备份导出（文件目标）
+// ---------------------------------------------------------------------------
+
+/// `backup_export_to_file` 请求：目标文件路径 + 备份口令。
+///
+/// 备份口令与主密码相互独立（设计稿 §6.5：主库不解密、主密码不参与备份
+/// 链路）；强度要求由前端把关，后端只做非空校验。口令本身永不落盘。
+#[derive(Debug, Deserialize)]
+pub struct BackupExportRequest {
+    pub path: String,
+    pub passphrase: String,
+}
+
+/// 导出结果（非敏感元数据，与 WorkspaceSettings.backup 的
+/// BackupEvidence 对账）。
+#[derive(Debug, Serialize)]
+pub struct BackupExportOutcome {
+    pub path: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub exported_at: String,
+}
+
+/// 整库加密备份导出到本地文件（S5 自救口第一批）。
+///
+/// 流程：VACUUM INTO 快照 → gzip → 口令加密 → 同目录 `.part` 临时文件
+/// + rename 原子落盘 → 导出凭证（BackupEvidence）写入 workspace
+/// settings。主库全程不解密、不需要主密码；导出中途失败不毁旧备份文件。
+#[command(rename_all = "snake_case")]
+pub async fn backup_export_to_file(
+    request: BackupExportRequest,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<BackupExportOutcome>, String> {
+    if let Some(message) = require_unlocked(&state).await {
+        return Ok(ApiResponse::error(message));
+    }
+    if request.passphrase.is_empty() {
+        return Ok(ApiResponse::error(
+            "Backup passphrase must not be empty".to_string(),
+        ));
+    }
+    if request.path.trim().is_empty() {
+        return Ok(ApiResponse::error(
+            "Backup destination path must not be empty".to_string(),
+        ));
+    }
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+
+    let blob = ok_or_error_response_ctx!(
+        persona_core::backup::create_backup_bytes(db.pool(), &request.passphrase, None).await,
+        "Failed to create backup: {}"
+    );
+
+    // 原子落盘：`backup.enc` → `backup.enc.part` 写完再 rename，中途
+    // 失败（磁盘满/进程被杀）旧文件原样保留
+    let dest = std::path::Path::new(&request.path);
+    let part = dest.with_extension(format!(
+        "{}part",
+        dest.extension()
+            .map(|e| format!("{}.", e.to_string_lossy()))
+            .unwrap_or_default()
+    ));
+    if let Err(e) = std::fs::write(&part, &blob.bytes) {
+        let _ = std::fs::remove_file(&part);
+        return Ok(ApiResponse::error(format!(
+            "Failed to write backup file: {e}"
+        )));
+    }
+    if let Err(e) = std::fs::rename(&part, dest) {
+        let _ = std::fs::remove_file(&part);
+        return Ok(ApiResponse::error(format!(
+            "Failed to finalize backup file: {e}"
+        )));
+    }
+
+    let exported_at = chrono::Utc::now().to_rfc3339();
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = workspace_or_return!(db, workspace_path);
+    ws.settings.backup = Some(persona_core::models::workspace::BackupEvidence {
+        exported_at: exported_at.clone(),
+        destination: "file".to_string(),
+        size_bytes: blob.size_bytes,
+    });
+    ws.touch();
+    ok_or_error_response!(repo.update(&ws).await);
+
+    Ok(ApiResponse::success(BackupExportOutcome {
+        path: request.path,
+        size_bytes: blob.size_bytes,
+        sha256: blob.sha256,
+        exported_at,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // 敏感字段 reveal + 重新认证
 // ---------------------------------------------------------------------------
 

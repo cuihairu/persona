@@ -962,6 +962,159 @@ async fn export_identity_command_returns_exportable_json() {
     assert!(export.data.is_object(), "export payload is JSON");
 }
 
+// ---- S5 自救口：整库加密备份文件导出（backup_export_to_file）----
+
+#[tokio::test]
+async fn backup_export_command_round_trip_and_records_evidence() {
+    let app = mock_app();
+    init_service_ok(&app, "correct-horse").await;
+    // 先放一条凭据，断言备份文件确实携带库内容（恢复链路读回验证）
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Work".to_string(),
+            identity_type: "work".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let identity_id = resp.data.expect("identity id").id.to_string();
+    let resp = create_credential(
+        password_credential_request(&identity_id),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("vault-backup.enc");
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "backup-pass-Δ".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let outcome = resp.data.expect("outcome");
+
+    // 文件在盘上、是 PERSENC1 密文（不是明文 SQLite）、尺寸与 sha256 对账
+    let blob = std::fs::read(&dest).expect("backup file written");
+    assert_eq!(blob.len() as u64, outcome.size_bytes);
+    assert!(
+        blob.starts_with(b"PERSENC1"),
+        "file must be PERSENC1 ciphertext"
+    );
+    assert_eq!(outcome.sha256.len(), 64);
+    assert!(outcome.sha256.chars().all(|c| c.is_ascii_hexdigit()));
+
+    // 恢复链路互解：备份字节 → SQLite 明文（头校验过）→ 可当库打开
+    let restored = dir.path().join("restored.db");
+    persona_core::backup::restore_backup_bytes(&blob, "backup-pass-Δ", &restored)
+        .expect("restore round trip");
+    let plain = std::fs::read(&restored).unwrap();
+    assert!(plain.starts_with(b"SQLite format 3\0"));
+
+    // 导出凭证落入 workspace settings（非敏感元数据；口令不在任何结构里）
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let settings = resp.data.expect("settings");
+    let evidence = settings.backup.expect("backup evidence recorded");
+    assert_eq!(evidence.destination, "file");
+    assert_eq!(evidence.size_bytes, blob.len() as u64);
+    assert_eq!(evidence.exported_at, outcome.exported_at);
+
+    // 覆盖导出：同路径二次导出原子替换成功，凭证时刻更新
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "new-pass".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "overwrite export failed: {:?}", resp.error);
+    let blob2 = std::fs::read(&dest).unwrap();
+    assert!(blob2.starts_with(b"PERSENC1"));
+    // 新口令可解（GCM 校验会失败于旧口令的 key）——换口令真生效
+    let restored2 = dir.path().join("restored2.db");
+    persona_core::backup::restore_backup_bytes(&blob2, "new-pass", &restored2)
+        .expect("second export uses new passphrase");
+}
+
+#[tokio::test]
+async fn backup_export_command_rejects_empty_passphrase_path_and_locked_state() {
+    let app = mock_app();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("v.enc");
+
+    // 未初始化服务 → 拒
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    init_service_ok(&app, "correct-horse").await;
+
+    // 空口令 → 拒（不产生文件）
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: String::new(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(!dest.exists(), "failed export must not leave a file");
+
+    // 空路径 → 拒
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: "   ".to_string(),
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+
+    // 锁定态 → 拒
+    let resp = lock_service(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = backup_export_to_file(
+        BackupExportRequest {
+            path: dest.to_string_lossy().to_string(),
+            passphrase: "x".to_string(),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+    assert!(!dest.exists());
+}
+
 #[tokio::test]
 async fn passkey_commands_round_trip_create_list_selftest_export_delete() {
     use base64::Engine;

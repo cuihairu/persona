@@ -107,6 +107,8 @@ import type {
   ConnectTokenView,
   ConnectTokenCreatedView,
   WorkspaceSettings,
+  BackupEvidence,
+  BackupExportOutcome,
   QuickAccessStatus,
   SshAgentStatus,
   SshAgentKey,
@@ -198,6 +200,15 @@ class PersonaAPI {
 
   async getWorkspaceSettings(): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('get_workspace_settings');
+  }
+
+  /** 整库加密备份导出到本地文件（S5 自救口）：口令加密、主库不解密。
+   * 成功后 settings.backup 落导出凭证（服务端真相在返回的 outcome）。 */
+  async backupExportToFile(
+    path: string,
+    passphrase: string,
+  ): Promise<ApiResponse<BackupExportOutcome>> {
+    return invoke('backup_export_to_file', { request: { path, passphrase } });
   }
 
   /** 窄写 features 四个开关位，返回更新后的全量设置作为服务端真相 */

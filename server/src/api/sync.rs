@@ -107,6 +107,15 @@ struct DeviceInfo {
     device_name: String,
     public_key: String,
     created_at: String,
+    /// 设备自备注（S4 设备面，仅本设备经 PUT /sync/devices/remark 可改自己的）。
+    remark: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct PutRemarkRequest {
+    /// 自备注全文（≤ 128 字节，空串 = 清除）。
+    remark: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -212,7 +221,7 @@ pub async fn register_device(
 /// GET /sync/devices：列出全部已登记设备。
 pub async fn list_devices(State(state): State<AppState>) -> Response {
     let rows = match sqlx::query(
-        "SELECT id, device_name, public_key, created_at FROM sync_devices ORDER BY created_at, id",
+        "SELECT id, device_name, public_key, created_at, remark FROM sync_devices ORDER BY created_at, id",
     )
     .fetch_all(&state.pool)
     .await
@@ -228,10 +237,44 @@ pub async fn list_devices(State(state): State<AppState>) -> Response {
                 device_name: row.get("device_name"),
                 public_key: B64.encode(row.get::<Vec<u8>, _>("public_key")),
                 created_at: row.get("created_at"),
+                remark: row.get("remark"),
             })
         })
         .collect();
     (Json(DeviceListResponse { devices })).into_response()
+}
+
+/// PUT /sync/devices/remark：改**自己**的备注（S4 设备面）。目标行由
+/// 令牌归属的设备名锁定（不接 device_id 参数——接口形态上就改不了
+/// 别人的），≤128 字节，空串 = 清除。
+#[allow(dead_code)]
+pub async fn put_device_remark(
+    State(state): State<AppState>,
+    Extension(device): Extension<DeviceName>,
+    Json(request): Json<PutRemarkRequest>,
+) -> Response {
+    let remark = request.remark.trim();
+    if remark.len() > 128 {
+        return ApiError::validation(
+            "invalid remark",
+            vec![ErrorItem::batch("remark", "must be at most 128 bytes")],
+        )
+        .into_response();
+    }
+    match sqlx::query("UPDATE sync_devices SET remark = ? WHERE device_name = ?")
+        .bind(remark)
+        .bind(&device.0)
+        .execute(&state.pool)
+        .await
+    {
+        Ok(updated) if updated.rows_affected() == 1 => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "device_name": device.0, "remark": remark })),
+        )
+            .into_response(),
+        Ok(_) => ApiError::absent("device not registered").into_response(),
+        Err(error) => ApiError::internal(error).into_response(),
+    }
 }
 
 /// DELETE /sync/devices/:id：吊销设备（删登记与其信封）。幂等；被吊销

@@ -25,6 +25,7 @@ import ConnectAutomationSection from './ConnectAutomationSection';
 import AccountSection from './AccountSection';
 import QuickAccessSection from './QuickAccessSection';
 import UpdateCheckSection from './UpdateCheckSection';
+import BackupSection from './BackupSection';
 import SyncConflictsModal from './SyncConflictsModal';
 import SyncGroupSection from './SyncGroupSection';
 import SshIntegrationSection from './SshIntegrationSection';
@@ -1210,6 +1211,10 @@ const GeneralPane: React.FC<{
           changingPassword={changingPassword}
           setChangingPassword={setChangingPassword}
         />
+      </section>
+
+      <section className="mb-5">
+        <BackupSection />
       </section>
 
       <section className="mb-5">

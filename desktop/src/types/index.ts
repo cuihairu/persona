@@ -210,6 +210,27 @@ export interface WorkspaceSettings {
   quick_access_hotkey: string | null;
   /** 账号域绑定（null = 未绑定；账号功能默认关闭，绑定是显式动作） */
   account: AccountBinding | null;
+  /** 自救口备份凭证（null = 从未在本机导出过；旧 JSON 缺键时为 null） */
+  backup: BackupEvidence | null;
+}
+
+/** 一次整库加密备份的导出记录（core `BackupEvidence` 镜像）。
+ * 非敏感元数据；备份口令永不落盘。 */
+export interface BackupEvidence {
+  /** 导出时刻（RFC3339） */
+  exported_at: string;
+  /** 目标类型："file"（本地文件）/ "server"（服务器密文仓，后续批） */
+  destination: string;
+  /** 密文字节数 */
+  size_bytes: number;
+}
+
+/** `backup_export_to_file` 的返回（含与 BackupEvidence 对账的元数据）。 */
+export interface BackupExportOutcome {
+  path: string;
+  size_bytes: number;
+  sha256: string;
+  exported_at: string;
 }
 
 /** 账号域绑定（core `AccountBinding` 镜像）。非敏感标识；令牌真值在
