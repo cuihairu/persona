@@ -69,7 +69,11 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         8080 端口错）已修为 build/up/down 三目标对齐 compose 部署链
         ——2026-10-03 解除：hex 修复随 0514d4a 入 main，docker.yml 于
         0514d4a/b0ee921 重发 SUCCESS，镜像已含 /data 修复
-- [ ] **M2 账号体系（落地①）**：server 账号注册/登录（通行密钥优先 +
+- [x] **M2 账号体系（落地①）——2026-10-07 复核翻牌**：四层交付物核查
+      俱全（server `api/accounts.rs`+`auth.rs` 真验证链、core `accounts`
+      feature wire、桌面 14 条 account_* 命令 + `AccountSection` 组件与
+      测试），编排/UI/红线三批均已收口（详见下方批次记录），多轮 CI 全绿
+      覆盖：server 账号注册/登录（通行密钥优先 +
       SRP 密码兜底——复用 DR-2 的 SRP 链路作密码兜底）、账号级设备管理
       （新设备授权/吊销/设备列表，复用 `/sync/devices` 扩到账号作用域）、
       账号恢复流程（恢复码/备用路径，无托管原则：主密码不出设备）；
