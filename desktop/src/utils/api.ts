@@ -107,7 +107,6 @@ import type {
   ConnectTokenView,
   ConnectTokenCreatedView,
   WorkspaceSettings,
-  BackupEvidence,
   BackupExportOutcome,
   QuickAccessStatus,
   SshAgentStatus,
