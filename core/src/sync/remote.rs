@@ -1139,13 +1139,16 @@ mod tests {
 
         let stored = admin.set_device_remark("主力机").await.unwrap();
         assert_eq!(stored, "主力机");
-        let reqs = captured.lock().unwrap();
-        assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].method, "PUT");
-        assert_eq!(reqs[0].path, "/api/v1/sync/devices/remark");
-        assert_eq!(reqs[0].auth.as_deref(), Some("Bearer tok-laptop"));
-        assert!(reqs[0].body.contains("主力机"), "{}", reqs[0].body);
-        drop(reqs);
+        // 块作用域收口守卫（clippy@1.99 的 await_holding_lock 不认显式
+        // drop()，后文还有 spawn_mock/set_device_remark 两个 await 点）
+        {
+            let reqs = captured.lock().unwrap();
+            assert_eq!(reqs.len(), 1);
+            assert_eq!(reqs[0].method, "PUT");
+            assert_eq!(reqs[0].path, "/api/v1/sync/devices/remark");
+            assert_eq!(reqs[0].auth.as_deref(), Some("Bearer tok-laptop"));
+            assert!(reqs[0].body.contains("主力机"), "{}", reqs[0].body);
+        }
 
         let base = spawn_mock(Arc::new(|_req| {
             (
