@@ -1,0 +1,14 @@
+{
+  "name": "braces",
+  "version": "3.0.4",
+  "description": "Self-maintained fork of braces 3.0.3. GHSA-vfj7-8cjw-p6xm: stack exhaustion via deeply nested brace patterns, no fixed upstream release exists. Patch: depth guard (default maxDepth 250) on the expand/stringify/compile AST walkers, and utils.flatten rewritten iteratively. Version bumped to 3.0.4 only to mark the fork and satisfy ^3.0.3 ranges.",
+  "license": "MIT",
+  "main": "index.js",
+  "engines": {
+    "node": ">=8"
+  },
+  "dependencies": {
+    "fill-range": "^7.1.1"
+  },
+  "private": true
+}

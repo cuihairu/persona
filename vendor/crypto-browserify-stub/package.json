@@ -1,0 +1,7 @@
+{
+  "name": "crypto-browserify",
+  "version": "3.12.1",
+  "description": "Self-authored no-op stub replacing crypto-browserify (Dependabot GHSA-848j-6mx2-7j84: elliptic <=6.6.1 has no fixed release). The only consumer chain is umi's node-libs-browser polyfill map, which require.resolve()es this package without loading it; website/ imports no node crypto, so the polyfill is never bundled. If something ever actually loads this module it gets an empty object instead of working crypto — fail loudly in review, not silently at runtime.",
+  "main": "index.js",
+  "private": true
+}

@@ -1515,6 +1515,27 @@ Quality & Security
       retried"），所以「转绿」只能以告警关闭 + 本地复算为凭，别指望重跑那条红 run。
       残留（都不是可达修复）：vite 报 "No update possible"（被 docs 自己的 override 钉住）、
       历史 /docs esbuild、/. 的 glob+elliptic、cargo 侧 glib/lru/rand 降级型失败（告警已关）
+- [x] Dependabot 开放警报清账·braces+elliptic 传递链拔除（2026-10-07，#305 high /
+      #41 low——09-20 那轮 dismiss 后 GitHub 刷新 advisory 又拉起，这次从树上真拔）：
+      braces GHSA-vfj7-8cjw-p6xm（深嵌套模式栈耗尽 DoS，受影响范围 **through 3.0.3**
+      即 registry 最新，无修复版 → override 指修复线不可行）；`pnpm why` 三条链全部
+      根在 website `umi 4.7.22`（preset-umi→fast-glob→micromatch、test→babel-jest→
+      micromatch、prettier-plugin-packagejson→sort-package-json/synckit→fast-glob→
+      micromatch），umi 已最新无父级可升 → `vendor/braces-patched` 自维护 fork：
+      expand/stringify/compile 三个 AST 递归走查器加 `maxDepth=250` 护栏（真实 glob
+      嵌套个位数，25 倍余量；parse 本身显式栈迭代不设防）+ `utils.flatten` 改原位
+      splice 迭代，版本记 3.0.4；overrides 以 **file:** 指入。验证：16 模式 ×3 选项集
+      输出与 3.0.3 逐字节一致；护栏经 micromatch 真实解析路径激活（300 层 RangeError）；
+      Node 24 下 2450 层 braces/4900 层 parens 原版未崩（advisory 崩溃窗口在旧 Node/
+      受限栈，fork 属封类+过扫描器）。
+      elliptic GHSA-848j-6mx2-7j84（无修复版）：唯一链 crypto-browserify←
+      node-libs-browser←umi webpack alias 表，只 require.resolve 不加载、树内零 crypto
+      导入 → `vendor/crypto-browserify-stub` 空壳 **link:** 替换；顺带 `chokidar@<4`→
+      ^4.0.3（4.x 无 micromatch/braces 依赖，再断一条老链）。锁内 elliptic 4→0、
+      braces@3.0.3→0、desktop/chromium-extension importer 逐字节不变。
+      **坑**：pnpm `link:` 目标的依赖不代装（braces 依赖 fill-range 会断），
+      `file:` 会装——有依赖用 file:，零依赖空壳才可用 link:。
+      门禁：website build / desktop tsc+vite build / desktop jest 全绿；告警待自动关不手关。
 - [x] 覆盖率轮次·基线与 connect-server（2026-09-27，CI 同口径
       `cargo llvm-cov --workspace --all-features --ignore-filename-regex '…'`）：
       全仓 **TOTAL 行覆盖 95.88%**（missed 1979/68783；functions 88.89%、regions 97.12%）。
