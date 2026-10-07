@@ -213,8 +213,22 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         popup Push 按钮（推完顺手拉刷新）；2 例桥级测试（gesture 门禁/
         未配置分类）；BRIDGE_PROTOCOL.md §19 + v7 行更新。真服务器双设备
         推拉走查留 M6
-      - [ ] **M5-批4 离线兜底 + 冲突解决**：断网读缓存、双版本裁决 UI
-        （对齐桌面 SyncConflictsModal 口径）
+      - [x] **M5-批4 离线兜底 + 冲突解决**（2026-10-07）：桥协议 v7 新增
+        `sync_resolve_conflict`（UUID 校验先于配置/解锁；采纳 adopt_op_id
+        指向的并发副本覆写胜者，走 core `SyncSession::resolve_conflict`
+        与桌面 SyncConflictsModal 同编排，先主库后 oplog；`sync_resolve_failed`
+        = 副本不存在/非 Credential）。桥侧重构出 `open_bridge_sync_session`
+        共享装配 helper（sync_push_now/resolve 复用）；扩展侧：离线兜底
+        （pull 失败时 `isUsableCache` 判据——同 server_url 且非空——重解密
+        chrome.storage.local 密文缓存渲染，状态行如实标注「Offline – cached
+        N min ago」不冒充在线）+ 冲突 UI（conflict_count>0 条目就地展开各
+        副本：解密名+device_id+tombstone 标注+「Keep this version」按钮→
+        syncResolveConflict→刷新；副本解密失败条目级容错如实展示）。
+        测试：桥 2 例（gesture 门禁/非法 UUID 分类）+ 扩展 isUsableCache
+        3 例 + conflictCopyViews 1 例（fixture 回放/墓碑/坏密文）；
+        BRIDGE_PROTOCOL.md §20 + v7 行 + gesture 清单补 sync_push_now/
+        sync_resolve_conflict + 错误码表 sync_resolve_failed + hello 示例
+        capabilities 对齐 v7 实况
       - [ ] **M5-批5 safari 同份**
 - [ ] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、

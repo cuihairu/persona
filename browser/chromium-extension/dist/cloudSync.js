@@ -301,6 +301,13 @@ export async function loadCloudCache() {
     const got = await chrome.storage.local.get(CLOUD_CACHE_KEY);
     return got[CLOUD_CACHE_KEY];
 }
+/**
+ * 离线兜底判据（M5 批4a）：缓存存在、指向同一台 server、且真的有 op。
+ * 换了服务器（server_url 不匹配）的旧缓存不能拿来渲染——group key 可能对不上。
+ */
+export function isUsableCache(cache, conn) {
+    return Boolean(cache && cache.server_url === conn.serverUrl && cache.ops.length > 0);
+}
 /** 把 LWW 视图解成展示列表：put 解密元数据，delete 如实标墓碑。 */
 export async function decryptItemViews(views, groupKeyHex) {
     const items = [];
@@ -330,5 +337,36 @@ export async function decryptItemViews(views, groupKeyHex) {
         }
     }
     return items;
+}
+/**
+ * 解密一个条目的并发冲突副本（`sync_resolve_conflict` 的 adopt_op_id 就从
+ * 这里的 op_id 里选）。与 decryptItemViews 同条目级容错口径。
+ */
+export async function conflictCopyViews(view, groupKeyHex) {
+    const copies = [];
+    for (const copy of view.conflicts) {
+        const base = {
+            op_id: copy.op_id,
+            device_id: copy.device_id,
+            lamport: copy.lamport,
+            deleted: copy.op === 'delete',
+        };
+        if (!copy.payload) {
+            copies.push({ ...base, meta: null });
+            continue;
+        }
+        try {
+            const plaintext = await openPayload(copy.payload, groupKeyHex);
+            copies.push({ ...base, meta: decodeSyncItemSnapshot(plaintext) });
+        }
+        catch (error) {
+            copies.push({
+                ...base,
+                meta: null,
+                decrypt_error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    }
+    return copies;
 }
 //# sourceMappingURL=cloudSync.js.map

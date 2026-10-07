@@ -1,6 +1,6 @@
 import type { BridgeStatus } from './nativeBridge';
 import type { DomainAssessment } from './domainPolicy';
-import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow } from './nativeBridge';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults';
 import {
@@ -8,11 +8,15 @@ import {
     loadCloudConn,
     saveCloudConn,
     saveCloudCache,
+    loadCloudCache,
+    isUsableCache,
     pullCloudOps,
     buildItemViews,
     decryptItemViews,
+    conflictCopyViews,
     type CloudConn,
     type CloudListItem,
+    type CloudItemView,
 } from './cloudSync';
 
 const statusEl = document.getElementById('status');
@@ -321,7 +325,9 @@ function setCloudConnected(conn: CloudConn | undefined) {
     );
 }
 
-function renderCloudItems(items: CloudListItem[]) {
+/** 渲染云端条目列表。items[i] 与 views[i] 一一对应（decryptItemViews 保序）。
+ * 有并发冲突副本的条目就地展开各版本，逐副本给「保留此版本」裁决按钮。 */
+async function renderCloudItems(items: CloudListItem[], views: CloudItemView[], conn: CloudConn) {
     if (!cloudItemsEl) return;
     cloudItemsEl.textContent = '';
     const live = items.filter((item) => !item.deleted);
@@ -334,7 +340,9 @@ function renderCloudItems(items: CloudListItem[]) {
         return;
     }
 
-    for (const item of live) {
+    for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.deleted) continue;
         const row = document.createElement('div');
         row.style.cssText =
             'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
@@ -358,6 +366,47 @@ function renderCloudItems(items: CloudListItem[]) {
 
         row.appendChild(title);
         row.appendChild(meta);
+
+        if (item.conflict_count > 0) {
+            const copies = await conflictCopyViews(views[i], conn.groupKeyHex);
+            for (const copy of copies) {
+                const copyRow = document.createElement('div');
+                copyRow.style.cssText =
+                    'display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px;';
+
+                const label = document.createElement('span');
+                label.style.cssText = 'color:#92400e;';
+                const bits = [`↳ ${copy.meta?.name ?? copy.op_id}`, `device ${copy.device_id.slice(0, 8)}`];
+                if (copy.deleted) bits.push('tombstone');
+                if (copy.decrypt_error) bits.push(`decrypt failed (${copy.decrypt_error})`);
+                label.textContent = bits.join(' • ');
+
+                const keepBtn = document.createElement('button');
+                keepBtn.className = 'secondary';
+                keepBtn.style.width = 'auto';
+                keepBtn.textContent = 'Keep this version';
+                keepBtn.addEventListener('click', async () => {
+                    keepBtn.toggleAttribute('disabled', true);
+                    setCloudStatus('Resolving conflict via local bridge…');
+                    try {
+                        const resp = await syncResolveConflict(item.item_id, copy.op_id);
+                        if (!resp?.ok) {
+                            setCloudStatus(`Resolve failed – ${resp?.error ?? 'unknown error'}`);
+                            return;
+                        }
+                        setCloudStatus('Conflict resolved • refreshing…');
+                        await pullAndRender(conn);
+                    } finally {
+                        keepBtn.toggleAttribute('disabled', false);
+                    }
+                });
+
+                copyRow.appendChild(label);
+                copyRow.appendChild(keepBtn);
+                row.appendChild(copyRow);
+            }
+        }
+
         cloudItemsEl.appendChild(row);
     }
 }
@@ -374,15 +423,28 @@ async function pullAndRender(conn: CloudConn) {
         });
         const views = buildItemViews(pull.ops);
         const items = await decryptItemViews(views, conn.groupKeyHex);
-        renderCloudItems(items);
+        await renderCloudItems(items, views, conn);
         const live = items.filter((item) => !item.deleted).length;
         const conflicts = views.filter((view) => view.conflicts.length > 0).length;
         const parts = [`Connected • ${live} items`, `${pull.ops.length} ops`];
         if (conflicts > 0) parts.push(`${conflicts} in conflict (pending adjudication)`);
         setCloudStatus(parts.join(' • '));
     } catch (error) {
-        // 拉取失败不掩盖既有连接状态；密文缓存仍在，离线兜底在后续批次接上
-        setCloudStatus(`Pull failed – ${cloudErrorText(error)}`);
+        // 断网兜底（M5 批4a）：本机密文缓存（chrome.storage.local）仍在——
+        // 重解密渲染，状态行如实标注缓存时刻，不冒充在线数据
+        const cache = await loadCloudCache().catch(() => undefined);
+        if (isUsableCache(cache, conn) && cache) {
+            const views = buildItemViews(cache.ops);
+            const items = await decryptItemViews(views, conn.groupKeyHex);
+            await renderCloudItems(items, views, conn);
+            const live = items.filter((item) => !item.deleted).length;
+            const ageMin = Math.max(0, Math.round((Date.now() - cache.synced_at) / 60000));
+            setCloudStatus(
+                `Offline – showing ${live} cached items from ${ageMin} min ago – pull failed: ${cloudErrorText(error)}`
+            );
+        } else {
+            setCloudStatus(`Pull failed – ${cloudErrorText(error)}`);
+        }
     }
 }
 

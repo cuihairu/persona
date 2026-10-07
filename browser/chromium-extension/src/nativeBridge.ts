@@ -262,6 +262,22 @@ export async function syncPushNow(
     );
 }
 
+/**
+ * 冲突裁决（M5 批4）：采纳并发双版本之一（adopt_op_id = 落选副本的 op id，
+ * 采纳后其余版本淘汰出视图）。须显式用户触发。
+ */
+export async function syncResolveConflict(
+    itemId: string,
+    adoptOpId: string,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<{ resolved: boolean }>> {
+    return sendAuthedNativeMessage<{ resolved: boolean }>(
+        'sync_resolve_conflict',
+        { item_id: itemId, adopt_op_id: adoptOpId, user_gesture: true },
+        host
+    );
+}
+
 /** 登出：宿主侧吊销服务器会话（best-effort）+ 清 keyring 令牌。 */
 export async function accountLogout(
     accountId: string,

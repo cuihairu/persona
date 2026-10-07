@@ -129,7 +129,13 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
       "passkey_credential_provider_assert",
       "find_for_save",
       "save_credential",
-      "generate_password"
+      "generate_password",
+      "sync_connect",
+      "account_login",
+      "account_status",
+      "account_logout",
+      "sync_push_now",
+      "sync_resolve_conflict"
     ],
     "pairing_required": true,
     "paired": false,
@@ -847,6 +853,35 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
   （信封拆封/装配失败）、`sync_cycle_failed`（backfill 或周期失败）、
   `locked:`（桥锁态无主密码）
 
+### 20. sync_resolve_conflict - 冲突裁决（协议 v7）
+
+真冲突（同条目、lamport 相等、device_id 不同的并发双版本）的裁决入口
+（M5 批4）：采纳 `adopt_op_id` 指向的并发副本，其内容覆盖保险库中的当前
+胜者，其余副本淘汰出视图。与桌面 `SyncConflictsModal` 走同一 core 编排
+（`SyncSession::resolve_conflict`，先主库后 oplog）。
+
+**请求：**
+
+```json
+{
+  "type": "sync_resolve_conflict",
+  "payload": {
+    "item_id": "018f3c2a-…",
+    "adopt_op_id": "018f3c2b-…",
+    "user_gesture": true
+  }
+}
+```
+
+- 门禁：配对会话 HMAC + `user_gesture`（裁决覆写败选副本，不可静默）
+- 校验顺序：`item_id` / `adopt_op_id` 必须是合法 UUID（`invalid_payload:`），
+  先于任何配置/解锁检查
+- 响应 `sync_resolve_conflict_response`：`{ "resolved": true }`
+- 失败分类：`sync_not_configured` / `sync_not_joined` /
+  `sync_identity_corrupted`（配置段，先于解锁）、`sync_session_failed`
+  （装配失败）、`sync_resolve_failed`（采纳的副本不存在——多半已被
+  别处裁决，或非 Credential kind）、`locked:`
+
 ## 安全机制
 
 ### Origin 绑定
@@ -859,7 +894,7 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
 
 ### User Gesture 要求
 
-`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` / `account_login` / `account_logout` 操作要求：
+`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` / `account_login` / `account_logout` / `sync_push_now` / `sync_resolve_conflict` 操作要求：
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
 2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
@@ -992,40 +1027,41 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 
 ### 错误码列表
 
-| 错误码                              | 描述                                         |
-| ----------------------------------- | -------------------------------------------- |
-| `invalid_json`                      | JSON 解析失败                                |
-| `unknown_type`                      | 未知的消息类型                               |
-| `locked`                            | 保险库已锁定，需要解锁                       |
-| `not_found`                         | 请求的资源不存在                             |
-| `origin_mismatch`                   | Origin 不匹配                                |
-| `origin_binding_required`           | 条目未设置 URL，无法进行 Origin 绑定         |
-| `authentication_failed`             | 认证失败                                     |
-| `wrong_identity`                    | 当前 active identity 不匹配                  |
-| `user_confirmation_required`        | 需要用户确认                                 |
-| `session_expired`                   | 会话已过期                                   |
-| `user_gesture_required`             | 缺少用户手势（v2）                           |
-| `no_active_identity`                | 未设置 active identity（v2）                 |
-| `passkey_rp_mismatch`               | origin 与 passkey 的 rp_id 不符（v2）        |
-| `passkey_alg_unsupported`           | pubKeyCredParams 不含 ES256（v2）            |
-| `passkey_item_not_found`            | 指定的 passkey 不存在（v2）                  |
-| `passkey_origin_mismatch`           | passkey origin 校验失败（预留）（v2）        |
-| `passkey_desktop_denied`            | passkey 创建/断言被桌面审批拒绝              |
-| `passkey_desktop_approval_required` | `require` 模式下桌面审批不可达               |
-| `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）                |
-| `unsupported_credential_type`       | 条目类型不支持该操作                         |
-| `invalid_payload`                   | payload 校验失败（如空密码）                 |
-| `sync_not_configured`               | 同步未配置（token/URL/workspace 缺失）（v6） |
-| `sync_not_joined`                   | 保险库尚未加入同步（v6）                     |
-| `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6）      |
-| `sync_group_key_failed`             | group key 信封拆封失败（v6）                 |
-| `sync_identity_corrupted`           | 设备身份不可读（v6）                         |
-| `sync_server_unreachable`           | 同步服务器不可达（v6）                       |
-| `account_not_configured`            | 账号服务器 URL 非法（v7）                    |
-| `account_login_failed`              | SRP 登录编排失败（含服务器拒绝）（v7）       |
-| `account_keyring_unavailable`       | 账号令牌 keyring 读写失败（v7）              |
-| `sync_session_failed`               | 同步会话装配失败（信封/授权）（v7）          |
-| `sync_cycle_failed`                 | 同步周期失败（backfill/cycle）（v7）         |
+| 错误码                              | 描述                                           |
+| ----------------------------------- | ---------------------------------------------- |
+| `invalid_json`                      | JSON 解析失败                                  |
+| `unknown_type`                      | 未知的消息类型                                 |
+| `locked`                            | 保险库已锁定，需要解锁                         |
+| `not_found`                         | 请求的资源不存在                               |
+| `origin_mismatch`                   | Origin 不匹配                                  |
+| `origin_binding_required`           | 条目未设置 URL，无法进行 Origin 绑定           |
+| `authentication_failed`             | 认证失败                                       |
+| `wrong_identity`                    | 当前 active identity 不匹配                    |
+| `user_confirmation_required`        | 需要用户确认                                   |
+| `session_expired`                   | 会话已过期                                     |
+| `user_gesture_required`             | 缺少用户手势（v2）                             |
+| `no_active_identity`                | 未设置 active identity（v2）                   |
+| `passkey_rp_mismatch`               | origin 与 passkey 的 rp_id 不符（v2）          |
+| `passkey_alg_unsupported`           | pubKeyCredParams 不含 ES256（v2）              |
+| `passkey_item_not_found`            | 指定的 passkey 不存在（v2）                    |
+| `passkey_origin_mismatch`           | passkey origin 校验失败（预留）（v2）          |
+| `passkey_desktop_denied`            | passkey 创建/断言被桌面审批拒绝                |
+| `passkey_desktop_approval_required` | `require` 模式下桌面审批不可达                 |
+| `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）                  |
+| `unsupported_credential_type`       | 条目类型不支持该操作                           |
+| `invalid_payload`                   | payload 校验失败（如空密码）                   |
+| `sync_not_configured`               | 同步未配置（token/URL/workspace 缺失）（v6）   |
+| `sync_not_joined`                   | 保险库尚未加入同步（v6）                       |
+| `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6）        |
+| `sync_group_key_failed`             | group key 信封拆封失败（v6）                   |
+| `sync_identity_corrupted`           | 设备身份不可读（v6）                           |
+| `sync_server_unreachable`           | 同步服务器不可达（v6）                         |
+| `account_not_configured`            | 账号服务器 URL 非法（v7）                      |
+| `account_login_failed`              | SRP 登录编排失败（含服务器拒绝）（v7）         |
+| `account_keyring_unavailable`       | 账号令牌 keyring 读写失败（v7）                |
+| `sync_session_failed`               | 同步会话装配失败（信封/授权）（v7）            |
+| `sync_cycle_failed`                 | 同步周期失败（backfill/cycle）（v7）           |
+| `sync_resolve_failed`               | 冲突裁决失败（副本不存在/非 Credential）（v7） |
 
 ## 配置
 
@@ -1107,15 +1143,15 @@ manifest 文件内容示例：
 
 ## 版本兼容性
 
-| Protocol Version | CLI Version | 功能                                                                                                                |
-| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------------------- |
-| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy              |
-| 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                                           |
-| 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）                           |
-| 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                                     |
-| 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port                         |
-| 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                                   |
-| 7                | 0.1.0+      | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）：令牌只落 keyring 不过桥 |
+| Protocol Version | CLI Version | 功能                                                                                                                                                        |
+| ---------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy                                                      |
+| 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                                                                                   |
+| 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）                                                                   |
+| 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                                                                             |
+| 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port                                                                 |
+| 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                                                                           |
+| 7                | 0.1.0+      | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）+ sync_resolve_conflict（冲突裁决，§20）：令牌只落 keyring 不过桥 |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

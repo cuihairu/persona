@@ -20,6 +20,8 @@ import {
     connFromSyncConnect,
     pullCloudOps,
     decryptItemViews,
+    conflictCopyViews,
+    isUsableCache,
     saveCloudConn,
     loadCloudConn,
     saveCloudCache,
@@ -336,6 +338,45 @@ describe('连接参数与密文缓存的存储语义', () => {
     });
 });
 
+// ---- 离线兜底判据（M5 批4a）----
+
+describe('isUsableCache', () => {
+    const conn: CloudConn = {
+        serverUrl: 'https://sync.example.com',
+        token: 'tok',
+        deviceId: 'dev-1',
+        deviceName: 'laptop',
+        groupKeyHex: '22'.repeat(32),
+    };
+
+    it('缓存指向同一 server 且非空 → 可用', () => {
+        const cache = {
+            server_url: conn.serverUrl,
+            ops: [op({ item_id: 'i1' })],
+            next_cursor: null,
+            synced_at: 1,
+        };
+        expect(isUsableCache(cache, conn)).toBe(true);
+    });
+
+    it('换服务器的旧缓存不可用（group key 可能对不上，不能拿来渲染）', () => {
+        const cache = {
+            server_url: 'https://old.example.com',
+            ops: [op({ item_id: 'i1' })],
+            next_cursor: null,
+            synced_at: 1,
+        };
+        expect(isUsableCache(cache, conn)).toBe(false);
+    });
+
+    it('空缓存与缺缓存不可用', () => {
+        expect(isUsableCache(undefined, conn)).toBe(false);
+        expect(
+            isUsableCache({ server_url: conn.serverUrl, ops: [], next_cursor: null, synced_at: 1 }, conn)
+        ).toBe(false);
+    });
+});
+
 // ---- 展示层解密（条目级容错）----
 
 describe('decryptItemViews', () => {
@@ -385,5 +426,54 @@ describe('decryptItemViews', () => {
 
         expect(items[2].meta).toBeNull();
         expect(items[2].decrypt_error).toBe('decryption_failed');
+    });
+});
+
+// ---- 冲突副本解密（M5 批4b，sync_resolve_conflict 的选单数据）----
+
+describe('conflictCopyViews', () => {
+    it('逐副本解密元数据；delete 副本标墓碑；坏密文条目级容错', async () => {
+        const view = {
+            item_id: 'i1',
+            kind: 'credential',
+            primary: op({ item_id: 'i1', lamport: 7, device_id: 'device-b' }),
+            conflicts: [
+                op({
+                    item_id: 'i1',
+                    lamport: 7,
+                    device_id: 'device-a',
+                    payload: {
+                        ciphertext: RICH.ciphertext_b64,
+                        wrapped_item_key: RICH.wrapped_item_key_b64,
+                    },
+                }),
+                op({ item_id: 'i1', lamport: 7, device_id: 'device-c', op: 'delete' as const, payload: null }),
+                op({
+                    item_id: 'i1',
+                    lamport: 7,
+                    device_id: 'device-d',
+                    payload: {
+                        ciphertext: Buffer.from('garbage-ciphertext-garbage-ciphertext!').toString('base64'),
+                        wrapped_item_key: RICH.wrapped_item_key_b64,
+                    },
+                }),
+            ],
+        };
+
+        const copies = await conflictCopyViews(view, RICH.group_key_hex);
+        expect(copies).toHaveLength(3);
+
+        expect(copies[0].device_id).toBe('device-a');
+        expect(copies[0].meta?.name).toBe(RICH.expected.name);
+        expect(copies[0].deleted).toBe(false);
+        expect(copies[0].op_id).toBe(view.conflicts[0].op_id);
+
+        expect(copies[1].device_id).toBe('device-c');
+        expect(copies[1].deleted).toBe(true);
+        expect(copies[1].meta).toBeNull();
+
+        expect(copies[2].device_id).toBe('device-d');
+        expect(copies[2].meta).toBeNull();
+        expect(copies[2].decrypt_error).toBe('decryption_failed');
     });
 });

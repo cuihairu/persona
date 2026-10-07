@@ -513,7 +513,7 @@ async fn handle_request(
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
                 "protocol_version": 7,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect", "account_login", "account_status", "account_logout", "sync_push_now"],
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect", "account_login", "account_status", "account_logout", "sync_push_now", "sync_resolve_conflict"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -1145,6 +1145,30 @@ async fn handle_request(
             Ok(ok(
                 req.request_id,
                 "sync_push_now_response",
+                serde_json::to_value(payload)?,
+            ))
+        }
+        // 冲突裁决（协议 v7，M5 批4）：采纳并发双版本之一，写操作。
+        "sync_resolve_conflict" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: SyncResolveConflictRequest = serde_json::from_value(req.payload)
+                .context("invalid payload for sync_resolve_conflict")?;
+            if gesture_required() && !parsed.user_gesture {
+                warn!("sync_resolve_conflict rejected: user_gesture required but not provided");
+                return Err(anyhow!(
+                    "user_gesture_required: sync_resolve_conflict overwrites the losing copy in the vault and must be triggered by explicit user action"
+                ));
+            }
+            let payload =
+                run_sync_resolve_conflict(db_path, &parsed.item_id, &parsed.adopt_op_id).await?;
+            info!(
+                event = "bridge_sync_resolve_conflict",
+                item_id = %parsed.item_id,
+                "conflict resolved via bridge"
+            );
+            Ok(ok(
+                req.request_id,
+                "sync_resolve_conflict_response",
                 serde_json::to_value(payload)?,
             ))
         }
@@ -2940,37 +2964,7 @@ struct SyncPushNowPayload {
 /// - **不挂捕获缝**——桥一请求一进程，缝随进程消亡没有意义；本请求
 ///   之外经桥落库的写入由下一轮 `backfill_existing` 幂等补齐。
 async fn run_sync_push_now(db_path: &Path) -> Result<SyncPushNowPayload> {
-    // 配置解析最先（便宜的错误先报，也不必先解锁）——与 sync_connect 同分类
-    let server_url = read_sync_server_url(db_path).await?;
-    let db_key = db_path.to_string_lossy().to_string();
-    let token = read_keyring_entry(KEYRING_SERVICE_SYNC_TOKEN, &db_key)?
-        .filter(|t| !t.trim().is_empty())
-        .ok_or_else(|| anyhow!("sync_not_configured: sync server token is not set"))?;
-    let identity_raw = read_keyring_entry(KEYRING_SERVICE_DEVICE_IDENTITY, &db_key)?
-        .ok_or_else(|| anyhow!("sync_not_joined: this vault has not joined sync"))?;
-    let identity = persona_core::sync::device::DeviceIdentity::from_stored_json(&identity_raw)
-        .map_err(|e| {
-            anyhow!("sync_identity_corrupted: stored device identity is unreadable: {e}")
-        })?;
-
-    // master 密钥要解锁的 service（桥锁态）；锁定 fail-closed
-    let (service, _) = open_unlocked_service(db_path).await?;
-    let db = open_db(db_path).await?;
-    db.migrate().await?;
-    // travel 闸在装配前采样一次（与桌面 open_sync_session 同语义）
-    let travel_active = service
-        .travel_mode_active()
-        .await
-        .map_err(|e| anyhow!("sync_session_failed: travel mode check failed: {e}"))?;
-    let session = persona_core::sync::runtime::SyncSession::open(
-        &db,
-        &identity,
-        &server_url,
-        &token,
-        Box::new(move || travel_active),
-    )
-    .await
-    .map_err(|e| anyhow!("sync_session_failed: {e}"))?;
+    let (session, service) = open_bridge_sync_session(db_path).await?;
     let master = service
         .get_master_encryption_service()
         .map_err(|e| anyhow!("locked: master key unavailable: {e}"))?;
@@ -2992,6 +2986,85 @@ async fn run_sync_push_now(db_path: &Path) -> Result<SyncPushNowPayload> {
         pushed: report.pushed,
         backfilled,
     })
+}
+
+// ---- 冲突裁决（协议 v7，M5 批4）----
+
+type BridgeSyncSession =
+    persona_core::sync::runtime::SyncSession<persona_core::sync::remote::HttpSyncRemote>;
+
+/// sync_push_now / sync_resolve_conflict 共用的会话装配：配置段错误分类
+/// 最先（便宜的错误先报，也不必先解锁）→ keyring 身份/令牌 → 解锁
+/// （桥锁态）→ travel 闸采样 → `SyncSession::open`。与桌面
+/// `open_sync_session` 同语义；service 随返回值借出（master 从它借）。
+async fn open_bridge_sync_session(db_path: &Path) -> Result<(BridgeSyncSession, PersonaService)> {
+    let server_url = read_sync_server_url(db_path).await?;
+    let db_key = db_path.to_string_lossy().to_string();
+    let token = read_keyring_entry(KEYRING_SERVICE_SYNC_TOKEN, &db_key)?
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| anyhow!("sync_not_configured: sync server token is not set"))?;
+    let identity_raw = read_keyring_entry(KEYRING_SERVICE_DEVICE_IDENTITY, &db_key)?
+        .ok_or_else(|| anyhow!("sync_not_joined: this vault has not joined sync"))?;
+    let identity = persona_core::sync::device::DeviceIdentity::from_stored_json(&identity_raw)
+        .map_err(|e| {
+            anyhow!("sync_identity_corrupted: stored device identity is unreadable: {e}")
+        })?;
+
+    let (service, _) = open_unlocked_service(db_path).await?;
+    let db = open_db(db_path).await?;
+    db.migrate().await?;
+    // travel 闸在装配前采样一次（与桌面 open_sync_session 同语义）
+    let travel_active = service
+        .travel_mode_active()
+        .await
+        .map_err(|e| anyhow!("sync_session_failed: travel mode check failed: {e}"))?;
+    let session = persona_core::sync::runtime::SyncSession::open(
+        &db,
+        &identity,
+        &server_url,
+        &token,
+        Box::new(move || travel_active),
+    )
+    .await
+    .map_err(|e| anyhow!("sync_session_failed: {e}"))?;
+    Ok((session, service))
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncResolveConflictRequest {
+    item_id: String,
+    adopt_op_id: String,
+    #[serde(default)]
+    user_gesture: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct SyncResolveConflictPayload {
+    resolved: bool,
+}
+
+/// 冲突裁决（对齐桌面 SyncConflictsModal 的「采纳某版本」语义）：
+/// `adopt_op_id` 是并发副本（同 lamport、异 device）的 op id；采纳后
+/// 其余版本淘汰出视图（重复裁决/未知 op → NotFound，与 core 同话术）。
+async fn run_sync_resolve_conflict(
+    db_path: &Path,
+    item_id: &str,
+    adopt_op_id: &str,
+) -> Result<SyncResolveConflictPayload> {
+    // UUID 解析在会话装配之前（便宜的错误先报，免 keyring 即可锚定）
+    let item_uuid = uuid::Uuid::parse_str(item_id)
+        .map_err(|_| anyhow!("invalid_payload: item_id is not a UUID"))?;
+    let adopt_uuid = uuid::Uuid::parse_str(adopt_op_id)
+        .map_err(|_| anyhow!("invalid_payload: adopt_op_id is not a UUID"))?;
+    let (session, service) = open_bridge_sync_session(db_path).await?;
+    let master = service
+        .get_master_encryption_service()
+        .map_err(|e| anyhow!("locked: master key unavailable: {e}"))?;
+    session
+        .resolve_conflict(master, item_uuid, adopt_uuid)
+        .await
+        .map_err(|e| anyhow!("sync_resolve_failed: {e}"))?;
+    Ok(SyncResolveConflictPayload { resolved: true })
 }
 
 async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<Option<Vec<u8>>> {
@@ -8437,6 +8510,62 @@ pub(crate) mod tests {
             err.to_string().starts_with("user_gesture_required"),
             "got: {err}"
         );
+    }
+
+    /// sync_resolve_conflict 的 user_gesture 门禁：裁决覆盖落选副本，
+    /// 写操作，无手势 → 拒。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 与既有 env 门禁测试同口径：ENV_LOCK 全程互斥
+    async fn sync_resolve_conflict_requires_user_gesture() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
+        let (session_id, key_b64) = pair_extension(&state_dir, "ext-resolve", "inst-resolve").await;
+        let req = signed_request(
+            "sync_resolve_conflict",
+            serde_json::json!({
+                "item_id": uuid::Uuid::new_v4().to_string(),
+                "adopt_op_id": uuid::Uuid::new_v4().to_string(),
+                "user_gesture": false
+            }),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-resolve-gesture",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("sync_resolve_conflict without gesture must fail");
+        assert!(
+            err.to_string().starts_with("user_gesture_required"),
+            "got: {err}"
+        );
+    }
+
+    /// 非 UUID 的 item_id → invalid_payload（解析在会话装配之前，免
+    /// keyring/网络即可锚定分类）。
+    #[tokio::test]
+    async fn sync_resolve_conflict_rejects_malformed_ids() {
+        let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
+        let (session_id, key_b64) =
+            pair_extension(&state_dir, "ext-resolve2", "inst-resolve2").await;
+        let req = signed_request(
+            "sync_resolve_conflict",
+            serde_json::json!({
+                "item_id": "not-a-uuid",
+                "adopt_op_id": uuid::Uuid::new_v4().to_string(),
+                "user_gesture": true
+            }),
+            "req-2",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-resolve-badid",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("malformed item_id must fail");
+        assert!(err.to_string().starts_with("invalid_payload"), "got: {err}");
     }
 
     /// 服务器未配置 → sync_not_configured（配置解析在解锁/信封之前，
