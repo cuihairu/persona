@@ -75,6 +75,21 @@ pub struct AccountBinding {
     pub device_name: Option<String>,
 }
 
+/// 一次整库加密备份的导出记录（S5 自救口，非敏感元数据）。
+///
+/// 口令本身**永不落盘**（与主密码同纪律）；只记时刻/目标/尺寸，供
+/// 「设备全丢=库全丢」常驻警示（设计稿 §6.5）把「已导出过备份」作为
+/// 解除证据之一。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BackupEvidence {
+    /// 导出时刻（RFC3339）。
+    pub exported_at: String,
+    /// 目标类型："file"（本地文件）/ "server"（服务器密文仓，后续批）。
+    pub destination: String,
+    /// 密文字节数。
+    pub size_bytes: u64,
+}
+
 /// Workspace configuration settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
@@ -144,6 +159,13 @@ pub struct WorkspaceSettings {
     /// 账号功能默认关闭，绑定由用户在设置页显式完成）
     #[serde(default)]
     pub account: Option<AccountBinding>,
+
+    /// 自救口备份凭证（S5，旧 JSON 缺键时为 None = 从未在本机导出过）。
+    /// 只存非敏感元数据：时刻/目标/尺寸。备份口令永不落盘（与主密码
+    /// 同纪律）；「设备全丢=库全丢」的常驻警示（设计稿 §6.5）以本字段
+    /// 为「已导出过备份」的解除证据之一。
+    #[serde(default)]
+    pub backup: Option<BackupEvidence>,
 }
 
 impl Default for WorkspaceSettings {
@@ -164,6 +186,7 @@ impl Default for WorkspaceSettings {
             quick_access_enabled: false,
             quick_access_hotkey: None,
             account: None,
+            backup: None,
         }
     }
 }
@@ -314,6 +337,33 @@ mod tests {
         assert_eq!(settings.quick_access_hotkey, None);
         // 账号域绑定缺键回退未绑定（M2 批次；默认关闭红线）
         assert_eq!(settings.account, None);
+        // 备份导出凭证缺键回退从未导出过（S5 批次）
+        assert_eq!(settings.backup, None);
+    }
+
+    #[test]
+    fn test_backup_evidence_round_trip() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        // 默认：从未在本机导出过
+        assert_eq!(ws.settings.backup, None);
+
+        ws.settings.backup = Some(BackupEvidence {
+            exported_at: "2026-10-07T09:30:00Z".to_string(),
+            destination: "file".to_string(),
+            size_bytes: 20480,
+        });
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.settings.backup,
+            Some(BackupEvidence {
+                exported_at: "2026-10-07T09:30:00Z".to_string(),
+                destination: "file".to_string(),
+                size_bytes: 20480,
+            })
+        );
+        // 字节里只有元数据：口令不存在于此结构，round-trip 后也不应出现
+        assert!(!json.contains("passphrase"));
     }
 
     #[test]
