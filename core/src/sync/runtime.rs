@@ -24,7 +24,7 @@ use super::keys::{wrap_item_key_with_group, GroupKey};
 use super::materialize::{MaterializeOutcome, Materializer};
 use super::oplog::{item_view, ItemKind, OpType, SyncPayload};
 use super::resolve::{self, ConflictEntry};
-use super::snapshot::SyncItemSnapshot;
+use super::snapshot::{LibrarySnapshotPayload, SyncItemSnapshot, UPLOAD_THRESHOLD_OPS};
 use crate::crypto::encryption::EncryptionService;
 use crate::crypto::key_hierarchy::KeyHierarchy;
 use crate::models::credential::CredentialData;
@@ -208,9 +208,53 @@ impl<R: SyncRemote> SyncSession<R> {
         Ok(count)
     }
 
+    /// 打包本机 oplog 视图充分集为库级快照明文（S2）：逐 item 取
+    /// [`item_view`] 的主位（put/tombstone）+ 未裁决冲突副本。凭据表
+    /// 行打包会丢 pending identity / 冲突副本 / tombstone，oplog 原封
+    /// 搬运才能保证「快照起步 + 点后增量 == 全量重放」。
+    pub async fn snapshot_payload(&self) -> Result<LibrarySnapshotPayload> {
+        let mut ops = Vec::new();
+        for item_id in self.sync_repo.item_ids().await? {
+            let view = item_view(self.sync_repo.item_ops(item_id).await?);
+            if let Some(primary) = view.primary {
+                ops.push(primary);
+            }
+            ops.extend(view.conflicts);
+        }
+        Ok(LibrarySnapshotPayload {
+            created_at: chrono::Utc::now().to_rfc3339(),
+            ops,
+        })
+    }
+
+    /// 装包回调本体：group key 拆包（fail-closed）→ 视图充分处理 op_id
+    /// 幂等入本地 oplog（record_remote_op，acked——这些位点已被压缩进
+    /// 快照，不该再推）。装包前游标不动，失败整体不收敛。
+    #[allow(dead_code)]
+    async fn install_snapshot_ops(&self, _seq: i64, sealed: Vec<u8>) -> Result<()> {
+        let payload = LibrarySnapshotPayload::open(&sealed, &self.group_key)?;
+        for op in &payload.ops {
+            self.sync_repo.record_remote_op(op).await?;
+        }
+        Ok(())
+    }
+
     /// 完整周期：pull（远端 op 攒进本地 oplog）→ materialize（oplog 主位
     /// 物化进主库）→ push（本地 pending op 推上服务器）。
     pub async fn run_cycle(&self, master: &EncryptionService) -> Result<SyncNowReport> {
+        // bootstrap：本机从未拉过（首次/新设备）时先试装库级快照——
+        // 装上则游标推到覆盖位点，pull 只拿增量；无快照/失败游标不动，
+        // 走全量重放（fail-closed，与 engine 原语约定一致）。
+        if self.sync_repo.get_state().await?.last_pull_cursor.is_none() {
+            if let Err(e) = self
+                .engine
+                .install_library_snapshot(|seq, sealed| self.install_snapshot_ops(seq, sealed))
+                .await
+            {
+                // 装包失败不收敛游标——全量重放兜底，仅记日志。
+                tracing::warn!(error = %e, "snapshot install failed; full replay");
+            }
+        }
         let pull = self.engine.pull_cycle().await?;
         let materialize = Materializer::new(self.db.clone())
             .materialize_all(master, &self.group_key, self.device_id)
@@ -220,6 +264,25 @@ impl<R: SyncRemote> SyncSession<R> {
         // 失败不阻断同步——增长治理不是同步正确性的前置条件。
         if let Err(e) = self.gc_oplog(default_tombstone_retention()).await {
             tracing::warn!(error = %e, "oplog gc skipped");
+        }
+        // 快照触发（S2）：head − 上次快照位点 > 阈值才重打包。失败仅记
+        // 日志不阻断——快照是优化层，缺位只是回退全量重放。
+        if let Ok(true) = self
+            .engine
+            .library_snapshot_needed(UPLOAD_THRESHOLD_OPS)
+            .await
+        {
+            match self.snapshot_payload().await {
+                Ok(payload) => match payload.seal(&self.group_key) {
+                    Ok(sealed) => {
+                        if let Err(e) = self.engine.upload_library_snapshot(&sealed).await {
+                            tracing::warn!(error = %e, "snapshot upload skipped");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "snapshot pack failed"),
+                },
+                Err(e) => tracing::warn!(error = %e, "snapshot payload failed"),
+            }
         }
         Ok(SyncNowReport {
             pulled: pull.applied,
@@ -688,6 +751,163 @@ mod tests {
             device_id,
         };
         (session, pushed_log)
+    }
+
+    /// 完整语义内存远端（pull 游标与 server 同构、支持库级快照存取），
+    /// 双设备收敛等价性集成测试用。
+    #[derive(Clone)]
+    struct SharedRemote {
+        state: Arc<Mutex<SharedState>>,
+    }
+
+    struct SharedState {
+        ops: Vec<SyncOp>,
+        snapshot: Option<(i64, Vec<u8>)>,
+    }
+
+    #[async_trait::async_trait]
+    impl SyncRemote for SharedRemote {
+        async fn push_ops(&self, ops: &[SyncOp]) -> Result<(u64, u64)> {
+            let mut state = self.state.lock().unwrap();
+            let existing: std::collections::HashSet<Uuid> =
+                state.ops.iter().map(|op| op.op_id).collect();
+            let accepted = ops
+                .iter()
+                .filter(|op| !existing.contains(&op.op_id))
+                .count() as u64;
+            state.ops.extend(ops.iter().cloned());
+            Ok((accepted, ops.len() as u64 - accepted))
+        }
+
+        async fn pull_ops(
+            &self,
+            since: Option<&str>,
+            limit: u32,
+        ) -> Result<(Vec<SyncOp>, Option<String>)> {
+            let state = self.state.lock().unwrap();
+            let start = match since {
+                Some(raw) => crate::sync::cursor::decode_cursor(raw)
+                    .map(|(seq, _)| seq as usize)
+                    .unwrap_or(0),
+                None => 0,
+            };
+            let total = state.ops.len();
+            let end = start.saturating_add(limit as usize).min(total);
+            let page = state.ops[start.min(total)..end].to_vec();
+            let next = (end > start).then(|| {
+                crate::sync::cursor::encode_cursor(
+                    end as i64,
+                    &state.ops[end - 1].op_id.to_string(),
+                )
+            });
+            Ok((page, next))
+        }
+
+        async fn head_seq(&self) -> Result<i64> {
+            Ok(self.state.lock().unwrap().ops.len() as i64)
+        }
+
+        async fn put_library_snapshot(
+            &self,
+            seq: i64,
+            _device_id: &str,
+            ciphertext: &[u8],
+        ) -> Result<u64> {
+            let mut state = self.state.lock().unwrap();
+            let pruned = (seq as usize).min(state.ops.len()) as u64;
+            state.snapshot = Some((seq, ciphertext.to_vec()));
+            Ok(pruned)
+        }
+
+        async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {
+            Ok(self.state.lock().unwrap().snapshot.clone())
+        }
+    }
+
+    fn shared_session(
+        db: &Database,
+        device_id: Uuid,
+        group_key: GroupKey,
+        remote: SharedRemote,
+    ) -> SyncSession<SharedRemote> {
+        SyncSession {
+            engine: Arc::new(SyncEngine::new(
+                SyncRepository::new(db.clone()),
+                remote,
+                device_id,
+                no_travel(),
+            )),
+            sync_repo: SyncRepository::new(db.clone()),
+            db: db.clone(),
+            group_key,
+            device_id,
+        }
+    }
+
+    // 双设备收敛等价性（S2 集成测试）：A 全量产出 → 手动打包上传快照 →
+    // B（空库新设备）run_cycle 装快照起步 → B 主库与 A 逐行一致、B 不
+    // 重复物化 A 的增量（游标在覆盖位点）。
+    #[tokio::test]
+    async fn snapshot_bootstrap_converges_like_full_replay() {
+        let (db_a, identity_a, master_a) = seeded_db().await;
+        let cred_a = CredentialRepository::new(db_a.clone());
+        store_credential(&cred_a, identity_a.id, "alpha", &master_a, "s1").await;
+        store_credential(&cred_a, identity_a.id, "beta", &master_a, "s2").await;
+
+        let group = GroupKey::generate().unwrap();
+        let remote = SharedRemote {
+            state: Arc::new(Mutex::new(SharedState {
+                ops: Vec::new(),
+                snapshot: None,
+            })),
+        };
+        let session_a = shared_session(&db_a, Uuid::new_v4(), group.clone(), remote.clone());
+        session_a.backfill_existing(&master_a).await.unwrap();
+        session_a.run_cycle(&master_a).await.unwrap();
+
+        // A 手动打包上传（阈值 1000 不触发，集成路径直接驱动）
+        let payload = session_a.snapshot_payload().await.unwrap();
+        assert_eq!(payload.ops.len(), 2);
+        let sealed = payload.seal(&group).unwrap();
+        let (seq, _) = session_a
+            .engine
+            .upload_library_snapshot(&sealed)
+            .await
+            .unwrap();
+        assert_eq!(seq, 2, "覆盖位点 = 已推平水位");
+
+        // B：空库、同组密钥、不同 master —— run_cycle 应先装快照再物化
+        let db_b = Database::in_memory().await.unwrap();
+        db_b.migrate().await.unwrap();
+        let master_b = EncryptionService::new(&EncryptionService::generate_key());
+        // 身份行是设备本地可预置事实（配对流程已建）；走同步链的只有凭据 op
+        IdentityRepository::new(db_b.clone())
+            .create(&Identity {
+                id: identity_a.id,
+                ..Identity::new("seed".to_string(), IdentityType::Personal)
+            })
+            .await
+            .unwrap();
+        let session_b = shared_session(&db_b, Uuid::new_v4(), group, remote.clone());
+        session_b.run_cycle(&master_b).await.unwrap();
+
+        let cred_b = CredentialRepository::new(db_b.clone());
+        let mut names: Vec<String> = cred_b
+            .list_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // B 的游标推到覆盖位点：再次 pull 只拿到空增量
+        let watermark = SyncRepository::new(db_b.clone())
+            .local_watermark()
+            .await
+            .unwrap();
+        assert_eq!(watermark, 2);
     }
 
     // 轮换核心（重包半边）：rewrap_all 把主库全部凭据以新组密钥重新
