@@ -175,12 +175,19 @@ SyncOp {
 **捕获点**：在 service 层写路径（与 change_history 相同的调用点）同步生成
 oplog——元数据明文只留在本地 change_history，oplog 只持有 §5 的密文结构。
 
-### 库级快照与指令压缩（S2 收口——2026-10-07 设计定稿，**未实现**）
+### 库级快照与指令压缩（S2 收口——2026-10-07 设计定稿，**实现中**）
 
 动机：oplog 是 append-only 指令流，新设备入组或长期离线后回归都要从游标
 起步重放全量指令——个人凭据库生命周期内指令数可观（改名/开密码/收藏
 每次都产生新 put），首同步时长随历史线性涨。快照 = 某一 seq 处的整库
 状态包，让落后者「快照起步 + 点后增量」。
+
+**实现进度**（2026-10-07）：✅ 00010 迁移 + server PUT/GET 端点（事务删
+`seq ≤ S`，a30a2ca）；✅ core 格式层 `LibrarySnapshotPayload`（seal/open
+fail-closed + 零知识测试）；✅ `SyncRemote` wire（HttpSyncRemote
+PUT/GET，404→None）；✅ engine 原语 `upload_library_snapshot` /
+`install_library_snapshot`（哨兵游标续拉）。⬜ service 装配层（整库打包
+循环 + bootstrap 触发接线到桌面/CLI）、⬜ 双设备收敛等价性集成测试。
 
 **快照格式**（服务器只见一个 BLOB，零知识不变）：
 
@@ -196,11 +203,15 @@ SnapshotEntry {
 }
 ```
 
-**覆盖语义（竞态的核心解法）**：客户端**先 pull 到 head、再 push 全部
-pending**（同步周期既有顺序），push 响应回的 acked seq 记为 S——快照声明
-覆盖 `seq ≤ S`。push 期间其他设备并发推送的 ops 落在 `> S` 区间，拉取者
-从 S 增量补齐，无需分布式快照点协议。客户端谎报 S 的威胁 = 组内设备本
-来就能推伪造条目（§2 信任模型，组内互信），不新增防线。
+**覆盖语义（竞态的核心解法，实现精化为水位口径）**：客户端**先推平本机
+待推队列、再拉平远端增量**（`upload_library_snapshot` 内的周期顺序），
+以收敛后的「本机已同步水位」（`local_watermark`，最后一条已消费 op 的
+服务器 seq）为覆盖位点 S——快照声明覆盖 `seq ≤ S`。周期顺序保证服务器上
+seq ≤ S 的每条 op 都已反映进本机状态（设计稿初版的「push acked seq」
+口径会多 claim 并发设备的落点区间，水位口径严格不超 claim）；push/pull
+之间其他设备的并发推送落在 `> S` 区间，拉取者从 S 增量补齐，无需分布式
+快照点协议。客户端谎报 S 的威胁 = 组内设备本来就能推伪造条目（§2 信任
+模型，组内互信），不新增防线。
 
 **端点**（新增两条，认证与 `/sync/*` 同族）：
 

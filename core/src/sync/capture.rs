@@ -113,6 +113,17 @@ mod tests {
         async fn head_seq(&self) -> Result<i64> {
             Ok(0)
         }
+        async fn put_library_snapshot(
+            &self,
+            _seq: i64,
+            _device_id: &str,
+            _ciphertext: &[u8],
+        ) -> Result<u64> {
+            Err(PersonaError::InvalidInput("dead remote".into()).into())
+        }
+        async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {
+            Ok(None)
+        }
     }
 
     fn sample_snapshot() -> SyncItemSnapshot {

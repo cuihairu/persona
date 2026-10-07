@@ -19,10 +19,16 @@ use uuid::Uuid;
 
 use crate::storage::sync_repository::SyncRepository;
 use crate::sync::oplog::{ItemKind, OpType, SyncOp, SyncPayload};
-use crate::Result;
+use crate::{PersonaError, Result};
 
 /// 单轮 pull 的页大小（与 server PULL_DEFAULT_LIMIT 对齐）。
 pub const PULL_PAGE: u32 = 200;
+
+/// 快照续拉游标的哨兵 op_id（S2）：op_id 是 UUID 串（hex 字符集），字典
+/// 序恒大于 `"0"`。游标 `(快照 seq, "0")` 经服务器的 `(seq, op_id) >`
+/// 复合比较精确表达「恢复位点 = 快照覆盖位点」——seq ≤ S 的行已被快照
+/// 上传压缩删除，语义无差；好处是水位（cursor 解回 seq）直读快照位点。
+pub const SNAPSHOT_RESUME_OP_ID: &str = "0";
 
 /// 远端中继的最小接口。返回的 op 已是 [`SyncOp`] 形态（wire 解析在实现
 /// 内完成；未知 kind → [`ItemKind::Unknown`]，条目级损坏 → 跳过该条）。
@@ -40,6 +46,20 @@ pub trait SyncRemote: Send + Sync {
     /// 组当前指令流水位（sync-group-mode §二.5.5「组最新版本号」）——服务
     /// 器 oplog 最大 seq；空组为 0。
     async fn head_seq(&self) -> Result<i64>;
+    /// 上传库级快照（S2，E2EE_SYNC_DESIGN §5）：group key 整包密文 +
+    /// 覆盖位点 seq。服务器单快照 upsert 并在同事务删 `seq ≤ S` 的 ops，
+    /// 返回被压缩的 op 条数（仅展示）。失败必须报错——覆盖区间可能已被
+    /// 压缩，静默丢快照 = 空库新设备无事实源可补的真数据洞。
+    async fn put_library_snapshot(
+        &self,
+        seq: i64,
+        device_id: &str,
+        ciphertext: &[u8],
+    ) -> Result<u64>;
+    /// 取库级快照：`Ok(None)` = 服务器无快照可取（新服务器尚未上传过、
+    /// 或老服务器没有这条路由），两个成因在客户端行为上收敛——都退回
+    /// 全量重放。返回 (覆盖位点 seq, group key 密文)。
+    async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,6 +201,53 @@ impl<R: SyncRemote> SyncEngine<R> {
         })
     }
 
+    /// 库级快照上传原语（S2，E2EE_SYNC_DESIGN §5）：调用方（service 层，
+    /// 持密钥层）把整库打包成 group key 密文传入，引擎负责收敛与覆盖位点
+    /// 的确定——先推平本机待推队列（上云拿到 seq）再拉平远端增量，然后以
+    /// 「本机已同步水位」为覆盖位点 S 上云。先 push 后 pull 的周期顺序保证
+    /// 服务器上 seq ≤ S 的每条 op 都已反映进本机状态，快照声称的覆盖区间
+    /// 因此成立（周期顺序消竞态，无需快照点协议）。
+    /// 返回 (覆盖位点 S, 服务器压缩的 op 条数)。
+    pub async fn upload_library_snapshot(&self, ciphertext: &[u8]) -> Result<(i64, u64)> {
+        if (self.travel_active)() {
+            return Err(PersonaError::InvalidInput(
+                "library snapshot upload is blocked while travel mode is active".to_string(),
+            )
+            .into());
+        }
+        self.push_cycle().await?;
+        self.pull_cycle().await?;
+        let seq = self.repo.local_watermark().await?;
+        let pruned = self
+            .remote
+            .put_library_snapshot(seq, &self.device_id.to_string(), ciphertext)
+            .await?;
+        Ok((seq, pruned))
+    }
+
+    /// 库级快照安装原语（S2 bootstrap 第一步）：取服务器快照 → 整包密文交
+    /// 回调（service 层持密钥：group key 拆包 + 逐条物化进主库）→ 回调成功
+    /// 后才把 pull 游标推进到覆盖位点，后续 pull 只拿增量。回调失败或服务
+    /// 器无快照一律不动游标，全量重放路径保持原状——fail-closed：游标先动
+    /// 而装包失败 = 覆盖区间已被压缩、本机又没装上，数据洞不可挽回。
+    /// 返回 `Some(覆盖位点 seq)`；服务器无快照为 `None`。
+    pub async fn install_library_snapshot<F>(&self, install: F) -> Result<Option<i64>>
+    where
+        F: AsyncFnOnce(i64, Vec<u8>) -> Result<()>,
+    {
+        let Some((seq, ciphertext)) = self.remote.get_library_snapshot().await? else {
+            return Ok(None);
+        };
+        install(seq, ciphertext).await?;
+        self.repo
+            .set_last_pull_cursor(Some(&crate::sync::cursor::encode_cursor(
+                seq,
+                SNAPSHOT_RESUME_OP_ID,
+            )))
+            .await?;
+        Ok(Some(seq))
+    }
+
     /// 同步状态（sync-group-mode §二.5.5）：组最新版本号、本机已同步水位、
     /// 落后条数、待推条数与最近同步时间。只读，不动任何周期状态。
     pub async fn sync_status(&self) -> Result<SyncStatusReport> {
@@ -229,6 +296,8 @@ mod tests {
     struct MemState {
         ops: Vec<SyncOp>,
         fail_push: bool,
+        /// 库级快照（S2）：(覆盖位点, 密文)；None = 尚未上传过。
+        snapshot: Option<(i64, Vec<u8>)>,
     }
 
     impl MemorySyncRemote {
@@ -237,6 +306,7 @@ mod tests {
                 state: Mutex::new(MemState {
                     ops: Vec::new(),
                     fail_push: false,
+                    snapshot: None,
                 }),
             }
         }
@@ -299,6 +369,26 @@ mod tests {
             // 内存远端的「服务器 seq」= 累计 op 条数（push 进几条 head 涨几条）
             Ok(self.state.lock().unwrap().ops.len() as i64)
         }
+
+        async fn put_library_snapshot(
+            &self,
+            seq: i64,
+            _device_id: &str,
+            ciphertext: &[u8],
+        ) -> Result<u64> {
+            // 单快照 upsert；返回值记账「将被压缩的 op 条数」。内存远端保持
+            // append-only——真删除的 seq 语义（rowid 单调、游标绝对）用数组
+            // 模拟会分叉，server 侧已由集成测试锁定
+            //（snapshot_put_get_roundtrip_and_prunes_covered_ops）。
+            let mut state = self.state.lock().unwrap();
+            let pruned = (seq as usize).min(state.ops.len());
+            state.snapshot = Some((seq, ciphertext.to_vec()));
+            Ok(pruned as u64)
+        }
+
+        async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {
+            Ok(self.state.lock().unwrap().snapshot.clone())
+        }
     }
 
     /// 引擎持 Arc 共享内存远端（orphan 规则允许：local trait for Arc<T>）。
@@ -318,6 +408,21 @@ mod tests {
 
         async fn head_seq(&self) -> Result<i64> {
             self.as_ref().head_seq().await
+        }
+
+        async fn put_library_snapshot(
+            &self,
+            seq: i64,
+            device_id: &str,
+            ciphertext: &[u8],
+        ) -> Result<u64> {
+            self.as_ref()
+                .put_library_snapshot(seq, device_id, ciphertext)
+                .await
+        }
+
+        async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {
+            self.as_ref().get_library_snapshot().await
         }
     }
 
@@ -557,5 +662,131 @@ mod tests {
         // 游标推进到头后，下一轮 pull 是一次空页往返
         let again = engine.pull_cycle().await.unwrap();
         assert_eq!(again.applied, 0);
+    }
+
+    // ---- 库级快照原语（S2，E2EE_SYNC_DESIGN §5）----
+
+    #[tokio::test]
+    async fn upload_snapshot_converges_then_stamps_watermark() {
+        // 覆盖位点语义：先推平本机队列再拉平远端，水位 = 服务器已消费位点
+        let (engine, remote) = fixture(false).await;
+        remote.add(vec![
+            remote_put(1, 1, ItemKind::Credential),
+            remote_put(2, 2, ItemKind::Identity),
+            remote_put(3, 3, ItemKind::Passkey),
+        ]);
+        let item = Uuid::new_v4();
+        for tag in 1..=2u8 {
+            engine
+                .record_local_change(item, ItemKind::Credential, OpType::Put, put_payload(tag))
+                .await
+                .unwrap();
+        }
+
+        let (seq, pruned) = engine.upload_library_snapshot(&[7u8; 5]).await.unwrap();
+        assert_eq!(seq, 5, "远端 3 条 + 本机推上的 2 条 = 水位 5");
+        assert_eq!(pruned, 5, "服务器压缩了覆盖区间内的全部 ops");
+        assert_eq!(
+            remote.state.lock().unwrap().snapshot,
+            Some((5, vec![7u8; 5])),
+            "单快照 upsert，密文与覆盖位点原样入库"
+        );
+        assert_eq!(
+            remote.state.lock().unwrap().ops.len(),
+            5,
+            "内存远端 append-only（真删除由 server 集成测试锁定），只记账"
+        );
+
+        // 快照后继续增量续拉：游标绝对位点（绝对 seq）不受压缩影响
+        remote.add(vec![remote_put(4, 4, ItemKind::Credential)]);
+        let pull = engine.pull_cycle().await.unwrap();
+        assert_eq!(pull.applied, 1, "只拉到快照点之后的增量");
+        assert_eq!(engine.repo.local_watermark().await.unwrap(), 6);
+    }
+
+    #[tokio::test]
+    async fn upload_snapshot_blocked_during_travel() {
+        let (engine, remote) = fixture(true).await;
+        let err = engine
+            .upload_library_snapshot(&[1u8; 4])
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("travel"), "{err}");
+        assert!(remote.state.lock().unwrap().snapshot.is_none());
+    }
+
+    #[tokio::test]
+    async fn install_snapshot_advances_cursor_and_pulls_only_increment() {
+        let (engine, remote) = fixture(false).await;
+        remote.add(vec![
+            remote_put(1, 1, ItemKind::Credential),
+            remote_put(2, 2, ItemKind::Identity),
+            remote_put(3, 3, ItemKind::Credential),
+        ]);
+        remote.state.lock().unwrap().snapshot = Some((3, vec![9u8; 4]));
+
+        let mut installed = None;
+        let seq = engine
+            .install_library_snapshot(async |s, bytes| {
+                installed = Some((s, bytes));
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(seq, Some(3));
+        assert_eq!(installed, Some((3, vec![9u8; 4])));
+        assert_eq!(
+            engine.repo.local_watermark().await.unwrap(),
+            3,
+            "游标直读快照位点"
+        );
+
+        // 快照点后的增量照常续拉——哨兵游标 (3, "0") 起拉
+        remote.add(vec![remote_put(4, 4, ItemKind::Credential)]);
+        let pull = engine.pull_cycle().await.unwrap();
+        assert_eq!(pull.applied, 1, "只拉 seq > 3 的增量，不重放已装快照");
+        assert_eq!(engine.repo.local_watermark().await.unwrap(), 4);
+    }
+
+    #[tokio::test]
+    async fn install_without_snapshot_keeps_full_replay_path() {
+        let (engine, remote) = fixture(false).await;
+        remote.add(vec![remote_put(1, 1, ItemKind::Credential)]);
+
+        let seq = engine
+            .install_library_snapshot(async |_, _| panic!("无快照不得调用装包回调"))
+            .await
+            .unwrap();
+        assert_eq!(seq, None);
+        assert_eq!(engine.repo.local_watermark().await.unwrap(), 0);
+
+        // 全量重放路径原状可用
+        let pull = engine.pull_cycle().await.unwrap();
+        assert_eq!(pull.applied, 1);
+    }
+
+    #[tokio::test]
+    async fn install_callback_failure_leaves_cursor_untouched() {
+        // fail-closed 主场景：装包失败游标不动——覆盖区间虽已在服务器压缩，
+        // 本机仍从零全量重放剩余 ops（缩水子集也收敛），不留半装状态
+        let (engine, remote) = fixture(false).await;
+        remote.add(vec![
+            remote_put(1, 1, ItemKind::Credential),
+            remote_put(2, 2, ItemKind::Credential),
+        ]);
+        remote.state.lock().unwrap().snapshot = Some((2, vec![5u8; 4]));
+
+        let err = engine
+            .install_library_snapshot(async |_, _| {
+                Err(PersonaError::CryptographicError("wrong group key".to_string()).into())
+            })
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("wrong group key"), "{err}");
+        assert_eq!(engine.repo.local_watermark().await.unwrap(), 0, "游标未动");
+
+        let pull = engine.pull_cycle().await.unwrap();
+        assert_eq!(pull.applied, 2, "剩余 ops 仍可全量重放");
     }
 }

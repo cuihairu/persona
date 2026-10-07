@@ -1617,8 +1617,24 @@ References
       ops 未删」与反向中间态都不允许)、`GET /sync/snapshot`(404
       code=absent,区别于路由 404)、`ApiError::absent` 新构造。测试:
       roundtrip/压缩计数/单快照不堆积/校验拒绝/404 absent。server 133
-      绿。core 侧待做(SyncRemote 加 snapshot 方法、快照打包/装快照/
-      bootstrap 起步、remote_http wire)。
+      绿。
+      **core 侧已落**(2026-10-07):`LibrarySnapshotPayload`/`Entry`
+      格式层(snapshot.rs,bincode→group key AES-256-GCM 整包 seal/open
+      fail-closed,零知识测试平移:整包字节搜不到条目明文/密钥原字节、
+      错 key/篡改/截断报错);`SyncRemote` 加 `put/get_library_snapshot`
+      (四个实现同步改:HttpSyncRemote wire——PUT 走 /snapshot 带回显
+      seq 一致性校验、GET 404 两成因收敛 Ok(None);DeadRemote;内存
+      remote 两处,put 记账不真删保 append-only 位点语义);engine 原语
+      `upload_library_snapshot`(travel 闸拒;先 push 后 pull 收敛,覆盖
+      位点=local_watermark——比设计初版 push-ack-seq 严格不超 claim,
+      设计稿已同步精化)与 `install_library_snapshot`(AsyncFnOnce 装
+      包回调,成功才推游标到哨兵 `(S,"0")`——UUID 串恒大于 "0",水位
+      直读快照位点;回调失败/无快照游标不动全量重放原状,fail-closed)。
+      测试:engine 5 个(收敛水位/travel 闸/装包游标推进+增量续拉/无快
+      照路径/装包失败不动游标)+wire 4 个(mock TCP:wire 正面/404→
+      None/seq 回显不符/三臂 malformed)。core 全量 1094 绿。余:service
+      装配层(整库打包循环+bootstrap 触发接线桌面/CLI)、双设备收敛等
+      价性集成测试、LWW 衔接语义。
 - [ ] S3 三形态中转:官方托管(Worker)/自建 relay(单二进制开源随仓)/局域网直传,同一协议,客户端三选一
       验收=三形态一致性测试(同一客户端协议,同步行为完全一致)。
 - [ ] S4 设备面:组内设备清单互见(仅改自己备注)、同等权限自由进出组

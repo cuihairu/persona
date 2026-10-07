@@ -605,6 +605,19 @@ mod tests {
         async fn head_seq(&self) -> Result<i64> {
             Ok(self.pushed.lock().unwrap().len() as i64)
         }
+
+        async fn put_library_snapshot(
+            &self,
+            _seq: i64,
+            _device_id: &str,
+            _ciphertext: &[u8],
+        ) -> Result<u64> {
+            Ok(0)
+        }
+
+        async fn get_library_snapshot(&self) -> Result<Option<(i64, Vec<u8>)>> {
+            Ok(None)
+        }
     }
 
     fn no_travel() -> Box<dyn Fn() -> bool + Send + Sync> {

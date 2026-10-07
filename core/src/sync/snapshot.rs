@@ -89,6 +89,65 @@ impl SyncItemSnapshot {
     }
 }
 
+/// 库级快照的单条目：与 oplog put 载荷同构（[`SyncItemSnapshot`] 密文 +
+/// group key 包裹的 item key），打包时从本地行整批产出，装包逐条走
+/// [`super::materialize`] 的同一落库路径。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LibrarySnapshotEntry {
+    pub item_id: Uuid,
+    /// `SyncItemSnapshot::seal(item_key)` 字节。
+    pub ciphertext: Vec<u8>,
+    /// group key 包裹的 item key（oplog `wrapped_item_key` 原样搬运）。
+    pub wrapped_item_key: Vec<u8>,
+}
+
+/// 库级快照包（S2 收口，E2EE_SYNC_DESIGN §5「库级快照与指令压缩」）：
+/// 某一服务器 seq 处的整库存活条目集。整包再用 group key 加密后上云——
+/// 服务器只见一个 BLOB（单快照 upsert + 压缩 `seq ≤ S` 的 ops）。
+///
+/// 零知识不变式与单条快照相同：条目名/域名/用户名/口令只存在于 item key
+/// 密文内，item key 只存在于 group key 密文内；包装格式错误一律
+/// fail-closed（覆盖区间可能已被压缩删除，静默降级为全量重放不可行）。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LibrarySnapshotPayload {
+    /// 打包时刻（rfc3339，仅展示）。
+    pub created_at: String,
+    /// 只含存活条目；tombstone 不进快照（快照点后的增量指令承载删除）。
+    pub entries: Vec<LibrarySnapshotEntry>,
+}
+
+impl LibrarySnapshotPayload {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(self)?)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Ok(bincode::deserialize(bytes)?)
+    }
+
+    /// group key 整包加密（服务器存储字节）。
+    pub fn seal(&self, group_key: &super::keys::GroupKey) -> Result<Vec<u8>> {
+        EncryptionService::new(group_key.as_bytes())
+            .encrypt(&self.to_bytes()?)
+            .map_err(|e| {
+                PersonaError::CryptographicError(format!("failed to seal library snapshot: {e}"))
+                    .into()
+            })
+    }
+
+    /// 拆封（bootstrap 路径；group key 不对或密文被篡改 fail-closed）。
+    pub fn open(sealed: &[u8], group_key: &super::keys::GroupKey) -> Result<Self> {
+        let plaintext = EncryptionService::new(group_key.as_bytes())
+            .decrypt(sealed)
+            .map_err(|_| {
+                PersonaError::CryptographicError(
+                    "failed to open library snapshot with group key".to_string(),
+                )
+            })?;
+        Self::from_bytes(&plaintext)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +235,110 @@ mod tests {
         assert_eq!(snap.name, "Bank");
         assert_eq!(snap.credential_type, CredentialType::BankCard);
         assert_eq!(snap.data.to_bytes().unwrap(), data.to_bytes().unwrap());
+    }
+
+    // ---- 库级快照包（S2，E2EE_SYNC_DESIGN §5）----
+
+    fn library_sample(group: &crate::sync::keys::GroupKey) -> LibrarySnapshotPayload {
+        let item_key = EncryptionService::generate_key();
+        let entry = LibrarySnapshotEntry {
+            item_id: Uuid::new_v4(),
+            ciphertext: sample().seal(&item_key).unwrap(),
+            wrapped_item_key: crate::sync::keys::wrap_item_key_with_group(&item_key, group),
+        };
+        LibrarySnapshotPayload {
+            created_at: "2026-10-07T00:00:00Z".to_string(),
+            entries: vec![entry],
+        }
+    }
+
+    #[test]
+    fn library_snapshot_seal_open_round_trips_with_group_key() {
+        let group = crate::sync::keys::GroupKey::generate().unwrap();
+        let payload = library_sample(&group);
+        let sealed = payload.seal(&group).unwrap();
+        assert_ne!(sealed, payload.to_bytes().unwrap(), "整包必须是密文");
+
+        let opened = LibrarySnapshotPayload::open(&sealed, &group).unwrap();
+        assert_eq!(opened.entries.len(), 1);
+        assert_eq!(opened.created_at, payload.created_at);
+
+        // 逐条解链：group key → item key → 单条快照明文（物化路径原样）
+        let entry = &opened.entries[0];
+        let item_key =
+            crate::sync::keys::unwrap_item_key_with_group(&entry.wrapped_item_key, &group).unwrap();
+        let snap = SyncItemSnapshot::open(&entry.ciphertext, &item_key).unwrap();
+        assert_eq!(snap.name, "Email 邮箱");
+        assert_eq!(snap.username.as_deref(), Some("alice@example.com"));
+    }
+
+    #[test]
+    fn library_snapshot_wrong_group_key_and_tamper_fail_closed() {
+        let group = crate::sync::keys::GroupKey::generate().unwrap();
+        let sealed = library_sample(&group).seal(&group).unwrap();
+        let other = crate::sync::keys::GroupKey::generate().unwrap();
+        assert!(
+            LibrarySnapshotPayload::open(&sealed, &other).is_err(),
+            "错 key 必须 fail-closed（静默降级为全量重放不可行——区间可能已被压缩）"
+        );
+        let mut tampered = sealed.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(LibrarySnapshotPayload::open(&tampered, &group).is_err());
+        assert!(LibrarySnapshotPayload::open(&sealed[..12], &group).is_err());
+    }
+
+    #[test]
+    fn library_snapshot_bytes_never_leak_entry_plaintext() {
+        // 零知识平移：整包字节里搜不到条目名/域名/用户名/口令与密钥原字节
+        let group = crate::sync::keys::GroupKey::generate().unwrap();
+        let item_key = EncryptionService::generate_key();
+        let snap = SyncItemSnapshot {
+            name: "机密条目Bravo".to_string(),
+            url: Some("https://secret-site-b.example/login".to_string()),
+            username: Some("bob@example.com".to_string()),
+            notes: None,
+            tags: vec![],
+            metadata: Default::default(),
+            is_favorite: false,
+            is_active: true,
+            identity_id: Uuid::new_v4(),
+            credential_type: CredentialType::Password,
+            security_level: SecurityLevel::High,
+            data: CredentialData::Password(PasswordCredentialData {
+                password: "特征口令-Δ9".to_string(),
+                email: None,
+                security_questions: vec![],
+            }),
+        };
+        let payload = LibrarySnapshotPayload {
+            created_at: "2026-10-07T00:00:00Z".to_string(),
+            entries: vec![LibrarySnapshotEntry {
+                item_id: Uuid::new_v4(),
+                ciphertext: snap.seal(&item_key).unwrap(),
+                wrapped_item_key: crate::sync::keys::wrap_item_key_with_group(&item_key, &group),
+            }],
+        };
+        let stored = payload.seal(&group).unwrap();
+        for plaintext in [
+            "机密条目Bravo".as_bytes(),
+            b"secret-site-b.example",
+            b"bob@example.com",
+            "特征口令-Δ9".as_bytes(),
+        ] {
+            assert!(
+                !stored.windows(plaintext.len()).any(|w| w == plaintext),
+                "整包字节泄露明文: {}",
+                String::from_utf8_lossy(plaintext)
+            );
+        }
+        assert!(
+            !stored.windows(32).any(|w| w == item_key.as_slice()),
+            "item key 原始字节泄露"
+        );
+        assert!(
+            !stored.windows(32).any(|w| w == group.as_bytes().as_slice()),
+            "group key 原始字节泄露"
+        );
     }
 }
