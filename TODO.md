@@ -247,6 +247,17 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 - [ ] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
       冲突合并正确、吊销流程走查，截图输出
+      - [x] **M6-批1 库级实链 E2E（离线部分）**（2026-10-07）：
+        `server/tests/sync_two_device_e2e.rs`——真 persona-server router
+        （axum serve 临时库 + 双设备 token）+ 两个真 core 客户端
+        （SyncAdminApi/SyncSession<HttpSyncRemote>），3 例：
+        ① join（A 自举/B 待授权 fail-closed）→ A 授权 B → A 建凭据
+        capture→push → B pull 物化主库出现同名条目；② 双端离线并发编辑
+        同条目 → 服务端真冲突（双端 conflict_item_count==1）→ A 采纳
+        落选副本 resolve_conflict → 主库内容翻转（解密断言）→ 双端收敛
+        冲突清零；③ 吊销：delete_device 后信封消失、新会话 fail-closed、
+        设备清单除名。与 runtime.rs 的 MemRemote 单测互补（那里锚引擎，
+        这里锚 HTTP 线格式+服务器真实现）。桌面/插件 UI 截图走查仍需实机
 
 浏览器插件推进（2026-10-04 用户令：对齐 1Password，自动化优先——先列分批计划进 todo，再逐批做，CI 绿门禁）
 

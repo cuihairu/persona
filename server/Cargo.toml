@@ -62,6 +62,8 @@ tokio-util.workspace = true
 dotenvy = "0.15"
 
 [dev-dependencies]
+# 跨端集成测试：OplogCapture 的 item_key 参数是 Zeroizing<[u8; 32]>
+zeroize.workspace = true
 tempfile.workspace = true
 # 测试构造 gzip 请求体（生产解压在 tower-http，压缩仅测试侧需要）
 flate2.workspace = true
