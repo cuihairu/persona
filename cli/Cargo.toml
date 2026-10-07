@@ -18,7 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library
-persona-core = { path = "../core" }
+persona-core = { path = "../core", features = ["remote-auth"] }
 # Connect 本机自动化 HTTP 端点（serve 与桌面共用同一 router/三防线）
 persona-connect-server = { path = "../connect-server" }
 
@@ -54,6 +54,10 @@ thiserror = "2.0"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# sync_connect（桥发云参数）读 OS keyring 里的 sync token 与设备身份——
+# 条目与桌面 token_store 同 service 名同键（persona-sync / persona-device）
+keyring = "4"
 
 # File system
 dirs = "7.0"

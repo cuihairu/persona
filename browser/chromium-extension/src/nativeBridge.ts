@@ -157,6 +157,38 @@ export interface GeneratePasswordResponsePayload {
     password: string;
 }
 
+// ============ Cloud sync bootstrap (bridge protocol v6, M5 批1) ============
+
+export interface SyncConnectRequest {
+    /** Must come from an explicit user action — this hands out vault keys. */
+    user_gesture: boolean;
+}
+
+/** `sync_connect_response`：扩展 HTTP 直连数据面的三件套 + 设备标识。
+ * 敏感材料只存 chrome.storage.session（内存区），不落盘。 */
+export interface SyncConnectPayload {
+    server_url: string;
+    token: string;
+    device_id: string;
+    device_name: string;
+    /** group key 十六进制（与桌面 sync_group_store 同编码）。 */
+    group_key_hex: string;
+}
+
+/**
+ * 从本地桥取云端同步参数（配对会话 + HMAC + user_gesture 三重门禁）。
+ * 成功后扩展自己直连 server 的 /api/v1/sync/*（出 native messaging 桥）。
+ */
+export async function syncConnect(
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<SyncConnectPayload>> {
+    return sendAuthedNativeMessage<SyncConnectPayload>(
+        'sync_connect',
+        { user_gesture: true },
+        host
+    );
+}
+
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 

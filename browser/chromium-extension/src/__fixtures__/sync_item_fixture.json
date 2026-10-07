@@ -1,0 +1,16 @@
+{
+  "ciphertext_b64": "YinLmoGs6U6wh8BVHUexCYOfAfODXC+onrUOjNXdR94u5lLbyLz9vsoBC/d0wCIwGrB8fsHoqGF4H39eojLfNOS005/AT1uA9UhQ2DolzfTw8xyKAdeV7LFof/AU+yqVpBwK6nlvefn3iFTTu+UupCbRPV5g2VmLc7BzbsNNorE/QtgIQ3kYwoz0R7vT/+sBhrIjuinsEvMnnwfANuh4HeirRAr9PAqa1K3MLsYDRfbgPPRrnhLbSqsnBw5YHDdAinZAJNe+yKQCTf8wF4ePtuN0+4p8Apn6RgeWXrIO1g==",
+  "expected": {
+    "credential_type": "Password",
+    "identity_id": "11111111-2222-3333-4444-555555555555",
+    "is_active": true,
+    "is_favorite": true,
+    "name": "GitHub (Work)",
+    "security_level": "High",
+    "url": "https://github.com",
+    "username": "alice@example.com"
+  },
+  "group_key_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "item_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "wrapped_item_key_b64": "ewPLIWFTOSxcRNsAT8vrTA/Jf7RLpEWfuK6BmK9BsVyMOEki0N5mKmYOD57TS+TqI2ffSvj4rJklYhf7"
+}

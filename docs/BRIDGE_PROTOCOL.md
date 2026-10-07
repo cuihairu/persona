@@ -708,6 +708,57 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 
 生成失败返回 `generation_failed`。
 
+### 17. sync_connect - 云端同步引导（协议 v6）
+
+把本地同步配置交给扩展：桥发放 `(server_url, token, device_id, group_key)` 四件套，
+扩展随后**HTTP 直连**同步服务器的 `/api/v1/sync/*` 拉取/解密云端保险库——数据面
+出 native messaging 桥，桥只做认证与密钥交接（M5 批1）。
+
+零知识不变式不受影响：token 与 group key 只进扩展的 `chrome.storage.session`
+（内存区，浏览器关闭即失）；桥读的是 OS keyring（`persona-sync` / `persona-device`，
+与桌面同条目）与 workspace settings 里的服务器 URL，全程不解密任何条目。
+
+**请求：**
+
+```json
+{
+  "type": "sync_connect",
+  "payload": {
+    "user_gesture": true
+  }
+}
+```
+
+- 三重门禁：配对会话 HMAC + `user_gesture: true`（缺省 → `user_gesture_required`，
+  本消息交出保险库解密钥，必须显式点击触发）+ 会话必需（未配对 → `pairing_required`）
+- 门禁顺序：先会话认证，后 payload 解析，再 gesture 检查
+
+**响应：** `sync_connect_response`
+
+```json
+{
+  "server_url": "https://sync.example.com",
+  "token": "…",
+  "device_id": "…",
+  "device_name": "…",
+  "group_key_hex": "…64 hex chars…"
+}
+```
+
+- `group_key_hex`：同步组的 group key（64 位十六进制，与桌面 sync_group_store 同编码）
+- token 来自 OS keyring；device 身份来自 `persona-device` 条目
+
+**错误码（v6 新增）：**
+
+| 错误码                    | 触发条件                                             |
+| ------------------------- | ---------------------------------------------------- |
+| `sync_not_configured`     | keyring 无 sync token / 无 workspace / 服务器 URL 为空 / 配置非法 |
+| `sync_not_joined`         | keyring 无设备身份（该保险库尚未加入同步）           |
+| `sync_not_authorized`     | 信封表里没有本机设备（待管理员授权，fail-closed）    |
+| `sync_group_key_failed`   | 本机 group key 信封拆封失败                          |
+| `sync_identity_corrupted` | 存储的设备身份不可读                                 |
+| `sync_server_unreachable` | `group_keys()` 远端调用失败                          |
+
 ## 安全机制
 
 ### Origin 绑定
@@ -720,7 +771,7 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 
 ### User Gesture 要求
 
-`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` 操作要求：
+`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` 操作要求：
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
 2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
@@ -876,6 +927,12 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 | `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）         |
 | `unsupported_credential_type`       | 条目类型不支持该操作                  |
 | `invalid_payload`                   | payload 校验失败（如空密码）          |
+| `sync_not_configured`               | 同步未配置（token/URL/workspace 缺失）（v6） |
+| `sync_not_joined`                   | 保险库尚未加入同步（v6）              |
+| `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6） |
+| `sync_group_key_failed`             | group key 信封拆封失败（v6）          |
+| `sync_identity_corrupted`           | 设备身份不可读（v6）                  |
+| `sync_server_unreachable`           | 同步服务器不可达（v6）                |
 
 ## 配置
 
@@ -964,6 +1021,7 @@ manifest 文件内容示例：
 | 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）              |
 | 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                        |
 | 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port            |
+| 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                      |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

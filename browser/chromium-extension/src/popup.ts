@@ -3,6 +3,17 @@ import type { DomainAssessment } from './domainPolicy';
 import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults';
+import {
+    connectViaBridge,
+    loadCloudConn,
+    saveCloudConn,
+    saveCloudCache,
+    pullCloudOps,
+    buildItemViews,
+    decryptItemViews,
+    type CloudConn,
+    type CloudListItem,
+} from './cloudSync';
 
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
@@ -286,12 +297,142 @@ if (genGenerateButton) {
     });
 }
 
+// ============ Cloud vault (bridge protocol v6, M5 批1) ============
+
+const cloudStatusEl = document.getElementById('cloudStatus');
+const cloudConnectButton = document.getElementById('cloudConnect') as HTMLButtonElement | null;
+const cloudRefreshButton = document.getElementById('cloudRefresh') as HTMLButtonElement | null;
+const cloudItemsEl = document.getElementById('cloudItems');
+
+function cloudErrorText(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+}
+
+function setCloudStatus(text: string) {
+    if (cloudStatusEl) cloudStatusEl.textContent = text;
+}
+
+function setCloudConnected(conn: CloudConn | undefined) {
+    cloudRefreshButton?.toggleAttribute('disabled', !conn);
+    setCloudStatus(
+        conn ? `Connected • device ${conn.deviceName} • ${conn.serverUrl}` : 'Not connected'
+    );
+}
+
+function renderCloudItems(items: CloudListItem[]) {
+    if (!cloudItemsEl) return;
+    cloudItemsEl.textContent = '';
+    const live = items.filter((item) => !item.deleted);
+
+    if (!live.length) {
+        const empty = document.createElement('div');
+        empty.className = 'status';
+        empty.textContent = items.length ? 'All items deleted upstream.' : 'Vault is empty.';
+        cloudItemsEl.appendChild(empty);
+        return;
+    }
+
+    for (const item of live) {
+        const row = document.createElement('div');
+        row.style.cssText =
+            'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
+
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:600;color:#111827;';
+        title.textContent = item.meta?.name ?? item.item_id;
+
+        const meta = document.createElement('div');
+        meta.style.cssText = 'font-size:12px;color:#6b7280;';
+        if (item.decrypt_error) {
+            meta.textContent = `decrypt failed (${item.decrypt_error})`;
+        } else if (item.meta) {
+            const bits = [item.meta.credential_type, item.meta.security_level];
+            if (item.meta.username) bits.push(item.meta.username);
+            if (item.conflict_count > 0) bits.push(`${item.conflict_count} in conflict`);
+            meta.textContent = bits.join(' • ');
+        } else {
+            meta.textContent = item.kind;
+        }
+
+        row.appendChild(title);
+        row.appendChild(meta);
+        cloudItemsEl.appendChild(row);
+    }
+}
+
+async function pullAndRender(conn: CloudConn) {
+    try {
+        setCloudStatus(`Pulling from ${conn.serverUrl}…`);
+        const pull = await pullCloudOps(conn);
+        await saveCloudCache({
+            server_url: conn.serverUrl,
+            ops: pull.ops,
+            next_cursor: pull.next_cursor,
+            synced_at: Date.now()
+        });
+        const views = buildItemViews(pull.ops);
+        const items = await decryptItemViews(views, conn.groupKeyHex);
+        renderCloudItems(items);
+        const live = items.filter((item) => !item.deleted).length;
+        const conflicts = views.filter((view) => view.conflicts.length > 0).length;
+        const parts = [`Connected • ${live} items`, `${pull.ops.length} ops`];
+        if (conflicts > 0) parts.push(`${conflicts} in conflict (pending adjudication)`);
+        setCloudStatus(parts.join(' • '));
+    } catch (error) {
+        // 拉取失败不掩盖既有连接状态；密文缓存仍在，离线兜底在后续批次接上
+        setCloudStatus(`Pull failed – ${cloudErrorText(error)}`);
+    }
+}
+
+cloudConnectButton?.addEventListener('click', async () => {
+    cloudConnectButton.toggleAttribute('disabled', true);
+    setCloudStatus('Connecting via local bridge…');
+    try {
+        const conn = await connectViaBridge();
+        // best-effort 申请该 sync server 的 host 权限（用户点击上下文内）；
+        // 拒绝也不拦——服务器若发 CORS，fetch 依然可用
+        try {
+            await chrome.permissions.request({ origins: [`${new URL(conn.serverUrl).origin}/*`] });
+        } catch {
+            // 权限 API 不可用/被拒：继续，拉取阶段如实报错
+        }
+        await saveCloudConn(conn);
+        setCloudConnected(conn);
+        await pullAndRender(conn);
+    } catch (error) {
+        setCloudStatus(`Connect failed – ${cloudErrorText(error)}`);
+    } finally {
+        cloudConnectButton.toggleAttribute('disabled', false);
+    }
+});
+
+cloudRefreshButton?.addEventListener('click', async () => {
+    const conn = await loadCloudConn();
+    if (!conn) {
+        setCloudStatus('Not connected — connect via local bridge first.');
+        setCloudConnected(undefined);
+        return;
+    }
+    await pullAndRender(conn);
+});
+
+async function initCloudVault() {
+    try {
+        const conn = await loadCloudConn();
+        setCloudConnected(conn);
+        if (conn) await pullAndRender(conn);
+    } catch {
+        setCloudConnected(undefined);
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     refreshStoredStatus();
     refreshForms();
     refreshPairing().catch(() => null);
     refreshAutofill().catch(() => null);
     refreshSettings().catch(() => null);
+    initCloudVault().catch(() => null);
 });
 
 async function getActiveTabOrigin(): Promise<{ tabId: number; origin: string } | null> {

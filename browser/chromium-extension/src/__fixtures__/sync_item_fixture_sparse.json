@@ -1,0 +1,16 @@
+{
+  "ciphertext_b64": "aU6IkYp3GRR+PvbsS67Lhr4RHcVoqrxrovrZ3tobD5Sj0fldkG/8+mM2H3Z4cmhrwyDRMKnqe8Ewo1LlsNcgetInnZRXlvU1WsWDIW8PAF9PfpemkJ/2hhXrnwV26S0qIwtNngX3FeNWsfpLFdFNWwsZq/3QPhv+7SCHLFGVVHm7vDbLOOOHlnq/kQDGiOSuOAnSk4IKsmBNn/+dlQUGg7PIdf47GZDL16f4mE7J6O1r+JZpZn7s8xHAqw+Y6y1CwQ==",
+  "expected": {
+    "credential_type": "内部工具",
+    "identity_id": "99999999-8888-7777-6666-555555555555",
+    "is_active": true,
+    "is_favorite": false,
+    "name": "Custom Note",
+    "security_level": "Medium",
+    "url": null,
+    "username": null
+  },
+  "group_key_hex": "2222222222222222222222222222222222222222222222222222222222222222",
+  "item_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "wrapped_item_key_b64": "xJ8QpK0mUlvYaqlRsyHEcL1R+SoeOCFrSRbyCeZcIlqAbbw8AcuJ7ns5hQ2X7jHOpCIZR9aUb57waVpk"
+}

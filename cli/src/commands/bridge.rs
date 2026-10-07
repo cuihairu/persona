@@ -512,8 +512,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "protocol_version": 5,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password"],
+                "protocol_version": 6,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -1058,6 +1058,33 @@ async fn handle_request(
                 "os_provider",
             )
             .await
+        }
+        // 云端同步参数发放（协议 v6，M5 批1）：把扩展做 HTTP 直连数据面
+        // 所需的三件套（server_url / bearer / group key）经 HMAC 会话发给
+        // 扩展——桥此后只做认证与密钥交接，数据面出本地桥（协议设计见
+        // BRIDGE_PROTOCOL.md §17）。敏感级：group key 出桥，故在配对会话
+        // 之上再要求 user gesture。
+        "sync_connect" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: SyncConnectRequest =
+                serde_json::from_value(req.payload).context("invalid payload for sync_connect")?;
+            if gesture_required() && !parsed.user_gesture {
+                warn!("sync_connect rejected: user_gesture required but not provided");
+                return Err(anyhow!(
+                    "user_gesture_required: sync_connect hands out vault decryption keys and must be triggered by explicit user action"
+                ));
+            }
+            let payload = run_sync_connect(db_path).await?;
+            info!(
+                event = "bridge_sync_connect",
+                device_id = %payload.device_id,
+                "sync connect parameters issued to extension"
+            );
+            Ok(ok(
+                req.request_id,
+                "sync_connect_response",
+                serde_json::to_value(payload)?,
+            ))
         }
         other => Ok(err(
             req.request_id,
@@ -2533,6 +2560,127 @@ fn pipe_to_command(cmd: &str, args: &[&str], text: &str) -> Result<()> {
     Ok(())
 }
 
+// ---- 云端同步参数发放（协议 v6，M5 批1）----
+//
+// 扩展侧 HTTP 直连数据面的引导：桥读 vault settings 的 server_url +
+// keyring 里的 sync token 与设备身份（与桌面同 service 名同条目键），向
+// 服务器取本机 group key 信封并拆开，经 HMAC 会话一次交给扩展。桥此后
+// 不参与数据面；token 与 group key 只在配对会话内传输，扩展侧仅存
+// chrome.storage.session（内存区），不落盘。职责切分与桌面
+// open_sync_session 一致：协议/密码学全在 core，这里只做宿主编排。
+
+/// keyring service 名（协议级常量，与 desktop/src-tauri/src/token_store.rs
+/// 的 SYNC_SERVICE / DEVICE_SERVICE 一致——两边读写同一条目，改名即断链）。
+const KEYRING_SERVICE_SYNC_TOKEN: &str = "persona-sync";
+const KEYRING_SERVICE_DEVICE_IDENTITY: &str = "persona-device";
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SyncConnectRequest {
+    /// 必须来自显式用户操作（popup 点选）；发放的是保险库解密钥。
+    user_gesture: bool,
+}
+
+/// `sync_connect_response` 负载。token 与 group key 是敏感材料：扩展侧只存
+/// 内存区（chrome.storage.session），安全口径见 BRIDGE_PROTOCOL.md §17。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct SyncConnectPayload {
+    server_url: String,
+    token: String,
+    device_id: String,
+    device_name: String,
+    /// group key 十六进制（与桌面 sync_group_store 的 group_key_to_hex 同编码）。
+    group_key_hex: String,
+}
+
+/// 读 keyring 条目（条目键 = vault db 路径，与桌面 token_store 同键）。
+/// 无条目 → None；secret service 不可用 → 报错而非当「未配置」——
+/// fail-closed：把「keyring 坏了」误报成「没加入同步」会误导排障方向。
+fn read_keyring_entry(service: &str, account: &str) -> Result<Option<String>> {
+    let entry = keyring::Entry::new(service, account)
+        .map_err(|e| anyhow!("sync_keyring_unavailable: {e}"))?;
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(anyhow!("sync_keyring_unavailable: {e}")),
+    }
+}
+
+/// vault settings.sync.server_url（免解锁读取：settings 是低敏配置，
+/// 不含凭据材料——与桌面 read_sync_config 的读取口径一致）。
+async fn read_sync_server_url(db_path: &Path) -> Result<String> {
+    let db = open_db(db_path).await?;
+    db.migrate().await?;
+    let workspace_path = db_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_string_lossy()
+        .to_string();
+    let repo = WorkspaceRepository::new(db);
+    let ws = repo
+        .find_by_path(&workspace_path)
+        .await?
+        .ok_or_else(|| anyhow!("sync_not_configured: no workspace found for this vault"))?;
+    let server_url = ws
+        .settings
+        .sync
+        .map(|s| s.server_url.trim().to_string())
+        .unwrap_or_default();
+    if server_url.is_empty() {
+        return Err(anyhow!("sync_not_configured: sync server URL is not set"));
+    }
+    Ok(server_url)
+}
+
+/// 从信封条目里拆出本机 group key（纯装配，测试锚点：信封可本地构造，
+/// 不需要真服务器）。
+fn open_own_group_key(
+    entries: &[persona_core::sync::remote::SyncGroupKeyEntry],
+    identity: &persona_core::sync::device::DeviceIdentity,
+) -> Result<[u8; 32]> {
+    let own = entries
+        .iter()
+        .find(|k| k.device_id == identity.device_id)
+        .ok_or_else(|| {
+            anyhow!(
+                "sync_not_authorized: this device has no group key envelope yet (pending authorization)"
+            )
+        })?;
+    persona_core::sync::envelope::open_group_key(&own.envelope, identity.key_pair.secret_bytes())
+        .map_err(|e| anyhow!("sync_group_key_failed: failed to open own group key envelope: {e}"))
+}
+
+async fn run_sync_connect(db_path: &Path) -> Result<SyncConnectPayload> {
+    let server_url = read_sync_server_url(db_path).await?;
+    let db_key = db_path.to_string_lossy().to_string();
+    let token = read_keyring_entry(KEYRING_SERVICE_SYNC_TOKEN, &db_key)?
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| anyhow!("sync_not_configured: sync server token is not set"))?;
+    let identity_raw = read_keyring_entry(KEYRING_SERVICE_DEVICE_IDENTITY, &db_key)?
+        .ok_or_else(|| anyhow!("sync_not_joined: this vault has not joined sync"))?;
+    let identity = persona_core::sync::device::DeviceIdentity::from_stored_json(&identity_raw)
+        .map_err(|e| {
+            anyhow!("sync_identity_corrupted: stored device identity is unreadable: {e}")
+        })?;
+
+    let admin = persona_core::sync::remote::SyncAdminApi::new(&server_url, &token)
+        .map_err(|e| anyhow!("sync_not_configured: invalid sync server configuration: {e}"))?;
+    let entries = admin
+        .group_keys()
+        .await
+        .map_err(|e| anyhow!("sync_server_unreachable: {e}"))?;
+    let group_key = open_own_group_key(&entries, &identity)?;
+
+    Ok(SyncConnectPayload {
+        server_url,
+        token,
+        device_id: identity.device_id.to_string(),
+        device_name: identity.device_name,
+        group_key_hex: hex::encode(group_key),
+    })
+}
+
 async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];
     match reader.read_exact(&mut len_buf).await {
@@ -2657,7 +2805,7 @@ pub(crate) mod tests {
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
 
-        // ---- hello: request declaring v2 still gets the v5 capability set
+        // ---- hello: request declaring v2 still gets the v6 capability set
         // (server reports its own protocol_version; old extensions stay
         // compatible by receiving unknown_type for new messages) ----
         let resp = handle_request(
@@ -2677,7 +2825,7 @@ pub(crate) mod tests {
         .unwrap();
         assert!(resp.ok, "hello must succeed: {:?}", resp.error);
         let payload = resp.payload.unwrap();
-        assert_eq!(payload["protocol_version"], 5);
+        assert_eq!(payload["protocol_version"], 6);
         for capability in [
             "passkey_list",
             "passkey_create",
@@ -4800,7 +4948,7 @@ pub(crate) mod tests {
         assert_eq!(payload["paired"], false);
         assert!(payload["session_id"].is_null());
         assert!(payload["session_expires_at_ms"].is_null());
-        assert_eq!(payload["protocol_version"], 5);
+        assert_eq!(payload["protocol_version"], 6);
         assert!(payload["server_version"].is_string());
         let caps = payload["capabilities"].as_array().unwrap();
         for capability in [
@@ -7595,5 +7743,294 @@ pub(crate) mod tests {
         )
         .unwrap_err();
         assert_eq!(err.to_string(), "pairing_not_approved");
+    }
+
+    // ---- sync_connect（协议 v6，M5 批1）----
+
+    /// 纯装配回环：本地生成设备身份 + 本地密封信封 → open_own_group_key
+    /// 还原 group key（不经过服务器，覆盖信封寻址与拆封两条路径）。
+    #[test]
+    fn sync_connect_opens_own_group_key_from_entries() {
+        let identity = device_identity(1);
+        let group_key = [7u8; 32];
+        let envelope = persona_core::sync::envelope::seal_group_key(
+            &group_key,
+            identity.key_pair.public_bytes(),
+        );
+        let entries = vec![persona_core::sync::remote::SyncGroupKeyEntry {
+            device_id: identity.device_id,
+            envelope,
+            sealed_by: "test".to_string(),
+            created_at: "2026-10-07T00:00:00Z".to_string(),
+        }];
+
+        let opened = open_own_group_key(&entries, &identity).unwrap();
+        assert_eq!(&opened, &group_key);
+    }
+
+    /// 信封表里没有本机设备 → sync_not_authorized（待授权语义，fail-closed）。
+    #[test]
+    fn sync_connect_rejects_missing_envelope() {
+        let identity = device_identity(1);
+        let other = device_identity(2);
+        let envelope =
+            persona_core::sync::envelope::seal_group_key(&[1u8; 32], other.key_pair.public_bytes());
+        let entries = vec![persona_core::sync::remote::SyncGroupKeyEntry {
+            device_id: other.device_id,
+            envelope,
+            sealed_by: "test".to_string(),
+            created_at: "2026-10-07T00:00:00Z".to_string(),
+        }];
+
+        let err = open_own_group_key(&entries, &identity).unwrap_err();
+        assert!(
+            err.to_string().starts_with("sync_not_authorized"),
+            "got: {err}"
+        );
+    }
+
+    /// generate() 的 device_id 是 nil UUID（登记后回填）——测试里显式
+    /// 分配不同 id 才能区分「本机」与「他机」。
+    fn device_identity(seed: u8) -> persona_core::sync::device::DeviceIdentity {
+        let id = uuid::Uuid::from_bytes([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, seed]);
+        persona_core::sync::device::DeviceIdentity::generate("test-device")
+            .unwrap()
+            .with_device_id(id)
+    }
+
+    /// 无 workspace/settings → sync_not_configured（免解锁读 settings 的
+    /// 错误分类锚点；run_sync_connect 的 keyring/服务器分支依赖真机
+    /// secret service 与真服务器，留在 M6 实机走查覆盖）。
+    #[tokio::test]
+    async fn sync_connect_reports_not_configured_on_fresh_vault() {
+        let (_dir, db_path, _state_dir, _identity) = seeded_bridge().await;
+
+        // seeded_bridge 建的 workspace 行没有 path 列值，find_by_path 落空
+        let err = read_sync_server_url(&db_path).await.unwrap_err();
+        assert!(
+            err.to_string().starts_with("sync_not_configured"),
+            "got: {err}"
+        );
+    }
+
+    /// settings 里 sync.server_url 在场时免解锁读出（正路径）。settings
+    /// JSON 必须是完整默认形态——row_to_workspace_v2 对解析失败静默回退
+    /// 默认值（sync=None），残缺 JSON 会伪装成「未配置」。
+    #[tokio::test]
+    async fn sync_connect_reads_server_url_from_workspace_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let settings =
+            workspace_settings_json(Some(("http://127.0.0.1:8080".to_string(), "".to_string())));
+        insert_workspace_row(&db, dir.path().to_string_lossy().as_ref(), &settings).await;
+
+        let url = read_sync_server_url(&db_path).await.unwrap();
+        assert_eq!(url, "http://127.0.0.1:8080");
+    }
+
+    /// settings.sync.server_url 为空串 = 未配置（与桌面 read_sync_config
+    /// 同口径：空白与缺省同义）。
+    #[tokio::test]
+    async fn sync_connect_treats_blank_server_url_as_not_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let settings = workspace_settings_json(Some(("".to_string(), "".to_string())));
+        insert_workspace_row(&db, dir.path().to_string_lossy().as_ref(), &settings).await;
+
+        let err = read_sync_server_url(&db_path).await.unwrap_err();
+        assert!(
+            err.to_string().starts_with("sync_not_configured"),
+            "got: {err}"
+        );
+    }
+
+    /// 跨语言 fixture 锚定（M5 批1）：扩展侧 cloudSync.ts 解密+解码的
+    /// 对象由 Rust 侧同一 fixture 反向校验——Rust 拆 group 包裹 → 拆快照
+    /// → 与 expected 逐字段比对。任何一侧格式漂移都会在此红掉。
+    #[test]
+    fn sync_item_fixture_round_trips_with_rust() {
+        for file in ["sync_item_fixture.json", "sync_item_fixture_sparse.json"] {
+            let path = concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../browser/chromium-extension/src/__fixtures__/"
+            )
+            .to_string()
+                + file;
+            let raw = std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let fixture: serde_json::Value =
+                serde_json::from_slice(&raw).unwrap_or_else(|e| panic!("parse {path}: {e}"));
+            let s = |k: &str| fixture[k].as_str().unwrap().to_string();
+
+            let group_key_bytes: [u8; 32] =
+                hex::decode(s("group_key_hex")).unwrap().try_into().unwrap();
+            let group_key = persona_core::sync::keys::GroupKey::from_bytes(group_key_bytes);
+            let wrapped = base64::engine::general_purpose::STANDARD
+                .decode(s("wrapped_item_key_b64"))
+                .unwrap();
+            let item_key =
+                persona_core::sync::keys::unwrap_item_key_with_group(&wrapped, &group_key)
+                    .unwrap_or_else(|e| panic!("{file}: unwrap failed: {e}"));
+
+            let ciphertext = base64::engine::general_purpose::STANDARD
+                .decode(s("ciphertext_b64"))
+                .unwrap();
+            let snap = persona_core::sync::snapshot::SyncItemSnapshot::open(&ciphertext, &item_key)
+                .unwrap_or_else(|e| panic!("{file}: open failed: {e}"));
+
+            let expected = &fixture["expected"];
+            assert_eq!(
+                snap.identity_id.to_string(),
+                expected["identity_id"],
+                "{file}"
+            );
+            assert_eq!(snap.name, expected["name"], "{file}");
+            assert_eq!(
+                format!("{}", snap.credential_type),
+                expected["credential_type"],
+                "{file}"
+            );
+            assert_eq!(
+                format!("{}", snap.security_level),
+                expected["security_level"],
+                "{file}"
+            );
+            assert_eq!(snap.url.as_deref(), expected["url"].as_str(), "{file} url");
+            assert_eq!(
+                snap.username.as_deref(),
+                expected["username"].as_str(),
+                "{file} username"
+            );
+            assert_eq!(snap.is_favorite, expected["is_favorite"], "{file}");
+            assert_eq!(snap.is_active, expected["is_active"], "{file}");
+        }
+    }
+
+    /// fixture 再生成（改了 SyncItemSnapshot/CredentialData 结构时用）：
+    /// `cargo test -p persona-cli emit_sync_item_fixture -- --ignored --nocapture`
+    /// 输出两份 JSON 覆盖 `browser/chromium-extension/src/__fixtures__/`。
+    #[test]
+    #[ignore = "fixture generator; run with --ignored --nocapture"]
+    fn emit_sync_item_fixture() {
+        use persona_core::models::{
+            CredentialData, CredentialType, PasswordCredentialData, SecurityLevel,
+        };
+        use persona_core::sync::keys::wrap_item_key_with_group;
+        use persona_core::sync::snapshot::SyncItemSnapshot;
+
+        let fixture = |name: &str,
+                       identity_id: uuid::Uuid,
+                       cred_type: CredentialType,
+                       level: SecurityLevel,
+                       url: Option<&str>,
+                       username: Option<&str>,
+                       favorite: bool,
+                       password: &str| {
+            let snap = SyncItemSnapshot {
+                identity_id,
+                name: name.to_string(),
+                credential_type: cred_type,
+                security_level: level,
+                url: url.map(str::to_string),
+                username: username.map(str::to_string),
+                notes: None,
+                tags: vec!["work".to_string()],
+                metadata: [("env".to_string(), "prod".to_string())]
+                    .into_iter()
+                    .collect(),
+                is_favorite: favorite,
+                is_active: true,
+                data: CredentialData::Password(PasswordCredentialData {
+                    password: password.to_string(),
+                    email: None,
+                    security_questions: vec![],
+                }),
+            };
+            let item_key: [u8; 32] = [0x11; 32];
+            let group_key = [0x22; 32];
+            let wrapped = wrap_item_key_with_group(
+                &item_key,
+                &persona_core::sync::keys::GroupKey::from_bytes(group_key),
+            );
+            let ciphertext = snap.seal(&item_key).unwrap();
+            let expected = serde_json::json!({
+                "identity_id": identity_id.to_string(),
+                "name": snap.name,
+                "credential_type": format!("{}", snap.credential_type),
+                "security_level": format!("{}", snap.security_level),
+                "url": snap.url,
+                "username": snap.username,
+                "is_favorite": snap.is_favorite,
+                "is_active": snap.is_active,
+            });
+            serde_json::json!({
+                "group_key_hex": hex::encode(group_key),
+                "item_key_hex": hex::encode(item_key),
+                "wrapped_item_key_b64": base64::engine::general_purpose::STANDARD.encode(&wrapped),
+                "ciphertext_b64": base64::engine::general_purpose::STANDARD.encode(&ciphertext),
+                "expected": expected,
+            })
+        };
+
+        let rich = fixture(
+            "GitHub (Work)",
+            uuid::Uuid::parse_str("11111111-2222-3333-4444-555555555555").unwrap(),
+            CredentialType::Password,
+            SecurityLevel::High,
+            Some("https://github.com"),
+            Some("alice@example.com"),
+            true,
+            "hunter2-strong",
+        );
+        let sparse = fixture(
+            "Custom Note",
+            uuid::Uuid::parse_str("99999999-8888-7777-6666-555555555555").unwrap(),
+            CredentialType::Custom("内部工具".to_string()),
+            SecurityLevel::Medium,
+            None,
+            None,
+            false,
+            "plain-note-secret",
+        );
+        println!("===RICH===");
+        println!("{}", serde_json::to_string_pretty(&rich).unwrap());
+        println!("===SPARSE===");
+        println!("{}", serde_json::to_string_pretty(&sparse).unwrap());
+    }
+
+    /// 完整 WorkspaceSettings 序列化（带指定 sync 配置）。
+    fn workspace_settings_json(sync: Option<(String, String)>) -> String {
+        let settings = persona_core::models::WorkspaceSettings {
+            sync: sync.map(
+                |(server_url, server_token)| persona_core::models::SyncConfig {
+                    enabled: true,
+                    server_url,
+                    server_token,
+                },
+            ),
+            ..persona_core::models::WorkspaceSettings::default()
+        };
+        serde_json::to_string(&settings).unwrap()
+    }
+
+    /// v2 形态 workspace 行（path = 指定目录，settings = 完整 JSON）。
+    async fn insert_workspace_row(db: &Database, path: &str, settings_json: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"INSERT INTO workspaces (id, name, path, created_at, updated_at, is_active, active_identity_id, settings)
+               VALUES (?, ?, ?, ?, ?, 1, NULL, ?)"#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind("test")
+        .bind(path)
+        .bind(&now)
+        .bind(&now)
+        .bind(settings_json)
+        .execute(db.pool())
+        .await
+        .unwrap();
     }
 }

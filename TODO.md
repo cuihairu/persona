@@ -174,6 +174,31 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
 - [ ] **M5 浏览器插件接账号（落地④）**：插件登录账号 → 读写云端保险库
       （HTTP 直连 server，出 native messaging 本地桥）、离线可用
       （本地缓存兜底）、同步冲突解决；chromium 与 safari 两份
+      **分批计划（2026-10-07 起）**：
+      - [x] **M5-批1 桥发云参数 + 插件 HTTP 直连读**（2026-10-07）：桥协议 v6 新增
+        `sync_connect`（配对会话+HMAC+user_gesture 门禁；读 vault settings
+        server_url + keyring `persona-sync` token + `persona-device` 身份 →
+        server `/sync/group-keys` 拆本机信封得 group key → 返回
+        {server_url, token, device_id, device_name, group_key_hex}（hex，与桌面
+        sync_group_store 同编码），token/group key 仅进 chrome.storage.session）；
+        扩展 `cloudSync.ts`：fetch 直连 `GET /api/v1/sync/oplog`
+        （next_cursor 翻页）→ WebCrypto AES-256-GCM 解包（item key→payload，
+        `nonce12‖ct‖tag16` 与 EncryptionService 同格式）→ bincode 1.3 解码
+        SyncItemSnapshot 元数据段（identity_id 带 u64 长度前缀、Custom 变体
+        输出裸内部字符串，均以 fixture 实测锚定）→ LWW 视图合并
+        → popup 云端区（连接/拉取/条目列表）+ chrome.storage.local 密文态缓存；
+        manifest（根 + public 两份）加 optional_host_permissions + 连接时按
+        服务器 origin 申请权限；跨语言测试锚点 = Rust emit_sync_item_fixture
+        生成两份 sync_item_fixture*.json（Rust 锚定测试 + TS 18 例双向读同一
+        文件）；BRIDGE_PROTOCOL.md §17 + 版本表 v6 + 6 条 sync_* 错误码
+      - [ ] **M5-批2 账号域登录**：桥 op `account_login/status/logout`
+        （Rust SRP 客户端走 `/api/v1/accounts/{id}/srp/*`，替换静态 token；
+        15 分钟会话续期）
+      - [ ] **M5-批3 云端写路径**：桥 op `sync_push_now`（桥开 SyncSession
+        跑 cycle；扩展侧新增/编辑走既有 save_credential + 推送）
+      - [ ] **M5-批4 离线兜底 + 冲突解决**：断网读缓存、双版本裁决 UI
+        （对齐桌面 SyncConflictsModal 口径）
+      - [ ] **M5-批5 safari 同份**
 - [ ] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
       冲突合并正确、吊销流程走查，截图输出
