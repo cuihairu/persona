@@ -64,15 +64,8 @@ body {
 }
 
 .VPHomeHero .name {
-  background: linear-gradient(120deg, #fe7336 8%, #15110f 58%, #f6b26b 100%);
-  -webkit-background-clip: text;
-  color: transparent;
-}
-
-.dark .VPHomeHero .name {
-  background: linear-gradient(120deg, #ff9a64 5%, #fff7ef 55%, #f2c078 100%);
-  -webkit-background-clip: text;
-  color: transparent;
+  /* 纯品牌色（2026-10 主题审核批：字体渐变全站禁用） */
+  color: var(--vp-c-brand-1);
 }
 
 .VPHomeHero .image-bg {
