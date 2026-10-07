@@ -1107,14 +1107,14 @@ manifest 文件内容示例：
 
 ## 版本兼容性
 
-| Protocol Version | CLI Version | 功能                                                                                                   |
-| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------ |
-| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
-| 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                              |
-| 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）              |
-| 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                        |
-| 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port            |
-| 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                      |
+| Protocol Version | CLI Version | 功能                                                                                                                |
+| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------------------- |
+| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy              |
+| 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                                           |
+| 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）                           |
+| 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                                     |
+| 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port                         |
+| 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                                   |
 | 7                | 0.1.0+      | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）：令牌只落 keyring 不过桥 |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
