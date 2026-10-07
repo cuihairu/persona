@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { personaAPI } from '@/utils/api';
+import DataLossWarning from './DataLossWarning';
 import type { SyncJoinBeginOutcome, SyncPairingCreateOutcome } from '@/types';
 
 /** 同步组配对节（S1 桌面接线）：出码 / 输码 / 指纹比对 / 入组。 */
@@ -200,6 +201,9 @@ export default function SyncGroupSection() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             {t('settings.syncGroup.joinedHint')}
           </p>
+          {/* S5-b 首次启用强提示：单设备且无备份时在位常驻（非一次性弹窗），
+              第二台设备或备份凭证任一到位即消失 */}
+          <DataLossWarning variant="strong" />
         </div>
       ) : (
         <div className="mt-3 space-y-3">

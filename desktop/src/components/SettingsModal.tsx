@@ -26,6 +26,7 @@ import AccountSection from './AccountSection';
 import QuickAccessSection from './QuickAccessSection';
 import UpdateCheckSection from './UpdateCheckSection';
 import BackupSection from './BackupSection';
+import DataLossWarning from './DataLossWarning';
 import SyncConflictsModal from './SyncConflictsModal';
 import SyncGroupSection from './SyncGroupSection';
 import SshIntegrationSection from './SshIntegrationSection';
@@ -1140,6 +1141,9 @@ const GeneralPane: React.FC<{
 
   return (
     <div>
+      {/* S5-b 数据丢失强提示：设置页常驻横幅（红点），第二台设备或备份
+          凭证任一到位即自动解除；账号绑定降一档 */}
+      <DataLossWarning variant="banner" />
       <section className="mb-5">
         <h3 className="text-sm font-medium text-gray-900 dark:text-gray-100 mb-2">{t('settings.theme')}</h3>
         <div

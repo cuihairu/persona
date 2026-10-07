@@ -337,6 +337,17 @@ export default {
       beginFailed: 'Failed to start pairing',
       confirmFailed: 'Failed to join',
     },
+    dataLoss: {
+      title: 'Data loss risk',
+      strongTitle: 'Data at risk',
+      strongBodyHigh: 'This vault has joined a sync group but contains only one device and no encrypted backup. losing this device means losing the entire vault.',
+      strongBodyMedium: 'This vault has joined a sync group with only one device. losing this device means losing the vault unless another device or a backup is available.',
+      actionBackup: 'Export encrypted backup',
+      actionDevice: 'Add another device',
+      bannerTitleHigh: 'Data at risk — only one device',
+      bannerTitleMedium: 'Data at risk — single device',
+      bannerAction: 'Manage risk',
+    },
     account: {
       title: 'Account',
       description:
