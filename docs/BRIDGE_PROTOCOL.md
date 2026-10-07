@@ -750,14 +750,14 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 
 **错误码（v6 新增）：**
 
-| 错误码                    | 触发条件                                             |
-| ------------------------- | ---------------------------------------------------- |
+| 错误码                    | 触发条件                                                          |
+| ------------------------- | ----------------------------------------------------------------- |
 | `sync_not_configured`     | keyring 无 sync token / 无 workspace / 服务器 URL 为空 / 配置非法 |
-| `sync_not_joined`         | keyring 无设备身份（该保险库尚未加入同步）           |
-| `sync_not_authorized`     | 信封表里没有本机设备（待管理员授权，fail-closed）    |
-| `sync_group_key_failed`   | 本机 group key 信封拆封失败                          |
-| `sync_identity_corrupted` | 存储的设备身份不可读                                 |
-| `sync_server_unreachable` | `group_keys()` 远端调用失败                          |
+| `sync_not_joined`         | keyring 无设备身份（该保险库尚未加入同步）                        |
+| `sync_not_authorized`     | 信封表里没有本机设备（待管理员授权，fail-closed）                 |
+| `sync_group_key_failed`   | 本机 group key 信封拆封失败                                       |
+| `sync_identity_corrupted` | 存储的设备身份不可读                                              |
+| `sync_server_unreachable` | `group_keys()` 远端调用失败                                       |
 
 ## 安全机制
 
@@ -904,35 +904,35 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 
 ### 错误码列表
 
-| 错误码                              | 描述                                  |
-| ----------------------------------- | ------------------------------------- |
-| `invalid_json`                      | JSON 解析失败                         |
-| `unknown_type`                      | 未知的消息类型                        |
-| `locked`                            | 保险库已锁定，需要解锁                |
-| `not_found`                         | 请求的资源不存在                      |
-| `origin_mismatch`                   | Origin 不匹配                         |
-| `origin_binding_required`           | 条目未设置 URL，无法进行 Origin 绑定  |
-| `authentication_failed`             | 认证失败                              |
-| `wrong_identity`                    | 当前 active identity 不匹配           |
-| `user_confirmation_required`        | 需要用户确认                          |
-| `session_expired`                   | 会话已过期                            |
-| `user_gesture_required`             | 缺少用户手势（v2）                    |
-| `no_active_identity`                | 未设置 active identity（v2）          |
-| `passkey_rp_mismatch`               | origin 与 passkey 的 rp_id 不符（v2） |
-| `passkey_alg_unsupported`           | pubKeyCredParams 不含 ES256（v2）     |
-| `passkey_item_not_found`            | 指定的 passkey 不存在（v2）           |
-| `passkey_origin_mismatch`           | passkey origin 校验失败（预留）（v2） |
-| `passkey_desktop_denied`            | passkey 创建/断言被桌面审批拒绝       |
-| `passkey_desktop_approval_required` | `require` 模式下桌面审批不可达        |
-| `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）         |
-| `unsupported_credential_type`       | 条目类型不支持该操作                  |
-| `invalid_payload`                   | payload 校验失败（如空密码）          |
+| 错误码                              | 描述                                         |
+| ----------------------------------- | -------------------------------------------- |
+| `invalid_json`                      | JSON 解析失败                                |
+| `unknown_type`                      | 未知的消息类型                               |
+| `locked`                            | 保险库已锁定，需要解锁                       |
+| `not_found`                         | 请求的资源不存在                             |
+| `origin_mismatch`                   | Origin 不匹配                                |
+| `origin_binding_required`           | 条目未设置 URL，无法进行 Origin 绑定         |
+| `authentication_failed`             | 认证失败                                     |
+| `wrong_identity`                    | 当前 active identity 不匹配                  |
+| `user_confirmation_required`        | 需要用户确认                                 |
+| `session_expired`                   | 会话已过期                                   |
+| `user_gesture_required`             | 缺少用户手势（v2）                           |
+| `no_active_identity`                | 未设置 active identity（v2）                 |
+| `passkey_rp_mismatch`               | origin 与 passkey 的 rp_id 不符（v2）        |
+| `passkey_alg_unsupported`           | pubKeyCredParams 不含 ES256（v2）            |
+| `passkey_item_not_found`            | 指定的 passkey 不存在（v2）                  |
+| `passkey_origin_mismatch`           | passkey origin 校验失败（预留）（v2）        |
+| `passkey_desktop_denied`            | passkey 创建/断言被桌面审批拒绝              |
+| `passkey_desktop_approval_required` | `require` 模式下桌面审批不可达               |
+| `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）                |
+| `unsupported_credential_type`       | 条目类型不支持该操作                         |
+| `invalid_payload`                   | payload 校验失败（如空密码）                 |
 | `sync_not_configured`               | 同步未配置（token/URL/workspace 缺失）（v6） |
-| `sync_not_joined`                   | 保险库尚未加入同步（v6）              |
-| `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6） |
-| `sync_group_key_failed`             | group key 信封拆封失败（v6）          |
-| `sync_identity_corrupted`           | 设备身份不可读（v6）                  |
-| `sync_server_unreachable`           | 同步服务器不可达（v6）                |
+| `sync_not_joined`                   | 保险库尚未加入同步（v6）                     |
+| `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6）      |
+| `sync_group_key_failed`             | group key 信封拆封失败（v6）                 |
+| `sync_identity_corrupted`           | 设备身份不可读（v6）                         |
+| `sync_server_unreachable`           | 同步服务器不可达（v6）                       |
 
 ## 配置
 
