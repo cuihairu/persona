@@ -759,6 +759,94 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 | `sync_identity_corrupted` | 存储的设备身份不可读                                              |
 | `sync_server_unreachable` | `group_keys()` 远端调用失败                                       |
 
+### 18. account_login / account_status / account_logout - 账号域三件套（协议 v7）
+
+扩展经本地桥登录/查询/登出**账号域**会话（M5 批2）：SRP 数学（Argon2id 预
+hash、M1 推导、M2 核验）全在宿主 Rust 侧（core `AccountsApi::srp_login` 编排），
+口令与 premaster 不出编排模块。令牌直写 OS keyring（`persona-account` 条目，
+键 = vault db_path，与桌面 token_store 同名同键）——**令牌本体不过桥协议**，
+扩展只见有效期与会话指纹。服务器 URL 复用 vault settings 的 sync 配置
+（与 §17 同一读取口径）。
+
+**account_login 请求：**
+
+```json
+{
+  "type": "account_login",
+  "payload": {
+    "account_id": "acct-…",
+    "password": "…",
+    "device_name": "browser-extension",
+    "user_gesture": true
+  }
+}
+```
+
+- 门禁：配对会话 HMAC + `user_gesture`（口令换令牌，敏感操作）
+- 响应 `account_login_response`：`{ "expires_in_secs": 900, "session_key_fingerprint": "…hex…" }`
+- 失败分类：`sync_not_configured`（服务器 URL 未配置）、`account_not_configured`
+  （URL 非法）、`account_login_failed`（SRP 编排失败，含服务器拒绝）、
+  `account_keyring_unavailable`（令牌落 keyring 失败——登录成功也不交付，
+  fail-closed）
+
+**account_status 请求：** `{}`（需配对会话，无 gesture 要求——只报在场与否）
+
+- 响应 `account_status_response`：`{ "has_session": true, "server_configured": true }`
+
+**account_logout 请求：**
+
+```json
+{
+  "type": "account_logout",
+  "payload": { "account_id": "acct-…", "user_gesture": true }
+}
+```
+
+- 门禁：配对会话 HMAC + `user_gesture`
+- 语义与桌面 `account_sign_out` 同口径：无令牌 = 幂等成功
+  （`revoked_on_server: false`）；有令牌则 best-effort 吊销服务器会话
+  （`DELETE /accounts/{id}/sessions/{token}`），**本地令牌照删不因服务器
+  失联卡死**，`revoked_on_server` 如实反映吊销结果
+- 响应 `account_logout_response`：`{ "revoked_on_server": false }`
+
+### 19. sync_push_now - 立即同步（协议 v7）
+
+云端写路径（M5 批3）：宿主开 `SyncSession` 跑 backfill → pull →
+materialize → push 周期，把主库（含经 `save_credential` 落库的扩展侧写入）
+推上云。与桌面 `sync_now` 同一 core 编排；差异：
+
+- master 密钥来自桥锁态（`PERSONA_MASTER_PASSWORD`），锁定 → `locked:`
+- **不挂捕获缝**——桥一请求一进程，缝随进程消亡；请求之外经桥落库的
+  写入由下一轮 `backfill_existing` 幂等补齐
+
+**请求：**
+
+```json
+{
+  "type": "sync_push_now",
+  "payload": { "user_gesture": true }
+}
+```
+
+- 门禁：配对会话 HMAC + `user_gesture`（写路径推云）
+- 响应 `sync_push_now_response`（与 core `SyncNowReport` 同字段的计数汇总）：
+
+```json
+{
+  "pulled": 0,
+  "materialized": 0,
+  "conflicts": 0,
+  "pending_identity": 0,
+  "pushed": 3,
+  "backfilled": 0
+}
+```
+
+- 失败分类：`sync_not_configured` / `sync_not_joined` /
+  `sync_identity_corrupted`（配置段，先于解锁）、`sync_session_failed`
+  （信封拆封/装配失败）、`sync_cycle_failed`（backfill 或周期失败）、
+  `locked:`（桥锁态无主密码）
+
 ## 安全机制
 
 ### Origin 绑定
@@ -771,7 +859,7 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 
 ### User Gesture 要求
 
-`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` 操作要求：
+`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` / `account_login` / `account_logout` 操作要求：
 
 1. 必须由用户明确操作触发（点击、键盘快捷键）
 2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
@@ -933,6 +1021,11 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 | `sync_group_key_failed`             | group key 信封拆封失败（v6）                 |
 | `sync_identity_corrupted`           | 设备身份不可读（v6）                         |
 | `sync_server_unreachable`           | 同步服务器不可达（v6）                       |
+| `account_not_configured`            | 账号服务器 URL 非法（v7）                    |
+| `account_login_failed`              | SRP 登录编排失败（含服务器拒绝）（v7）       |
+| `account_keyring_unavailable`       | 账号令牌 keyring 读写失败（v7）              |
+| `sync_session_failed`               | 同步会话装配失败（信封/授权）（v7）          |
+| `sync_cycle_failed`                 | 同步周期失败（backfill/cycle）（v7）         |
 
 ## 配置
 
@@ -1022,6 +1115,7 @@ manifest 文件内容示例：
 | 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                        |
 | 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port            |
 | 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                      |
+| 7                | 0.1.0+      | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）：令牌只落 keyring 不过桥 |
 
 > v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
 

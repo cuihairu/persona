@@ -1,3 +1,32 @@
+/**
+ * 从本地桥取云端同步参数（配对会话 + HMAC + user_gesture 三重门禁）。
+ * 成功后扩展自己直连 server 的 /api/v1/sync/*（出 native messaging 桥）。
+ */
+export async function syncConnect(host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('sync_connect', { user_gesture: true }, host);
+}
+/**
+ * SRP 登录账号域（challenge/verify 两跳与 M2 核验全在宿主 Rust 侧）。
+ * 必须由显式用户点击触发——口令换会话令牌，属敏感操作。
+ */
+export async function accountLogin(request, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('account_login', { ...request, user_gesture: true }, host);
+}
+/** 查询本机账号会话在场与否 + 服务器配置状态（轻量，未登录也安全）。 */
+export async function accountStatus(host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('account_status', {}, host);
+}
+/**
+ * 立即同步（写路径）：宿主跑 backfill+pull/materialize/push 周期，把主库
+ * （含经 save_credential 落库的扩展侧写入）推上云。须显式用户触发。
+ */
+export async function syncPushNow(host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('sync_push_now', { user_gesture: true }, host);
+}
+/** 登出：宿主侧吊销服务器会话（best-effort）+ 清 keyring 令牌。 */
+export async function accountLogout(accountId, host = DEFAULT_NATIVE_HOST) {
+    return sendAuthedNativeMessage('account_logout', { account_id: accountId, user_gesture: true }, host);
+}
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 function generateRequestId() {

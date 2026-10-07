@@ -69,7 +69,17 @@
     <p id="cloudStatus" class="status">Not connected</p>
     <button id="cloudConnect" class="secondary">Connect via local bridge</button>
     <button id="cloudRefresh" class="secondary" disabled>Pull from server</button>
+    <button id="cloudPush" class="secondary" disabled>Push local changes</button>
     <div id="cloudItems" style="display:flex;flex-direction:column;gap:8px;"></div>
+
+    <h3 style="margin-top:16px;">Account</h3>
+    <p id="accountStatus" class="status">Unknown</p>
+    <label for="accountId" style="display:block;margin-top:8px;">Account ID</label>
+    <input id="accountId" type="text" placeholder="acct-…" style="width:100%;padding:6px;" />
+    <label for="accountPassword" style="display:block;margin-top:8px;">Password</label>
+    <input id="accountPassword" type="password" style="width:100%;padding:6px;" />
+    <button id="accountLoginBtn">Sign in</button>
+    <button id="accountLogoutBtn" class="danger">Sign out</button>
 
     <h3 style="margin-top:16px;">Autofill settings</h3>
     <div style="display:flex;flex-direction:column;gap:8px;">

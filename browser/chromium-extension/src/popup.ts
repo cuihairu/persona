@@ -1,6 +1,6 @@
 import type { BridgeStatus } from './nativeBridge';
 import type { DomainAssessment } from './domainPolicy';
-import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword } from './nativeBridge';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults';
 import {
@@ -302,6 +302,7 @@ if (genGenerateButton) {
 const cloudStatusEl = document.getElementById('cloudStatus');
 const cloudConnectButton = document.getElementById('cloudConnect') as HTMLButtonElement | null;
 const cloudRefreshButton = document.getElementById('cloudRefresh') as HTMLButtonElement | null;
+const cloudPushButton = document.getElementById('cloudPush') as HTMLButtonElement | null;
 const cloudItemsEl = document.getElementById('cloudItems');
 
 function cloudErrorText(error: unknown): string {
@@ -314,6 +315,7 @@ function setCloudStatus(text: string) {
 
 function setCloudConnected(conn: CloudConn | undefined) {
     cloudRefreshButton?.toggleAttribute('disabled', !conn);
+    cloudPushButton?.toggleAttribute('disabled', !conn);
     setCloudStatus(
         conn ? `Connected • device ${conn.deviceName} • ${conn.serverUrl}` : 'Not connected'
     );
@@ -416,6 +418,33 @@ cloudRefreshButton?.addEventListener('click', async () => {
     await pullAndRender(conn);
 });
 
+cloudPushButton?.addEventListener('click', async () => {
+    cloudPushButton?.toggleAttribute('disabled', true);
+    setCloudStatus('Running sync cycle via local bridge…');
+    try {
+        const resp = await syncPushNow();
+        if (!resp?.ok || !resp.payload) {
+            setCloudStatus(`Sync failed – ${resp?.error ?? 'unknown error'}`);
+            return;
+        }
+        const r = resp.payload;
+        const parts = [
+            `pushed ${r.pushed}`,
+            `pulled ${r.pulled} (materialized ${r.materialized})`
+        ];
+        if (r.backfilled > 0) parts.push(`backfilled ${r.backfilled}`);
+        if (r.conflicts > 0) parts.push(`${r.conflicts} conflicts pending adjudication`);
+        if (r.pending_identity > 0) parts.push(`${r.pending_identity} pending identity`);
+        setCloudStatus(`Synced • ${parts.join(' • ')}`);
+        // 推送改变了远端 oplog——顺手拉一次刷新列表
+        const conn = await loadCloudConn();
+        if (conn) await pullAndRender(conn);
+    } finally {
+        const conn = await loadCloudConn();
+        cloudPushButton?.toggleAttribute('disabled', !conn);
+    }
+});
+
 async function initCloudVault() {
     try {
         const conn = await loadCloudConn();
@@ -426,6 +455,94 @@ async function initCloudVault() {
     }
 }
 
+// ============ Account (bridge protocol v7, M5 批2) ============
+
+const accountStatusEl = document.getElementById('accountStatus');
+const accountIdInput = document.getElementById('accountId') as HTMLInputElement | null;
+const accountPasswordInput = document.getElementById('accountPassword') as HTMLInputElement | null;
+const accountLoginButton = document.getElementById('accountLoginBtn') as HTMLButtonElement | null;
+const accountLogoutButton = document.getElementById('accountLogoutBtn') as HTMLButtonElement | null;
+
+function setAccountStatus(text: string) {
+    if (accountStatusEl) accountStatusEl.textContent = text;
+}
+
+async function refreshAccountStatus() {
+    const resp = await accountStatus().catch((e: unknown) => ({ ok: false, error: String(e) }) as any);
+    if (!resp?.ok) {
+        setAccountStatus(`Unavailable – ${resp?.error ?? 'bridge not reachable'}`);
+        return;
+    }
+    const payload = resp.payload as { has_session: boolean; server_configured: boolean } | undefined;
+    if (!payload) {
+        setAccountStatus('Unavailable – malformed response');
+        return;
+    }
+    if (payload.has_session) {
+        setAccountStatus('Signed in');
+    } else if (payload.server_configured) {
+        setAccountStatus('Not signed in');
+    } else {
+        setAccountStatus('Not signed in (sync server not configured)');
+    }
+    if (accountLogoutButton) {
+        accountLogoutButton.toggleAttribute('disabled', !payload.has_session);
+    }
+}
+
+accountLoginButton?.addEventListener('click', async () => {
+    const accountId = accountIdInput?.value?.trim();
+    const password = accountPasswordInput?.value ?? '';
+    if (!accountId || !password) {
+        setAccountStatus('Account ID and password are required.');
+        return;
+    }
+    accountLoginButton?.toggleAttribute('disabled', true);
+    setAccountStatus('Signing in…');
+    try {
+        const resp = await accountLogin({
+            account_id: accountId,
+            password,
+            device_name: 'browser-extension'
+        });
+        if (!resp?.ok) {
+            setAccountStatus(`Sign-in failed – ${resp?.error ?? 'unknown error'}`);
+            return;
+        }
+        const payload = resp.payload as { expires_in_secs: number; session_key_fingerprint: string };
+        setAccountStatus(
+            `Signed in • token valid ${Math.round(payload.expires_in_secs / 60)} min • fingerprint ${payload.session_key_fingerprint.slice(0, 12)}…`
+        );
+        if (accountPasswordInput) accountPasswordInput.value = '';
+    } finally {
+        accountLoginButton?.toggleAttribute('disabled', false);
+        await refreshAccountStatus().catch(() => null);
+    }
+});
+
+accountLogoutButton?.addEventListener('click', async () => {
+    const accountId = accountIdInput?.value?.trim();
+    if (!accountId) {
+        setAccountStatus('Account ID is required to sign out.');
+        return;
+    }
+    accountLogoutButton?.toggleAttribute('disabled', true);
+    try {
+        const resp = await accountLogout(accountId);
+        if (!resp?.ok) {
+            setAccountStatus(`Sign-out failed – ${resp?.error ?? 'unknown error'}`);
+            return;
+        }
+        const payload = resp.payload as { revoked_on_server: boolean };
+        setAccountStatus(
+            payload.revoked_on_server ? 'Signed out (session revoked)' : 'Signed out (local token cleared)'
+        );
+    } finally {
+        accountLogoutButton?.toggleAttribute('disabled', false);
+        await refreshAccountStatus().catch(() => null);
+    }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
     refreshStoredStatus();
     refreshForms();
@@ -433,6 +550,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshAutofill().catch(() => null);
     refreshSettings().catch(() => null);
     initCloudVault().catch(() => null);
+    refreshAccountStatus().catch(() => null);
 });
 
 async function getActiveTabOrigin(): Promise<{ tabId: number; origin: string } | null> {

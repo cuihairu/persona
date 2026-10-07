@@ -14,6 +14,9 @@ import {
     getSuggestions,
     passkeyCreate,
     getPairingState,
+    accountLogin,
+    accountStatus,
+    accountLogout,
     type NativeBridgeResponse
 } from './nativeBridge';
 
@@ -329,5 +332,45 @@ describe('authed requests', () => {
         expect(mock.calls).toHaveLength(1);
         expect(mock.calls[0].message.type).toBe('status');
         expect(mock.calls[0].message.auth).toBeUndefined();
+    });
+});
+
+describe('account domain (protocol v7)', () => {
+    it('accountLogin forces user_gesture true and signs the payload', async () => {
+        await mock.seedPairing('sess-9', Date.now() + 3_600_000);
+
+        const response = await accountLogin({
+            account_id: 'acct-1',
+            password: 'hunter2',
+            device_name: 'browser'
+        });
+
+        expect(response.ok).toBe(true);
+        const call = authedCall('account_login');
+        expect(call.message.payload).toEqual({
+            account_id: 'acct-1',
+            password: 'hunter2',
+            device_name: 'browser',
+            user_gesture: true
+        });
+        expect(call.message.auth.session_id).toBe('sess-9');
+    });
+
+    it('accountStatus signs an empty payload', async () => {
+        await mock.seedPairing('sess-9', Date.now() + 3_600_000);
+
+        await accountStatus();
+
+        const call = authedCall('account_status');
+        expect(call.message.payload).toEqual({});
+    });
+
+    it('accountLogout carries account_id with user_gesture', async () => {
+        await mock.seedPairing('sess-9', Date.now() + 3_600_000);
+
+        await accountLogout('acct-1');
+
+        const call = authedCall('account_logout');
+        expect(call.message.payload).toEqual({ account_id: 'acct-1', user_gesture: true });
     });
 });

@@ -189,6 +189,91 @@ export async function syncConnect(
     );
 }
 
+// ============ Account domain (bridge protocol v7, M5 批2) ============
+
+export interface AccountLoginRequest {
+    account_id: string;
+    password: string;
+    device_name: string;
+    user_gesture: boolean;
+}
+
+/** `account_login_response`：SRP 编排产物。令牌本体直写宿主 keyring，
+ * 不经桥协议下发——扩展只见有效期与会话指纹。 */
+export interface AccountLoginPayload {
+    expires_in_secs: number;
+    session_key_fingerprint: string;
+}
+
+export interface AccountStatusPayload {
+    has_session: boolean;
+    server_configured: boolean;
+}
+
+export interface AccountLogoutPayload {
+    revoked_on_server: boolean;
+}
+
+/**
+ * SRP 登录账号域（challenge/verify 两跳与 M2 核验全在宿主 Rust 侧）。
+ * 必须由显式用户点击触发——口令换会话令牌，属敏感操作。
+ */
+export async function accountLogin(
+    request: Omit<AccountLoginRequest, 'user_gesture'>,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<AccountLoginPayload>> {
+    return sendAuthedNativeMessage<AccountLoginPayload>(
+        'account_login',
+        { ...request, user_gesture: true },
+        host
+    );
+}
+
+/** 查询本机账号会话在场与否 + 服务器配置状态（轻量，未登录也安全）。 */
+export async function accountStatus(
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<AccountStatusPayload>> {
+    return sendAuthedNativeMessage<AccountStatusPayload>('account_status', {}, host);
+}
+
+// ============ Cloud sync write path (bridge protocol v7, M5 批3) ============
+
+/** `sync_push_now_response`：与 core SyncNowReport 同字段的计数汇总。 */
+export interface SyncPushNowPayload {
+    pulled: number;
+    materialized: number;
+    conflicts: number;
+    pending_identity: number;
+    pushed: number;
+    backfilled: number;
+}
+
+/**
+ * 立即同步（写路径）：宿主跑 backfill+pull/materialize/push 周期，把主库
+ * （含经 save_credential 落库的扩展侧写入）推上云。须显式用户触发。
+ */
+export async function syncPushNow(
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<SyncPushNowPayload>> {
+    return sendAuthedNativeMessage<SyncPushNowPayload>(
+        'sync_push_now',
+        { user_gesture: true },
+        host
+    );
+}
+
+/** 登出：宿主侧吊销服务器会话（best-effort）+ 清 keyring 令牌。 */
+export async function accountLogout(
+    accountId: string,
+    host = DEFAULT_NATIVE_HOST
+): Promise<NativeBridgeResponse<AccountLogoutPayload>> {
+    return sendAuthedNativeMessage<AccountLogoutPayload>(
+        'account_logout',
+        { account_id: accountId, user_gesture: true },
+        host
+    );
+}
+
 const DEFAULT_NATIVE_HOST = 'com.persona.native';
 const PAIRING_STORAGE_KEY = 'persona_native_pairing_v1';
 

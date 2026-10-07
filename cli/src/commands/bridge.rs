@@ -512,8 +512,8 @@ async fn handle_request(
 
             let payload = serde_json::json!({
                 "server_version": "0.1.0",
-                "protocol_version": 6,
-                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect"],
+                "protocol_version": 7,
+                "capabilities": ["status", "pairing_request", "pairing_finalize", "get_suggestions", "request_fill", "get_totp", "copy", "passkey_list", "passkey_create", "passkey_assert", "passkey_credential_provider_list", "passkey_credential_provider_assert", "find_for_save", "save_credential", "generate_password", "sync_connect", "account_login", "account_status", "account_logout", "sync_push_now"],
                 "pairing_required": require_pairing && session.is_none(),
                 "paired": session.is_some(),
                 "session_id": session.as_ref().map(|s| s.session_id.clone()),
@@ -1083,6 +1083,87 @@ async fn handle_request(
             Ok(ok(
                 req.request_id,
                 "sync_connect_response",
+                serde_json::to_value(payload)?,
+            ))
+        }
+        // 账号域三件套（协议 v7，M5 批2）：SRP 登录/会话状态/登出，
+        // 令牌只落 OS keyring（persona-account 条目），不过桥协议下发。
+        "account_login" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: AccountLoginRequest =
+                serde_json::from_value(req.payload).context("invalid payload for account_login")?;
+            if gesture_required() && !parsed.user_gesture {
+                warn!("account_login rejected: user_gesture required but not provided");
+                return Err(anyhow!(
+                    "user_gesture_required: account_login exchanges the vault password for a session token and must be triggered by explicit user action"
+                ));
+            }
+            let payload = run_account_login(
+                db_path,
+                &parsed.account_id,
+                &parsed.password,
+                &parsed.device_name,
+                &KeyringAccountTokenStore,
+            )
+            .await?;
+            info!(event = "bridge_account_login", "account login via bridge");
+            Ok(ok(
+                req.request_id,
+                "account_login_response",
+                serde_json::to_value(payload)?,
+            ))
+        }
+        "account_status" => {
+            require_authenticated_session(state_dir, &req)?;
+            let payload = run_account_status(db_path, &KeyringAccountTokenStore).await?;
+            Ok(ok(
+                req.request_id,
+                "account_status_response",
+                serde_json::to_value(payload)?,
+            ))
+        }
+        // 云端写路径（协议 v7，M5 批3）：把主库（含经 save_credential 落库
+        // 的扩展侧写入）推上云。写操作，配对会话之上再要求 user gesture。
+        "sync_push_now" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: SyncPushNowRequest =
+                serde_json::from_value(req.payload).context("invalid payload for sync_push_now")?;
+            if gesture_required() && !parsed.user_gesture {
+                warn!("sync_push_now rejected: user_gesture required but not provided");
+                return Err(anyhow!(
+                    "user_gesture_required: sync_push_now uploads vault data to the sync server and must be triggered by explicit user action"
+                ));
+            }
+            let payload = run_sync_push_now(db_path).await?;
+            info!(
+                event = "bridge_sync_push_now",
+                pulled = payload.pulled,
+                pushed = payload.pushed,
+                materialized = payload.materialized,
+                "sync cycle completed via bridge"
+            );
+            Ok(ok(
+                req.request_id,
+                "sync_push_now_response",
+                serde_json::to_value(payload)?,
+            ))
+        }
+        "account_logout" => {
+            require_authenticated_session(state_dir, &req)?;
+            let parsed: AccountLogoutRequest = serde_json::from_value(req.payload)
+                .context("invalid payload for account_logout")?;
+            if gesture_required() && !parsed.user_gesture {
+                warn!("account_logout rejected: user_gesture required but not provided");
+                return Err(anyhow!(
+                    "user_gesture_required: account_logout revokes the account session and must be triggered by explicit user action"
+                ));
+            }
+            let payload =
+                run_account_logout(db_path, &parsed.account_id, &KeyringAccountTokenStore).await?;
+            info!(event = "bridge_account_logout", "account logout via bridge");
+            Ok(ok(
+                req.request_id,
+                "account_logout_response",
                 serde_json::to_value(payload)?,
             ))
         }
@@ -2681,6 +2762,238 @@ async fn run_sync_connect(db_path: &Path) -> Result<SyncConnectPayload> {
     })
 }
 
+// ---- 账号域（协议 v7，M5 批2）----
+
+/// 账号域 bearer（静态服务器令牌 / SRP 短期令牌 / 24h 会话令牌）的
+/// keyring service——与桌面 token_store 的 ACCOUNT_SERVICE 同名同键
+/// （条目键 = vault db_path），桌面与桥读写同一枚令牌。
+const KEYRING_SERVICE_ACCOUNT: &str = "persona-account";
+
+/// 账号令牌仓抽象：生产走 OS keyring；测试注入内存实现（与桌面
+/// token_store 的 TokenStore trait 同构，参数化 service 名的思路一致）。
+trait AccountTokenStore: Send + Sync {
+    fn set_token(&self, db_key: &str, token: &str) -> Result<()>;
+    fn get_token(&self, db_key: &str) -> Result<Option<String>>;
+    fn delete_token(&self, db_key: &str) -> Result<()>;
+}
+
+struct KeyringAccountTokenStore;
+
+impl AccountTokenStore for KeyringAccountTokenStore {
+    fn set_token(&self, db_key: &str, token: &str) -> Result<()> {
+        keyring::Entry::new(KEYRING_SERVICE_ACCOUNT, db_key)
+            .and_then(|e| e.set_password(token))
+            .map_err(|e| anyhow!("account_keyring_unavailable: {e}"))
+    }
+
+    fn get_token(&self, db_key: &str) -> Result<Option<String>> {
+        let entry = keyring::Entry::new(KEYRING_SERVICE_ACCOUNT, db_key)
+            .map_err(|e| anyhow!("account_keyring_unavailable: {e}"))?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(anyhow!("account_keyring_unavailable: {e}")),
+        }
+    }
+
+    fn delete_token(&self, db_key: &str) -> Result<()> {
+        let entry = keyring::Entry::new(KEYRING_SERVICE_ACCOUNT, db_key)
+            .map_err(|e| anyhow!("account_keyring_unavailable: {e}"))?;
+        match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()), // 幂等
+            Err(e) => Err(anyhow!("account_keyring_unavailable: {e}")),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountLoginRequest {
+    account_id: String,
+    password: String,
+    device_name: String,
+    #[serde(default)]
+    user_gesture: bool,
+}
+
+/// `account_login_response`：SRP 编排产物（core `AccountSrpLoginOutcome`
+/// 的展示投影）。令牌本体直写 keyring，不过桥协议下发——扩展只见
+/// 有效期与会话指纹（与桌面 account_srp_login 的响应口径一致）。
+#[derive(Debug, Serialize)]
+struct AccountLoginPayload {
+    expires_in_secs: u64,
+    session_key_fingerprint: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AccountStatusPayload {
+    has_session: bool,
+    server_configured: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccountLogoutRequest {
+    account_id: String,
+    #[serde(default)]
+    user_gesture: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AccountLogoutPayload {
+    revoked_on_server: bool,
+}
+
+async fn run_account_login(
+    db_path: &Path,
+    account_id: &str,
+    password: &str,
+    device_name: &str,
+    store: &dyn AccountTokenStore,
+) -> Result<AccountLoginPayload> {
+    let server_url = read_sync_server_url(db_path).await?;
+    let api = persona_core::accounts::remote::AccountsApi::new(&server_url).map_err(|e| {
+        anyhow!("account_not_configured: invalid account server configuration: {e}")
+    })?;
+    // SRP 数学全在 core（口令不出编排模块）；桥只递口令与收编排产物
+    let outcome = api
+        .srp_login(account_id, device_name, password)
+        .await
+        .map_err(|e| anyhow!("account_login_failed: {e}"))?;
+    let db_key = db_path.to_string_lossy().to_string();
+    store
+        .set_token(&db_key, &outcome.token)
+        .map_err(|e| anyhow!("{e}"))?;
+    Ok(AccountLoginPayload {
+        expires_in_secs: outcome.expires_in_secs,
+        session_key_fingerprint: outcome.session_key_fingerprint,
+    })
+}
+
+async fn run_account_status(
+    db_path: &Path,
+    store: &dyn AccountTokenStore,
+) -> Result<AccountStatusPayload> {
+    let db_key = db_path.to_string_lossy().to_string();
+    let has_session = store
+        .get_token(&db_key)?
+        .filter(|t| !t.trim().is_empty())
+        .is_some();
+    let server_configured = read_sync_server_url(db_path).await.is_ok();
+    Ok(AccountStatusPayload {
+        has_session,
+        server_configured,
+    })
+}
+
+async fn run_account_logout(
+    db_path: &Path,
+    account_id: &str,
+    store: &dyn AccountTokenStore,
+) -> Result<AccountLogoutPayload> {
+    let db_key = db_path.to_string_lossy().to_string();
+    let bearer = store.get_token(&db_key)?.filter(|t| !t.trim().is_empty());
+    let Some(bearer) = bearer else {
+        // 本机已无令牌 = 已退出；幂等成功（与桌面 account_sign_out 同口径）
+        return Ok(AccountLogoutPayload {
+            revoked_on_server: false,
+        });
+    };
+    let mut revoked_on_server = false;
+    if let Ok(server_url) = read_sync_server_url(db_path).await {
+        if let Ok(api) =
+            persona_core::accounts::remote::AccountsApi::with_bearer(&server_url, &bearer)
+        {
+            revoked_on_server = api
+                .revoke_account_session(account_id, &bearer)
+                .await
+                .is_ok();
+        }
+    }
+    store.delete_token(&db_key)?;
+    Ok(AccountLogoutPayload { revoked_on_server })
+}
+
+// ---- 云端写路径（协议 v7，M5 批3）----
+
+#[derive(Debug, Deserialize)]
+struct SyncPushNowRequest {
+    #[serde(default)]
+    user_gesture: bool,
+}
+
+/// `sync_push_now_response`：与 core `SyncNowReport` 同字段的桥投影
+/// （核心类型未实现 Serialize，桥侧镜像计数）。
+#[derive(Debug, Serialize)]
+struct SyncPushNowPayload {
+    pulled: usize,
+    materialized: usize,
+    conflicts: usize,
+    pending_identity: usize,
+    pushed: usize,
+    backfilled: u64,
+}
+
+/// 立即同步（M5 批3：扩展侧新增/编辑走既有 `save_credential` 落主库，
+/// 本 op 把存量+增量推上云）。与桌面 `sync_now` 同一 core 编排
+/// （`SyncSession::open` → backfill → run_cycle），差异只在两点：
+/// - master 密钥来自桥锁态（`PERSONA_MASTER_PASSWORD` 解锁），锁定即拒；
+/// - **不挂捕获缝**——桥一请求一进程，缝随进程消亡没有意义；本请求
+///   之外经桥落库的写入由下一轮 `backfill_existing` 幂等补齐。
+async fn run_sync_push_now(db_path: &Path) -> Result<SyncPushNowPayload> {
+    // 配置解析最先（便宜的错误先报，也不必先解锁）——与 sync_connect 同分类
+    let server_url = read_sync_server_url(db_path).await?;
+    let db_key = db_path.to_string_lossy().to_string();
+    let token = read_keyring_entry(KEYRING_SERVICE_SYNC_TOKEN, &db_key)?
+        .filter(|t| !t.trim().is_empty())
+        .ok_or_else(|| anyhow!("sync_not_configured: sync server token is not set"))?;
+    let identity_raw = read_keyring_entry(KEYRING_SERVICE_DEVICE_IDENTITY, &db_key)?
+        .ok_or_else(|| anyhow!("sync_not_joined: this vault has not joined sync"))?;
+    let identity = persona_core::sync::device::DeviceIdentity::from_stored_json(&identity_raw)
+        .map_err(|e| {
+            anyhow!("sync_identity_corrupted: stored device identity is unreadable: {e}")
+        })?;
+
+    // master 密钥要解锁的 service（桥锁态）；锁定 fail-closed
+    let (service, _) = open_unlocked_service(db_path).await?;
+    let db = open_db(db_path).await?;
+    db.migrate().await?;
+    // travel 闸在装配前采样一次（与桌面 open_sync_session 同语义）
+    let travel_active = service
+        .travel_mode_active()
+        .await
+        .map_err(|e| anyhow!("sync_session_failed: travel mode check failed: {e}"))?;
+    let session = persona_core::sync::runtime::SyncSession::open(
+        &db,
+        &identity,
+        &server_url,
+        &token,
+        Box::new(move || travel_active),
+    )
+    .await
+    .map_err(|e| anyhow!("sync_session_failed: {e}"))?;
+    let master = service
+        .get_master_encryption_service()
+        .map_err(|e| anyhow!("locked: master key unavailable: {e}"))?;
+
+    let backfilled = session
+        .backfill_existing(master)
+        .await
+        .map_err(|e| anyhow!("sync_cycle_failed: backfill: {e}"))?;
+    let report = session
+        .run_cycle(master)
+        .await
+        .map_err(|e| anyhow!("sync_cycle_failed: {e}"))?;
+
+    Ok(SyncPushNowPayload {
+        pulled: report.pulled,
+        materialized: report.materialized,
+        conflicts: report.conflicts,
+        pending_identity: report.pending_identity,
+        pushed: report.pushed,
+        backfilled,
+    })
+}
+
 async fn read_frame<R: AsyncReadExt + Unpin>(reader: &mut R) -> Result<Option<Vec<u8>>> {
     let mut len_buf = [0u8; 4];
     match reader.read_exact(&mut len_buf).await {
@@ -2805,7 +3118,7 @@ pub(crate) mod tests {
 
         let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
 
-        // ---- hello: request declaring v2 still gets the v6 capability set
+        // ---- hello: request declaring v2 still gets the v7 capability set
         // (server reports its own protocol_version; old extensions stay
         // compatible by receiving unknown_type for new messages) ----
         let resp = handle_request(
@@ -2825,7 +3138,7 @@ pub(crate) mod tests {
         .unwrap();
         assert!(resp.ok, "hello must succeed: {:?}", resp.error);
         let payload = resp.payload.unwrap();
-        assert_eq!(payload["protocol_version"], 6);
+        assert_eq!(payload["protocol_version"], 7);
         for capability in [
             "passkey_list",
             "passkey_create",
@@ -4948,7 +5261,7 @@ pub(crate) mod tests {
         assert_eq!(payload["paired"], false);
         assert!(payload["session_id"].is_null());
         assert!(payload["session_expires_at_ms"].is_null());
-        assert_eq!(payload["protocol_version"], 6);
+        assert_eq!(payload["protocol_version"], 7);
         assert!(payload["server_version"].is_string());
         let caps = payload["capabilities"].as_array().unwrap();
         for capability in [
@@ -7907,6 +8220,247 @@ pub(crate) mod tests {
             assert_eq!(snap.is_favorite, expected["is_favorite"], "{file}");
             assert_eq!(snap.is_active, expected["is_active"], "{file}");
         }
+    }
+
+    // ---- account_*（协议 v7，M5 批2）----
+
+    /// 内存版账号令牌仓（测试注入；与生产 KeyringAccountTokenStore 同 trait）。
+    struct InMemoryAccountTokenStore(std::sync::Mutex<std::collections::HashMap<String, String>>);
+
+    impl InMemoryAccountTokenStore {
+        fn new() -> Self {
+            Self(std::sync::Mutex::new(std::collections::HashMap::new()))
+        }
+    }
+
+    impl AccountTokenStore for InMemoryAccountTokenStore {
+        fn set_token(&self, db_key: &str, token: &str) -> Result<()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(db_key.to_string(), token.to_string());
+            Ok(())
+        }
+
+        fn get_token(&self, db_key: &str) -> Result<Option<String>> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(db_key)
+                .cloned())
+        }
+
+        fn delete_token(&self, db_key: &str) -> Result<()> {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(db_key);
+            Ok(())
+        }
+    }
+
+    /// account_login 的 user_gesture 门禁：配对会话在场但无手势 → 拒。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 与既有 env 门禁测试同口径：ENV_LOCK 全程互斥
+    async fn account_login_requires_user_gesture() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
+        let (session_id, key_b64) = pair_extension(&state_dir, "ext-acct", "inst-acct").await;
+        let req = signed_request(
+            "account_login",
+            serde_json::json!({
+                "account_id": "acct-1",
+                "password": "pw",
+                "device_name": "dev",
+                "user_gesture": false
+            }),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-acct-gesture",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("account_login without gesture must fail");
+        assert!(
+            err.to_string().starts_with("user_gesture_required"),
+            "got: {err}"
+        );
+    }
+
+    /// 服务器未配置 → sync_not_configured（复用 sync 侧分类；手势门禁
+    /// 已过，配置解析先于任何网络/密钥动作）。
+    #[tokio::test]
+    async fn account_login_fails_closed_when_server_not_configured() {
+        let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
+        let (session_id, key_b64) = pair_extension(&state_dir, "ext-acct2", "inst-acct2").await;
+        let req = signed_request(
+            "account_login",
+            serde_json::json!({
+                "account_id": "acct-1",
+                "password": "pw",
+                "device_name": "dev",
+                "user_gesture": true
+            }),
+            "req-2",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-acct-noconfig",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("account_login without server URL must fail");
+        assert!(
+            err.to_string().starts_with("sync_not_configured"),
+            "got: {err}"
+        );
+    }
+
+    /// 服务器在场但不可达 → account_login_failed（SRP 编排错误如实
+    /// 透传分类；连不上一台死端口即可走通全链，不需要 SRP mock）。
+    #[tokio::test]
+    async fn account_login_reports_srp_failure_against_dead_server() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let settings =
+            workspace_settings_json(Some(("http://127.0.0.1:1".to_string(), "".to_string())));
+        insert_workspace_row(&db, dir.path().to_string_lossy().as_ref(), &settings).await;
+
+        let store = InMemoryAccountTokenStore::new();
+        let err = run_account_login(&db_path, "acct-1", "pw", "dev", &store)
+            .await
+            .expect_err("dead server must fail");
+        assert!(
+            err.to_string().starts_with("account_login_failed"),
+            "got: {err}"
+        );
+        // 失败不落地任何令牌
+        assert_eq!(store.get_token(&db_path.to_string_lossy()).unwrap(), None);
+    }
+
+    /// account_status 反映令牌仓现状（has_session）与服务器配置
+    /// （server_configured），注入内存仓全路径可测、不碰真 keyring。
+    #[tokio::test]
+    async fn account_status_reflects_store_and_server_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let settings =
+            workspace_settings_json(Some(("http://127.0.0.1:8080".to_string(), "".to_string())));
+        insert_workspace_row(&db, dir.path().to_string_lossy().as_ref(), &settings).await;
+
+        let store = InMemoryAccountTokenStore::new();
+        let status = run_account_status(&db_path, &store).await.unwrap();
+        assert!(!status.has_session);
+        assert!(status.server_configured);
+
+        store
+            .set_token(&db_path.to_string_lossy(), "tok-15m")
+            .unwrap();
+        let status = run_account_status(&db_path, &store).await.unwrap();
+        assert!(status.has_session);
+
+        // 空白令牌视同未登录（与读侧 filter 同口径）
+        store.set_token(&db_path.to_string_lossy(), "   ").unwrap();
+        let status = run_account_status(&db_path, &store).await.unwrap();
+        assert!(!status.has_session);
+    }
+
+    /// 无令牌 → 登出幂等成功（revoked_on_server=false），与桌面
+    /// account_sign_out 同口径。
+    #[tokio::test]
+    async fn account_logout_is_idempotent_without_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+
+        let store = InMemoryAccountTokenStore::new();
+        let payload = run_account_logout(&db_path, "acct-1", &store)
+            .await
+            .unwrap();
+        assert!(!payload.revoked_on_server);
+    }
+
+    /// 有令牌 + 服务器不可达 → 本地令牌照删（登出不因服务器失联卡死），
+    /// revoked_on_server 如实报 false。
+    #[tokio::test]
+    async fn account_logout_clears_local_token_even_when_server_unreachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let settings =
+            workspace_settings_json(Some(("http://127.0.0.1:1".to_string(), "".to_string())));
+        insert_workspace_row(&db, dir.path().to_string_lossy().as_ref(), &settings).await;
+
+        let db_key = db_path.to_string_lossy().to_string();
+        let store = InMemoryAccountTokenStore::new();
+        store.set_token(&db_key, "tok-15m").unwrap();
+
+        let payload = run_account_logout(&db_path, "acct-1", &store)
+            .await
+            .unwrap();
+        assert!(!payload.revoked_on_server);
+        assert_eq!(store.get_token(&db_key).unwrap(), None);
+    }
+
+    // ---- sync_push_now（协议 v7，M5 批3）----
+
+    /// sync_push_now 的 user_gesture 门禁：写路径推云，无手势 → 拒
+    /// （门禁在会话之后、任何 keyring/网络动作之前）。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // 与既有 env 门禁测试同口径：ENV_LOCK 全程互斥
+    async fn sync_push_now_requires_user_gesture() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
+        let (session_id, key_b64) = pair_extension(&state_dir, "ext-push", "inst-push").await;
+        let req = signed_request(
+            "sync_push_now",
+            serde_json::json!({ "user_gesture": false }),
+            "req-1",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-push-gesture",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("sync_push_now without gesture must fail");
+        assert!(
+            err.to_string().starts_with("user_gesture_required"),
+            "got: {err}"
+        );
+    }
+
+    /// 服务器未配置 → sync_not_configured（配置解析在解锁/信封之前，
+    /// 免解锁免 keyring 即可锚定分类——与 sync_connect 同口径）。
+    #[tokio::test]
+    async fn sync_push_now_fails_closed_when_server_not_configured() {
+        let (_dir, db_path, state_dir, _identity) = seeded_bridge().await;
+        let (session_id, key_b64) = pair_extension(&state_dir, "ext-push2", "inst-push2").await;
+        let req = signed_request(
+            "sync_push_now",
+            serde_json::json!({ "user_gesture": true }),
+            "req-2",
+            &session_id,
+            &key_b64,
+            now_ms(),
+            "nonce-push-noconfig",
+        );
+        let err = handle_request(&db_path, &state_dir, req)
+            .await
+            .expect_err("sync_push_now without server URL must fail");
+        assert!(
+            err.to_string().starts_with("sync_not_configured"),
+            "got: {err}"
+        );
     }
 
     /// fixture 再生成（改了 SyncItemSnapshot/CredentialData 结构时用）：

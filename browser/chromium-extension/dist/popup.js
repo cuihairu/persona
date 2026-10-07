@@ -1,6 +1,7 @@
-import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword } from './nativeBridge';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow } from './nativeBridge';
 import { getAutofillSettings, setAutofillSettings } from './settings';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin } from './autofillDefaults';
+import { connectViaBridge, loadCloudConn, saveCloudConn, saveCloudCache, pullCloudOps, buildItemViews, decryptItemViews, } from './cloudSync';
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
 const endpointInput = document.getElementById('endpoint');
@@ -279,12 +280,256 @@ if (genGenerateButton) {
         genGenerateButton.toggleAttribute('disabled', false);
     });
 }
+// ============ Cloud vault (bridge protocol v6, M5 批1) ============
+const cloudStatusEl = document.getElementById('cloudStatus');
+const cloudConnectButton = document.getElementById('cloudConnect');
+const cloudRefreshButton = document.getElementById('cloudRefresh');
+const cloudPushButton = document.getElementById('cloudPush');
+const cloudItemsEl = document.getElementById('cloudItems');
+function cloudErrorText(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+function setCloudStatus(text) {
+    if (cloudStatusEl)
+        cloudStatusEl.textContent = text;
+}
+function setCloudConnected(conn) {
+    cloudRefreshButton?.toggleAttribute('disabled', !conn);
+    cloudPushButton?.toggleAttribute('disabled', !conn);
+    setCloudStatus(conn ? `Connected • device ${conn.deviceName} • ${conn.serverUrl}` : 'Not connected');
+}
+function renderCloudItems(items) {
+    if (!cloudItemsEl)
+        return;
+    cloudItemsEl.textContent = '';
+    const live = items.filter((item) => !item.deleted);
+    if (!live.length) {
+        const empty = document.createElement('div');
+        empty.className = 'status';
+        empty.textContent = items.length ? 'All items deleted upstream.' : 'Vault is empty.';
+        cloudItemsEl.appendChild(empty);
+        return;
+    }
+    for (const item of live) {
+        const row = document.createElement('div');
+        row.style.cssText =
+            'border:1px solid #e5e7eb;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px;';
+        const title = document.createElement('div');
+        title.style.cssText = 'font-weight:600;color:#111827;';
+        title.textContent = item.meta?.name ?? item.item_id;
+        const meta = document.createElement('div');
+        meta.style.cssText = 'font-size:12px;color:#6b7280;';
+        if (item.decrypt_error) {
+            meta.textContent = `decrypt failed (${item.decrypt_error})`;
+        }
+        else if (item.meta) {
+            const bits = [item.meta.credential_type, item.meta.security_level];
+            if (item.meta.username)
+                bits.push(item.meta.username);
+            if (item.conflict_count > 0)
+                bits.push(`${item.conflict_count} in conflict`);
+            meta.textContent = bits.join(' • ');
+        }
+        else {
+            meta.textContent = item.kind;
+        }
+        row.appendChild(title);
+        row.appendChild(meta);
+        cloudItemsEl.appendChild(row);
+    }
+}
+async function pullAndRender(conn) {
+    try {
+        setCloudStatus(`Pulling from ${conn.serverUrl}…`);
+        const pull = await pullCloudOps(conn);
+        await saveCloudCache({
+            server_url: conn.serverUrl,
+            ops: pull.ops,
+            next_cursor: pull.next_cursor,
+            synced_at: Date.now()
+        });
+        const views = buildItemViews(pull.ops);
+        const items = await decryptItemViews(views, conn.groupKeyHex);
+        renderCloudItems(items);
+        const live = items.filter((item) => !item.deleted).length;
+        const conflicts = views.filter((view) => view.conflicts.length > 0).length;
+        const parts = [`Connected • ${live} items`, `${pull.ops.length} ops`];
+        if (conflicts > 0)
+            parts.push(`${conflicts} in conflict (pending adjudication)`);
+        setCloudStatus(parts.join(' • '));
+    }
+    catch (error) {
+        // 拉取失败不掩盖既有连接状态；密文缓存仍在，离线兜底在后续批次接上
+        setCloudStatus(`Pull failed – ${cloudErrorText(error)}`);
+    }
+}
+cloudConnectButton?.addEventListener('click', async () => {
+    cloudConnectButton.toggleAttribute('disabled', true);
+    setCloudStatus('Connecting via local bridge…');
+    try {
+        const conn = await connectViaBridge();
+        // best-effort 申请该 sync server 的 host 权限（用户点击上下文内）；
+        // 拒绝也不拦——服务器若发 CORS，fetch 依然可用
+        try {
+            await chrome.permissions.request({ origins: [`${new URL(conn.serverUrl).origin}/*`] });
+        }
+        catch {
+            // 权限 API 不可用/被拒：继续，拉取阶段如实报错
+        }
+        await saveCloudConn(conn);
+        setCloudConnected(conn);
+        await pullAndRender(conn);
+    }
+    catch (error) {
+        setCloudStatus(`Connect failed – ${cloudErrorText(error)}`);
+    }
+    finally {
+        cloudConnectButton.toggleAttribute('disabled', false);
+    }
+});
+cloudRefreshButton?.addEventListener('click', async () => {
+    const conn = await loadCloudConn();
+    if (!conn) {
+        setCloudStatus('Not connected — connect via local bridge first.');
+        setCloudConnected(undefined);
+        return;
+    }
+    await pullAndRender(conn);
+});
+cloudPushButton?.addEventListener('click', async () => {
+    cloudPushButton?.toggleAttribute('disabled', true);
+    setCloudStatus('Running sync cycle via local bridge…');
+    try {
+        const resp = await syncPushNow();
+        if (!resp?.ok || !resp.payload) {
+            setCloudStatus(`Sync failed – ${resp?.error ?? 'unknown error'}`);
+            return;
+        }
+        const r = resp.payload;
+        const parts = [
+            `pushed ${r.pushed}`,
+            `pulled ${r.pulled} (materialized ${r.materialized})`
+        ];
+        if (r.backfilled > 0)
+            parts.push(`backfilled ${r.backfilled}`);
+        if (r.conflicts > 0)
+            parts.push(`${r.conflicts} conflicts pending adjudication`);
+        if (r.pending_identity > 0)
+            parts.push(`${r.pending_identity} pending identity`);
+        setCloudStatus(`Synced • ${parts.join(' • ')}`);
+        // 推送改变了远端 oplog——顺手拉一次刷新列表
+        const conn = await loadCloudConn();
+        if (conn)
+            await pullAndRender(conn);
+    }
+    finally {
+        const conn = await loadCloudConn();
+        cloudPushButton?.toggleAttribute('disabled', !conn);
+    }
+});
+async function initCloudVault() {
+    try {
+        const conn = await loadCloudConn();
+        setCloudConnected(conn);
+        if (conn)
+            await pullAndRender(conn);
+    }
+    catch {
+        setCloudConnected(undefined);
+    }
+}
+// ============ Account (bridge protocol v7, M5 批2) ============
+const accountStatusEl = document.getElementById('accountStatus');
+const accountIdInput = document.getElementById('accountId');
+const accountPasswordInput = document.getElementById('accountPassword');
+const accountLoginButton = document.getElementById('accountLoginBtn');
+const accountLogoutButton = document.getElementById('accountLogoutBtn');
+function setAccountStatus(text) {
+    if (accountStatusEl)
+        accountStatusEl.textContent = text;
+}
+async function refreshAccountStatus() {
+    const resp = await accountStatus().catch((e) => ({ ok: false, error: String(e) }));
+    if (!resp?.ok) {
+        setAccountStatus(`Unavailable – ${resp?.error ?? 'bridge not reachable'}`);
+        return;
+    }
+    const payload = resp.payload;
+    if (!payload) {
+        setAccountStatus('Unavailable – malformed response');
+        return;
+    }
+    if (payload.has_session) {
+        setAccountStatus('Signed in');
+    }
+    else if (payload.server_configured) {
+        setAccountStatus('Not signed in');
+    }
+    else {
+        setAccountStatus('Not signed in (sync server not configured)');
+    }
+    if (accountLogoutButton) {
+        accountLogoutButton.toggleAttribute('disabled', !payload.has_session);
+    }
+}
+accountLoginButton?.addEventListener('click', async () => {
+    const accountId = accountIdInput?.value?.trim();
+    const password = accountPasswordInput?.value ?? '';
+    if (!accountId || !password) {
+        setAccountStatus('Account ID and password are required.');
+        return;
+    }
+    accountLoginButton?.toggleAttribute('disabled', true);
+    setAccountStatus('Signing in…');
+    try {
+        const resp = await accountLogin({
+            account_id: accountId,
+            password,
+            device_name: 'browser-extension'
+        });
+        if (!resp?.ok) {
+            setAccountStatus(`Sign-in failed – ${resp?.error ?? 'unknown error'}`);
+            return;
+        }
+        const payload = resp.payload;
+        setAccountStatus(`Signed in • token valid ${Math.round(payload.expires_in_secs / 60)} min • fingerprint ${payload.session_key_fingerprint.slice(0, 12)}…`);
+        if (accountPasswordInput)
+            accountPasswordInput.value = '';
+    }
+    finally {
+        accountLoginButton?.toggleAttribute('disabled', false);
+        await refreshAccountStatus().catch(() => null);
+    }
+});
+accountLogoutButton?.addEventListener('click', async () => {
+    const accountId = accountIdInput?.value?.trim();
+    if (!accountId) {
+        setAccountStatus('Account ID is required to sign out.');
+        return;
+    }
+    accountLogoutButton?.toggleAttribute('disabled', true);
+    try {
+        const resp = await accountLogout(accountId);
+        if (!resp?.ok) {
+            setAccountStatus(`Sign-out failed – ${resp?.error ?? 'unknown error'}`);
+            return;
+        }
+        const payload = resp.payload;
+        setAccountStatus(payload.revoked_on_server ? 'Signed out (session revoked)' : 'Signed out (local token cleared)');
+    }
+    finally {
+        accountLogoutButton?.toggleAttribute('disabled', false);
+        await refreshAccountStatus().catch(() => null);
+    }
+});
 document.addEventListener('DOMContentLoaded', () => {
     refreshStoredStatus();
     refreshForms();
     refreshPairing().catch(() => null);
     refreshAutofill().catch(() => null);
     refreshSettings().catch(() => null);
+    initCloudVault().catch(() => null);
+    refreshAccountStatus().catch(() => null);
 });
 async function getActiveTabOrigin() {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });

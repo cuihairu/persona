@@ -191,11 +191,28 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         服务器 origin 申请权限；跨语言测试锚点 = Rust emit_sync_item_fixture
         生成两份 sync_item_fixture*.json（Rust 锚定测试 + TS 18 例双向读同一
         文件）；BRIDGE_PROTOCOL.md §17 + 版本表 v6 + 6 条 sync_* 错误码
-      - [ ] **M5-批2 账号域登录**：桥 op `account_login/status/logout`
-        （Rust SRP 客户端走 `/api/v1/accounts/{id}/srp/*`，替换静态 token；
-        15 分钟会话续期）
-      - [ ] **M5-批3 云端写路径**：桥 op `sync_push_now`（桥开 SyncSession
-        跑 cycle；扩展侧新增/编辑走既有 save_credential + 推送）
+      - [x] **M5-批2 账号域登录**（2026-10-07）：桥协议 v7 新增
+        `account_login/status/logout`（Rust SRP 客户端走
+        `/api/v1/accounts/{id}/srp/*`，复用 core `AccountsApi::srp_login`
+        编排——M2 核验过了才交付；15 分钟令牌直写 keyring `persona-account`
+        条目与桌面同名同键，**令牌本体不过桥协议**，响应只带
+        expires_in_secs + session_key_fingerprint；logout 与桌面
+        account_sign_out 同口径幂等 + 本地令牌照删不因服务器失联卡死；
+        status 报 has_session/server_configured）。cli persona-core 补
+        `accounts` feature；AccountTokenStore trait 注入式测试（6 例：
+        gesture 门禁/未配置分类/死端口 SRP 失败不落令牌/状态反映/幂等
+        登出/失联照删）；扩展 nativeBridge 三函数 + popup Account 区；
+        BRIDGE_PROTOCOL.md §18 + v7 行 + 3 条 account_* 错误码。
+        真 SRP 服务器 E2E 留 M6 实机走查
+      - [x] **M5-批3 云端写路径**（2026-10-07）：桥 op `sync_push_now`
+        （并入协议 v7——v7=账号三件套+本 op，单版本双消息；桥开 core
+        SyncSession 跑 backfill→pull→materialize→push，与桌面 sync_now 同
+        编排；master 来自桥锁态 PERSONA_MASTER_PASSWORD，锁定 fail-closed；
+        **不挂捕获缝**——桥一请求一进程，跨请求写入由下轮 backfill_existing
+        幂等补齐；配置段错误分类先于解锁）。扩展 nativeBridge.syncPushNow +
+        popup Push 按钮（推完顺手拉刷新）；2 例桥级测试（gesture 门禁/
+        未配置分类）；BRIDGE_PROTOCOL.md §19 + v7 行更新。真服务器双设备
+        推拉走查留 M6
       - [ ] **M5-批4 离线兜底 + 冲突解决**：断网读缓存、双版本裁决 UI
         （对齐桌面 SyncConflictsModal 口径）
       - [ ] **M5-批5 safari 同份**
