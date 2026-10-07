@@ -6,6 +6,11 @@
     <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /></a>
     <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+    <img src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white" alt="Rust" />
+    <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
+    <img src="https://img.shields.io/badge/Windows-0078D4?logo=windows11&logoColor=white" alt="Windows" />
+    <img src="https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white" alt="macOS" />
+    <img src="https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black" alt="Linux" />
   </p>
 </div>
 
