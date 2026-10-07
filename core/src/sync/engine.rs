@@ -205,8 +205,10 @@ impl<R: SyncRemote> SyncEngine<R> {
     /// 持密钥层）把整库打包成 group key 密文传入，引擎负责收敛与覆盖位点
     /// 的确定——先推平本机待推队列（上云拿到 seq）再拉平远端增量，然后以
     /// 「本机已同步水位」为覆盖位点 S 上云。先 push 后 pull 的周期顺序保证
-    /// 服务器上 seq ≤ S 的每条 op 都已反映进本机状态，快照声称的覆盖区间
-    /// 因此成立（周期顺序消竞态，无需快照点协议）。
+    /// 服务器上 seq ≤ S 的每条 op 都已反映进本机状态（pull 按 (seq, op_id)
+    /// 全序分页，拉到空页 = 水位即当时的 head），快照声称的覆盖区间因此
+    /// 成立（周期顺序消竞态，无需快照点协议）。成功后记
+    /// `last_snapshot_seq`（触发阈值基线）。
     /// 返回 (覆盖位点 S, 服务器压缩的 op 条数)。
     pub async fn upload_library_snapshot(&self, ciphertext: &[u8]) -> Result<(i64, u64)> {
         if (self.travel_active)() {
@@ -222,19 +224,27 @@ impl<R: SyncRemote> SyncEngine<R> {
             .remote
             .put_library_snapshot(seq, &self.device_id.to_string(), ciphertext)
             .await?;
+        self.repo.set_last_snapshot_seq(seq).await?;
         Ok((seq, pruned))
     }
 
     /// 库级快照安装原语（S2 bootstrap 第一步）：取服务器快照 → 整包密文交
-    /// 回调（service 层持密钥：group key 拆包 + 逐条物化进主库）→ 回调成功
-    /// 后才把 pull 游标推进到覆盖位点，后续 pull 只拿增量。回调失败或服务
-    /// 器无快照一律不动游标，全量重放路径保持原状——fail-closed：游标先动
-    /// 而装包失败 = 覆盖区间已被压缩、本机又没装上，数据洞不可挽回。
-    /// 返回 `Some(覆盖位点 seq)`；服务器无快照为 `None`。
+    /// 回调（装配层持密钥：group key 拆包 + 视图充分集按 op_id 幂等入本地
+    /// oplog）→ 回调成功后才把 pull 游标推进到覆盖位点并记
+    /// `last_snapshot_seq`，后续 pull 只拿增量。回调失败或服务器无快照
+    /// 一律不动游标，全量重放路径保持原状——fail-closed：游标先动而装包
+    /// 失败 = 覆盖区间已被压缩、本机又没装上，数据洞不可挽回。
+    /// travel 激活期间整体跳过（装包把远端数据写进 oplog/主库，与 pull
+    /// 同向，travel 期间不得发生；退 travel 后下次 bootstrap 照装——游标
+    /// 未动）。返回 `Some(覆盖位点 seq)`；无快照或 travel 跳过为 `None`
+    /// （两者行为一致：都退回全量重放路径，游标决定下次是否还试）。
     pub async fn install_library_snapshot<F>(&self, install: F) -> Result<Option<i64>>
     where
         F: AsyncFnOnce(i64, Vec<u8>) -> Result<()>,
     {
+        if (self.travel_active)() {
+            return Ok(None);
+        }
         let Some((seq, ciphertext)) = self.remote.get_library_snapshot().await? else {
             return Ok(None);
         };
@@ -245,7 +255,21 @@ impl<R: SyncRemote> SyncEngine<R> {
                 SNAPSHOT_RESUME_OP_ID,
             )))
             .await?;
+        self.repo.set_last_snapshot_seq(seq).await?;
         Ok(Some(seq))
+    }
+
+    /// 快照上传触发判定（E2EE_SYNC_DESIGN §5「触发时机」）：`head − 上次
+    /// 快照位点 > threshold` 才值得重打包（防频繁重打包）。travel 恒 false
+    /// （不上传）；从未有过快照基线记 0。判定与 [`Self::upload_library_snapshot`]
+    /// 分开：触发只是可能，上传仍要过收敛周期——调用方在 push ack 后询问。
+    pub async fn library_snapshot_needed(&self, threshold: i64) -> Result<bool> {
+        if (self.travel_active)() {
+            return Ok(false);
+        }
+        let head = self.remote.head_seq().await?;
+        let last = self.repo.get_state().await?.last_snapshot_seq;
+        Ok(head - last > threshold)
     }
 
     /// 同步状态（sync-group-mode §二.5.5）：组最新版本号、本机已同步水位、
@@ -696,6 +720,11 @@ mod tests {
             5,
             "内存远端 append-only（真删除由 server 集成测试锁定），只记账"
         );
+        assert_eq!(
+            engine.repo.get_state().await.unwrap().last_snapshot_seq,
+            5,
+            "上传成功记触发阈值基线"
+        );
 
         // 快照后继续增量续拉：游标绝对位点（绝对 seq）不受压缩影响
         remote.add(vec![remote_put(4, 4, ItemKind::Credential)]);
@@ -740,6 +769,11 @@ mod tests {
             engine.repo.local_watermark().await.unwrap(),
             3,
             "游标直读快照位点"
+        );
+        assert_eq!(
+            engine.repo.get_state().await.unwrap().last_snapshot_seq,
+            3,
+            "装包成功记触发阈值基线"
         );
 
         // 快照点后的增量照常续拉——哨兵游标 (3, "0") 起拉
@@ -788,5 +822,53 @@ mod tests {
 
         let pull = engine.pull_cycle().await.unwrap();
         assert_eq!(pull.applied, 2, "剩余 ops 仍可全量重放");
+    }
+
+    #[tokio::test]
+    async fn install_snapshot_skipped_during_travel() {
+        // travel 期间装包整体跳过（装包把远端数据写进 oplog，与 pull 同闸）：
+        // 回调不得被调、游标与水位基线都不动——退 travel 后下次 bootstrap
+        // 还会再试
+        let (engine, remote) = fixture(true).await;
+        remote.state.lock().unwrap().snapshot = Some((3, vec![1u8; 2]));
+        let seq = engine
+            .install_library_snapshot(async |_, _| panic!("travel 期间不得装包"))
+            .await
+            .unwrap();
+        assert_eq!(seq, None);
+        assert_eq!(engine.repo.local_watermark().await.unwrap(), 0);
+        assert_eq!(engine.repo.get_state().await.unwrap().last_snapshot_seq, 0);
+    }
+
+    #[tokio::test]
+    async fn library_snapshot_needed_tracks_threshold_and_travel() {
+        let (engine, remote) = fixture(false).await;
+        remote.add(
+            (1..=5)
+                .map(|i| remote_put(i, 1, ItemKind::Credential))
+                .collect(),
+        );
+
+        // 从未有过快照（基线 0）：head 5 超阈值 3 触发；严格大于——阈值 5 不触发
+        assert!(engine.library_snapshot_needed(3).await.unwrap());
+        assert!(!engine.library_snapshot_needed(5).await.unwrap());
+
+        // 上传后基线 = 水位 5：head 5 − 5 = 0，任何阈值都不再触发
+        engine.upload_library_snapshot(&[1u8; 3]).await.unwrap();
+        assert!(!engine.library_snapshot_needed(0).await.unwrap());
+
+        // 组继续前进：head 8 − 基线 5 = 3 → 超 2 触发、等于 3 不触发
+        remote.add(
+            (6..=8)
+                .map(|i| remote_put(i, 1, ItemKind::Credential))
+                .collect(),
+        );
+        assert!(engine.library_snapshot_needed(2).await.unwrap());
+        assert!(!engine.library_snapshot_needed(3).await.unwrap());
+
+        // travel 激活：恒不触发（不上传）
+        let (travel_engine, travel_remote) = fixture(true).await;
+        travel_remote.add(vec![remote_put(1, 1, ItemKind::Credential)]);
+        assert!(!travel_engine.library_snapshot_needed(0).await.unwrap());
     }
 }
