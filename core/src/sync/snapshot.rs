@@ -17,6 +17,7 @@ use uuid::Uuid;
 
 use crate::crypto::encryption::EncryptionService;
 use crate::models::{Credential, CredentialData, CredentialType, SecurityLevel};
+use crate::sync::oplog::SyncOp;
 use crate::{PersonaError, Result};
 
 /// 凭据条目的同步快照：远端物化一行凭据所需的全部语义字段。
@@ -89,21 +90,25 @@ impl SyncItemSnapshot {
     }
 }
 
-/// 库级快照的单条目：与 oplog put 载荷同构（[`SyncItemSnapshot`] 密文 +
-/// group key 包裹的 item key），打包时从本地行整批产出，装包逐条走
-/// [`super::materialize`] 的同一落库路径。
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct LibrarySnapshotEntry {
-    pub item_id: Uuid,
-    /// `SyncItemSnapshot::seal(item_key)` 字节。
-    pub ciphertext: Vec<u8>,
-    /// group key 包裹的 item key（oplog `wrapped_item_key` 原样搬运）。
-    pub wrapped_item_key: Vec<u8>,
-}
-
 /// 库级快照包（S2 收口，E2EE_SYNC_DESIGN §5「库级快照与指令压缩」）：
-/// 某一服务器 seq 处的整库存活条目集。整包再用 group key 加密后上云——
-/// 服务器只见一个 BLOB（单快照 upsert + 压缩 `seq ≤ S` 的 ops）。
+/// 某一服务器 seq 处的整库状态包——本机 oplog 的**视图充分集**（每条目的
+/// 主位 op + 未裁决冲突副本，tombstone 主位同样在场；被 GC 的旧版本视图
+/// 中性故缺席）。整包再用 group key 加密后上云——服务器只见一个 BLOB
+/// （单快照 upsert + 压缩 `seq ≤ S` 的 ops）。
+///
+/// **打包原 op 而非凭据表行**（装包 = 按 op_id 幂等入本地 oplog + 既有物化
+/// 路径，全链路复用）：
+///
+/// - **pending identity 不丢**：新设备缺身份行时 `materialize_put` 会
+///   `SkippedPendingIdentity`——凭据表快照会把条目直接丢弃而其 op 已被
+///   压缩（真数据洞）；op 入 oplog 则与全量重放同款挂起重试。
+/// - **冲突副本不丢**：未裁决双版本是「数据不丢」底线的一部分，快照点
+///   前的冲突 ops 同样被压缩。
+/// - **tombstone 在场防复活**：`seq ≤ S` 被压缩后「点后增量」并不携带
+///   快照点前的删除；快照缺席删除会让装到非空库的设备复活已删条目。
+/// - **LWW 全序原样**：op_id/lamport/device_id 原封搬运，装包设备的
+///   `item_view` 与未走快照的老设备逐条同序——「快照起步 + 点后增量 ==
+///   全量重放」按视图相等（收敛等价性测试锚点的口径）。
 ///
 /// 零知识不变式与单条快照相同：条目名/域名/用户名/口令只存在于 item key
 /// 密文内，item key 只存在于 group key 密文内；包装格式错误一律
@@ -112,9 +117,14 @@ pub struct LibrarySnapshotEntry {
 pub struct LibrarySnapshotPayload {
     /// 打包时刻（rfc3339，仅展示）。
     pub created_at: String,
-    /// 只含存活条目；tombstone 不进快照（快照点后的增量指令承载删除）。
-    pub entries: Vec<LibrarySnapshotEntry>,
+    /// 视图充分集：主位（put 或 tombstone）+ 冲突副本，按条目收拢。
+    pub ops: Vec<SyncOp>,
 }
+
+/// 快照上传触发阈值（E2EE_SYNC_DESIGN §5「触发时机」）：push ack 后
+/// `head_seq − last_snapshot_seq > 此值` 才重打包（防频繁重打包）。
+/// 配置化口径：CLI/桌面不暴露。
+pub const UPLOAD_THRESHOLD_OPS: i64 = 1000;
 
 impl LibrarySnapshotPayload {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
@@ -152,6 +162,7 @@ impl LibrarySnapshotPayload {
 mod tests {
     use super::*;
     use crate::models::PasswordCredentialData;
+    use crate::sync::oplog::{ItemKind, OpType, SyncPayload};
 
     fn sample() -> SyncItemSnapshot {
         SyncItemSnapshot {
@@ -239,16 +250,37 @@ mod tests {
 
     // ---- 库级快照包（S2，E2EE_SYNC_DESIGN §5）----
 
+    /// 一条与打包路径同构的 op（put 带单条快照密文；tombstone payload 恒空）。
+    fn library_op(
+        item_key: &[u8; 32],
+        group: &crate::sync::keys::GroupKey,
+        lamport: u64,
+        op: OpType,
+    ) -> SyncOp {
+        SyncOp {
+            op_id: Uuid::new_v4(),
+            item_id: Uuid::new_v4(),
+            kind: ItemKind::Credential,
+            op,
+            lamport,
+            device_id: Uuid::new_v4(),
+            timestamp: None,
+            payload: (op == OpType::Put).then(|| SyncPayload {
+                ciphertext: sample().seal(item_key).unwrap(),
+                wrapped_item_key: crate::sync::keys::wrap_item_key_with_group(item_key, group),
+            }),
+        }
+    }
+
     fn library_sample(group: &crate::sync::keys::GroupKey) -> LibrarySnapshotPayload {
         let item_key = EncryptionService::generate_key();
-        let entry = LibrarySnapshotEntry {
-            item_id: Uuid::new_v4(),
-            ciphertext: sample().seal(&item_key).unwrap(),
-            wrapped_item_key: crate::sync::keys::wrap_item_key_with_group(&item_key, group),
-        };
         LibrarySnapshotPayload {
             created_at: "2026-10-07T00:00:00Z".to_string(),
-            entries: vec![entry],
+            // 视图充分集：put 主位 + tombstone 主位（防删除复活）
+            ops: vec![
+                library_op(&item_key, group, 1, OpType::Put),
+                library_op(&item_key, group, 2, OpType::Delete),
+            ],
         }
     }
 
@@ -260,14 +292,20 @@ mod tests {
         assert_ne!(sealed, payload.to_bytes().unwrap(), "整包必须是密文");
 
         let opened = LibrarySnapshotPayload::open(&sealed, &group).unwrap();
-        assert_eq!(opened.entries.len(), 1);
+        assert_eq!(opened.ops.len(), 2);
         assert_eq!(opened.created_at, payload.created_at);
+        // op 全字段原样（LWW 全序与 op_id 幂等都靠 op_id/lamport/device_id
+        // 不走样——装包设备与老设备的 item_view 因此逐条同序）
+        assert_eq!(opened.ops, payload.ops);
+        // tombstone 主位在场且 payload 恒空
+        assert!(opened.ops[1].is_tombstone());
+        assert!(opened.ops[1].payload.is_none());
 
         // 逐条解链：group key → item key → 单条快照明文（物化路径原样）
-        let entry = &opened.entries[0];
+        let put = opened.ops[0].payload.as_ref().expect("put 必带 payload");
         let item_key =
-            crate::sync::keys::unwrap_item_key_with_group(&entry.wrapped_item_key, &group).unwrap();
-        let snap = SyncItemSnapshot::open(&entry.ciphertext, &item_key).unwrap();
+            crate::sync::keys::unwrap_item_key_with_group(&put.wrapped_item_key, &group).unwrap();
+        let snap = SyncItemSnapshot::open(&put.ciphertext, &item_key).unwrap();
         assert_eq!(snap.name, "Email 邮箱");
         assert_eq!(snap.username.as_deref(), Some("alice@example.com"));
     }
@@ -313,10 +351,20 @@ mod tests {
         };
         let payload = LibrarySnapshotPayload {
             created_at: "2026-10-07T00:00:00Z".to_string(),
-            entries: vec![LibrarySnapshotEntry {
+            ops: vec![SyncOp {
+                op_id: Uuid::new_v4(),
                 item_id: Uuid::new_v4(),
-                ciphertext: snap.seal(&item_key).unwrap(),
-                wrapped_item_key: crate::sync::keys::wrap_item_key_with_group(&item_key, &group),
+                kind: ItemKind::Credential,
+                op: OpType::Put,
+                lamport: 1,
+                device_id: Uuid::new_v4(),
+                timestamp: None,
+                payload: Some(SyncPayload {
+                    ciphertext: snap.seal(&item_key).unwrap(),
+                    wrapped_item_key: crate::sync::keys::wrap_item_key_with_group(
+                        &item_key, &group,
+                    ),
+                }),
             }],
         };
         let stored = payload.seal(&group).unwrap();

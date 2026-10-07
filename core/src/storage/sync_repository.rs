@@ -26,6 +26,10 @@ pub struct SyncState {
     pub last_pull_cursor: Option<String>,
     /// 最近一次成功同步周期的时间（迁移 017；None = 从未同步）。
     pub last_sync_at: Option<DateTime<Utc>>,
+    /// 本机最近一次库级快照的覆盖位点（迁移 018；0 = 从未有过快照）——
+    /// 上传/bootstrap 装包成功时记，快照触发阈值（E2EE_SYNC_DESIGN §5
+    /// 「触发时机」）的比较基线。
+    pub last_snapshot_seq: i64,
 }
 
 pub struct SyncRepository {
@@ -42,7 +46,7 @@ impl SyncRepository {
     /// 读本设备同步状态；行不存在时返回全默认（lamport 0 / 未注册 / 无游标）。
     pub async fn get_state(&self) -> Result<SyncState> {
         let row = sqlx::query(
-            "SELECT local_lamport, device_id, last_pull_cursor, last_sync_at
+            "SELECT local_lamport, device_id, last_pull_cursor, last_sync_at, last_snapshot_seq
              FROM sync_state WHERE id = 1",
         )
         .fetch_optional(self.db.pool())
@@ -54,6 +58,7 @@ impl SyncRepository {
                 device_id: None,
                 last_pull_cursor: None,
                 last_sync_at: None,
+                last_snapshot_seq: 0,
             });
         };
         let device_id: Option<String> = row.get("device_id");
@@ -65,6 +70,7 @@ impl SyncRepository {
             last_sync_at: last_sync_at
                 .and_then(|s| DateTime::parse_from_rfc3339(&s).ok())
                 .map(|t| t.with_timezone(&Utc)),
+            last_snapshot_seq: row.get::<i64, _>("last_snapshot_seq"),
         })
     }
 
@@ -112,6 +118,21 @@ impl SyncRepository {
              ON CONFLICT(id) DO UPDATE SET last_sync_at = excluded.last_sync_at",
         )
         .bind(at.to_rfc3339())
+        .execute(self.db.pool())
+        .await
+        .map_err(|e| PersonaError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 记本机最近一次库级快照的覆盖位点（上传与 bootstrap 装包成功时）。
+    /// `MAX` 语义只进不退：水位回退会让触发阈值提前误触发（多打一次包，
+    /// 无害方向）而前进方向必须诚实——谎报会推迟重打包。
+    pub async fn set_last_snapshot_seq(&self, seq: i64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO sync_state (id, last_snapshot_seq) VALUES (1, ?)
+             ON CONFLICT(id) DO UPDATE SET last_snapshot_seq = MAX(last_snapshot_seq, excluded.last_snapshot_seq)",
+        )
+        .bind(seq)
         .execute(self.db.pool())
         .await
         .map_err(|e| PersonaError::Database(e.to_string()))?;
