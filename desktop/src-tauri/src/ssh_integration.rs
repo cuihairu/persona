@@ -76,8 +76,9 @@ pub struct SshConfigAgentAnalysis {
     /// ForwardAgent 条目集合（on/off 值原样，作用域各自标明）
     pub forward_agent_entries: Vec<SshConfigEntry>,
     /// 生效 IdentityAgent：ssh 语义「首个匹配值」的顶层级近似——第一个
-    /// **顶层**（无 Host/Match 限定）IdentityAgent。只有 host 级条目时
-    /// None（对不同 host 结果不同，不妄断）。
+    /// 顶层（无 Host/Match 限定）条目优先；无用户全局条目时取 persona
+    /// 锚点块值（Host * 对所有连接生效，块在 EOF 被更早条目压过）；两者
+    /// 皆无时 None（对不同 host 结果不同，不妄断）。
     pub identity_agent_effective: Option<String>,
     /// 环境 SSH_AUTH_SOCK（无则 None）
     pub ssh_auth_sock: Option<String>,
@@ -549,9 +550,13 @@ pub fn analyze_config(config_path: &Path, ssh_auth_sock: Option<String>) -> SshC
     let mut read_error = None;
     let mut warnings = Vec::new();
     let mut entries = Vec::new();
+    // 锚点块值参与生效判定：块追加在文件 EOF，用户更早的全局条目按
+    // 「先出现先生效」压过它；没有用户全局条目时块值就是 ssh 实际用的值
+    let mut managed_block_value = None;
     if exists {
         match std::fs::read_to_string(config_path) {
             Ok(content) => {
+                managed_block_value = managed_block_identity_agent(&content);
                 // 主文件里 persona 锚点块的行号区间（块内条目不计）
                 let skip_span = {
                     let lines: Vec<&str> = content.lines().collect();
@@ -575,11 +580,13 @@ pub fn analyze_config(config_path: &Path, ssh_auth_sock: Option<String>) -> SshC
     }
 
     // ssh 语义「首个匹配值」的顶层级近似：第一个顶层（全局作用域）
-    // IdentityAgent；只有 host 级条目时不妄断（不同 host 结果不同）。
+    // IdentityAgent；只有 host 级条目时不妄断（不同 host 结果不同），
+    // 此时退锚点块值（Host * 对所有连接生效）。
     let identity_agent_effective = entries
         .iter()
         .find(|e| e.keyword.eq_ignore_ascii_case("identityagent") && e.scope.is_empty())
-        .map(|e| e.value.clone());
+        .map(|e| e.value.clone())
+        .or(managed_block_value);
     let forward_agent_entries = entries
         .iter()
         .filter(|e| e.keyword.eq_ignore_ascii_case("forwardagent"))
@@ -880,12 +887,34 @@ mod tests {
         )
         .unwrap();
         let a = analyze_config(&config_path, None);
+        // 条目列表不含锚点块（那是 persona 自己写的，不是用户配置）
         assert!(a.entries.iter().all(|e| e.keyword != "IdentityAgent"));
-        assert_eq!(a.identity_agent_effective, None);
         assert_eq!(a.forward_agent_entries.len(), 1);
-        // 无全局 IdentityAgent 且无环境变量 → 生效 socket 未知，不妄断
-        assert_eq!(a.effective_socket, None);
-        assert_eq!(a.socket_alive, None);
+        // 但生效判定包含块值：无用户全局条目时 ssh 实际用的就是块
+        assert_eq!(a.identity_agent_effective.as_deref(), Some(AGENT));
+        assert_eq!(a.effective_socket.as_deref(), Some(AGENT));
+        // AGENT 路径在测试环境不存在 → 探测 false（不是 None 的「未知」）
+        assert_eq!(a.socket_alive, Some(false));
+    }
+
+    #[test]
+    fn user_global_identity_agent_beats_managed_block_first_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        // 用户全局条目在前，块在 EOF：ssh first-wins 语义下用户条目生效
+        std::fs::write(
+            &config_path,
+            format!(
+                "IdentityAgent /user/global.sock\n\n{BLOCK_BEGIN}\nHost *\n  IdentityAgent {AGENT}\n{BLOCK_END}\n"
+            ),
+        )
+        .unwrap();
+        let a = analyze_config(&config_path, None);
+        assert_eq!(
+            a.identity_agent_effective.as_deref(),
+            Some("/user/global.sock")
+        );
+        assert_eq!(a.effective_socket.as_deref(), Some("/user/global.sock"));
     }
 
     #[test]

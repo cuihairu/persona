@@ -1124,7 +1124,9 @@ export interface SshConfigAgentAnalysis {
   entries: SshConfigEntry[];
   /** ForwardAgent 条目（转发经常单列展示） */
   forwardAgentEntries: SshConfigEntry[];
-  /** 生效 IdentityAgent：首个顶层条目；只有 host 级时 null 不妄断 */
+  /** 生效 IdentityAgent：首个顶层条目优先（ssh first-wins，块在 EOF 被
+   *  更早的用户全局条目压过）；无用户全局条目时取 persona 锚点块值；
+   *  两者皆无时 null 不妄断 */
   identityAgentEffective: string | null;
   /** 环境 SSH_AUTH_SOCK */
   sshAuthSock: string | null;

@@ -105,6 +105,23 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
         "基线不应已指向 persona socket"
     );
 
+    // ── 分析基线：无 agent 条目 → 生效值未知，状态灯=未启用 ──
+    let baseline_analysis = persona_desktop::commands::ssh_agent_config_analysis()
+        .data
+        .expect("config analysis 返回");
+    println!(
+        "WALKTHROUGH baseline analysis: effective={:?} sock_env={:?} alive={:?} persona_alive={}",
+        baseline_analysis.identity_agent_effective,
+        baseline_analysis.ssh_auth_sock,
+        baseline_analysis.socket_alive,
+        baseline_analysis.persona_socket_alive,
+    );
+    assert!(baseline_analysis.config_exists);
+    assert!(baseline_analysis.readable);
+    assert!(baseline_analysis.read_error.is_none());
+    assert!(baseline_analysis.entries.is_empty());
+    assert_eq!(baseline_analysis.identity_agent_effective, None);
+
     // ── 启用（真实命令层：锚点块幂等写入）──
     let enabled = persona_desktop::commands::ssh_agent_integration_enable()
         .expect("enable command")
@@ -136,6 +153,26 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
         "ssh -G 应解析到 persona 稳定 socket"
     );
 
+    // ── 分析翻转（开）：生效值=锚点块值，状态灯=已启用 ──
+    let on_analysis = persona_desktop::commands::ssh_agent_config_analysis()
+        .data
+        .expect("config analysis 返回");
+    println!(
+        "WALKTHROUGH after-enable analysis: effective={:?} alive={:?} persona_alive={}",
+        on_analysis.identity_agent_effective,
+        on_analysis.socket_alive,
+        on_analysis.persona_socket_alive,
+    );
+    assert_eq!(
+        on_analysis.identity_agent_effective.as_deref(),
+        Some(socket_str.as_str())
+    );
+    // 锚点块条目不混进用户条目列表（用户 seed 配置本无 agent 条目）
+    assert!(on_analysis.entries.is_empty());
+    // 临时 XDG_RUNTIME_DIR 里没有 agent 进程 → 灯如实显示未运行/无人监听
+    assert!(!on_analysis.persona_socket_alive);
+    assert_eq!(on_analysis.socket_alive, Some(false));
+
     // ── 停用（锚点块整块移除）──
     let disabled = persona_desktop::commands::ssh_agent_integration_disable()
         .expect("disable command")
@@ -156,5 +193,16 @@ fn ssh_agent_integration_walkthrough_enable_ssh_g_disable_restores_user_config()
     assert!(
         !after.contains(&socket_str),
         "停用后不应再解析到 persona socket"
+    );
+
+    // ── 分析翻回（关）：块已移除，生效值回到未知 ──
+    let off_analysis = persona_desktop::commands::ssh_agent_config_analysis()
+        .data
+        .expect("config analysis 返回");
+    assert_eq!(off_analysis.identity_agent_effective, None);
+    assert!(off_analysis.entries.is_empty());
+    println!(
+        "WALKTHROUGH after-disable analysis: effective={:?} ✓ 状态灯翻回未启用",
+        off_analysis.identity_agent_effective
     );
 }
