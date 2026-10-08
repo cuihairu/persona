@@ -417,10 +417,20 @@ ssh -T git@github.com
 - **状态三态**：已启用（锚点块指向当前 socket）/ 未启用（无块）/
   配置异常（块存在但指向别处——重新启用即修复）；查询失败时区块整体隐藏，
   不谎报状态。
+- **Agent 配置分析面板**（已实现，2026-10-08）：设置页同一区块内的只读
+  分析——解析 `~/.ssh/config`（含 Include 递归展开：深度 ≤5、循环/缺文件/
+  超深度进告警黄条、相对路径相对 `~/.ssh`、段内 glob `*`/`?`），识别
+  `IdentityAgent`/`ForwardAgent`/`AddKeysToAgent`/`ProxyAgent` 条目并标注
+  作用域行与 `文件:行号`（persona 锚点块内不计入用户条目）；结合环境
+  `SSH_AUTH_SOCK` 与 Unix socket/命名管道连通探测，给出**生效
+  IdentityAgent**（首个顶层条目按「先出现先生效」优先，无则取锚点块值）
+  与**生效 socket 存活灯**（有进程在听=绿/无人听=红/无法判定=灰）及
+  persona agent 运行灯。config 读失败（权限/IO/非 UTF-8）红条如实显示
+  不崩，且此时一键启用拒绝写（防覆盖用户配置）。
 - **验收**：`ssh -G <host>` 输出 `identityagent <稳定 socket>`（模块测试
   `ssh_g_resolves_identity_agent_from_managed_block` 以真实 OpenSSH 往返
   验证，含块外无关 host；端到端走查 `ssh_agent_walkthrough` 覆盖命令层
-  启用/停用 + 用户配置逐字节还原）。
+  启用/停用 + 用户配置逐字节还原 + 分析生效值随 config 开关双向翻转）。
 
 手动配置（不想用桌面开关）：把上面四行粘进 `~/.ssh/config` 文件末尾
 （`Host *` 让它对所有连接生效）；shell 环境变量方案
