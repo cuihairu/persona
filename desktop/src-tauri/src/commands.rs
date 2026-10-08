@@ -5153,7 +5153,12 @@ pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::Ssh
     use crate::ssh_integration as si;
 
     let config_path = si::ssh_config_path();
-    let config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    // 读失败如实上报（权限/IO/非 UTF-8），绝不静默当空文件
+    let (config, read_error) = match std::fs::read_to_string(&config_path) {
+        Ok(c) => (c, None),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), None),
+        Err(e) => (String::new(), Some(e.to_string())),
+    };
     let value = si::identity_agent_value();
     let managed = si::managed_block_identity_agent(&config);
     let enabled = managed.as_deref() == Some(value.as_str());
@@ -5167,7 +5172,22 @@ pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::Ssh
         socket_path: value.clone(),
         identity_agent: managed,
         ssh_version: None,
+        config_exists: config_path.exists(),
+        read_error,
     })
+}
+
+/// ~/.ssh/config 的 agent 面分析：Include 展开 + 环境变量 + socket 连通探测。
+/// 只读不动配置；损坏/无权限落 read_error 字段如实显示，不崩。
+#[command(rename_all = "snake_case")]
+pub fn ssh_agent_config_analysis() -> ApiResponse<crate::ssh_integration::SshConfigAgentAnalysis> {
+    use crate::ssh_integration as si;
+
+    let config_path = si::ssh_config_path();
+    let ssh_auth_sock = std::env::var("SSH_AUTH_SOCK")
+        .ok()
+        .filter(|s| !s.is_empty());
+    ApiResponse::success(si::analyze_config(&config_path, ssh_auth_sock))
 }
 
 /// 一键启用：幂等 upsert 锚点块（损坏块收敛重写），原子写回。
@@ -5178,7 +5198,17 @@ pub fn ssh_agent_integration_enable(
     use crate::ssh_integration as si;
 
     let config_path = si::ssh_config_path();
-    let config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    // 读失败（权限/IO）时拒绝写：空串 upsert 会把用户 config 整个覆盖掉
+    let config = match std::fs::read_to_string(&config_path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => {
+            return Err(format!(
+                "Failed to read {} ({e}); refusing to overwrite an unreadable config",
+                config_path.display()
+            ))
+        }
+    };
     let new = si::upsert_managed_block(&config, &si::identity_agent_value());
     si::write_config_atomic(&config_path, &new)
         .map_err(|e| format!("Failed to write {}: {e}", config_path.display()))?;

@@ -8,6 +8,7 @@ jest.mock('@/utils/api', () => ({
     sshAgentIntegrationStatus: jest.fn(),
     sshAgentIntegrationEnable: jest.fn(),
     sshAgentIntegrationDisable: jest.fn(),
+    sshAgentConfigAnalysis: jest.fn(),
   },
 }));
 
@@ -24,16 +25,37 @@ const statusOf = (over: Record<string, unknown> = {}) => ({
   socketPath: '/run/user/1000/persona/ssh-agent.sock',
   identityAgent: null,
   sshVersion: null,
+  configExists: true,
+  readError: null,
+  ...over,
+});
+
+const analysisOf = (over: Record<string, unknown> = {}) => ({
+  configPath: '/home/user/.ssh/config',
+  configExists: true,
+  readable: true,
+  readError: null,
+  warnings: [],
+  entries: [],
+  forwardAgentEntries: [],
+  identityAgentEffective: null,
+  sshAuthSock: null,
+  effectiveSocket: null,
+  socketAlive: null,
+  personaSocketAlive: false,
   ...over,
 });
 
 const mockStatus = personaAPI.sshAgentIntegrationStatus as jest.Mock;
 const mockEnable = personaAPI.sshAgentIntegrationEnable as jest.Mock;
 const mockDisable = personaAPI.sshAgentIntegrationDisable as jest.Mock;
+const mockAnalysis = personaAPI.sshAgentConfigAnalysis as jest.Mock;
 
 describe('components/SshIntegrationSection', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    // 默认分析查询失败 → 面板隐藏（只影响状态行，不影响既有断言）
+    mockAnalysis.mockResolvedValue({ success: false, data: null });
   });
 
   it('renders disabled state with enable button (status query failed hides section)', async () => {
@@ -116,5 +138,97 @@ describe('components/SshIntegrationSection', () => {
       'IdentityAgent /run/user/1000/persona/ssh-agent.sock',
     );
     expect(snippet).toHaveTextContent('# persona managed end');
+  });
+
+  it('renders the config analysis panel with entries and socket liveness', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockAnalysis.mockResolvedValue({
+      success: true,
+      data: analysisOf({
+        sshAuthSock: '/env/sock',
+        identityAgentEffective: '/run/user/1000/persona/ssh-agent.sock',
+        effectiveSocket: '/run/user/1000/persona/ssh-agent.sock',
+        socketAlive: true,
+        personaSocketAlive: true,
+        entries: [
+          {
+            file: '/home/user/.ssh/config',
+            line: 4,
+            scope: 'Host github.com',
+            keyword: 'ForwardAgent',
+            value: 'no',
+          },
+          {
+            file: '/home/user/.ssh/conf.d/extra.conf',
+            line: 1,
+            scope: '',
+            keyword: 'IdentityAgent',
+            value: '/run/user/1000/persona/ssh-agent.sock',
+          },
+        ],
+        forwardAgentEntries: [
+          {
+            file: '/home/user/.ssh/config',
+            line: 4,
+            scope: 'Host github.com',
+            keyword: 'ForwardAgent',
+            value: 'no',
+          },
+        ],
+      }),
+    });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-analysis-panel')).toBeInTheDocument());
+    // 环境变量与生效值（读出来的真状态）
+    expect(getByTestId('ssh-analysis-sock-env')).toHaveTextContent('/env/sock');
+    expect(getByTestId('ssh-analysis-effective-agent')).toHaveTextContent(
+      '/run/user/1000/persona/ssh-agent.sock',
+    );
+    // socket 存活灯 = 探测结果（绿/运行中）
+    expect(getByTestId('ssh-analysis-alive')).toHaveClass('bg-green-500');
+    expect(getByTestId('ssh-analysis-persona-alive')).toHaveClass('bg-green-500');
+    expect(getByTestId('ssh-analysis-panel')).toHaveTextContent('运行中');
+    // 条目列表：作用域行 + 文件:行号（Include 展开也进列表）
+    const entries = getByTestId('ssh-analysis-entries');
+    expect(entries).toHaveTextContent('Host github.com → ForwardAgent no');
+    expect(entries).toHaveTextContent('/home/user/.ssh/config:4');
+    expect(entries).toHaveTextContent('conf.d/extra.conf:1');
+  });
+
+  it('shows unreadable config and warnings honestly instead of hiding them', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockAnalysis.mockResolvedValue({
+      success: true,
+      data: analysisOf({
+        readable: false,
+        readError: 'Permission denied (os error 13)',
+        warnings: ['Include 无匹配文件：conf.d/*.conf'],
+        socketAlive: false,
+      }),
+    });
+
+    const { getByTestId, queryByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-analysis-read-error')).toBeInTheDocument());
+    expect(getByTestId('ssh-analysis-read-error')).toHaveTextContent(
+      'Permission denied (os error 13)',
+    );
+    expect(getByTestId('ssh-analysis-warnings')).toHaveTextContent(
+      'Include 无匹配文件：conf.d/*.conf',
+    );
+    // 无人监听：红点 + 文案
+    expect(getByTestId('ssh-analysis-alive')).toHaveClass('bg-red-500');
+    expect(getByTestId('ssh-analysis-panel')).toHaveTextContent('无人监听');
+    // 读不出条目 ≠ 空列表渲染
+    expect(queryByTestId('ssh-analysis-entries')).toBeNull();
+  });
+
+  it('hides only the analysis panel when the analysis query fails', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockAnalysis.mockRejectedValue(new Error('invoke failed'));
+
+    const { getByTestId, queryByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-integration-badge')).toBeInTheDocument());
+    expect(queryByTestId('ssh-analysis-panel')).toBeNull();
   });
 });

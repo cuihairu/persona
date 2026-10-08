@@ -97,6 +97,7 @@ import type {
   SyncPairingPollOutcome,
   SyncRotateReport,
   SyncStatusReport,
+  SshConfigAgentAnalysis,
   SshIntegrationStatus,
   FaviconData,
   BiometricStatus,
@@ -626,6 +627,11 @@ class PersonaAPI {
   /** 一键停用：整块移除锚点块 */
   async sshAgentIntegrationDisable(): Promise<ApiResponse<SshIntegrationStatus>> {
     return invoke('ssh_agent_integration_disable');
+  }
+
+  /** ~/.ssh/config 的 agent 面只读分析（Include 展开 + SSH_AUTH_SOCK + socket 探测） */
+  async sshAgentConfigAnalysis(): Promise<ApiResponse<SshConfigAgentAnalysis>> {
+    return invoke('ssh_agent_config_analysis');
   }
 
   async getSshKeys(): Promise<ApiResponse<SshAgentKey[]>> {

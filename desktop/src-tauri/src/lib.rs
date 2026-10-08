@@ -383,6 +383,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::ssh_agent_integration_status,
             commands::ssh_agent_integration_enable,
             commands::ssh_agent_integration_disable,
+            commands::ssh_agent_config_analysis,
             commands::ssh_approval_respond,
             commands::passkey_approval_respond,
             commands::inspect_ssh_key_file,

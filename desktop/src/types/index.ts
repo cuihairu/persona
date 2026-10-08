@@ -1087,4 +1087,51 @@ export interface SshIntegrationStatus {
   identityAgent: string | null;
   /** OpenSSH 版本（探测失败 null；IdentityAgent 需 8.3+） */
   sshVersion: string | null;
+  /** config 文件在盘上（不存在不算错误：首次启用会创建） */
+  configExists: boolean;
+  /** 读失败原因（权限/IO）——如实显示，绝不静默吞；enable 时会拒绝写 */
+  readError: string | null;
+}
+
+/** ~/.ssh/config 里的单条 agent 相关配置（对应 Rust SshConfigEntry） */
+export interface SshConfigEntry {
+  /** 所在文件绝对路径（Include 展开后可能是别的文件） */
+  file: string;
+  /** 行号（1 起） */
+  line: number;
+  /** 作用域行原文（空串 = 顶层全局；否则 Host/Match 行） */
+  scope: string;
+  /** 关键字原文（保留大小写） */
+  keyword: string;
+  /** 值（去引号） */
+  value: string;
+}
+
+/** `ssh_agent_config_analysis` 返回（对应 Rust SshConfigAgentAnalysis）：
+ *  ~/.ssh/config 的 agent 面只读分析——Include 展开 + 环境变量 + socket 探测 */
+export interface SshConfigAgentAnalysis {
+  configPath: string;
+  /** config 文件在盘上 */
+  configExists: boolean;
+  /** 主文件可读（Include 子文件读失败只进 warnings） */
+  readable: boolean;
+  /** 主文件读失败原因（权限/IO/非 UTF-8） */
+  readError: string | null;
+  /** 解析过程中的非致命问题（Include 缺文件/循环/超深度等） */
+  warnings: string[];
+  /** agent 相关条目（IdentityAgent/ForwardAgent/AddKeysToAgent/ProxyAgent；
+   *  persona 锚点块内不计） */
+  entries: SshConfigEntry[];
+  /** ForwardAgent 条目（转发经常单列展示） */
+  forwardAgentEntries: SshConfigEntry[];
+  /** 生效 IdentityAgent：首个顶层条目；只有 host 级时 null 不妄断 */
+  identityAgentEffective: string | null;
+  /** 环境 SSH_AUTH_SOCK */
+  sshAuthSock: string | null;
+  /** 生效 socket：identityAgentEffective 优先，否则退 SSH_AUTH_SOCK */
+  effectiveSocket: string | null;
+  /** effectiveSocket 连通探测：true 有进程在听 / false 无人听 / null 未知 */
+  socketAlive: boolean | null;
+  /** persona agent 稳定 socket 连通探测（agent 进程是否活着） */
+  personaSocketAlive: boolean;
 }

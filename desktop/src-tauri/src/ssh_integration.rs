@@ -37,6 +37,56 @@ pub struct SshIntegrationStatus {
     pub identity_agent: Option<String>,
     /// OpenSSH < 8.3 不支持 IdentityAgent（version 探测失败时不填）
     pub ssh_version: Option<String>,
+    /// config 文件在盘上（不存在不算错误：首次启用会创建）
+    pub config_exists: bool,
+    /// 读失败原因（权限/IO）——如实显示，绝不静默吞（启用路径据此拒绝写）
+    pub read_error: Option<String>,
+}
+
+/// 一条 agent 相关配置行（Include 展开后的真实来源）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigEntry {
+    /// 来源文件（Include 展开前的主 config 或被 Include 的文件）
+    pub file: String,
+    /// 1 起的行号
+    pub line: usize,
+    /// 所处作用域：空串 = 顶层（对所有 host 生效）；否则 Host/Match 行原文
+    pub scope: String,
+    /// 关键字（原样大小写，比较时用小写）
+    pub keyword: String,
+    /// 值（去引号）
+    pub value: String,
+}
+
+/// `~/.ssh/config`（含 Include 展开）的 agent 相关面分析。
+/// 只读；任何失败都落到字段里如实显示，不让前端猜。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshConfigAgentAnalysis {
+    pub config_path: String,
+    pub config_exists: bool,
+    pub readable: bool,
+    /// 读失败原因（权限/IO，如 config 是目录/权限不足）
+    pub read_error: Option<String>,
+    /// 非致命解析警告（Include 缺文件/循环/超深度/glob 无匹配）
+    pub warnings: Vec<String>,
+    /// agent 相关条目（含 Include 展开；persona 锚点块内不计——块状态单独看）
+    pub entries: Vec<SshConfigEntry>,
+    /// ForwardAgent 条目集合（on/off 值原样，作用域各自标明）
+    pub forward_agent_entries: Vec<SshConfigEntry>,
+    /// 生效 IdentityAgent：ssh 语义「首个匹配值」的顶层级近似——第一个
+    /// **顶层**（无 Host/Match 限定）IdentityAgent。只有 host 级条目时
+    /// None（对不同 host 结果不同，不妄断）。
+    pub identity_agent_effective: Option<String>,
+    /// 环境 SSH_AUTH_SOCK（无则 None）
+    pub ssh_auth_sock: Option<String>,
+    /// ssh 实际会用到的 socket：effective IdentityAgent 优先，其次环境
+    pub effective_socket: Option<String>,
+    /// effective_socket 的 Unix socket 连通探测（None = 平台不支持/无 socket）
+    pub socket_alive: Option<bool>,
+    /// persona agent 稳定 socket 是否有进程在听（= agent 运行中）
+    pub persona_socket_alive: bool,
 }
 
 /// agent 稳定 socket 路径：desktop 壳启动 agent 前经
@@ -255,6 +305,310 @@ pub fn write_config_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+// ---------------------------------------------------------------------------
+// config 解析与 agent 面分析（Include 展开、作用域追踪、socket 探测）
+//
+// 只读：识别 agent 相关配置（IdentityAgent/ForwardAgent/AddKeysToAgent/
+// ProxyAgent——最后一个非 OpenSSH 标准键，出现即在列表里如实展示）在哪些
+// 文件哪些行哪些 Host/Match 作用域里；结合环境 SSH_AUTH_SOCK 与 Unix
+// socket 连通探测给出「agent 是否开启/配置在哪/socket 路径」。任何失败
+// 都进 read_error / warnings 字段如实显示，不让前端猜。
+// ---------------------------------------------------------------------------
+
+/// 分析关注的 agent 相关关键字（小写比对）。
+const AGENT_KEYWORDS: [&str; 4] = [
+    "identityagent",
+    "forwardagent",
+    "addkeystoagent",
+    "proxyagent",
+];
+const INCLUDE_MAX_DEPTH: usize = 5;
+
+/// 解析单行 → (keyword, value)。`Key Value` 与 `Key=Value` 两形态；
+/// 注释/空行 → None。值去成对引号（不成对原样保留）。
+fn parse_ssh_line(line: &str) -> Option<(String, String)> {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') {
+        return None;
+    }
+    let (keyword, value) = match t.split_once('=') {
+        // `Key=Value`：= 前不得有空白（`Host a = b` 之类按空白拆）
+        Some((k, v)) if !k.trim().is_empty() && !k.contains(char::is_whitespace) => (k, v),
+        _ => t.split_once(char::is_whitespace)?,
+    };
+    let value = value.trim();
+    // `Key = value` 形态：空白拆分后值以 = 开头（ssh_config 允许 = 作分隔符）
+    let value = value.strip_prefix('=').map(str::trim).unwrap_or(value);
+    let value = match value.strip_prefix('"') {
+        Some(rest) if rest.ends_with('"') => &rest[..rest.len() - 1],
+        _ => value,
+    };
+    Some((keyword.trim().to_string(), value.to_string()))
+}
+
+/// 值拆 token：空白分隔，双引号内保留空白（OpenSSH Include 语义）。
+fn split_tokens(value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for ch in value.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// 段内 glob 匹配（`*` 任意串、`?` 单字符；经典回溯）。
+fn glob_match(pat: &[u8], name: &[u8]) -> bool {
+    let (mut p, mut n) = (0usize, 0usize);
+    let (mut star_p, mut star_n) = (None::<usize>, 0usize);
+    while n < name.len() {
+        if p < pat.len() && (pat[p] == b'?' || pat[p] == name[n]) {
+            p += 1;
+            n += 1;
+        } else if p < pat.len() && pat[p] == b'*' {
+            star_p = Some(p);
+            star_n = n;
+            p += 1;
+        } else if let Some(sp) = star_p {
+            p = sp + 1;
+            star_n += 1;
+            n = star_n;
+        } else {
+            return false;
+        }
+    }
+    while p < pat.len() && pat[p] == b'*' {
+        p += 1;
+    }
+    p == pat.len()
+}
+
+/// 展开含 `*`/`?` 的路径（逐段走文件系统；字面段直接拼）。返回现存文件。
+fn expand_glob(pattern: &Path) -> Vec<PathBuf> {
+    let mut current: Vec<PathBuf> = vec![PathBuf::new()];
+    for comp in pattern.components() {
+        let comp_str = comp.as_os_str().to_string_lossy();
+        let mut next = Vec::new();
+        for base in &current {
+            if !comp_str.contains('*') && !comp_str.contains('?') {
+                next.push(base.join(comp.as_os_str()));
+            } else {
+                let dir = if base.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    base.as_path()
+                };
+                if let Ok(entries) = std::fs::read_dir(dir) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name();
+                        if glob_match(comp_str.as_bytes(), name.to_string_lossy().as_bytes()) {
+                            next.push(base.join(name));
+                        }
+                    }
+                }
+            }
+        }
+        current = next;
+    }
+    current.into_iter().filter(|p| p.is_file()).collect()
+}
+
+/// Include token → 实际路径候选：`~` 展开；相对路径相对 `~/.ssh`
+/// （OpenSSH 语义）；支持 glob。无匹配给警告。
+fn expand_include_token(token: &str, warnings: &mut Vec<String>) -> Vec<PathBuf> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => {
+            warnings.push(format!("Include 无法解析（无 HOME）：{token}"));
+            return Vec::new();
+        }
+    };
+    let pattern = if let Some(rest) = token.strip_prefix("~/") {
+        home.join(rest)
+    } else if token.starts_with('/') {
+        PathBuf::from(token)
+    } else {
+        home.join(".ssh").join(token)
+    };
+    let matched = expand_glob(&pattern);
+    if matched.is_empty() {
+        warnings.push(format!("Include 无匹配文件：{token}"));
+    }
+    matched
+}
+
+/// 深度优先展开 Include 并收集 agent 相关条目。`skip_span` 只对主 config
+/// 生效（persona 锚点块行号区间——块状态单独看，不混进用户条目列表）。
+fn collect_agent_entries(
+    path: &Path,
+    depth: usize,
+    is_root: bool,
+    skip_span: Option<(usize, usize)>,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    warnings: &mut Vec<String>,
+    out: &mut Vec<SshConfigEntry>,
+) {
+    if depth > INCLUDE_MAX_DEPTH {
+        warnings.push(format!(
+            "Include 嵌套超过 {INCLUDE_MAX_DEPTH} 层，停止展开：{}",
+            path.display()
+        ));
+        return;
+    }
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !visited.insert(canonical) {
+        warnings.push(format!("Include 循环引用，停止展开：{}", path.display()));
+        return;
+    }
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            warnings.push(format!("无法读取 {}: {e}", path.display()));
+            return;
+        }
+    };
+    let file_display = path.display().to_string();
+    let mut scope = String::new();
+    for (idx, line) in content.lines().enumerate() {
+        if is_root {
+            if let Some((begin, end)) = skip_span {
+                if idx >= begin && idx <= end {
+                    continue;
+                }
+            }
+        }
+        let Some((keyword, value)) = parse_ssh_line(line) else {
+            continue;
+        };
+        match keyword.to_ascii_lowercase().as_str() {
+            "host" | "match" => scope = format!("{keyword} {value}"),
+            "include" => {
+                for token in split_tokens(&value) {
+                    for included in expand_include_token(&token, warnings) {
+                        collect_agent_entries(
+                            &included,
+                            depth + 1,
+                            false,
+                            None,
+                            visited,
+                            warnings,
+                            out,
+                        );
+                    }
+                }
+            }
+            k if AGENT_KEYWORDS.contains(&k) => out.push(SshConfigEntry {
+                file: file_display.clone(),
+                line: idx + 1,
+                scope: scope.clone(),
+                keyword,
+                value,
+            }),
+            _ => {}
+        }
+    }
+}
+
+/// Unix socket 连通探测：能连上 = 有进程在听。Windows 走命名管道打开。
+#[cfg(unix)]
+fn socket_probe(path: &Path) -> bool {
+    use std::os::unix::net::UnixStream;
+    UnixStream::connect(path).is_ok()
+}
+
+#[cfg(windows)]
+fn socket_probe(path: &Path) -> bool {
+    let s = path.display().to_string();
+    let target = if s.starts_with(r"\\.\pipe\") {
+        s
+    } else {
+        format!(r"\\.\pipe\{s}")
+    };
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(target)
+        .is_ok()
+}
+
+/// 读 config（含 Include 展开）并分析 agent 相关面。任何失败落字段，
+/// 绝不 panic、绝不静默吞。
+pub fn analyze_config(config_path: &Path, ssh_auth_sock: Option<String>) -> SshConfigAgentAnalysis {
+    let exists = config_path.exists();
+    let mut read_error = None;
+    let mut warnings = Vec::new();
+    let mut entries = Vec::new();
+    if exists {
+        match std::fs::read_to_string(config_path) {
+            Ok(content) => {
+                // 主文件里 persona 锚点块的行号区间（块内条目不计）
+                let skip_span = {
+                    let lines: Vec<&str> = content.lines().collect();
+                    let begin = lines.iter().position(|l| l.trim() == BLOCK_BEGIN);
+                    let end = lines.iter().position(|l| l.trim() == BLOCK_END);
+                    begin.zip(end).filter(|(b, e)| e >= b)
+                };
+                let mut visited = std::collections::HashSet::new();
+                collect_agent_entries(
+                    config_path,
+                    0,
+                    true,
+                    skip_span,
+                    &mut visited,
+                    &mut warnings,
+                    &mut entries,
+                );
+            }
+            Err(e) => read_error = Some(e.to_string()),
+        }
+    }
+
+    // ssh 语义「首个匹配值」的顶层级近似：第一个顶层（全局作用域）
+    // IdentityAgent；只有 host 级条目时不妄断（不同 host 结果不同）。
+    let identity_agent_effective = entries
+        .iter()
+        .find(|e| e.keyword.eq_ignore_ascii_case("identityagent") && e.scope.is_empty())
+        .map(|e| e.value.clone());
+    let forward_agent_entries = entries
+        .iter()
+        .filter(|e| e.keyword.eq_ignore_ascii_case("forwardagent"))
+        .cloned()
+        .collect();
+    let effective_socket = identity_agent_effective
+        .clone()
+        .or_else(|| ssh_auth_sock.clone());
+    let socket_alive = effective_socket
+        .as_deref()
+        .map(|s| socket_probe(Path::new(s)));
+    let persona_socket_alive = socket_probe(&agent_stable_socket());
+
+    SshConfigAgentAnalysis {
+        config_path: config_path.display().to_string(),
+        config_exists: exists,
+        readable: read_error.is_none(),
+        read_error,
+        warnings,
+        entries,
+        forward_agent_entries,
+        identity_agent_effective,
+        ssh_auth_sock,
+        effective_socket,
+        socket_alive,
+        persona_socket_alive,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,5 +771,176 @@ mod tests {
             }
         }
         None
+    }
+
+    #[test]
+    fn parse_ssh_line_handles_both_forms_and_comments() {
+        assert_eq!(
+            parse_ssh_line("  IdentityAgent /run/x  "),
+            Some(("IdentityAgent".into(), "/run/x".into()))
+        );
+        assert_eq!(
+            parse_ssh_line("forwardagent=/run/y"),
+            Some(("forwardagent".into(), "/run/y".into()))
+        );
+        // `Key = value`（= 作分隔符）与成对引号值
+        assert_eq!(
+            parse_ssh_line("ForwardAgent = yes"),
+            Some(("ForwardAgent".into(), "yes".into()))
+        );
+        assert_eq!(
+            parse_ssh_line("ProxyAgent \"a b/c\""),
+            Some(("ProxyAgent".into(), "a b/c".into()))
+        );
+        // 不成对引号原样保留
+        assert_eq!(
+            parse_ssh_line("IdentityAgent \"a b"),
+            Some(("IdentityAgent".into(), "\"a b".into()))
+        );
+        assert_eq!(parse_ssh_line("# comment"), None);
+        assert_eq!(parse_ssh_line("   "), None);
+    }
+
+    #[test]
+    fn glob_match_segment_semantics() {
+        assert!(glob_match(b"*", b"anything.conf"));
+        assert!(glob_match(b"conf.d*", b"conf.d"));
+        assert!(glob_match(b"*.conf", b"a.conf"));
+        assert!(!glob_match(b"*.conf", b"a.conf.bak"));
+        assert!(glob_match(b"file?", b"file1"));
+        assert!(!glob_match(b"file?", b"file12"));
+        assert!(glob_match(b"a*b*c", b"aXbYc"));
+        assert!(!glob_match(b"a?c", b"ac"));
+    }
+
+    #[test]
+    fn analyze_collects_agent_entries_across_scopes_and_includes() {
+        let dir = tempfile::tempdir().unwrap();
+        let inc_dir = dir.path().join("conf.d");
+        std::fs::create_dir(&inc_dir).unwrap();
+        std::fs::write(inc_dir.join("extra.conf"), "AddKeysToAgent yes\n").unwrap();
+        let config_path = dir.path().join("config");
+        // OpenSSH 语义：相对 Include 相对 ~/.ssh 解析，这里用绝对路径指向 tempdir；
+        // 全局 IdentityAgent 必须在任何 Host/Match 之前（作用域持续到下一个块头）
+        std::fs::write(
+            &config_path,
+            format!(
+                "IdentityAgent /global/sock\nHost github.com\n  User git\n  ForwardAgent no\n\n\
+                 Match host *.corp\n  IdentityAgent /match/sock\n\n\
+                 Include {}\n",
+                inc_dir.join("*.conf").display()
+            ),
+        )
+        .unwrap();
+
+        let a = analyze_config(&config_path, Some("/env/sock".into()));
+        assert!(a.readable);
+        assert!(a.read_error.is_none());
+        assert!(a.warnings.is_empty(), "warnings: {:?}", a.warnings);
+        // 作用域归属与行号（1 起）
+        assert_eq!(a.forward_agent_entries.len(), 1);
+        assert_eq!(a.forward_agent_entries[0].scope, "Host github.com");
+        assert_eq!(a.forward_agent_entries[0].line, 4);
+        // 顶层级首个 IdentityAgent 生效，环境变量被压后
+        assert_eq!(a.identity_agent_effective.as_deref(), Some("/global/sock"));
+        assert_eq!(a.effective_socket.as_deref(), Some("/global/sock"));
+        // Include 展开进条目（file 指向被包含文件）
+        let add = a
+            .entries
+            .iter()
+            .find(|e| e.keyword == "AddKeysToAgent")
+            .expect("Include 内条目应被收集");
+        assert!(
+            add.file.ends_with("conf.d/extra.conf"),
+            "file: {}",
+            add.file
+        );
+        assert_eq!(add.value, "yes");
+        // Match 作用域条目如实展示，但不妄断生效值
+        let m = a
+            .entries
+            .iter()
+            .find(|e| e.keyword == "IdentityAgent" && e.scope.starts_with("Match"))
+            .expect("Match 块条目应被收集");
+        assert_eq!(m.value, "/match/sock");
+        // 目标 socket 不存在 → 探测 false（不是 None 的「未知」）
+        assert_eq!(a.socket_alive, Some(false));
+        assert_eq!(a.ssh_auth_sock.as_deref(), Some("/env/sock"));
+    }
+
+    #[test]
+    fn analyze_excludes_persona_managed_block_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config");
+        std::fs::write(
+            &config_path,
+            format!(
+                "{BLOCK_BEGIN}\nHost *\n  IdentityAgent {AGENT}\n{BLOCK_END}\nHost a\n  ForwardAgent yes\n"
+            ),
+        )
+        .unwrap();
+        let a = analyze_config(&config_path, None);
+        assert!(a.entries.iter().all(|e| e.keyword != "IdentityAgent"));
+        assert_eq!(a.identity_agent_effective, None);
+        assert_eq!(a.forward_agent_entries.len(), 1);
+        // 无全局 IdentityAgent 且无环境变量 → 生效 socket 未知，不妄断
+        assert_eq!(a.effective_socket, None);
+        assert_eq!(a.socket_alive, None);
+    }
+
+    #[test]
+    fn analyze_warns_on_missing_and_circular_includes() {
+        let dir = tempfile::tempdir().unwrap();
+        let a_path = dir.path().join("a.conf");
+        let b_path = dir.path().join("b.conf");
+        let root = dir.path().join("root.conf");
+        // root → a →（缺失 glob + 指回 root 的环）；root → b（正常条目）
+        std::fs::write(
+            &a_path,
+            format!("Include missing-glob-*.conf\nInclude {}\n", root.display()),
+        )
+        .unwrap();
+        std::fs::write(&b_path, "AddKeysToAgent yes\n").unwrap();
+        std::fs::write(
+            &root,
+            format!(
+                "Include {}\nInclude {}\n",
+                a_path.display(),
+                b_path.display()
+            ),
+        )
+        .unwrap();
+
+        let a = analyze_config(&root, None);
+        assert!(a.warnings.iter().any(|w| w.contains("无匹配文件")));
+        assert!(a.warnings.iter().any(|w| w.contains("循环引用")));
+        // 环不挡正常收集：b.conf 的条目照进列表
+        assert_eq!(a.entries.len(), 1);
+        assert_eq!(a.entries[0].keyword, "AddKeysToAgent");
+    }
+
+    #[test]
+    fn analyze_missing_config_is_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("nope");
+        let a = analyze_config(&p, Some("/env".into()));
+        assert!(!a.config_exists);
+        assert!(a.read_error.is_none());
+        assert!(a.entries.is_empty());
+        // 生效 socket 退回环境变量
+        assert_eq!(a.effective_socket.as_deref(), Some("/env"));
+    }
+
+    #[test]
+    fn analyze_reports_unreadable_config_instead_of_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        // 路径是目录：确定性的读失败（不依赖 chmod，CI root 也能跑）
+        let as_dir = dir.path().join("config");
+        std::fs::create_dir(&as_dir).unwrap();
+        let a = analyze_config(&as_dir, None);
+        assert!(a.config_exists);
+        assert!(!a.readable);
+        assert!(a.read_error.is_some());
+        assert!(a.entries.is_empty());
     }
 }
