@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowPathIcon,
   PlayIcon,
@@ -81,6 +81,29 @@ const SshAgentPanel: React.FC = () => {
   useEffect(() => {
     refreshSshAgentStatus();
     loadSshKeys();
+  }, []);
+
+  // 回到窗口时重读：agent 可被 CLI（add-to-agent 自动拉起 daemon）或
+  // 其他入口起停/装载密钥，面板只在挂载时拉取会陈旧——用户切回看到的
+  // 徽章与列表就是现状，灯=真状态。服务函数每渲染重建，ref 捕获最新
+  // 引用；visibilitychange 与 focus 在切回时连发，1s 节流防重复拉取。
+  const rereadRef = useRef({ refreshSshAgentStatus, loadSshKeys });
+  rereadRef.current = { refreshSshAgentStatus, loadSshKeys };
+  useEffect(() => {
+    let lastReread = 0;
+    const reread = () => {
+      const now = Date.now();
+      if (document.visibilityState !== 'visible' || now - lastReread < 1000) return;
+      lastReread = now;
+      void rereadRef.current.refreshSshAgentStatus();
+      void rereadRef.current.loadSshKeys();
+    };
+    document.addEventListener('visibilitychange', reread);
+    window.addEventListener('focus', reread);
+    return () => {
+      document.removeEventListener('visibilitychange', reread);
+      window.removeEventListener('focus', reread);
+    };
   }, []);
 
   // 文件拖拽：enter/over 点亮拖放区，drop 带路径走与选择器同一条导入

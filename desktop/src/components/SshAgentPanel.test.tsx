@@ -99,6 +99,56 @@ describe('components/SshAgentPanel', () => {
     expect(loadSshKeys).toHaveBeenCalled();
   });
 
+  it('rereads agent status and keys when the window becomes visible again', async () => {
+    // agent 可被 CLI 起停/装载密钥：切回窗口时徽章与列表须跟上现状
+    const refreshSshAgentStatus = jest.fn();
+    const loadSshKeys = jest.fn();
+
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ refreshSshAgentStatus, loadSshKeys }),
+    );
+
+    render(<SshAgentPanel />);
+    await Promise.resolve();
+    const callsAfterMount = refreshSshAgentStatus.mock.calls.length;
+    const keyCallsAfterMount = loadSshKeys.mock.calls.length;
+
+    // 受控时钟：节流窗口（1s）靠 Date.now 判定
+    let clock = 1_000_000;
+    const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => clock);
+
+    // 可见性变化（切回 tab/还原窗口）→ 自动重读
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(refreshSshAgentStatus.mock.calls.length).toBeGreaterThan(callsAfterMount);
+    expect(loadSshKeys.mock.calls.length).toBeGreaterThan(keyCallsAfterMount);
+
+    // 1s 节流：窗口内连发（visibilitychange+focus 切回时成对到达）不重复拉取
+    clock += 300;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(refreshSshAgentStatus.mock.calls.length).toBe(callsAfterMount + 1);
+
+    // 越过窗口后，窗口聚焦同样触发（OS 级切回不产生 visibilitychange 的场景）
+    clock += 2000;
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(refreshSshAgentStatus.mock.calls.length).toBe(callsAfterMount + 2);
+
+    // 隐藏态不拉取
+    clock += 2000;
+    jest.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(refreshSshAgentStatus.mock.calls.length).toBe(callsAfterMount + 2);
+    nowSpy.mockRestore();
+    jest.restoreAllMocks();
+  });
+
   it('starts agent with optional master password', async () => {
     const startSshAgent = jest.fn().mockResolvedValue(undefined);
     const refreshSshAgentStatus = jest.fn().mockResolvedValue(undefined);
