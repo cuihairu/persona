@@ -258,6 +258,23 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         冲突清零；③ 吊销：delete_device 后信封消失、新会话 fail-closed、
         设备清单除名。与 runtime.rs 的 MemRemote 单测互补（那里锚引擎，
         这里锚 HTTP 线格式+服务器真实现）。桌面/插件 UI 截图走查仍需实机
+      - [x] **M6-批2 桌面 UI 实链走查（同步组配对半程）**（2026-10-10）：
+        双实例（Xvfb :88 + dbus-run-session + gnome-keyring + 静态 dist）
+        真桌面真 server 走查——A 配置服务器（M4 明示弹窗、URL 入 config、
+        令牌入 OS keyring、重启可读）→ A 本机出码（动态 6 位码+邀请串，
+        server 建 10min TTL 会话）→ B 粘贴邀请入组 → PAKE 双向信箱实链
+        （to_host 727B / host 应答 to_guest 726B）→ B 端 6 位配对指纹
+        显示（多轮 201353/790825/415222，需双端同源 PAKE 秘密才一致）
+        → B 确认入组消息落信箱（to_host 85B）；超时红字（90s×3 类）、
+        继续等待/取消配对恢复、重复 join 拒绝（勿重复 join）、自动锁定
+        均按设计工作。最终密钥交接腿（确认后 host 下发包裹组钥匙→B
+        入组）未在交互窗内走完（90s 轮询窗+10min TTL vs 截图驱动延迟，
+        三轮会话均过期于此腿），由 M6-批1 sync_two_device_e2e.rs 自动化
+        覆盖（join→授权→push/pull 实链绿）。环境发现：gnome-keyring-daemon
+        --replace 经共享 per-uid control socket 顶杀其他会话的同名守护
+        （对端 secrets 总线变 activatable 无主、keyring 操作永久挂起）
+        ——多实例桌面走查必须各自独立 XDG_RUNTIME_DIR；Xvfb 无 WM 时
+        windowactivate 不可用，用 windowraise+截图核位。
 
 浏览器插件推进（2026-10-04 用户令：对齐 1Password，自动化优先——先列分批计划进 todo，再逐批做，CI 绿门禁）
 
