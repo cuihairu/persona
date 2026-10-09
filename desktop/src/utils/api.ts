@@ -77,6 +77,7 @@ import type {
   CredentialData,
   CredentialHistoryEntry,
   AttachmentEntry,
+  CustomField,
   CreateIdentityRequest,
   UpdateIdentityRequest,
   CreateCredentialRequest,
@@ -522,6 +523,24 @@ class PersonaAPI {
     version: number
   ): Promise<ApiResponse<Credential>> {
     return invoke('restore_credential_version', { credential_id: credentialId, version });
+  }
+
+  /** 结构化自定义字段（1Password 对齐）：per-item key 密封，读需解锁 */
+  async getCredentialCustomFields(
+    credentialId: string
+  ): Promise<ApiResponse<CustomField[]>> {
+    return invoke('get_credential_custom_fields', { credential_id: credentialId });
+  }
+
+  /** 整表替换（空表=移除）；新行 id 传空串由后端生成 */
+  async setCredentialCustomFields(
+    credentialId: string,
+    fields: CustomField[]
+  ): Promise<ApiResponse<CustomField[]>> {
+    return invoke('set_credential_custom_fields', {
+      credential_id: credentialId,
+      fields,
+    });
   }
 
   async listAttachments(credentialId: string): Promise<ApiResponse<AttachmentEntry[]>> {

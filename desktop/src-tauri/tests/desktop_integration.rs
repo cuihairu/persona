@@ -347,3 +347,117 @@ fn build_assembles_full_app_with_tray() {
 
     app.cleanup_before_exit();
 }
+
+/// 自定义字段（1Password 对齐）命令层走查：真 PersonaService（解锁态）+
+/// mock runtime State 直驱命令——set 时空 id 由后端生成、get 回读一致、
+/// 空表移除、非法 UUID 与未知类型分类报错。
+#[tokio::test]
+async fn custom_fields_commands_roundtrip_through_real_service() {
+    use persona_desktop::commands;
+    use persona_desktop::types::SerializableCustomField;
+
+    let app = mock_app();
+    let dir = tempfile::tempdir().unwrap();
+    let db = persona_core::storage::Database::from_file(
+        dir.path().join("custom-fields.db").to_str().unwrap(),
+    )
+    .await
+    .unwrap();
+    db.migrate().await.unwrap();
+    let mut service = persona_core::service::PersonaService::new(db)
+        .await
+        .unwrap();
+    service.initialize_user("test_password").await.unwrap();
+    let identity = service
+        .create_identity(
+            "CF Identity".to_string(),
+            persona_core::IdentityType::Personal,
+        )
+        .await
+        .unwrap();
+    let data = persona_core::models::CredentialData::Password(
+        persona_core::models::credential::PasswordCredentialData {
+            password: "pw".to_string(),
+            email: None,
+            security_questions: vec![],
+        },
+    );
+    let cred = service
+        .create_credential(
+            identity.id,
+            "WithFields".to_string(),
+            persona_core::CredentialType::Password,
+            persona_core::models::SecurityLevel::Medium,
+            &data,
+        )
+        .await
+        .unwrap();
+    *app.state::<AppState>().service.lock().await = Some(service);
+
+    let field_input =
+        |id: &str, label: &str, value: &str, field_type: &str| SerializableCustomField {
+            id: id.to_string(),
+            label: label.to_string(),
+            value: value.to_string(),
+            field_type: field_type.to_string(),
+            section: None,
+        };
+
+    // set：新行 id 空串 → 后端生成；get 回读同表
+    let set_resp = commands::set_credential_custom_fields(
+        cred.id.to_string(),
+        vec![
+            field_input("", "Server", "db.internal:5432", "text"),
+            field_input("", "Recovery code", "abcd-efgh", "concealed"),
+        ],
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(set_resp.success, "set failed: {:?}", set_resp.error);
+    let stored = set_resp.data.clone().unwrap();
+    assert_eq!(stored.len(), 2);
+    assert!(!stored[0].id.is_empty() && !stored[1].id.is_empty());
+    assert!(stored[1].id != stored[0].id);
+
+    let get_resp =
+        commands::get_credential_custom_fields(cred.id.to_string(), app.state::<AppState>())
+            .await
+            .unwrap();
+    assert!(get_resp.success);
+    assert_eq!(get_resp.data.unwrap(), stored);
+
+    // 空表 = 移除
+    let clear = commands::set_credential_custom_fields(
+        cred.id.to_string(),
+        vec![],
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(clear.success);
+    let get_empty =
+        commands::get_credential_custom_fields(cred.id.to_string(), app.state::<AppState>())
+            .await
+            .unwrap();
+    assert!(get_empty.data.unwrap().is_empty());
+
+    // 非法 UUID 分类报错
+    let bad =
+        commands::get_credential_custom_fields("not-a-uuid".to_string(), app.state::<AppState>())
+            .await
+            .unwrap();
+    assert!(!bad.success);
+    assert!(bad.error.unwrap().contains("Invalid UUID"));
+
+    // 未知类型分类报错（不落库）
+    let unknown = commands::set_credential_custom_fields(
+        cred.id.to_string(),
+        vec![field_input("", "K", "V", "bogus")],
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!unknown.success);
+    assert!(unknown.error.unwrap().contains("unknown custom field type"));
+}

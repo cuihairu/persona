@@ -73,7 +73,7 @@ describe('components/WalletPanel', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
-    (usePersonaService as jest.Mock).mockReturnValue({ currentIdentity: IDENT });
+    (usePersonaService as jest.Mock).mockReturnValue({ currentIdentity: IDENT, getCredentialCustomFields: jest.fn(() => new Promise(() => {})) });
     mockWalletList([makeWallet()]);
     (personaAPI.walletListAddresses as jest.Mock).mockResolvedValue({
       success: true,
@@ -227,7 +227,7 @@ describe('components/WalletPanel', () => {
   });
 
   it('skips the API entirely when no identity is selected', async () => {
-    (usePersonaService as jest.Mock).mockReturnValue({ currentIdentity: null });
+    (usePersonaService as jest.Mock).mockReturnValue({ currentIdentity: null, getCredentialCustomFields: jest.fn(() => new Promise(() => {})) });
     render(<WalletPanel />);
     await flush();
     await flush();

@@ -83,6 +83,8 @@ const setupPane = (
     // 同步收尾的旧用例不受影响（悬挂 promise 卸载后无害）；附件用例
     // 显式传 mockResolvedValue 并用 findBy/act 收尾
     listAttachments: jest.fn(() => new Promise(() => {})),
+    // 自定义字段同口径：默认悬挂，专项用例显式 mockResolvedValue + findBy 收尾
+    getCredentialCustomFields: jest.fn(() => new Promise(() => {})),
     attachFileToCredential: jest.fn(),
     saveAttachmentToFile: jest.fn().mockResolvedValue(true),
     deleteAttachment: jest.fn().mockResolvedValue(true),
@@ -896,5 +898,56 @@ describe('components/CredentialDetailPane', () => {
     clickCopyNextTo('bob');
     await act(async () => {});
     expect(toast.error).toHaveBeenCalledWith('复制到剪贴板失败');
+  });
+
+  it('renders custom fields with concealed masking, reveal and copy', async () => {
+    // 结构化自定义字段（1Password 对齐）：明文 text 直接显示，concealed
+    // UI 层打码（值已随列表解密，打码只为防肩窥）；复制带字段标签
+    const { onCopy } = setupPane(
+      { name: 'WithFields' },
+      null,
+      {
+        getCredentialCustomFields: jest.fn().mockResolvedValue([
+          { id: 'f1', label: 'Server', value: 'db.internal:5432', type: 'text', section: null },
+          { id: 'f2', label: 'Recovery code', value: 'abcd-efgh', type: 'concealed', section: null },
+        ]),
+      },
+    );
+
+    await screen.findByTestId('custom-fields-section');
+    expect(screen.getByTestId('custom-field-value-f1')).toHaveTextContent('db.internal:5432');
+    // concealed 默认打码
+    expect(screen.getByTestId('custom-field-value-f2')).toHaveTextContent('••••••••');
+    expect(screen.getByTestId('custom-field-value-f2')).not.toHaveTextContent('abcd-efgh');
+
+    // 显示→隐藏两态翻转
+    fireEvent.click(screen.getByTestId('custom-field-reveal-f2'));
+    expect(screen.getByTestId('custom-field-value-f2')).toHaveTextContent('abcd-efgh');
+    fireEvent.click(screen.getByTestId('custom-field-reveal-f2'));
+    expect(screen.getByTestId('custom-field-value-f2')).toHaveTextContent('••••••••');
+
+    // 复制走 onCopy，带字段标签
+    fireEvent.click(screen.getByTestId('custom-field-copy-f2'));
+    expect(onCopy).toHaveBeenCalledWith('abcd-efgh', 'Recovery code');
+  });
+
+  it('hides the custom fields section for credentials without fields', async () => {
+    setupPane({ name: 'NoFields' }, null, {
+      getCredentialCustomFields: jest.fn().mockResolvedValue([]),
+    });
+
+    await act(async () => {});
+    expect(screen.queryByTestId('custom-fields-section')).not.toBeInTheDocument();
+  });
+
+  it('shows an error line when custom fields fail to load (no fake empty state)', async () => {
+    // 读失败（如保险库已上锁）必须如实显示错误行，不冒充「无字段」
+    setupPane({ name: 'Locked' }, null, {
+      getCredentialCustomFields: jest.fn().mockResolvedValue(null),
+    });
+
+    const err = await screen.findByTestId('custom-fields-error');
+    expect(err).toHaveTextContent('自定义字段读取失败');
+    expect(screen.queryByTestId('custom-field-entry')).not.toBeInTheDocument();
   });
 });

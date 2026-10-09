@@ -4344,6 +4344,90 @@ pub async fn get_credential_data(
     }
 }
 
+/// Structured custom fields of a credential (1Password parity). Values are
+/// sealed under the credential's per-item key, so this needs an unlocked
+/// vault; a credential without fields returns an empty list.
+#[command(rename_all = "snake_case")]
+pub async fn get_credential_custom_fields(
+    credential_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<SerializableCustomField>>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&credential_id) {
+            Ok(uuid) => match service.custom_fields(&uuid).await {
+                Ok(fields) => Ok(ApiResponse::success(
+                    fields.into_iter().map(Into::into).collect(),
+                )),
+                Err(e) => {
+                    let (code, msg) = map_persona_error(&e);
+                    match code {
+                        Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                        None => Ok(ApiResponse::error(format!(
+                            "Failed to get custom fields: {}",
+                            msg
+                        ))),
+                    }
+                }
+            },
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
+/// Replace a credential's structured custom fields (empty list removes
+/// them). Client may send `id: ""` for newly added rows — ids are
+/// generated here; ids must be unique within the list.
+#[command(rename_all = "snake_case")]
+pub async fn set_credential_custom_fields(
+    credential_id: String,
+    fields: Vec<SerializableCustomField>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<Vec<SerializableCustomField>>, String> {
+    let service_guard = state.service.lock().await;
+    match service_guard.as_ref() {
+        Some(service) => match Uuid::from_str(&credential_id) {
+            Ok(uuid) => {
+                let mut core_fields = Vec::with_capacity(fields.len());
+                for f in fields {
+                    let mut f = f;
+                    if f.id.trim().is_empty() {
+                        f.id = Uuid::new_v4().to_string();
+                    }
+                    match CustomField::try_from(f) {
+                        Ok(cf) => core_fields.push(cf),
+                        Err(e) => return Ok(ApiResponse::error(e.to_string())),
+                    }
+                }
+                match service.set_custom_fields(&uuid, core_fields).await {
+                    Ok(_) => match service.custom_fields(&uuid).await {
+                        Ok(fields) => Ok(ApiResponse::success(
+                            fields.into_iter().map(Into::into).collect(),
+                        )),
+                        Err(e) => Ok(ApiResponse::error(format!(
+                            "Failed to read back custom fields: {}",
+                            e
+                        ))),
+                    },
+                    Err(e) => {
+                        let (code, msg) = map_persona_error(&e);
+                        match code {
+                            Some(code) => Ok(ApiResponse::error_with_code(code, msg)),
+                            None => Ok(ApiResponse::error(format!(
+                                "Failed to set custom fields: {}",
+                                msg
+                            ))),
+                        }
+                    }
+                }
+            }
+            Err(_) => Ok(ApiResponse::error("Invalid UUID format".to_string())),
+        },
+        None => Ok(ApiResponse::error("Service not initialized".to_string())),
+    }
+}
+
 /// Get change history for a credential (item history; metadata-only,
 /// 字段级 diff 不含任何密文/密钥材料)
 #[command(rename_all = "snake_case")]

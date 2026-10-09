@@ -593,6 +593,19 @@ export interface CredentialData {
   data: any;
 }
 
+/**
+ * 结构化自定义字段（1Password 对齐，对应 Rust SerializableCustomField）。
+ * 整表以 per-item key 密封存于 credential.metadata，读需解锁；
+ * `concealed` 行 value 是密文解出后的明文，仅在 UI 层打码。
+ */
+export interface CustomField {
+  id: string;
+  label: string;
+  value: string;
+  type: 'text' | 'concealed' | 'date';
+  section: string | null;
+}
+
 /** 字段级 diff（对应 Rust SerializableFieldChange；快照 JSON 不回传） */
 export interface FieldChangeEntry {
   field: string;

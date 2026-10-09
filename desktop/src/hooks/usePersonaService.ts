@@ -5,6 +5,7 @@ import type {
   AttachmentEntry,
   ApiResponse,
   CredentialHistoryEntry,
+  CustomField,
   Identity,
   SshKeyGenerated,
   SshKeyImported,
@@ -500,6 +501,22 @@ export const usePersonaService = () => {
     }
   };
 
+  /**
+   * 结构化自定义字段（1Password 对齐）。读失败返回 null（与「空表」区分，
+   * 面板据此显示错误行而非空态）；值随列表一并解密，UI 层对 concealed 打码。
+   */
+  const getCredentialCustomFields = async (credentialId: string): Promise<CustomField[] | null> => {
+    try {
+      const response = await personaAPI.getCredentialCustomFields(credentialId);
+      if (response.success && Array.isArray(response.data)) {
+        return response.data;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
+
   const attachFileToCredential = async (credentialId: string, filePath: string, encrypt: boolean) => {
     try {
       const response = await personaAPI.attachFileToCredential(credentialId, filePath, encrypt);
@@ -753,6 +770,7 @@ export const usePersonaService = () => {
     getCredentialHistory,
     restoreCredentialVersion,
     listAttachments,
+    getCredentialCustomFields,
     attachFileToCredential,
     saveAttachmentToFile,
     deleteAttachment,

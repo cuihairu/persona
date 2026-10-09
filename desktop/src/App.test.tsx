@@ -167,6 +167,7 @@ describe('App', () => {
       // 挂载期要拉附件/详情数据——悬挂 promise 不产生 setState，避免 act 警告
       getCredentialData: jest.fn(() => new Promise(() => {})),
       listAttachments: jest.fn(() => new Promise(() => {})),
+      getCredentialCustomFields: jest.fn(() => new Promise(() => {})),
       toggleCredentialFavorite: jest.fn(),
       getTotpCode: jest.fn(),
       getCredentialHistory: jest.fn().mockResolvedValue([]),
@@ -474,6 +475,7 @@ describe('App', () => {
     // 面板挂载期拉附件（悬挂 promise 不产生 setState），其余 service 面均为防御桩
     serviceState.getCredentialData = jest.fn().mockResolvedValue(null);
     serviceState.listAttachments = jest.fn(() => new Promise(() => {}));
+    serviceState.getCredentialCustomFields = jest.fn(() => new Promise(() => {}));
     serviceState.toggleCredentialFavorite = jest.fn();
     serviceState.getTotpCode = jest.fn();
     serviceState.getCredentialHistory = jest.fn().mockResolvedValue([]);

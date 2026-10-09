@@ -362,6 +362,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::update_credential_data,
             commands::get_credentials_for_identity,
             commands::get_credential_data,
+            commands::get_credential_custom_fields,
+            commands::set_credential_custom_fields,
             commands::get_credential_history,
             commands::restore_credential_version,
             commands::get_totp_code,

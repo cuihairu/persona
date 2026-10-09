@@ -6,6 +6,8 @@ import {
   ChevronUpIcon,
   ClockIcon,
   DocumentDuplicateIcon,
+  EyeIcon,
+  EyeSlashIcon,
   HeartIcon,
   LockClosedIcon,
   PaperClipIcon,
@@ -22,7 +24,7 @@ import { personaAPI } from '@/utils/api';
 import { useAppStore } from '@/stores/appStore';
 import FaviconImg from './FaviconImg';
 import { useFavicons } from '@/hooks/useFavicons';
-import type { AttachmentEntry, Credential, CredentialHistoryEntry } from '@/types';
+import type { AttachmentEntry, Credential, CredentialHistoryEntry, CustomField } from '@/types';
 import { clsx } from 'clsx';
 import RevealSecretButton from '@/components/RevealSecretButton';
 import {
@@ -69,6 +71,7 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
     attachFileToCredential,
     saveAttachmentToFile,
     deleteAttachment,
+    getCredentialCustomFields,
   } = usePersonaService();
   const faviconsEnabled = useAppStore((s) => s.featureFlags.fetch_favicons);
   const setEditingCredential = useAppStore((s) => s.setEditingCredential);
@@ -97,6 +100,12 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
   // Attachments：主功能，选中即拉取；切换凭据重置后重拉
   const [attachments, setAttachments] = useState<AttachmentEntry[]>([]);
   const [isAttachmentBusy, setIsAttachmentBusy] = useState(false);
+  // 结构化自定义字段（1Password 对齐）：per-item key 密封，解锁态才读得到；
+  // null=读失败（如实显示错误行，不冒充空表）
+  const [customFields, setCustomFields] = useState<CustomField[] | null>(null);
+  const [customFieldsError, setCustomFieldsError] = useState<string | null>(null);
+  // concealed 行的 UI 层打码（值已随列表解密，隐藏只为防肩窥）
+  const [revealedFieldIds, setRevealedFieldIds] = useState<Set<string>>(new Set());
   const IconComponent = getCredentialIcon(credential.credential_type);
 
   useEffect(() => {
@@ -113,6 +122,26 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
       cancelled = true;
     };
     // listAttachments 来自 context hook，返回值每渲染重建但仅作启动调用
+  }, [credential.id]);
+
+  // 自定义字段随条目切换重读；读失败留错误行（不冒充空表）
+  useEffect(() => {
+    const cancelled = { flag: false };
+    setCustomFields(null);
+    setCustomFieldsError(null);
+    setRevealedFieldIds(new Set());
+    getCredentialCustomFields(credential.id).then((fields) => {
+      if (cancelled.flag) return;
+      if (fields === null) {
+        setCustomFieldsError(t('detail.customFieldsLoadFailed'));
+      } else {
+        setCustomFields(fields);
+      }
+    });
+    return () => {
+      cancelled.flag = true;
+    };
+    // getCredentialCustomFields 来自 context hook，返回值每渲染重建但仅作启动调用
   }, [credential.id]);
 
   // 切换凭据时重置历史折叠态（不预取）
@@ -986,6 +1015,92 @@ const CredentialDetailPane: React.FC<CredentialDetailPaneProps> = ({
             )}
           </div>
         </div>
+
+        {/* 自定义字段（1Password 对齐）：per-item key 密封的整表，读失败如实显示；
+            加载中/空表整节隐藏（不闪空标题） */}
+        {((customFields !== null && customFields.length > 0) || customFieldsError) && (
+          <div className="border-t pt-3" data-testid="custom-fields-section">
+            <span className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-300">
+              <DocumentDuplicateIcon className="w-4 h-4" />
+              {t('detail.customFields')}
+            </span>
+            {customFieldsError ? (
+              <p className="mt-2 text-xs text-red-500 dark:text-red-400" data-testid="custom-fields-error">
+                {customFieldsError}
+              </p>
+            ) : customFields === null ? null : (
+              <ul className="mt-2 space-y-1.5">
+                {customFields.map((field) => {
+                  const revealed = revealedFieldIds.has(field.id);
+                  return (
+                    <li
+                      key={field.id}
+                      className="flex items-center justify-between gap-2 text-xs bg-gray-50 dark:bg-gray-800 rounded p-2"
+                      data-testid="custom-field-entry"
+                    >
+                      <div className="min-w-0">
+                        <p
+                          className="truncate font-medium text-gray-700 dark:text-gray-200"
+                          data-testid="custom-field-label"
+                        >
+                          {field.label}
+                        </p>
+                        <p
+                          className={clsx(
+                            'font-mono break-all',
+                            field.type === 'concealed' && !revealed
+                              ? 'tracking-widest select-none'
+                              : 'text-gray-600 dark:text-gray-300'
+                          )}
+                          data-testid={`custom-field-value-${field.id}`}
+                        >
+                          {field.type === 'concealed' && !revealed
+                            ? '••••••••'
+                            : field.value}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {field.type === 'concealed' && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRevealedFieldIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(field.id)) next.delete(field.id);
+                                else next.add(field.id);
+                                return next;
+                              })
+                            }
+                            title={revealed ? t('detail.hideFieldValue') : t('detail.showFieldValue')}
+                            aria-label={revealed ? t('detail.hideFieldValue') : t('detail.showFieldValue')}
+                            data-testid={`custom-field-reveal-${field.id}`}
+                            className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          >
+                            {revealed ? (
+                              <EyeSlashIcon className="w-4 h-4" />
+                            ) : (
+                              <EyeIcon className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => onCopy(field.value, field.label)}
+                          title={t('detail.copyLabel', { name: field.label })}
+                          aria-label={t('detail.copyLabel', { name: field.label })}
+                          data-testid={`custom-field-copy-${field.id}`}
+                          className="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        >
+                          <DocumentDuplicateIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
 
         {/* Item history（1Password 对齐）：懒加载的变更时间线 */}
         <div className="border-t pt-3">

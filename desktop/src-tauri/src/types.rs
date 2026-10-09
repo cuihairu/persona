@@ -824,6 +824,57 @@ pub struct SerializableCredentialData {
     pub data: serde_json::Value,
 }
 
+/// Structured custom field (1Password parity). `value` is a secret for
+/// `Concealed` fields, so reads require an unlocked vault.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SerializableCustomField {
+    pub id: String,
+    pub label: String,
+    pub value: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    pub section: Option<String>,
+}
+
+impl From<CustomField> for SerializableCustomField {
+    fn from(f: CustomField) -> Self {
+        Self {
+            id: f.id,
+            label: f.label,
+            value: f.value,
+            field_type: serde_json::to_value(f.field_type)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_else(|| "text".to_string()),
+            section: f.section,
+        }
+    }
+}
+
+impl TryFrom<SerializableCustomField> for CustomField {
+    type Error = PersonaError;
+
+    fn try_from(f: SerializableCustomField) -> std::result::Result<Self, Self::Error> {
+        let field_type = match f.field_type.as_str() {
+            "text" => CustomFieldType::Text,
+            "concealed" => CustomFieldType::Concealed,
+            "date" => CustomFieldType::Date,
+            other => {
+                return Err(PersonaError::InvalidInput(format!(
+                    "unknown custom field type: {other}"
+                )))
+            }
+        };
+        Ok(CustomField {
+            id: f.id,
+            label: f.label,
+            value: f.value,
+            field_type,
+            section: f.section,
+        })
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct SshAgentStatus {
     pub running: bool,

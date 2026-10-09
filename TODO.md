@@ -831,6 +831,20 @@ Desktop (Tauri v2 + React)
         Certificate/GameAccount）只编辑元数据——不盲目用空 payload 覆盖既有
         密文。顺带修 create_credential 类型 match 缺 SecureNote/Identity/
         SoftwareLicense 三臂（此前经 Custom(name) 字符串往返侥幸等价）
+- [x] 结构化自定义字段——读写链路（2026-10-09，1Password 对齐 #5 的一半）：
+      core `CustomField`（id/label/value/type(text|concealed|date)/section）
+      整表 JSON 经 **per-item key** 密封后存 `credential.metadata["persona:custom_fields"]`
+      （legacy 行首次封存时自动升级 item key，同附件模式）——bincode 负载
+      结构零改动（实证：bincode 1.3 追加字段连 `#[serde(default)]` 都不容忍，
+      旧密文必坏，故不走负载体；metadata 随 SyncItemSnapshot/条目历史/审计
+      白得全链复用）。service `custom_fields`/`set_custom_fields`（空表=移除、
+      重复 id 拒绝、锁定 fail-closed、密文错 fail-closed）；tauri 两命令
+      `get/set_credential_custom_fields`（空 id 服务端补 uuid、未知类型分类报错）；
+      详情面板只读区（concealed UI 层打码+揭示+复制、空表整节隐藏、读失败
+      如实报错行不冒充空表）。测试：core 8 单测 + service 4 + 集成命令走查
+      （真服务 set/get/移除/非法 UUID/未知类型）+ jest 3（面板）+ mock 补齐。
+      core+src-tauri fmt/clippy(-D warnings)/test、jest 702、lint、tsc 绿。
+      **待做**：条目编辑表单（CreateCredentialModal）内的增删改 UI、CLI。
 - [x] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
       ——5f39538e 测试 fixture 对齐类型定义，清零 23 个 tsc 本底
       （beforeBuildCommand=`pnpm build` 由此解锁，前端验证基线简化为
