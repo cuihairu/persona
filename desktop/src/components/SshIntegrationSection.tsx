@@ -4,6 +4,12 @@ import toast from 'react-hot-toast';
 import { personaAPI } from '@/utils/api';
 import type { SshConfigAgentAnalysis, SshIntegrationStatus } from '@/types';
 
+/** "OpenSSH_10.2p1" → [10, 2]；解析不了 → null */
+const parseSshVersion = (label: string): [number, number] | null => {
+  const m = /^OpenSSH_(\d+)\.(\d+)/.exec(label);
+  return m ? [Number(m[1]), Number(m[2])] : null;
+};
+
 /**
  * 设置页「SSH 走 persona agent」：检测/一键启用 ~/.ssh/config 的
  * IdentityAgent 锚点块，纯文件操作不解锁。文案解释原理（IdentityAgent
@@ -17,6 +23,7 @@ const SshIntegrationSection: React.FC = () => {
   const [status, setStatus] = useState<SshIntegrationStatus | null>(null);
   const [analysis, setAnalysis] = useState<SshConfigAgentAnalysis | null>(null);
   const [busy, setBusy] = useState<'enable' | 'disable' | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [showManual, setShowManual] = useState(false);
 
   const refreshAnalysis = useCallback(async () => {
@@ -43,6 +50,16 @@ const SshIntegrationSection: React.FC = () => {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 手动重读：外部改了 config / 起了 agent 后，面板与状态行同步现状
+  const manualRefresh = async (): Promise<void> => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const apply = async (op: 'enable' | 'disable'): Promise<void> => {
     setBusy(op);
@@ -90,6 +107,17 @@ const SshIntegrationSection: React.FC = () => {
       : analysis?.socketAlive === false
         ? t('settings.sshIntegration.analysisAliveDead')
         : t('settings.sshIntegration.analysisAliveUnknown');
+
+  // OpenSSH 版本兼容判定：IdentityAgent 需 8.3+（探测不到/解析不了则
+  // 如实显示无法判定，不猜）
+  const parsedVersion = status.sshVersion
+    ? parseSshVersion(status.sshVersion)
+    : null;
+  const versionOk: boolean | null = status.sshVersion
+    ? parsedVersion
+      ? parsedVersion[0] > 8 || (parsedVersion[0] === 8 && parsedVersion[1] >= 3)
+      : null
+    : null;
   // Host * 作用域行与后端锚点块同构：块追加在 EOF，若无它会落入用户
   // 最后一个 Host 块的作用域（见 ssh_integration.rs 模块注释）
   const manualSnippet = [
@@ -141,6 +169,30 @@ const SshIntegrationSection: React.FC = () => {
             {configPath}
           </span>
         </p>
+        <p className="flex flex-wrap items-center gap-2">
+          <span className="shrink-0 text-gray-400 dark:text-gray-500">
+            {t('settings.sshIntegration.sshVersionLabel')}
+          </span>
+          <span className="font-mono" data-testid="ssh-integration-version">
+            {status.sshVersion ?? t('settings.sshIntegration.sshVersionUnknown')}
+          </span>
+          <span
+            data-testid="ssh-integration-version-verdict"
+            className={
+              versionOk === true
+                ? 'text-green-600 dark:text-green-400'
+                : versionOk === false
+                  ? 'text-red-600 dark:text-red-400'
+                  : 'text-gray-400 dark:text-gray-500'
+            }
+          >
+            {versionOk === true
+              ? t('settings.sshIntegration.sshVersionOk')
+              : versionOk === false
+                ? t('settings.sshIntegration.sshVersionTooOld')
+                : t('settings.sshIntegration.sshVersionRequirement')}
+          </span>
+        </p>
         <p className="text-gray-500 dark:text-gray-400">
           {t('settings.sshIntegration.manualHint')}
         </p>
@@ -151,9 +203,21 @@ const SshIntegrationSection: React.FC = () => {
           data-testid="ssh-analysis-panel"
           className="mt-3 rounded-md border border-gray-200 dark:border-gray-700 p-3 space-y-2 text-xs text-gray-600 dark:text-gray-300"
         >
-          <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-            {t('settings.sshIntegration.analysisTitle')}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              {t('settings.sshIntegration.analysisTitle')}
+            </p>
+            <button
+              data-testid="ssh-analysis-refresh"
+              className="btn-ghost text-xs"
+              disabled={refreshing}
+              onClick={() => void manualRefresh()}
+            >
+              {refreshing
+                ? t('settings.sshIntegration.analysisRefreshing')
+                : t('settings.sshIntegration.analysisRefresh')}
+            </button>
+          </div>
 
           {/* config 损坏/无权限：如实显示，不崩、不静默 */}
           {analysis.readError && (

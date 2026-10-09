@@ -358,6 +358,13 @@ export default {
       analysisPersonaDead: '未运行',
       analysisEntries: 'agent 相关条目（{{count}}）：',
       analysisEmpty: '未发现 agent 相关配置（IdentityAgent / ForwardAgent / AddKeysToAgent / ProxyAgent）。',
+      sshVersionLabel: 'OpenSSH 客户端：',
+      sshVersionUnknown: '未探测到',
+      sshVersionOk: '支持 IdentityAgent',
+      sshVersionTooOld: '版本过旧，不支持 IdentityAgent（需 8.3+）',
+      sshVersionRequirement: '需 8.3+ 才支持 IdentityAgent',
+      analysisRefresh: '重新读取',
+      analysisRefreshing: '读取中…',
     },
     syncGroup: {
       title: '同步组配对',

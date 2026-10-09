@@ -366,6 +366,13 @@ export default {
       analysisPersonaDead: 'not running',
       analysisEntries: 'Agent-related entries ({{count}}):',
       analysisEmpty: 'No agent-related entries found (IdentityAgent / ForwardAgent / AddKeysToAgent / ProxyAgent).',
+      sshVersionLabel: 'OpenSSH client:',
+      sshVersionUnknown: 'not detected',
+      sshVersionOk: 'supports IdentityAgent',
+      sshVersionTooOld: 'too old for IdentityAgent (needs 8.3+)',
+      sshVersionRequirement: 'needs 8.3+ for IdentityAgent',
+      analysisRefresh: 'Refresh',
+      analysisRefreshing: 'Refreshing…',
     },
     syncGroup: {
       title: 'Sync group pairing',

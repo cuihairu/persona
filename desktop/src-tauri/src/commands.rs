@@ -5171,7 +5171,7 @@ pub fn ssh_agent_integration_status() -> ApiResponse<crate::ssh_integration::Ssh
         config_path: config_path.display().to_string(),
         socket_path: value.clone(),
         identity_agent: managed,
-        ssh_version: None,
+        ssh_version: si::probe_ssh_version(),
         config_exists: config_path.exists(),
         read_error,
     })

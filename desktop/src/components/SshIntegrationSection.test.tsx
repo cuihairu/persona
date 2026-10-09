@@ -231,4 +231,72 @@ describe('components/SshIntegrationSection', () => {
     await waitFor(() => expect(getByTestId('ssh-integration-badge')).toBeInTheDocument());
     expect(queryByTestId('ssh-analysis-panel')).toBeNull();
   });
+
+  it('renders the detected OpenSSH version with a compatibility verdict', async () => {
+    mockStatus.mockResolvedValue({
+      success: true,
+      data: statusOf({ sshVersion: 'OpenSSH_10.2p1' }),
+    });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-integration-version')).toBeInTheDocument());
+    expect(getByTestId('ssh-integration-version')).toHaveTextContent('OpenSSH_10.2p1');
+    expect(getByTestId('ssh-integration-version-verdict')).toHaveTextContent('支持 IdentityAgent');
+    expect(getByTestId('ssh-integration-version-verdict')).toHaveClass('text-green-600');
+  });
+
+  it('flags an OpenSSH version too old for IdentityAgent', async () => {
+    mockStatus.mockResolvedValue({
+      success: true,
+      data: statusOf({ sshVersion: 'OpenSSH_8.2p1' }),
+    });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() =>
+      expect(getByTestId('ssh-integration-version-verdict')).toBeInTheDocument(),
+    );
+    expect(getByTestId('ssh-integration-version-verdict')).toHaveTextContent('版本过旧');
+    expect(getByTestId('ssh-integration-version-verdict')).toHaveClass('text-red-600');
+  });
+
+  it('shows "not detected" honestly when the OpenSSH probe returns nothing', async () => {
+    mockStatus.mockResolvedValue({
+      success: true,
+      data: statusOf({ sshVersion: null }),
+    });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-integration-version')).toBeInTheDocument());
+    expect(getByTestId('ssh-integration-version')).toHaveTextContent('未探测到');
+    // 无法判定 ≠ 通过：既不绿也不红
+    expect(getByTestId('ssh-integration-version-verdict')).toHaveTextContent('需 8.3+');
+    expect(getByTestId('ssh-integration-version-verdict')).toHaveClass('text-gray-400');
+  });
+
+  it('manual refresh re-reads both status and analysis', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockAnalysis.mockResolvedValue({ success: true, data: analysisOf() });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-analysis-refresh')).toBeInTheDocument());
+    const statusCallsBefore = mockStatus.mock.calls.length;
+    const analysisCallsBefore = mockAnalysis.mock.calls.length;
+
+    // 外部改了 config：重读后拉到的分析是新值
+    mockAnalysis.mockResolvedValue({
+      success: true,
+      data: analysisOf({ identityAgentEffective: '/fresh/sock', socketAlive: true }),
+    });
+    fireEvent.click(getByTestId('ssh-analysis-refresh'));
+
+    await waitFor(() =>
+      expect(mockStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore),
+    );
+    await waitFor(() =>
+      expect(mockAnalysis.mock.calls.length).toBeGreaterThan(analysisCallsBefore),
+    );
+    await waitFor(() =>
+      expect(getByTestId('ssh-analysis-effective-agent')).toHaveTextContent('/fresh/sock'),
+    );
+  });
 });

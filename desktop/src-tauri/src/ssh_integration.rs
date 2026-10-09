@@ -543,6 +543,30 @@ fn socket_probe(path: &Path) -> bool {
         .is_ok()
 }
 
+/// 从 `ssh -V` stderr 提取（展示标签, 主/次版本）。样本：
+/// `OpenSSH_10.2p1 Ubuntu-…` / `OpenSSH_9.6p1, OpenSSL …` / `OpenSSH_8.3`。
+fn parse_ssh_version(stderr: &str) -> Option<(String, (u32, u32))> {
+    let rest = stderr.split("OpenSSH_").nth(1)?;
+    let token = rest.split(|c: char| c.is_whitespace() || c == ',').next()?;
+    if token.is_empty() {
+        return None;
+    }
+    let mut nums = token
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty());
+    let major = nums.next()?.parse().ok()?;
+    let minor = nums.next().unwrap_or("0").parse().ok()?;
+    Some((format!("OpenSSH_{token}"), (major, minor)))
+}
+
+/// `ssh -V` 探测（版本号走 stderr，ssh 的约定）。未装 OpenSSH / 解析
+/// 失败 → None，前端如实显示「未探测到」，不猜。
+pub fn probe_ssh_version() -> Option<String> {
+    let out = std::process::Command::new("ssh").arg("-V").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stderr);
+    parse_ssh_version(&text).map(|(label, _)| label)
+}
+
 /// 读 config（含 Include 展开）并分析 agent 相关面。任何失败落字段，
 /// 绝不 panic、绝不静默吞。
 pub fn analyze_config(config_path: &Path, ssh_auth_sock: Option<String>) -> SshConfigAgentAnalysis {
@@ -958,6 +982,30 @@ mod tests {
         assert!(a.entries.is_empty());
         // 生效 socket 退回环境变量
         assert_eq!(a.effective_socket.as_deref(), Some("/env"));
+    }
+
+    #[test]
+    fn parse_ssh_version_extracts_label_and_numbers() {
+        assert_eq!(
+            parse_ssh_version("OpenSSH_10.2p1 Ubuntu-3ubuntu1, OpenSSL 3.0.13"),
+            Some(("OpenSSH_10.2p1".into(), (10, 2)))
+        );
+        assert_eq!(
+            parse_ssh_version("OpenSSH_9.6p1, OpenSSL 3.0.13 30 Jan 2024"),
+            Some(("OpenSSH_9.6p1".into(), (9, 6)))
+        );
+        // 无 p 后缀
+        assert_eq!(
+            parse_ssh_version("OpenSSH_8.3\n"),
+            Some(("OpenSSH_8.3".into(), (8, 3)))
+        );
+        // 不是 OpenSSH（如 Windows 的 Win32-OpenSSH 也会带 OpenSSH_，但
+        // 完全无关的输出应回 None）
+        assert_eq!(
+            parse_ssh_version("usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy]"),
+            None
+        );
+        assert_eq!(parse_ssh_version(""), None);
     }
 
     #[test]
