@@ -1738,7 +1738,7 @@ References
 
 推进顺序 S1→S2→S3(S4/S5 随批落地),每批可验收增量提交推送。
 
-- [x] S1 配对与密钥层(协议+中转已收口 2026-10-04,桌面 UI 接线待续):动态密码(短时效)+PAKE 换钥、组密钥管理(退出销毁/轮换)、条目内容与元数据加密(零知识)
+- [x] S1 配对与密钥层(**全链收口 2026-10-05**,桌面 UI 接线=725a561):动态密码(短时效)+PAKE 换钥、组密钥管理(退出销毁/轮换)、条目内容与元数据加密(零知识)
       已落:`core/src/sync/pairing.rs`——短码 Crockford base32(45 bit)单次
       使用,Argon2id 域分隔(persona-pairing-v1)派生后进 PAKE(短码不作密钥);
       PAKE 复用 RFC 5054 向量锁定的 SRP-6a 数学(host 现场派 verifier 不
@@ -1756,8 +1756,15 @@ References
       邀请串 `persona-pair-1.<b64url(json{code,relay_url,session_id})>`、
       drive_host 一步到位、guest join_begin/join_confirm 两段式(指纹比对
       通过才投 ClientProof 入组);11 例含手搓 HTTP mock 端到端。
-      余项:桌面命令层 + 设置页配对 UI(出码/输码/指纹比对/
-      入组)、账号模式显式可选口径文案、组密钥退出销毁/轮换语义接 S4。
+      桌面接线已落(2026-10-05,725a561):命令 7 条
+      (sync_group_status/pairing_create/poll/cancel/join_begin/confirm/
+      cancel;协议全在 core,宿主只做中转客户端构造+配对会话内存态存取
+      +组密钥 keyring 落存,槽 persona-sync-group 存在=已入组单一真相源,
+      fail-closed)+SyncGroupSection 挂设置页(出码面/输码面/指纹比对门禁,
+      一致才确认入组;i18n zh/en)+命令 5 测组件 8 测。账号模式显式可选
+      口径文案由 S5-b 落地(26264c9 DataLossWarning 强提示两变体,同步组
+      默认引导/账号模式藏显式开启);组密钥退出销毁/轮换语义随 S4 收口
+      (M3 join/leave/authorize/revoke/rotate 面)。S1 无余项。
 - [x] S2 指令流收敛:增/删/改条目走指令(op_id 幂等+定序+位点续传),复用 M3 E2EE 同步管线成果,快照+指令压缩
       （**收口 2026-10-07**:零知识核查+设计定稿+server 两端点+core 格式/
       wire/engine/装配层+双设备收敛等价集成测试+LWW 衔接语义全落）
