@@ -13,13 +13,14 @@ use crate::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
         EncryptionService, KeyHierarchy, Sha256Hasher,
     },
+    custom_fields::{decode_custom_fields, encode_custom_fields, CUSTOM_FIELDS_METADATA_KEY},
     events::Emitter,
     health::{HealthIssue, HealthIssueKind, HealthReport, HealthScanConfig},
     models::{
         Attachment, AttachmentStats, AuditAction, AuditLog, ChangeHistory, ChangeHistoryQuery,
-        ChangeHistoryStats, ChangeType, Credential, CredentialData, CredentialType, EntityType,
-        FaviconCacheEntry, Identity, IdentityType, PasskeyItem, ResourceType, SecurityLevel,
-        MAX_HOSTS_PER_REQUEST,
+        ChangeHistoryStats, ChangeType, Credential, CredentialData, CredentialType, CustomField,
+        EntityType, FaviconCacheEntry, Identity, IdentityType, PasskeyItem, ResourceType,
+        SecurityLevel, MAX_HOSTS_PER_REQUEST,
     },
     password::{PasswordGenerator, PasswordGeneratorOptions},
     storage::{
@@ -2701,14 +2702,15 @@ impl PersonaService {
 
     // ===== Attachment Management =====
 
-    /// Resolve the per-item key an attachment should be sealed under.
+    /// Resolve the per-item key used to seal credential-bound side data
+    /// (attachment blobs, structured custom fields).
     ///
     /// Legacy rows (`wrapped_item_key` NULL, payload sealed directly with the
     /// master key) are upgraded in place first: master-password rotation
     /// re-encrypts legacy rows but never touches attachment blobs, so sealing
     /// an attachment with the master key would break it on rotation. After
     /// the upgrade the payload sits under a fresh item key and both the
-    /// credential and its attachments are rotation-safe.
+    /// credential and its side data are rotation-safe.
     async fn credential_item_key_for_attachment(&self, credential_id: &Uuid) -> Result<[u8; 32]> {
         let mut credential = self
             .credential_repo
@@ -2733,7 +2735,7 @@ impl PersonaService {
             credential.encrypted_data = envelope.ciphertext;
             credential.wrapped_item_key = Some(envelope.wrapped_key);
             self.credential_repo.update(&credential).await?;
-            tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key for attachment sealing");
+            tracing::info!(credential_id = %credential.id, "legacy credential upgraded to per-item key for side-data sealing");
         }
 
         let wrapped = credential.wrapped_item_key.as_ref().ok_or_else(|| {
@@ -2746,10 +2748,76 @@ impl PersonaService {
             .unwrap_item_key(wrapped)
             .map_err(|e| {
                 PersonaError::CryptographicError(format!(
-                    "Failed to unwrap item key for attachment sealing: {e}"
+                    "Failed to unwrap item key for side-data sealing: {e}"
                 ))
             })?;
         Ok(key)
+    }
+
+    // ===== Custom Fields =====
+
+    /// Structured custom fields of a credential (1Password parity).
+    ///
+    /// The field list is sealed under the credential's per-item key and
+    /// stored as one `metadata` blob, so this needs an unlocked vault.
+    /// A credential without the blob has no custom fields.
+    pub async fn custom_fields(&self, credential_id: &Uuid) -> Result<Vec<CustomField>> {
+        self.ensure_unlocked()?;
+        let credential = self
+            .credential_repo
+            .find_by_id(credential_id)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!("credential {credential_id} not found"))
+            })?;
+        let Some(blob) = credential.metadata.get(CUSTOM_FIELDS_METADATA_KEY) else {
+            return Ok(Vec::new());
+        };
+        let key = self
+            .credential_item_key_for_attachment(credential_id)
+            .await?;
+        decode_custom_fields(blob, &key)
+    }
+
+    /// Replace a credential's structured custom fields (empty list removes
+    /// them). Seals under the per-item key into `metadata`, then goes
+    /// through the regular update path so item history, audit and sync
+    /// capture all see the change.
+    pub async fn set_custom_fields(
+        &self,
+        credential_id: &Uuid,
+        fields: Vec<CustomField>,
+    ) -> Result<Credential> {
+        self.ensure_unlocked()?;
+        let mut credential = self
+            .credential_repo
+            .find_by_id(credential_id)
+            .await?
+            .ok_or_else(|| {
+                PersonaError::InvalidInput(format!("credential {credential_id} not found"))
+            })?;
+
+        if fields.is_empty() {
+            credential.metadata.remove(CUSTOM_FIELDS_METADATA_KEY);
+        } else {
+            // Dedup ids so edits stay addressable; labels may repeat.
+            let mut seen = std::collections::HashSet::new();
+            if !fields.iter().all(|f| seen.insert(f.id.as_str())) {
+                return Err(PersonaError::InvalidInput(
+                    "custom field ids must be unique".to_string(),
+                )
+                .into());
+            }
+            let key = self
+                .credential_item_key_for_attachment(credential_id)
+                .await?;
+            let blob = encode_custom_fields(&fields, &key)?;
+            credential
+                .metadata
+                .insert(CUSTOM_FIELDS_METADATA_KEY.to_string(), blob);
+        }
+
+        self.update_credential(&credential).await
     }
 
     /// Attach a file to a credential
@@ -4143,6 +4211,127 @@ mod tests {
             )
             .await
             .unwrap()
+    }
+
+    // ------------------------------------------------------------------
+    // Custom fields（1Password 对齐）：per-item key 密封的 metadata blob
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn custom_fields_set_read_roundtrip_seals_values() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("CF Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(
+            &service,
+            identity.id,
+            "WithFields",
+            CredentialType::Password,
+        )
+        .await;
+
+        let fields = vec![
+            crate::custom_fields::new_custom_field(
+                "Server",
+                "db.internal:5432",
+                crate::models::credential::CustomFieldType::Text,
+            ),
+            crate::custom_fields::new_custom_field(
+                "Recovery code",
+                "abcd-efgh",
+                crate::models::credential::CustomFieldType::Concealed,
+            ),
+        ];
+        service
+            .set_custom_fields(&cred.id, fields.clone())
+            .await
+            .unwrap();
+
+        let read_back = service.custom_fields(&cred.id).await.unwrap();
+        assert_eq!(read_back, fields);
+
+        // 落库形态是密文：metadata blob 不含明文标签或值
+        let stored = service.get_credential(&cred.id).await.unwrap().unwrap();
+        let blob = stored
+            .metadata
+            .get(crate::custom_fields::CUSTOM_FIELDS_METADATA_KEY)
+            .unwrap();
+        assert!(!blob.contains("Recovery code"));
+        assert!(!blob.contains("abcd-efgh"));
+    }
+
+    #[tokio::test]
+    async fn custom_fields_empty_list_removes_blob() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("CF Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "CF", CredentialType::Password).await;
+
+        let fields = vec![crate::custom_fields::new_custom_field(
+            "K",
+            "V",
+            crate::models::credential::CustomFieldType::Text,
+        )];
+        service.set_custom_fields(&cred.id, fields).await.unwrap();
+        service
+            .set_custom_fields(&cred.id, Vec::new())
+            .await
+            .unwrap();
+
+        assert!(service.custom_fields(&cred.id).await.unwrap().is_empty());
+        let stored = service.get_credential(&cred.id).await.unwrap().unwrap();
+        assert!(!stored
+            .metadata
+            .contains_key(crate::custom_fields::CUSTOM_FIELDS_METADATA_KEY));
+    }
+
+    #[tokio::test]
+    async fn custom_fields_locked_vault_fails_closed() {
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("CF Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "CF", CredentialType::Password).await;
+        let fields = vec![crate::custom_fields::new_custom_field(
+            "K",
+            "V",
+            crate::models::credential::CustomFieldType::Text,
+        )];
+        service.set_custom_fields(&cred.id, fields).await.unwrap();
+
+        service.lock();
+        assert!(service.custom_fields(&cred.id).await.is_err());
+        assert!(service
+            .set_custom_fields(&cred.id, Vec::new())
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn custom_fields_duplicate_ids_rejected() {
+        let (_db, service) = unlocked_service().await;
+        let identity = service
+            .create_identity("CF Identity".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = seed_credential(&service, identity.id, "CF", CredentialType::Password).await;
+
+        let mut a = crate::custom_fields::new_custom_field(
+            "K",
+            "V",
+            crate::models::credential::CustomFieldType::Text,
+        );
+        let b = a.clone();
+        a.label = "K2".to_string();
+        assert!(service
+            .set_custom_fields(&cred.id, vec![a, b])
+            .await
+            .is_err());
     }
 
     // ------------------------------------------------------------------

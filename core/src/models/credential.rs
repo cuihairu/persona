@@ -171,6 +171,35 @@ pub struct Credential {
     pub is_favorite: bool,
 }
 
+/// Structured custom field attached to a credential (1Password parity).
+///
+/// Stored sealed (per-item key) as one metadata blob — see
+/// `crate::custom_fields`; never in the bincode payload, so old
+/// ciphertexts stay readable.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CustomField {
+    /// Stable id (uuid string) so edits can address a field
+    pub id: String,
+    /// User-facing label
+    pub label: String,
+    /// Field value (for `Concealed` this is a secret)
+    pub value: String,
+    /// Display/behavior type
+    pub field_type: CustomFieldType,
+    /// Optional 1Password-style section grouping
+    #[serde(default)]
+    pub section: Option<String>,
+}
+
+/// Custom field type: plain text, hidden (secret) value, or date.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomFieldType {
+    Text,
+    Concealed,
+    Date,
+}
+
 impl Credential {
     /// Create a new credential
     pub fn new(

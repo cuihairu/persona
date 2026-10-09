@@ -11,6 +11,7 @@ pub mod backup;
 pub mod breach;
 pub mod connect;
 pub mod crypto;
+pub mod custom_fields;
 pub mod events;
 #[cfg(feature = "favicon")]
 pub mod favicon;
