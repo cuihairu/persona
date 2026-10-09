@@ -822,7 +822,10 @@ struct SnapshotResponse {
     created_at: String,
 }
 
-/// PUT /sync/snapshot：上传快照（幂等覆盖语义——后到覆盖前者）。
+/// PUT /sync/snapshot：上传快照。覆盖语义按水位单调收窄——seq 不小于
+/// 现存快照（或尚无快照）才接受（同 seq 重打包幂等覆盖），低于现存水位
+/// 的落后端 409 拒绝：否则「快照回退到旧 S2 + 覆盖区间 ops 已删」会留
+/// 数据洞（bootstrap 拿旧快照起步，S2..S1 的历史既无快照也无 ops）。
 pub async fn put_snapshot(
     State(state): State<AppState>,
     payload: Result<Json<PutSnapshotRequest>, axum::extract::rejection::JsonRejection>,
@@ -868,10 +871,12 @@ pub async fn put_snapshot(
         return ApiError::payload_too_large_with(MAX_SNAPSHOT_BYTES).into_response();
     }
 
-    // 事务：写快照（单行 upsert）+ 压缩覆盖区间 ops。分解失败即整体回滚——
-    // 不允许「快照已换、旧 ops 还在」的中间态（那会让 bootstrap 拿旧快照
-    // 又重放已进快照的 ops，幂等无害但浪费；真正的危险是反向：ops 删了
-    // 快照没写上，覆盖区间既无快照也无 ops = 数据洞）。
+    // 事务：写快照（单行 upsert，seq 单调闸）+ 压缩覆盖区间 ops。分解失败
+    // 即整体回滚——不允许「快照已换、旧 ops 还在」的中间态（那会让
+    // bootstrap 拿旧快照又重放已进快照的 ops，幂等无害但浪费；真正的危险
+    // 是反向：ops 删了快照没写上，覆盖区间既无快照也无 ops = 数据洞）。
+    // 单调闸压在 upsert 的 WHERE 上（同一写锁内判定，无检查-写竞态）：
+    // 输家 0 行受影响 → 409 回滚，绝不删 ops。
     let mut tx = match state.pool.begin().await {
         Ok(tx) => tx,
         Err(error) => return ApiError::internal(error).into_response(),
@@ -884,7 +889,8 @@ pub async fn put_snapshot(
             device_id = excluded.device_id,
             ciphertext = excluded.ciphertext,
             size = excluded.size,
-            created_at = excluded.created_at",
+            created_at = excluded.created_at
+         WHERE excluded.seq >= sync_snapshots.seq",
     )
     .bind(request.seq)
     .bind(request.device_id.trim())
@@ -892,8 +898,17 @@ pub async fn put_snapshot(
     .bind(ciphertext.len() as i64)
     .execute(&mut *tx)
     .await;
-    if let Err(error) = upsert {
-        return ApiError::internal(error).into_response();
+    let won = match upsert {
+        Ok(done) => done.rows_affected() == 1,
+        Err(error) => return ApiError::internal(error).into_response(),
+    };
+    if !won {
+        // 落后水位：现存快照更 ahead，本次上传既不能覆盖也不能压缩——
+        // fail-visible 409，让落后端先 pull 增量再重打包。
+        return ApiError::conflict(
+            "snapshot seq is behind the stored snapshot; pull and re-package",
+        )
+        .into_response();
     }
     let pruned = sqlx::query("DELETE FROM sync_oplog WHERE seq <= ?")
         .bind(request.seq)
@@ -1324,6 +1339,125 @@ mod tests {
         // 一个也没写进去
         let (status, _) = send(router.clone(), get_req("/api/v1/sync/snapshot")).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    // 水位单调闸（E2EE_SYNC_DESIGN §5 测试锚点「并发 PUT 快照，head 单调」）：
+    // 落后端 PUT 被拒——否则「快照回退旧 seq + 覆盖区间 ops 已删」= bootstrap
+    // 数据洞；同 seq 重打包幂等放行；409 不附带任何 oplog 压缩。
+    #[tokio::test]
+    async fn snapshot_stale_put_rejected_and_head_monotonic() {
+        let (router, state) = setup(Some(TOKEN)).await;
+        let device = register_device(&router, "laptop").await;
+
+        // 三条 op（seq 1..3），A 端打包 seq=2
+        let item = Uuid::new_v4();
+        for lamport in 1..=3u64 {
+            let op = put_op_json(
+                &Uuid::new_v4().to_string(),
+                &item.to_string(),
+                lamport,
+                &device,
+                &[lamport as u8; 8],
+            );
+            let (status, _) = send(
+                router.clone(),
+                req(
+                    "POST",
+                    "/api/v1/sync/oplog",
+                    &json!({"ops": [op]}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let v1 = B64.encode(b"snapshot-at-seq-2");
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/snapshot",
+                &put_snapshot_json(2, &device, &v1).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["pruned_ops"], 2);
+
+        // 落后端（水位 1 < 2）PUT → 409，快照与 oplog 都原样
+        let stale = B64.encode(b"stale-snapshot-at-seq-1");
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/snapshot",
+                &put_snapshot_json(1, &device, &stale).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        assert_eq!(body["error"]["code"], "conflict");
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/snapshot")).await;
+        assert_eq!(body["seq"], 2);
+        assert_eq!(body["ciphertext"], v1, "落后上传不得覆盖");
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(1) FROM sync_oplog")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1, "409 路径不附带压缩");
+
+        // 同 seq 重打包幂等放行（覆盖同水位内容，head 不动）
+        let v1b = B64.encode(b"repackaged-at-seq-2");
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/snapshot",
+                &put_snapshot_json(2, &device, &v1b).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["pruned_ops"], 0);
+        let (_, body) = send(router.clone(), get_req("/api/v1/sync/snapshot")).await;
+        assert_eq!(body["seq"], 2);
+        assert_eq!(body["ciphertext"], v1b);
+    }
+
+    // 真·并发两路 PUT：无论到达次序如何，最终 head = max(seqs) 且字节归属
+    // 高水位者——空表时低者可先立、高者随后覆盖；高者先立时低者 409。
+    #[tokio::test]
+    async fn snapshot_concurrent_puts_head_monotonic() {
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let device = register_device(&router, "laptop").await;
+
+        let hi = B64.encode(b"snapshot-at-seq-10");
+        let lo = B64.encode(b"snapshot-at-seq-8");
+        let put = |seq: i64, ciphertext: String| {
+            let router = router.clone();
+            async move {
+                send(
+                    router,
+                    req(
+                        "PUT",
+                        "/api/v1/sync/snapshot",
+                        &put_snapshot_json(seq, &device, &ciphertext).to_string(),
+                    ),
+                )
+                .await
+            }
+        };
+        let ((hi_status, _hi_body), (lo_status, lo_body)) =
+            tokio::join!(put(10, hi.clone()), put(8, lo.clone()));
+
+        // 高水位必在库：低者要么被拒（高者先立），要么先立后被覆盖
+        assert!(
+            (hi_status == StatusCode::OK && lo_status == StatusCode::OK)
+                || (hi_status == StatusCode::OK && lo_status == StatusCode::CONFLICT),
+            "hi={hi_status} lo={lo_status} {lo_body}"
+        );
+        let (_, body) = send(router, get_req("/api/v1/sync/snapshot")).await;
+        assert_eq!(body["seq"], 10, "head 单调：终值=max(seqs)");
+        assert_eq!(body["ciphertext"], hi);
     }
 
     #[tokio::test]
