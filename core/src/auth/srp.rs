@@ -154,6 +154,17 @@ fn compute_k<D: Digest>(params: &SrpGroup) -> BigUint {
     BigUint::from_bytes_be(&d.finalize())
 }
 
+/// premaster 左填零到 group 模数字节数（RFC 5054：S 以 N 的全宽参与
+/// M1/M2 派生）。不补零时 `to_bytes_be` 会剥掉前导零，使会话密钥长度
+/// 在 511/512 间漂移（~1/256 概率），违反「长度 = 模数字节数」契约。
+fn padded_premaster(params: &SrpGroup, key: &BigUint) -> Vec<u8> {
+    let len = params.n.bits().div_ceil(8) as usize;
+    let raw = key.to_bytes_be();
+    let mut buf = vec![0u8; len];
+    buf[len - raw.len()..].copy_from_slice(&raw);
+    buf
+}
+
 /// M1 = H(A ‖ B ‖ S)。
 fn compute_m1<D: Digest>(a_pub: &[u8], b_pub: &[u8], key: &[u8]) -> Vec<u8> {
     let mut d = D::new();
@@ -208,7 +219,8 @@ impl<D: Digest> SrpClientVerifier<D> {
         &self.m1
     }
 
-    /// 会话密钥（premaster 最小字节序，用作密钥材料前应再经 KDF）。
+    /// 会话密钥（premaster 左填零到 group 模数字节数，4096-bit group
+    /// 下恒为 512B；用作密钥材料前应再经 KDF）。
     pub fn key(&self) -> &[u8] {
         &self.key
     }
@@ -285,7 +297,7 @@ impl<'a, D: Digest> SrpClient<'a, D> {
         let x = compute_x::<D>(&identity_hash, salt);
 
         let key = self.premaster(&b_pub, &k, &x, &a, &u);
-        let key_bytes = key.to_bytes_be();
+        let key_bytes = padded_premaster(self.params, &key);
 
         let m1 = compute_m1::<D>(&a_pub.to_bytes_be(), &b_pub.to_bytes_be(), &key_bytes);
         let m2 = compute_m2::<D>(&a_pub.to_bytes_be(), &m1, &key_bytes);
@@ -314,7 +326,8 @@ pub struct SrpServerVerifier<D: Digest> {
 }
 
 impl<D: Digest> SrpServerVerifier<D> {
-    /// 会话密钥（与客户端 `verify_server` 返回值一致）。
+    /// 会话密钥（与客户端 `verify_server` 返回值一致，长度 = group
+    /// 模数字节数）。
     pub fn key(&self) -> &[u8] {
         &self.key
     }
@@ -383,7 +396,7 @@ impl<'a, D: Digest> SrpServer<'a, D> {
 
         let u = compute_u::<D>(&a_pub.to_bytes_be(), &b_pub.to_bytes_be());
         let key = self.premaster(&a_pub, &v, &u, &b);
-        let key_bytes = key.to_bytes_be();
+        let key_bytes = padded_premaster(self.params, &key);
 
         let m1 = compute_m1::<D>(&a_pub.to_bytes_be(), &b_pub.to_bytes_be(), &key_bytes);
         let m2 = compute_m2::<D>(&a_pub.to_bytes_be(), &m1, &key_bytes);
@@ -616,6 +629,8 @@ mod tests {
 
         let client_key = proof.verify_server(&outcome.server_proof).unwrap();
         assert_eq!(client_key, outcome.session_key);
+        // 契约：premaster 恒为 group 模数字节数（4096-bit group = 512B）
+        assert_eq!(client_key.len(), 512);
     }
 
     /// 错误口令：客户端能算出 M1（SRP 数学上无「客户端侧失败」），
