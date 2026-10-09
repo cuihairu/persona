@@ -41,7 +41,7 @@ zip = { version = "8", default-features = false, features = ["deflate"] }
 
 # 密码学 - BIP/加密货币相关
 bip39 = "3.0"
-bip32 = "0.5"
+bip32 = "0.6"
 k256 = { version = "0.14", features = ["ecdsa", "sha256"] }
 secp256k1 = "0.28"
 sha2 = "0.11"
