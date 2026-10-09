@@ -35,7 +35,7 @@ const TOKEN_B: &str = "e2e-token-device-b";
 
 /// 返回 (base_url, TempDir)：TempDir 必须由调用方持有——sqlite 文件随
 /// drop 删除，提前 drop 会让后续请求 500。
-async fn spawn_server() -> (String, tempfile::TempDir) {
+async fn spawn_server() -> (String, sqlx::SqlitePool, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("server.db");
     let pool = state::init_pool(db_path.to_str().unwrap()).await.unwrap();
@@ -45,14 +45,14 @@ async fn spawn_server() -> (String, tempfile::TempDir) {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    let app = AppState::new(pool, Some(auth), Arc::new(Metrics::new(start_unix)));
+    let app = AppState::new(pool.clone(), Some(auth), Arc::new(Metrics::new(start_unix)));
     let router = build_router(app);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    (format!("http://{addr}"), dir)
+    (format!("http://{addr}"), pool.clone(), dir)
 }
 
 /// 一台"设备"：独立临时库 + 独立主密钥。两个库种入同一 identity 行 id
@@ -195,7 +195,7 @@ async fn device_a_creates_item(
 
 #[tokio::test]
 async fn join_authorize_and_single_direction_sync() {
-    let (url, _server_dir) = spawn_server().await;
+    let (url, _server_pool, _server_dir) = spawn_server().await;
     let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
 
     // 双端共享同一 identity 行 id（materialize 的身份外键）
@@ -250,7 +250,7 @@ async fn join_authorize_and_single_direction_sync() {
 
 #[tokio::test]
 async fn concurrent_edits_conflict_then_resolution_converges() {
-    let (url, _server_dir) = spawn_server().await;
+    let (url, _server_pool, _server_dir) = spawn_server().await;
     let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
 
     let shared_identity = Identity::new("e2e".to_string(), IdentityType::Personal);
@@ -347,7 +347,7 @@ async fn concurrent_edits_conflict_then_resolution_converges() {
 
 #[tokio::test]
 async fn revoke_device_drops_envelope_and_blocks_new_sessions() {
-    let (url, _server_dir) = spawn_server().await;
+    let (url, _server_pool, _server_dir) = spawn_server().await;
     let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
 
     let shared_identity = Identity::new("e2e".to_string(), IdentityType::Personal);
@@ -388,7 +388,7 @@ async fn revoke_device_drops_envelope_and_blocks_new_sessions() {
 /// 可读；空串/纯空白清除；吊销后原设备写不进（404 fail-closed）。
 #[tokio::test]
 async fn device_remark_self_service_and_isolation() {
-    let (url, _server_dir) = spawn_server().await;
+    let (url, _server_pool, _server_dir) = spawn_server().await;
     let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
     let admin_b = SyncAdminApi::new(&url, TOKEN_B).unwrap();
 
@@ -433,4 +433,134 @@ async fn device_remark_self_service_and_isolation() {
         err.to_string().contains("HTTP 404"),
         "revoked device must fail closed, got: {err}"
     );
+}
+
+// 快照起步 + 点后增量 == 全量重放（E2EE_SYNC_DESIGN §5 测试锚点）：
+// 双真 TCP 设备，B 初同步走快照路径——A 推满阈值（>1000 ops）触发
+// run_cycle 尾部的打包上传（真实生产触发路径，无测试专用旁路），服务器
+// 事务内压缩覆盖区间；B 首轮 pulled==0 且物化全量 = 只能来自快照装包
+// （全量重放路径必然 pulled==1001），水位落在覆盖位点；点后增量照常续拉。
+#[tokio::test]
+async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
+    let (url, _server_pool, _server_dir) = spawn_server().await;
+    let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
+
+    let shared_identity = Identity::new("e2e".to_string(), IdentityType::Personal);
+    let identity_id = shared_identity.id;
+    let a = make_device(identity_id).await;
+    let b = make_device(identity_id).await;
+
+    let (identity_a, _device_id_a) = register_device(&admin_a, "device-a", TOKEN_A, true).await;
+    let (identity_b, device_id_b) = register_device(&admin_a, "device-b", TOKEN_B, false).await;
+    authorize(&admin_a, &identity_a, device_id_b).await;
+    let session_a = SyncSession::open(&a.db, &identity_a, &url, TOKEN_A, no_travel())
+        .await
+        .unwrap();
+    let session_b = SyncSession::open(&b.db, &identity_b, &url, TOKEN_B, no_travel())
+        .await
+        .unwrap();
+
+    // A 推满 1001 条（> UPLOAD_THRESHOLD_OPS=1000）：push 每周期一批
+    // （≤500），跑到待推清零——最后一个周期越过阈值触发打包上传（服务器
+    // 压缩 seq ≤ 1001 全部 ops）
+    for i in 1..=1001 {
+        local_put(
+            &session_a,
+            identity_id,
+            Uuid::new_v4(),
+            &format!("item-{i}"),
+            &format!("secret-{i}"),
+        )
+        .await;
+    }
+    let mut total_pushed = 0;
+    for _ in 0..5 {
+        let report_a = session_a.run_cycle(&a.master).await.unwrap();
+        total_pushed += report_a.pushed;
+        if report_a.pushed == 0 {
+            break;
+        }
+    }
+    assert_eq!(total_pushed, 1001, "all ops must reach the server");
+
+    // B 首轮同步：bootstrap 装快照起步，pull 零增量、物化全量
+    let report_b = session_b.run_cycle(&b.master).await.unwrap();
+    assert_eq!(
+        report_b.pulled, 0,
+        "server oplog was fully compressed; anything B got must come from the snapshot"
+    );
+    assert_eq!(
+        report_b.materialized, 1001,
+        "B must materialize the whole library from the snapshot"
+    );
+    let status_b = session_b.status().await.unwrap();
+    assert_eq!(
+        status_b.head_seq, 1001,
+        "head is snapshot-aware: oplog emptied by compression must not regress the group version"
+    );
+    assert_eq!(
+        status_b.local_watermark, 1001,
+        "cursor must sit at the snapshot coverage point"
+    );
+    assert_eq!(status_b.behind, 0);
+
+    // 快照装包内容与 A 主库逐条一致（抽全量名字 + 抽一条解密比对）
+    let mut b_names: Vec<String> = b
+        .cred_repo
+        .find_by_identity(&identity_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    b_names.sort();
+    assert_eq!(b_names.len(), 1001);
+    assert_eq!(b_names[0], "item-1");
+    assert_eq!(b_names[1000], "item-999");
+    let b_row = b
+        .cred_repo
+        .find_by_identity(&identity_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.name == "item-42")
+        .expect("item-42 must materialize from the snapshot");
+    let plain = KeyHierarchy::new(&b.master)
+        .decrypt_with_wrapped_key(
+            b_row.wrapped_item_key.as_ref().unwrap(),
+            &b_row.encrypted_data,
+        )
+        .unwrap();
+    match CredentialData::from_bytes(&plain).unwrap() {
+        CredentialData::Password(pw) => assert_eq!(pw.password, "secret-42"),
+        other => panic!("expected password credential, got {other:?}"),
+    }
+
+    // 点后增量：A 追加一条，B 照常续拉（游标在覆盖位点，只拿新段）
+    local_put(
+        &session_a,
+        identity_id,
+        Uuid::new_v4(),
+        "item-1002",
+        "secret-1002",
+    )
+    .await;
+    session_a.run_cycle(&a.master).await.unwrap();
+    let report_b2 = session_b.run_cycle(&b.master).await.unwrap();
+    assert_eq!(report_b2.pulled, 1, "only the post-snapshot op is new");
+    assert!(report_b2.materialized >= 1);
+    let b_names2: Vec<String> = b
+        .cred_repo
+        .find_by_identity(&identity_id)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert_eq!(
+        b_names2.len(),
+        1002,
+        "increment must converge on the snapshot base"
+    );
+    assert!(b_names2.contains(&"item-1002".to_string()));
 }

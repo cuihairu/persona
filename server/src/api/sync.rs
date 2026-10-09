@@ -774,11 +774,19 @@ struct StatusResponse {
 }
 
 /// GET /sync/status：组指令流水位（sync-group-mode §二.5.5「组最新版本号」，
-/// 设置页状态显示用）。只回 max(seq)——纯元数据，不含密文。
+/// 设置页状态显示用）。只回 max(seq)——纯元数据，不含密文。头水位按
+/// max(oplog max seq, 快照 seq)：压缩后 oplog 清空不能让组版本号回退
+/// （§5.5「单调版本号」硬要求）——快照点即已被覆盖的事实位置。
 pub async fn status(State(state): State<AppState>) -> Response {
-    let head_seq: i64 = match sqlx::query_scalar("SELECT COALESCE(MAX(seq), 0) FROM sync_oplog")
-        .fetch_one(&state.pool)
-        .await
+    let head_seq: i64 = match sqlx::query_scalar(
+        "SELECT MAX(m) FROM (
+             SELECT COALESCE(MAX(seq), 0) AS m FROM sync_oplog
+             UNION ALL
+             SELECT seq FROM sync_snapshots WHERE id = 1
+         )",
+    )
+    .fetch_one(&state.pool)
+    .await
     {
         Ok(seq) => seq,
         Err(error) => return ApiError::internal(error).into_response(),
@@ -2207,6 +2215,49 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["accepted"], 3);
 
+        let (status, body) = send(router, get_req("/api/v1/sync/status")).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["head_seq"], 3);
+    }
+
+    // 压缩后组版本号不回退（§5.5「单调版本号」）：快照点即已覆盖的事实位置，
+    // head = max(oplog max, snapshot seq)——oplog 清空后仍报快照水位。
+    #[tokio::test]
+    async fn status_head_stays_monotonic_across_snapshot_compression() {
+        let (router, _state) = setup(Some(TOKEN)).await;
+        let device = register_device(&router, "laptop").await;
+        let item = Uuid::new_v4();
+        for lamport in 1..=3u64 {
+            let op = put_op_json(
+                &Uuid::new_v4().to_string(),
+                &item.to_string(),
+                lamport,
+                &device,
+                &[lamport as u8; 8],
+            );
+            let (status, _) = send(
+                router.clone(),
+                req(
+                    "POST",
+                    "/api/v1/sync/oplog",
+                    &json!({"ops": [op]}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+        }
+        let (status, _) = send(
+            router.clone(),
+            req(
+                "PUT",
+                "/api/v1/sync/snapshot",
+                &put_snapshot_json(3, &device, &B64.encode(b"snapshot-at-3")).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // oplog 已清空（压缩生效），但组版本号停在快照点不回退
         let (status, body) = send(router, get_req("/api/v1/sync/status")).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert_eq!(body["head_seq"], 3);
