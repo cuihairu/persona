@@ -582,6 +582,22 @@ SSH Agent (developer focus)
       名旁徽标（`ssh-key-size-{id}`）；导入/新建/列表三路径同源现算自动
       带标签。core 测试（ed25519/RSA 位长与私钥自报交叉验证/P-256/垃圾
       None）+ jest 徽标两态。jest 646、tsc、vite build、fmt、stable clippy 绿。
+- [x] SSH agent 配置分析面板（2026-10-08/09）：设置页集成区块内只读分析——
+      手写解析 `~/.ssh/config`（Include 递归深度≤5+canonicalize 防环、相对
+      Include 对 `~/.ssh` 解析、`~` 展开、段 glob `*`/`?`、引号感知分词、
+      `Key=Value` 两式），Host/Match 作用域跟踪，提取
+      IdentityAgent/ForwardAgent/AddKeysToAgent/ProxyAgent（锚点块值排除出
+      用户条目）；生效 IdentityAgent=用户顶层首条（ssh first-wins）否则锚点
+      块值（`.or` 补齐）否则 Unknown 不猜测；socket 存活探测（unix
+      UnixStream/windows 命名管道）+ 环境变量与生效值双列；`ssh -V` 探测
+      （stderr 版本行→标签+主次版本）判 IdentityAgent 需 OpenSSH 8.3+，
+      绿/红/灰三态判定（前端显式逐位比较，避开 JS 数组 `>=` 字符串比较坑）；
+      读失败/告警如实展示。读失败时 enable 拒写（防覆盖损坏 config）。
+      验收：17 项模块单测 + `ssh_agent_walkthrough` 真实 `ssh -G` 三态断言
+      + UI 关→开→关截图（版本行/存活灯/重新读取按钮）、jest 699、
+      fmt/clippy/test 双 workspace 绿；面板状态/密钥列表改挂
+      visibilitychange+focus 重读（1s 节流、隐藏态不拉）——外部（CLI
+      add-to-agent 等）起停 agent 后切回窗口徽章与列表即时跟上。
 - [ ] Windows-specific testing and optimization
       · 编译层已收口（2026-09-28）：`rustup target add x86_64-pc-windows-gnu`
       后 `cargo check --workspace --all-targets --all-features --target
