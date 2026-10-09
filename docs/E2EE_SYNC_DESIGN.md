@@ -189,8 +189,13 @@ fail-closed + 零知识测试；条目 = oplog 视图充分集原 op，见下）
 `upload_library_snapshot` / `install_library_snapshot`（哨兵游标续拉、
 travel 双闸）；✅ 触发基线与阈值判定（迁移 018 `sync_state.last_snapshot_seq`
 MAX 语义 + `UPLOAD_THRESHOLD_OPS` + `engine::library_snapshot_needed`）。
-⬜ service 装配层（整库打包循环 + bootstrap/run_cycle 触发接线到桌面/
-CLI）、⬜ 双设备收敛等价性集成测试。
+✅ service 装配层（2026-10-07：`SyncSession::snapshot_payload` /
+`install_snapshot_ops` + run_cycle 尾部阈值触发与 bootstrap 游标空时
+装包；失败仅记日志不阻断）；✅ 双设备收敛等价性集成测试（core 内存
+remote `snapshot_bootstrap_converges_like_full_replay` + 真 TCP
+`sync_two_device_e2e::snapshot_bootstrap_plus_increment_converges_over_real_tcp`
+——A 推满阈值触发真实生产上传路径，B 快照起步 pulled==0 且物化全量、
+水位在覆盖位点、点后增量照常续拉，2026-10-10）。
 
 **快照格式**（服务器只见一个 BLOB，零知识不变；**2026-10-07 实现修订**：
 条目从初稿的「凭据表行快照」改为**本机 oplog 的视图充分集**）：
@@ -260,7 +265,10 @@ bootstrap 时先 GET 快照（404 则照旧从空拉），命中则装快照、�
 CLI/桌面不暴露）+ `engine::library_snapshot_needed(threshold)`（travel 恒
 false；基线 = 迁移 018 的 `sync_state.last_snapshot_seq`，上传/装包成功
 记账，MAX 语义只进不退）；判定挂进 run_cycle 尾部与 ② 的 bootstrap
-调用（游标为空才试）都待装配层批次接线。
+调用（游标为空才试）已随装配层批次接线（2026-10-07）。压缩后组版本号
+显示不回退：`GET /sync/status` 的 head 按 `max(oplog max seq, 快照 seq)`
+（2026-10-10，§5.5「单调版本号」硬要求——oplog 清空不能让设置页的组
+最新版本号从 1001 跳回 0）。
 
 **失败面**：快照上传失败不阻断同步周期（尽力而为旁路，与捕获同语义）；
 travel 激活期间上传直接报错拒绝、装包整体跳过（与 pull 同闸，退 travel
@@ -277,12 +285,21 @@ travel 激活期间上传直接报错拒绝、装包整体跳过（与 pull 同�
   （`snapshot.rs::library_snapshot_bytes_never_leak_entry_plaintext` 与
   错 key/篡改/截断 fail-closed 回归）。
 - 快照起步 + 点后增量 == 全量重放的最终收敛等价性（双真 TCP 设备，一方
-  走快照路径）——⬜ 待装配层批次。
+  走快照路径）——✅ 已落（2026-10-10，`sync_two_device_e2e` 第 5 例：
+  A 推满 1001 ops 越过阈值触发真实上传路径，B 首轮 pulled==0 且物化
+  1001 条、水位落在覆盖位点、点后增量照常续拉；core 内存 remote 等价
+  性测试互补）。
 - 404 → 全量重放回退（初稿「410 重对齐」随 retention 合流修订取消）——
   ✅ 引擎级已落（`install_without_snapshot_keeps_full_replay_path`）。
-- 并发 PUT 快照（后到覆盖前者，head 单调）——⬜。
+- 并发 PUT 快照（后到覆盖前者，head 单调）——✅ 已落（2026-10-10：
+  `PUT /sync/snapshot` 的 upsert 带 `excluded.seq >= 现存 seq` 条件，
+  落后水位 409 拒绝且不附带压缩——否则「快照回退旧 seq + 覆盖区间
+  ops 已删」= bootstrap 数据洞；同 seq 重打包幂等放行；两测：
+  `snapshot_stale_put_rejected_and_head_monotonic` 与
+  `snapshot_concurrent_puts_head_monotonic`）。
 - 压缩后老设备增量拉取不受影响——✅ server 端点测试（重传压缩与压缩后
-  续拉）+ engine 快照点后续拉增量已落；跨端真 TCP 回归随收敛等价性一并补。
+  续拉）+ engine 快照点后续拉增量已落；跨端真 TCP 回归已随收敛等价性
+  一并补（2026-10-10，`sync_two_device_e2e` 第 5 例覆盖点后增量）。
 
 ## 6. 设备生命周期
 

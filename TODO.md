@@ -275,6 +275,22 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         （对端 secrets 总线变 activatable 无主、keyring 操作永久挂起）
         ——多实例桌面走查必须各自独立 XDG_RUNTIME_DIR；Xvfb 无 WM 时
         windowactivate 不可用，用 windowraise+截图核位。
+- [x] **M7 E2EE 云同步（账号模式）§5 验收锚点收口**（2026-10-10）：
+      E2EE_SYNC_DESIGN §5 两个 ⬜ 锚点全落，其余 ⬜ 标记同步翻绿（装配层
+      +收敛测试 2026-10-07 已实落，文档滞后）：
+      ① 并发 PUT 快照 head 单调——`PUT /sync/snapshot` upsert 带
+      `excluded.seq >= 现存 seq` 条件闸，落后水位 409（`ApiError::conflict`）
+      且不附带压缩；修正语义洞：无闸时「快照回退旧 seq+覆盖区间 ops 已删」
+      = bootstrap 数据洞（server 2 测：stale 拒绝+并发双 PUT 终值必为
+      max）；② 真 TCP 快照收敛等价性——`sync_two_device_e2e` 第 5 例：
+      A 推满 1001 ops 越过 UPLOAD_THRESHOLD 触发真实生产上传路径（无测试
+      专用旁路），B 空库首轮 pulled==0 且物化 1001（全量重放必 pulled
+      ==1001，此即「走的是快照路径」的证明）、水位=覆盖位点、点后增量
+      照常续拉收敛 1002 条。附带发现并修正：压缩后 `GET /sync/status`
+      head 回退（oplog 清空→组版本号 1001→0，违反 §5.5 单调版本号硬
+      要求）——head 改 max(oplog max, 快照 seq)（server 测
+      `status_head_stays_monotonic_across_snapshot_compression`）。门禁：
+      server lib 139 + e2e 5 + clippy --all-features -D warnings 全绿。
 
 浏览器插件推进（2026-10-04 用户令：对齐 1Password，自动化优先——先列分批计划进 todo，再逐批做，CI 绿门禁）
 
