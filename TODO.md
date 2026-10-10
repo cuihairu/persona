@@ -246,9 +246,10 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         - [ ] **批5b Swift 宿主端**（挂起，需 macOS/Xcode 实机）：
           SafariWebExtensionHandler 实现桥协议 v7 宿主端 + Xcode 工程 +
           签名分发；与 P4.2/P4.3、iOS/鸿蒙同批推进
-- [ ] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
+- [x] **M6 多设备真实走查（落地③）**：双设备演示脚本升级为真实流程
       （真 server + 真桌面构建，shim→实链）：桌面→插件同步一条凭据、
-      冲突合并正确、吊销流程走查，截图输出
+      冲突合并正确、吊销流程走查，截图输出（批1 库级 E2E + 批2/2b
+      桌面 UI + 批3 桌面→插件实链全落）
       - [x] **M6-批1 库级实链 E2E（离线部分）**（2026-10-07）：
         `server/tests/sync_two_device_e2e.rs`——真 persona-server router
         （axum serve 临时库 + 双设备 token）+ 两个真 core 客户端
@@ -309,6 +310,46 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         seam 仅在 sync_now 末尾挂回——重启/会话锁/保险库锁任一之后的
         编辑不记账直至下次 sync_now；自动锁定横幅使整版下移 ~50px 且
         设置弹窗重开滚动位复位（坐标驱动走查的脆性来源）。
+      - [x] **M6-批3 桌面→插件同步实链（Chrome for Testing 真浏览器）**（2026-10-10）：
+        A 桌面（同批2 基建）推一条凭据（walk-plugin-demo）→ Chrome for
+        Testing 153 加载 unpacked 扩展 → popup 走 NMH 实链全流程：
+        Connect to bridge（hello 握手）→ Request pairing code（动态码
+        565-955）→ 终端 `persona bridge --approve-code` 批准 → Finalize
+        pairing（Paired (authenticated)，配对密钥只落桥 state 与扩展
+        storage，重连持久）→ Connect via local bridge（sync_connect 会话
+        HMAC + user_gesture，桥读 server_url+keyring token/设备身份+组
+        密钥信封下发）→ Pull from server → **扩展侧 AES-GCM 解密渲染
+        walk-plugin-demo（Password • High • plugin-user）**，云端 1 items
+        /21 ops，截图 shots/w5-34~40。走查抓出 4 个真 bug 并修复：
+        ① 扩展 ESM 相对导入无 .js 后缀（tsc Bundler 模式放行、浏览器
+        死路）——popup/background/content 模块图整体 404 不执行、零监听
+        器（表象：点击无响应、状态停留初值）；修复 = 5 个运行时文件
+        补 .js 后缀 + jest moduleNameMapper 映射回 .ts（157 测试绿）。
+        ② `persona bridge` 拒收浏览器 NMH 按规范附带的 origin argv
+        （chrome-extension://<id>/）——clap 报 unexpected argument 宿主
+        即退（表象 Native host has exited）；修复 = BridgeArgs 加
+        trailing_var_arg 隐藏参数收下并忽略。
+        ③ 根 manifest.json 缺 commands 段——background.ts 顶层注册
+        chrome.commands.onCommand 抛 TypeError，MV3 service worker 每
+        次启动即崩且无错误面板（表象：persona_ping/status_request 永
+        挂、状态卡 Probing bridge...）；修复 = manifest 补 open_search
+        （与 safari Shared/public manifest 对齐）。
+        ④ 桥日志落 stdout——RedactedLoggerBuilder 默认 sink 是 stdout，
+        sync_connect 响应前的 info! 日志行混入 NMH 帧流（浏览器把
+        "2026…" 当长度前缀 → 帧流损坏 → Native host has exited / 桥端
+        broken pipe；单发 hello/status 无日志故幸存，排查高误导）；修复
+        = bridge 模式 init_logging 走 stderr，stdout 保持纯协议通道。
+        环境与排查记录：NMH manifest 需铺到 Chrome for Testing 实际扫描
+        的多个配置目录（google-chrome/chromium/google-chrome-for-testing/
+        profile 内 NativeMessagingHosts）；扩展 ID = sha256(绝对路径) 映
+        射 a-p；服务端起服用 PERSONA_SERVER_PORT/HOST env（--listen 不
+        存在）；走查环境进程随会话回收、数据（server.db/A/B 库/桥
+        state）持久，重链 = 起 Xvfb:88+logproxy(18995→18996)+server
+        (18996)+desktop A+chrome(CDP 9333) 即可，配对因 state 持久免重配。
+        残留观察（不修，供裁量）：桥 status 报 Locked (set
+        PERSONA_MASTER_PASSWORD...) 与桌面解锁态脱节（CLI 桥自身解锁口
+        径，不影响 sync_connect 的 keyring 读路径）；popup 连接后的刷新
+        全依赖手动点击（无自动轮询，符合「一请求一进程」桥设计）。
 - [x] **M7 E2EE 云同步（账号模式）§5 验收锚点收口**（2026-10-10）：
       E2EE_SYNC_DESIGN §5 两个 ⬜ 锚点全落，其余 ⬜ 标记同步翻绿（装配层
       +收敛测试 2026-10-07 已实落，文档滞后）：
