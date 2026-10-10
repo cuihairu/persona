@@ -149,8 +149,10 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
       8 组（sync_join 部分状态清理/leave 离线可清/授权吊销需成员态/sync_now
       与 rotate 先闸后网/conflict 命令同门禁）随桌面全量 216 绿；设计稿
       阶段 3 的 `STORAGE_AND_SYNC.md` 重写早已入库且与实现一致。
-      **余项**：实机桌面会话的授权/吊销/裁决点击走查（需显示环境，
-      与 E2E 基建一并登记重启）
+      **余项**（实机桌面授权/吊销/裁决点击走查）——2026-10-10 收口：
+      授权走查见 M6-批2 密钥交接腿自动化覆盖；裁决+吊销实链见
+      M6-批2b（Xvfb 双实例真桌面真 server，证据链
+      `~/.cache/persona-m3-walk/shots/w1-*…w4-*`）
 - [x] **M4 隐私红线（落地⑤）——2026-10-04 M3 面复核收口**：默认关闭已入
       测试（SettingsModal.test：fresh workspace 同步开关默认 false、「General
       四开关出厂全关」、「默认关闭——未开启前不会有任何网络请求」、默认未加入
@@ -275,6 +277,38 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         （对端 secrets 总线变 activatable 无主、keyring 操作永久挂起）
         ——多实例桌面走查必须各自独立 XDG_RUNTIME_DIR；Xvfb 无 WM 时
         windowactivate 不可用，用 windowraise+截图核位。
+      - [x] **M6-批2b 桌面 UI 实链走查（冲突裁决+吊销闭环）**（2026-10-10）：
+        延续批2 基建（双实例 A/B 真桌面经 logging proxy 打真 server）。
+        ① 裁决实链：B 本地双编辑不推（op 11/12 favorite 形状）+ A 先推
+        tombstone（op 12）→ B 拉取形成 top-tie → 同步冲突弹窗自动
+        弹出（当前版本 vs 已删除·删除操作，含各自版本号/时间戳）→
+        采纳此版本。规则实证：apply_op 仅在回放栈顶 lamport 相等才成
+        冲突，严格更旧静默 Ignored（LWW 丢弃，oplog.rs 锚）。
+        ② 走查抓出真 bug（FK 787）并修复：audit_logs.credential_id 是
+        NO ACTION 外键，resolve_conflict 的 Delete 臂与拉取 tombstone
+        物化路径此前直接 DELETE 撞 FOREIGN KEY constraint failed（UI
+        报英文 "Failed to resolve conflict: … (code: 787)"）。修复 =
+        `Materializer::materialize_delete`（先
+        `clear_credential_reference` 摘引用再删行），裁决与拉取两路
+        共用；service.rs 手删路径同构早已正确。2 回归测试 +
+        sync 99 绿 + workspace 全绿 + 修后实机复验采纳成功、双端收敛
+        （双库 0 credentials、oplog top 14 一致、25 条审计行保留为
+        detached）。
+        ③ 吊销实链：A 吊销 walk-device-B（吊销按钮无确认即执行，toast
+        设备已吊销 + 保存中… 期间轮换组密钥）→ server sync_devices
+        除名 B、A sync_state 密钥标记 v1:18→v1:19（B 停留 v1:18 被轮出
+        密钥材料）→ B 立即同步拉 group-keys 得 200 但无本机信封，
+        fail-closed 报 "no group key envelope yet (pending authorization)"
+        （无 oplog 拉取、无推送、最近同步时间不更新）；A 存活设备轮换后
+        照常全轮同步（group-keys→oplog?since→status 全 200）。
+        UX 发现登记（不修，供 UI 批裁量）：吊销后错误文案误导为
+        "pending authorization"（实为已吊销，客户端无法区分）；该错误
+        toast 为英文（与 FK 错误同类 i18n 缺口）；查看冲突入口只在设置
+        弹窗内且由 lastReport 驱动（下次同步前是旧态）；全量同步后
+        「落后 N 条指令」水位不归零；回收站删除无确认弹窗；capture
+        seam 仅在 sync_now 末尾挂回——重启/会话锁/保险库锁任一之后的
+        编辑不记账直至下次 sync_now；自动锁定横幅使整版下移 ~50px 且
+        设置弹窗重开滚动位复位（坐标驱动走查的脆性来源）。
 - [x] **M7 E2EE 云同步（账号模式）§5 验收锚点收口**（2026-10-10）：
       E2EE_SYNC_DESIGN §5 两个 ⬜ 锚点全落，其余 ⬜ 标记同步翻绿（装配层
       +收敛测试 2026-10-07 已实落，文档滞后）：
