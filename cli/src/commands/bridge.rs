@@ -4607,6 +4607,7 @@ pub(crate) mod tests {
             db_path: Some(dir.path().join("identities.db")),
             approve_code: Some("000-000".to_string()),
             state_dir: Some(state_dir),
+            browser_origin: Vec::new(),
         })
         .await
         .unwrap_err();
@@ -7696,6 +7697,7 @@ pub(crate) mod tests {
             db_path: None,
             approve_code: Some(format!(" {}", code)),
             state_dir: Some(state_dir.clone()),
+            browser_origin: Vec::new(),
         })
         .await
         .expect("approve must succeed");
@@ -7712,6 +7714,7 @@ pub(crate) mod tests {
             db_path: None,
             approve_code: Some("000-000".to_string()),
             state_dir: Some(state_dir.clone()),
+            browser_origin: Vec::new(),
         })
         .await
         .expect_err("unknown approval code must fail");
