@@ -29,7 +29,7 @@ use crate::crypto::encryption::EncryptionService;
 use crate::crypto::key_hierarchy::KeyHierarchy;
 use crate::models::credential::CredentialData;
 use crate::storage::sync_repository::SyncRepository;
-use crate::storage::{CredentialRepository, Database, Repository};
+use crate::storage::{CredentialRepository, Database};
 use crate::PersonaError;
 use crate::Result;
 
@@ -607,8 +607,8 @@ impl<R: SyncRemote> SyncSession<R> {
                 }
             }
             OpType::Delete => {
-                CredentialRepository::new(self.db.clone())
-                    .delete(&item_id)
+                Materializer::new(self.db.clone())
+                    .materialize_delete(&item_id)
                     .await?;
             }
         }
@@ -1520,6 +1520,53 @@ mod tests {
         assert!(view.primary.unwrap().is_tombstone());
         assert!(view.conflicts.is_empty());
         assert_eq!(session.conflict_item_count().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn resolve_adopted_delete_detaches_audit_rows_instead_of_fk_error() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let local_device = Uuid::new_v4();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (winner, loser) = if a > b { (a, b) } else { (b, a) };
+        let put = conflict_put_op(item, winner, 5, &snapshot("alive", identity.id), &group);
+        let del = conflict_delete_op(item, loser, 5);
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&put).await.unwrap();
+        sync_repo.record_remote_op(&del).await.unwrap();
+
+        let (session, _) = session_for(&db, local_device, group.clone());
+        // 先物化主位 put（行存在），再造审计引用（audit_logs FK NO ACTION）
+        Materializer::new(db.clone())
+            .materialize_all(&master, &group, local_device)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO audit_logs (id, credential_id, action, resource_type, success, timestamp) \
+             VALUES (?, ?, 'credential.viewed', 'credential', 1, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(item.to_string())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // 采纳 delete 副本：不因审计引用拒删（此前 FK 787）
+        session
+            .resolve_conflict(&master, item, del.op_id)
+            .await
+            .unwrap();
+        let cred_repo = CredentialRepository::new(db.clone());
+        assert!(cred_repo.find_by_id(&item).await.unwrap().is_none());
+        let (detached,) = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM audit_logs WHERE credential_id IS NULL",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(detached, 1, "audit row preserved with reference detached");
     }
 
     #[tokio::test]

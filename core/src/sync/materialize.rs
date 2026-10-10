@@ -23,7 +23,7 @@ use crate::crypto::encryption::EncryptionService;
 use crate::crypto::key_hierarchy::KeyHierarchy;
 use crate::models::Credential;
 use crate::storage::sync_repository::SyncRepository;
-use crate::storage::{CredentialRepository, IdentityRepository, Repository};
+use crate::storage::{AuditLogRepository, CredentialRepository, IdentityRepository, Repository};
 use crate::sync::keys::unwrap_item_key_with_group;
 use crate::sync::keys::GroupKey;
 use crate::sync::oplog::{item_view, ItemKind, OpType};
@@ -65,6 +65,7 @@ pub struct Materializer {
     credential_repo: CredentialRepository,
     identity_repo: IdentityRepository,
     sync_repo: SyncRepository,
+    audit_repo: AuditLogRepository,
 }
 
 impl Materializer {
@@ -72,7 +73,8 @@ impl Materializer {
         Self {
             credential_repo: CredentialRepository::new(db.clone()),
             identity_repo: IdentityRepository::new(db.clone()),
-            sync_repo: SyncRepository::new(db),
+            sync_repo: SyncRepository::new(db.clone()),
+            audit_repo: AuditLogRepository::new(db),
         }
     }
 
@@ -131,7 +133,7 @@ impl Materializer {
         }
         match primary.op {
             OpType::Delete => {
-                self.credential_repo.delete(item_id).await?;
+                self.materialize_delete(item_id).await?;
                 Ok(MaterializeOutcome::Tombstoned)
             }
             OpType::Put => {
@@ -150,6 +152,15 @@ impl Materializer {
                 .await
             }
         }
+    }
+
+    /// 物化一个 tombstone 主位：先摘掉 audit_logs 对该凭据的引用再删行
+    /// （audit 的 FK 是 NO ACTION，不先 detach 会 787 拒删）。公开给冲突
+    /// 裁决复用：采纳 delete 副本走同一条删行路径。
+    pub async fn materialize_delete(&self, item_id: &Uuid) -> Result<()> {
+        self.audit_repo.clear_credential_reference(item_id).await?;
+        self.credential_repo.delete(item_id).await?;
+        Ok(())
     }
 
     /// 物化一个 put 主位进主库（重包 item key 到本机主密钥）。公开给
@@ -396,6 +407,75 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn tombstone_with_audit_rows_detaches_references_instead_of_fk_error() {
+        let (db, materializer, _identity_repo, group, identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+        let item_id = Uuid::new_v4();
+        let snapshot = SyncItemSnapshot {
+            identity_id,
+            name: "audited".to_string(),
+            credential_type: CredentialType::Password,
+            security_level: SecurityLevel::High,
+            url: None,
+            username: Some("bob@remote.example".to_string()),
+            notes: None,
+            tags: vec![],
+            metadata: Default::default(),
+            is_favorite: false,
+            is_active: true,
+            data: password_data("x"),
+        };
+        let remote = Uuid::new_v4();
+        materializer
+            .sync_repo
+            .record_remote_op(&put_op(item_id, remote, 3, &snapshot, &group))
+            .await
+            .unwrap();
+        materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+
+        // 审计行引用该凭据（audit_logs.credential_id FK 是 NO ACTION）
+        sqlx::query(
+            "INSERT INTO audit_logs (id, credential_id, action, resource_type, success, timestamp) \
+             VALUES (?, ?, 'credential.viewed', 'credential', 1, ?)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(item_id.to_string())
+        .bind(Utc::now().to_rfc3339())
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // 远端 tombstone：删行前必须先摘审计引用，否则 FK 787 拒删
+        materializer
+            .sync_repo
+            .record_remote_op(&delete_op(item_id, remote, 4))
+            .await
+            .unwrap();
+        let outcome = materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(outcome, MaterializeOutcome::Tombstoned);
+        assert!(materializer
+            .credential_repo
+            .find_by_id(&item_id)
+            .await
+            .unwrap()
+            .is_none());
+        // 审计行保留，引用已摘除
+        let (detached,) = sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM audit_logs WHERE credential_id IS NULL",
+        )
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(detached, 1);
     }
 
     #[tokio::test]
