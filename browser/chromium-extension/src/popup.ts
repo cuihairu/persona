@@ -1,8 +1,8 @@
-import type { BridgeStatus } from './nativeBridge';
-import type { DomainAssessment } from './domainPolicy';
-import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge';
-import { getAutofillSettings, setAutofillSettings } from './settings';
-import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults';
+import type { BridgeStatus } from './nativeBridge.js';
+import type { DomainAssessment } from './domainPolicy.js';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge.js';
+import { getAutofillSettings, setAutofillSettings } from './settings.js';
+import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin, type OriginAutofillDefaults } from './autofillDefaults.js';
 import {
     connectViaBridge,
     loadCloudConn,
@@ -17,7 +17,7 @@ import {
     type CloudConn,
     type CloudListItem,
     type CloudItemView,
-} from './cloudSync';
+} from './cloudSync.js';
 
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');

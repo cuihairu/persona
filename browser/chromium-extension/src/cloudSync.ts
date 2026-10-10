@@ -18,7 +18,7 @@
  * 于服务器，多一份副本不加深泄露面）。
  */
 
-import { syncConnect, type SyncConnectPayload } from './nativeBridge';
+import { syncConnect, type SyncConnectPayload } from './nativeBridge.js';
 
 // ---- wire 类型（与 core/src/sync/remote.rs 的 WireOp/WirePayload 对齐）----
 

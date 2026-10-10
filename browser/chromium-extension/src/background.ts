@@ -24,21 +24,21 @@ import {
     type SaveCredentialResponsePayload,
     type GeneratePasswordRequest,
     type GeneratePasswordResponsePayload
-} from './nativeBridge';
+} from './nativeBridge.js';
 import {
     evaluateDomain,
     upsertPolicy,
     removePolicy,
     type DomainPolicy,
     type DomainAssessment
-} from './domainPolicy';
+} from './domainPolicy.js';
 import {
     clearPendingSave,
     stashPendingSave,
     takePendingSave,
     type PendingSaveEntry
-} from './pendingSave';
-import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings';
+} from './pendingSave.js';
+import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings.js';
 
 const STORAGE_KEY = 'persona_bridge_status';
 const FORMS_KEY = 'persona_forms';

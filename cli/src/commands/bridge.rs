@@ -45,6 +45,12 @@ pub struct BridgeArgs {
     /// If omitted, uses `PERSONA_BRIDGE_STATE_DIR` or `~/.persona/bridge`.
     #[arg(long)]
     pub state_dir: Option<PathBuf>,
+
+    /// Origin passed by the browser when launched as a native messaging host
+    /// (e.g. `chrome-extension://<id>/`). Ignored; accepted so the host
+    /// does not exit on the browser-supplied argument.
+    #[arg(trailing_var_arg = true, hide = true)]
+    pub browser_origin: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,0 +1,2 @@
+2026-10-10T11:34:39.386Z WARN  persona_server - PERSONA_SERVER_TOKEN 是 legacy 配置：建议迁移到多设备令牌 PERSONA_SERVER_TOKENS
+2026-10-10T11:34:39.389Z INFO  persona_server - Persona server listening on 0.0.0.0:3000

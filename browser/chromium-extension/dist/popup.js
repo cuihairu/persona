@@ -1,7 +1,7 @@
-import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge';
-import { getAutofillSettings, setAutofillSettings } from './settings';
-import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin } from './autofillDefaults';
-import { connectViaBridge, loadCloudConn, saveCloudConn, saveCloudCache, loadCloudCache, isUsableCache, pullCloudOps, buildItemViews, decryptItemViews, conflictCopyViews, } from './cloudSync';
+import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge.js';
+import { getAutofillSettings, setAutofillSettings } from './settings.js';
+import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin } from './autofillDefaults.js';
+import { connectViaBridge, loadCloudConn, saveCloudConn, saveCloudCache, loadCloudCache, isUsableCache, pullCloudOps, buildItemViews, decryptItemViews, conflictCopyViews, } from './cloudSync.js';
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
 const endpointInput = document.getElementById('endpoint');

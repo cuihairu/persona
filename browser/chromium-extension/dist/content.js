@@ -1,11 +1,11 @@
-import { observeForms } from './formScanner';
-import { evaluateDomain } from './domainPolicy';
-import { DEFAULT_AUTOFILL_SETTINGS, getAutofillSettings, onAutofillSettingsChanged } from './settings';
-import { getAutofillDefaultsForOrigin, onAutofillDefaultsChanged, setAutofillDefaultsForOrigin } from './autofillDefaults';
-import { freshTotpWaitMs, pickSuggestion, shouldWaitForFreshTotp, totpCopiedNotice, totpFilledNotice } from './autofillUx';
-import { extractSaveProposal } from './saveDetect';
-import { planLoginStep } from './loginSteps';
-import { mountPersonaUi } from './shadowUi';
+import { observeForms } from './formScanner.js';
+import { evaluateDomain } from './domainPolicy.js';
+import { DEFAULT_AUTOFILL_SETTINGS, getAutofillSettings, onAutofillSettingsChanged } from './settings.js';
+import { getAutofillDefaultsForOrigin, onAutofillDefaultsChanged, setAutofillDefaultsForOrigin } from './autofillDefaults.js';
+import { freshTotpWaitMs, pickSuggestion, shouldWaitForFreshTotp, totpCopiedNotice, totpFilledNotice } from './autofillUx.js';
+import { extractSaveProposal } from './saveDetect.js';
+import { planLoginStep } from './loginSteps.js';
+import { mountPersonaUi } from './shadowUi.js';
 // Current page state
 let currentForms = [];
 let currentSuggestions = [];

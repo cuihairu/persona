@@ -121,8 +121,11 @@ async fn main() -> Result<()> {
     let args = maybe_inject_argv0_subcommand(std::env::args_os().collect());
     let cli = Cli::parse_from(args);
 
-    // Initialize logging
-    init_logging(cli.verbose)?;
+    // Initialize logging. Bridge host mode must keep stdout protocol-only
+    // (length-prefixed NMH frames): a stray log line corrupts the frame
+    // stream and the browser reports "Native host has exited".
+    let bridge_mode = matches!(cli.command, Commands::Bridge(_));
+    init_logging(cli.verbose, bridge_mode)?;
 
     // Load configuration.
     //
@@ -219,16 +222,20 @@ fn command_requires_workspace(cmd: &Commands) -> bool {
 }
 
 /// Initialize logging based on verbosity level
-fn init_logging(verbose: bool) -> Result<()> {
+fn init_logging(verbose: bool, to_stderr: bool) -> Result<()> {
     let level = if verbose {
         tracing::Level::DEBUG
     } else {
         tracing::Level::INFO
     };
 
-    RedactedLoggerBuilder::new(level)
-        .include_target(false)
-        .init()?;
+    let builder = RedactedLoggerBuilder::new(level).include_target(false);
+    let builder = if to_stderr {
+        builder.with_writer(|| Box::new(std::io::stderr()))
+    } else {
+        builder
+    };
+    builder.init()?;
 
     Ok(())
 }
@@ -373,8 +380,8 @@ mod tests {
         // init() 自 b291488 起幂等：全局 subscriber 已被占用时保持已装的并
         // 返回 Ok（内嵌 agent 场景 desktop 壳先装是正常次序）。断言重复调用
         // 安全，且安装真实生效（全局默认不是 NoSubscriber）。
-        init_logging(true).expect("init_logging must never fail (idempotent)");
-        init_logging(false).expect("re-install keeps the existing subscriber and stays Ok");
+        init_logging(true, false).expect("init_logging must never fail (idempotent)");
+        init_logging(false, true).expect("re-install keeps the existing subscriber and stays Ok");
         tracing::dispatcher::get_default(|d| {
             assert!(!d.is::<tracing::subscriber::NoSubscriber>());
         });

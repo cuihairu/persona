@@ -1,27 +1,27 @@
-import { observeForms, type DetectedForm, type DetectedField } from './formScanner';
-import { evaluateDomain, type DomainAssessment, type DomainPolicy } from './domainPolicy';
+import { observeForms, type DetectedForm, type DetectedField } from './formScanner.js';
+import { evaluateDomain, type DomainAssessment, type DomainPolicy } from './domainPolicy.js';
 import {
     DEFAULT_AUTOFILL_SETTINGS,
     getAutofillSettings,
     onAutofillSettingsChanged,
     type AutofillSettings
-} from './settings';
+} from './settings.js';
 import {
     getAutofillDefaultsForOrigin,
     onAutofillDefaultsChanged,
     setAutofillDefaultsForOrigin,
     type OriginAutofillDefaults
-} from './autofillDefaults';
+} from './autofillDefaults.js';
 import {
     freshTotpWaitMs,
     pickSuggestion,
     shouldWaitForFreshTotp,
     totpCopiedNotice,
     totpFilledNotice
-} from './autofillUx';
-import { extractSaveProposal, type SaveProposal, type SaveScanInput } from './saveDetect';
-import { planLoginStep } from './loginSteps';
-import { mountPersonaUi } from './shadowUi';
+} from './autofillUx.js';
+import { extractSaveProposal, type SaveProposal, type SaveScanInput } from './saveDetect.js';
+import { planLoginStep } from './loginSteps.js';
+import { mountPersonaUi } from './shadowUi.js';
 
 interface SuggestionItem {
     item_id: string;

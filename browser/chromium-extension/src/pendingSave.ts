@@ -11,7 +11,7 @@
 // just typed); it is strictly origin-bound, time-limited, and it is dropped
 // as soon as the user acts on it or the bar is dismissed.
 
-import type { SaveProposal } from './saveDetect';
+import type { SaveProposal } from './saveDetect.js';
 
 export interface PendingSaveEntry extends SaveProposal {
     /** Exact page origin that captured the form. Never matched loosely. */

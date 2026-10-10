@@ -20,6 +20,14 @@
     "service_worker": "dist/background.js",
     "type": "module"
   },
+  "commands": {
+    "open_search": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "Open Persona mini search"
+    }
+  },
   "content_scripts": [
     {
       "matches": ["<all_urls>"],

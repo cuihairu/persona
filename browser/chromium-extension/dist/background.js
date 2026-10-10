@@ -1,7 +1,7 @@
-import { sendNativeMessage, getSuggestions, requestFill, getTotp, copyToClipboard, passkeyList, passkeyCreate, passkeyAssert, findForSave, saveCredential, generatePassword } from './nativeBridge';
-import { evaluateDomain, upsertPolicy, removePolicy } from './domainPolicy';
-import { clearPendingSave, stashPendingSave, takePendingSave } from './pendingSave';
-import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings';
+import { sendNativeMessage, getSuggestions, requestFill, getTotp, copyToClipboard, passkeyList, passkeyCreate, passkeyAssert, findForSave, saveCredential, generatePassword } from './nativeBridge.js';
+import { evaluateDomain, upsertPolicy, removePolicy } from './domainPolicy.js';
+import { clearPendingSave, stashPendingSave, takePendingSave } from './pendingSave.js';
+import { AUTOFILL_SETTINGS_KEY, DEFAULT_AUTOFILL_SETTINGS } from './settings.js';
 const STORAGE_KEY = 'persona_bridge_status';
 const FORMS_KEY = 'persona_forms';
 const POLICY_KEY = 'persona_domain_policies';

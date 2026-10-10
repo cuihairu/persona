@@ -17,7 +17,7 @@
  * 拉到的密文 op 缓存进 `chrome.storage.local`（离线兜底的本钱，本就公开
  * 于服务器，多一份副本不加深泄露面）。
  */
-import { syncConnect } from './nativeBridge';
+import { syncConnect } from './nativeBridge.js';
 const OPLOG_PAGE_LIMIT = 500;
 const OPLOG_MAX_PAGES = 40;
 export const CLOUD_SESSION_KEY = 'persona_cloud_conn_v1';
