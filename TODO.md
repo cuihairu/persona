@@ -205,7 +205,7 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         gesture 门禁/未配置分类/死端口 SRP 失败不落令牌/状态反映/幂等
         登出/失联照删）；扩展 nativeBridge 三函数 + popup Account 区；
         BRIDGE_PROTOCOL.md §18 + v7 行 + 3 条 account_* 错误码。
-        真 SRP 服务器 E2E 留 M6 实机走查
+        真 SRP 服务器 E2E 留 M6 实机走查（✅ 2026-10-10 落于 M6-批4，见下）
       - [x] **M5-批3 云端写路径**（2026-10-07）：桥 op `sync_push_now`
         （并入协议 v7——v7=账号三件套+本 op，单版本双消息；桥开 core
         SyncSession 跑 backfill→pull→materialize→push，与桌面 sync_now 同
@@ -350,6 +350,32 @@ Account & Sync（2026-10 定位升级令：账号系统 + 多设备同步）
         PERSONA_MASTER_PASSWORD...) 与桌面解锁态脱节（CLI 桥自身解锁口
         径，不影响 sync_connect 的 keyring 读路径）；popup 连接后的刷新
         全依赖手动点击（无自动轮询，符合「一请求一进程」桥设计）。
+      - [x] **M6-批4 真 SRP 服务器 E2E（M5-批2 尾注收口）**（2026-10-10）：
+        M5-批2 记的「真 SRP 服务器 E2E 留 M6 实机走查」在此落。同一
+        批3 基线环境（Xvfb+logproxy 18995→server 18996+desktop A+
+        chrome CDP 9333，配对 state 持久免重配）。账号侧准备：POST
+        /accounts/register（免认证，仅建行）→ cli/examples/srp_gen.rs
+        （临时工具，调 core register_verifier：device_name+password →
+        salt32/verifier272 的 B64）→ POST /accounts/{id}/srp/register
+        （Bearer 走 PERSONA_SERVER_TOKEN 静态令牌）。走查：popup
+        Account 区填 account_id+password → Sign in → 桥 account_login
+        跑 core srp_login（challenge→verify 两跳）→ 服务器 server_verify
+        过 → 15 分钟令牌直写 keyring persona-account（令牌本体不过桥
+        协议）→ 扩展只见 expires_in_secs+session_key_fingerprint（指纹
+        64554b0a3b68…）→ refreshAccountStatus 报 Signed in；先 Logout
+        （Signed out (local token cleared)，令牌清空）再登录验证幂等
+        往返。截出一个真坑：SRP verifier 与 identity 绑定（register_
+        verifier 的 username 进 KDF/identifier），按 device_name
+        'e2e-device' 注册而扩展固定发 'browser-extension' → challenge
+        200 但 verify 401（server_verify proof 不匹配）；与「凭据不存
+        在」的 401 同形（都走 ApiError::unauthorized 防泄露），分型靠
+        proxy.log 看 challenge 200 / verify 401 配对 + 按正确 identity
+        重生成 verifier 命中。扩展侧观察（不修）：登录结果文案随即被
+        finally 里的 refreshAccountStatus 覆盖为纯 Signed in / Not
+        signed in，成功态的令牌有效期与指纹只剩刷新前的瞬时文案，走查
+        需 200ms 级采样。截图 shots/w6-account-{logout,login,
+        signedin}.png；驱动 ~/.cache/persona-ui-shots/popup-account-
+        {login,cycle,trace,shot}.mjs。
 - [x] **M7 E2EE 云同步（账号模式）§5 验收锚点收口**（2026-10-10）：
       E2EE_SYNC_DESIGN §5 两个 ⬜ 锚点全落，其余 ⬜ 标记同步翻绿（装配层
       +收敛测试 2026-10-07 已实落，文档滞后）：
