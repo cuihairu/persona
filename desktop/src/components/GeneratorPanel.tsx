@@ -8,6 +8,9 @@ import type { GeneratedPasswords } from '@/types';
 
 const MIN_LENGTH = 4;
 const MAX_LENGTH = 64;
+// Diceware 词数界（core generate_words 的校验范围）
+const MIN_WORDS = 3;
+const MAX_WORDS = 10;
 
 /** 熵值分档（bits）：颜色 + 标签（阈值与 1Password 的弱/可/强/极强近似） */
 const strengthFor = (bits: number): { tone: string; labelKey: string } => {
@@ -62,14 +65,20 @@ const GeneratorPanel: React.FC = () => {
   const [includeNumbers, setIncludeNumbers] = useState(true);
   const [includeSymbols, setIncludeSymbols] = useState(true);
   const [pronounceable, setPronounceable] = useState(false);
+  const [wordsMode, setWordsMode] = useState(false);
+  const [wordCount, setWordCount] = useState(5);
   const [count, setCount] = useState(3);
   const [result, setResult] = useState<GeneratedPasswords | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const hasLetterSet = includeLowercase || includeUppercase;
-  // 可发音需要字母集；随机模式至少一个字符集（core 校验的镜像，提前禁用按钮）
-  const canGenerate = pronounceable ? hasLetterSet : hasLetterSet || includeNumbers || includeSymbols;
+  // 词组模式无字符集约束（core 先行短路）；字符/可发音模式的约束见下
+  const canGenerate = wordsMode
+    ? true
+    : pronounceable
+      ? hasLetterSet
+      : hasLetterSet || includeNumbers || includeSymbols;
 
   const strength = useMemo(
     () => strengthFor(result?.entropy_bits ?? 0),
@@ -88,6 +97,8 @@ const GeneratorPanel: React.FC = () => {
         include_symbols: includeSymbols,
         pronounceable,
         count,
+        // 词组模式下 core 短路进 Diceware（字符集选项被忽略，熵按 EFF 词表计）
+        ...(wordsMode ? { words: wordCount } : {}),
       });
       if (res.success && res.data) {
         setResult(res.data);
@@ -127,27 +138,51 @@ const GeneratorPanel: React.FC = () => {
         </div>
 
         <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-2">
-          {/* 长度 */}
-          <div>
-            <div className="flex items-center justify-between">
-              <label htmlFor="generator-length" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                {t('generator.length')}
-              </label>
-              <span data-testid="generator-length-value" className="text-sm text-gray-500 dark:text-gray-400">
-                {length}
-              </span>
+          {/* 长度（词组模式下换成词数滑杆——长度对 Diceware 无意义） */}
+          {wordsMode ? (
+            <div>
+              <div className="flex items-center justify-between">
+                <label htmlFor="generator-words" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t('generator.wordsCount')}
+                </label>
+                <span data-testid="generator-words-value" className="text-sm text-gray-500 dark:text-gray-400">
+                  {wordCount}
+                </span>
+              </div>
+              <input
+                id="generator-words"
+                data-testid="generator-words-input"
+                type="range"
+                min={MIN_WORDS}
+                max={MAX_WORDS}
+                value={wordCount}
+                onChange={(e) => setWordCount(Number(e.target.value))}
+                className="mt-2 w-full accent-primary-600 dark:accent-primary-400"
+              />
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('generator.wordsHint')}</p>
             </div>
-            <input
-              id="generator-length"
-              data-testid="generator-length-input"
-              type="range"
-              min={MIN_LENGTH}
-              max={MAX_LENGTH}
-              value={length}
-              onChange={(e) => setLength(Number(e.target.value))}
-              className="mt-2 w-full accent-primary-600 dark:accent-primary-400"
-            />
-          </div>
+          ) : (
+            <div>
+              <div className="flex items-center justify-between">
+                <label htmlFor="generator-length" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {t('generator.length')}
+                </label>
+                <span data-testid="generator-length-value" className="text-sm text-gray-500 dark:text-gray-400">
+                  {length}
+                </span>
+              </div>
+              <input
+                id="generator-length"
+                data-testid="generator-length-input"
+                type="range"
+                min={MIN_LENGTH}
+                max={MAX_LENGTH}
+                value={length}
+                onChange={(e) => setLength(Number(e.target.value))}
+                className="mt-2 w-full accent-primary-600 dark:accent-primary-400"
+              />
+            </div>
+          )}
 
           {/* 候选数量 */}
           <div>
@@ -203,11 +238,17 @@ const GeneratorPanel: React.FC = () => {
                 checked={pronounceable}
                 onChange={(checked) => setPronounceable(checked)}
               />
+              <CharsetToggle
+                testId="generator-toggle-words"
+                label={t('generator.words')}
+                checked={wordsMode}
+                onChange={(checked) => setWordsMode(checked)}
+              />
             </div>
-            {pronounceable && !hasLetterSet && (
+            {!wordsMode && pronounceable && !hasLetterSet && (
               <p className="text-xs text-amber-600 dark:text-amber-400">{t('generator.pronounceableNeedsLetters')}</p>
             )}
-            {!pronounceable && !canGenerate && (
+            {!wordsMode && !pronounceable && !canGenerate && (
               <p className="text-xs text-amber-600 dark:text-amber-400">{t('generator.needsOneCharset')}</p>
             )}
           </div>

@@ -154,4 +154,63 @@ describe('components/GeneratorPanel', () => {
     // 强度行渲染为 "强度: 非常弱"（两个 text 节点），用子串匹配
     expect(getByText(/非常弱/)).toBeInTheDocument();
   });
+
+  it('swaps the length slider for a word-count slider in words mode', () => {
+    const { getByTestId, queryByTestId, getByText, queryByText } = render(<GeneratorPanel />);
+
+    expect(getByTestId('generator-length-input')).toBeInTheDocument();
+    expect(queryByTestId('generator-words-input')).not.toBeInTheDocument();
+
+    fireEvent.click(getByTestId('generator-toggle-words'));
+
+    expect(queryByTestId('generator-length-input')).not.toBeInTheDocument();
+    expect(getByTestId('generator-words-value')).toHaveTextContent('5');
+    expect(getByText(/EFF 大词表/)).toBeInTheDocument();
+
+    // 词组模式不勾任何字符集也能生成（core 短路进 Diceware），警示条也不出现
+    fireEvent.click(getByTestId('generator-toggle-lowercase'));
+    fireEvent.click(getByTestId('generator-toggle-uppercase'));
+    fireEvent.click(getByTestId('generator-toggle-numbers'));
+    fireEvent.click(getByTestId('generator-toggle-symbols'));
+    expect(getByTestId('generator-generate')).toBeEnabled();
+    expect(queryByText('至少需要勾选一个字符集')).not.toBeInTheDocument();
+
+    // 关掉词组恢复长度滑杆
+    fireEvent.click(getByTestId('generator-toggle-words'));
+    expect(getByTestId('generator-length-input')).toBeInTheDocument();
+    expect(queryByTestId('generator-words-input')).not.toBeInTheDocument();
+  });
+
+  it('passes the word count through and ignores charset constraints in words mode', async () => {
+    mockGenerate.mockResolvedValue({
+      success: true,
+      data: mkResult({
+        passwords: ['wrong-donkey-battery-staple'],
+        entropy_bits: 51.7,
+        pool_size: 7772,
+      }),
+    });
+
+    const { getByTestId } = render(<GeneratorPanel />);
+    fireEvent.click(getByTestId('generator-toggle-words'));
+    // 全部字符集关掉，词组模式照样生成
+    fireEvent.click(getByTestId('generator-toggle-lowercase'));
+    fireEvent.click(getByTestId('generator-toggle-uppercase'));
+    fireEvent.click(getByTestId('generator-toggle-numbers'));
+    fireEvent.click(getByTestId('generator-toggle-symbols'));
+    fireEvent.change(getByTestId('generator-words-input'), { target: { value: '7' } });
+
+    fireEvent.click(getByTestId('generator-generate'));
+    await waitFor(() => expect(getByTestId('generator-results')).toBeInTheDocument());
+    expect(mockGenerate).toHaveBeenCalledWith({
+      length: 16,
+      include_lowercase: false,
+      include_uppercase: false,
+      include_numbers: false,
+      include_symbols: false,
+      pronounceable: false,
+      count: 3,
+      words: 7,
+    });
+  });
 });
