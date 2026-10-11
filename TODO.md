@@ -58,6 +58,13 @@ cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0�
 - [ ] 建议（待拍板）：dependabot ignore 掉 dtolnay/rust-toolchain——幻影版本
       bump 已第三次（#32/#45 秒挂未遂、#62 被合入致 main 全红）；工具链
       升级改由人工定期整体对齐（真实最新 stable 见 1.99.0@2026-09-28）
+- [ ] 建议（待拍板）：handlebars 三告警（Dependabot #312/#313/#314，2 critical
+      +1 moderate，2026-10-12 登记）——来源 jest 30.5.2 快照报告模板，纯
+      dev/test 工具链不进产品二进制；4.7.9 已是最新 4.x 且被 override 钉住，
+      **上游无修复版**（fixed: null）；三条 advisory 全是 compile 路径注入
+      （AST 类型混淆 / 预编译模板内嵌 / own-property 绕过），本仓无攻击者
+      可控模板编译，实际不可达。选项：ignore 告警（写明理由）或等上游修复
+      后 bump
 - [x] #61 bip32 0.5→0.6（`64c9427`）——**原拍板冻结（钱包轨），被并批合入**；
       secp256k1 0.31 先决条件在（#66 已合），钱包编译适配是否随合并带上
       待 main 修复后验证
