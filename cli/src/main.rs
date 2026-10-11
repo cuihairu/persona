@@ -110,6 +110,10 @@ enum Commands {
 
     /// Connect local automation: token management and the local HTTP listener
     Connect(commands::connect::ConnectArgs),
+
+    /// Secrets automation: resolve refs, run commands with injected env,
+    /// render K8s Secret manifests, speak the Terraform external protocol
+    Secrets(commands::secrets::SecretsArgs),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -180,6 +184,7 @@ async fn main() -> Result<()> {
         Commands::Passwd(args) => commands::passwd::execute(args, &config).await,
         Commands::Travel(args) => commands::travel::execute(args, &config).await,
         Commands::Connect(args) => commands::connect::execute(args, &config).await,
+        Commands::Secrets(args) => commands::secrets::execute(args, &config).await,
     };
     // 尽力 flush 队列剩余审计事件（未启用时为无操作）
     commands::service::shutdown_event_emitter().await;
