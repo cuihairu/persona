@@ -6,6 +6,14 @@ Priority policy (2026-09): the password-manager track targets 1Password parity f
 
 Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进入主线**——纯本地存疑，对齐 1Password 形态。账号/E2EE 同步/插件云接全部按下方 Account & Sync 章节的里程碑逐项推进；隐私红线（默认关闭、显式开启、明示数据范围）与本地模式完整可用是每项的硬验收。
 
+对标缺口补登（2026-10-11 审核对齐：`docs/FEATURE_GAP_ANALYSIS.md` 有缺口、本清单此前未登记——补登以闭合「审核了却没进 todo」）：
+
+- [ ] **OS 自动填充集成**（gap #13，未实现）：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello 作为 authenticator）同属此缺口。口径：iOS 需 macOS+Xcode、鸿蒙需 DevEco（与 #24 同因），本机 Linux 无环境——**需对应平台机器才能启动**，先登记
+- [ ] **桌面应用级填充**（gap #12，未实现）：Windows 桌面应用内的填充注入（现状仅浏览器桥）。顺延原因已在 gap 文档登记：需 Windows 桌面会话实机注入验收，本机无 Windows 桌面会话
+- [ ] **Passkey 跨设备同步**（gap #14 已完成项的后续）：软件认证器与桥接审批已落，跨设备同步等 E2EE 同步阶段推进
+- [ ] **Secrets 自动化三件套**（gap #28 部分完成）：K8s secrets、Terraform provider、shell plugins——本地 Connect（127.0.0.1 scoped token）与 CLI 侧已完成，这三件未做
+- [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
+
 依赖迁移批（2026-10-11 用户拍板：RustCrypto 0.10→0.11 先行，每迁移一 PR、CI 绿才合；bincode 冻结等 wire 兼容面另行拍板）
 
 - [ ] #65 + #67 sha1 + sha2（digest/hmac 全家升级，一次迁移覆盖两个 PR）
