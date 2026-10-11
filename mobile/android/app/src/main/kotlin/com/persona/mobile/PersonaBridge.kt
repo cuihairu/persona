@@ -36,6 +36,21 @@ object PersonaBridge {
 
     external fun personaShutdown(): String?
 
+    // ---- 业务 FFI（business 层，出参包络 {"ok":bool,"error"?,"data"?}——
+    // 与上面生命周期层的 success 键名不同，用 parseBusiness 分别解析）----
+
+    /** 全文搜索凭据（元数据，不解密负载；空串 = 全部）。可能为 null（JVM 双层全挂） */
+    external fun personaCredentialSearch(query: String): String?
+
+    /** 业务包络轻量解包：返回 (ok, error, 整个响应对象)；null / 非 JSON 一律落失败臂 */
+    fun parseBusiness(json: String?): Triple<Boolean, String?, org.json.JSONObject?> {
+        if (json == null) return Triple(false, "Native bridge returned null", null)
+        return runCatching {
+            val obj = org.json.JSONObject(json)
+            Triple(obj.optBoolean("ok"), obj.optString("error", "").ifEmpty { null }, obj)
+        }.getOrElse { Triple(false, "Unexpected native response", null) }
+    }
+
     /** JSON 出参的轻量解包：null / 非 JSON / 非对象一律落失败臂，不抛异常 */
     fun parseResult(json: String?): Pair<Boolean, String?> {
         if (json == null) return false to "Native bridge returned null"

@@ -152,3 +152,53 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaShutdown(
 ) -> jstring {
     result_to_json(env, super::persona_shutdown())
 }
+
+// ---------------------------------------------------------------------------
+// 业务 FFI 转发（business 层 JSON 包络 {"ok":bool,"error"?,"data"?}，与上面
+// 生命周期层的 {"success":bool,"error"} 键名不同，Kotlin 侧分别解析）
+// ---------------------------------------------------------------------------
+
+/// business C ABI 出参（owned CString JSON）→ jstring；取值后归还所有权。
+/// null（两层全挂）降级为可解析失败包络，不把 null 递给 Kotlin。
+fn business_json_to_jstring(env: &mut JNIEnv, json: *mut std::os::raw::c_char) -> jstring {
+    const BUSINESS_DEGRADED: &str = "{\"ok\":false,\"error\":\"jni bridge degraded\"}";
+    let owned = if json.is_null() {
+        BUSINESS_DEGRADED.to_string()
+    } else {
+        // SAFETY: 指针由 business 层 CString::into_raw 分配，取值后立刻归还。
+        unsafe {
+            let s = CStr::from_ptr(json).to_string_lossy().into_owned();
+            let _ = CString::from_raw(json);
+            s
+        }
+    };
+    env.new_string(&owned)
+        .or_else(|_| env.new_string(BUSINESS_DEGRADED))
+        .map(|s| s.into_raw())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+#[no_mangle]
+pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSearch(
+    env: &mut JNIEnv,
+    _class: JClass,
+    query: JString,
+) -> jstring {
+    let query = match jstring_to_cstring(env, &query) {
+        Ok(s) => s,
+        Err(e) => {
+            // 入参非法也走 business 包络语义，Kotlin 只需解析一种业务格式
+            let degraded = format!(
+                "{{\"ok\":false,\"error\":{}}}",
+                serde_json::to_string(&e).unwrap_or_else(|_| "\"error\"".to_string())
+            );
+            return env
+                .new_string(&degraded)
+                .map(|s| s.into_raw())
+                .unwrap_or(std::ptr::null_mut());
+        }
+    };
+    // SAFETY: CString 保活到调用结束，指针在 persona_credential_search 内有效。
+    let json = unsafe { super::business::persona_credential_search(query.as_ptr()) };
+    business_json_to_jstring(env, json)
+}
