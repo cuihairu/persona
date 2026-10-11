@@ -21,9 +21,16 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
       SDK 刻意不做（external 协议覆盖）。文档：STORAGE_AND_SYNC「Secrets
       自动化（CLI 直读）」章 + gap #28 已完成（=）
 - [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
-- [ ] **生成器全局热键**（gap #9 余项，小尾巴低优先）：桌面生成器面板仅应用内
-      ⌘G 呼出；OS 级任意应用内呼出未做——Quick Access 全局热键只覆盖检索
-      浮窗（#22），不含生成器面板。随 Quick Access 体系顺带
+- [x] **生成器全局热键**（gap #9 余项，2026-10-11 完成）：OS 级任意应用内
+      呼出生成器浮窗（generator-panel，无边框置顶不进任务栏），平台默认
+      ⌘⇧G / Ctrl+Shift+G 可改绑可关（WorkspaceSettings.generator_panel_*
+      两字段 serde default，旧 JSON 免迁移）。与 Quick Access 热键独立
+      共存——compute_registration 只注销自己的旧键（不再 unregister_all），
+      互不顶掉；托盘 "Password Generator" 常驻入口；生成是纯计算
+      CSPRNG，锁定态可用（浮窗无解锁门）；Esc 隐藏 + CloseRequested 转
+      hide（#22 同款语义）；设置页 GeneratorHotkeySection 实时回显抢注
+      失败原因。测试：core round-trip、src-tauri 层测 5 例 + quick_access
+      单测、jest 11 例；文档：gap #9 已完成
 
 依赖迁移批（2026-10-11 用户拍板：RustCrypto 0.10→0.11 先行，每迁移一 PR、
 CI 绿才合。**2026-10-11 结算：6 项已全部合入 main**，但合并级联把
