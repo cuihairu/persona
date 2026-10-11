@@ -1233,11 +1233,14 @@ Desktop (Tauri v2 + React)
       （"N words"提示 + 模式行），core 校验错误透传。
       测试：core 7 例（词数/区间两端/互斥/跳过校验/词表 7772 唯一纯小写/
       Default 关闭）+ CLI 2 例（生成/区间外拒绝）。
-      遗留（下一轮）：#23 Windows/macOS 实机验收（#20 通用格式导入已于
+      ③ 2026-10-12 桌面接线：`generate_password_advanced` 增加
+      `words: Option<usize>`（熵估算补 7772 词池分支），api.ts 透传；
+      GeneratorPanel 词组开关 + 词数滑杆（3..=10，词组模式下词数滑杆
+      替换长度滑杆、字符集全关仍可生成、两条字符集警示条加
+      `!wordsMode` 守卫），jest 9 例全绿。
+      遗留：#23 Windows/macOS 实机验收（#20 通用格式导入已于
       2026-09-30 落地：`persona import-generic`，CSV 列形嗅探 +
-      Bitwarden JSON，确认流与 1PUX 同线；#10 桌面生成器面板接线
-      `--words` 待后续，`generate_password_advanced` 暂保持
-      `words: None`）。
+      Bitwarden JSON，确认流与 1PUX 同线）。
 
 Server & Sync (optional)
 
