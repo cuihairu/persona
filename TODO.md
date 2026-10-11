@@ -37,6 +37,9 @@ cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0�
       保留；本地扩展 157 测试 + desktop lint/build + website build 全绿
       - [ ] TS7 迁移（独立工程）：ts-jest 官方路径是装 `@typescript/native`
             并把 `@typescript/typescript6` alias 给 ts-jest，等真需求再排
+- [ ] 建议（待拍板）：dependabot ignore 掉 dtolnay/rust-toolchain——幻影版本
+      bump 已第三次（#32/#45 秒挂未遂、#62 被合入致 main 全红）；工具链
+      升级改由人工定期整体对齐（真实最新 stable 见 1.99.0@2026-09-28）
 - [x] #61 bip32 0.5→0.6（`64c9427`）——**原拍板冻结（钱包轨），被并批合入**；
       secp256k1 0.31 先决条件在（#66 已合），钱包编译适配是否随合并带上
       待 main 修复后验证
