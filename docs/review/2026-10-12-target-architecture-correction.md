@@ -85,17 +85,17 @@ flowchart TB
 
 ## 3. 核心概念与实现状态
 
-| 概念 | 定义 | 实现状态 | 代码依据 |
-|------|------|---------|---------|
-| **Principal** | 调用主体（用户/CLI/Agent/扩展/外部应用） | **Unverified** | 代码中无 `Principal` 类型定义，仅文档概念 |
-| **Identity** | 用户管理的身份或分身 | **Implemented** | `core/src/models/identity.rs` |
-| **Context** | 当前工作上下文 | **Partial** | 有 workspace/identity 切换，无独立 Context 类型 |
-| **Material** | 受保护的凭证与身份材料 | **Implemented** | `core/src/models/credential.rs` (`CredentialData` 枚举) |
-| **Resource** | 目标 Vault 或 Material | **Implemented** | Credential/Identity UUID |
-| **Action** | 操作类型（read/use/fill/sign/export） | **Partial** | `ConnectVerb` 只有 `Read`，SSH Agent 有签名但无统一 Action 枚举 |
-| **Policy** | 授权决策规则 | **Partial** | `AutoLockPolicy` 是自动锁定策略，非统一授权入口 |
-| **Security Level** | 材料保护等级 | **Implemented** | `core/src/models/credential.rs:83` `SecurityLevel` 枚举 (Low/Medium/High/Critical) |
-| **Unlock State** | 安全域解锁状态 | **Implemented** | `core/src/auth/` 解锁/锁定逻辑 |
+| 概念               | 定义                                     | 实现状态        | 代码依据                                                                           |
+| ------------------ | ---------------------------------------- | --------------- | ---------------------------------------------------------------------------------- |
+| **Principal**      | 调用主体（用户/CLI/Agent/扩展/外部应用） | **Unverified**  | 代码中无 `Principal` 类型定义，仅文档概念                                          |
+| **Identity**       | 用户管理的身份或分身                     | **Implemented** | `core/src/models/identity.rs`                                                      |
+| **Context**        | 当前工作上下文                           | **Partial**     | 有 workspace/identity 切换，无独立 Context 类型                                    |
+| **Material**       | 受保护的凭证与身份材料                   | **Implemented** | `core/src/models/credential.rs` (`CredentialData` 枚举)                            |
+| **Resource**       | 目标 Vault 或 Material                   | **Implemented** | Credential/Identity UUID                                                           |
+| **Action**         | 操作类型（read/use/fill/sign/export）    | **Partial**     | `ConnectVerb` 只有 `Read`，SSH Agent 有签名但无统一 Action 枚举                    |
+| **Policy**         | 授权决策规则                             | **Partial**     | `AutoLockPolicy` 是自动锁定策略，非统一授权入口                                    |
+| **Security Level** | 材料保护等级                             | **Implemented** | `core/src/models/credential.rs:83` `SecurityLevel` 枚举 (Low/Medium/High/Critical) |
+| **Unlock State**   | 安全域解锁状态                           | **Implemented** | `core/src/auth/` 解锁/锁定逻辑                                                     |
 
 ---
 
@@ -108,12 +108,12 @@ flowchart TB
     L3 --> L4["L4 关键"]
 ```
 
-| 等级 | 典型材料 | 保护要求 | 实现状态 |
-|------|---------|---------|---------|
-| L1 | 网站密码 | 解锁即可读 | **Implemented** (`SecurityLevel::Low`) |
-| L2 | API Key、开发凭证 | 解锁 + 上下文隔离 | **Implemented** (`SecurityLevel::Medium`) |
-| L3 | 生产管理员、SSH 私钥 | 解锁 + 确认 + 限制导出 | **Partial** (有等级字段，无独立密钥边界) |
-| L4 | 钱包助记词、根私钥 | 独立密钥保护边界 + 严格解锁 | **Unverified** (无独立密钥边界证据) |
+| 等级 | 典型材料             | 保护要求                    | 实现状态                                  |
+| ---- | -------------------- | --------------------------- | ----------------------------------------- |
+| L1   | 网站密码             | 解锁即可读                  | **Implemented** (`SecurityLevel::Low`)    |
+| L2   | API Key、开发凭证    | 解锁 + 上下文隔离           | **Implemented** (`SecurityLevel::Medium`) |
+| L3   | 生产管理员、SSH 私钥 | 解锁 + 确认 + 限制导出      | **Partial** (有等级字段，无独立密钥边界)  |
+| L4   | 钱包助记词、根私钥   | 独立密钥保护边界 + 严格解锁 | **Unverified** (无独立密钥边界证据)       |
 
 **关键缺口**：`security_level` 字段存在，但高等级是否有独立密钥保护边界、是否能在主 vault 解锁后保持锁定，**需要代码审查确认**。
 
@@ -140,15 +140,15 @@ flowchart TB
 
 ### Action 粒度（目标）
 
-| Action | 语义 | 当前支持 |
-|--------|------|---------|
-| `list_metadata` | 查看元数据 | Partial |
-| `read_secret` | 读取明文 | Connect `Read` |
-| `copy_secret` | 复制 | Partial |
-| `autofill` | 填充 | 浏览器扩展 |
-| `sign` | 私钥签名 | SSH Agent |
-| `export_secret` | 导出 | CLI export |
-| `share_secret` | 共享 | 未实现 |
+| Action          | 语义       | 当前支持       |
+| --------------- | ---------- | -------------- |
+| `list_metadata` | 查看元数据 | Partial        |
+| `read_secret`   | 读取明文   | Connect `Read` |
+| `copy_secret`   | 复制       | Partial        |
+| `autofill`      | 填充       | 浏览器扩展     |
+| `sign`          | 私钥签名   | SSH Agent      |
+| `export_secret` | 导出       | CLI export     |
+| `share_secret`  | 共享       | 未实现         |
 
 **关键规则**：允许 `sign` ≠ 允许 `export_secret`。
 
@@ -169,16 +169,16 @@ pub struct ConnectTokenScope {
 
 ### 契约检查表
 
-| 契约项 | 要求 | 实现状态 | 缺口 |
-|--------|------|---------|------|
-| 调用主体绑定 | Token 绑定明确 Principal | **Partial** | Token 有 scope 但无 principal 字段 |
-| 资源范围 | 限定 Vault/Material | **Implemented** | `identities` + `item_types` |
-| 操作范围 | read/use/fill 区分 | **Partial** | 只有 `Read`，无 `use`/`sign` |
-| 有效期 | 短期 Token | **Unverified** | 需确认 Token 是否有过期机制 |
-| 撤销 | 支持撤销 | **Implemented** | `revoke` 存在 |
-| 交互要求 | 非交互不能绕过确认 | **Partial** | 需确认无人值守模式行为 |
-| 输出最小化 | 返回执行所需结果 | **Implemented** | Connect 只读 |
-| 审计 | 记录成功/拒绝/敏感操作 | **Implemented** | 审计日志存在 |
+| 契约项       | 要求                     | 实现状态        | 缺口                               |
+| ------------ | ------------------------ | --------------- | ---------------------------------- |
+| 调用主体绑定 | Token 绑定明确 Principal | **Partial**     | Token 有 scope 但无 principal 字段 |
+| 资源范围     | 限定 Vault/Material      | **Implemented** | `identities` + `item_types`        |
+| 操作范围     | read/use/fill 区分       | **Partial**     | 只有 `Read`，无 `use`/`sign`       |
+| 有效期       | 短期 Token               | **Unverified**  | 需确认 Token 是否有过期机制        |
+| 撤销         | 支持撤销                 | **Implemented** | `revoke` 存在                      |
+| 交互要求     | 非交互不能绕过确认       | **Partial**     | 需确认无人值守模式行为             |
+| 输出最小化   | 返回执行所需结果         | **Implemented** | Connect 只读                       |
+| 审计         | 记录成功/拒绝/敏感操作   | **Implemented** | 审计日志存在                       |
 
 ---
 
@@ -221,13 +221,13 @@ Code Agent 应按以下步骤执行：
 
 基于初步代码扫描：
 
-| 发现 | 状态 | 影响 |
-|------|------|------|
-| `Principal` 类型在代码中不存在 | Unverified | 架构图与代码不一致 |
-| `SecurityLevel` 枚举存在但无独立密钥边界 | Partial | 分级安全可能只有标签无实质保护 |
-| `ConnectTokenScope` 只有 `Read` verb | Partial | 无法支持 `use` 操作（SSH 签名） |
-| `AutoLockPolicy` 是自动锁定策略非授权策略 | Partial | 授权决策可能分散在各入口 |
-| 无统一 `authorize()` 函数 | Unverified | 各入口可能各自实现授权检查 |
+| 发现                                      | 状态       | 影响                            |
+| ----------------------------------------- | ---------- | ------------------------------- |
+| `Principal` 类型在代码中不存在            | Unverified | 架构图与代码不一致              |
+| `SecurityLevel` 枚举存在但无独立密钥边界  | Partial    | 分级安全可能只有标签无实质保护  |
+| `ConnectTokenScope` 只有 `Read` verb      | Partial    | 无法支持 `use` 操作（SSH 签名） |
+| `AutoLockPolicy` 是自动锁定策略非授权策略 | Partial    | 授权决策可能分散在各入口        |
+| 无统一 `authorize()` 函数                 | Unverified | 各入口可能各自实现授权检查      |
 
 ---
 
@@ -239,6 +239,7 @@ Code Agent 应按以下步骤执行：
 4. **安全测试**：增加授权拒绝、跨上下文访问、敏感导出的测试。
 
 **验收标准**：
+
 - 所有敏感凭证访问路径都有明确的授权检查位置。
 - 文档中的每个概念都能对应到真实代码、明确接口或标记为 Planned/Unverified。
 - 自动化调用方不能仅凭凭证 ID 读取敏感数据。
