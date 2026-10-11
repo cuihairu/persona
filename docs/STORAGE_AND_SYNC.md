@@ -352,6 +352,62 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/
 - 防线只对本机浏览器侧攻击（恶意网页）有效——**不要**把 token 交给浏览
   器扩展或任何网页可达的存储；本机恶意进程本来就在信任边界之外。
 
+## Secrets 自动化（CLI 直读）
+
+Connect API 面向**跨进程**消费者（HTTP 客户端）；`persona secrets` 是
+**同进程** CLI 直读路径，给脚本 / CI / 声明式工具提供明文，覆盖三件套：
+shell plugins（env 注入 + 子进程执行）、Kubernetes Secret 清单渲染、
+Terraform `external` provider 协议。
+
+**引用语法**统一为 `IDENTITY/ITEM/FIELD`（身份按名称、条目按凭据名，
+精确匹配；重名即报错，不猜）：
+
+- `name` / `username` / `url` / `notes` 取元数据，**不解密**；
+- 其余字段按条目类型的字段词汇表取值（`persona secrets` 会把合法字段
+  列在报错里），可选字段未设置即报错——**不静默给空串**；
+- `secret` 是各类型主秘密的别名（Password→`password`、API Key→
+  `api_key`、TOTP→`secret_key`、SSH Key→`private_key`、Server→
+  `password`、Secure Note→`note`、钱包→`private_key`、License→
+  `license_key`）。
+
+每次解密都走与桌面/CLI 展示相同的审计路径（`CredentialDecrypted`），
+触碰自动锁计时。
+
+**四个子命令：**
+
+```bash
+# 1. resolve：脚本基元，一行一值（顺序与参数一致）
+export API_KEY="$(persona secrets resolve work/deploy/api_key)"
+
+# 2. run：把明文注入子进程环境后执行（不进 shell 历史，不落盘）
+persona secrets run --env GITHUB_TOKEN=work/ci/api_key -- gh repo view
+
+# 3. k8s：渲染 Secret 清单（data 走 base64）到 stdout，kubectl apply 消费
+persona secrets k8s --name deploy-secrets --namespace prod \
+  --key password=work/deploy/password --key token=work/ci/api_key \
+  --label app.kubernetes.io/managed-by=persona | kubectl apply -f -
+
+# 4. external：Terraform external provider 协议助手（stdin JSON 查询 →
+#    stdout JSON 明文；native gRPC provider 需 Go SDK，刻意不做）
+```
+
+```hcl
+data "external" "persona" {
+  program = ["persona", "secrets", "external"]
+  query = { db_password = "work/db/password" }
+}
+```
+
+边界（诚实版）：
+
+- **只读**；与 Connect 共用解锁链（无已解锁会话时提示主密码）。CI 里配
+  `PERSONA_WORKSPACE_PATH` + `PERSONA_MASTER_PASSWORD` 即全程非交互（见
+  [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md)）。
+- 明文经 stdout / 环境变量交付——`resolve` 的重定向落盘、CI 日志回显
+  属使用方责任；`run` 的注入只存在于子进程环境。
+- 银行卡类型没有 `secret` 别名（卡号/CVV 无单一"主秘密"），按具体字段
+  引用。
+
 ## 故障后果速查
 
 | 场景                 | 后果                                                                       | 能否补救                                          |

@@ -11,7 +11,15 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
 - [ ] **OS 自动填充集成**（gap #13，未实现）：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello 作为 authenticator）同属此缺口。口径：iOS 需 macOS+Xcode、鸿蒙需 DevEco（与 #24 同因），本机 Linux 无环境——**需对应平台机器才能启动**，先登记
 - [ ] **桌面应用级填充**（gap #12，未实现）：Windows 桌面应用内的填充注入（现状仅浏览器桥）。顺延原因已在 gap 文档登记：需 Windows 桌面会话实机注入验收，本机无 Windows 桌面会话
 - [ ] **Passkey 跨设备同步**（gap #14 已完成项的后续）：软件认证器与桥接审批已落，跨设备同步等 E2EE 同步阶段推进
-- [ ] **Secrets 自动化三件套**（gap #28 部分完成）：K8s secrets、Terraform provider、shell plugins——本地 Connect（127.0.0.1 scoped token）与 CLI 侧已完成，这三件未做
+- [x] **Secrets 自动化三件套**（gap #28，2026-10-11 完成）：`persona
+      secrets` 直读三件套一次落地——`resolve`（脚本基元）/ `run`（env 注入
+      =shell plugins 通用机制）/ `k8s`（Opaque Secret YAML，base64 data，
+      prefix/name label）/ `external`（Terraform external provider 协议助
+      手）。共享 `IDENTITY/ITEM/FIELD` 引用解析（元数据字段不解密、类型
+      字段词汇表、`secret` 主秘密别名、未设可选字段硬报错），解密走
+      CredentialDecrypted 审计链。native gRPC Terraform provider 需 Go
+      SDK 刻意不做（external 协议覆盖）。文档：STORAGE_AND_SYNC「Secrets
+      自动化（CLI 直读）」章 + gap #28 已完成（=）
 - [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
 - [ ] **生成器全局热键**（gap #9 余项，小尾巴低优先）：桌面生成器面板仅应用内
       ⌘G 呼出；OS 级任意应用内呼出未做——Quick Access 全局热键只覆盖检索

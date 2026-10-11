@@ -222,6 +222,12 @@ q to quit, r to reload, ↑/↓ or j/k to navigate
 persona connect token create --label "my CI script"
 persona connect serve
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items
+
+# Secrets automation, CLI direct read (refs are IDENTITY/ITEM/FIELD)
+persona secrets resolve work/deploy/api_key            # one value per line
+persona secrets run --env GH_TOKEN=work/ci/api_key -- gh repo view
+persona secrets k8s --name deploy --key password=work/deploy/password | kubectl apply -f -
+persona secrets external   # Terraform external provider: stdin JSON -> stdout JSON
 ```
 
 ### Export / Import (Compression + Encryption)
