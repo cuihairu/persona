@@ -162,6 +162,13 @@ persona credential attachments --id <UUID>
 persona credential save-attachment --attachment-id <UUID> --output ~/Downloads/recovery-codes.txt
 persona credential remove-attachment --attachment-id <UUID>
 
+# Custom fields (1Password-style): typed fields (text/concealed/date) with
+# optional sections; the whole table is sealed under the item's per-item key.
+# set-fields replaces the entire table; --clear removes all fields
+persona credential set-fields --id <UUID> --field concealed:Bank:PIN=999999 --field text::Recovery=abc123
+persona credential fields --id <UUID>            # concealed values masked
+persona credential fields --id <UUID> --reveal   # confirm, then print values
+
 # Secure Note (1Password-style): the body is stored fully encrypted under the
 # per-item key — unlike the plain notes column on other item types
 persona credential add --identity alice --name "Recovery codes" --credential-type note --note "1111-2222

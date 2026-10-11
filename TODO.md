@@ -1073,7 +1073,21 @@ Desktop (Tauri v2 + React)
       如实报错行不冒充空表）。测试：core 8 单测 + service 4 + 集成命令走查
       （真服务 set/get/移除/非法 UUID/未知类型）+ jest 3（面板）+ mock 补齐。
       core+src-tauri fmt/clippy(-D warnings)/test、jest 702、lint、tsc 绿。
-      **待做**：条目编辑表单（CreateCredentialModal）内的增删改 UI、CLI。
+      **编辑表单增删改 UI 已落（2026-10-12，#5 收口）**：CreateCredentialModal
+      整表编辑器——已有行回显（concealed 打码/揭示）、添加行 id 传空串由后端
+      生成（本地 tmp- id 防两条新行同 id 寻址冲突）、全空行丢弃、label/section
+      trim、dirty 才落库（未动不白写密文）、读取失败不提供编辑（整表替换
+      语义下盲存会清掉读不到的旧表）、无专属 payload 字段类型（银行卡等）
+      也照存、创建模式建条目后补落库（失败 toast 不留弹窗防重复建条目）。
+      jest 5 例（回显/新增/元数据-only 类型/读失败防清表/创建后落库）。
+      **CLI 读写已落（2026-10-12，#5 全收口）**：`persona credential
+      set-fields --id <UUID> --field TYPE:SECTION:LABEL=VALUE`（整表替换；
+      SECTION 可空且不允许含 `:`、首个 `=` 后全归 VALUE、label 非空、新 id
+      core 生成；`--clear` 显式清空，与 --field 互斥、二者皆无报错）+
+      `fields --id <UUID> [--reveal]`（concealed 默认打码，--reveal 先确认
+      再印，沿用 show 的屏显确认语义）。测试：spec 解析纯单测 + arg 互斥
+      守卫 + set/list/clear 全流程走查（3 例）；README 示例补齐。
+      #5 无余项。
 - [x] `pnpm tauri:build` 产出安装包（本环境无 GUI，待人工验收）
       ——5f39538e 测试 fixture 对齐类型定义，清零 23 个 tsc 本底
       （beforeBuildCommand=`pnpm build` 由此解锁，前端验证基线简化为
