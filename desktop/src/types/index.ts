@@ -288,6 +288,17 @@ export interface QuickAccessStatus {
   error: string | null;
 }
 
+/**
+ * 生成器热键状态面（对应 Rust quick_access::GeneratorStatus，语义与
+ * QuickAccessStatus 同构：configured = DB 真值，registered = 真实抢注结果）
+ */
+export interface GeneratorStatus {
+  enabled: boolean;
+  configured_accelerator: string;
+  registered_accelerator: string | null;
+  error: string | null;
+}
+
 /** persona://quick-access-open-credential 事件载荷（浮窗 → 主窗口跨窗跳转） */
 export interface QuickAccessOpenCredential {
   identity_id: string;

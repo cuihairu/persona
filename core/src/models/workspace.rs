@@ -155,6 +155,17 @@ pub struct WorkspaceSettings {
     #[serde(default)]
     pub quick_access_hotkey: Option<String>,
 
+    /// 密码生成器全局热键（gap #9 余项：OS 级任意应用内呼出生成器浮窗）。
+    /// 开关语义与 [`Self::quick_access_enabled`] 同口径：默认**关**（全局
+    /// 热键抢占 OS 组合键，不主动开），设置页显式打开。旧 JSON 缺键回退关
+    #[serde(default)]
+    pub generator_panel_enabled: bool,
+
+    /// 生成器热键的加速键串（同 [`Self::quick_access_hotkey`] 语法）。
+    /// None = 桌面端按平台取默认绑定
+    #[serde(default)]
+    pub generator_panel_hotkey: Option<String>,
+
     /// 账号域绑定（旧 JSON 缺键时为 None = 未绑定任何账号；隐私红线：
     /// 账号功能默认关闭，绑定由用户在设置页显式完成）
     #[serde(default)]
@@ -185,6 +196,8 @@ impl Default for WorkspaceSettings {
             travel_entered_at: None,
             quick_access_enabled: false,
             quick_access_hotkey: None,
+            generator_panel_enabled: false,
+            generator_panel_hotkey: None,
             account: None,
             backup: None,
         }
@@ -421,6 +434,39 @@ mod tests {
             restored.settings.quick_access_hotkey.as_deref(),
             Some("CommandOrControl+Shift+Space")
         );
+    }
+
+    #[test]
+    fn test_generator_panel_hotkey_round_trip() {
+        let mut ws = Workspace::new("/tmp/persona", "main".to_string());
+        // 默认：关（与 Quick Access 同口径——热键抢占 OS 组合键，不主动开）
+        assert!(!ws.settings.generator_panel_enabled);
+        assert!(ws.settings.generator_panel_hotkey.is_none());
+
+        ws.settings.generator_panel_enabled = true;
+        ws.settings.generator_panel_hotkey = Some("CommandOrControl+Shift+G".to_string());
+        let json = serde_json::to_string(&ws).unwrap();
+        let restored: Workspace = serde_json::from_str(&json).unwrap();
+        assert!(restored.settings.generator_panel_enabled);
+        assert_eq!(
+            restored.settings.generator_panel_hotkey.as_deref(),
+            Some("CommandOrControl+Shift+G")
+        );
+
+        // 旧 JSON（缺两个键）回退默认关：以当前默认序列化后剥掉生成器键，
+        // 模拟字段加入前的存量 settings
+        let mut legacy = serde_json::to_value(WorkspaceSettings::default()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("generator_panel_enabled");
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("generator_panel_hotkey");
+        let legacy_settings: WorkspaceSettings = serde_json::from_value(legacy).unwrap();
+        assert!(!legacy_settings.generator_panel_enabled);
+        assert!(legacy_settings.generator_panel_hotkey.is_none());
     }
 
     #[test]

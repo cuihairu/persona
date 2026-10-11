@@ -1025,6 +1025,86 @@ pub async fn quick_access_open<R: tauri::Runtime>(
     Ok(ApiResponse::success(true))
 }
 
+/// 读生成器热键状态面（免解锁，语义同 [`quick_access_status`]）
+#[command]
+pub async fn generator_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<crate::quick_access::GeneratorStatus>, String> {
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let ws = workspace_or_return!(db, workspace_path);
+
+    let runtime = state
+        .quick_access
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Ok(ApiResponse::success(
+        crate::quick_access::GeneratorStatus::snapshot(&runtime, &ws.settings),
+    ))
+}
+
+/// 设置生成器热键开关与绑定（语义同 [`quick_access_set`]：解锁门禁 →
+/// 语法校验 → 落库 → 重注册，抢注失败不算命令失败）
+#[command]
+pub async fn generator_set<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    enabled: bool,
+    accelerator: Option<String>,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<crate::quick_access::GeneratorStatus>, String> {
+    let service_unlocked = {
+        let guard = state.service.lock().await;
+        match guard.as_ref() {
+            Some(service) => service.is_unlocked(),
+            None => return Ok(ApiResponse::error("Service not initialized".to_string())),
+        }
+    };
+    if !service_unlocked {
+        return Ok(ApiResponse::error("Service is locked".to_string()));
+    }
+
+    // 语法校验先行：非法串不落库（否则下次解锁还在反复失败）
+    let normalized = match accelerator.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => {
+            let normalized = crate::quick_access::normalize_accelerator(raw);
+            if let Err(err) = crate::quick_access::parse_accelerator(&normalized) {
+                return Ok(ApiResponse::error(err));
+            }
+            Some(normalized)
+        }
+        // 空串 = 恢复平台默认绑定（存 None，不把默认值钉进 DB）
+        _ => None,
+    };
+
+    let db_path = db_path_or_return!(state);
+    let db = open_db_or_return!(db_path);
+    let workspace_path = workspace_path_for_db_path(&db_path);
+    let repo = WorkspaceRepository::new(db.clone());
+    let mut ws = workspace_or_return!(db, workspace_path);
+    ws.settings.generator_panel_enabled = enabled;
+    ws.settings.generator_panel_hotkey = normalized.clone();
+    ws.touch();
+    ok_or_error_response!(repo.update(&ws).await);
+
+    let status = crate::quick_access::apply_explicit_generator(
+        &app,
+        &state.quick_access,
+        enabled,
+        normalized.as_deref(),
+    );
+    Ok(ApiResponse::success(status))
+}
+
+/// 从托盘菜单直接拉起生成器浮窗（语义同 [`quick_access_open`]）
+#[command]
+pub async fn generator_open<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> std::result::Result<ApiResponse<bool>, String> {
+    crate::quick_access::open_generator(&app);
+    Ok(ApiResponse::success(true))
+}
+
 /// 浮窗里"在 Persona 中打开"：定向通知主窗口切身份 + 选中条目，并把主
 /// 窗口拉到前台。两个窗口各有独立 JS store，跨窗跳转只能走事件（载荷
 /// 见 `quick_access::OpenCredentialPayload`）

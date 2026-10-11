@@ -58,9 +58,25 @@ fn display_session_available() -> bool {
 fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {
     let open_item = MenuItem::with_id(app, "open", "Open Persona", true, None::<&str>)?;
     let quick_item = MenuItem::with_id(app, "quick-access", "Quick Access", true, None::<&str>)?;
+    let generator_item = MenuItem::with_id(
+        app,
+        "generator-panel",
+        "Password Generator",
+        true,
+        None::<&str>,
+    )?;
     let lock_item = MenuItem::with_id(app, "lock", "Lock", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let tray_menu = Menu::with_items(app, &[&open_item, &quick_item, &lock_item, &quit_item])?;
+    let tray_menu = Menu::with_items(
+        app,
+        &[
+            &open_item,
+            &quick_item,
+            &generator_item,
+            &lock_item,
+            &quit_item,
+        ],
+    )?;
 
     TrayIconBuilder::with_id("persona-tray")
         .icon(
@@ -87,10 +103,12 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
             "open" => show_main_window(app),
             // Quick Access 浮窗：热键被占用/未注册时，托盘仍是入口
             "quick-access" => quick_access::open(app),
+            // 生成器浮窗：同理托盘兜底入口
+            "generator-panel" => quick_access::open_generator(app),
             "lock" => {
-                // 收起 Quick Access 浮窗：锁户后浮窗里的检索结果不该继续
-                // 留在屏幕上（数据已在内存，但暴露面不该多留）
-                quick_access::close(app);
+                // 收起两个浮窗：锁户后浮窗里留下的检索结果/刚生成的密码
+                // 不该继续在屏幕上（数据已在内存，但暴露面不该多留）
+                quick_access::close_all(app);
                 // 走事件链（Locked → persona://auto-lock → 前端回解锁屏），
                 // 再兜底清内存主密钥（与回调同一动作，幂等）
                 let service = app.state::<AppState>().service.clone();
@@ -258,12 +276,14 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
                     let _ = window.hide();
                 }
             }
-            // Quick Access 浮窗：失焦即自收尾（1Password 同款行为——浮窗是
-            // "瞬时取用"面，焦点回到别的应用还杵在屏幕中央就是遮挡）。
+            // Quick Access 与生成器浮窗：失焦即自收尾（1Password 同款行为——
+            // 浮窗是"瞬时取用"面，焦点回到别的应用还杵在屏幕中央就是遮挡）。
             // CloseRequested 同样转 hide 而不是真关：浮窗是常驻的（初始
             // visible:false，热键/托盘随时唤起），被 Alt+F4 / cmd-W 真关掉
             // 就再也唤不回来了
-            if window.label() == quick_access::WINDOW_LABEL {
+            if window.label() == quick_access::WINDOW_LABEL
+                || window.label() == quick_access::GENERATOR_WINDOW_LABEL
+            {
                 if let tauri::WindowEvent::Focused(false) = event {
                     let _ = window.hide();
                 }
@@ -297,6 +317,9 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::quick_access_set,
             commands::quick_access_open,
             commands::quick_access_open_credential,
+            commands::generator_status,
+            commands::generator_set,
+            commands::generator_open,
             commands::focus_main_window,
             commands::change_master_password,
             commands::connect_server_start,

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 import QuickAccessPanel from './components/QuickAccessPanel';
+import GeneratorOverlay from './components/GeneratorOverlay';
 import { useTheme } from './hooks/useTheme';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import '@/i18n';
@@ -9,6 +10,9 @@ import './index.css';
 
 /** Quick Access 浮窗的窗口标签（与 tauri.conf.json / quick_access.rs 一致） */
 const QUICK_ACCESS_LABEL = 'quick-access';
+
+/** 生成器浮窗的窗口标签（同上，quick_access.rs 的 GENERATOR_WINDOW_LABEL） */
+const GENERATOR_PANEL_LABEL = 'generator-panel';
 
 /**
  * 读当前窗口标签。**非 Tauri 环境（jest/jsdom）恒返回 null**：
@@ -33,11 +37,17 @@ const QuickAccessRoot: React.FC = () => {
   return <QuickAccessPanel />;
 };
 
+/** 生成器浮窗壳：同 QuickAccessRoot，主题偏好走 localStorage 无需额外同步 */
+const GeneratorPanelRoot: React.FC = () => {
+  useTheme();
+  return <GeneratorOverlay />;
+};
+
 /**
- * 同一份 index.html 服务两个窗口：主窗口（App）与 Quick Access 浮窗
- * （标签 quick-access，OS 级全局热键唤起）。分流在**挂载点**做而不是
- * App 内部早退——浮窗不该把主界面的侧栏/审批弹窗/auto-lock 监控整套
- * 逻辑与 store 副作用都挂一遍。
+ * 同一份 index.html 服务三个窗口：主窗口（App）、Quick Access 检索浮窗
+ * （标签 quick-access）与生成器浮窗（标签 generator-panel），各自由 OS 级
+ * 全局热键唤起。分流在**挂载点**做而不是 App 内部早退——浮窗不该把主界面
+ * 的侧栏/审批弹窗/auto-lock 监控整套逻辑与 store 副作用都挂一遍。
  */
 const Root: React.FC = () => {
   const [label, setLabel] = useState<string | null>(null);
@@ -48,6 +58,9 @@ const Root: React.FC = () => {
 
   if (label === QUICK_ACCESS_LABEL) {
     return <QuickAccessRoot />;
+  }
+  if (label === GENERATOR_PANEL_LABEL) {
+    return <GeneratorPanelRoot />;
   }
   // label 未就绪（首帧）与非 Tauri 环境都先渲染主窗口：浮窗首帧闪一下
   // 主界面比反过来更糟（用户是被热键唤起的一方）

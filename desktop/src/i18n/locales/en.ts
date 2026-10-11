@@ -120,6 +120,24 @@ export default {
       statusNotActive: 'Not active ({{accelerator}}): {{reason}}',
       openNow: 'Open Quick Access now',
     },
+    generatorHotkey: {
+      title: 'Password generator global hotkey',
+      description:
+        'Summon the password generator from any app with a global hotkey — generate and copy strong passwords without switching windows.',
+      enable: 'Enable global hotkey',
+      enableHint: 'When off, no hotkey is registered; the tray menu entry stays available.',
+      hotkey: 'Hotkey',
+      hotkeyHint:
+        'Modifiers first and exactly one main key, e.g. Control+Shift+G (Command+Shift+G and CmdOrCtrl+Shift+G also work). Leave empty for the platform default.',
+      resetDefault: 'Reset to default',
+      saved: 'Generator hotkey settings saved',
+      savedButNotActive: 'Binding saved, but the OS did not accept the hotkey (another app may hold it)',
+      statusUnknown: 'Status unknown',
+      statusDisabled: 'Disabled',
+      statusActive: 'Active: {{accelerator}}',
+      statusNotActive: 'Not active ({{accelerator}}): {{reason}}',
+      openNow: 'Open generator now',
+    },
     updateCheck: {
       title: 'Version update check',
       description:

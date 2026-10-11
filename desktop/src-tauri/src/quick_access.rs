@@ -6,12 +6,15 @@
 //!   会建 X11/平台热键管理器，失败即 Err——走 Builder 链的话这个 Err 会
 //!   让整个 app 构建失败（`.expect` 直接 panic），一个"锦上添花的全局热键
 //!   不该让密码管理器起不来"。headless Linux/无 XWayland 正是这条路径。
-//! - **注册面**（本模块其余部分）：抢注一个加速键，成功才把 `registered`
-//!   记为 Some。**抢注失败不静默**：原因进 `last_error`，设置页如实显示
-//!   （被别的应用/WM 占用、平台不支持都会走到这里）。
-//! - **浮窗面**：`quick-access` 标签的无边框置顶小窗（tauri.conf.json 声明，
-//!   初始 `visible: false`）。热键是 toggle：已显示则隐藏（把焦点还给原
-//!   应用），未显示则 show + focus + emit [`OPENED_EVENT`] 让前端重置搜索态。
+//! - **注册面**（本模块其余部分）：两个独立绑定各自抢注——Quick Access
+//!   检索浮窗（对标矩阵 #22）与密码生成器浮窗（#9 余项）。成功才把
+//!   `registered` 记为 Some。**抢注失败不静默**：原因进 `last_error`，
+//!   设置页如实显示（被别的应用/WM 占用、平台不支持都会走到这里）。
+//!   改绑**只注销自己的旧键**（`unregister` 单个），不动另一个绑定。
+//! - **浮窗面**：`quick-access` / `generator-panel` 两个无边框置顶小窗
+//!   （tauri.conf.json 声明，初始 `visible: false`）。热键是 toggle：
+//!   已显示则隐藏（把焦点还给原应用），未显示则 show + focus + emit
+//!   该窗口的 OPENED 事件让前端重置状态。
 //!
 //! 真值源纪律：绑定与开关的**持久化真值**在 workspace settings
 //! （`quick_access_enabled` / `quick_access_hotkey`，见
@@ -38,9 +41,15 @@ use persona_core::models::WorkspaceSettings;
 /// 浮窗标签（tauri.conf.json 里 windows[1].label 必须一致）
 pub const WINDOW_LABEL: &str = "quick-access";
 
+/// 生成器浮窗标签（tauri.conf.json 里同名 window 的 label 必须一致）
+pub const GENERATOR_WINDOW_LABEL: &str = "generator-panel";
+
 /// 浮窗被热键唤起时向自身 webview 发的事件：前端据此清空上一次查询、
 /// 聚焦输入框（同一进程内多窗口的 wake 通道，不用轮询）
 pub const OPENED_EVENT: &str = "persona://quick-access-opened";
+
+/// 生成器浮窗的唤醒事件（同 [`OPENED_EVENT`] 语义，各自的 webview 各听各的）
+pub const GENERATOR_OPENED_EVENT: &str = "persona://generator-panel-opened";
 
 /// 浮窗里"在 Persona 中打开"→ 主窗口：事件 + 载荷（跨 webview 唯一通道，
 /// 两个窗口各有独立的 JS store，不能靠前端内存互传）
@@ -69,8 +78,13 @@ pub struct QuickAccessRuntime {
     pub registered: Option<String>,
     /// 最近一次抢注失败的原文（设置页展示；成功/关闭时清空）
     pub last_error: Option<String>,
+    /// 生成器热键的抢注结果（语义同 `registered`，槽位独立互不影响）
+    pub generator_registered: Option<String>,
+    /// 生成器热键最近一次抢注失败的原文（语义同 `last_error`）
+    pub generator_last_error: Option<String>,
     /// 插件装载失败原因（headless 会话 / 平台不支持）。与 `last_error` 分开
-    /// 记：一个是"这台机器上全局热键根本起不来"，一个是"键被占用了"
+    /// 记：一个是"这台机器上全局热键根本起不来"，一个是"键被占用了"。
+    /// 装载失败对两个绑定一视同仁（同一个插件实例）
     pub install_error: Option<String>,
 }
 
@@ -93,6 +107,40 @@ impl QuickAccessRuntime {
                 .last_error
                 .clone()
                 .or_else(|| self.install_error.clone()),
+        }
+    }
+}
+
+/// `generator_status` 的返回形状（与 [`QuickAccessStatus`] 同构，字段
+/// snake_case：前端 `GeneratorStatus` 逐字对齐）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratorStatus {
+    /// 用户开关（DB 真值）
+    pub enabled: bool,
+    /// 设置页展示的绑定
+    pub configured_accelerator: String,
+    /// 实际抢注成功的绑定（None = 未生效）
+    pub registered_accelerator: Option<String>,
+    /// 未生效原因（抢注失败或插件装载失败）
+    pub error: Option<String>,
+}
+
+impl GeneratorStatus {
+    /// 从运行态 + 设置收口（与 [`QuickAccessRuntime::snapshot`] 同构）
+    pub fn snapshot(runtime: &QuickAccessRuntime, settings: &WorkspaceSettings) -> Self {
+        let enabled = settings.generator_panel_enabled;
+        let configured = settings
+            .generator_panel_hotkey
+            .clone()
+            .unwrap_or_else(|| default_generator_accelerator().to_string());
+        GeneratorStatus {
+            enabled,
+            configured_accelerator: configured,
+            registered_accelerator: runtime.generator_registered.clone(),
+            error: runtime
+                .generator_last_error
+                .clone()
+                .or_else(|| runtime.install_error.clone()),
         }
     }
 }
@@ -125,6 +173,19 @@ pub const fn default_accelerator() -> &'static str {
     "Control+Shift+Space"
 }
 
+/// 生成器热键的平台默认绑定。macOS 用 ⌘⇧G（与 Finder「前往文件夹」重叠，
+/// 全局注册后生成器优先——介意可在设置页改绑），Win/Linux 用
+/// Ctrl+Shift+G（避开 WM 高频占用键位，与检索浮窗默认键同构好记）
+#[cfg(target_os = "macos")]
+pub const fn default_generator_accelerator() -> &'static str {
+    "Command+Shift+G"
+}
+
+#[cfg(not(target_os = "macos"))]
+pub const fn default_generator_accelerator() -> &'static str {
+    "Control+Shift+G"
+}
+
 /// 校验并解析加速键串（tauri global-shortcut 语法）。空串与空白按"恢复
 /// 平台默认"处理由调用方决定，这里只做语法判定
 pub fn parse_accelerator(raw: &str) -> Result<tauri_plugin_global_shortcut::Shortcut, String> {
@@ -152,18 +213,20 @@ pub fn normalize_accelerator(raw: &str) -> String {
 /// （Rust 侧 `register` 恒为 None）和 Builder 级 handler。此前两路
 /// 都是 None：OS 抢注成功（无冲突报错）、`registered` 也记为 Some，
 /// 但按键事件分发给空 handler，什么都不发生。挂在 Builder 级对
-/// 本应用注册的任何加速键都生效（我们最多注册一个）；只在 `Pressed`
-/// 沿触发——global-hotkey 的 Pressed/Released 都会上报，不过滤会
-/// show 完立刻 hide。
+/// 本应用注册的任何加速键都生效（检索 + 生成器两个绑定）；只在
+/// `Pressed` 沿触发——global-hotkey 的 Pressed/Released 都会上报，
+/// 不过滤会 show 完立刻 hide。哪个键按下由运行态里的注册串反查
+/// （[`dispatch_shortcut`]）：两个绑定抢到同一个加速键只可能有一个
+/// 真注册成功（第二个 register 必撞 OS 冲突），不会双触发。
 pub fn install_plugin<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     if app.try_state::<GlobalShortcut<R>>().is_some() {
         return Ok(());
     }
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
-            .with_handler(|app, _shortcut, event| {
+            .with_handler(|app, shortcut, event| {
                 if event.state == ShortcutState::Pressed {
-                    toggle(app);
+                    dispatch_shortcut(app, shortcut);
                 }
             })
             .build(),
@@ -176,25 +239,48 @@ pub fn install_plugin<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<(), Strin
 enum Registration {
     /// 抢注成功，存的是**配置串**（不是 `Display` 归一化串）
     Registered(String),
-    /// 开关关闭：主动释放全部绑定
+    /// 开关关闭：主动释放本绑定的旧键（不动另一个绑定）
     Disabled,
     /// 没抢上，原因原样带给设置页
     Failed(String),
 }
 
+/// 按窗口标签定位该绑定在运行态里的槽位对（生成器与检索各一组字段）
+fn slots_for<'a>(
+    guard: &'a mut QuickAccessRuntime,
+    window_label: &str,
+) -> (&'a mut Option<String>, &'a mut Option<String>) {
+    if window_label == GENERATOR_WINDOW_LABEL {
+        (
+            &mut guard.generator_registered,
+            &mut guard.generator_last_error,
+        )
+    } else {
+        (&mut guard.registered, &mut guard.last_error)
+    }
+}
+
 /// 同步 OS 抢注状态并返回结果（不改运行态，由调用方统一落盘——避免
-/// "先改状态后抢注失败"留下半截状态）。
+/// "先改状态后抢注失败"留下半截状态）。`previous` 是该绑定当前已注册
+/// 的加速键串：改绑/关闭时**只注销自己这一个旧键**——`unregister_all`
+/// 会把另一个绑定的键一起杀掉，两绑定并存后不能再全局清。
 fn compute_registration<R: tauri::Runtime>(
     app: &AppHandle<R>,
+    window_label: &str,
     accelerator: Option<&str>,
+    previous: Option<String>,
 ) -> Registration {
     // 开关关闭最先判：关闭 = 用户明确不要热键，**不是失败**——浮窗缺失
     // /headless 等环境问题不该给关着的开关记一条错误原因（设置页会把
-    // "已关闭"误渲染成"未生效（原因）"）。能拿到插件就顺手注销全部；
+    // "已关闭"误渲染成"未生效（原因）"）。能拿到插件就只注销自己的旧键；
     // 拿不到（mock / 未装载）说明本来就没注册过，无需清理。
     let Some(raw) = accelerator else {
-        if let Some(plugin) = app.try_state::<GlobalShortcut<R>>() {
-            let _ = plugin.unregister_all();
+        if let (Some(plugin), Some(prev)) =
+            (app.try_state::<GlobalShortcut<R>>(), previous.as_deref())
+        {
+            if let Ok(old) = parse_accelerator(prev) {
+                let _ = plugin.unregister(old);
+            }
         }
         return Registration::Disabled;
     };
@@ -202,7 +288,7 @@ fn compute_registration<R: tauri::Runtime>(
     // 没有窗口）就没什么可绑的，直接短路。顺带避开一个测试隐患——
     // mock runtime 的 run_on_main_thread 只排队不执行，插件 register 里
     // 的阻塞 recv 会把测试挂死。
-    if app.get_webview_window(WINDOW_LABEL).is_none() {
+    if app.get_webview_window(window_label).is_none() {
         return Registration::Failed(ERR_WINDOW_MISSING.to_string());
     }
     // 插件装载失败（headless / 平台不支持）：如实报，不 panic
@@ -211,8 +297,13 @@ fn compute_registration<R: tauri::Runtime>(
             "global shortcut support is unavailable on this session".to_string(),
         );
     };
-    // 先释放旧绑定：改绑时旧键必须先让位，否则新旧两键同时响应
-    let _ = plugin.unregister_all();
+    // 先释放自己绑定的旧键：改绑时旧键必须先让位，否则新旧两键同时响应。
+    // 只动自己的——另一个绑定的键不归这里管
+    if let Some(prev) = previous.as_deref() {
+        if let Ok(old) = parse_accelerator(prev) {
+            let _ = plugin.unregister(old);
+        }
+    }
 
     let shortcut = match parse_accelerator(raw) {
         Ok(shortcut) => shortcut,
@@ -224,64 +315,112 @@ fn compute_registration<R: tauri::Runtime>(
     }
 }
 
-/// 把抢注结果写回运行态
-fn store_registration(runtime: &Mutex<QuickAccessRuntime>, outcome: Registration) {
+/// 把抢注结果写回运行态（按 `window_label` 选边）
+fn store_registration(
+    runtime: &Mutex<QuickAccessRuntime>,
+    window_label: &str,
+    outcome: Registration,
+) {
     let mut guard = runtime.lock().unwrap_or_else(|p| p.into_inner());
+    let (registered, last_error) = slots_for(&mut guard, window_label);
     match outcome {
         Registration::Registered(accelerator) => {
-            guard.registered = Some(accelerator);
-            guard.last_error = None;
+            *registered = Some(accelerator);
+            *last_error = None;
         }
         Registration::Disabled => {
-            guard.registered = None;
-            guard.last_error = None;
+            *registered = None;
+            *last_error = None;
         }
         Registration::Failed(reason) => {
-            tracing::warn!("quick access hotkey registration failed: {reason}");
-            guard.registered = None;
-            guard.last_error = Some(reason);
+            tracing::warn!("hotkey registration failed for {window_label}: {reason}");
+            *registered = None;
+            *last_error = Some(reason);
         }
     }
 }
 
-/// 按 workspace settings 下发绑定（解锁成功后调用；开关关 = 注销全部）。
+/// 读取该绑定当前已注册的加速键串（`compute_registration` 的 `previous`）
+fn current_registration(runtime: &Mutex<QuickAccessRuntime>, window_label: &str) -> Option<String> {
+    let mut guard = runtime.lock().unwrap_or_else(|p| p.into_inner());
+    slots_for(&mut guard, window_label).0.clone()
+}
+
+/// 单个绑定的"开关+绑定串"下发（检索与生成器共用，窗口标签区分）。
+fn apply_binding<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    runtime: &Mutex<QuickAccessRuntime>,
+    window_label: &str,
+    enabled: bool,
+    accelerator: Option<&str>,
+    fallback_default: &str,
+) {
+    let effective = enabled.then(|| {
+        accelerator
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| fallback_default.to_string())
+    });
+    let previous = current_registration(runtime, window_label);
+    let outcome = compute_registration(app, window_label, effective.as_deref(), previous);
+    store_registration(runtime, window_label, outcome);
+}
+
+/// 按 workspace settings 下发两个绑定（解锁成功后调用；开关关 = 注销
+/// 该绑定自己的旧键）。
 ///
 /// DB 是真值源，所以这里不做"是否与当前一致"的短路判断——每次解锁都重放
-/// 一遍，代价是一次 unregister_all + 一次 register，收益是任何一端的
+/// 一遍，代价是至多两次 unregister + 两次 register，收益是任何一端的
 /// 改绑（包括 CLI 手改 settings JSON）都在下次解锁时收敛。
 pub fn apply_from_settings<R: tauri::Runtime>(
     app: &AppHandle<R>,
     runtime: &Mutex<QuickAccessRuntime>,
     settings: &WorkspaceSettings,
 ) {
-    let accelerator = settings.quick_access_enabled.then(|| {
-        settings
-            .quick_access_hotkey
-            .clone()
-            .unwrap_or_else(|| default_accelerator().to_string())
-    });
-    store_registration(runtime, compute_registration(app, accelerator.as_deref()));
+    apply_binding(
+        app,
+        runtime,
+        WINDOW_LABEL,
+        settings.quick_access_enabled,
+        settings.quick_access_hotkey.as_deref(),
+        default_accelerator(),
+    );
+    apply_binding(
+        app,
+        runtime,
+        GENERATOR_WINDOW_LABEL,
+        settings.generator_panel_enabled,
+        settings.generator_panel_hotkey.as_deref(),
+        default_generator_accelerator(),
+    );
 }
 
-/// 显式下发（设置页改开关/改绑后调用，与 [`apply_from_settings`] 同一套
-/// 抢注逻辑，区别只是绑定串由调用方给定而非从 DB 读）
+/// 显式下发检索绑定（设置页改开关/改绑后调用，与 [`apply_from_settings`]
+/// 同一套抢注逻辑，区别只是绑定串由调用方给定而非从 DB 读）
 pub fn apply_explicit<R: tauri::Runtime>(
     app: &AppHandle<R>,
     runtime: &Mutex<QuickAccessRuntime>,
     enabled: bool,
     accelerator: Option<&str>,
 ) -> QuickAccessStatus {
-    let effective = enabled.then(|| {
-        accelerator
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| default_accelerator().to_string())
-    });
-    store_registration(runtime, compute_registration(app, effective.as_deref()));
+    apply_binding(
+        app,
+        runtime,
+        WINDOW_LABEL,
+        enabled,
+        accelerator,
+        default_accelerator(),
+    );
 
     let guard = runtime.lock().unwrap_or_else(|p| p.into_inner());
     QuickAccessStatus {
         enabled,
-        configured_accelerator: effective.unwrap_or_default(),
+        configured_accelerator: if enabled {
+            accelerator
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| default_accelerator().to_string())
+        } else {
+            Default::default()
+        },
         registered_accelerator: guard.registered.clone(),
         error: guard
             .last_error
@@ -290,9 +429,44 @@ pub fn apply_explicit<R: tauri::Runtime>(
     }
 }
 
-/// 热键回调体：toggle 浮窗。抽成独立函数便于托盘、命令与插件回调共用
-pub fn toggle<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+/// 显式下发生成器绑定（语义同 [`apply_explicit`]，窗口与槽位独立）
+pub fn apply_explicit_generator<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    runtime: &Mutex<QuickAccessRuntime>,
+    enabled: bool,
+    accelerator: Option<&str>,
+) -> GeneratorStatus {
+    apply_binding(
+        app,
+        runtime,
+        GENERATOR_WINDOW_LABEL,
+        enabled,
+        accelerator,
+        default_generator_accelerator(),
+    );
+
+    let guard = runtime.lock().unwrap_or_else(|p| p.into_inner());
+    GeneratorStatus {
+        enabled,
+        configured_accelerator: if enabled {
+            accelerator
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| default_generator_accelerator().to_string())
+        } else {
+            Default::default()
+        },
+        registered_accelerator: guard.generator_registered.clone(),
+        error: guard
+            .generator_last_error
+            .clone()
+            .or_else(|| guard.install_error.clone()),
+    }
+}
+
+/// 热键回调体：toggle 浮窗。抽成独立函数便于托盘、命令与插件回调共用。
+/// `window_label`/`opened_event` 成对传（检索与生成器各一套，语义一致）
+fn toggle_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, opened_event: &str) {
+    let Some(window) = app.get_webview_window(window_label) else {
         return;
     };
     match window.is_visible() {
@@ -303,25 +477,93 @@ pub fn toggle<R: tauri::Runtime>(app: &AppHandle<R>) {
             let _ = window.show();
             let _ = window.set_focus();
             // 唤醒事件：前端清查询 + 聚焦输入框（浮窗复用上次结果会很迷惑）
-            let _ = window.emit(OPENED_EVENT, ());
+            let _ = window.emit(opened_event, ());
         }
     }
 }
 
 /// 拉起浮窗（托盘菜单 / 设置页按钮用；已显示时只聚焦）
-pub fn open<R: tauri::Runtime>(app: &AppHandle<R>) {
-    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+fn open_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, opened_event: &str) {
+    let Some(window) = app.get_webview_window(window_label) else {
         return;
     };
     let _ = window.show();
     let _ = window.set_focus();
-    let _ = window.emit(OPENED_EVENT, ());
+    let _ = window.emit(opened_event, ());
 }
 
 /// 收回浮窗（前端 Esc / 失焦自收尾都走它，避免两处各写一遍 hide）
-pub fn close<R: tauri::Runtime>(app: &AppHandle<R>) {
-    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
+fn close_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str) {
+    if let Some(window) = app.get_webview_window(window_label) {
         let _ = window.hide();
+    }
+}
+
+/// 检索浮窗热键回调（toggle）
+pub fn toggle<R: tauri::Runtime>(app: &AppHandle<R>) {
+    toggle_window(app, WINDOW_LABEL, OPENED_EVENT);
+}
+
+/// 生成器浮窗热键回调（toggle）
+pub fn toggle_generator<R: tauri::Runtime>(app: &AppHandle<R>) {
+    toggle_window(app, GENERATOR_WINDOW_LABEL, GENERATOR_OPENED_EVENT);
+}
+
+/// 拉起检索浮窗（托盘菜单 / 设置页按钮用）
+pub fn open<R: tauri::Runtime>(app: &AppHandle<R>) {
+    open_window(app, WINDOW_LABEL, OPENED_EVENT);
+}
+
+/// 拉起生成器浮窗（托盘菜单入口，语义同 [`open`]）
+pub fn open_generator<R: tauri::Runtime>(app: &AppHandle<R>) {
+    open_window(app, GENERATOR_WINDOW_LABEL, GENERATOR_OPENED_EVENT);
+}
+
+/// 收回检索浮窗
+pub fn close<R: tauri::Runtime>(app: &AppHandle<R>) {
+    close_window(app, WINDOW_LABEL);
+}
+
+/// 收回生成器浮窗。生成结果虽非库内密文，但用户可能刚复制走要用的密码，
+/// 锁户时同样不该留在屏幕上（与 [`close`] 同一数据暴露面论据）
+pub fn close_generator<R: tauri::Runtime>(app: &AppHandle<R>) {
+    close_window(app, GENERATOR_WINDOW_LABEL);
+}
+
+/// 锁户时两个浮窗一起收（托盘 lock 菜单 / 前端锁屏动作共用）
+pub fn close_all<R: tauri::Runtime>(app: &AppHandle<R>) {
+    close(app);
+    close_generator(app);
+}
+
+/// Builder 级 handler 的分发体：反查运行态里哪个绑定注册了这枚按键。
+/// 配置串解析失败的槽位跳过（不该发生——注册成功时存的就是合法串）；
+/// 两个绑定都没命中就忽略（理论不可达，防御式不 panic）。
+fn dispatch_shortcut<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    fired: &tauri_plugin_global_shortcut::Shortcut,
+) {
+    use crate::AppState;
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let guard = state.quick_access.lock().unwrap_or_else(|p| p.into_inner());
+    let search_hit = guard
+        .registered
+        .as_deref()
+        .and_then(|raw| parse_accelerator(raw).ok())
+        .is_some_and(|s| s == *fired);
+    let generator_hit = guard
+        .generator_registered
+        .as_deref()
+        .and_then(|raw| parse_accelerator(raw).ok())
+        .is_some_and(|s| s == *fired);
+    drop(guard);
+    if search_hit {
+        toggle(app);
+    }
+    if generator_hit {
+        toggle_generator(app);
     }
 }
 
@@ -402,7 +644,7 @@ mod tests {
         let runtime = QuickAccessRuntime {
             registered: Some("Ctrl+Shift+Space".to_string()),
             last_error: None,
-            install_error: None,
+            ..QuickAccessRuntime::default()
         };
         // 开启态（默认已改关，2026-09-28）：未自定义绑定 → configured 落到
         // 平台默认值
@@ -426,7 +668,7 @@ mod tests {
         let runtime = QuickAccessRuntime {
             registered: None,
             last_error: Some("Another process has already registered".to_string()),
-            install_error: None,
+            ..QuickAccessRuntime::default()
         };
         let settings = WorkspaceSettings {
             quick_access_hotkey: Some("Control+Alt+K".to_string()),
@@ -445,6 +687,7 @@ mod tests {
             registered: None,
             last_error: Some("hotkey taken".to_string()),
             install_error: Some("no display".to_string()),
+            ..QuickAccessRuntime::default()
         };
         let status = runtime.snapshot(&WorkspaceSettings::default());
         assert_eq!(status.error.as_deref(), Some("hotkey taken"));
@@ -456,6 +699,7 @@ mod tests {
             registered: None,
             last_error: None,
             install_error: Some("no display".to_string()),
+            ..QuickAccessRuntime::default()
         };
         let status = runtime.snapshot(&WorkspaceSettings::default());
         assert_eq!(status.error.as_deref(), Some("no display"));
@@ -472,6 +716,91 @@ mod tests {
         // 关掉时 configured 仍展示绑定串（设置页要能看见"当前配置"）
         assert_eq!(status.configured_accelerator, default_accelerator());
         assert!(status.registered_accelerator.is_none());
+    }
+
+    #[test]
+    fn generator_default_accelerator_parses() {
+        assert!(
+            parse_accelerator(default_generator_accelerator()).is_ok(),
+            "生成器默认绑定必须是合法加速键串"
+        );
+    }
+
+    #[test]
+    fn generator_snapshot_maps_settings_to_status() {
+        let runtime = QuickAccessRuntime {
+            generator_registered: Some("Ctrl+Shift+G".to_string()),
+            ..QuickAccessRuntime::default()
+        };
+        let settings = WorkspaceSettings {
+            generator_panel_enabled: true,
+            ..WorkspaceSettings::default()
+        };
+        let status = GeneratorStatus::snapshot(&runtime, &settings);
+        assert!(status.enabled);
+        assert_eq!(
+            status.configured_accelerator,
+            default_generator_accelerator()
+        );
+        assert_eq!(
+            status.registered_accelerator.as_deref(),
+            Some("Ctrl+Shift+G")
+        );
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn generator_snapshot_surfaces_registration_failure() {
+        // 抢注失败：configured 保留 DB 里的绑定，registered 空、error 有值
+        let runtime = QuickAccessRuntime {
+            generator_last_error: Some("Another process has already registered".to_string()),
+            ..QuickAccessRuntime::default()
+        };
+        let settings = WorkspaceSettings {
+            generator_panel_hotkey: Some("Control+Alt+P".to_string()),
+            ..WorkspaceSettings::default()
+        };
+        let status = GeneratorStatus::snapshot(&runtime, &settings);
+        assert_eq!(status.configured_accelerator, "Control+Alt+P");
+        assert!(status.registered_accelerator.is_none());
+        assert_eq!(
+            status.error.as_deref(),
+            Some("Another process has already registered")
+        );
+    }
+
+    #[test]
+    fn generator_snapshot_disabled_shows_configured_only() {
+        let settings = WorkspaceSettings {
+            generator_panel_enabled: false,
+            ..WorkspaceSettings::default()
+        };
+        let status = GeneratorStatus::snapshot(&QuickAccessRuntime::default(), &settings);
+        assert!(!status.enabled);
+        assert_eq!(
+            status.configured_accelerator,
+            default_generator_accelerator()
+        );
+        assert!(status.registered_accelerator.is_none());
+        assert!(status.error.is_none());
+    }
+
+    #[test]
+    fn generator_status_serializes_snake_case_keys() {
+        let json = serde_json::to_value(GeneratorStatus::snapshot(
+            &QuickAccessRuntime::default(),
+            &WorkspaceSettings::default(),
+        ))
+        .unwrap();
+        for key in [
+            "enabled",
+            "configured_accelerator",
+            "registered_accelerator",
+            "error",
+        ] {
+            assert!(json.get(key).is_some(), "missing key: {key}");
+        }
+        assert!(json.get("configuredAccelerator").is_none());
     }
 
     // 抢注路径（compute_registration / apply_*）需要 AppHandle，其"浮窗

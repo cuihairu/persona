@@ -39,6 +39,20 @@
         "skipTaskbar": true,
         "visible": false,
         "focus": true
+      },
+      {
+        "label": "generator-panel",
+        "fullscreen": false,
+        "resizable": false,
+        "title": "Persona Generator",
+        "width": 460,
+        "height": 560,
+        "center": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "focus": true
       }
     ],
     "security": {

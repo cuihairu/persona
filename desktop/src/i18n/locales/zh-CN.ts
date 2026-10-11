@@ -120,6 +120,23 @@ export default {
       statusNotActive: '未生效（{{accelerator}}）：{{reason}}',
       openNow: '现在打开 Quick Access',
     },
+    generatorHotkey: {
+      title: '密码生成器全局热键',
+      description: '在任意应用中按全局热键唤出生成器浮窗，不切窗口就能生成并复制强密码。',
+      enable: '启用全局热键',
+      enableHint: '关闭后不注册任何热键，托盘菜单里的生成器入口仍在。',
+      hotkey: '热键',
+      hotkeyHint:
+        '修饰键在前、只有一个主键，形如 Control+Shift+G（也接受 Command+Shift+G / CmdOrCtrl+Shift+G）。留空 = 用平台默认。',
+      resetDefault: '恢复默认',
+      saved: '生成器热键设置已保存',
+      savedButNotActive: '绑定已保存，但系统未接受该热键（可能被别的应用占用）',
+      statusUnknown: '状态未知',
+      statusDisabled: '已关闭',
+      statusActive: '生效中：{{accelerator}}',
+      statusNotActive: '未生效（{{accelerator}}）：{{reason}}',
+      openNow: '现在打开生成器',
+    },
     updateCheck: {
       title: '版本更新检测',
       description:

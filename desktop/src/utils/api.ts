@@ -115,6 +115,7 @@ import type {
   BackupVersionView,
   BackupServerDeleteOutcome,
   QuickAccessStatus,
+  GeneratorStatus,
   SshAgentStatus,
   SshAgentKey,
   SshKeyInspection,
@@ -890,6 +891,32 @@ class PersonaAPI {
   /** 主窗口拉到前台（浮窗锁定态的"去解锁"出口） */
   async focusMainWindow(): Promise<ApiResponse<boolean>> {
     return invoke('focus_main_window');
+  }
+
+  // -------------------------------------------------------------------------
+  // 生成器热键（gap #9 余项：OS 级呼出生成器浮窗；与 Quick Access 同一套
+  // 门禁/落库/抢注语义，窗口与槽位独立）
+  // -------------------------------------------------------------------------
+
+  /** 读生成器热键状态面（免解锁，同 quickAccessStatus） */
+  async generatorStatus(): Promise<ApiResponse<GeneratorStatus>> {
+    return invoke('generator_status');
+  }
+
+  /**
+   * 改生成器开关/绑定。accelerator 传 null/空串 = 恢复平台默认绑定。
+   * 返回体带 `error` 表示绑定已落库但 OS 抢注失败（设置页如实显示）
+   */
+  async generatorSet(
+    enabled: boolean,
+    accelerator: string | null,
+  ): Promise<ApiResponse<GeneratorStatus>> {
+    return invoke('generator_set', { enabled, accelerator });
+  }
+
+  /** 拉起生成器浮窗（托盘/设置页入口；热键被占用时的兜底） */
+  async generatorOpen(): Promise<ApiResponse<boolean>> {
+    return invoke('generator_open');
   }
 
   // -------------------------------------------------------------------------

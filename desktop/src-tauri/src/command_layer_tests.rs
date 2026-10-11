@@ -9327,6 +9327,231 @@ async fn quick_access_set_disable_clears_registered_state() {
     assert!(runtime.registered.is_none());
 }
 
+// ---------------------------------------------------------------------------
+// 生成器热键（gap #9 余项：与 Quick Access 同一套门禁/落库/抢注语义，
+// 独立窗口与独立槽位——改检索绑定不得动生成器，反之亦然）
+// ---------------------------------------------------------------------------
+
+/// 未初始化的库：status 走"缺 db_path"错误，不 panic（与 quick_access 同因）
+#[tokio::test]
+async fn generator_status_requires_initialized_service() {
+    let app = mock_app();
+    let resp = generator_status(app.state::<AppState>()).await.unwrap();
+    assert!(!resp.success);
+    assert!(resp
+        .error
+        .as_deref()
+        .is_some_and(|e| e.contains("Database path unavailable")));
+}
+
+/// 写配置要过解锁门禁（读免解锁）；锁定态的写入不得落库
+#[tokio::test]
+async fn generator_set_requires_unlocked_service() {
+    let app = mock_app();
+
+    let resp = generator_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+G".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service not initialized"));
+
+    init_service_ok(&app, "master-pw-123").await;
+
+    lock_service(app.state::<AppState>()).await.unwrap();
+    let resp = generator_status(app.state::<AppState>()).await.unwrap();
+    assert!(
+        resp.success,
+        "status must work while locked: {:?}",
+        resp.error
+    );
+
+    let resp = generator_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+G".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert_eq!(resp.error.as_deref(), Some("Service is locked"));
+
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp
+        .data
+        .expect("settings")
+        .generator_panel_hotkey
+        .is_none());
+}
+
+/// 默认关；显式开启后 mock context 没有 generator-panel 浮窗 → 抢注
+/// 必然失败且带原因。**改检索绑定不得动生成器槽位**（独立运行态）
+#[tokio::test]
+async fn generator_status_reports_defaults_and_missing_registration() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    let resp = generator_status(app.state::<AppState>()).await.unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(
+        !status.enabled,
+        "生成器热键默认关闭（与 Quick Access 同口径）"
+    );
+    assert!(status.registered_accelerator.is_none());
+    assert!(status.error.is_none(), "默认关不是失败，不带原因");
+
+    let resp = generator_set(app.handle().clone(), true, None, app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(status.enabled);
+    assert_eq!(
+        status.configured_accelerator,
+        crate::quick_access::default_generator_accelerator()
+    );
+    assert!(status.registered_accelerator.is_none());
+    assert!(status.error.is_some(), "未生效必须带原因，不能静默");
+
+    let state = app.state::<AppState>();
+    let runtime = state.quick_access.lock().unwrap();
+    assert!(runtime.generator_registered.is_none());
+    assert!(runtime.generator_last_error.is_some());
+}
+
+/// 改绑落库并回读；非法加速键不落库；与检索绑定互不影响
+#[tokio::test]
+async fn generator_set_persists_binding_and_rejects_invalid() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    let resp = generator_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+G".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert_eq!(status.configured_accelerator, "Control+Alt+G");
+
+    // 落库回读
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.data
+            .expect("settings")
+            .generator_panel_hotkey
+            .as_deref(),
+        Some("Control+Alt+G")
+    );
+
+    // 检索绑定写入后，生成器的 DB 值与运行态槽位都不被带跑
+    let resp = quick_access_set(
+        app.handle().clone(),
+        true,
+        Some("Control+Alt+K".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    let settings = resp.data.expect("settings");
+    assert_eq!(
+        settings.generator_panel_hotkey.as_deref(),
+        Some("Control+Alt+G"),
+        "检索改绑不得动生成器落库值"
+    );
+    assert_eq!(
+        settings.quick_access_hotkey.as_deref(),
+        Some("Control+Alt+K")
+    );
+    let state = app.state::<AppState>();
+    // 锁的作用域止步于块尾：后面还有 await（clippy::await_holding_lock）
+    {
+        let runtime = state.quick_access.lock().unwrap();
+        assert!(runtime.generator_last_error.is_some());
+        assert!(
+            runtime.last_error.is_some(),
+            "两条绑定各自带自己的抢注失败原因"
+        );
+    }
+
+    // 非法串：命令失败且 DB 不动
+    let resp = generator_set(
+        app.handle().clone(),
+        true,
+        Some("Ctrl+".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.data
+            .expect("settings")
+            .generator_panel_hotkey
+            .as_deref(),
+        Some("Control+Alt+G"),
+        "非法加速键不得覆盖已落库的绑定"
+    );
+}
+
+/// 关开关 + 空串恢复默认：hotkey 存回 None（不把默认值钉进 DB）
+#[tokio::test]
+async fn generator_set_disable_and_reset_default() {
+    let app = mock_app();
+    init_service_ok(&app, "master-pw-123").await;
+
+    generator_set(
+        app.handle().clone(),
+        false,
+        Some("Control+Alt+G".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let resp = generator_set(
+        app.handle().clone(),
+        true,
+        Some("   ".to_string()),
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let status = resp.data.expect("status present");
+    assert!(status.enabled);
+    assert_eq!(
+        status.configured_accelerator,
+        crate::quick_access::default_generator_accelerator()
+    );
+
+    let resp = get_workspace_settings(app.state::<AppState>())
+        .await
+        .unwrap();
+    let settings = resp.data.expect("settings");
+    assert!(settings.generator_panel_enabled);
+    assert!(settings.generator_panel_hotkey.is_none());
+}
+
 /// 跨窗跳转的入参校验：非法 UUID 直接拒（主窗口拿到非法 id 只会静默不选中）
 #[tokio::test]
 async fn quick_access_open_credential_rejects_invalid_uuid() {

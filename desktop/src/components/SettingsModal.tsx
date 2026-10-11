@@ -24,6 +24,7 @@ import TravelPassphraseModal from './TravelPassphraseModal';
 import ConnectAutomationSection from './ConnectAutomationSection';
 import AccountSection from './AccountSection';
 import QuickAccessSection from './QuickAccessSection';
+import GeneratorHotkeySection from './GeneratorHotkeySection';
 import UpdateCheckSection from './UpdateCheckSection';
 import BackupSection from './BackupSection';
 import DataLossWarning from './DataLossWarning';
@@ -1266,6 +1267,10 @@ const GeneralPane: React.FC<{
 
       <section className="mb-5">
         <QuickAccessSection />
+      </section>
+
+      <section className="mb-5">
+        <GeneratorHotkeySection />
       </section>
 
       <section className="mb-5">
