@@ -13,6 +13,9 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
 - [ ] **Passkey 跨设备同步**（gap #14 已完成项的后续）：软件认证器与桥接审批已落，跨设备同步等 E2EE 同步阶段推进
 - [ ] **Secrets 自动化三件套**（gap #28 部分完成）：K8s secrets、Terraform provider、shell plugins——本地 Connect（127.0.0.1 scoped token）与 CLI 侧已完成，这三件未做
 - [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
+- [ ] **生成器全局热键**（gap #9 余项，小尾巴低优先）：桌面生成器面板仅应用内
+      ⌘G 呼出；OS 级任意应用内呼出未做——Quick Access 全局热键只覆盖检索
+      浮窗（#22），不含生成器面板。随 Quick Access 体系顺带
 
 依赖迁移批（2026-10-11 用户拍板：RustCrypto 0.10→0.11 先行，每迁移一 PR、
 CI 绿才合。**2026-10-11 结算：6 项已全部合入 main**，但合并级联把
