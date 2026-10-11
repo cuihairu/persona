@@ -11,7 +11,7 @@
     "clean": "rimraf .vitepress/dist .vitepress/cache"
   },
   "devDependencies": {
-    "mermaid": "^12.0.0",
+    "mermaid": "^12.1.0",
     "rimraf": "^6.0.1",
     "vitepress": "^1.6.4",
     "vue": "^3.5.38"
