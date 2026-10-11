@@ -7,6 +7,7 @@ import type {
   Credential,
   CredentialData,
   CredentialType,
+  CustomField,
   SecurityLevel,
   CredentialDataRequest,
 } from '@/types';
@@ -149,10 +150,24 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
   // 补载期间禁提交，避免拿空 payload 覆盖既有密文
   const [hydrating, setHydrating] = useState(false);
 
+  // 自定义字段（gap #5 余项）：编辑表单里的增删改。整表读写——新行 id 传
+  // 空串由后端生成；dirty 才落库，未动过的表不白写一轮密文
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customFieldsError, setCustomFieldsError] = useState<string | null>(null);
+  const [customFieldsDirty, setCustomFieldsDirty] = useState(false);
+  const [revealedFieldIds, setRevealedFieldIds] = useState<Set<string>>(new Set());
+
   // 打开时初始化表单：编辑模式预填（payload 缺失字段留空），创建模式清残留
   useEffect(() => {
     if (!isOpen) return;
     retryRef.current = false;
+    // 自定义字段整表读取（sealed blob 需解锁）。读取失败不提供编辑：
+    // 保存是整表替换语义，读不到旧表就盲存会清掉既有字段
+    let fieldsCancelled = false;
+    setCustomFields([]);
+    setCustomFieldsError(null);
+    setCustomFieldsDirty(false);
+    setRevealedFieldIds(new Set());
     if (editCredential) {
       const c = editCredential.credential;
       const payload = editCredential.data;
@@ -171,6 +186,14 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         tags: c.tags.join(', '),
       });
       setCredentialData(payload?.data ? { ...payload.data } : {});
+      void personaAPI.getCredentialCustomFields(c.id).then((res) => {
+        if (fieldsCancelled) return;
+        if (res.success && res.data) {
+          setCustomFields(res.data);
+        } else {
+          setCustomFieldsError(res.error || t('detail.customFieldsLoadFailed'));
+        }
+      });
       if (!payload) {
         // 兜底补载：调用方没带 payload（详情页数据尚未加载/加载失败重试入口）
         let cancelled = false;
@@ -184,6 +207,7 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         });
         return () => {
           cancelled = true;
+          fieldsCancelled = true;
         };
       }
     } else {
@@ -202,6 +226,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         security_questions: [],
       });
     }
+    return () => {
+      fieldsCancelled = true;
+    };
   }, [isOpen, editCredential]);
 
   const [showPassword, setShowPassword] = useState(false);
@@ -228,6 +255,60 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     if (password) {
       setCredentialData({ ...credentialData, password });
     }
+  };
+
+  // ---- 自定义字段（整表读写）----
+  // 新行给 tmp- 前缀的本地 id（两条新行并存也要各自可寻址）；落库时映射回
+  // 空串，由后端 set_credential_custom_fields 生成正式 uuid。已有行的 uuid
+  // 不可能与 tmp- 撞
+  const tmpFieldIdRef = useRef(0);
+  const newFieldRow = (): CustomField => {
+    tmpFieldIdRef.current += 1;
+    return { id: `tmp-${tmpFieldIdRef.current}`, label: '', value: '', type: 'text', section: null };
+  };
+
+  const updateCustomField = (id: string, patch: Partial<CustomField>) => {
+    setCustomFields((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+    setCustomFieldsDirty(true);
+  };
+
+  const addCustomField = () => {
+    setCustomFields((prev) => [...prev, newFieldRow()]);
+    setCustomFieldsDirty(true);
+  };
+
+  const removeCustomField = (id: string) => {
+    setCustomFields((prev) => prev.filter((f) => f.id !== id));
+    setCustomFieldsDirty(true);
+  };
+
+  const toggleRevealField = (id: string) => {
+    setRevealedFieldIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /** 整表落库。全空行丢弃；成功后以服务端回传（含生成 id）重建本地表 */
+  const persistCustomFields = async (credentialId: string): Promise<boolean> => {
+    const rows = customFields
+      .map((f) => ({
+        ...f,
+        label: f.label.trim(),
+        section: (f.section ?? '').trim() || null,
+      }))
+      .filter((f) => f.label !== '' || f.value !== '')
+      .map((f) => (f.id.startsWith('tmp-') ? { ...f, id: '' } : f));
+    const res = await personaAPI.setCredentialCustomFields(credentialId, rows);
+    if (res.success && res.data) {
+      setCustomFields(res.data);
+      setCustomFieldsDirty(false);
+      return true;
+    }
+    toast.error(res.error || t('credForm.customFieldsSaveFailed'));
+    return false;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -393,6 +474,8 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         'ApiKey',
       ];
       if (!typesWithPayloadFields.includes(formData.credential_type)) {
+        // 自定义字段挂在 metadata 上，与 payload 无关：无专属字段类型也照存
+        if (customFieldsDirty && !(await persistCustomFields(credentialId))) return;
         onClose();
         return;
       }
@@ -419,7 +502,11 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
         return false;
       };
       // payload 保存失败保持弹窗打开（元数据已存，用户可重试密文部分）
-      if (await doSavePayload()) onClose();
+      if (await doSavePayload()) {
+        // 字段排在 payload 之后：失败同样保持弹窗可重试（payload 幂等重封）
+        if (customFieldsDirty && !(await persistCustomFields(credentialId))) return;
+        onClose();
+      }
       return;
     }
 
@@ -439,6 +526,9 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
     });
 
     if (result) {
+      // 条目已创建：字段落库失败不回滚也不留弹窗（重提交会重复建条目），
+      // toast 已报错，条目可从详情/编辑入口再补
+      if (customFieldsDirty) await persistCustomFields(result.id);
       onClose();
     }
   };
@@ -1173,6 +1263,125 @@ const CreateCredentialModal: React.FC<CreateCredentialModalProps> = ({
             />
             <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('settings.commaSeparated')}</p>
           </div>
+
+          {/* 自定义字段编辑（gap #5 余项）：整表替换语义。读取失败不渲染编辑器
+              ——读不到旧表还盲存会把既有字段清掉 */}
+          {customFieldsError ? (
+            <p className="text-xs text-red-500 dark:text-red-400" data-testid="custom-fields-editor-error">
+              {customFieldsError}
+            </p>
+          ) : (
+            <div data-testid="custom-fields-editor">
+              <div className="flex items-center justify-between mb-2">
+                <label className="label">{t('credForm.customFields')}</label>
+                <button
+                  type="button"
+                  onClick={addCustomField}
+                  className="btn-secondary text-xs"
+                  data-testid="custom-field-add"
+                >
+                  {t('credForm.addCustomField')}
+                </button>
+              </div>
+              {customFields.length === 0 ? (
+                <p className="text-xs text-gray-500 dark:text-gray-400" data-testid="custom-fields-empty">
+                  {t('credForm.noCustomFields')}
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {customFields.map((field, index) => {
+                    const revealed = revealedFieldIds.has(field.id);
+                    const rowId = field.id || `row-${index}`;
+                    return (
+                      <li
+                        key={rowId}
+                        className="bg-gray-50 dark:bg-gray-800 rounded p-2 space-y-2"
+                        data-testid="custom-field-row"
+                      >
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={field.label}
+                            onChange={(e) => updateCustomField(field.id, { label: e.target.value })}
+                            className="input flex-1"
+                            placeholder={t('credForm.customFieldLabelPlaceholder')}
+                            data-testid={`custom-field-label-${rowId}`}
+                          />
+                          <select
+                            value={field.type}
+                            onChange={(e) =>
+                              updateCustomField(field.id, {
+                                type: e.target.value as CustomField['type'],
+                              })
+                            }
+                            className="input w-auto"
+                            aria-label={t('detail.customFields')}
+                            data-testid={`custom-field-type-${rowId}`}
+                          >
+                            <option value="text">{t('credForm.fieldTypeText')}</option>
+                            <option value="concealed">{t('credForm.fieldTypeConcealed')}</option>
+                            <option value="date">{t('credForm.fieldTypeDate')}</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => removeCustomField(field.id)}
+                            className="p-2 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                            aria-label={t('credForm.customFieldRemove')}
+                            title={t('credForm.customFieldRemove')}
+                            data-testid={`custom-field-remove-${rowId}`}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <div className="flex gap-2 items-center">
+                          <div className="relative flex-1">
+                            <input
+                              type={
+                                field.type === 'concealed' && !revealed
+                                  ? 'password'
+                                  : field.type === 'date'
+                                    ? 'date'
+                                    : 'text'
+                              }
+                              value={field.value}
+                              onChange={(e) => updateCustomField(field.id, { value: e.target.value })}
+                              className={field.type === 'concealed' ? 'input pr-10' : 'input'}
+                              placeholder={t('credForm.customFieldValuePlaceholder')}
+                              data-testid={`custom-field-value-${rowId}`}
+                            />
+                            {field.type === 'concealed' && (
+                              <button
+                                type="button"
+                                onClick={() => toggleRevealField(field.id)}
+                                className="absolute inset-y-0 right-0 pr-3 flex items-center"
+                                aria-label={revealed ? t('detail.hideFieldValue') : t('detail.showFieldValue')}
+                                title={revealed ? t('detail.hideFieldValue') : t('detail.showFieldValue')}
+                                data-testid={`custom-field-reveal-${rowId}`}
+                              >
+                                {revealed ? (
+                                  <EyeSlashIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                                ) : (
+                                  <EyeIcon className="h-4 w-4 text-gray-400 dark:text-gray-500" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <input
+                          type="text"
+                          value={field.section ?? ''}
+                          onChange={(e) => updateCustomField(field.id, { section: e.target.value })}
+                          className="input text-xs"
+                          placeholder={t('credForm.customFieldSectionPlaceholder')}
+                          data-testid={`custom-field-section-${rowId}`}
+                        />
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="flex gap-3 pt-4">
             <button
