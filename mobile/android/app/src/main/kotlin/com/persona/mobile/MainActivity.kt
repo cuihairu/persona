@@ -155,9 +155,10 @@ class MainActivity : AppCompatActivity() {
             val item = items.optJSONObject(i) ?: continue
             val row = layoutInflater.inflate(R.layout.credential_row, credentialList, false)
             row.findViewById<TextView>(R.id.row_name).text = item.optString("name")
+            // org.json 对 JSON null 的 optString 会返回字面 "null"，按空处理
             val meta = listOf(
-                item.optString("username", "").ifBlank { null },
-                item.optString("credential_type", "").ifBlank { null },
+                item.optString("username", "").takeIf { it.isNotBlank() && it != "null" },
+                item.optString("credential_type", "").takeIf { it.isNotBlank() && it != "null" },
             ).filterNotNull().joinToString(" · ")
             row.findViewById<TextView>(R.id.row_meta).text = meta
             credentialList.addView(row)

@@ -7,6 +7,11 @@
 //! 即归还（`CString::from_raw`），不泄漏。
 //!
 //! 符号命名对应：`Java_com_persona_mobile_PersonaBridge_<method>`。
+//!
+//! 导出签名铁律（2026-10-11 实机走查实锤，String 出参曾恒为 null——NPE 崩溃
+//! aa771f4 只治了症状）：`JNIEnv` 是 `#[repr(transparent)]` 裸指针包装，
+//! 导出函数必须**按值**收 `JNIEnv`（写 `&mut JNIEnv` 会变成双重间接，一切
+//! 经 env 的出参都废）；内部 helper 收 `&mut JNIEnv` 引用则没问题。
 
 use std::ffi::{CStr, CString};
 
@@ -79,7 +84,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaInit(
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaVersion(
-    env: &mut JNIEnv,
+    env: JNIEnv,
     _class: JClass,
 ) -> jstring {
     // SAFETY: persona_version 返回本库分配的 CString 指针，取值后立即归还。
@@ -97,44 +102,44 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaVersion(
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceInit(
-    env: &mut JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     db_path: JString,
     master_password: JString,
 ) -> jstring {
     let (db_path, master_password) = match (
-        jstring_to_cstring(env, &db_path),
-        jstring_to_cstring(env, &master_password),
+        jstring_to_cstring(&mut env, &db_path),
+        jstring_to_cstring(&mut env, &master_password),
     ) {
         (Ok(a), Ok(b)) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return arg_error(env, &e),
+        (Err(e), _) | (_, Err(e)) => return arg_error(&mut env, &e),
     };
     // SAFETY: 两个 CString 保活到调用结束，指针在 persona_service_init 内有效。
     let result = unsafe { super::persona_service_init(db_path.as_ptr(), master_password.as_ptr()) };
-    result_to_json(env, result)
+    result_to_json(&mut env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceUnlock(
-    env: &mut JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     master_password: JString,
 ) -> jstring {
-    let master_password = match jstring_to_cstring(env, &master_password) {
+    let master_password = match jstring_to_cstring(&mut env, &master_password) {
         Ok(s) => s,
-        Err(e) => return arg_error(env, &e),
+        Err(e) => return arg_error(&mut env, &e),
     };
     // SAFETY: CString 保活到调用结束，指针在 persona_service_unlock 内有效。
     let result = unsafe { super::persona_service_unlock(master_password.as_ptr()) };
-    result_to_json(env, result)
+    result_to_json(&mut env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceLock(
-    env: &mut JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    result_to_json(env, super::persona_service_lock())
+    result_to_json(&mut env, super::persona_service_lock())
 }
 
 #[no_mangle]
@@ -147,10 +152,10 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceIsUnl
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaShutdown(
-    env: &mut JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
 ) -> jstring {
-    result_to_json(env, super::persona_shutdown())
+    result_to_json(&mut env, super::persona_shutdown())
 }
 
 // ---------------------------------------------------------------------------
@@ -180,11 +185,11 @@ fn business_json_to_jstring(env: &mut JNIEnv, json: *mut std::os::raw::c_char) -
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSearch(
-    env: &mut JNIEnv,
+    mut env: JNIEnv,
     _class: JClass,
     query: JString,
 ) -> jstring {
-    let query = match jstring_to_cstring(env, &query) {
+    let query = match jstring_to_cstring(&mut env, &query) {
         Ok(s) => s,
         Err(e) => {
             // 入参非法也走 business 包络语义，Kotlin 只需解析一种业务格式
@@ -200,5 +205,5 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSe
     };
     // SAFETY: CString 保活到调用结束，指针在 persona_credential_search 内有效。
     let json = unsafe { super::business::persona_credential_search(query.as_ptr()) };
-    business_json_to_jstring(env, json)
+    business_json_to_jstring(&mut env, json)
 }
