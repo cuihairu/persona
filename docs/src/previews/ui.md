@@ -42,9 +42,22 @@ UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
 ![Android 移动端主界面](/ui/mobile-android-home.png)
 
 **Android 主界面（空库状态）**：原生 Kotlin + JNI 桥（`mobile/rust`）真实
-构建在模拟器运行的截图——顶部应用栏、保险库列表区（空态提示）、底部
-凭据 / 工具 / 设置三 tab 导航。截图时库为全新初始化状态；有数据的列表、
-工具与设置 tab 视图仍待补（见下方缺口清单）。
+构建在模拟器运行的截图——主密码输入与初始化 / 解锁按钮。
+
+以下三张为解锁后业务区的三 tab（2026-10-11 实机走查，种子库 4 条凭据）：
+
+![Android 数据 tab](/ui/mobile-android-data.png)
+
+**数据 tab**：经业务 FFI（`persona_credential_search`）取回的凭据列表，
+只展示元数据（名称 + 用户名 / 类型）、不解密负载。
+
+![Android 工具 tab](/ui/mobile-android-tools.png)
+
+**工具 tab**：重新加载凭据列表、锁定会话。
+
+![Android 设置 tab](/ui/mobile-android-settings.png)
+
+**设置 tab**：桥状态、桥版本、保险库路径、凭据数。
 
 ## 原型缺口清单
 
@@ -61,6 +74,6 @@ UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
 | 快速访问                       | 全局热键唤起的速查面板                                                                     |
 | CLI 终端会话                   | persona CLI 关键命令的终端记录                                                             |
 | 浏览器扩展                     | 填充建议弹层与身份切换                                                                     |
-| 移动端（Android / iOS / 鸿蒙） | Android 空库主界面已入（上方）；有数据列表、工具 / 设置 tab 仍缺；iOS 与鸿蒙原生界面均暂缺 |
+| 移动端（Android / iOS / 鸿蒙） | Android 空库主界面与数据 / 工具 / 设置三 tab 已入（上方）；iOS 与鸿蒙原生界面均暂缺（本机无对应构建环境） |
 
 素材的入库出处、变更史与交付规范见[素材盘点](/previews/assets)。

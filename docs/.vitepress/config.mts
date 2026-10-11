@@ -62,6 +62,7 @@ const sidebar = [
   {
     text: "系统设计",
     items: [
+      { text: "产品定位与总体架构", link: "/design/product" },
       { text: "整体架构", link: "/design/architecture" },
       { text: "安全设计", link: "/design/security" },
     ],

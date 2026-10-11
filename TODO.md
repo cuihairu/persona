@@ -20,15 +20,30 @@ Doc site（2026-10-03 插队：首页走马灯）
       `cargo ndk -t x86_64` 重编（NDK r27c）+ abiFilters 临时放开重打包
       后桥连通、真实主界面渲染。previews/ui.md 移动端行同步（Android
       空库主界面已入；有数据列表、工具/设置 tab、iOS/鸿蒙仍缺）
-  - [ ] 移动端原型图扩展：有数据列表 / 工具 / 设置 tab 截图；iOS 与鸿蒙
-        原生界面。本次出图受阻记录：宿主机过载（load 60+，双模拟器并发）
-        下 systemUI 反复 ANR、app 进程被反复杀——出图脚本本身可行
-        （am start → uiautomator dump 拿坐标 → input tap/text → screencap），
-        低负载时段重跑即可
+  - [x] 移动端原型图扩展（2026-10-11 完成）：数据 / 工具 / 设置三 tab
+        截图已入 docs（`mobile-android-{data,tools,settings}.png`，
+        previews/ui.md 移动端行同步）。真正的卡点不是出图流程而是**业务 UI
+        此前根本不存在**（activity_main 只有锁屏），本轮补齐：Kotlin 三 tab
+        + 业务 FFI 列表渲染（`parseBusiness` 解 `{"ok":bool,"error","data"}`
+        包络），种子库 4 条凭据全渲染、元数据 "null" 过滤。出图实锤三个坑：
+        ① `abiFilters` 单 arm64 在 x86_64 模拟器 UnsatisfiedLinkError——临时
+        放开双 ABI 出图（不提交，已回滚）；② JNI 导出必须**按值**收
+        `JNIEnv`（jni 0.21 `#[repr(transparent)]` 裸指针包装，写 `&mut JNIEnv`
+        双重间接 → 一切 String 出参恒 null，即 10-03 NPE 崩溃真因，aa771f4
+        只治症状）——6 处导出签名已改按值 + 模块文档记铁律；③ 首装
+        `databases/` 父目录不存在时 SQLite `mode=rwc` 只建文件不建目录，
+        Kotlin 侧先 `mkdirs()`。iOS 与鸿蒙原生界面仍缺（本机无 Xcode/鸿蒙
+        SDK 构建环境，如实注记）
   - [x] Android 初始化崩溃修复（2026-10-03 走查发现，crash buffer 实锤；
-        2026-10-04 落地）：`personaServiceInit` 失败路径曾返回 null（Rust
-        侧 panic 被吞成 null 指针）→ Kotlin `parseResult(json: String)`
-        非空参数收 null → NPE 直接崩溃退桌面。修法两端已落：
+        2026-10-04 落地，2026-10-11 真因补实）：`personaServiceInit` 曾返回
+        null → Kotlin `parseResult(json: String)` 非空参数收 null → NPE
+        直接崩溃退桌面。当时归因为「panic 被吞成 null」，只治了症状——
+        **真因（2026-10-11 出图走查实锤）**：JNI 导出函数签名写成
+        `env: &mut JNIEnv`，而 jni 0.21 的 `JNIEnv` 是 `#[repr(transparent)]`
+        裸指针包装，多一层间接后一切经 env 的调用（`new_string` 等）全部
+        失效 → **所有 String 出参恒为 null**（int/bool 走 jni 直接类型，
+        故不受影响，当时掩盖了问题）。6 处导出签名改**按值**收 `JNIEnv`，
+        铁律记入 `jni_android.rs` 模块文档。修法两端已落：
         Rust 侧 `mobile/rust/src/lib.rs` 生命周期入口（init/unlock/lock/
         is_unlocked/configure_sync/shutdown）统一经 `guard_result`/
         `guard_bool`（catch_unwind → 错误结果），`jni_android.rs` 的
