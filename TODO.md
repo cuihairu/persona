@@ -14,31 +14,42 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
 - [ ] **Secrets 自动化三件套**（gap #28 部分完成）：K8s secrets、Terraform provider、shell plugins——本地 Connect（127.0.0.1 scoped token）与 CLI 侧已完成，这三件未做
 - [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
 
-依赖迁移批（2026-10-11 用户拍板：RustCrypto 0.10→0.11 先行，每迁移一 PR、CI 绿才合；bincode 冻结等 wire 兼容面另行拍板）
+依赖迁移批（2026-10-11 用户拍板：RustCrypto 0.10→0.11 先行，每迁移一 PR、
+CI 绿才合。**2026-10-11 结算：6 项已全部合入 main**，但合并级联把
+cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0）
 
-- [ ] #65 + #67 sha1 + sha2（digest/hmac 全家升级，一次迁移覆盖两个 PR）
-      ——**断点定位（2026-10-11）**：workspace manifest 早已是
-      `sha2 = "0.11"` / `sha1 = "0.11"` / `hmac = "0.13"`（`b38efa7`
-      「Rust digest 0.11 生态迁移」的落地 + `2278381` 回退后的残留态），
-      真正留在 0.10 系的是 **cli/Cargo.toml 三条直连**（`hmac = "0.12"`、
-      `sha1 = "0.10"`、`sha2 = "0.10"`）。dependabot 单升 sha2 到 0.11 而
-      hmac 留 0.12 → `Hmac<Sha256>` 的 `CoreProxy` trait bound 全断
-      （sha2 0.11 实现的是 digest 0.11 的 CoreProxy，hmac 0.12 只认识
-      digest 0.10）。迁法：cli 三条改 `workspace = true` + 修
-      `cli/src/commands/bridge.rs` 的 Hmac 构造与调用。lock 里
+- [x] #65 + #67 sha1 + sha2（digest/hmac 全家升级，一次迁移覆盖两个 PR）
+      ——经 **#72（`dd4ec66` migrate cli to digest 0.11 ecosystem）** 落地：
+      cli 三条改 `workspace = true` + `bridge.rs` 补 `KeyInit` import
+      （hmac 0.13 把 `new_from_slice` 挪进了 trait），本地 442+19 测试绿；
+      随后 dependabot #67/#65 级联合入（`29a4bbc`/`83274ae`）。lock 里
       sha2/sha1 0.10.x 与 hmac 0.12.x 保留给 bip32 / pbkdf2 0.12 /
       rfc6979 / bs58 等上游，属正常双版本共存，不清
-- [ ] #62 dtolnay/rust-toolchain 1.97.0 → 1.120.0——上面两项落地后整体
-      对齐六处钉版（现 CI 实际钉 1.97.0 六处，见 memory
-      ci-stable-vs-pinned-toolchain；dependabot 只改一处会错位）
-- [ ] #69 dev-deps 组 ×8——随上两项顺带诊断（Desktop + Web 构建断）
-- [ ] **#61 bip32 0.5→0.6 ——暂缓**（用户拍板冻结）：属钱包轨（优先级策略
-      暂停中），且 bip32 0.6 编译失败，需 secp256k1 0.31+ 的适配验证
-      （secp256k1 #66 已合入，先决条件已就绪）
-- [ ] **#59 bincode 1.3→3.0 ——暂缓**（用户拍板冻结，wire 兼容面单独拍板）：
-      bincode 承载 E2EE 同步 wire format，`SyncItemSnapshot` 追加字段连
-      `#[serde(default)]` 都不容忍（见下方 bincode 实证条目），改 wire
-      是产品级决策，本批不动
+- [x] #62 dtolnay/rust-toolchain 1.97.0 → 1.120.0（`a5563d0`）——六处钉版
+      已整体对齐（ci.yml ×4 + desktop-build.yml ×2，见 memory
+      ci-stable-vs-pinned-toolchain 的错位教训，本次六处一次改齐）
+- [x] #69 dev-deps 组 ×8（`e797264`）——TS7 / ESLint10 / Vite8 三条 major
+      打包合入，Desktop + Web job 待 main 修复后观察
+- [x] #61 bip32 0.5→0.6（`64c9427`）——**原拍板冻结（钱包轨），被并批合入**；
+      secp256k1 0.31 先决条件在（#66 已合），钱包编译适配是否随合并带上
+      待 main 修复后验证
+- [x] #59 bincode 1.3→3.0（`04fb143`）——**原拍板冻结（wire 兼容面单独
+      拍板），被并批合入**；E2EE 同步 wire format 已实际换 3.0，
+      跨版本同步兼容与旧档读取待验证（实证背景见下方 bincode 条目）
+
+- [x] **P0：main 红——已修复**（合并级联三重伤，`31d7999` 实测
+      CI/Docker/Rust 全红；本地 core+server+cli 测试全绿后推 main）：
+      1. **cli/Cargo.toml 重复键**（级联合 #65/#67 rebase 把直连钉版叠在
+         #72 的 workspace=true 上）：`cannot extend value of type string
+         with a dotted key`。→ 删三条直连、保 workspace=true
+      2. **bincode 3.0.0 是无法编译的占位发布**（crates.io 上
+         `compile_error!("https://xkcd.com/2347/")`，发布者是 ghost 账号、
+         未 yank，8 万次下载全坑）：#59 合入即编译死。→ 退回仓库实际
+         在用的 `bincode = "1.3"`（lock 锁 1.3.3；**不是** 2.0.1——
+         真升级属冻结待拍板的 wire 决策）
+      3. **bip32 0.6 默认 feature 不再含 `alloc`**（`DerivationPath` 导出
+         与 `to_string(Prefix)` 都被 cfg 掉；#61 合入即断 wallet 编译）：
+         → workspace dep 加 `features = ["alloc"]`（源码零改动）
 
 Doc site（2026-10-03 插队：首页走马灯）
 
