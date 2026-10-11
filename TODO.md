@@ -26,10 +26,17 @@ cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0�
       sha2/sha1 0.10.x 与 hmac 0.12.x 保留给 bip32 / pbkdf2 0.12 /
       rfc6979 / bs58 等上游，属正常双版本共存，不清
 - [x] #62 dtolnay/rust-toolchain 1.97.0 → 1.120.0（`a5563d0`）——六处钉版
-      已整体对齐（ci.yml ×4 + desktop-build.yml ×2，见 memory
-      ci-stable-vs-pinned-toolchain 的错位教训，本次六处一次改齐）
-- [x] #69 dev-deps 组 ×8（`e797264`）——TS7 / ESLint10 / Vite8 三条 major
-      打包合入，Desktop + Web job 待 main 修复后观察
+      已整体对齐（ci.yml ×4 + desktop-build.yml ×2）。**但 1.120.0 是
+      dependabot 解析 dtolnay tag 错乱出来的幻影版本**（rust-lang dist
+      404，真实最新 stable 是 1.99.0，2026-09-28）——热修中六处重新对齐
+      到 1.99.0，本地 `cargo +1.99.0 check --workspace` 绿后推
+- [x] #69 dev-deps 组 ×8（`e797264`）——实际只有 typescript 5.9.3→7.0.2
+      是 major 跳，其余全是补丁级。**TS7（Go 原生重写）砍掉了 ts-jest
+      依赖的 JS 编译器 API**，扩展 12 套件全挂（桌面 ts-jest 同病）。
+      热修：三处 package.json 退回 `^5.9.3`（lock 同步），#69 其余升级
+      保留；本地扩展 157 测试 + desktop lint/build + website build 全绿
+      - [ ] TS7 迁移（独立工程）：ts-jest 官方路径是装 `@typescript/native`
+            并把 `@typescript/typescript6` alias 给 ts-jest，等真需求再排
 - [x] #61 bip32 0.5→0.6（`64c9427`）——**原拍板冻结（钱包轨），被并批合入**；
       secp256k1 0.31 先决条件在（#66 已合），钱包编译适配是否随合并带上
       待 main 修复后验证
