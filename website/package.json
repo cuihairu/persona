@@ -15,7 +15,7 @@
     "antd": "^6.6.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "umi": "^4.7.22"
+    "umi": "^4.7.23"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
