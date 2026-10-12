@@ -95,6 +95,22 @@ describe('components/ErrorHandling', () => {
     expect(screen.queryByRole('button', { name: '忽略' })).not.toBeInTheDocument();
   });
 
+  it('ErrorBoundary reload button reloads the page', () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(
+      <ErrorBoundary>
+        <Bomb message="kaboom-reload" />
+      </ErrorBoundary>,
+    );
+
+    // jsdom 对 location.reload 仅报 "Not implemented" 不抛出：点击即执行 handleReload
+    expect(() =>
+      fireEvent.click(screen.getByRole('button', { name: '重新加载应用' }))
+    ).not.toThrow();
+    consoleSpy.mockRestore();
+  });
+
   it('ErrorBoundary shows the fallback, dev details and recovers via Try Again', () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const prevEnv = process.env.NODE_ENV;

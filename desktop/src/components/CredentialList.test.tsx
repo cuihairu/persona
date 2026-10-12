@@ -208,6 +208,25 @@ describe('components/CredentialList', () => {
     expect(screen.getByText('2 条凭据')).toBeInTheDocument();
   });
 
+  it('sorts by last_accessed under the recent filter (never-accessed sink, ties by name)', () => {
+    setupList([
+      makeCred({ id: '1', name: 'Zeta', credential_type: 'Password' }),
+      makeCred({ id: '2', name: 'Alpha', credential_type: 'Password', last_accessed: '2026-10-01T00:00:00Z' }),
+      makeCred({ id: '3', name: 'Mid', credential_type: 'Password', last_accessed: '2026-10-05T00:00:00Z' }),
+      makeCred({ id: '4', name: 'Aard', credential_type: 'Password', last_accessed: '2026-10-01T00:00:00Z' }),
+    ]);
+
+    act(() => {
+      useAppStore.setState({ sidebarFilter: { kind: 'recent' } });
+    });
+
+    // 最近访问在前（新→旧），同刻按名称，从未访问的沉底
+    const order = screen
+      .getAllByTestId(/^credential-row-/)
+      .map((el) => el.getAttribute('data-testid'));
+    expect(order).toEqual(['credential-row-3', 'credential-row-4', 'credential-row-2', 'credential-row-1']);
+  });
+
   it('shows the generic empty hint when a tree filter matches nothing', () => {
     setupList([makeCred({ id: '1', name: 'Bank one', credential_type: 'Password' })]);
 

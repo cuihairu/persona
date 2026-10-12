@@ -18,6 +18,14 @@ describe('components/ReauthModal', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('closes on backdrop mousedown (click lands on the overlay itself)', () => {
+    renderModal();
+
+    // 点空白 = 关闭：事件直接派发在 overlay 上 → target === currentTarget
+    fireEvent.mouseDown(screen.getByTestId('reauth-modal'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('submits the typed master password', () => {
     renderModal();
 
