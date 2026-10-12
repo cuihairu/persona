@@ -7,7 +7,7 @@ use crate::{
         MockRemoteAuthProvider, RemoteAuthChallenge, RemoteAuthProvider, RemoteAuthResult, Session,
         UserAuth,
     },
-    authz::{authorize, AuthzAction, AuthzContext, AuthzDecision, AuthzPrincipal, AuthzResource},
+    authz::{authorize, denied_error, AuthzAction, AuthzContext, AuthzPrincipal, AuthzResource},
     breach::BreachChecker,
     connect::{ConnectItemType, ConnectTokenRow, ConnectTokenScope},
     crypto::{
@@ -460,8 +460,8 @@ impl PersonaService {
             action,
             &AuthzContext::LOCAL,
         );
-        if let AuthzDecision::Denied { reason } = decision {
-            return Err(PersonaError::Forbidden(format!("operation denied: {reason}")).into());
+        if let Some(err) = denied_error(&decision) {
+            return Err(err.into());
         }
         self.ensure_sensitive_operation_allowed().await
     }
@@ -8068,6 +8068,86 @@ mod tests {
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// use 动词 token（批2）：签名/出码类授权不带来读取能力——纯 use
+    /// scope 在四个数据面端点一律同形空/None；同 scope 加 read 即可读，
+    /// 证明拒绝来自动词集而非身份或类型维度。
+    #[tokio::test]
+    async fn connect_use_verb_token_cannot_read_data_plane() {
+        let (service, _db) = connect_fixture().await;
+        let identity = service
+            .create_identity("work".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred = service
+            .create_credential(
+                identity.id,
+                "login".into(),
+                CredentialType::Password,
+                SecurityLevel::Medium,
+                &CredentialData::Password(PasswordCredentialData {
+                    password: "pw".to_string(),
+                    email: None,
+                    security_questions: Vec::new(),
+                }),
+            )
+            .await
+            .unwrap();
+
+        let use_only = ConnectTokenScope {
+            identities: vec![identity.id],
+            item_types: vec![],
+            verbs: vec![ConnectVerb::Use],
+        };
+        assert!(
+            use_only.validate().is_ok(),
+            "use-only scope is a legal grant"
+        );
+        let token = token_of(&use_only);
+        assert!(service
+            .connect_list_identities(&token)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(service
+            .connect_list_items(&token, None, None, None)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(service
+            .connect_get_item_data(&token, &cred.id)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(service
+            .connect_totp(&token, &cred.id)
+            .await
+            .unwrap()
+            .is_none());
+
+        let read_use = ConnectTokenScope {
+            verbs: vec![ConnectVerb::Read, ConnectVerb::Use],
+            ..use_only.clone()
+        };
+        let full = token_of(&read_use);
+        assert_eq!(
+            service.connect_list_identities(&full).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            service
+                .connect_list_items(&full, None, None, None)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(service
+            .connect_get_item_data(&full, &cred.id)
+            .await
+            .unwrap()
+            .is_some());
     }
 
     /// 过期与主体绑定（迁移 019）：未到期 token 鉴权放行；已过期的

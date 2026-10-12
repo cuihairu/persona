@@ -18,6 +18,10 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
+# 过期 token 的端到端契约测试要在真库上改写 expires_at（生产代码不碰
+# 直写 SQL，故只进 dev）；sqlx/chrono 已在 workspace 锁内，不引入新依赖。
+sqlx = { workspace = true, features = ["chrono"] }
+chrono = { workspace = true }
 # listener 生命周期测试要在真 TCP 上读写 HTTP/1.1 裸请求（io-util 提供
 # AsyncReadExt/AsyncWriteExt）；生产代码不碰这些 trait，故只进 dev。
 tokio = { version = "1.35", features = ["io-util", "net"] }

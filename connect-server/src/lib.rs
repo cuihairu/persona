@@ -884,6 +884,92 @@ mod tests {
         assert_eq!(body["error"]["code"], "unauthorized");
     }
 
+    /// 过期 token（批2 迁移 019）：与吊销同形 401——自动化调用方不能
+    /// 仅凭 token 明文读数据，过期与吊销同等失效（不泄漏二者差异）。
+    #[tokio::test]
+    async fn expired_token_is_401_same_shape_as_revoked() {
+        let fx = fixture().await;
+        sqlx::query("UPDATE connect_tokens SET expires_at = ? WHERE id = ?")
+            .bind((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339())
+            .bind(fx.token_row_id.to_string())
+            .execute(fx.db.pool())
+            .await
+            .unwrap();
+
+        let (status, body) = send(
+            fx.router,
+            "GET",
+            "/api/v1/connect/items",
+            &auth_header(&fx.token),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["error"]["code"], "unauthorized");
+    }
+
+    /// 纯 use 动词 token（批2）：签名/出码类授权不带来读取能力——数据面
+    /// 端点一律同形空列表或 404（不泄漏存在性）；同 scope 加 read 即可读，
+    /// 证明拒绝来自动词集而非身份或类型维度。
+    #[tokio::test]
+    async fn use_only_token_reads_nothing_on_any_endpoint() {
+        let fx = fixture().await;
+        let use_scope = ConnectTokenScope {
+            identities: vec![],
+            item_types: vec![],
+            verbs: vec![ConnectVerb::Use],
+        };
+        let use_token = mint_token(&fx, "use-only", use_scope.clone()).await;
+        let read_use_token = mint_token(
+            &fx,
+            "read-use",
+            ConnectTokenScope {
+                verbs: vec![ConnectVerb::Read, ConnectVerb::Use],
+                ..use_scope
+            },
+        )
+        .await;
+        let use_auth = auth_header(&use_token);
+        let read_auth = auth_header(&read_use_token);
+
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/identities",
+            &use_auth,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["data"].as_array().unwrap().is_empty(),
+            "use token 不得读身份列表"
+        );
+        let (status, body) = send(
+            fx.router.clone(),
+            "GET",
+            "/api/v1/connect/identities",
+            &read_auth,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"].as_array().unwrap().len(), 1, "read+use 可读");
+
+        let (status, body) =
+            send(fx.router.clone(), "GET", "/api/v1/connect/items", &use_auth).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["data"].as_array().unwrap().is_empty(),
+            "use token 不得读条目列表"
+        );
+
+        // 单条读取：use token 404 同形（不泄漏存在性）。
+        let path = format!("/api/v1/connect/items/{}", fx.cred_id);
+        let (status, body) = send(fx.router.clone(), "GET", &path, &use_auth).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "use token 不得读单条");
+        assert_eq!(body["error"]["code"], "not_found");
+        let (status, _) = send(fx.router, "GET", &path, &read_auth).await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
     #[tokio::test]
     async fn locked_vault_is_503_and_does_not_consume_rate() {
         let fx = fixture().await;

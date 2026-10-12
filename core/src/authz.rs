@@ -20,6 +20,7 @@
 
 use crate::connect::token::{ConnectTokenScope, ConnectVerb};
 use crate::models::CredentialType;
+use crate::PersonaError;
 use uuid::Uuid;
 
 /// 授权动作。`Read` 读元数据/数据，`Use` 在本库内使用凭据（解密展示、
@@ -123,6 +124,18 @@ pub enum AuthzDecision {
 impl AuthzDecision {
     pub fn is_allowed(&self) -> bool {
         matches!(self, Self::Allowed)
+    }
+}
+
+/// 把裁决折算成领域错误：`Denied` → [`PersonaError::Forbidden`]（身份已过
+/// 但动作越权，与认证失败区分）；`Allowed` / `InteractionRequired` 放行——
+/// 后者由调用边履约（确认框），履约失败由调用方报错，不在此折算。
+pub fn denied_error(decision: &AuthzDecision) -> Option<PersonaError> {
+    match decision {
+        AuthzDecision::Denied { reason } => Some(PersonaError::Forbidden(format!(
+            "operation denied: {reason}"
+        ))),
+        _ => None,
     }
 }
 
@@ -578,5 +591,81 @@ mod tests {
             &AuthzContext::CONNECT
         )
         .is_allowed());
+    }
+
+    /// SSH 私钥的使用与导出是不同动作、不同裁决（验收标准）：agent 密钥
+    /// 唯一能力是对自己的密钥签名（输出签名，不回传材料）；导出在无人
+    /// 值守的 agent 上下文拒绝，只有交互的本地会话可走且需履约；token
+    /// 对密钥材料一律不可见。
+    #[test]
+    fn ssh_key_sign_and_export_are_different_decisions() {
+        let credential_id = Uuid::new_v4();
+        let identity_id = Uuid::new_v4();
+        let key = AuthzPrincipal::AgentKey {
+            credential_id,
+            identity_id,
+        };
+        let own = AuthzResource::SshKey { credential_id };
+
+        // 使用（签名）放行。
+        assert!(authorize(&key, &own, AuthzAction::Sign, &AuthzContext::AGENT).is_allowed());
+        // 导出在无人值守的 agent 上下文拒绝（fail-closed）。
+        assert!(matches!(
+            authorize(&key, &own, AuthzAction::Export, &AuthzContext::AGENT),
+            AuthzDecision::Denied { .. }
+        ));
+        // 同一导出动作在交互的本地会话可走，但要求调用边履约。
+        assert!(matches!(
+            authorize(
+                &AuthzPrincipal::LocalSession,
+                &AuthzResource::Credential {
+                    identity_id,
+                    credential_type: CredentialType::SshKey,
+                },
+                AuthzAction::Export,
+                &AuthzContext::LOCAL,
+            ),
+            AuthzDecision::InteractionRequired { .. }
+        ));
+        // token 对密钥材料一律不可见（即使带 read+use 全动词集）。
+        let token = AuthzPrincipal::ConnectToken {
+            scope: ConnectTokenScope {
+                identities: vec![],
+                item_types: vec![],
+                verbs: vec![ConnectVerb::Read, ConnectVerb::Use],
+            },
+        };
+        for action in [AuthzAction::Read, AuthzAction::Sign, AuthzAction::Export] {
+            assert!(
+                matches!(
+                    authorize(&token, &own, action, &AuthzContext::CONNECT),
+                    AuthzDecision::Denied { .. }
+                ),
+                "{action:?} 必须对密钥材料拒绝"
+            );
+        }
+    }
+
+    /// 裁决→错误的折算：只有 `Denied` 产 `Forbidden`（含原拒绝原因）；
+    /// `Allowed` 与 `InteractionRequired` 都不产错误——后者由调用边履约。
+    #[test]
+    fn denied_error_maps_only_denied() {
+        assert!(denied_error(&AuthzDecision::Allowed).is_none());
+        assert!(denied_error(&AuthzDecision::InteractionRequired {
+            reason: "needs confirmation".into()
+        })
+        .is_none());
+
+        let err = denied_error(&AuthzDecision::Denied {
+            reason: "verb 'export' is not grantable to connect tokens".into(),
+        })
+        .unwrap();
+        match err {
+            PersonaError::Forbidden(msg) => {
+                assert!(msg.starts_with("operation denied: "), "{msg}");
+                assert!(msg.contains("verb 'export'"), "{msg}");
+            }
+            other => panic!("Denied must map to Forbidden, got {other:?}"),
+        }
     }
 }
