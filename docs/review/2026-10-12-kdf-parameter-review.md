@@ -9,14 +9,14 @@
 
 ## 评审结论速览
 
-| 路径 | 算法与参数 | OWASP 口径 | 结论 |
-| --- | --- | --- | --- |
-| 主密钥派生（本地解锁，`core/src/auth/authentication.rs:203`） | PBKDF2-HMAC-SHA256 **100,000** 次 | 600,000 次 | ⚠️ **低于建议 6 倍**——提案升 600k，需用户拍板（见下） |
-| 口令验证哈希（`core/src/crypto/hashing.rs`） | Argon2id PHC 串（存量 v19 m=19456,t=2,p=1） | 下限 19 MiB/t=2/p=1 | ✅ 恰在下限；维持，下季度复核 |
-| SRP 登录预哈希（`core/src/auth/srp.rs:119`） | Argon2id crate 默认（m≈19 MiB/t=2/p=1） | 下限 | ✅ 恰在下限；维持 |
-| 同步组配对短码 KDF（`core/src/sync/pairing.rs:107`） | Argon2id crate 默认 | 下限 | ✅ 维持（短码本身 9 位单次使用，主闸不在 KDF） |
-| 导出/备份加密 PERSENC1（`core/src/backup/file_crypto.rs`） | Argon2id m=64 MiB/t=3/p=1 | 下限以上 | ✅ 维持 |
-| 钱包 keystore（`core/src/crypto/encryption.rs`） | Argon2 默认 m≈19 MiB/t=2/p=1 | 下限 | ✅ 维持（钱包轨整体冻结中） |
+| 路径                                                          | 算法与参数                                  | OWASP 口径          | 结论                                                  |
+| ------------------------------------------------------------- | ------------------------------------------- | ------------------- | ----------------------------------------------------- |
+| 主密钥派生（本地解锁，`core/src/auth/authentication.rs:203`） | PBKDF2-HMAC-SHA256 **100,000** 次           | 600,000 次          | ⚠️ **低于建议 6 倍**——提案升 600k，需用户拍板（见下） |
+| 口令验证哈希（`core/src/crypto/hashing.rs`）                  | Argon2id PHC 串（存量 v19 m=19456,t=2,p=1） | 下限 19 MiB/t=2/p=1 | ✅ 恰在下限；维持，下季度复核                         |
+| SRP 登录预哈希（`core/src/auth/srp.rs:119`）                  | Argon2id crate 默认（m≈19 MiB/t=2/p=1）     | 下限                | ✅ 恰在下限；维持                                     |
+| 同步组配对短码 KDF（`core/src/sync/pairing.rs:107`）          | Argon2id crate 默认                         | 下限                | ✅ 维持（短码本身 9 位单次使用，主闸不在 KDF）        |
+| 导出/备份加密 PERSENC1（`core/src/backup/file_crypto.rs`）    | Argon2id m=64 MiB/t=3/p=1                   | 下限以上            | ✅ 维持                                               |
+| 钱包 keystore（`core/src/crypto/encryption.rs`）              | Argon2 默认 m≈19 MiB/t=2/p=1                | 下限                | ✅ 维持（钱包轨整体冻结中）                           |
 
 ## 发现与提案
 
