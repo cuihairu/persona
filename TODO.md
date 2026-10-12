@@ -890,10 +890,17 @@ SSH Agent (developer focus)
       src-tauri 独立 workspace 修 1 处——`tests/desktop_integration.rs` 是
       Unix domain socket 专项（被测 sink/服务端生产侧本就 `#[cfg(unix)]`），
       加文件级 `#![cfg(unix)]` 门禁后全绿。其余 5 包无 cfg/路径/平台 API
-      误用。**check 不覆盖的口径**：链接层（需 gnu linker，本机未装）与
-      Windows 运行时行为（命名管道审批流、TPM biometric、NSIS 安装器、
-      SSH agent named-pipe 同流程——见 ⑤）仍待真 Windows 机器验收；
-      msvc target 已装可作后续 CI 矩阵候选。
+      误用。**CI 编译层守卫已全接线（2026-10-12）**：根 workspace 由既有
+      `rust-windows` job（windows-latest msvc runner，build+nextest+doc+clippy）
+      守护；src-tauri 独立 workspace 补 `rust-windows-desktop` job
+      （windows-latest `cargo check --all-targets`，compile-layer only——
+      缺 dist 的 codegen 容错与 ubuntu desktop job 同口径，本地 host check
+      2m20s 绿 + actionlint 过）。原「msvc target 已装可作 CI 矩阵候选」
+      注记作废：msvc 真机 runner 守卫强于本地交叉 check。
+      **剩余（阻塞，需真 Windows 桌面会话）**：运行时行为验收——命名管道
+      审批流、TPM biometric、NSIS 安装器、SSH agent named-pipe 同流程
+      （见 ⑤）；链接层由 rust-windows job 的 build 步骤覆盖（真 msvc
+      linker），本地 gnu linker 缺失不再是缺口。
 
 Wallet Material (experimental — deferred until 1Password parity; see priority policy above)
 
