@@ -29,6 +29,18 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
       CredentialDecrypted 审计链。native gRPC Terraform provider 需 Go
       SDK 刻意不做（external 协议覆盖）。文档：STORAGE_AND_SYNC「Secrets
       自动化（CLI 直读）」章 + gap #28 已完成（=）
+- [x] **Context-aware identity suggestion 阶段 1**（ROADMAP M7，2026-10-12
+      落地）：core `ContextService`（`core/src/context.rs` 纯函数打分——
+      project 精确匹配 1.0 / host 正则 0.8 / 阈值 0.6 / 平局 active 优先 /
+      覆盖链 `PERSONA_CONTEXT_OVERRIDE` > 仓库内 `.persona/context.toml` >
+      全局 `~/.persona/context.toml` > active；cwd 上溯 `.git` 读 origin
+      归一化 host/owner/repo，worktree 指针文件兼容，本地路径 remote 降级
+      None）+ `persona suggest [--json]` + `persona context
+      map/get/unmap/status`（两命令豁免 workspace 要求，任意项目目录可跑；
+      映射文件损坏按「忽略该层并告警」不崩）。铁律落地：Context 只建议
+      不授权——激活仍走 `persona switch`，建议无任何写路径/审计旁路。
+      阶段 2–4（shell-hook/学习表/SSH host 维度/桥协议字段）未做。测试：
+      core 30 例 + CLI 8 例；文档：设计稿状态表与 ROADMAP 同步翻绿
 - [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
 - [x] **生成器全局热键**（gap #9 余项，2026-10-11 完成）：OS 级任意应用内
       呼出生成器浮窗（generator-panel，无边框置顶不进任务栏），平台默认

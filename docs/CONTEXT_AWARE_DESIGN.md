@@ -1,6 +1,8 @@
 # Context-Aware Identity Suggestion — Design
 
-状态：设计（阶段 0）。关联：[核心概念：上下文](src/concepts/context.md)、
+状态：**阶段 1 已实现**（2026-10-12：core `ContextService` + `context.toml`
+解析 + `persona suggest [--json]` + `persona context map/get/unmap/status`）；
+阶段 2–4 未实现。关联：[核心概念：上下文](src/concepts/context.md)、
 [ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows)、
 `cli/src/commands/ssh.rs` 的 `--identity`（reserved for future use）。
 
@@ -67,10 +69,11 @@ score = Σ (signal_match × signal_weight)
 
 ```toml
 # ~/.persona/context.toml（用户可维护；v1 也支持 persona context map 子命令）
-[project "github.com/cuihairu/persona"]
+# TOML 合法语法是点分隔引号键（设计初稿的空格形式是 git-config 风格，无效）
+[project."github.com/cuihairu/persona"]
 identity = "OpenSource"
 
-[host ".*-server$"]
+[host.".*-server$"]
 identity = "Ops"
 ```
 
@@ -130,7 +133,7 @@ cwd/host 信号主要在终端场景价值最大。v1 锁 CLI，把 ContextServi
 
 | 阶段 | 交付                                                                                        | 验收                                                            |
 | ---- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| 1    | core `ContextService` + `context.toml` 解析 + `persona suggest [--json]` + `context` 子命令 | 单测：映射命中/无命中/覆盖链/平局/伪造信号；无映射时输出=active |
+| 1    | core `ContextService` + `context.toml` 解析 + `persona suggest [--json]` + `context` 子命令 | 单测：映射命中/无命中/覆盖链/平局/伪造信号；无映射时输出=active **——已实现 2026-10-12（`core/src/context.rs` 30 例 + CLI 8 例；suggest/context 豁免 workspace 要求，可在任意项目目录运行；映射文件损坏按「忽略该层并告警」处理）** |
 | 2    | shell-hook、交互 TTY 提示、`persona use`、历史学习表（默认关）                              | 双 shell 冒烟；学习开关默认关；审计含 reason                    |
 | 3    | SSH host 维度接入、`--identity` 生效                                                        | `ssh -T git@github.com` 场景建议正确；host 策略联动不变         |
 | 4    | 桥协议字段、桌面托盘候选、浏览器建议排序                                                    | 全部入口一致候选；旧扩展（未知字段）不回归                      |

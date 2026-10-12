@@ -48,6 +48,12 @@ enum Commands {
     /// Switch to a different identity
     Switch(commands::switch::SwitchArgs),
 
+    /// Suggest the likely identity for the current context (cwd/repo/host)
+    Suggest(commands::suggest::SuggestArgs),
+
+    /// Manage context-to-identity mappings used by `suggest`
+    Context(commands::context::ContextArgs),
+
     /// Show identity details
     Show(commands::show::ShowArgs),
 
@@ -163,6 +169,8 @@ async fn main() -> Result<()> {
         Commands::Add(args) => commands::add::execute(args, &config).await,
         Commands::List(args) => commands::list::execute(args, &config).await,
         Commands::Switch(args) => commands::switch::execute(args, &config).await,
+        Commands::Suggest(args) => commands::suggest::execute(args, &config).await,
+        Commands::Context(args) => commands::context::execute(args).await,
         Commands::Show(args) => commands::show::execute(args, &config).await,
         Commands::Remove(args) => commands::remove::execute(args, &config).await,
         Commands::Edit(args) => commands::edit::execute(args, &config).await,
@@ -222,7 +230,13 @@ fn maybe_inject_argv0_subcommand(mut args: Vec<OsString>) -> Vec<OsString> {
 fn command_requires_workspace(cmd: &Commands) -> bool {
     !matches!(
         cmd,
-        Commands::Init(_) | Commands::Bridge(_) | Commands::Password(_)
+        Commands::Init(_)
+            | Commands::Bridge(_)
+            | Commands::Password(_)
+            // suggest/context 在任意项目目录里用（shell 集成前提）：
+            // 走 PERSONA_WORKSPACE_PATH / 全局默认工作区，不要求 cwd 有 config.toml
+            | Commands::Suggest(_)
+            | Commands::Context(_)
     )
 }
 

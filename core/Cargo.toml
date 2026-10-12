@@ -92,6 +92,9 @@ hex.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
 regex.workspace = true
+toml = "1.1"
+# 上下文建议的 host 信号来源（PERSONA_HOST 覆盖 → gethostname，core/src/context.rs）
+hostname = "0.4"
 url.workspace = true
 # 1PUX（1Password 导出）ZIP 容器解析
 zip.workspace = true

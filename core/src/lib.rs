@@ -11,6 +11,7 @@ pub mod authz;
 pub mod backup;
 pub mod breach;
 pub mod connect;
+pub mod context;
 pub mod crypto;
 pub mod custom_fields;
 pub mod events;

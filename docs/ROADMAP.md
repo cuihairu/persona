@@ -15,7 +15,7 @@ Milestones 0–3 – Foundation (done)
 
 Milestone 4 – 1Password Parity (current focus)
 
-- [ ] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (review stage; P1 core/CLI done, P2 browser interception done, P3 desktop done — confirmation gate via tray app + passkey management page with list/detail/delete/self-test/export)
+- [x] Passkeys (WebAuthn): storage model + autofill — design at `PASSKEYS_DESIGN.md` (P1 core/CLI done incl. `passkey self-test`, P2 browser interception done incl. webauthn.io/GitHub real-site interop, P3 desktop done — PasskeyPanel list/detail/delete + approval gate + re-auth/biometric wiring + domain policy; P4.1 provider protocol + P4.4 provider audit metadata done 2026-09-24. Remaining: P4.2/P4.3 OS provider needs macOS/Windows real machines (registered as gap, same blocker as OS-autofill #13), P4.5 CXF deferred by design until the standard finalizes)
 - [x] 1Password migration: 1PUX import — parser + pure import planner in core (`import_1pux`), `persona import-1pux --dry-run` plan preview (per-vault identities, Login/API Credential/SSH Key mapping, TOTP split into dedicated credentials, skip reporting for unmapped categories/archived items/attachments)
 - [x] Watchtower-class health checks: rules engine (weak/reused/expired/stale; core + CLI + desktop command layer, metadata-only reports)
 - [x] Watchtower: desktop UI panel (scan with optional HIBP breach check; severity-grouped metadata-only report)
@@ -55,7 +55,7 @@ Milestone 7 – Identity Runtime (positioning & concepts; feature track follows)
 
 - [x] Concept docs: `docs/src/concepts/` — identity / context / material / policy / action / principal (2026-10-04)
 - [x] Site copy & terminology: homepage / intro / architecture / security de-“password-manager”ed; "零知识" standardized as "本地优先 + 端到端加密" (zero-knowledge kept only for credential-storage semantics)
-- [ ] Context-aware identity suggestion: terminal cwd/repo + host → suggested identity (today only origin binding + per-site defaults exist; design at `CONTEXT_AWARE_DESIGN.md` stage 0, 2026-10-04)
+- [x] Context-aware identity suggestion stage 1 (design `CONTEXT_AWARE_DESIGN.md`): core `ContextService` in `core/src/context.rs` (pure scoring: repo/project exact match 1.0 + host regex 0.8, threshold 0.6, active-first tiebreak, override chain `PERSONA_CONTEXT_OVERRIDE` > repo-local `.persona/context.toml` > global `~/.persona/context.toml` > active) + `persona suggest [--json]` + `persona context map/get/unmap/status` (both workspace-exempt, usable in any project dir); context only suggests, never authorizes — activation stays `persona switch`. Stages 2–4 (shell hook, learn table, SSH host dimension, bridge/desktop surface) pending
 - [ ] Principal / Agent scoping: optional `principal_id` in protocol & audit; per-principal action allowlists (reserved direction, no timeline commitment)
 
 Ongoing quality
