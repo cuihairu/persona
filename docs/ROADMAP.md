@@ -33,7 +33,7 @@ Milestone 5 – Wallet Graduation (deferred until Milestone 4; experimental toda
 Existing experimental base: BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana derivation and signing on audited crates (rust-bitcoin, alloy, bech32), CLI wallet flows, official test vectors as regression harness.
 
 - [ ] `docs/WALLET_DESIGN.md`: wallet key hierarchy (seed ↔ master key wrapping, re-wrap on password change), identity-binding model, signing-confirmation UX, wallet threat-model extension
-- [ ] keystore JSON import/export (replace the simplified keystore path with standard scrypt/pbkdf2)
+- [x] keystore JSON import/export (2026-10-13: full Web3 Secret Storage v3 — scrypt/pbkdf2 KDF (untagged params), keccak MAC verified before AES-128-CTR, geth default export factors (n=2^18,r=8,p=1) with 256MiB import memory cap, constant-time MAC compare; canonical geth spec vector + OpenSSL cross-language KDF pins as tests; CLI `wallet import/export --format keystore`)
 - [ ] PSBT workflow
 - [ ] Signing confirmations verifying recipient address, amount, fees and chain id (anti address-poisoning)
   - [x] Desktop confirmation modal exists: from/to/amount/fee display, address-poisoning heuristic warning, password stays in the modal, signature verified before persisting; backend signing UX policy (threat model) still pending

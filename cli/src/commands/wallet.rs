@@ -314,7 +314,7 @@ pub enum WalletCommand {
         /// Wallet ID or name
         wallet_identifier: String,
 
-        /// Export format (json, mnemonic, private_key, wif, xpub)
+        /// Export format (json, mnemonic, private_key, wif, xpub, keystore)
         #[arg(long)]
         format: String,
 
@@ -923,8 +923,8 @@ pub(crate) async fn handle_wallet_with(
             output,
         } => {
             use persona_core::crypto::{
-                export_mnemonic, export_private_key, export_to_json, export_to_wif, export_xpub,
-                parse_export_format, ExportFormat,
+                export_keystore, export_mnemonic, export_private_key, export_to_json,
+                export_to_wif, export_xpub, parse_export_format, ExportFormat,
             };
 
             let wallet = find_wallet_by_identifier(&repo, &wallet_identifier).await?;
@@ -959,6 +959,11 @@ pub(crate) async fn handle_wallet_with(
                 ExportFormat::Xpub => export_xpub(&wallet).context("Failed to export xpub")?,
                 ExportFormat::Json => export_to_json(&wallet, include_private, password.as_deref())
                     .context("Failed to export to JSON")?,
+                ExportFormat::Keystore => {
+                    let pwd =
+                        password.ok_or_else(|| anyhow!("Password required for keystore export"))?;
+                    export_keystore(&wallet, &pwd).context("Failed to export keystore")?
+                }
             };
 
             // Output to file or stdout
@@ -971,7 +976,9 @@ pub(crate) async fn handle_wallet_with(
                 println!("{}", exported_data);
             }
 
-            if include_private {
+            // Keystore JSON always wraps the private key, regardless of the
+            // include_private flag.
+            if include_private || matches!(export_format, ExportFormat::Keystore) {
                 formatter.print_warning("\n⚠️  Security Warning:");
                 formatter.print_info("- This export contains sensitive private data");
                 formatter.print_info("- Store it securely and delete it when done");
@@ -1060,8 +1067,23 @@ pub(crate) async fn handle_wallet_with(
                     import_from_json(identity_id, name, import_data.trim(), &password)
                         .context("Failed to import from JSON export")?
                 }
-                _ => {
-                    bail!("Import format not yet fully implemented");
+                ImportFormat::Keystore => {
+                    // Keystore JSON is defined over Ethereum-style secp256k1
+                    // keys; the format itself carries no network hint.
+                    let secret = persona_core::crypto::wallet_encryption::import_from_keystore(
+                        import_data.trim(),
+                        &password,
+                    )
+                    .context("Failed to import keystore")?;
+                    let wallet_name = name.unwrap_or_else(|| "Imported Wallet".to_string());
+                    import_from_private_key(
+                        identity_id,
+                        wallet_name,
+                        &hex::encode(secret),
+                        BlockchainNetwork::Ethereum,
+                        &password,
+                    )
+                    .context("Failed to import from keystore")?
                 }
             };
 
@@ -1392,6 +1414,7 @@ fn export_requires_password(
         persona_core::crypto::ExportFormat::Mnemonic
             | persona_core::crypto::ExportFormat::PrivateKey
             | persona_core::crypto::ExportFormat::Wif
+            | persona_core::crypto::ExportFormat::Keystore
     ) || include_private
 }
 
@@ -1823,6 +1846,11 @@ mod tests {
     #[test]
     fn wif_export_requires_password_without_include_private() {
         assert!(export_requires_password(ExportFormat::Wif, false));
+    }
+
+    #[test]
+    fn keystore_export_requires_password_without_include_private() {
+        assert!(export_requires_password(ExportFormat::Keystore, false));
     }
 
     #[test]
@@ -2560,12 +2588,43 @@ mod integration {
         .expect_err("unknown import format must fail");
         assert!(err.to_string().contains("Unknown import format"));
 
-        // Keystore parses but is not implemented; the password is asked first.
+        // Malformed keystore JSON fails after the password prompt.
         let ui = ScriptedUi::new().password("import-pass-123");
         let err = handle_wallet_with(import_args("keystore", "{}", None), &config, &ui)
             .await
-            .expect_err("keystore import must fail");
-        assert!(err.to_string().contains("not yet fully implemented"));
+            .expect_err("malformed keystore import must fail");
+        assert!(err.to_string().contains("Failed to import keystore"));
+        assert!(ui.exhausted());
+
+        // A real keystore file imports end to end with no extra prompts
+        // (network is implied by the format; scrypt factors kept tiny).
+        let key = [7u8; 32];
+        let keystore_json =
+            persona_core::crypto::wallet_encryption::export_to_keystore_with_params(
+                &key,
+                "import-pass-123",
+                None,
+                persona_core::crypto::wallet_encryption::ScryptExportParams {
+                    log_n: 4,
+                    r: 1,
+                    p: 1,
+                },
+            )
+            .expect("build keystore fixture");
+        let keystore_path = dir.path().join("wallet.json");
+        std::fs::write(&keystore_path, &keystore_json).unwrap();
+        let ui = ScriptedUi::new().password("import-pass-123");
+        handle_wallet_with(
+            import_args(
+                "keystore",
+                keystore_path.to_str().unwrap(),
+                Some("Keystore Wallet"),
+            ),
+            &config,
+            &ui,
+        )
+        .await
+        .expect("keystore import must succeed");
         assert!(ui.exhausted());
 
         // Short password bails.

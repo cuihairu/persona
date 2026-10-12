@@ -48,6 +48,8 @@ pub enum ExportFormat {
     Xpub,
     /// Full JSON export
     Json,
+    /// Ethereum keystore JSON (Web3 Secret Storage v3)
+    Keystore,
 }
 
 /// Wallet export data
@@ -434,6 +436,33 @@ pub fn export_private_key(wallet: &CryptoWallet, password: &str) -> PersonaResul
     })
 }
 
+/// Export the wallet's primary private key as a Web3 Secret Storage v3
+/// keystore JSON (geth-standard scrypt work factors). Ethereum wallets only:
+/// the keystore format is defined over secp256k1 keys.
+pub fn export_keystore(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
+    if wallet.watch_only {
+        return Err(PersonaError::InvalidInput(
+            "Watch-only wallets cannot export keystore".to_string(),
+        ));
+    }
+    if wallet.network != BlockchainNetwork::Ethereum {
+        return Err(PersonaError::InvalidInput(format!(
+            "Keystore export requires an Ethereum wallet (this wallet is {:?})",
+            wallet.network
+        )));
+    }
+    let key_hex = export_private_key(wallet, password)?;
+    let key = hex::decode(key_hex.trim())
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid stored key encoding: {e}")))?;
+    let address = wallet.addresses.first().map(|a| {
+        a.address
+            .trim_start_matches("0x")
+            .trim_start_matches("0X")
+            .to_lowercase()
+    });
+    crate::crypto::wallet_encryption::export_to_keystore(&key, password, address)
+}
+
 /// Export wallet private key as Bitcoin WIF (requires password)
 pub fn export_to_wif(wallet: &CryptoWallet, password: &str) -> PersonaResult<String> {
     if wallet.watch_only {
@@ -589,6 +618,7 @@ pub fn parse_export_format(format_str: &str) -> PersonaResult<ExportFormat> {
         "wif" => Ok(ExportFormat::Wif),
         "xpub" | "extended_public_key" => Ok(ExportFormat::Xpub),
         "json" => Ok(ExportFormat::Json),
+        "keystore" => Ok(ExportFormat::Keystore),
         _ => Err(PersonaError::InvalidInput(format!(
             "Unknown export format: {}",
             format_str
@@ -1593,6 +1623,7 @@ mod tests {
             ("xpub", E::Xpub),
             ("extended_public_key", E::Xpub),
             ("json", E::Json),
+            ("keystore", E::Keystore),
         ] {
             assert_eq!(parse_export_format(s).unwrap(), expected, "{s}");
         }
@@ -1601,6 +1632,33 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("Unknown export format"));
+    }
+
+    #[test]
+    fn keystore_export_roundtrips_through_keystore_import() {
+        let wallet = hd_wallet(BlockchainNetwork::Ethereum, 1);
+        let json = export_keystore(&wallet, "pw").expect("ethereum export must succeed");
+        let secret = crate::crypto::wallet_encryption::import_from_keystore(&json, "pw")
+            .unwrap_or_else(|e| panic!("roundtrip import must succeed: {e}"));
+        let stored = export_private_key(&wallet, "pw").unwrap();
+        assert_eq!(
+            hex::encode(&*secret),
+            stored.trim().trim_start_matches("0x").to_lowercase(),
+            "roundtrip must recover the same key"
+        );
+    }
+
+    #[test]
+    fn keystore_export_rejects_watch_only_and_non_ethereum() {
+        let mut wallet = hd_wallet(BlockchainNetwork::Bitcoin, 1);
+        let err =
+            export_keystore(&wallet, "pw").expect_err("bitcoin wallet must not export keystore");
+        assert!(err.to_string().contains("Ethereum"));
+        wallet.network = BlockchainNetwork::Ethereum;
+        wallet.watch_only = true;
+        let err =
+            export_keystore(&wallet, "pw").expect_err("watch-only wallet must not export keystore");
+        assert!(err.to_string().contains("Watch-only"));
     }
 
     #[test]

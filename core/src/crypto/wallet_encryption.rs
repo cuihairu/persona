@@ -3,7 +3,9 @@
 use crate::crypto::encryption::{decrypt_data, encrypt_data};
 use crate::crypto::wallet_crypto::MasterKey;
 use crate::{PersonaError, PersonaResult};
+use aes::cipher::{KeyIvInit, StreamCipher};
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Encrypted wallet key data
@@ -187,7 +189,7 @@ pub fn change_wallet_password(
     Ok(new_encrypted)
 }
 
-/// Keystore format (Ethereum-compatible JSON keystore)
+/// Keystore format (Web3 Secret Storage v3, the geth/MyCrypto interchange JSON)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeystoreV3 {
     pub version: u32,
@@ -211,17 +213,136 @@ pub struct CipherParams {
     pub iv: String,
 }
 
+/// KDF parameters. The standard names two shapes: scrypt
+/// (`{dklen, n, r, p, salt}`) and pbkdf2 (`{dklen, c, prf, salt}`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct KdfParams {
-    pub dklen: u32,
-    pub n: u32,
-    pub p: u32,
-    pub r: u32,
-    pub salt: String,
+#[serde(untagged)]
+pub enum KdfParams {
+    Scrypt {
+        dklen: u32,
+        n: u32,
+        r: u32,
+        p: u32,
+        salt: String,
+    },
+    Pbkdf2 {
+        dklen: u32,
+        c: u32,
+        prf: String,
+        salt: String,
+    },
 }
 
-/// Import from Ethereum keystore JSON
-pub fn import_from_keystore(keystore_json: &str, _password: &str) -> PersonaResult<Vec<u8>> {
+/// scrypt work factors used when exporting. `log_n` encodes n = 2^log_n.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScryptExportParams {
+    pub log_n: u8,
+    pub r: u32,
+    pub p: u32,
+}
+
+/// Geth's standard export work factors (n = 2^18, r = 8, p = 1, ~0.5s native).
+pub const SCRYPT_EXPORT_DEFAULT: ScryptExportParams = ScryptExportParams {
+    log_n: 18,
+    r: 8,
+    p: 1,
+};
+
+/// Upper bound on scrypt memory (128 * r * n bytes) we are willing to spend
+/// while importing an untrusted keystore. Equals geth's default (r=8, n=2^18),
+/// so standard exports still import; hostile files asking for more are
+/// rejected before any work is done.
+const SCRYPT_IMPORT_MAX_MEM: u64 = 256 * 1024 * 1024;
+
+fn hex_decode_field(field: &str, name: &str) -> PersonaResult<Vec<u8>> {
+    hex::decode(field)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid hex in keystore {name}: {e}")))
+}
+
+/// Derive the keystore encryption key (per Web3 Secret Storage v3).
+fn derive_keystore_key(crypto: &KeystoreCrypto, password: &str) -> PersonaResult<Vec<u8>> {
+    let password_bytes = password.as_bytes();
+    let mut dk = match (crypto.kdf.as_str(), &crypto.kdfparams) {
+        (
+            "scrypt",
+            KdfParams::Scrypt {
+                dklen,
+                n,
+                r,
+                p,
+                salt,
+            },
+        ) => {
+            let salt = hex_decode_field(salt, "kdfparams.salt")?;
+            if *r == 0 || *p == 0 || n == &0 {
+                return Err(PersonaError::InvalidInput(
+                    "Invalid scrypt params: zero work factor".to_string(),
+                ));
+            }
+            let mem = 128u64 * u64::from(*r) * u64::from(*n);
+            if mem > SCRYPT_IMPORT_MAX_MEM {
+                return Err(PersonaError::InvalidInput(format!(
+                    "scrypt work factor too high ({} bytes > {} cap)",
+                    mem, SCRYPT_IMPORT_MAX_MEM
+                )));
+            }
+            let log_n = u8::try_from(31 - n.leading_zeros())
+                .map_err(|_| PersonaError::InvalidInput("scrypt n out of range".to_string()))?;
+            if 1u32 << log_n != *n {
+                return Err(PersonaError::InvalidInput(
+                    "Invalid scrypt params: n must be a power of two".to_string(),
+                ));
+            }
+            let dklen_us = usize::try_from(*dklen).map_err(|_| {
+                PersonaError::InvalidInput("keystore dklen out of range".to_string())
+            })?;
+            let params = scrypt::Params::new(log_n, *r, *p)
+                .map_err(|e| PersonaError::InvalidInput(format!("Invalid scrypt params: {e}")))?;
+            let mut out = vec![0u8; dklen_us];
+            scrypt::scrypt(password_bytes, &salt, &params, &mut out)
+                .map_err(|e| PersonaError::CryptographicError(format!("scrypt failed: {e}")))?;
+            out
+        }
+        (
+            "pbkdf2",
+            KdfParams::Pbkdf2 {
+                dklen,
+                c,
+                prf,
+                salt,
+            },
+        ) => {
+            if prf != "hmac-sha256" {
+                return Err(PersonaError::InvalidInput(format!(
+                    "Unsupported pbkdf2 prf: {prf}"
+                )));
+            }
+            let salt = hex_decode_field(salt, "kdfparams.salt")?;
+            let dklen_us = usize::try_from(*dklen).map_err(|_| {
+                PersonaError::InvalidInput("keystore dklen out of range".to_string())
+            })?;
+            let mut out = vec![0u8; dklen_us];
+            pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password_bytes, &salt, *c, &mut out);
+            out
+        }
+        (kdf, _) => {
+            return Err(PersonaError::InvalidInput(format!(
+                "Unsupported keystore kdf: {kdf}"
+            )))
+        }
+    };
+    if dk.len() < 32 {
+        dk.zeroize();
+        return Err(PersonaError::InvalidInput(
+            "keystore dklen must be at least 32".to_string(),
+        ));
+    }
+    Ok(dk)
+}
+
+/// Import a private key from Web3 Secret Storage v3 keystore JSON
+/// (scrypt or pbkdf2-hmac-sha256 KDF, AES-128-CTR, keccak-256 MAC).
+pub fn import_from_keystore(keystore_json: &str, password: &str) -> PersonaResult<Vec<u8>> {
     let keystore: KeystoreV3 = serde_json::from_str(keystore_json)
         .map_err(|e| PersonaError::InvalidInput(format!("Invalid keystore format: {}", e)))?;
 
@@ -231,25 +352,128 @@ pub fn import_from_keystore(keystore_json: &str, _password: &str) -> PersonaResu
             keystore.version
         )));
     }
+    if keystore.crypto.cipher != "aes-128-ctr" {
+        return Err(PersonaError::InvalidInput(format!(
+            "Unsupported keystore cipher: {}",
+            keystore.crypto.cipher
+        )));
+    }
 
-    // Simplified keystore decryption (production should use proper scrypt/pbkdf2)
-    // This is a placeholder for the full implementation
-    Err(PersonaError::CryptographicError(
-        "Keystore import not yet fully implemented".to_string(),
-    ))
+    let ciphertext = hex_decode_field(&keystore.crypto.ciphertext, "ciphertext")?;
+    let iv = hex_decode_field(&keystore.crypto.cipherparams.iv, "cipherparams.iv")?;
+    if iv.len() != 16 {
+        return Err(PersonaError::InvalidInput(format!(
+            "Invalid keystore iv length: {} (want 16)",
+            iv.len()
+        )));
+    }
+    let mac = hex_decode_field(&keystore.crypto.mac, "mac")?;
+
+    let mut dk = derive_keystore_key(&keystore.crypto, password)?;
+
+    // MAC covers dk[16..32] ‖ ciphertext — verify before touching AES.
+    let mut mac_input = Vec::with_capacity(16 + ciphertext.len());
+    mac_input.extend_from_slice(&dk[16..32]);
+    mac_input.extend_from_slice(&ciphertext);
+    let expected = sha3::Keccak256::digest(&mac_input);
+    let mac_ok: bool = subtle::ConstantTimeEq::ct_eq(&mac[..], &expected[..]).into();
+    if !mac_ok {
+        dk.zeroize();
+        return Err(PersonaError::CryptographicError(
+            "Keystore MAC mismatch: wrong password or corrupted keystore".to_string(),
+        ));
+    }
+
+    let mut cipher = ctr::Ctr128BE::<aes::Aes128>::new_from_slices(&dk[..16], &iv)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid keystore key/iv: {e}")))?;
+    let mut plaintext = ciphertext.clone();
+    cipher.apply_keystream(&mut plaintext);
+    dk.zeroize();
+    Ok(plaintext)
 }
 
-/// Export to Ethereum-compatible keystore JSON
+/// Export a private key to Web3 Secret Storage v3 keystore JSON with geth's
+/// standard scrypt work factors (n = 2^18, r = 8, p = 1).
 pub fn export_to_keystore(
-    _private_key: &[u8],
-    _password: &str,
-    _address: Option<String>,
+    private_key: &[u8],
+    password: &str,
+    address: Option<String>,
 ) -> PersonaResult<String> {
-    // Simplified keystore export (production should use proper scrypt)
-    // This is a placeholder for the full implementation
-    Err(PersonaError::CryptographicError(
-        "Keystore export not yet fully implemented".to_string(),
-    ))
+    export_to_keystore_with_params(private_key, password, address, SCRYPT_EXPORT_DEFAULT)
+}
+
+/// Export with explicit scrypt work factors (tests and tooling use small
+/// factors to stay fast; real exports should use [`SCRYPT_EXPORT_DEFAULT`]).
+pub fn export_to_keystore_with_params(
+    private_key: &[u8],
+    password: &str,
+    address: Option<String>,
+    params: ScryptExportParams,
+) -> PersonaResult<String> {
+    if params.r == 0 || params.p == 0 {
+        return Err(PersonaError::InvalidInput(
+            "Invalid scrypt params: zero work factor".to_string(),
+        ));
+    }
+    if params.log_n > 23 {
+        return Err(PersonaError::InvalidInput(
+            "Invalid scrypt params: log_n above 23".to_string(),
+        ));
+    }
+    let mem = 128u64 * u64::from(params.r) * (1u64 << params.log_n);
+    if mem > SCRYPT_IMPORT_MAX_MEM {
+        return Err(PersonaError::InvalidInput(format!(
+            "scrypt work factor too high ({} bytes > {} cap)",
+            mem, SCRYPT_IMPORT_MAX_MEM
+        )));
+    }
+
+    let mut salt = [0u8; 32];
+    getrandom::fill(&mut salt).expect("failed to generate random salt");
+    let mut iv = [0u8; 16];
+    getrandom::fill(&mut iv).expect("failed to generate random iv");
+
+    let scrypt_params = scrypt::Params::new(params.log_n, params.r, params.p)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid scrypt params: {e}")))?;
+    let mut dk = [0u8; 32];
+    scrypt::scrypt(password.as_bytes(), &salt, &scrypt_params, &mut dk)
+        .map_err(|e| PersonaError::CryptographicError(format!("scrypt failed: {e}")))?;
+
+    let mut ciphertext = private_key.to_vec();
+    ctr::Ctr128BE::<aes::Aes128>::new_from_slices(&dk[..16], &iv)
+        .map_err(|e| PersonaError::InvalidInput(format!("Invalid key/iv: {e}")))?
+        .apply_keystream(&mut ciphertext);
+
+    let mut mac_input = Vec::with_capacity(16 + ciphertext.len());
+    mac_input.extend_from_slice(&dk[16..32]);
+    mac_input.extend_from_slice(&ciphertext);
+    let mac = sha3::Keccak256::digest(&mac_input);
+    dk.zeroize();
+
+    let keystore = KeystoreV3 {
+        version: 3,
+        id: uuid::Uuid::new_v4().to_string(),
+        address,
+        crypto: KeystoreCrypto {
+            cipher: "aes-128-ctr".to_string(),
+            ciphertext: hex::encode(&ciphertext),
+            cipherparams: CipherParams {
+                iv: hex::encode(iv),
+            },
+            kdf: "scrypt".to_string(),
+            kdfparams: KdfParams::Scrypt {
+                dklen: 32,
+                n: 1u32 << params.log_n,
+                r: params.r,
+                p: params.p,
+                salt: hex::encode(salt),
+            },
+            mac: hex::encode(mac),
+        },
+    };
+    ciphertext.zeroize();
+    serde_json::to_string_pretty(&keystore)
+        .map_err(|e| PersonaError::CryptographicError(format!("Failed to serialize keystore: {e}")))
 }
 
 #[cfg(test)]
@@ -350,7 +574,7 @@ mod tests {
                         ciphertext,
                         cipherparams: CipherParams { iv },
                         kdf: "scrypt".to_string(),
-                        kdfparams: KdfParams {
+                        kdfparams: KdfParams::Scrypt {
                             dklen: 32,
                             n: 16384,
                             p: 1,
@@ -476,7 +700,7 @@ mod tests {
                     iv: "bb".to_string(),
                 },
                 kdf: "scrypt".to_string(),
-                kdfparams: KdfParams {
+                kdfparams: KdfParams::Scrypt {
                     dklen: 32,
                     n: 16384,
                     p: 1,
@@ -491,33 +715,233 @@ mod tests {
         assert!(err.to_string().contains("Unsupported keystore version: 1"));
     }
 
+    /// The canonical scrypt vector from go-ethereum's own testdata
+    /// (`accounts/keystore/testdata/v3_test_vector.json`, the
+    /// "wikipage_test_vector_scrypt" entry). Conformance is self-contained:
+    /// a wrong MAC formula fails the MAC check; wrong AES/CTR composition
+    /// yields a key whose address cannot match the spec's published address.
     #[test]
-    fn import_from_keystore_v3_reports_unimplemented() {
+    fn import_from_keystore_spec_vector() {
         let keystore_json = r#"{
-            "version": 3,
-            "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
-            "address": "008aeeda4d805471d9ce51f053c6c1265d6a6ad9",
             "crypto": {
                 "cipher": "aes-128-ctr",
-                "ciphertext": "d172bf743a674da9cdad04534d56926ef8358534d458fffccc4b3b6b0f6de5f1",
+                "ciphertext": "d172bf743a674da9cdad04534d56926ef8358534d458fffccd4e6ad2fbde479c",
                 "cipherparams": {"iv": "83dbcc02d8ccb40e466191a123791e0e"},
                 "kdf": "scrypt",
-                "kdfparams": {"dklen": 32, "n": 262144, "p": 8, "r": 1, "salt": "ab0c7876052600dd703518d6fc3fe8984592145b591fc8fb5c6d43190334ba19"},
-                "mac": "2103ac29920d71da29f15d75b4a16dbe95cfd7ff8ec01d476db6d3c960fcbfff"
-            }
+                "kdfparams": {"dklen": 32, "n": 262144, "r": 1, "p": 8, "salt": "ab0c7876052600dd703518d6fc3fe8984592145b591fc8fb5c6d43190334ba19"},
+                "mac": "2103ac29920d71da29f15d75b4a16dbe95cfd7ff8faea1056c33131d846e3097"
+            },
+            "id": "3198bc9c-6672-5ab3-d995-4942343ae5b6",
+            "version": 3
         }"#;
-        let err = import_from_keystore(keystore_json, "testpassword")
-            .expect_err("v3 import is a placeholder");
-        assert!(err.to_string().contains("not yet fully implemented"));
+        let secret = import_from_keystore(keystore_json, "testpassword")
+            .expect("canonical spec vector must decrypt");
+        assert_eq!(
+            hex::encode(&secret),
+            "7a28b5ba57c53603b0b07b56bba752f7784bf506fa95edc395f5cf6c7514fe9d"
+        );
+
+        // secp256k1 address of the recovered key must equal the spec's
+        // published address: keccak256(pubkey_xy)[12..].
+        let signing_key = k256::ecdsa::SigningKey::from_slice(&secret)
+            .expect("recovered key is a valid secp256k1 key");
+        let uncompressed = signing_key
+            .verifying_key()
+            .to_sec1_point(false)
+            .as_bytes()
+            .to_vec();
+        let hash = sha3::Keccak256::digest(&uncompressed[1..]);
+        let address = hex::encode(&hash[12..]);
+        assert_eq!(address, "008aeeda4d805471df9b2a5b0f38a0c3bcba786b");
+
+        // Wrong password must fail at the MAC, not produce garbage.
+        let err = import_from_keystore(keystore_json, "wrongpassword")
+            .expect_err("wrong password must not decrypt");
+        assert!(err.to_string().contains("MAC mismatch"));
+    }
+
+    /// scrypt KDF layer cross-checked against OpenSSL (python hashlib.scrypt):
+    /// password "test", salt aa×16, n=16 r=1 p=1 dklen=32.
+    #[test]
+    fn keystore_scrypt_derivation_matches_openssl() {
+        let crypto = KeystoreCrypto {
+            cipher: "aes-128-ctr".to_string(),
+            ciphertext: "00".to_string(),
+            cipherparams: CipherParams {
+                iv: "00".repeat(16),
+            },
+            kdf: "scrypt".to_string(),
+            kdfparams: KdfParams::Scrypt {
+                dklen: 32,
+                n: 16,
+                r: 1,
+                p: 1,
+                salt: "aa".repeat(16),
+            },
+            mac: "00".to_string(),
+        };
+        let dk = derive_keystore_key(&crypto, "test").unwrap();
+        assert_eq!(
+            hex::encode(dk),
+            "977a0f4a5c2267090ead966af8edd176a319dec3607cfcbb0b2436687408ffea"
+        );
+    }
+
+    /// pbkdf2 KDF layer cross-checked against OpenSSL (python
+    /// hashlib.pbkdf2_hmac): password "test", salt bb×8, c=1000, sha256.
+    #[test]
+    fn keystore_pbkdf2_derivation_matches_openssl() {
+        let crypto = KeystoreCrypto {
+            cipher: "aes-128-ctr".to_string(),
+            ciphertext: "00".to_string(),
+            cipherparams: CipherParams {
+                iv: "00".repeat(16),
+            },
+            kdf: "pbkdf2".to_string(),
+            kdfparams: KdfParams::Pbkdf2 {
+                dklen: 32,
+                c: 1000,
+                prf: "hmac-sha256".to_string(),
+                salt: "bb".repeat(8),
+            },
+            mac: "00".to_string(),
+        };
+        let dk = derive_keystore_key(&crypto, "test").unwrap();
+        assert_eq!(
+            hex::encode(dk),
+            "78862acd1a1b83cc9120c3214f52ae2e04c19918ebd6f6019231ac41189efb35"
+        );
+    }
+
+    /// Build a full pbkdf2 keystore JSON for roundtrip tests (the KDF layer
+    /// itself is pinned to OpenSSL above; this exercises the MAC + AES
+    /// composition through the same public surface as a real file).
+    fn build_pbkdf2_keystore_json(secret: &[u8], password: &str, c: u32) -> String {
+        use sha3::Digest;
+        let salt = [0x42u8; 16];
+        let iv = [0x43u8; 16];
+        let mut dk = vec![0u8; 32];
+        pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password.as_bytes(), &salt, c, &mut dk);
+        let mut ciphertext = secret.to_vec();
+        ctr::Ctr128BE::<aes::Aes128>::new_from_slices(&dk[..16], &iv)
+            .unwrap()
+            .apply_keystream(&mut ciphertext);
+        let mut mac_input = Vec::with_capacity(16 + ciphertext.len());
+        mac_input.extend_from_slice(&dk[16..32]);
+        mac_input.extend_from_slice(&ciphertext);
+        let mac = sha3::Keccak256::digest(&mac_input);
+        serde_json::json!({
+            "version": 3,
+            "id": Uuid::new_v4(),
+            "crypto": {
+                "cipher": "aes-128-ctr",
+                "ciphertext": hex::encode(&ciphertext),
+                "cipherparams": {"iv": hex::encode(iv)},
+                "kdf": "pbkdf2",
+                "kdfparams": {
+                    "dklen": 32, "c": c, "prf": "hmac-sha256", "salt": hex::encode(salt)
+                },
+                "mac": hex::encode(mac)
+            }
+        })
+        .to_string()
     }
 
     #[test]
-    fn export_to_keystore_is_not_yet_implemented() {
-        let err = export_to_keystore(&[1u8; 32], "pw", None)
-            .expect_err("keystore export is a placeholder");
-        assert!(err
-            .to_string()
-            .contains("Keystore export not yet fully implemented"));
+    fn pbkdf2_keystore_roundtrip() {
+        let secret = [0x5Au8; 32];
+        let json = build_pbkdf2_keystore_json(&secret, "roundtrip-pass", 1000);
+        let recovered = import_from_keystore(&json, "roundtrip-pass").unwrap();
+        assert_eq!(recovered, secret);
+    }
+
+    #[test]
+    fn keystore_scrypt_export_roundtrip() {
+        let secret = [0xC0u8; 32];
+        let json = export_to_keystore_with_params(
+            &secret,
+            "export-pass",
+            Some("008aeeda4d805471d9ce51f053c6c1265d6a6ad9".to_string()),
+            ScryptExportParams {
+                log_n: 4,
+                r: 1,
+                p: 1,
+            },
+        )
+        .unwrap();
+        let parsed: KeystoreV3 = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.version, 3);
+        assert_eq!(
+            parsed.address.as_deref(),
+            Some("008aeeda4d805471d9ce51f053c6c1265d6a6ad9")
+        );
+        let recovered = import_from_keystore(&json, "export-pass").unwrap();
+        assert_eq!(recovered, secret);
+    }
+
+    #[test]
+    fn keystore_tampered_ciphertext_fails_mac() {
+        let secret = [0x11u8; 32];
+        let json = build_pbkdf2_keystore_json(&secret, "mac-pass", 1000);
+        let mut keystore: KeystoreV3 = serde_json::from_str(&json).unwrap();
+        // Flip one bit of the ciphertext.
+        let mut ct = hex::decode(&keystore.crypto.ciphertext).unwrap();
+        ct[0] ^= 0x01;
+        keystore.crypto.ciphertext = hex::encode(ct);
+        let err = import_from_keystore(&serde_json::to_string(&keystore).unwrap(), "mac-pass")
+            .expect_err("tampered ciphertext must fail the MAC");
+        assert!(err.to_string().contains("MAC mismatch"));
+    }
+
+    #[test]
+    fn keystore_rejects_unsupported_kdf_cipher_and_prf() {
+        let secret = [0x22u8; 32];
+        let json = build_pbkdf2_keystore_json(&secret, "fmt-pass", 100);
+        let bad_kdf = json.replace("\"pbkdf2\"", "\"bcrypt\"");
+        let err = import_from_keystore(&bad_kdf, "fmt-pass")
+            .expect_err("unsupported kdf must be rejected");
+        assert!(err.to_string().contains("Unsupported keystore kdf"));
+
+        let bad_cipher = json.replace("aes-128-ctr", "aes-256-cbc");
+        let err = import_from_keystore(&bad_cipher, "fmt-pass")
+            .expect_err("unsupported cipher must be rejected");
+        assert!(err.to_string().contains("Unsupported keystore cipher"));
+
+        let bad_prf = json.replace("hmac-sha256", "hmac-sha512");
+        let err = import_from_keystore(&bad_prf, "fmt-pass")
+            .expect_err("unsupported prf must be rejected");
+        assert!(err.to_string().contains("Unsupported pbkdf2 prf"));
+    }
+
+    #[test]
+    fn keystore_rejects_oversized_scrypt_work_factor() {
+        let crypto = KeystoreCrypto {
+            cipher: "aes-128-ctr".to_string(),
+            ciphertext: "00".to_string(),
+            cipherparams: CipherParams {
+                iv: "00".repeat(16),
+            },
+            kdf: "scrypt".to_string(),
+            // 128 * r * n = 128 * 8 * 2^24 = 4 GiB > 256 MiB cap.
+            kdfparams: KdfParams::Scrypt {
+                dklen: 32,
+                n: 16_777_216,
+                r: 8,
+                p: 1,
+                salt: "aa".repeat(16),
+            },
+            mac: "00".to_string(),
+        };
+        let keystore = KeystoreV3 {
+            version: 3,
+            id: Uuid::new_v4().to_string(),
+            address: None,
+            crypto,
+        };
+        let json = serde_json::to_string(&keystore).unwrap();
+        let err = import_from_keystore(&json, "pw")
+            .expect_err("oversized scrypt must be rejected before any work");
+        assert!(err.to_string().contains("work factor too high"));
     }
 
     #[test]

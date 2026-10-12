@@ -4724,6 +4724,7 @@ dependencies = [
 name = "persona-core"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "aes-gcm",
  "alloy-consensus",
  "alloy-eips",
@@ -4741,6 +4742,7 @@ dependencies = [
  "chrono",
  "coset",
  "csv",
+ "ctr",
  "data-encoding",
  "dirs",
  "ed25519-dalek",
@@ -4765,6 +4767,7 @@ dependencies = [
  "reqwest 0.13.5",
  "ring",
  "ripemd",
+ "scrypt",
  "secp256k1 0.33.1",
  "serde",
  "serde_json",
