@@ -128,30 +128,41 @@ mod tests {
     fn snippets_pass_shell_syntax_and_smoke_run() {
         let dir = std::env::temp_dir().join(format!("persona-hook-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let bash_hook = dir.join("hook.sh");
-        std::fs::write(&bash_hook, bash_snippet()).unwrap();
-        let ok = std::process::Command::new("bash")
-            .arg("-n")
-            .arg(&bash_hook)
+        // `bash` 必须是真 bash 才冒烟（与下面 zsh 同规：可选环境）。GitHub
+        // windows runner 的 PATH 上 `bash` 是 WSL stub——没装发行版时对任何
+        // 参数都报错退出（UTF-16 提示），`--version` 探测不过 → 跳过；片段
+        // 语法本身由 Linux CI 的同测试锁定。
+        let bash_available = std::process::Command::new("bash")
+            .arg("--version")
             .status()
-            .expect("bash available")
-            .success();
-        assert!(ok, "generated bash snippet must be syntactically valid");
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if bash_available {
+            let bash_hook = dir.join("hook.sh");
+            std::fs::write(&bash_hook, bash_snippet()).unwrap();
+            let ok = std::process::Command::new("bash")
+                .arg("-n")
+                .arg(&bash_hook)
+                .status()
+                .expect("bash available")
+                .success();
+            assert!(ok, "generated bash snippet must be syntactically valid");
 
-        // Source + direct call: 命令失败也必须把变量清空（静默降级）。
-        let probe = format!(
-            "source '{}'; __persona_context_ps1; test -z \"$PERSONA_CTX_SUGGEST\"",
-            bash_hook.display()
-        );
-        // PATH 上没有 persona 二进制 → command -v 失败 → 变量保持空。
-        let ok = std::process::Command::new("bash")
-            .arg("-c")
-            .arg(&probe)
-            .env("PATH", "/usr/bin:/bin")
-            .status()
-            .expect("bash smoke run")
-            .success();
-        assert!(ok, "bash hook must degrade to an empty suggestion var");
+            // Source + direct call: 命令失败也必须把变量清空（静默降级）。
+            let probe = format!(
+                "source '{}'; __persona_context_ps1; test -z \"$PERSONA_CTX_SUGGEST\"",
+                bash_hook.display()
+            );
+            // PATH 上没有 persona 二进制 → command -v 失败 → 变量保持空。
+            let ok = std::process::Command::new("bash")
+                .arg("-c")
+                .arg(&probe)
+                .env("PATH", "/usr/bin:/bin")
+                .status()
+                .expect("bash smoke run")
+                .success();
+            assert!(ok, "bash hook must degrade to an empty suggestion var");
+        }
 
         // zsh：装了才冒烟（CI/本机可选）。
         if let Ok(status) = std::process::Command::new("zsh").arg("--version").status() {
