@@ -64,6 +64,24 @@ cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0�
       保留；本地扩展 157 测试 + desktop lint/build + website build 全绿
       - [ ] TS7 迁移（独立工程）：ts-jest 官方路径是装 `@typescript/native`
             并把 `@typescript/typescript6` alias 给 ts-jest，等真需求再排
+- [x] **CI Install deps 红——锁文件+TS 钉版双雷（2026-10-12 修复，
+      `a386a4e`）**：当天 4 个 push（含纯文档 commit）的 Web/Desktop 两
+      job 全挂 Install deps，`ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY`。
+      两条雷都在 dependabot JS 批量 PR：① #84（`4b340aa`，umi
+      4.7.22→4.7.23）写了**半截锁文件**——importer 引用
+      `'@umijs/ast': 4.7.23` 但 packages/snapshots 只有 4.7.22 条目，
+      frozen install 建图即炸；② #83（`181ddac`，dev-deps 组）把
+      typescript ^5.9.3→^7.0.2，**撤销了 a65210c 的钉版**，重撞上面
+      #69 同款 TS7/ts-jest 坑。修复：三处 package.json 钉回 `^5.9.3` +
+      完整 `pnpm install --no-frozen-lockfile` 重建锁文件（**`--lockfile-only`
+      修不了**：resolution 因 specs 匹配被跳过，缺项只在建图时暴露，
+      还会把带 integrity 的条目降成空 `{}` 损伤）；验证 = CI 同款
+      `pnpm install --frozen-lockfile` + extension build/test 157 +
+      desktop lint/jest 723 + website umi build 本地全绿后推，CI 三
+      run 全绿（ci.yml 五 job / docs / docker）。教训：dependabot
+      JS 批量 PR 的锁文件不可信（部分更新），合入后 CI 的
+      frozen-lockfile 步是唯一真闸——与 #62 幻影版本、bincode 占位
+      发布同族，见记忆 dependabot-bump-hazards
 - [x] dtolnay/rust-toolchain 已 dependabot ignore（`.github/dependabot.yml`
       github-actions 段写明理由）——幻影版本 bump 已第三次（#32/#45 秒挂
       未遂、#62 被合入致 main 全红）；工具链升级改由人工定期整体对齐
