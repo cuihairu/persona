@@ -57,6 +57,9 @@ enum TokenCommand {
         /// 限定可读条目类型（snake_case，可多次；缺省 = 全部可授权类型）
         #[arg(long = "type")]
         item_types: Vec<String>,
+        /// 有效期时长（<正整数><s|m|h|d>，如 30d / 12h / 30m；缺省 = 永不过期）
+        #[arg(long = "expires-in")]
+        expires_in: Option<String>,
     },
     /// 列出 token（含已吊销；只有指纹，明文不可找回）
     List,
@@ -82,7 +85,18 @@ pub(crate) async fn execute_with(
                 label,
                 identities,
                 item_types,
-            } => create_token(config, ui, &label, &identities, &item_types).await,
+                expires_in,
+            } => {
+                create_token(
+                    config,
+                    ui,
+                    &label,
+                    &identities,
+                    &item_types,
+                    expires_in.as_deref(),
+                )
+                .await
+            }
             TokenCommand::List => list_tokens(config, ui).await,
             TokenCommand::Revoke { target } => revoke_token(config, ui, &target).await,
         },
@@ -154,6 +168,33 @@ fn parse_item_type(raw: &str) -> Result<ConnectItemType> {
     })
 }
 
+/// 解析 `--expires-in` 时长：`<正整数><s|m|h|d>`（如 `30d`、`12h`、`30m`）。
+/// 从创建时刻起算的相对时长；缺省不传 = 永不过期（沿用既有语义）。
+fn parse_expires_in(raw: &str) -> Result<chrono::Duration> {
+    let Some(idx) = raw.find(|c: char| !c.is_ascii_digit()) else {
+        bail!("invalid duration {raw:?}: expected <number><unit> like 30d, 12h, 30m");
+    };
+    let (digits, unit) = raw.split_at(idx);
+    let amount: i64 = digits
+        .parse()
+        .map_err(|_| anyhow!("invalid duration {raw:?}: number out of range"))?;
+    if amount <= 0 {
+        bail!("invalid duration {raw:?}: must be positive");
+    }
+    let multiplier: i64 = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        "d" => 86400,
+        other => bail!("invalid duration {raw:?}: unknown unit {other:?} (valid: s, m, h, d)"),
+    };
+    let seconds = amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| anyhow!("invalid duration {raw:?}: out of range"))?;
+    chrono::Duration::try_seconds(seconds)
+        .ok_or_else(|| anyhow!("invalid duration {raw:?}: out of range"))
+}
+
 fn type_name(t: &ConnectItemType) -> &'static str {
     match t {
         ConnectItemType::Password => "password",
@@ -201,6 +242,7 @@ async fn create_token(
     label: &str,
     identity_names: &[String],
     item_types: &[String],
+    expires_in: Option<&str>,
 ) -> Result<()> {
     let label = label.trim();
     if label.is_empty() {
@@ -210,11 +252,12 @@ async fn create_token(
         bail!("--label must be at most 128 bytes");
     }
 
-    // 类型解析在解锁之前：参数错了就不该问密码
+    // 类型/时长解析在解锁之前：参数错了就不该问密码
     let types = item_types
         .iter()
         .map(|raw| parse_item_type(raw))
         .collect::<Result<Vec<_>>>()?;
+    let ttl = expires_in.map(parse_expires_in).transpose()?;
 
     let service = open_unlocked(config, ui, None).await?;
 
@@ -234,7 +277,12 @@ async fn create_token(
         verbs: vec![ConnectVerb::Read],
     };
     let (token, row) = service
-        .create_connect_token(label.to_string(), scope, None, None)
+        .create_connect_token(
+            label.to_string(),
+            scope,
+            None,
+            ttl.map(|d| chrono::Utc::now() + d),
+        )
         .await
         .into_anyhow()
         .context("failed to create connect token")?;
@@ -249,6 +297,12 @@ async fn create_token(
     println!("   id:         {}", row.id);
     println!("   fingerprint: {}", row.fingerprint);
     println!("   scope:      {}", scope_summary(&row.scope));
+    match row.expires_at {
+        Some(at) => println!("   expires at: {}", at.to_rfc3339()),
+        None => {
+            println!("   expires at: never (pass --expires-in <n><s|m|h|d> to bound the lifetime)")
+        }
+    }
     println!(
         "   {}",
         "Point your tool at http://127.0.0.1:<port>/api/v1/connect/ with".bright_black()
@@ -275,8 +329,11 @@ async fn list_tokens(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
         return Ok(());
     }
     for row in tokens {
+        let expired = row.expired();
         let state = if row.revoked_at.is_some() {
             "revoked".red()
+        } else if expired {
+            "expired".yellow()
         } else {
             "active".green()
         };
@@ -294,6 +351,11 @@ async fn list_tokens(config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
                 (None, None) => "never used".to_string(),
             }
         });
+        if let Some(at) = row.expires_at {
+            if row.revoked_at.is_none() {
+                println!("    expires at: {}", at.to_rfc3339());
+            }
+        }
     }
     Ok(())
 }
@@ -453,12 +515,22 @@ mod tests {
     }
 
     fn create_args(label: &str, identities: &[&str], types: &[&str]) -> ConnectArgs {
+        create_args_with_ttl(label, identities, types, None)
+    }
+
+    fn create_args_with_ttl(
+        label: &str,
+        identities: &[&str],
+        types: &[&str],
+        expires_in: Option<&str>,
+    ) -> ConnectArgs {
         ConnectArgs {
             command: ConnectCommand::Token {
                 command: TokenCommand::Create {
                     label: label.to_string(),
                     identities: identities.iter().map(|s| s.to_string()).collect(),
                     item_types: types.iter().map(|s| s.to_string()).collect(),
+                    expires_in: expires_in.map(|s| s.to_string()),
                 },
             },
         }
@@ -507,6 +579,71 @@ mod tests {
         assert!(rows[0].scope.identities.is_empty(), "缺省 = 全部身份");
         assert!(rows[0].scope.item_types.is_empty(), "缺省 = 全部类型");
         assert_eq!(audit_count(&config, "connect_token_created").await, 1);
+        assert!(rows[0].expires_at.is_none(), "缺省 = 永不过期");
+    }
+
+    /// `--expires-in` 解析：<正整数><s|m|h|d>；0/负数/空数字/未知单位/
+    /// 溢出一律拒绝。
+    #[test]
+    fn expires_in_parses_units_and_rejects_bad_input() {
+        assert_eq!(parse_expires_in("45s").unwrap().num_seconds(), 45);
+        assert_eq!(parse_expires_in("30m").unwrap().num_seconds(), 1800);
+        assert_eq!(parse_expires_in("12h").unwrap().num_seconds(), 43200);
+        assert_eq!(parse_expires_in("30d").unwrap().num_seconds(), 2_592_000);
+
+        for bad in ["", "d", "0d", "-5h", "1x", "1h30m", "99999999999999999999d"] {
+            assert!(parse_expires_in(bad).is_err(), "{bad:?} must be rejected");
+        }
+    }
+
+    /// 带 `--expires-in` 创建：行内 expires_at 落在未来约 1h（±容差），
+    /// 明文行不落库语义不变。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_with_expires_in_persists_future_expiry() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+
+        execute_with(
+            create_args_with_ttl("ttl-ci", &[], &[], Some("1h")),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap();
+
+        let rows = token_rows(&config).await;
+        assert_eq!(rows.len(), 1);
+        let expires_at = rows[0].expires_at.expect("expiry must be persisted");
+        let delta = expires_at - chrono::Utc::now();
+        assert!(
+            delta.num_seconds() > 3500 && delta.num_seconds() <= 3600,
+            "expiry should be ~1h ahead, got {delta:?}"
+        );
+    }
+
+    /// 坏时长在解锁之前拒绝（不设 PERSONA_MASTER_PASSWORD：真走到解锁
+    /// 会被 ScriptedUi 卡住/报别的错，报错含 invalid duration 即证明
+    /// 参数闸先于密码提示）。
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn create_with_bad_duration_fails_before_prompt() {
+        let _guard = env_guard();
+        let (_dir, config) = seeded_workspace().await;
+
+        let err = execute_with(
+            create_args_with_ttl("bad", &[], &[], Some("1x")),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("invalid duration"), "{err}");
+        assert!(
+            token_rows(&config).await.is_empty(),
+            "no row must be written"
+        );
     }
 
     #[tokio::test]
