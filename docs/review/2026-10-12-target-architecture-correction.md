@@ -233,10 +233,14 @@ Code Agent 应按以下步骤执行：
 
 ## 10. 下一步行动
 
-1. **代码 Agent 执行审查**：按第 8 节方法完成审查。
-2. **校正架构文档**：更新 `docs/src/overview/architecture.md` 和 `docs/src/design/architecture.md`。
-3. **补全关键实现**（如需）：统一授权入口、Connect `use` verb、Token principal 绑定。
-4. **安全测试**：增加授权拒绝、跨上下文访问、敏感导出的测试。
+1. **代码 Agent 执行审查**：按第 8 节方法完成审查。 ✅ 已完成（审计轮 `280a756` + 本报告）。
+2. **校正架构文档**：更新 `docs/src/overview/architecture.md` 和 `docs/src/design/architecture.md`。 ✅ 已完成（2026-10-12 批1/批2 落地后重新对齐：Principal/Action/统一入口改 **Implemented** 并附代码锚；AuthZ 图后差异表、授权决策链、概念实现状态表、受控自动化契约、组件职责、数据流全部按真实口径重写；`design/architecture.md` 分层表补授权层、模块交互图补 `authorize` 步骤、扩展点补授权入口与 Connect 动词扩展指引）。**无悬空概念**：每个概念有代码锚或明确标注。
+3. **补全关键实现**（如需）：统一授权入口、Connect `use` verb、Token principal 绑定。 ✅ 已完成（批1 `820635f`、批2 `06d829c`）。
+4. **安全测试**：增加授权拒绝、跨上下文访问、敏感导出的测试。 ✅ 已完成（2026-10-12）。
+   - 授权拒绝：`authz::tests::denied_error_maps_only_denied`（Denied→`Forbidden` 折算）、`service::tests::connect_scope_denial_writes_unauthorized_access_audit`（服务层拒绝 + 审计）。
+   - 跨上下文访问：`authz::tests::cross_context_access_is_denied`、`service::tests::connect_data_plane_filters_by_scope`、`connect-server::tests::use_only_token_reads_nothing_on_any_endpoint`。
+   - 敏感导出：`authz::tests::ssh_key_sign_and_export_are_different_decisions`（**验收标准**：使用与导出是不同动作不同裁决）+ `sensitive_export_requires_interaction`；CLI 导出确认链有端到端测试（`execute_with_sensitive_gate_can_abort_or_proceed` 等）。
+   - 自动化调用方不能仅凭凭证 ID 读敏感数据：`connect-server::tests::sensitive_types_stay_invisible_even_for_an_all_scope_token`（敏感类型排除法）+ 新增的过期 token 契约测试 `expired_token_is_401_same_shape_as_revoked`（迁移 019 到期时刻在 HTTP 边界生效）。
 
 **验收标准**：
 
