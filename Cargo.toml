@@ -120,7 +120,7 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 config = "0.15"
 
 # 测试
-mockall = "0.12"
+mockall = "0.15"
 proptest = "1.5"
 
 # 其他依赖
