@@ -90,6 +90,83 @@ impl SyncItemSnapshot {
     }
 }
 
+/// passkey 条目的同步快照：远端物化一行 passkey 所需的全部语义字段。
+///
+/// **不含**设备本地事实——`created_at`（新行用物化时刻）、`sign_count` 与
+/// `last_used_at`（每次断言在各设备独立推进；跨设备复制计数只会伪造
+/// WebAuthn 克隆检测基线）。物化时保留接收方已有行的本地使用态。
+///
+/// `encrypted_private_key` 是源端 item key 封存的私钥信封，**原样搬运**：
+/// item key 经 group 信封流转（物化端重包到本机主密钥，key 字节不变），
+/// 同一把 item key 仍可解开这份信封——与主库「附件不变量」同一口径。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SyncPasskeySnapshot {
+    pub identity_id: Uuid,
+    pub rp_id: String,
+    pub rp_name: Option<String>,
+    pub user_handle: Vec<u8>,
+    pub user_name: Option<String>,
+    pub user_display_name: Option<String>,
+    pub credential_id: Vec<u8>,
+    pub encrypted_private_key: Vec<u8>,
+    pub public_key_cose: Vec<u8>,
+    pub alg: i64,
+    pub uv_initialized: bool,
+    pub export_allowed: bool,
+    pub tags: Vec<String>,
+}
+
+impl SyncPasskeySnapshot {
+    /// 从本地 passkey 行组装快照（捕获路径；不含设备本地使用态）。
+    pub fn from_item(item: &crate::models::PasskeyItem) -> Self {
+        Self {
+            identity_id: item.identity_id,
+            rp_id: item.rp_id.clone(),
+            rp_name: item.rp_name.clone(),
+            user_handle: item.user_handle.clone(),
+            user_name: item.user_name.clone(),
+            user_display_name: item.user_display_name.clone(),
+            credential_id: item.credential_id.clone(),
+            encrypted_private_key: item.encrypted_private_key.clone(),
+            public_key_cose: item.public_key_cose.clone(),
+            alg: item.alg,
+            uv_initialized: item.uv_initialized,
+            export_allowed: item.export_allowed,
+            tags: item.tags.clone(),
+        }
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(self)?)
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        Ok(bincode::deserialize(bytes)?)
+    }
+
+    /// 用 item key 加密封条（同步 payload 的 `ciphertext` 字段）。
+    pub fn seal(&self, item_key: &[u8; 32]) -> Result<Vec<u8>> {
+        EncryptionService::new(item_key)
+            .encrypt(&self.to_bytes()?)
+            .map_err(|e| {
+                PersonaError::CryptographicError(format!("failed to seal passkey snapshot: {e}"))
+                    .into()
+            })
+    }
+
+    /// 拆封（物化路径；key 不对或密文被篡改一律 fail-closed）。
+    pub fn open(sealed: &[u8], item_key: &[u8; 32]) -> Result<Self> {
+        let plaintext = EncryptionService::new(item_key)
+            .decrypt(sealed)
+            .map_err(|_| {
+                PersonaError::CryptographicError(
+                    "failed to open passkey snapshot with item key".to_string(),
+                )
+            })?;
+        Self::from_bytes(&plaintext)
+    }
+}
+
 /// 库级快照包（S2 收口，E2EE_SYNC_DESIGN §5「库级快照与指令压缩」）：
 /// 某一服务器 seq 处的整库状态包——本机 oplog 的**视图充分集**（每条目的
 /// 主位 op + 未裁决冲突副本，tombstone 主位同样在场；被 GC 的旧版本视图
@@ -246,6 +323,69 @@ mod tests {
         assert_eq!(snap.name, "Bank");
         assert_eq!(snap.credential_type, CredentialType::BankCard);
         assert_eq!(snap.data.to_bytes().unwrap(), data.to_bytes().unwrap());
+    }
+
+    // ---- passkey 快照 ----
+
+    fn passkey_item() -> crate::models::PasskeyItem {
+        let mut item = crate::models::PasskeyItem::new(
+            Uuid::new_v4(),
+            "example.com".to_string(),
+            b"user-handle".to_vec(),
+            b"credential-id-32-bytes-xxxxxxxxxxxx".to_vec(),
+            vec![9; 48],
+            vec![7; 48],
+            b"cose-key".to_vec(),
+        );
+        item.rp_name = Some("Example".to_string());
+        item.user_name = Some("alice@example.com".to_string());
+        item.user_display_name = Some("Alice".to_string());
+        item.uv_initialized = true;
+        item.export_allowed = false;
+        item.tags = vec!["synced".to_string()];
+        item
+    }
+
+    #[test]
+    fn passkey_snapshot_round_trip_preserves_every_field() {
+        let item = passkey_item();
+        let snap = SyncPasskeySnapshot::from_item(&item);
+        let opened = SyncPasskeySnapshot::from_bytes(&snap.to_bytes().unwrap()).unwrap();
+        assert_eq!(opened.identity_id, item.identity_id);
+        assert_eq!(opened.rp_id, "example.com");
+        assert_eq!(opened.rp_name.as_deref(), Some("Example"));
+        assert_eq!(opened.user_handle, item.user_handle);
+        assert_eq!(opened.user_name.as_deref(), Some("alice@example.com"));
+        assert_eq!(opened.user_display_name.as_deref(), Some("Alice"));
+        assert_eq!(opened.credential_id, item.credential_id);
+        assert_eq!(opened.encrypted_private_key, item.encrypted_private_key);
+        assert_eq!(opened.public_key_cose, item.public_key_cose);
+        assert_eq!(opened.alg, item.alg);
+        assert!(opened.uv_initialized);
+        assert!(!opened.export_allowed);
+        assert_eq!(opened.tags, vec!["synced".to_string()]);
+    }
+
+    #[test]
+    fn passkey_snapshot_seal_open_and_fail_closed() {
+        let snap = SyncPasskeySnapshot::from_item(&passkey_item());
+        let item_key = EncryptionService::generate_key();
+        let sealed = snap.seal(&item_key).unwrap();
+        assert_ne!(sealed, snap.to_bytes().unwrap(), "密封后必须是密文");
+        assert_eq!(
+            SyncPasskeySnapshot::open(&sealed, &item_key)
+                .unwrap()
+                .credential_id,
+            snap.credential_id
+        );
+        // 错 key / 篡改 / 截断 fail-closed
+        assert!(SyncPasskeySnapshot::open(&sealed, &EncryptionService::generate_key()).is_err());
+        let mut tampered = sealed.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert!(SyncPasskeySnapshot::open(&tampered, &item_key).is_err());
+        assert!(SyncPasskeySnapshot::open(&sealed[..12], &item_key).is_err());
+        assert!(SyncPasskeySnapshot::from_bytes(b"not bincode").is_err());
     }
 
     // ---- 库级快照包（S2，E2EE_SYNC_DESIGN §5）----

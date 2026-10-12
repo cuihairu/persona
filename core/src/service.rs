@@ -31,7 +31,7 @@ use crate::{
     },
     sync::capture::SyncCapture,
     sync::oplog::{ItemKind, OpType},
-    sync::snapshot::SyncItemSnapshot,
+    sync::snapshot::{SyncItemSnapshot, SyncPasskeySnapshot},
     PersonaError, Result,
 };
 use std::{
@@ -1358,7 +1358,9 @@ impl PersonaService {
         let master_encryption = self.get_master_encryption_service()?;
         let hierarchy = KeyHierarchy::new(master_encryption);
         let scalar = registration.signing_key.to_bytes();
-        let envelope = hierarchy.encrypt_with_new_item_key(scalar.as_slice())?;
+        // 同步捕获需要 item key 明文（包 group 信封）——与凭据同款 revealed 变体
+        let (envelope, item_key) =
+            hierarchy.encrypt_with_new_item_key_revealed(scalar.as_slice())?;
 
         let user_handle = match user_handle {
             Some(handle) => handle,
@@ -1387,6 +1389,25 @@ impl PersonaService {
             None,
         )
         .await;
+        // 同步载荷 = passkey 语义快照（不含设备本地使用态）密封——与凭据
+        // 捕获同口径：密封失败只跳过捕获，不影响主库写入。
+        match SyncPasskeySnapshot::from_item(&created).seal(&item_key) {
+            Ok(sealed) => {
+                self.capture_sync(
+                    created.id,
+                    ItemKind::Passkey,
+                    OpType::Put,
+                    Some(sealed),
+                    Some(item_key),
+                )
+                .await;
+            }
+            Err(e) => tracing::warn!(
+                passkey_id = %created.id,
+                error = %e,
+                "passkey sync snapshot seal failed; capture skipped"
+            ),
+        }
         Ok(PasskeyCreation {
             item: created,
             attestation_object: registration.attestation_object,
@@ -1446,6 +1467,11 @@ impl PersonaService {
             None,
         )
         .await;
+        // 删除照实广播 tombstone（尽力而为旁路：无捕获装配时是 no-op）
+        if ok {
+            self.capture_sync(*id, ItemKind::Passkey, OpType::Delete, None, None)
+                .await;
+        }
         Ok(ok)
     }
 

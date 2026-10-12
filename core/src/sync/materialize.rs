@@ -23,11 +23,16 @@ use crate::crypto::encryption::EncryptionService;
 use crate::crypto::key_hierarchy::KeyHierarchy;
 use crate::models::Credential;
 use crate::storage::sync_repository::SyncRepository;
-use crate::storage::{AuditLogRepository, CredentialRepository, IdentityRepository, Repository};
+use crate::storage::{
+    AuditLogRepository, CredentialRepository, IdentityRepository, PasskeyRepository, Repository,
+};
 use crate::sync::keys::unwrap_item_key_with_group;
 use crate::sync::keys::GroupKey;
 use crate::sync::oplog::{item_view, ItemKind, OpType};
-use crate::sync::snapshot::SyncItemSnapshot;
+use std::sync::Arc;
+
+use crate::models::PasskeyItem;
+use crate::sync::snapshot::{SyncItemSnapshot, SyncPasskeySnapshot};
 use crate::{Database, Result};
 
 /// 单个 item 的物化结果。
@@ -41,7 +46,7 @@ pub enum MaterializeOutcome {
     SkippedLocalPrimary,
     /// 快照引用的身份本地还没有（Identity 同步在后续批次）——留待下轮。
     SkippedPendingIdentity { identity_id: Uuid },
-    /// 非 Credential 条目（Identity/Passkey 的捕获与物化在后续批次）。
+    /// 不支持的条目种类（Identity 的捕获与物化在后续批次；未知 kind）。
     SkippedUnsupportedKind,
     /// oplog 无该 item 的 op（防御：调用方枚举与查询竞态）。
     NoPrimary,
@@ -64,6 +69,7 @@ pub struct MaterializeReport {
 pub struct Materializer {
     credential_repo: CredentialRepository,
     identity_repo: IdentityRepository,
+    passkey_repo: PasskeyRepository,
     sync_repo: SyncRepository,
     audit_repo: AuditLogRepository,
 }
@@ -73,6 +79,7 @@ impl Materializer {
         Self {
             credential_repo: CredentialRepository::new(db.clone()),
             identity_repo: IdentityRepository::new(db.clone()),
+            passkey_repo: PasskeyRepository::new(Arc::new(db.clone())),
             sync_repo: SyncRepository::new(db.clone()),
             audit_repo: AuditLogRepository::new(db),
         }
@@ -128,28 +135,55 @@ impl Materializer {
         if primary.device_id == local_device_id {
             return Ok(MaterializeOutcome::SkippedLocalPrimary);
         }
-        if primary.kind != ItemKind::Credential {
-            return Ok(MaterializeOutcome::SkippedUnsupportedKind);
-        }
-        match primary.op {
-            OpType::Delete => {
-                self.materialize_delete(item_id).await?;
-                Ok(MaterializeOutcome::Tombstoned)
-            }
-            OpType::Put => {
-                let Some(payload) = primary.payload else {
-                    // 协议不变量违反（put 必带 payload）：fail-closed，不写库。
-                    tracing::warn!(item_id = %item_id, "remote put without payload; ignored");
-                    return Ok(MaterializeOutcome::NoPrimary);
-                };
-                self.materialize_put(
-                    item_id,
-                    &payload.ciphertext,
-                    &payload.wrapped_item_key,
-                    master,
-                    group,
-                )
-                .await
+        match primary.kind {
+            ItemKind::Credential => match primary.op {
+                OpType::Delete => {
+                    self.materialize_delete(item_id).await?;
+                    Ok(MaterializeOutcome::Tombstoned)
+                }
+                OpType::Put => {
+                    let Some(payload) = primary.payload else {
+                        // 协议不变量违反（put 必带 payload）：fail-closed，不写库。
+                        tracing::warn!(item_id = %item_id, "remote put without payload; ignored");
+                        return Ok(MaterializeOutcome::NoPrimary);
+                    };
+                    self.materialize_put(
+                        item_id,
+                        &payload.ciphertext,
+                        &payload.wrapped_item_key,
+                        master,
+                        group,
+                    )
+                    .await
+                }
+            },
+            ItemKind::Passkey => match primary.op {
+                OpType::Delete => {
+                    // passkeys 表无入站 FK，无需摘引用
+                    self.passkey_repo.delete(item_id).await?;
+                    Ok(MaterializeOutcome::Tombstoned)
+                }
+                OpType::Put => {
+                    let Some(payload) = primary.payload else {
+                        tracing::warn!(
+                            item_id = %item_id,
+                            "remote passkey put without payload; ignored"
+                        );
+                        return Ok(MaterializeOutcome::NoPrimary);
+                    };
+                    self.materialize_passkey_put(
+                        item_id,
+                        &payload.ciphertext,
+                        &payload.wrapped_item_key,
+                        master,
+                        group,
+                    )
+                    .await
+                }
+            },
+            // Identity 的捕获与物化在后续批次；未知 kind 不产生本地写
+            ItemKind::Identity | ItemKind::Unknown => {
+                Ok(MaterializeOutcome::SkippedUnsupportedKind)
             }
         }
     }
@@ -234,6 +268,59 @@ impl Materializer {
                 self.credential_repo.create(&credential).await?;
             }
         }
+        Ok(MaterializeOutcome::Written)
+    }
+
+    /// 物化一个 passkey put 主位进主库。私钥信封原样搬运：item key 字节
+    /// 不变（group 信封拆出后重包到本机主密钥），物化后的行照常可解私钥；
+    /// 设备本地使用态（`created_at`/`sign_count`/`last_used_at`）由
+    /// [`PasskeyRepository::upsert_synced`] 保留，远端不携带。
+    async fn materialize_passkey_put(
+        &self,
+        item_id: &Uuid,
+        ciphertext: &[u8],
+        wrapped_item_key: &[u8],
+        master: &EncryptionService,
+        group: &GroupKey,
+    ) -> Result<MaterializeOutcome> {
+        let item_key = unwrap_item_key_with_group(wrapped_item_key, group)?;
+        let snapshot = SyncPasskeySnapshot::open(ciphertext, &item_key)?;
+
+        if self
+            .identity_repo
+            .find_by_id(&snapshot.identity_id)
+            .await?
+            .is_none()
+        {
+            return Ok(MaterializeOutcome::SkippedPendingIdentity {
+                identity_id: snapshot.identity_id,
+            });
+        }
+
+        // 重包：同一把 item key 改由本机主密钥包裹（私钥信封不变量维持）。
+        let wrapped_local = master.encrypt(&item_key).map_err(|e| {
+            crate::PersonaError::CryptographicError(format!("failed to wrap item key: {e}"))
+        })?;
+
+        let mut item = PasskeyItem::new(
+            snapshot.identity_id,
+            snapshot.rp_id,
+            snapshot.user_handle,
+            snapshot.credential_id,
+            snapshot.encrypted_private_key,
+            wrapped_local,
+            snapshot.public_key_cose,
+        );
+        item.id = *item_id;
+        item.rp_name = snapshot.rp_name;
+        item.user_name = snapshot.user_name;
+        item.user_display_name = snapshot.user_display_name;
+        item.alg = snapshot.alg;
+        item.uv_initialized = snapshot.uv_initialized;
+        item.export_allowed = snapshot.export_allowed;
+        item.tags = snapshot.tags;
+
+        self.passkey_repo.upsert_synced(&item).await?;
         Ok(MaterializeOutcome::Written)
     }
 }
@@ -811,5 +898,268 @@ mod tests {
             2,
             "两条 op 都留在 oplog，可重跑补齐"
         );
+    }
+
+    // ---- passkey 物化 ----
+
+    fn passkey_put_op(
+        item_id: Uuid,
+        device_id: Uuid,
+        lamport: u64,
+        item_key: &[u8; 32],
+        snapshot: &SyncPasskeySnapshot,
+        group: &GroupKey,
+    ) -> SyncOp {
+        SyncOp {
+            op_id: Uuid::new_v4(),
+            item_id,
+            kind: ItemKind::Passkey,
+            op: OpType::Put,
+            lamport,
+            device_id,
+            timestamp: Some(Utc::now()),
+            payload: Some(SyncPayload {
+                ciphertext: snapshot.seal(item_key).unwrap(),
+                wrapped_item_key: wrap_item_key_with_group(item_key, group),
+            }),
+        }
+    }
+
+    fn passkey_snapshot(identity_id: Uuid, rp_id: &str, private_key: &[u8]) -> SyncPasskeySnapshot {
+        SyncPasskeySnapshot {
+            identity_id,
+            rp_id: rp_id.to_string(),
+            rp_name: Some("Example".to_string()),
+            user_handle: b"remote-handle".to_vec(),
+            user_name: Some("bob@example.com".to_string()),
+            user_display_name: None,
+            credential_id: b"credential-id-32-bytes-remote-xxxx".to_vec(),
+            encrypted_private_key: private_key.to_vec(),
+            public_key_cose: b"cose".to_vec(),
+            alg: -7,
+            uv_initialized: true,
+            export_allowed: false,
+            tags: vec!["remote".to_string()],
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_passkey_put_materializes_row_and_private_key_stays_decryptable() {
+        let (_db, materializer, _identity_repo, group, identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+
+        let item_id = Uuid::new_v4();
+        let item_key = EncryptionService::generate_key();
+        // 私钥信封 = item key 封存的标量字节（与 create_passkey_full 同构）
+        let scalar = b"p256-scalar-bytes-32-bytes-xxxxxxx";
+        let sealed_key = EncryptionService::new(&item_key).encrypt(scalar).unwrap();
+        let snapshot = passkey_snapshot(identity_id, "remote.example", &sealed_key);
+        materializer
+            .sync_repo
+            .record_remote_op(&passkey_put_op(
+                item_id,
+                Uuid::new_v4(),
+                3,
+                &item_key,
+                &snapshot,
+                &group,
+            ))
+            .await
+            .unwrap();
+
+        let outcome = materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(outcome, MaterializeOutcome::Written);
+
+        let row = materializer
+            .passkey_repo
+            .find_by_id(&item_id)
+            .await
+            .unwrap()
+            .expect("passkey row materialized");
+        assert_eq!(row.rp_id, "remote.example");
+        assert_eq!(row.user_name.as_deref(), Some("bob@example.com"));
+        assert!(!row.export_allowed);
+        assert_eq!(row.alg, -7);
+
+        // item key 重包到本机主密钥且字节不变 → 私钥信封照常可解
+        let hierarchy = KeyHierarchy::new(&master);
+        let scalar_out = hierarchy
+            .decrypt_with_wrapped_key(&row.wrapped_item_key, &row.encrypted_private_key)
+            .unwrap();
+        assert_eq!(scalar_out, scalar);
+        // 设备本地使用态走零值（远端快照不携带）
+        assert_eq!(row.sign_count, 0);
+        assert!(row.last_used_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_passkey_put_overwrites_semantics_but_keeps_local_usage() {
+        let (db, materializer, _identity_repo, group, identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+
+        let item_id = Uuid::new_v4();
+        let item_key = EncryptionService::generate_key();
+        let sealed_key = EncryptionService::new(&item_key)
+            .encrypt(b"scalar-v1")
+            .unwrap();
+        materializer
+            .sync_repo
+            .record_remote_op(&passkey_put_op(
+                item_id,
+                Uuid::new_v4(),
+                1,
+                &item_key,
+                &passkey_snapshot(identity_id, "first.example", &sealed_key),
+                &group,
+            ))
+            .await
+            .unwrap();
+        materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+
+        // 本机使用态：直接写（repo.update 的语义字段集不含 sign_count）
+        sqlx::query("UPDATE passkeys SET sign_count = 5, last_used_at = ? WHERE id = ?")
+            .bind(Utc::now().timestamp())
+            .bind(item_id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        // 远端第二轮 put（新 lamport）：换 rp、换私钥信封
+        let sealed_key2 = EncryptionService::new(&item_key)
+            .encrypt(b"scalar-v2")
+            .unwrap();
+        materializer
+            .sync_repo
+            .record_remote_op(&passkey_put_op(
+                item_id,
+                Uuid::new_v4(),
+                2,
+                &item_key,
+                &passkey_snapshot(identity_id, "second.example", &sealed_key2),
+                &group,
+            ))
+            .await
+            .unwrap();
+        let outcome = materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(outcome, MaterializeOutcome::Written);
+
+        let row = materializer
+            .passkey_repo
+            .find_by_id(&item_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.rp_id, "second.example");
+        // 使用态保留本机值
+        assert_eq!(row.sign_count, 5);
+        assert!(row.last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn remote_passkey_tombstone_deletes_local_row() {
+        let (_db, materializer, _identity_repo, group, identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+
+        let item_id = Uuid::new_v4();
+        let item_key = EncryptionService::generate_key();
+        let sealed_key = EncryptionService::new(&item_key)
+            .encrypt(b"scalar")
+            .unwrap();
+        materializer
+            .sync_repo
+            .record_remote_op(&passkey_put_op(
+                item_id,
+                Uuid::new_v4(),
+                1,
+                &item_key,
+                &passkey_snapshot(identity_id, "gone.example", &sealed_key),
+                &group,
+            ))
+            .await
+            .unwrap();
+        materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(materializer
+            .passkey_repo
+            .find_by_id(&item_id)
+            .await
+            .unwrap()
+            .is_some());
+
+        materializer
+            .sync_repo
+            .record_remote_op(&SyncOp {
+                op_id: Uuid::new_v4(),
+                item_id,
+                kind: ItemKind::Passkey,
+                op: OpType::Delete,
+                lamport: 2,
+                device_id: Uuid::new_v4(),
+                timestamp: Some(Utc::now()),
+                payload: None,
+            })
+            .await
+            .unwrap();
+        let outcome = materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert_eq!(outcome, MaterializeOutcome::Tombstoned);
+        assert!(materializer
+            .passkey_repo
+            .find_by_id(&item_id)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_passkey_put_with_unknown_identity_defers() {
+        let (_db, materializer, _identity_repo, group, _identity_id) = setup().await;
+        let master = EncryptionService::new(&EncryptionService::generate_key());
+
+        let item_id = Uuid::new_v4();
+        let item_key = EncryptionService::generate_key();
+        let sealed_key = EncryptionService::new(&item_key)
+            .encrypt(b"scalar")
+            .unwrap();
+        materializer
+            .sync_repo
+            .record_remote_op(&passkey_put_op(
+                item_id,
+                Uuid::new_v4(),
+                1,
+                &item_key,
+                &passkey_snapshot(Uuid::new_v4(), "dangling.example", &sealed_key),
+                &group,
+            ))
+            .await
+            .unwrap();
+
+        let outcome = materializer
+            .materialize_item(&item_id, &master, &group, Uuid::new_v4())
+            .await
+            .unwrap();
+        assert!(matches!(
+            outcome,
+            MaterializeOutcome::SkippedPendingIdentity { .. }
+        ));
+        assert!(materializer
+            .passkey_repo
+            .find_by_id(&item_id)
+            .await
+            .unwrap()
+            .is_none());
     }
 }

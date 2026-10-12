@@ -13,6 +13,7 @@ use persona_core::models::credential::{
 };
 use persona_core::models::identity::{Identity, IdentityType};
 use persona_core::storage::database::Database;
+use persona_core::storage::passkey_repository::PasskeyRepository;
 use persona_core::storage::repository::{CredentialRepository, IdentityRepository};
 use persona_core::sync::capture::SyncCapture;
 use persona_core::sync::device::DeviceIdentity;
@@ -20,7 +21,7 @@ use persona_core::sync::envelope;
 use persona_core::sync::oplog::{ItemKind, OpType};
 use persona_core::sync::remote::SyncAdminApi;
 use persona_core::sync::runtime::SyncSession;
-use persona_core::sync::snapshot::SyncItemSnapshot;
+use persona_core::sync::snapshot::{SyncItemSnapshot, SyncPasskeySnapshot};
 use persona_core::Repository;
 use persona_server::auth::AuthTokens;
 use persona_server::build_router;
@@ -563,4 +564,94 @@ async fn snapshot_bootstrap_plus_increment_converges_over_real_tcp() {
         "increment must converge on the snapshot base"
     );
     assert!(b_names2.contains(&"item-1002".to_string()));
+}
+
+#[tokio::test]
+async fn passkey_put_and_delete_sync_between_devices() {
+    let (url, _server_pool, _server_dir) = spawn_server().await;
+    let admin_a = SyncAdminApi::new(&url, TOKEN_A).unwrap();
+
+    let shared_identity = Identity::new("e2e-passkey".to_string(), IdentityType::Personal);
+    let identity_id = shared_identity.id;
+    let a = make_device(identity_id).await;
+    let b = make_device(identity_id).await;
+
+    let (identity_a, _device_id_a) = register_device(&admin_a, "device-a", TOKEN_A, true).await;
+    let (identity_b, device_id_b) = register_device(&admin_a, "device-b", TOKEN_B, false).await;
+    authorize(&admin_a, &identity_a, device_id_b).await;
+    let session_a = SyncSession::open(&a.db, &identity_a, &url, TOKEN_A, no_travel())
+        .await
+        .unwrap();
+    let session_b = SyncSession::open(&b.db, &identity_b, &url, TOKEN_B, no_travel())
+        .await
+        .unwrap();
+
+    // A 注册 passkey（capture 语义与 service.create_passkey_full 同构）：
+    // 私钥信封 = item key 封存的标量，快照携带语义字段，item key 包 group 信封
+    let item_id = Uuid::new_v4();
+    let item_key = EncryptionService::generate_key();
+    let scalar = EncryptionService::generate_key();
+    let sealed_private = EncryptionService::new(&item_key)
+        .encrypt(scalar.as_slice())
+        .unwrap();
+    let snap = SyncPasskeySnapshot {
+        identity_id,
+        rp_id: "example.com".to_string(),
+        rp_name: Some("Example".to_string()),
+        user_handle: b"e2e-handle".to_vec(),
+        user_name: Some("e2e@example.com".to_string()),
+        user_display_name: None,
+        credential_id: b"e2e-credential-id-32-bytes-xxxxxxx".to_vec(),
+        encrypted_private_key: sealed_private,
+        public_key_cose: b"e2e-cose".to_vec(),
+        alg: -7,
+        uv_initialized: true,
+        export_allowed: true,
+        tags: vec![],
+    };
+    session_a
+        .capture()
+        .capture(
+            item_id,
+            ItemKind::Passkey,
+            OpType::Put,
+            Some(snap.seal(&item_key).unwrap()),
+            Some(Zeroizing::new(item_key)),
+        )
+        .await;
+    let report = session_a.run_cycle(&a.master).await.unwrap();
+    assert_eq!(report.pushed, 1, "passkey put should push to the server");
+
+    // B 拉取物化：passkeys 表出现同 id 行，item key 重包到 B 的主密钥，
+    // 私钥信封照常可解
+    let report_b = session_b.run_cycle(&b.master).await.unwrap();
+    assert!(
+        report_b.materialized >= 1,
+        "B should materialize A's passkey, got {report_b:?}"
+    );
+    let b_repo = PasskeyRepository::new(std::sync::Arc::new(b.db.clone()));
+    let row = b_repo
+        .find_by_id(&item_id)
+        .await
+        .unwrap()
+        .expect("passkey row materialized on B");
+    assert_eq!(row.rp_id, "example.com");
+    assert_eq!(row.user_name.as_deref(), Some("e2e@example.com"));
+    let scalar_out = KeyHierarchy::new(&b.master)
+        .decrypt_with_wrapped_key(&row.wrapped_item_key, &row.encrypted_private_key)
+        .unwrap();
+    assert_eq!(scalar_out.as_slice(), scalar.as_slice());
+
+    // A 删除 → tombstone → B 主库行消失
+    session_a
+        .capture()
+        .capture(item_id, ItemKind::Passkey, OpType::Delete, None, None)
+        .await;
+    let report = session_a.run_cycle(&a.master).await.unwrap();
+    assert_eq!(report.pushed, 1, "tombstone should push to the server");
+    session_b.run_cycle(&b.master).await.unwrap();
+    assert!(
+        b_repo.find_by_id(&item_id).await.unwrap().is_none(),
+        "B should tombstone the passkey"
+    );
 }
