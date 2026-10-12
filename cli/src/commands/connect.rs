@@ -234,7 +234,7 @@ async fn create_token(
         verbs: vec![ConnectVerb::Read],
     };
     let (token, row) = service
-        .create_connect_token(label.to_string(), scope)
+        .create_connect_token(label.to_string(), scope, None, None)
         .await
         .into_anyhow()
         .context("failed to create connect token")?;

@@ -13,10 +13,10 @@
 //!   （CLI 确认、桌面对话框、agent 审批/生物识别）；履约完成前视同未
 //!   授权。非交互上下文直接拒绝（fail-closed），不产生「等一个永远不
 //!   来的确认」。
-//! - 动词模型统一 read/use/export/sign：Connect token 目前只能被授予
-//!   `read`（创建期 `validate` 强制，见 `ConnectTokenScope::validate`），
-//!   其余动词对 token 一律拒绝；agent 密钥唯一能力是签名；本地会话的
-//!   导出永远要求显式确认。
+//! - 动词模型统一 read/use/export/sign：Connect token 可被授予 `read`/
+//!   `use`（创建期 `validate` 限定子集，见 `ConnectTokenScope::validate`），
+//!   export/sign 对 token 一律拒绝（不是 Connect 动词）；agent 密钥唯一
+//!   能力是签名；本地会话的导出永远要求显式确认。
 
 use crate::connect::token::{ConnectTokenScope, ConnectVerb};
 use crate::models::CredentialType;
@@ -34,12 +34,13 @@ pub enum AuthzAction {
 }
 
 impl AuthzAction {
-    /// Connect verb 折算：`read` 是目前唯一可授予 token 的动词；
-    /// use/export/sign 不是 Connect 动词（无对应端点）。
+    /// Connect verb 折算：`read`/`use` 可授予 token（use 供签名/出码类
+    /// 端点，导出永不授予）；export/sign 不是 Connect 动词（无对应端点）。
     pub fn connect_verb(self) -> Option<ConnectVerb> {
         match self {
             Self::Read => Some(ConnectVerb::Read),
-            Self::Use | Self::Export | Self::Sign => None,
+            Self::Use => Some(ConnectVerb::Use),
+            Self::Export | Self::Sign => None,
         }
     }
 
@@ -300,7 +301,8 @@ mod tests {
         );
         assert!(matches!(d, AuthzDecision::Denied { .. }));
 
-        // token 请求 use/export/sign：Connect 动词集外，无论 scope 如何。
+        // token 请求 use/export/sign：read-only scope 未授予 use（export/
+        // sign 本就不是 Connect 动词，任何 scope 都不可能授予）。
         for action in [AuthzAction::Use, AuthzAction::Export, AuthzAction::Sign] {
             let d = authorize(
                 &AuthzPrincipal::ConnectToken {
@@ -523,5 +525,58 @@ mod tests {
                 AuthzDecision::Denied { .. }
             ));
         }
+    }
+
+    /// use 动词 token（架构校正批2）：签名/出码类操作可授予，导出与
+    /// 签名之外的读路径按 scope 判定；纯 use token 读不到数据面。
+    #[test]
+    fn token_use_verb_grants_use_but_never_export() {
+        let id = Uuid::new_v4();
+        let scope = ConnectTokenScope {
+            identities: vec![id],
+            item_types: vec![],
+            verbs: vec![ConnectVerb::Read, ConnectVerb::Use],
+        };
+        let principal = AuthzPrincipal::ConnectToken { scope };
+
+        // use 在 scope 内凭据上放行；export/sign 永远拒绝（非 Connect 动词）。
+        assert!(authorize(
+            &principal,
+            &cred(id),
+            AuthzAction::Use,
+            &AuthzContext::CONNECT
+        )
+        .is_allowed());
+        for action in [AuthzAction::Export, AuthzAction::Sign] {
+            assert!(matches!(
+                authorize(&principal, &cred(id), action, &AuthzContext::CONNECT),
+                AuthzDecision::Denied { .. }
+            ));
+        }
+
+        // 纯 use token：读不到（read 未授予）。
+        let use_only = AuthzPrincipal::ConnectToken {
+            scope: ConnectTokenScope {
+                identities: vec![],
+                item_types: vec![],
+                verbs: vec![ConnectVerb::Use],
+            },
+        };
+        assert!(matches!(
+            authorize(
+                &use_only,
+                &cred(Uuid::new_v4()),
+                AuthzAction::Read,
+                &AuthzContext::CONNECT
+            ),
+            AuthzDecision::Denied { .. }
+        ));
+        assert!(authorize(
+            &use_only,
+            &cred(Uuid::new_v4()),
+            AuthzAction::Use,
+            &AuthzContext::CONNECT
+        )
+        .is_allowed());
     }
 }

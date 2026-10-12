@@ -2208,11 +2208,15 @@ impl PersonaService {
 
     /// 创建 Connect token：返回 `(presented 明文, 库行)`——明文仅此一次
     /// 展示，调用方（桌面设置页/CLI）负责「关闭后无法再次查看」语义。
-    /// 管理操作走敏感门禁（reauth）+ 解锁会话（DR-5）。
+    /// `principal` 绑定调用方身份（空/空白归一为 `None`）；`expires_at`
+    /// 为 `None` = 永不过期（旧数据语义）。管理操作走敏感门禁（reauth）
+    /// + 解锁会话（DR-5）。
     pub async fn create_connect_token(
         &self,
         label: String,
         scope: ConnectTokenScope,
+        principal: Option<String>,
+        expires_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> Result<(String, ConnectTokenRow)> {
         self.ensure_sensitive_operation_allowed().await?;
         self.connect_gate()?;
@@ -2227,6 +2231,24 @@ impl PersonaService {
             )
             .into());
         }
+        let principal = principal
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
+        if principal
+            .as_deref()
+            .is_some_and(|p| p.chars().count() > 256)
+        {
+            return Err(PersonaError::InvalidInput(
+                "connect token principal must be at most 256 characters".to_string(),
+            )
+            .into());
+        }
+        if expires_at.is_some_and(|t| t <= chrono::Utc::now()) {
+            return Err(PersonaError::InvalidInput(
+                "connect token expiry must be in the future".to_string(),
+            )
+            .into());
+        }
 
         let presented = crate::connect::generate_token();
         let hash = crate::connect::hash_token(&presented).ok_or_else(|| {
@@ -2238,9 +2260,11 @@ impl PersonaService {
             fingerprint: crate::connect::fingerprint_from_hash(&hash),
             hash,
             scope,
+            principal,
             created_at: chrono::Utc::now(),
             last_used_at: None,
             revoked_at: None,
+            expires_at,
         };
         ConnectTokenRepository::new(self.db.clone())
             .insert(&row)
@@ -2327,6 +2351,21 @@ impl PersonaService {
             }
             return Ok(None);
         }
+        // 过期 token 与吊销同形拒绝（迁移 019：expires_at 判定）。
+        if row.expired() {
+            if self.connect_throttle_should_write(&format!("expired:{}", row.id)) {
+                self.log_audit(
+                    AuditAction::ConnectTokenUsed,
+                    ResourceType::Connect,
+                    false,
+                    Some(row.id),
+                    None,
+                    Some("expired token".to_string()),
+                )
+                .await;
+            }
+            return Ok(None);
+        }
         if self.connect_throttle_should_write(&format!("used:{}", row.id)) {
             repo.touch_last_used(&row.id, chrono::Utc::now()).await?;
             self.log_audit(
@@ -2354,16 +2393,37 @@ impl PersonaService {
         .is_allowed()
     }
 
+    /// scope 拒绝审计（架构校正批2 补全）：此前 scope 拒绝零审计。节流
+    /// 落库（与 used/unknown 同窗口），记 token 指纹与拒绝点，自动化
+    /// 轮询不刷屏；列表内逐条过滤属正常降噪行为，不逐条记。
+    async fn audit_scope_denied(&self, token: &ConnectTokenRow, detail: &str) {
+        if self.connect_throttle_should_write(&format!("denied:{}", token.id)) {
+            // token id 不是 identity/credential 外键：直构日志只载
+            // resource_id（与删除事件同策略），不走 log_audit 的外键臂。
+            let log = AuditLog::new(
+                AuditAction::UnauthorizedAccess,
+                ResourceType::Connect,
+                false,
+            )
+            .with_user_id(self.current_user.map(|u| u.to_string()))
+            .with_resource_id(Some(token.id.to_string()))
+            .with_error_message(Some(format!(
+                "scope denied ({}): {detail}",
+                token.fingerprint
+            )));
+            let _ = self.audit_repo.create(&log).await;
+        }
+    }
+
     /// scope 内身份列表（id + 名称）。
-    pub async fn connect_list_identities(
-        &self,
-        scope: &ConnectTokenScope,
-    ) -> Result<Vec<Identity>> {
+    pub async fn connect_list_identities(&self, token: &ConnectTokenRow) -> Result<Vec<Identity>> {
         self.connect_gate()?;
         let principal = AuthzPrincipal::ConnectToken {
-            scope: scope.clone(),
+            scope: token.scope.clone(),
         };
         if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
+            self.audit_scope_denied(token, "list identities: read not granted")
+                .await;
             return Ok(vec![]);
         }
         let all = self.get_identities().await?;
@@ -2377,20 +2437,24 @@ impl PersonaService {
     /// identity 参数越 scope 返回空列表（不报错，防探测）。
     pub async fn connect_list_items(
         &self,
-        scope: &ConnectTokenScope,
+        token: &ConnectTokenRow,
         identity: Option<Uuid>,
         item_type: Option<ConnectItemType>,
         title: Option<String>,
     ) -> Result<Vec<Credential>> {
         self.connect_gate()?;
         let principal = AuthzPrincipal::ConnectToken {
-            scope: scope.clone(),
+            scope: token.scope.clone(),
         };
         if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
+            self.audit_scope_denied(token, "list items: read not granted")
+                .await;
             return Ok(vec![]);
         }
         if let Some(want) = &identity {
             if !Self::token_allows_read(&principal, &AuthzResource::Identity { id: *want }) {
+                self.audit_scope_denied(token, "list items: identity param outside scope")
+                    .await;
                 return Ok(vec![]);
             }
         }
@@ -2421,28 +2485,33 @@ impl PersonaService {
     /// 统一映射 404（与 403 同形）。
     pub async fn connect_get_item_data(
         &self,
-        scope: &ConnectTokenScope,
+        token: &ConnectTokenRow,
         id: &Uuid,
     ) -> Result<Option<(Credential, CredentialData)>> {
         self.connect_gate()?;
         let principal = AuthzPrincipal::ConnectToken {
-            scope: scope.clone(),
+            scope: token.scope.clone(),
         };
         if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
+            self.audit_scope_denied(token, "get item data: read not granted")
+                .await;
             return Ok(None);
         }
         let Some(cred) = self.get_credential(id).await? else {
             return Ok(None);
         };
-        if !cred.is_active
-            || !Self::token_allows_read(
-                &principal,
-                &AuthzResource::Credential {
-                    identity_id: cred.identity_id,
-                    credential_type: cred.credential_type.clone(),
-                },
-            )
-        {
+        if !cred.is_active {
+            return Ok(None);
+        }
+        if !Self::token_allows_read(
+            &principal,
+            &AuthzResource::Credential {
+                identity_id: cred.identity_id,
+                credential_type: cred.credential_type.clone(),
+            },
+        ) {
+            self.audit_scope_denied(token, "get item data: credential outside scope")
+                .await;
             return Ok(None);
         }
         let Some(data) = self.get_credential_data(id).await? else {
@@ -2455,14 +2524,16 @@ impl PersonaService {
     /// TwoFactor 一律 `None`）。
     pub async fn connect_totp(
         &self,
-        scope: &ConnectTokenScope,
+        token: &ConnectTokenRow,
         id: &Uuid,
     ) -> Result<Option<crate::crypto::totp::TotpCode>> {
         self.connect_gate()?;
         let principal = AuthzPrincipal::ConnectToken {
-            scope: scope.clone(),
+            scope: token.scope.clone(),
         };
         if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
+            self.audit_scope_denied(token, "totp: read not granted")
+                .await;
             return Ok(None);
         }
         let Some(cred) = self.get_credential(id).await? else {
@@ -2470,15 +2541,18 @@ impl PersonaService {
         };
         // 单条裁决涵盖身份与类型两维；非 TwoFactor 条目随后的数据门
         // （`CredentialData::TwoFactor`）同形 None。
-        if !cred.is_active
-            || !Self::token_allows_read(
-                &principal,
-                &AuthzResource::Credential {
-                    identity_id: cred.identity_id,
-                    credential_type: cred.credential_type.clone(),
-                },
-            )
-        {
+        if !cred.is_active {
+            return Ok(None);
+        }
+        if !Self::token_allows_read(
+            &principal,
+            &AuthzResource::Credential {
+                identity_id: cred.identity_id,
+                credential_type: cred.credential_type.clone(),
+            },
+        ) {
+            self.audit_scope_denied(token, "totp: credential outside scope")
+                .await;
             return Ok(None);
         }
         let Some(data) = self.get_credential_data(id).await? else {
@@ -3580,6 +3654,23 @@ mod tests {
         }
     }
 
+    /// scope → 测试用 token 行：数据面方法以完整 token 行为入参
+    /// （拒绝审计需带 token id / 指纹）。
+    fn token_of(scope: &ConnectTokenScope) -> ConnectTokenRow {
+        ConnectTokenRow {
+            id: Uuid::new_v4(),
+            label: "test".to_string(),
+            hash: "hash".to_string(),
+            fingerprint: "fingerprint0".to_string(),
+            scope: scope.clone(),
+            principal: None,
+            created_at: chrono::Utc::now(),
+            last_used_at: None,
+            revoked_at: None,
+            expires_at: None,
+        }
+    }
+
     /// 已解锁服务 + 独立 Database 句柄(直接查表断言哈希存储用)。
     async fn connect_fixture() -> (PersonaService, Database) {
         let db = Database::in_memory().await.unwrap();
@@ -3608,7 +3699,7 @@ mod tests {
         // 语义报认证失败(桌面据此回解锁屏);数据面的 VaultLocked/503
         // 语义由 connect_hides_archived_items_and_gates_when_locked 覆盖。
         let err = service
-            .create_connect_token("t".into(), connect_read_scope())
+            .create_connect_token("t".into(), connect_read_scope(), None, None)
             .await
             .unwrap_err();
         assert!(matches!(
@@ -3633,7 +3724,7 @@ mod tests {
         let (service, db) = connect_fixture().await;
 
         let (presented, row) = service
-            .create_connect_token("  ci runner  ".into(), connect_read_scope())
+            .create_connect_token("  ci runner  ".into(), connect_read_scope(), None, None)
             .await
             .unwrap();
         // 明文形态:前缀 + 32B base64url(43 字符),哈希/指纹与呈现值一致
@@ -3758,12 +3849,16 @@ mod tests {
         // 全量 scope:全部身份/条目可见
         let all = connect_read_scope();
         assert_eq!(
-            service.connect_list_identities(&all).await.unwrap().len(),
+            service
+                .connect_list_identities(&token_of(&all))
+                .await
+                .unwrap()
+                .len(),
             2
         );
         assert_eq!(
             service
-                .connect_list_items(&all, None, None, None)
+                .connect_list_items(&token_of(&all), None, None, None)
                 .await
                 .unwrap()
                 .len(),
@@ -3777,7 +3872,7 @@ mod tests {
         };
         assert_eq!(
             service
-                .connect_list_identities(&only_a)
+                .connect_list_identities(&token_of(&only_a))
                 .await
                 .unwrap()
                 .len(),
@@ -3785,14 +3880,14 @@ mod tests {
         );
         assert_eq!(
             service
-                .connect_list_items(&only_a, None, None, None)
+                .connect_list_items(&token_of(&only_a), None, None, None)
                 .await
                 .unwrap()
                 .len(),
             2
         );
         assert!(service
-            .connect_list_items(&only_a, Some(id_b.id), None, None)
+            .connect_list_items(&token_of(&only_a), Some(id_b.id), None, None)
             .await
             .unwrap()
             .is_empty());
@@ -3803,7 +3898,7 @@ mod tests {
             ..connect_read_scope()
         };
         let items = service
-            .connect_list_items(&pwd_only, None, None, None)
+            .connect_list_items(&token_of(&pwd_only), None, None, None)
             .await
             .unwrap();
         assert_eq!(items.len(), 1);
@@ -3811,17 +3906,17 @@ mod tests {
 
         // 单条读取:scope 外与不存在同形 None
         assert!(service
-            .connect_get_item_data(&only_a, &cred_b.id)
+            .connect_get_item_data(&token_of(&only_a), &cred_b.id)
             .await
             .unwrap()
             .is_none());
         assert!(service
-            .connect_get_item_data(&all, &Uuid::new_v4())
+            .connect_get_item_data(&token_of(&all), &Uuid::new_v4())
             .await
             .unwrap()
             .is_none());
         let (cred, data) = service
-            .connect_get_item_data(&all, &cred_a.id)
+            .connect_get_item_data(&token_of(&all), &cred_a.id)
             .await
             .unwrap()
             .unwrap();
@@ -3830,13 +3925,13 @@ mod tests {
 
         // TOTP:TwoFactor 项出码,密码项 None
         let code = service
-            .connect_totp(&all, &cred_totp.id)
+            .connect_totp(&token_of(&all), &cred_totp.id)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(code.code.len(), 6);
         assert!(service
-            .connect_totp(&all, &cred_a.id)
+            .connect_totp(&token_of(&all), &cred_a.id)
             .await
             .unwrap()
             .is_none());
@@ -3866,7 +3961,7 @@ mod tests {
             .unwrap();
         let all = connect_read_scope();
         assert!(service
-            .connect_get_item_data(&all, &cred.id)
+            .connect_get_item_data(&token_of(&all), &cred.id)
             .await
             .unwrap()
             .is_some());
@@ -3876,12 +3971,12 @@ mod tests {
         archived.is_active = false;
         service.update_credential(&archived).await.unwrap();
         assert!(service
-            .connect_get_item_data(&all, &cred.id)
+            .connect_get_item_data(&token_of(&all), &cred.id)
             .await
             .unwrap()
             .is_none());
         let items = service
-            .connect_list_items(&all, None, None, None)
+            .connect_list_items(&token_of(&all), None, None, None)
             .await
             .unwrap();
         assert!(items.iter().all(|c| c.id != cred.id));
@@ -3889,13 +3984,13 @@ mod tests {
         // 锁定后数据面/管理面全部 503 语义(VaultLocked)
         service.lock();
         let err = service
-            .connect_get_item_data(&all, &cred.id)
+            .connect_get_item_data(&token_of(&all), &cred.id)
             .await
             .unwrap_err();
         assert_vault_locked(err);
         assert_vault_locked(
             service
-                .connect_list_items(&all, None, None, None)
+                .connect_list_items(&token_of(&all), None, None, None)
                 .await
                 .unwrap_err(),
         );
@@ -7931,13 +8026,13 @@ mod tests {
         let (service, _db) = connect_fixture().await;
 
         let blank = service
-            .create_connect_token("   ".into(), connect_read_scope())
+            .create_connect_token("   ".into(), connect_read_scope(), None, None)
             .await
             .unwrap_err();
         assert!(blank.to_string().contains("1..=128"), "{blank}");
 
         let long = service
-            .create_connect_token("x".repeat(129), connect_read_scope())
+            .create_connect_token("x".repeat(129), connect_read_scope(), None, None)
             .await
             .unwrap_err();
         assert!(long.to_string().contains("1..=128"), "{long}");
@@ -7954,25 +8049,162 @@ mod tests {
         };
 
         assert!(service
-            .connect_list_identities(&no_read)
+            .connect_list_identities(&token_of(&no_read))
             .await
             .unwrap()
             .is_empty());
         assert!(service
-            .connect_list_items(&no_read, None, None, None)
+            .connect_list_items(&token_of(&no_read), None, None, None)
             .await
             .unwrap()
             .is_empty());
         assert!(service
-            .connect_get_item_data(&no_read, &Uuid::new_v4())
+            .connect_get_item_data(&token_of(&no_read), &Uuid::new_v4())
             .await
             .unwrap()
             .is_none());
         assert!(service
-            .connect_totp(&no_read, &Uuid::new_v4())
+            .connect_totp(&token_of(&no_read), &Uuid::new_v4())
             .await
             .unwrap()
             .is_none());
+    }
+
+    /// 过期与主体绑定（迁移 019）：未到期 token 鉴权放行；已过期的
+    /// 同形拒绝（与吊销同形）并记失败审计。创建期拒绝过去时刻。
+    #[tokio::test]
+    async fn connect_authenticate_rejects_expired_token() {
+        let (service, db) = connect_fixture().await;
+
+        let (presented, row) = service
+            .create_connect_token(
+                "valid".into(),
+                connect_read_scope(),
+                Some("browser-extension".into()),
+                Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(row.principal.as_deref(), Some("browser-extension"));
+        assert!(service
+            .connect_authenticate(&presented)
+            .await
+            .unwrap()
+            .is_some());
+
+        // 创建期：过去/现在时刻直接拒绝。
+        let past = service
+            .create_connect_token(
+                "past".into(),
+                connect_read_scope(),
+                None,
+                Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
+            )
+            .await
+            .unwrap_err();
+        assert!(past.to_string().contains("expiry must be in the future"));
+
+        // 运行中过期：直接落库为过去时刻，authenticate 拒绝并节流记审计。
+        let (stale, stale_row) = service
+            .create_connect_token(
+                "stale".into(),
+                connect_read_scope(),
+                None,
+                Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE connect_tokens SET expires_at = ? WHERE id = ?")
+            .bind((chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339())
+            .bind(stale_row.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(service
+            .connect_authenticate(&stale)
+            .await
+            .unwrap()
+            .is_none());
+
+        let audit_repo = AuditLogRepository::new(db);
+        let used = audit_repo
+            .find_by_action(&AuditAction::ConnectTokenUsed)
+            .await
+            .unwrap();
+        assert!(
+            used.iter().any(|a| !a.success
+                && a.error_message
+                    .as_deref()
+                    .is_some_and(|m| m.contains("expired"))),
+            "expiry denial must be audited: {used:?}"
+        );
+    }
+
+    /// scope 拒绝写审计（架构校正批2）：此前 scope 拒绝零审计。scope 外
+    /// 的单条读取返回 None（防探测）同时记一条 UnauthorizedAccess。
+    #[tokio::test]
+    async fn connect_scope_denial_writes_unauthorized_access_audit() {
+        let (service, db) = connect_fixture().await;
+        let id_a = service
+            .create_identity("A".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let id_b = service
+            .create_identity("B".into(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let cred_b = service
+            .create_credential(
+                id_b.id,
+                "B login".into(),
+                CredentialType::Password,
+                SecurityLevel::Medium,
+                &CredentialData::Password(PasswordCredentialData {
+                    password: "pw".to_string(),
+                    email: None,
+                    security_questions: Vec::new(),
+                }),
+            )
+            .await
+            .unwrap();
+
+        let mut scope = connect_read_scope();
+        scope.identities = vec![id_a.id];
+        let token = token_of(&scope);
+
+        // 越 scope 的单条读取：None + 恰好一条 UnauthorizedAccess。
+        assert!(service
+            .connect_get_item_data(&token, &cred_b.id)
+            .await
+            .unwrap()
+            .is_none());
+        let audit_repo = AuditLogRepository::new(db);
+        let denials = audit_repo
+            .find_by_action(&AuditAction::UnauthorizedAccess)
+            .await
+            .unwrap();
+        assert_eq!(denials.len(), 1, "exactly one scope denial audited");
+        assert!(!denials[0].success);
+        assert!(
+            denials[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|m| m.contains("outside scope")),
+            "denial audit must name the reject point: {:?}",
+            denials[0].error_message
+        );
+
+        // scope 内读取不写拒绝审计。
+        assert!(service
+            .connect_get_item_data(&token_of(&connect_read_scope()), &cred_b.id)
+            .await
+            .unwrap()
+            .is_some());
+        let after = audit_repo
+            .find_by_action(&AuditAction::UnauthorizedAccess)
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1, "granted read must not add a denial audit");
     }
 
     /// connect_totp 的 scope/存在性防御臂：未知 id、scope 外身份、
@@ -8005,7 +8237,7 @@ mod tests {
 
         // 未知 id → None
         assert!(service
-            .connect_totp(&connect_read_scope(), &Uuid::new_v4())
+            .connect_totp(&token_of(&connect_read_scope()), &Uuid::new_v4())
             .await
             .unwrap()
             .is_none());
@@ -8016,7 +8248,7 @@ mod tests {
             ..connect_read_scope()
         };
         assert!(service
-            .connect_totp(&other_only, &cred.id)
+            .connect_totp(&token_of(&other_only), &cred.id)
             .await
             .unwrap()
             .is_none());
@@ -8027,7 +8259,7 @@ mod tests {
             ..connect_read_scope()
         };
         assert!(service
-            .connect_totp(&no_totp, &cred.id)
+            .connect_totp(&token_of(&no_totp), &cred.id)
             .await
             .unwrap()
             .is_none());
@@ -8077,7 +8309,7 @@ mod tests {
 
         let logins = service
             .connect_list_items(
-                &connect_read_scope(),
+                &token_of(&connect_read_scope()),
                 None,
                 Some(ConnectItemType::Password),
                 None,

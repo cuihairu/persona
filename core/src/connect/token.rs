@@ -52,11 +52,14 @@ impl ConnectItemType {
     }
 }
 
-/// 授权动作；起步唯一合法值 `read`（写路径未拍板，见设计稿 §9-1）。
+/// 授权动作；`read` 读数据面，`use` 在库内使用凭据（签名/出码类操作，
+/// 不含导出——导出不是 Connect 动词）。写路径未拍板，不在枚举里
+/// （设计稿 §9-1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectVerb {
     Read,
+    Use,
 }
 
 /// 三维 scope。`identities` / `item_types` 为空 = 全部（显式选择，创建方
@@ -73,11 +76,19 @@ pub struct ConnectTokenScope {
 }
 
 impl ConnectTokenScope {
-    /// 创建期校验：verbs 必须恰为 `[Read]`。数据面判定只认这个形态，
-    /// 其他形态（空 verbs / 含未来枚举）在入库前就拒绝（fail-closed）。
+    /// 创建期校验：verbs 非空且为 `{read, use}` 的子集。数据面判定只认
+    /// 这个形态，其他形态（空 verbs / 含未来枚举）在入库前就拒绝
+    /// （fail-closed）。导出/签名经 Connect 不可授予（不是 Connect 动词）。
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.verbs != vec![ConnectVerb::Read] {
-            return Err("verbs must be exactly [read]");
+        if self.verbs.is_empty() {
+            return Err("verbs must not be empty");
+        }
+        if self
+            .verbs
+            .iter()
+            .any(|v| !matches!(v, ConnectVerb::Read | ConnectVerb::Use))
+        {
+            return Err("verbs must be a subset of [read, use]");
         }
         Ok(())
     }
@@ -111,14 +122,23 @@ pub struct ConnectTokenRow {
     /// 哈希前 8 字节 hex（16 字符）——列表识别/审计用，不泄露 token。
     pub fingerprint: String,
     pub scope: ConnectTokenScope,
+    /// 绑定的调用方身份（迁移 019）；`None` = 旧数据未绑定。
+    pub principal: Option<String>,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// 过期时刻（迁移 019）；`None` = 永不过期（旧数据语义不变）。
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl ConnectTokenRow {
     pub fn revoked(&self) -> bool {
         self.revoked_at.is_some()
+    }
+
+    /// 过期判定：已到过期时刻即失效（鉴权处与吊销同形拒绝）。
+    pub fn expired(&self) -> bool {
+        self.expires_at.is_some_and(|t| t <= chrono::Utc::now())
     }
 }
 
@@ -222,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_requires_exactly_read_verb() {
+    fn validate_requires_nonempty_subset_of_read_use() {
         let ok = ConnectTokenScope {
             identities: vec![],
             item_types: vec![],
@@ -230,10 +250,55 @@ mod tests {
         };
         assert!(ok.validate().is_ok());
 
+        // read+use 与纯 use 均合法（use 供未来签名类端点，导出不可授予）。
+        let read_use = ConnectTokenScope {
+            verbs: vec![ConnectVerb::Read, ConnectVerb::Use],
+            ..ok.clone()
+        };
+        assert!(read_use.validate().is_ok());
+        let use_only = ConnectTokenScope {
+            verbs: vec![ConnectVerb::Use],
+            ..ok.clone()
+        };
+        assert!(use_only.validate().is_ok());
+
         let no_verbs = ConnectTokenScope {
             verbs: vec![],
             ..ok.clone()
         };
         assert!(no_verbs.validate().is_err());
+    }
+
+    #[test]
+    fn expired_depends_on_expires_at_only() {
+        let row = ConnectTokenRow {
+            id: Uuid::new_v4(),
+            label: "t".to_string(),
+            hash: "h".to_string(),
+            fingerprint: "f".to_string(),
+            scope: ConnectTokenScope {
+                identities: vec![],
+                item_types: vec![],
+                verbs: vec![ConnectVerb::Read],
+            },
+            principal: None,
+            created_at: Utc::now(),
+            last_used_at: None,
+            revoked_at: None,
+            expires_at: None,
+        };
+        assert!(!row.expired(), "no expiry means never expires");
+
+        let future = ConnectTokenRow {
+            expires_at: Some(Utc::now() + chrono::Duration::hours(1)),
+            ..row.clone()
+        };
+        assert!(!future.expired());
+
+        let past = ConnectTokenRow {
+            expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            ..row.clone()
+        };
+        assert!(past.expired());
     }
 }

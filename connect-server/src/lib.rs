@@ -393,7 +393,7 @@ async fn identities(
     let Some(service) = service_guard.as_ref() else {
         return locked_response();
     };
-    match service.connect_list_identities(&row.scope).await {
+    match service.connect_list_identities(&row).await {
         Ok(list) => ok_json(
             list.into_iter()
                 .map(|i| ConnectIdentityView {
@@ -425,7 +425,7 @@ async fn items(
         return locked_response();
     };
     match service
-        .connect_list_items(&row.scope, query.identity, query.item_type, query.title)
+        .connect_list_items(&row, query.identity, query.item_type, query.title)
         .await
     {
         Ok(list) => ok_json(list.iter().map(item_meta_json).collect::<Vec<_>>()),
@@ -463,7 +463,7 @@ async fn item(
     let Some(service) = service_guard.as_ref() else {
         return locked_response();
     };
-    match service.connect_get_item_data(&row.scope, &id).await {
+    match service.connect_get_item_data(&row, &id).await {
         Ok(Some((cred, data))) => ok_json(json!({
             "id": cred.id,
             "title": cred.name,
@@ -488,7 +488,7 @@ async fn item_totp(
     let Some(service) = service_guard.as_ref() else {
         return locked_response();
     };
-    match service.connect_totp(&row.scope, &id).await {
+    match service.connect_totp(&row, &id).await {
         Ok(Some(code)) => ok_json(json!({
             "code": code.code,
             "remaining_seconds": code.remaining_seconds,
@@ -560,7 +560,7 @@ mod tests {
             verbs: vec![ConnectVerb::Read],
         };
         let (token, row) = service
-            .create_connect_token("test token".to_string(), scope)
+            .create_connect_token("test token".to_string(), scope, None, None)
             .await
             .unwrap();
 
@@ -597,7 +597,7 @@ mod tests {
         guard
             .as_ref()
             .unwrap()
-            .create_connect_token(label.to_string(), token_scope)
+            .create_connect_token(label.to_string(), token_scope, None, None)
             .await
             .unwrap()
             .0

@@ -25,17 +25,19 @@ impl ConnectTokenRepository {
         let scope_json =
             serde_json::to_string(&row.scope).map_err(|e| PersonaError::Database(e.to_string()))?;
         sqlx::query(
-            "INSERT INTO connect_tokens (id, label, hash, fingerprint, scope, created_at, last_used_at, revoked_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO connect_tokens (id, label, hash, fingerprint, scope, principal, created_at, last_used_at, revoked_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(row.id.to_string())
         .bind(&row.label)
         .bind(&row.hash)
         .bind(&row.fingerprint)
         .bind(&scope_json)
+        .bind(&row.principal)
         .bind(row.created_at.to_rfc3339())
         .bind(row.last_used_at.map(|t| t.to_rfc3339()))
         .bind(row.revoked_at.map(|t| t.to_rfc3339()))
+        .bind(row.expires_at.map(|t| t.to_rfc3339()))
         .execute(self.db.pool())
         .await
         .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -45,7 +47,7 @@ impl ConnectTokenRepository {
     /// 全量列表（含已吊销——管理面要展示吊销状态）；按创建时间倒序。
     pub async fn list_all(&self) -> PersonaResult<Vec<ConnectTokenRow>> {
         let rows = sqlx::query(
-            "SELECT id, label, hash, fingerprint, scope, created_at, last_used_at, revoked_at
+            "SELECT id, label, hash, fingerprint, scope, principal, created_at, last_used_at, revoked_at, expires_at
              FROM connect_tokens ORDER BY created_at DESC",
         )
         .fetch_all(self.db.pool())
@@ -57,7 +59,7 @@ impl ConnectTokenRepository {
     /// 哈希查表；无命中返回 `None`（与吊销同形，调用方不再区分）。
     pub async fn find_by_hash(&self, hash: &str) -> PersonaResult<Option<ConnectTokenRow>> {
         let row = sqlx::query(
-            "SELECT id, label, hash, fingerprint, scope, created_at, last_used_at, revoked_at
+            "SELECT id, label, hash, fingerprint, scope, principal, created_at, last_used_at, revoked_at, expires_at
              FROM connect_tokens WHERE hash = ?",
         )
         .bind(hash)
@@ -122,9 +124,11 @@ fn row_to_token(row: &sqlx::sqlite::SqliteRow) -> PersonaResult<ConnectTokenRow>
             }
         },
         scope,
+        principal: row.get("principal"),
         created_at: parse_time(Some(row.get("created_at")))?.unwrap_or_else(Utc::now),
         last_used_at: parse_time(row.get("last_used_at"))?,
         revoked_at: parse_time(row.get("revoked_at"))?,
+        expires_at: parse_time(row.get("expires_at"))?,
     })
 }
 
@@ -145,9 +149,11 @@ mod tests {
                 item_types: vec![ConnectItemType::Password, ConnectItemType::ApiKey],
                 verbs: vec![ConnectVerb::Read],
             },
+            principal: Some("browser-extension".to_string()),
             created_at,
             last_used_at: None,
             revoked_at: None,
+            expires_at: None,
         }
     }
 
@@ -218,5 +224,25 @@ mod tests {
         }
         let found = repo.find_by_hash(&hash).await.unwrap().unwrap();
         assert_eq!(found.fingerprint, fingerprint_from_hash(&hash));
+    }
+
+    /// 迁移 019：principal 与 expires_at 完整回读；expires_at 为 NULL 时
+    /// expired() 恒假（旧数据永不过期语义不变）。
+    #[tokio::test]
+    async fn principal_and_expiry_round_trip() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let repo = ConnectTokenRepository::new(db);
+
+        let expires_at = Utc::now() + chrono::Duration::days(30);
+        let mut row = sample_row(&"c".repeat(64), "cccccccccccccccc", Utc::now());
+        row.principal = Some("cockpit".to_string());
+        row.expires_at = Some(expires_at);
+        repo.insert(&row).await.unwrap();
+
+        let found = repo.find_by_hash(&row.hash).await.unwrap().unwrap();
+        assert_eq!(found.principal.as_deref(), Some("cockpit"));
+        assert_eq!(found.expires_at, Some(expires_at));
+        assert!(!found.expired());
     }
 }

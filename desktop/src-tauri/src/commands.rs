@@ -8180,6 +8180,8 @@ pub struct ConnectTokenView {
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub revoked_at: Option<String>,
+    pub principal: Option<String>,
+    pub expires_at: Option<String>,
 }
 
 impl From<&persona_core::connect::ConnectTokenRow> for ConnectTokenView {
@@ -8192,6 +8194,8 @@ impl From<&persona_core::connect::ConnectTokenRow> for ConnectTokenView {
             created_at: row.created_at.to_rfc3339(),
             last_used_at: row.last_used_at.map(|t| t.to_rfc3339()),
             revoked_at: row.revoked_at.map(|t| t.to_rfc3339()),
+            principal: row.principal.clone(),
+            expires_at: row.expires_at.map(|t| t.to_rfc3339()),
         }
     }
 }
@@ -8319,7 +8323,7 @@ pub async fn connect_token_create(
     let result = {
         let service_guard = state.service.lock().await;
         match service_guard.as_ref() {
-            Some(service) => service.create_connect_token(label, scope).await,
+            Some(service) => service.create_connect_token(label, scope, None, None).await,
             None => return Ok(ApiResponse::error("Service not initialized".to_string())),
         }
     };

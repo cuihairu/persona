@@ -192,10 +192,10 @@ pub struct ConnectTokenScope {
 
 ### 中优先级（补全契约）
 
-- [ ] **Connect Token 增加 principal 字段**：绑定调用方身份。
-- [ ] **Connect 支持 `use` verb**：允许签名操作但不允许导出。
-- [ ] **Token 过期机制**：确认或实现短期 Token。
-- [ ] **安全等级独立密钥边界**：确认 L4 是否能在主 vault 解锁后保持锁定。
+- [x] **Connect Token 增加 principal 字段**：绑定调用方身份。（2026-10-12 落地：迁移 `019_connect_token_principal_expiry.sql` 加 `principal` 列；`create_connect_token` 接受 `Option<String>`，空/空白归一 `None`，≤256 字符；`ConnectTokenRow.principal` 随行，桌面 `ConnectTokenView` 暴露）
+- [x] **Connect 支持 `use` verb**：允许签名操作但不允许导出。（2026-10-12 落地：`ConnectVerb::Use` 加入枚举，`validate` 收紧为 `{read, use}` 非空子集——export/sign 不是 Connect 动词，任何 scope 都不可能授予；`AuthzAction::connect_verb` 折算 Use→`ConnectVerb::Use`；纯 use token 读不到数据面。当前无签名端点，use 为未来签名/出码类端点的合法授权）
+- [x] **Token 过期机制**：确认或实现短期 Token。（2026-10-12 落地：迁移 019 加 `expires_at` 列（NULL = 永不过期，旧数据语义不变）；`create_connect_token` 要求过期时刻在未来；`connect_authenticate` 对过期 token 与吊销同形拒绝（None + 节流记失败审计））
+- [ ] **安全等级独立密钥边界**：确认 L4 是否能在主 vault 解锁后保持锁定。（补充事实，2026-10-12：迁移 019 同时补上 scope 拒绝审计——`audit_scope_denied` 对动词/身份参数/单条越 scope 记 `UnauthorizedAccess`（节流防刷屏，token id 载 resource_id 不载外键），此前 scope 拒绝零审计。密钥边界方案待用户拍板，未动加密层）
 
 ### 低优先级（文档完善）
 
