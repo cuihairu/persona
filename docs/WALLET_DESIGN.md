@@ -156,4 +156,4 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
 - 防投毒：core 启发式 7 例（命中/同址豁免/部分匹配拒绝/base58 保守/
   大小写不敏感/非 ASCII 不 panic/确认放行）+ CLI 集成（未确认拒绝、
   确认后放行）+ 桌面命令层（缺 ack 拒签不落库、带 ack 正常签名落库）
-  + 弹窗 jest（干净地址 ack=false、仿冒地址 ack=true）。
+  - 弹窗 jest（干净地址 ack=false、仿冒地址 ack=true）。
