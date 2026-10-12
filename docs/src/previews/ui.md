@@ -59,6 +59,35 @@ UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
 
 **设置 tab**：桥状态、桥版本、保险库路径、凭据数。
 
+## CLI 终端会话
+
+`persona` CLI 的真实终端输出（2026-10-12 录制，演示工作区与演示数据）。
+
+![persona 命令总览](/ui/cli-help.png)
+
+**命令总览**：`persona --help`——工作区初始化、身份/凭据管理、SSH、
+TOTP、钱包、通行密钥、密码生成、备份、旅行模式、Connect 自动化、
+Secrets 注入等子命令一屏可览。
+
+![凭据列表](/ui/cli-credentials.png)
+
+**凭据列表**：`persona credential list`——按身份归属列出凭据元数据
+（名称、类型、用户名、收藏标记）；明文不出库，读取需显式 `show` 并解锁。
+
+![密码生成](/ui/cli-password-generate.png)
+
+**密码生成**：`persona password generate`——随机模式与词组模式
+（Diceware passphrase，EFF 大词表）两种输出。
+
+## 浏览器扩展（Chromium）
+
+![Chromium 扩展 popup](/ui/extension-chromium-popup.png)
+
+**Persona Autofill 扩展 popup**：经 Native Messaging 桥与本地 `persona`
+进程连通后的真实状态（顶栏 "Connected • Unlocked"）。popup 提供
+配对、填充策略、云端保险库推送/拉取与账号登录入口；页面内的填充
+建议弹层素材后续补入。
+
 ## 原型缺口清单
 
 以下关键视图还没有对应原型 / 截图素材（暂缺，等素材到位后补入本页）：
@@ -72,8 +101,7 @@ UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
 | 新建 / 编辑凭据弹窗            | 分类字段、密码生成器、表单校验                                                                            |
 | 统计 / 安全瞭望                | 库内元数据报告、弱口令 / 重用检测                                                                         |
 | 快速访问                       | 全局热键唤起的速查面板                                                                                    |
-| CLI 终端会话                   | persona CLI 关键命令的终端记录                                                                            |
-| 浏览器扩展                     | 填充建议弹层与身份切换                                                                                    |
+| 浏览器扩展 · 填充建议弹层      | 页面内填充建议弹层与身份切换（popup 主视图已入，见上）                                                     |
 | 移动端（Android / iOS / 鸿蒙） | Android 空库主界面与数据 / 工具 / 设置三 tab 已入（上方）；iOS 与鸿蒙原生界面均暂缺（本机无对应构建环境） |
 
 素材的入库出处、变更史与交付规范见[素材盘点](/previews/assets)。
