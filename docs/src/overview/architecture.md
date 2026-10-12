@@ -68,14 +68,14 @@ flowchart TB
 
 **图与现状的差异（目标 vs 当前实现，2026-10-12 审计）**：
 
-| 图中节点 | 状态 | 现状 |
-|------|------|------|
-| Principals 子图「调用主体 (Principal)」 | **Planned** | 无 Principal 类型（全仓零定义）；各入口直接持有 session/scope 调用核心服务 |
-| AuthZ「authorize(principal, resource, action, context)」 | **Planned** | 不存在统一 `authorize()`；授权分散在四套机制（见下「当前实现的授权检查位置」） |
-| AuthZ「Security Level 分级」 | **Partial** | `SecurityLevel` 枚举存在（`core/src/models/credential.rs:83`），但是**纯标签**——无任何按等级分支的授权行为 |
-| AuthZ「Unlock State」 | **Implemented** | `core/src/service.rs:82-83`（内存主密钥态）+ `core/src/auth/auto_lock.rs`（后台巡检强锁）+ 敏感操作再认证（`core/src/auth/session.rs:105-113`） |
-| Core 子图「服务层/加密层/存储层」 | **Implemented** | `core/src/service.rs`（PersonaService 单体）、`core/src/crypto/`、`core/src/storage/` |
-| Server 子图「事件 & 自动化 API (Connect)」 | **Partial（位置不符）** | Connect API 是**本机**独立 crate `connect-server/`（127.0.0.1，桌面与 CLI 共用），不在 `server/` 可选云服务里；`server/` 只有事件与同步端点 |
+| 图中节点                                                 | 状态                    | 现状                                                                                                                                            |
+| -------------------------------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Principals 子图「调用主体 (Principal)」                  | **Planned**             | 无 Principal 类型（全仓零定义）；各入口直接持有 session/scope 调用核心服务                                                                      |
+| AuthZ「authorize(principal, resource, action, context)」 | **Planned**             | 不存在统一 `authorize()`；授权分散在四套机制（见下「当前实现的授权检查位置」）                                                                  |
+| AuthZ「Security Level 分级」                             | **Partial**             | `SecurityLevel` 枚举存在（`core/src/models/credential.rs:83`），但是**纯标签**——无任何按等级分支的授权行为                                      |
+| AuthZ「Unlock State」                                    | **Implemented**         | `core/src/service.rs:82-83`（内存主密钥态）+ `core/src/auth/auto_lock.rs`（后台巡检强锁）+ 敏感操作再认证（`core/src/auth/session.rs:105-113`） |
+| Core 子图「服务层/加密层/存储层」                        | **Implemented**         | `core/src/service.rs`（PersonaService 单体）、`core/src/crypto/`、`core/src/storage/`                                                           |
+| Server 子图「事件 & 自动化 API (Connect)」               | **Partial（位置不符）** | Connect API 是**本机**独立 crate `connect-server/`（127.0.0.1，桌面与 CLI 共用），不在 `server/` 可选云服务里；`server/` 只有事件与同步端点     |
 
 **授权决策链**（目标模型）：所有敏感操作经过统一授权入口，决策依据为：
 
@@ -114,18 +114,18 @@ flowchart TB
 
 **概念实现状态**（2026-10-12 审计，代码依据见审计报告）：
 
-| 概念 | 状态 | 代码依据 |
-|------|------|---------|
-| Principal 主体 | **Planned** | 全仓无类型定义；文档概念（见[主体](/concepts/principal)） |
-| Identity 分身 | **Implemented** | `core/src/models/identity.rs`；active 指针 `core/src/models/workspace.rs:17` |
-| Context 上下文 | **Partial** | 无一级类型；事实散在 known_hosts / origin binding / active_identity |
-| Material 材料 | **Implemented** | `core/src/models/credential.rs`（`CredentialData` + per-item key `core/src/crypto/key_hierarchy.rs:12`） |
-| Policy 策略 | **Partial** | 散点硬门槛（SSH 策略/自动锁/再认证/Connect scope）；`SecurityStrategy` 规则机（`core/src/auth/security_strategies.rs`）已写但未接线 |
-| Action 动作 | **Partial** | `ConnectVerb` 仅 `Read`（`core/src/connect/token.rs:58`）；SSH 仅 sign；无共享 Action 模型 |
-| Security Level | **Partial** | `core/src/models/credential.rs:83` 四级枚举，纯标签无强制 |
-| Unlock State | **Implemented** | `core/src/service.rs:82` + `core/src/auth/auto_lock.rs` + `core/src/auth/session.rs` |
-| 统一 authorize 入口 | **Planned** | 不存在；四套机制并存（见「当前实现的授权检查位置」） |
-| 审计 | **Implemented** | SQLite `audit_logs` 表（`core/src/storage/repository.rs:1158`）+ `core/src/events/emitter.rs` 远端复制 |
+| 概念                | 状态            | 代码依据                                                                                                                            |
+| ------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Principal 主体      | **Planned**     | 全仓无类型定义；文档概念（见[主体](/concepts/principal)）                                                                           |
+| Identity 分身       | **Implemented** | `core/src/models/identity.rs`；active 指针 `core/src/models/workspace.rs:17`                                                        |
+| Context 上下文      | **Partial**     | 无一级类型；事实散在 known_hosts / origin binding / active_identity                                                                 |
+| Material 材料       | **Implemented** | `core/src/models/credential.rs`（`CredentialData` + per-item key `core/src/crypto/key_hierarchy.rs:12`）                            |
+| Policy 策略         | **Partial**     | 散点硬门槛（SSH 策略/自动锁/再认证/Connect scope）；`SecurityStrategy` 规则机（`core/src/auth/security_strategies.rs`）已写但未接线 |
+| Action 动作         | **Partial**     | `ConnectVerb` 仅 `Read`（`core/src/connect/token.rs:58`）；SSH 仅 sign；无共享 Action 模型                                          |
+| Security Level      | **Partial**     | `core/src/models/credential.rs:83` 四级枚举，纯标签无强制                                                                           |
+| Unlock State        | **Implemented** | `core/src/service.rs:82` + `core/src/auth/auto_lock.rs` + `core/src/auth/session.rs`                                                |
+| 统一 authorize 入口 | **Planned**     | 不存在；四套机制并存（见「当前实现的授权检查位置」）                                                                                |
+| 审计                | **Implemented** | SQLite `audit_logs` 表（`core/src/storage/repository.rs:1158`）+ `core/src/events/emitter.rs` 远端复制                              |
 
 ## 安全等级模型
 
