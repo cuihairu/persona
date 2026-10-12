@@ -74,8 +74,18 @@ cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0�
       依赖的 JS 编译器 API**，扩展 12 套件全挂（桌面 ts-jest 同病）。
       热修：三处 package.json 退回 `^5.9.3`（lock 同步），#69 其余升级
       保留；本地扩展 157 测试 + desktop lint/build + website build 全绿
-      - [ ] TS7 迁移（独立工程）：ts-jest 官方路径是装 `@typescript/native`
-            并把 `@typescript/typescript6` alias 给 ts-jest，等真需求再排
+      - [x] TS7 迁移（2026-10-12，DISPATCH-R7）：按 ts-jest 官方
+            side-by-side 布局落地（`@typescript/native` =
+            `npm:typescript@^7.0.2` 原生编译器供 `tsc` 构建/类型检查，
+            `typescript` alias 到 `npm:@typescript/typescript6@^6.0.2`
+            供 ts-jest/@typescript-eslint/umi 取 JS 编译器 API——实测
+            API=6.0.3、tsc=7.0.2）。extension/desktop/website 三处
+            package.json + pnpm-lock 重建（frozen-lockfile 复验过），
+            扩展 dist 重编（4 个 .js.map 源映射 names 索引微差，.js
+            字节不变）。门禁全绿：扩展 build+jest 157、desktop
+            lint+jest 723+build、website umi build。注意：jest 变换
+            路径性能与 TS6 相同（native 提速只惠及 tsc），CI 的
+            `tsc --noEmit` 类构建即 TS7 权威类型检查
 - [x] **CI Install deps 红——锁文件+TS 钉版双雷（2026-10-12 修复，
       `a386a4e`）**：当天 4 个 push（含纯文档 commit）的 Web/Desktop 两
       job 全挂 Install deps，`ERR_PNPM_LOCKFILE_MISSING_DEPENDENCY`。
