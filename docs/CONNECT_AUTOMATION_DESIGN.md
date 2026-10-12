@@ -11,7 +11,9 @@
 > 相关文档：[`ROADMAP.md`](./ROADMAP.md) Milestone 6、[`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md)
 > （同轨道姊妹稿——本端点**不依赖**同步轨道，可独立落地）、
 > [`THREAT_MODEL.md`](./THREAT_MODEL.md)、[`BOUNDARY.md`](../BOUNDARY.md)
-> （automation-friendly access 在边界内）。
+> （automation-friendly access 在边界内）。**外部项目接入指南：
+> [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)**（三步接入、
+> 实测响应样例、令牌到期/吊销语义、权限边界、错误码表；2026-10-12 补）。
 
 ## 1. 目标与非目标
 
