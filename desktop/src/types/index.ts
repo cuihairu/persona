@@ -521,6 +521,8 @@ export interface CreateTransactionRequest {
 export interface SignTransactionRequest {
   transaction_id: string;
   password: string;
+  /** 确认弹窗展示地址投毒告警后用户仍二次确认（后端缺 ack 即拒签） */
+  confirm_poisoning_check?: boolean;
 }
 
 /** persona://ssh-approval 事件负载：待审批的 SSH 签名请求 */
@@ -861,7 +863,7 @@ export interface WalletGenerateResponse {
 export interface WalletImportRequest {
   name: string;
   network: string;
-  import_type: 'mnemonic' | 'private_key' | 'wif';
+  import_type: 'mnemonic' | 'private_key' | 'wif' | 'keystore';
   data: string;
   password: string;
   address_count?: number;
@@ -869,7 +871,7 @@ export interface WalletImportRequest {
 
 export interface WalletExportRequest {
   wallet_id: string;
-  format: 'json' | 'mnemonic' | 'xpub' | 'private_key' | 'wif';
+  format: 'json' | 'mnemonic' | 'xpub' | 'private_key' | 'wif' | 'keystore';
   include_private: boolean;
   password?: string;
 }

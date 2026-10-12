@@ -9,9 +9,10 @@
 独立第六条 KDF 路径）。
 
 **本文与代码的边界**：§1/§2 是现状盘点（已在库中实现）；§2.1/§3/§4/§5 是
-**定案**——其中 §3 的 `persona wallet passwd`、§5 第 3 条的后端防投毒强制
-**尚未落代码**，作为 M5 后续工程项在 ROADMAP 单独列；其余为现状或纯文档
-约定。定案不代表已实现，读法以本节标记为准。
+**定案**——其中 §3 的 `persona wallet passwd` 与 `EncryptedMnemonic` 重包
+**尚未落代码**，作为 M5 后续工程项在 ROADMAP 单独列；§5 第 3 条（后端防
+投毒强制）与桌面 keystore 臂已落地（2026-10-13）。定案不代表已实现，读法
+以本节标记为准。
 
 ## 1. 现状代码地图（盘点，2026-10-13）
 
@@ -107,10 +108,15 @@ BIP39 助记词 ──(BIP39 seed, 可选 passphrase)──▶ 64 字节 seed
 2. **确认面板必列**：from（签名地址全文）、to（全文 + EIP-55 校验和）、
    金额 + 精度、费用（gas × price 或 fee rate）、chain id（EVM）、
    网络。缺任何一项不允许提交签名。
-3. **防投毒启发式后端化**（**定案，未落代码**）：`looksLikeAddressPoisoning`
-   （首 6 + 末 6 字符相同、中段不同，现仅桌面 UI 启发式）在**后端签名
-   入口**再跑一次，命中即拒绝签名并要求显式确认。已知地址集合 =
-   钱包全部地址 + 用户标记，收紧现状「仅当前选中地址列表」的口径。
+3. **防投毒启发式后端化**（**已实现 2026-10-13**）：core
+   `crypto/address_poisoning.rs` 的 `detect_address_poisoning`（首 6 + 末 6
+   字符相同、中段不同，大小写不敏感，按字符切分永不 panic）+
+   `enforce_poisoning_check`（命中且未确认即拒签）在后端签名入口强制：
+   CLI `create-transaction --sign` 检查在口令 prompt 之前，命中需显式
+   `--confirm-poisoning-check`；桌面 `wallet_sign_transaction` 同样强制，
+   确认弹窗展示告警后用户二次确认才带 `confirm_poisoning_check` ack
+   （serde default false，旧前端缺字段按未确认拒绝）。已知地址集合 =
+   钱包全部地址（本实现口径）；「+ 用户标记」仍开放。
 4. **口令不离面板**：桌面口令在 modal 内输入、`finally` 清理；CLI 走
    标准口令 prompt；两者都不落日志（脱敏策略已有测试）。
 5. **审计**：每次签名记录 digest 级摘要（to/amount/fee/chain id hash），
@@ -132,8 +138,10 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
   是否进主线待用户裁定（ROADMAP M5 open question）。
 - **PSBT 工作流**：BTC 多方签名/离线签名依赖 BIP-174；现 BTC 只有
   单签 P2WPKH 直签。另列。
-- **桌面端 keystore 臂**：`import_wallet_from_request`/`export_wallet_from_request`
-  尚无 keystore 分支（CLI 已全量支持）——补齐属工程项，无设计争议。
+- **桌面端 keystore 臂**：~~`import_wallet_from_request`/`export_wallet_from_request`
+  尚无 keystore 分支~~ **已补齐（2026-10-13）**：桌面 `wallet import/export`
+  均支持 `keystore`（导出 geth 默认参数；导入解出私钥后走存储包装），
+  WalletPanel 表单与格式下拉同步。
 - BIP-84/86 地址形态进默认流程（现仅 P2WPKH）。
 
 ## 8. 测试盘点（回归锚点）
@@ -145,3 +153,7 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
 - 口令变更：`test_password_change`（旧密失效、新密可用、密文独立）。
 - 篡改路径：keystore 密文篡改 MAC 拒绝、超大 scrypt work factor 拒绝、
   不支持 KDF/cipher/prf 拒绝。
+- 防投毒：core 启发式 7 例（命中/同址豁免/部分匹配拒绝/base58 保守/
+  大小写不敏感/非 ASCII 不 panic/确认放行）+ CLI 集成（未确认拒绝、
+  确认后放行）+ 桌面命令层（缺 ack 拒签不落库、带 ack 正常签名落库）
+  + 弹窗 jest（干净地址 ack=false、仿冒地址 ack=true）。

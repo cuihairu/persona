@@ -6269,6 +6269,9 @@ pub struct WalletCreateTransactionRequest {
 pub struct WalletSignTransactionRequest {
     pub transaction_id: String,
     pub password: String,
+    /// 桌面确认弹窗展示投毒告警后用户再次确认；缺省按未确认处理（拒绝签名）。
+    #[serde(default)]
+    pub confirm_poisoning_check: bool,
 }
 
 /// 从数据库加载钱包交易仓库。
@@ -6415,7 +6418,14 @@ pub async fn wallet_sign_transaction(
     };
 
     let signed = ok_or_error_response!(
-        sign_wallet_transaction(&repo, &wallet, &transaction, &request.password).await
+        sign_wallet_transaction(
+            &repo,
+            &wallet,
+            &transaction,
+            &request.password,
+            request.confirm_poisoning_check
+        )
+        .await
     );
     let value = ok_or_error_response_ctx!(
         serde_json::to_value(&signed),
@@ -6433,14 +6443,34 @@ async fn sign_wallet_transaction(
     wallet: &CryptoWallet,
     request: &persona_core::models::wallet::TransactionRequest,
     password: &str,
+    confirmed_poisoning_check: bool,
 ) -> std::result::Result<persona_core::models::wallet::SignedTransaction, String> {
     use persona_core::crypto::transaction_signing::{
         build_raw_transaction, sign_transaction, verify_ethereum_transaction,
         verify_solana_transaction,
     };
     use persona_core::crypto::wallet_import_export::signing_key_for_address;
+    use persona_core::crypto::{detect_address_poisoning, enforce_poisoning_check};
     use persona_core::models::wallet::{BroadcastStatus, SignedTransaction};
     use sha2::Digest;
+
+    // 后端防投毒强制检查（WALLET_DESIGN.md §5 第 3 条）：不只依赖桌面确认
+    // 弹窗的启发式——弹窗展示告警后用户再次确认才会带 ack，否则拒绝签名。
+    let known_addresses: Vec<String> = wallet.addresses.iter().map(|a| a.address.clone()).collect();
+    if let Some(mimicked) = detect_address_poisoning(&request.to_address, &known_addresses) {
+        tracing::warn!(
+            to_address = %request.to_address,
+            mimicked = %mimicked,
+            confirmed = confirmed_poisoning_check,
+            "backend address-poisoning heuristic hit on wallet sign path"
+        );
+    }
+    enforce_poisoning_check(
+        &request.to_address,
+        &known_addresses,
+        confirmed_poisoning_check,
+    )
+    .map_err(|e| e.to_string())?;
 
     let key = signing_key_for_address(wallet, password, &request.from_address)
         .map_err(|e| format!("Failed to derive signing key (wrong password?): {}", e))?;
@@ -6609,8 +6639,25 @@ fn import_wallet_from_request(
             &request.password,
         )
         .map_err(|e| e.to_string()),
+        "keystore" => {
+            // Keystore JSON is defined over Ethereum-style secp256k1 keys;
+            // the format itself carries no network hint.
+            let secret = persona_core::crypto::wallet_encryption::import_from_keystore(
+                request.data.trim(),
+                &request.password,
+            )
+            .map_err(|e| e.to_string())?;
+            persona_core::crypto::wallet_import_export::import_from_private_key(
+                identity_id,
+                request.name.clone(),
+                &hex::encode(secret),
+                BlockchainNetwork::Ethereum,
+                &request.password,
+            )
+            .map_err(|e| e.to_string())
+        }
         other => Err(format!(
-            "Unsupported import_type '{}'. Use 'mnemonic', 'private_key', or 'wif'.",
+            "Unsupported import_type '{}'. Use 'mnemonic', 'private_key', 'wif', or 'keystore'.",
             other
         )),
     }
@@ -6663,6 +6710,16 @@ fn export_wallet_from_request(
                     .password
                     .as_deref()
                     .ok_or_else(|| "Password required for WIF export".to_string())?,
+            )
+            .map_err(|e| e.to_string())
+        }
+        persona_core::crypto::wallet_import_export::ExportFormat::Keystore => {
+            persona_core::crypto::wallet_import_export::export_keystore(
+                wallet,
+                request
+                    .password
+                    .as_deref()
+                    .ok_or_else(|| "Password required for keystore export".to_string())?,
             )
             .map_err(|e| e.to_string())
         }

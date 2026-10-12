@@ -1,4 +1,5 @@
 pub mod address_generator;
+pub mod address_poisoning;
 pub mod bech32;
 pub mod encryption;
 pub mod game_token;
@@ -23,6 +24,7 @@ pub mod wallet_encryption;
 pub mod wallet_import_export;
 
 pub use address_generator::*;
+pub use address_poisoning::*;
 pub use encryption::*;
 pub use game_token::*;
 pub use hashing::*;

@@ -82,6 +82,9 @@ const TransactionConfirmModal: React.FC<TransactionConfirmModalProps> = ({
       const result = await personaAPI.walletSignTransaction({
         transaction_id: created.data.id,
         password,
+        // 弹窗展示投毒告警后用户仍在二次确认中点击了确认 = 显式确认
+        // （后端 sign 入口会再跑一次启发式，无 ack 即拒绝签名）
+        confirm_poisoning_check: poisonSource !== null,
       });
       if (!result.success || !result.data) {
         throw new Error(result.error ?? t('tx.signFailed'));

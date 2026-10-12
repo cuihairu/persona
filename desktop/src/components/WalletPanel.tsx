@@ -18,7 +18,7 @@ import TransactionConfirmModal from '@/components/TransactionConfirmModal';
 import { QRCodeSVG } from 'qrcode.react';
 import type { WalletAddress, WalletGenerateResponse, WalletSummary } from '@/types';
 
-type WalletExportFormat = 'json' | 'xpub' | 'mnemonic' | 'private_key' | 'wif';
+type WalletExportFormat = 'json' | 'xpub' | 'mnemonic' | 'private_key' | 'wif' | 'keystore';
 
 const WalletPanel: React.FC = () => {
   const { t } = useTranslation();
@@ -51,7 +51,7 @@ const WalletPanel: React.FC = () => {
   const [importForm, setImportForm] = useState({
     name: '',
     network: 'Ethereum',
-    importType: 'mnemonic' as 'mnemonic' | 'private_key' | 'wif',
+    importType: 'mnemonic' as 'mnemonic' | 'private_key' | 'wif' | 'keystore',
     data: '',
     password: '',
     addressCount: 5,
@@ -147,6 +147,7 @@ const WalletPanel: React.FC = () => {
         exportFormat === 'mnemonic' ||
         exportFormat === 'private_key' ||
         exportFormat === 'wif' ||
+        exportFormat === 'keystore' ||
         (exportFormat === 'json' && exportIncludePrivate);
       if (needsPassword && !exportPassword) {
         throw new Error(t('wallet.errors.passwordRequired'));
@@ -773,7 +774,7 @@ const WalletPanel: React.FC = () => {
                       value={importForm.network}
                       onChange={(e) => setImportForm({ ...importForm, network: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
-                      disabled={importForm.importType === 'wif'}
+                      disabled={importForm.importType === 'wif' || importForm.importType === 'keystore'}
                     >
                       <option>Ethereum</option>
                       <option>Bitcoin</option>
@@ -790,8 +791,13 @@ const WalletPanel: React.FC = () => {
                       onChange={(e) =>
                         setImportForm({
                           ...importForm,
-                          importType: e.target.value as 'mnemonic' | 'private_key' | 'wif',
-                          network: e.target.value === 'wif' ? 'Bitcoin' : importForm.network,
+                          importType: e.target.value as 'mnemonic' | 'private_key' | 'wif' | 'keystore',
+                          network:
+                            e.target.value === 'wif'
+                              ? 'Bitcoin'
+                              : e.target.value === 'keystore'
+                                ? 'Ethereum'
+                                : importForm.network,
                         })
                       }
                       className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg"
@@ -799,6 +805,7 @@ const WalletPanel: React.FC = () => {
                       <option value="mnemonic">{t('wallet.importMnemonic')}</option>
                       <option value="private_key">{t('wallet.importPrivateKey')}</option>
                       <option value="wif">Bitcoin WIF</option>
+                      <option value="keystore">Ethereum keystore v3</option>
                     </select>
                   </div>
                 </div>
@@ -826,7 +833,9 @@ const WalletPanel: React.FC = () => {
                       ? t('wallet.importMnemonic')
                       : importForm.importType === 'wif'
                         ? 'Bitcoin WIF'
-                        : t('wallet.importPrivateKey')}
+                        : importForm.importType === 'keystore'
+                          ? 'Ethereum keystore v3'
+                          : t('wallet.importPrivateKey')}
                   </label>
                   <textarea
                     value={importForm.data}
@@ -837,7 +846,9 @@ const WalletPanel: React.FC = () => {
                         ? 'word1 word2 word3 ...'
                         : importForm.importType === 'wif'
                           ? 'K... / L...'
-                          : '0x... / hex'
+                          : importForm.importType === 'keystore'
+                            ? '{"crypto": {"cipher": "aes-128-ctr"}}'
+                            : '0x... / hex'
                     }
                   />
                 </div>
@@ -978,6 +989,7 @@ const WalletPanel: React.FC = () => {
                 {(exportFormat === 'mnemonic' ||
                   exportFormat === 'private_key' ||
                   exportFormat === 'wif' ||
+                  exportFormat === 'keystore' ||
                   (exportFormat === 'json' && exportIncludePrivate)) && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t('wallet.walletPassword')}</label>
@@ -1045,6 +1057,8 @@ const formatLabel = (t: (key: string) => string, format: WalletExportFormat): st
       return t('wallet.importPrivateKey');
     case 'wif':
       return 'Bitcoin WIF';
+    case 'keystore':
+      return 'Ethereum keystore v3';
   }
 };
 
@@ -1069,6 +1083,11 @@ const getAvailableExportFormats = (wallet: WalletSummary | null): WalletExportFo
 
   if (!wallet.watch_only && wallet.network.toLowerCase() === 'bitcoin' && wallet.wallet_type === 'SingleAddress') {
     formats.push('wif');
+  }
+
+  // Web3 Secret Storage v3 is defined over secp256k1 keys: Ethereum only
+  if (!wallet.watch_only && wallet.network.toLowerCase() === 'ethereum') {
+    formats.push('keystore');
   }
 
   return formats;

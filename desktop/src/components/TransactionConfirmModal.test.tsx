@@ -124,6 +124,8 @@ describe('components/TransactionConfirmModal', () => {
     expect(personaAPI.walletSignTransaction).toHaveBeenCalledWith({
       transaction_id: 't-1',
       password: 'wallet-pass',
+      // 正常地址未命中投毒启发式：不带确认
+      confirm_poisoning_check: false,
     });
 
     expect(screen.getByTestId('tx-hash').textContent).toBe('0xdeadbeef');
@@ -134,6 +136,25 @@ describe('components/TransactionConfirmModal', () => {
     // 复制按钮走 copyWithAutoClear
     fireEvent.click(screen.getByLabelText('复制哈希'));
     expect(copyWithAutoClear).toHaveBeenCalledWith('0xdeadbeef');
+  });
+
+  // 投毒告警可见时用户仍在确认中点击确认 = 显式 ack（后端签名入口
+  // 会再跑一次启发式，缺 ack 拒绝签名）。
+  it('carries the poisoning ack when the recipient mimics a known address', async () => {
+    renderModal();
+    fillForm({ to: lookalikeAddress });
+    expect(screen.getByTestId('poisoning-warning')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('confirm-sign-button'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('tx-result')).toBeInTheDocument();
+    });
+
+    expect(personaAPI.walletSignTransaction).toHaveBeenCalledWith({
+      transaction_id: 't-1',
+      password: 'wallet-pass',
+      confirm_poisoning_check: true,
+    });
   });
 
   it('keeps the form open with the API error when creation fails', async () => {

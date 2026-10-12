@@ -2261,6 +2261,7 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         WalletSignTransactionRequest {
             transaction_id: "not-a-uuid".to_string(),
             password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -2273,6 +2274,7 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         WalletSignTransactionRequest {
             transaction_id: uuid::Uuid::new_v4().to_string(),
             password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -2287,6 +2289,7 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         WalletSignTransactionRequest {
             transaction_id: tx_id.clone(),
             password: "wrong-pass".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -2306,6 +2309,7 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         WalletSignTransactionRequest {
             transaction_id: tx_id.clone(),
             password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -2336,6 +2340,7 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
         WalletSignTransactionRequest {
             transaction_id: tx_id,
             password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -2348,6 +2353,103 @@ async fn wallet_transaction_commands_round_trip_and_rejections() {
             .is_some_and(|e| e.contains("Failed to store signed transaction")),
         "got: {:?}",
         resp.error
+    );
+}
+
+// 后端防投毒强制检查：to 地址模仿本钱包已知地址时，缺 ack 一律拒绝签名，
+// 带 ack 放行（WALLET_DESIGN.md §5 第 3 条）。
+#[tokio::test]
+async fn wallet_sign_refuses_address_poisoning_without_ack() {
+    let (app, identity_id) = app_with_identity().await;
+
+    let resp = wallet_generate(
+        identity_id.clone(),
+        WalletGenerateRequest {
+            name: "Poison Wallet".to_string(),
+            network: "Ethereum".to_string(),
+            wallet_type: "hd".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let wallet = resp.data.expect("wallet generated");
+    let wallet_id = wallet.wallet_id.clone();
+    let own = wallet.first_address.clone();
+    assert!(own.len() >= 12);
+
+    // 仿冒地址：与钱包自身地址前 6 + 后 6 字符相同、中段不同
+    let spoof = format!(
+        "{}{}{}",
+        &own[..6],
+        "0".repeat(own.len() - 12),
+        &own[own.len() - 6..]
+    );
+
+    let resp = wallet_create_transaction(
+        WalletCreateTransactionRequest {
+            wallet_id,
+            to_address: spoof.clone(),
+            amount: "1000000000000000000".to_string(),
+            fee: "21000".to_string(),
+            gas_price: Some("20000000000".to_string()),
+            gas_limit: Some(21000),
+            nonce: Some(0),
+            memo: None,
+            expires_in_minutes: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let tx_id = resp.data.expect("transaction created")["id"]
+        .as_str()
+        .expect("transaction id")
+        .to_string();
+
+    // 缺 ack：拒绝签名，且不落 signed_transactions。
+    let resp = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id.clone(),
+            password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("address-poisoning spoof")),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 带 ack（桌面确认弹窗展示告警后的二次确认）：放行并正常落库。
+    let resp = wallet_sign_transaction(
+        WalletSignTransactionRequest {
+            transaction_id: tx_id,
+            password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: true,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let signed = resp.data.expect("signed transaction returned");
+    assert!(
+        signed["transaction_hash"]
+            .as_str()
+            .is_some_and(|h| h.starts_with("0x")),
+        "hash: {:?}",
+        signed["transaction_hash"]
     );
 }
 
@@ -3040,7 +3142,7 @@ async fn wallet_export_format_matrix() {
     );
 
     let resp = wallet_import(
-        identity_id,
+        identity_id.clone(),
         WalletImportRequest {
             name: "Btc Single".to_string(),
             network: "Bitcoin".to_string(),
@@ -3089,7 +3191,7 @@ async fn wallet_export_format_matrix() {
 
     let resp = wallet_export(
         WalletExportRequest {
-            wallet_id: eth_id,
+            wallet_id: eth_id.clone(),
             format: "yaml".to_string(),
             include_private: false,
             password: None,
@@ -3099,6 +3201,117 @@ async fn wallet_export_format_matrix() {
     .await
     .unwrap();
     assert!(!resp.success, "unknown export format must be rejected");
+
+    // Keystore v3 臂：导出臂的边界（geth 默认 scrypt n=2^18 在本测试里太慢，
+    // 往返覆盖见 core 的 keystore 规范向量与低 work factor 往返），导入臂用
+    // 低 work factor 造的 keystore 端到端走一遍。
+    let resp = wallet_export(
+        WalletExportRequest {
+            wallet_id: eth_id.clone(),
+            format: "keystore".to_string(),
+            include_private: false,
+            password: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("Password required for keystore export")),
+        "got: {:?}",
+        resp.error
+    );
+
+    // 原钱包的私钥，供 keystore 往返校验。
+    let resp = wallet_export(
+        WalletExportRequest {
+            wallet_id: eth_id,
+            format: "private_key".to_string(),
+            include_private: false,
+            password: Some("wallet-pass-123".to_string()),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let original_pk = resp.data.unwrap();
+
+    let keystore_json = persona_core::crypto::export_to_keystore_with_params(
+        hex::decode(original_pk.trim()).unwrap().as_slice(),
+        "wallet-pass-123",
+        Some("".to_string()),
+        persona_core::crypto::ScryptExportParams {
+            log_n: 4,
+            r: 8,
+            p: 1,
+        },
+    )
+    .expect("small-factor keystore export");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&keystore_json).unwrap()["version"],
+        3
+    );
+
+    let resp = wallet_import(
+        identity_id.clone(),
+        WalletImportRequest {
+            name: "Keystore Roundtrip".to_string(),
+            network: "Ethereum".to_string(),
+            import_type: "keystore".to_string(),
+            data: keystore_json,
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    let imported = resp.data.expect("imported wallet");
+    assert!(!imported.watch_only);
+    assert_eq!(imported.address_count, 1);
+
+    let resp = wallet_export(
+        WalletExportRequest {
+            wallet_id: imported.id,
+            format: "private_key".to_string(),
+            include_private: false,
+            password: Some("wallet-pass-123".to_string()),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "{:?}", resp.error);
+    assert_eq!(original_pk, resp.data.unwrap(), "same private key material");
+
+    // 导入臂的坏数据：非法 JSON 在 scrypt 之前就被拒。
+    let resp = wallet_import(
+        identity_id,
+        WalletImportRequest {
+            name: "Bad Keystore".to_string(),
+            network: "Ethereum".to_string(),
+            import_type: "keystore".to_string(),
+            data: "{not json".to_string(),
+            password: "wallet-pass-123".to_string(),
+            address_count: Some(1),
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(!resp.success);
+    assert!(
+        resp.error
+            .as_deref()
+            .is_some_and(|e| e.contains("keystore")),
+        "got: {:?}",
+        resp.error
+    );
 }
 
 /// get_ssh_keys 只挑出 SshKey 凭据并带 identity 名；health_scan 出报告。
@@ -4429,6 +4642,7 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
         WalletSignTransactionRequest {
             transaction_id: tx_id,
             password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -4492,6 +4706,7 @@ async fn wallet_sign_bitcoin_audit_only_and_solana_rejection() {
         WalletSignTransactionRequest {
             transaction_id: tx_id,
             password: "wallet-pass-123".to_string(),
+            confirm_poisoning_check: false,
         },
         app.state::<AppState>(),
     )
@@ -6746,6 +6961,7 @@ async fn wallet_five_commands_precondition_and_dead_db_matrix() {
     let sign_request = |wallet_id: &str| WalletSignTransactionRequest {
         transaction_id: wallet_id.to_string(),
         password: "wallet-pass-123".to_string(),
+        confirm_poisoning_check: false,
     };
 
     // 场景 A：未初始化。add/delete/export 返回 Ok 包错误体；

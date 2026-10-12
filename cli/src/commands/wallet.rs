@@ -279,6 +279,12 @@ pub enum WalletCommand {
         #[arg(long)]
         sign: bool,
 
+        /// Explicitly acknowledge the address-poisoning check and sign anyway
+        /// (only needed when the to-address mimics one of the wallet's own
+        /// addresses — same first 6 and last 6 characters, different middle)
+        #[arg(long)]
+        confirm_poisoning_check: bool,
+
         /// Broadcast immediately after signing
         #[arg(long)]
         broadcast: bool,
@@ -1105,6 +1111,7 @@ pub(crate) async fn handle_wallet_with(
             nonce,
             memo,
             sign,
+            confirm_poisoning_check,
             broadcast: _,
             expires_in,
         } => {
@@ -1150,6 +1157,18 @@ pub(crate) async fn handle_wallet_with(
             if !sign {
                 return Ok(());
             }
+
+            // 后端防投毒强制检查（WALLET_DESIGN.md §5 第 3 条）：to 地址模仿
+            // 本钱包任一已知地址即拒绝签名，除非显式 --confirm-poisoning-check。
+            // 放在口令 prompt 之前：被拦下时不必让用户先输口令。
+            let known_addresses: Vec<String> =
+                wallet.addresses.iter().map(|a| a.address.clone()).collect();
+            persona_core::crypto::enforce_poisoning_check(
+                &created.to_address,
+                &known_addresses,
+                confirm_poisoning_check,
+            )
+            .with_context(|| format!("Address-poisoning check refused '{}'", created.to_address))?;
 
             // Sign the created request with the wallet's first address key
             let password = if config.ui.interactive {
@@ -1992,6 +2011,7 @@ mod integration {
                 nonce,
                 memo: memo.map(String::from),
                 sign,
+                confirm_poisoning_check: false,
                 broadcast: false,
                 expires_in: None,
             },
@@ -3172,6 +3192,82 @@ mod integration {
         .expect("env-password sign must succeed");
 
         std::env::remove_var("PERSONA_WALLET_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn sign_refuses_address_poisoning_spoof_until_confirmed() {
+        let _guard = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = false;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let password = "poison-pass-1";
+
+        let signer = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "poison-signer".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &signer).await;
+
+        // 仿冒地址：与钱包自身地址前 6 + 后 6 字符相同、中段不同
+        let own = signer.addresses.first().unwrap().address.clone();
+        assert!(own.len() >= 12);
+        let spoof = format!(
+            "{}{}{}",
+            &own[..6],
+            "0".repeat(own.len() - 12),
+            &own[own.len() - 6..]
+        );
+        let (gas_price, gas_limit, nonce) = (Some("20000000000"), Some(21000), Some(0));
+
+        std::env::set_var("PERSONA_WALLET_PASSWORD", password);
+
+        // 拦截：不输口令即被拒（检查在口令 prompt 之前）
+        let err = handle_wallet_with(
+            tx_args(
+                "poison-signer",
+                &spoof,
+                "1",
+                "100",
+                gas_price,
+                gas_limit,
+                nonce,
+                None,
+                true,
+            ),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("address-poisoning spoof must be refused");
+        assert!(err.to_string().contains("Address-poisoning check refused"));
+        // 内层 PersonaError 文本在 anyhow 的全链显示里（与文件内其他断言同口径）
+        assert!(format!("{:#}", err).contains("address-poisoning spoof"));
+
+        // 显式确认后放行
+        let args = WalletArgs {
+            command: WalletCommand::CreateTransaction {
+                wallet_identifier: "poison-signer".to_string(),
+                to: spoof.clone(),
+                amount: "1".to_string(),
+                fee: "100".to_string(),
+                gas_price: gas_price.map(String::from),
+                gas_limit,
+                nonce,
+                memo: None,
+                sign: true,
+                confirm_poisoning_check: true,
+                broadcast: false,
+                expires_in: None,
+            },
+        };
+        handle_wallet_with(args, &config, &ScriptedUi::new())
+            .await
+            .expect("confirmed poisoning sign must succeed");
     }
 
     #[tokio::test]
