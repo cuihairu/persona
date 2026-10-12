@@ -5,8 +5,9 @@ use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
     crypto::{
-        build_raw_transaction, sign_transaction, signing_key_for_address,
-        verify_ethereum_transaction, verify_solana_transaction,
+        build_raw_transaction, change_mnemonic_password, change_wallet_password, sign_transaction,
+        signing_key_for_address, verify_ethereum_transaction, verify_solana_transaction,
+        EncryptedMnemonic, EncryptedWalletKey,
     },
     models::wallet::{
         AddressType, BipVersion, BlockchainNetwork, CryptoWallet, SignedTransaction,
@@ -196,6 +197,11 @@ pub enum WalletCommand {
         /// Skip confirmation prompt
         #[arg(long)]
         force: bool,
+    },
+    /// Change a wallet's password (re-wraps private key and mnemonic)
+    Passwd {
+        /// Wallet ID or name
+        wallet_identifier: String,
     },
     /// Add address to wallet
     AddAddress {
@@ -780,6 +786,10 @@ pub(crate) async fn handle_wallet_with(
             }
         }
 
+        WalletCommand::Passwd { wallet_identifier } => {
+            execute_passwd(&repo, &wallet_identifier, config, ui, &formatter).await?;
+        }
+
         WalletCommand::AddAddress {
             wallet_id,
             address,
@@ -1289,6 +1299,76 @@ pub(crate) async fn handle_wallet_with(
 }
 
 // Helper functions
+
+/// `persona wallet passwd` — re-wrap a wallet's private key and mnemonic
+/// under a new password (WALLET_DESIGN.md §3).
+///
+/// 解旧密与重包都在写回之前完成：任一步失败原钱包行保持不动，不会出现
+/// 两份材料口令不一致的半写状态。旧口令的解析方式与签名一致
+/// （`PERSONA_WALLET_PASSWORD` 环境变量优先，交互模式走 prompt）；新口令
+/// 交互式输入（与 `persona passwd` 同规：无环境变量覆盖，陈旧的环境
+/// 变量永远不能静默轮换口令）。
+async fn execute_passwd(
+    repo: &CryptoWalletRepository,
+    wallet_identifier: &str,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    formatter: &OutputFormatter,
+) -> Result<()> {
+    let wallet = find_wallet_by_identifier(repo, wallet_identifier).await?;
+
+    if wallet.watch_only {
+        bail!("Watch-only wallets hold no key material to re-wrap");
+    }
+
+    let old_password = if config.ui.interactive {
+        ui.password("Enter current wallet password:", false, None)?
+    } else {
+        std::env::var("PERSONA_WALLET_PASSWORD")
+            .context("PERSONA_WALLET_PASSWORD must be set in non-interactive mode")?
+    };
+
+    if !config.ui.interactive {
+        bail!("The new wallet password is interactive-only; re-run in an interactive terminal");
+    }
+
+    let new_password = ui.password(
+        "Set a new wallet password",
+        false,
+        Some(("Confirm new wallet password", "Passwords don't match")),
+    )?;
+    if new_password == old_password {
+        bail!("New password must be different from the current password");
+    }
+    if new_password.len() < 8 {
+        bail!("New password must be at least 8 characters");
+    }
+
+    // 先全部解密（错旧口令在这里失败，不产生半写状态），再全部重包。
+    let old_key: EncryptedWalletKey = serde_json::from_slice(&wallet.encrypted_private_key)
+        .map_err(|e| anyhow!("Stored private key is not valid wallet encryption JSON: {e}"))?;
+    let new_key = change_wallet_password(&old_key, &old_password, &new_password)
+        .map_err(|e| anyhow!("Failed to re-wrap private key (wrong password?): {e}"))?;
+
+    let new_mnemonic_bytes = if let Some(bytes) = &wallet.encrypted_mnemonic {
+        let old_mnemonic: EncryptedMnemonic = serde_json::from_slice(bytes)
+            .map_err(|e| anyhow!("Stored mnemonic is not valid wallet encryption JSON: {e}"))?;
+        let new_mnemonic = change_mnemonic_password(&old_mnemonic, &old_password, &new_password)
+            .map_err(|e| anyhow!("Failed to re-wrap mnemonic: {e}"))?;
+        Some(serde_json::to_vec(&new_mnemonic)?)
+    } else {
+        None
+    };
+
+    let mut updated = wallet.clone();
+    updated.encrypted_private_key = serde_json::to_vec(&new_key)?;
+    updated.encrypted_mnemonic = new_mnemonic_bytes;
+    updated.updated_at = chrono::Utc::now();
+    repo.update(&updated).await.into_anyhow()?;
+
+    formatter.print_success(&format!("Wallet password changed for '{}'", updated.name));
+    Ok(())
+}
 
 async fn init_wallet_repository(config: &CliConfig) -> Result<CryptoWalletRepository> {
     let db_path = config.get_database_path();
@@ -3268,6 +3348,183 @@ mod integration {
         handle_wallet_with(args, &config, &ScriptedUi::new())
             .await
             .expect("confirmed poisoning sign must succeed");
+    }
+
+    fn passwd_args(identifier: &str) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::Passwd {
+                wallet_identifier: identifier.to_string(),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn passwd_rewraps_private_key_and_mnemonic() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = true;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let old_password = "rotate-old-pass";
+        let new_password = "rotate-new-pass";
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+
+        let wallet = persona_core::crypto::import_from_mnemonic(
+            identity_id,
+            "rotate-me".to_string(),
+            phrase,
+            "",
+            BlockchainNetwork::Ethereum,
+            None,
+            1,
+            old_password,
+        )
+        .unwrap();
+        insert_wallet(&config, &wallet).await;
+
+        // ScriptedUi consumes one answer per password() call (confirmation
+        // auto-matches), so old + new is two scripted answers.
+        let ui = ScriptedUi::new()
+            .password(old_password)
+            .password(new_password);
+        handle_wallet_with(passwd_args("rotate-me"), &config, &ui)
+            .await
+            .expect("passwd must succeed");
+        assert!(ui.exhausted());
+
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let updated = find_wallet_by_identifier(&repo, "rotate-me").await.unwrap();
+
+        // New password unlocks both blobs; the old one unlocks neither.
+        let mnemonic = persona_core::crypto::export_mnemonic(&updated, new_password).unwrap();
+        assert_eq!(mnemonic, phrase);
+        let private_key = persona_core::crypto::export_private_key(&updated, new_password).unwrap();
+        let before = persona_core::crypto::export_private_key(&wallet, old_password).unwrap();
+        assert_eq!(private_key, before);
+
+        assert!(persona_core::crypto::export_mnemonic(&updated, old_password).is_err());
+        assert!(persona_core::crypto::export_private_key(&updated, old_password).is_err());
+
+        // Both wraps got fresh salt/nonce (independent re-wrap).
+        let old_key: persona_core::crypto::EncryptedWalletKey =
+            serde_json::from_slice(&wallet.encrypted_private_key).unwrap();
+        let new_key: persona_core::crypto::EncryptedWalletKey =
+            serde_json::from_slice(&updated.encrypted_private_key).unwrap();
+        assert_ne!(old_key.salt, new_key.salt);
+        assert_ne!(old_key.nonce, new_key.nonce);
+        let old_mnemonic: persona_core::crypto::EncryptedMnemonic =
+            serde_json::from_slice(wallet.encrypted_mnemonic.as_ref().unwrap()).unwrap();
+        let new_mnemonic: persona_core::crypto::EncryptedMnemonic =
+            serde_json::from_slice(updated.encrypted_mnemonic.as_ref().unwrap()).unwrap();
+        assert_ne!(old_mnemonic.salt, new_mnemonic.salt);
+        assert_ne!(old_mnemonic.nonce, new_mnemonic.nonce);
+    }
+
+    #[tokio::test]
+    async fn passwd_rejects_wrong_old_password_without_touching_the_row() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = true;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let password = "rotate-real-pass";
+
+        let wallet = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "wrong-old".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &wallet).await;
+
+        let ui = ScriptedUi::new()
+            .password("totally-wrong")
+            .password("rotate-new-pass");
+        let err = handle_wallet_with(passwd_args("wrong-old"), &config, &ui)
+            .await
+            .expect_err("wrong old password must fail");
+        assert!(err
+            .to_string()
+            .contains("Failed to re-wrap private key (wrong password?)"));
+
+        // The row is untouched: the original password still decrypts.
+        let repo = init_wallet_repository(&config).await.unwrap();
+        let unchanged = find_wallet_by_identifier(&repo, "wrong-old").await.unwrap();
+        assert!(persona_core::crypto::export_private_key(&unchanged, password).is_ok());
+        assert!(persona_core::crypto::export_private_key(&unchanged, "rotate-new-pass").is_err());
+    }
+
+    #[tokio::test]
+    async fn passwd_rejects_watch_only_and_weak_or_same_new_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = true;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+
+        let mut watcher = CryptoWallet::new(
+            identity_id,
+            "watcher".to_string(),
+            BlockchainNetwork::Ethereum,
+            persona_core::models::wallet::WalletType::SingleAddress,
+            vec![],
+        );
+        watcher.watch_only = true;
+        // DB CHECK constraint: watch-only rows must carry an xpub.
+        watcher.extended_public_key = Some("xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDHsk3PeQXtoy3xsj5BfuDGLJbl26NZf8Koc1tSNevURNWrqzEMBEq9VXdGiJZzhyTNt7ESChi".to_string());
+        insert_wallet(&config, &watcher).await;
+
+        let err = handle_wallet_with(
+            passwd_args("watcher"),
+            &config,
+            &ScriptedUi::new().password("x").password("y"),
+        )
+        .await
+        .expect_err("watch-only wallet must be refused");
+        assert!(err
+            .to_string()
+            .contains("Watch-only wallets hold no key material"));
+
+        // Same new password as the old one is rejected.
+        let wallet = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "same-pass".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            "same-old-pass",
+        )
+        .unwrap();
+        insert_wallet(&config, &wallet).await;
+        let err = handle_wallet_with(
+            passwd_args("same-pass"),
+            &config,
+            &ScriptedUi::new()
+                .password("same-old-pass")
+                .password("same-old-pass"),
+        )
+        .await
+        .expect_err("same password must be refused");
+        assert!(err.to_string().contains("New password must be different"));
+
+        // Short new password is rejected.
+        let err = handle_wallet_with(
+            passwd_args("same-pass"),
+            &config,
+            &ScriptedUi::new()
+                .password("same-old-pass")
+                .password("short"),
+        )
+        .await
+        .expect_err("short password must be refused");
+        assert!(err.to_string().contains("at least 8 characters"));
     }
 
     #[tokio::test]

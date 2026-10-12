@@ -189,6 +189,20 @@ pub fn change_wallet_password(
     Ok(new_encrypted)
 }
 
+/// Change the mnemonic wrapping password (re-encrypt with a fresh salt/nonce).
+///
+/// Symmetric counterpart of [`change_wallet_password`]; the CLI
+/// `wallet passwd` flow re-wraps both blobs in one shot so a wallet is
+/// never left with mismatched passwords (WALLET_DESIGN.md §3).
+pub fn change_mnemonic_password(
+    encrypted_mnemonic: &EncryptedMnemonic,
+    old_password: &str,
+    new_password: &str,
+) -> PersonaResult<EncryptedMnemonic> {
+    let phrase = decrypt_mnemonic(encrypted_mnemonic, old_password)?;
+    encrypt_mnemonic(&phrase, new_password)
+}
+
 /// Keystore format (Web3 Secret Storage v3, the geth/MyCrypto interchange JSON)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeystoreV3 {
@@ -536,6 +550,25 @@ mod tests {
         // Data should be intact
         let decrypted = decrypt_private_key(&re_encrypted, new_password).unwrap();
         assert_eq!(decrypted, private_key);
+    }
+
+    #[test]
+    fn mnemonic_password_change_rewraps_with_fresh_salt() {
+        let phrase = "test wave barrel tea";
+
+        let encrypted = encrypt_mnemonic(phrase, "old_pass").unwrap();
+        let re_encrypted = change_mnemonic_password(&encrypted, "old_pass", "new_pass").unwrap();
+
+        // Old password no longer decrypts; new one restores the phrase.
+        assert!(decrypt_mnemonic(&re_encrypted, "old_pass").is_err());
+        assert_eq!(decrypt_mnemonic(&re_encrypted, "new_pass").unwrap(), phrase);
+
+        // Fresh salt/nonce: the ciphertext is not byte-identical to the old one.
+        assert_ne!(re_encrypted.salt, encrypted.salt);
+        assert_ne!(re_encrypted.nonce, encrypted.nonce);
+
+        // Wrong old password is rejected without producing a new blob.
+        assert!(change_mnemonic_password(&encrypted, "wrong", "new_pass").is_err());
     }
 
     #[test]

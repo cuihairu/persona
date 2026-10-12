@@ -10,9 +10,9 @@
 
 **本文与代码的边界**：§1/§2 是现状盘点（已在库中实现）；§2.1/§3/§4/§5 是
 **定案**——其中 §3 的 `persona wallet passwd` 与 `EncryptedMnemonic` 重包
-**尚未落代码**，作为 M5 后续工程项在 ROADMAP 单独列；§5 第 3 条（后端防
-投毒强制）与桌面 keystore 臂已落地（2026-10-13）。定案不代表已实现，读法
-以本节标记为准。
+**已落地（2026-10-13）**，§5 第 3 条（后端防投毒强制）与桌面 keystore 臂
+也已落地（2026-10-13）；§2.1 的 version=2 惰性重包迁移仍待做。定案不
+代表已实现，读法以本节标记为准。
 
 ## 1. 现状代码地图（盘点，2026-10-13）
 
@@ -65,7 +65,8 @@ BIP39 助记词 ──(BIP39 seed, 可选 passphrase)──▶ 64 字节 seed
 现状（2026-10-13 盘点）：
 
 - `change_wallet_password(encrypted_key, old, new)` 存在（解旧密→新
-  salt/nonce 重包），**但没有生产调用方**——CLI/桌面均未暴露。
+  salt/nonce 重包）；对称的 `change_mnemonic_password` 已补（2026-10-13），
+  两者由 CLI `persona wallet passwd` 作为生产调用方串起。
 - 主密码轮换 `change_master_password → rewrap_all_item_keys` 只覆盖
   credentials/passkeys 的 item key；`crypto_wallets` 表的包装物
   **刻意不动**：钱包口令是独立于主密码的第二要素，主密码泄露不应
@@ -76,11 +77,15 @@ BIP39 助记词 ──(BIP39 seed, 可选 passphrase)──▶ 64 字节 seed
 
 1. **钱包口令保持独立于主密码**（签名/导出时输入；`validate_wallet_password`
    试解密校验）。
-2. **新增 `persona wallet passwd`**：一个原子操作里同时 re-wrap
-   `encrypted_private_key` 与 `encrypted_mnemonic`（解旧密→各自新
-   salt/nonce→重包→同事务写回；任一步失败保留原状）。复用
+2. **新增 `persona wallet passwd`**（**已实现 2026-10-13**）：一个操作里
+   同时 re-wrap `encrypted_private_key` 与 `encrypted_mnemonic`——复用
    `change_wallet_password` 并为 `EncryptedMnemonic` 补对称的
-   `change_mnemonic_password`。
+   `change_mnemonic_password`（均 fresh salt/nonce）。写回顺序：先解旧密
+   重包两份材料（任一步失败即中止，原行不动，不产生半写），成功后才
+   `repo.update` 写回。旧口令与签名同源（交互走 prompt，非交互
+   `PERSONA_WALLET_PASSWORD`）；新口令仅交互输入（与 `persona passwd`
+   同规：无环境变量覆盖，陈旧环境变量不能静默轮换口令），带确认
+   prompt、须异于旧口令且 ≥8 字符；watch-only 钱包拒绝（无材料可重包）。
 3. **不随主密码轮换**：`change_master_password` 对 `crypto_wallets`
    不动作继续成立；文档在此与 THREAT_MODEL 钱包节同时声明。
 
@@ -150,7 +155,11 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
   MAC/地址三重断言）+ OpenSSL 跨语言 KDF 钉版（scrypt/pbkdf2 各一）。
 - EIP-155 签名规范向量、BIP-143 P2WPKH 逐字节向量、SLIP-0010 ed25519
   官方向量、BIP-84/86 path builder 向量（builder 层）。
-- 口令变更：`test_password_change`（旧密失效、新密可用、密文独立）。
+- 口令变更：`test_password_change`（旧密失效、新密可用、密文独立）；
+  `mnemonic_password_change_rewraps_with_fresh_salt`（对称语义 + fresh
+  salt/nonce + 错旧口令拒绝）；CLI `persona wallet passwd` 集成 4 例
+  （双 blob 轮换后新口令可解/旧口令失效且 salt/nonce 已换、错旧口令
+  报错且原行不动、watch_only 拒绝、同口令/弱口令拒绝）。
 - 篡改路径：keystore 密文篡改 MAC 拒绝、超大 scrypt work factor 拒绝、
   不支持 KDF/cipher/prf 拒绝。
 - 防投毒：core 启发式 7 例（命中/同址豁免/部分匹配拒绝/base58 保守/
