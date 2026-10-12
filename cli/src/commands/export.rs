@@ -73,6 +73,20 @@ pub(crate) async fn execute_with(
     // Show export summary
     show_export_summary(&identity_names, &output_path, &args)?;
 
+    // 统一授权入口（架构校正批1）：Export 恒判 InteractionRequired——
+    // 策略允许导出但必须调用边显式确认，以下确认框即履约（提示文案/
+    // 默认值不变）。Denied 在本地会话上不可达（见 authz 模块），保留
+    // 防御臂以对齐统一裁决词汇。
+    let export_decision = persona_core::authz::authorize(
+        &persona_core::authz::AuthzPrincipal::LocalSession,
+        &persona_core::authz::AuthzResource::Vault,
+        persona_core::authz::AuthzAction::Export,
+        &persona_core::authz::AuthzContext::LOCAL,
+    );
+    if let persona_core::authz::AuthzDecision::Denied { reason } = export_decision {
+        return Err(anyhow!("Export denied: {}", reason));
+    }
+
     // Confirm export
     if !ui.confirm("Proceed with export?", true)? {
         println!("{}", "Export cancelled.".yellow());
@@ -88,6 +102,16 @@ pub(crate) async fn execute_with(
                 .red()
                 .bold()
         );
+        // 敏感载荷：同一裁决点再次要求交互履约（更严提示，默认否）。
+        let sensitive_decision = persona_core::authz::authorize(
+            &persona_core::authz::AuthzPrincipal::LocalSession,
+            &persona_core::authz::AuthzResource::Vault,
+            persona_core::authz::AuthzAction::Export,
+            &persona_core::authz::AuthzContext::LOCAL,
+        );
+        if let persona_core::authz::AuthzDecision::Denied { reason } = sensitive_decision {
+            return Err(anyhow!("Export denied: {}", reason));
+        }
         if !ui.confirm("Are you sure you want to include sensitive data?", false)? {
             println!("{}", "Export cancelled.".yellow());
             return Ok(());

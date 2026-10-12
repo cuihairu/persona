@@ -6,6 +6,7 @@
 #[cfg(feature = "accounts")]
 pub mod accounts;
 pub mod auth;
+pub mod authz;
 #[cfg(feature = "backup")]
 pub mod backup;
 pub mod breach;
@@ -121,6 +122,11 @@ pub enum PersonaError {
     /// 设备已抢先轮换）。客户端应重读状态后重试（E2EE_SYNC_DESIGN §11-2）。
     #[error("Concurrent operation conflict: {0}")]
     ConcurrentConflict(String),
+
+    /// 授权拒绝：统一授权入口（core/src/authz.rs）判 Denied。与认证失败
+    /// （AuthenticationFailed，身份没过）区分——这是身份已过但动作越权。
+    #[error("Operation not allowed: {0}")]
+    Forbidden(String),
 }
 
 // Implement From conversions for common error types

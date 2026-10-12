@@ -266,6 +266,25 @@ impl Agent {
         // Get target hostname
         let hostname = current_target_host();
 
+        // 统一授权入口（架构校正批1）：agent 密钥的唯一动作是签名且只对
+        // 自己的密钥——越权请求在此拒绝；主机规则/频率/确认计数等条件
+        // 策略仍由下方 PolicyEnforcer 把守（机制层）。
+        let entry = persona_core::authz::authorize(
+            &persona_core::authz::AuthzPrincipal::AgentKey {
+                credential_id: key.credential_id,
+                identity_id: key.identity_id,
+            },
+            &persona_core::authz::AuthzResource::SshKey {
+                credential_id: key.credential_id,
+            },
+            persona_core::authz::AuthzAction::Sign,
+            &persona_core::authz::AuthzContext::AGENT,
+        );
+        if !entry.is_allowed() {
+            warn!("Signature rejected at unified authz entry: {:?}", entry);
+            return Ok(failure_packet());
+        }
+
         // Policy enforcement using PolicyEnforcer.
         // The guard is scoped so it never spans an await (MutexGuard is !Send).
         let decision = {
@@ -275,6 +294,8 @@ impl Agent {
                 .map_err(|_| anyhow!("Policy lock poisoned"))?;
             policy_enforcer.check_signature(&key.credential_id, hostname.as_deref())?
         };
+        // 裁决统一词汇落审计/日志：与 core/Connect/CLI 同一表达。
+        info!("Signature policy decision: {:?}", decision.to_authz());
         match decision {
             SignatureDecision::Denied { reason } => {
                 tracing::warn!("Signature denied: {}", reason);

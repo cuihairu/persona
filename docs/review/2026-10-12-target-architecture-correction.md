@@ -186,9 +186,9 @@ pub struct ConnectTokenScope {
 
 ### 高优先级（校正文档与代码不一致）
 
-- [ ] **文档校正**：架构图中 `Principal` 标注为"预留"，但目标架构要求其为已实现概念。需更新文档为 **Planned** 或补全实现。
-- [ ] **授权入口统一**：确认 CLI/桌面/SSH Agent/Connect 是否都经过同一授权检查。当前 SSH Agent 有策略检查，Connect 有 Token scope，但无统一 `authorize()` 入口。
-- [ ] **Action 语义补全**：明确 `read` vs `use` vs `export` 的授权差异。当前 Connect 只有 `Read`，SSH 签名独立于 Connect。
+- [x] **文档校正**：架构图中 `Principal` 标注为"预留"，但目标架构要求其为已实现概念。需更新文档为 **Planned** 或补全实现。（2026-10-12 落地：`core/src/authz.rs` 实现 `AuthzPrincipal`——LocalSession / ConnectToken{scope} / AgentKey 三类主体；架构图 "Entry + Principal 识别" 现有代码对应物即各入口构造 principal 后调用 `authorize()`）
+- [x] **授权入口统一**：确认 CLI/桌面/SSH Agent/Connect 是否都经过同一授权检查。当前 SSH Agent 有策略检查，Connect 有 Token scope，但无统一 `authorize()` 入口。（2026-10-12 落地：`core/src/authz.rs` 的 `authorize(principal, resource, action, context)` 为唯一策略裁决点。四入口全部改走它：① core 数据面（`ensure_authorized` → get/update_credential_data、passkey assertion/self-test/export）；② Connect 四读端点（`token_allows_read` = authorize 的 404 形映射，动词+身份+类型三维裁决）；③ SSH Agent（签名入口先过 authorize 的 Sign-only 动作边界，`SignatureDecision::to_authz` 把条件策略折算到统一裁决词汇）；④ CLI 导出（两道确认框成为 Export→InteractionRequired 的履约，提示文案与默认值不变）。状态性机制不变：会话锁/自动锁/敏感重认证/token 吊销查表/agent 主机规则与频率计数仍各归其位。行为无回退：core 1070 测试全绿，connect 19 例全绿）
+- [x] **Action 语义补全**：明确 `read` vs `use` vs `export` 的授权差异。当前 Connect 只有 `Read`，SSH 签名独立于 Connect。（2026-10-12 落地：`AuthzAction::{Read, Use, Export, Sign}` 统一动词模型。Connect token 目前只可授予 read（创建期 validate 强制不变）；agent 密钥 Sign-only（密钥材料不经 agent 读取/导出）；本地会话 Export 恒判 InteractionRequired（非交互上下文折叠为 Denied，fail-closed）；Use 归位解密展示与 passkey 断言类操作）
 
 ### 中优先级（补全契约）
 

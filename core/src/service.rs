@@ -7,8 +7,9 @@ use crate::{
         MockRemoteAuthProvider, RemoteAuthChallenge, RemoteAuthProvider, RemoteAuthResult, Session,
         UserAuth,
     },
+    authz::{authorize, AuthzAction, AuthzContext, AuthzDecision, AuthzPrincipal, AuthzResource},
     breach::BreachChecker,
-    connect::{ConnectItemType, ConnectTokenRow, ConnectTokenScope, ConnectVerb},
+    connect::{ConnectItemType, ConnectTokenRow, ConnectTokenScope},
     crypto::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
         EncryptionService, KeyHierarchy, Sha256Hasher,
@@ -441,6 +442,30 @@ impl PersonaService {
         Ok(())
     }
 
+    /// 统一授权入口（本地会话数据面）。纯策略裁决走 [`authz::authorize`]：
+    /// Denied 立即失败；Export 的 `InteractionRequired` 由调用边履约
+    /// （CLI 确认/桌面对话框），core 侧不重复弹窗。随后状态性门禁照旧
+    /// 把守会话锁/自动锁/敏感重认证——机制层不变，只是判定词汇统一。
+    ///
+    /// 管理面操作（token 创建/吊销、旅行模式进出）保持既有敏感门禁，
+    /// 不引入数据面动词（写动词未拍板，见 authz 模块注释）。
+    pub(crate) async fn ensure_authorized(
+        &self,
+        resource: &AuthzResource,
+        action: AuthzAction,
+    ) -> Result<()> {
+        let decision = authorize(
+            &AuthzPrincipal::LocalSession,
+            resource,
+            action,
+            &AuthzContext::LOCAL,
+        );
+        if let AuthzDecision::Denied { reason } = decision {
+            return Err(PersonaError::Forbidden(format!("operation denied: {reason}")).into());
+        }
+        self.ensure_sensitive_operation_allowed().await
+    }
+
     /// Create a new identity
     pub async fn create_identity(
         &self,
@@ -732,7 +757,8 @@ impl PersonaService {
         &self,
         credential_id: &Uuid,
     ) -> Result<Option<CredentialData>> {
-        self.ensure_sensitive_operation_allowed().await?;
+        self.ensure_authorized(&AuthzResource::Vault, AuthzAction::Read)
+            .await?;
         self.touch_activity();
 
         let credential = match self.credential_repo.find_by_id(credential_id).await? {
@@ -1101,7 +1127,8 @@ impl PersonaService {
         credential_id: &Uuid,
         credential_data: &CredentialData,
     ) -> Result<Credential> {
-        self.ensure_sensitive_operation_allowed().await?;
+        self.ensure_authorized(&AuthzResource::Vault, AuthzAction::Use)
+            .await?;
         self.touch_activity();
 
         let mut credential = self
@@ -1487,7 +1514,8 @@ impl PersonaService {
         user_verification: bool,
         via: &str,
     ) -> Result<PasskeyAssertion> {
-        self.ensure_sensitive_operation_allowed().await?;
+        self.ensure_authorized(&AuthzResource::Vault, AuthzAction::Use)
+            .await?;
         self.touch_activity();
 
         let passkey = self
@@ -1533,7 +1561,8 @@ impl PersonaService {
     /// and check the assertion against the stored public key — the same
     /// verification an RP would run. No state is modified.
     pub async fn passkey_self_test(&self, id: &Uuid) -> Result<()> {
-        self.ensure_sensitive_operation_allowed().await?;
+        self.ensure_authorized(&AuthzResource::Vault, AuthzAction::Use)
+            .await?;
         self.touch_activity();
 
         let passkey = self
@@ -1567,7 +1596,10 @@ impl PersonaService {
     /// Refused when the passkey is marked non-exportable; audited as a
     /// security-sensitive event.
     pub async fn export_passkey_private_key(&self, id: &Uuid) -> Result<Vec<u8>> {
-        self.ensure_sensitive_operation_allowed().await?;
+        // Export 判 InteractionRequired：履约在调用边（CLI `--include-sensitive`
+        // 的确认框/桌面导出对话框）；core 侧不重复弹窗，状态门禁照旧。
+        self.ensure_authorized(&AuthzResource::Vault, AuthzAction::Export)
+            .await?;
         self.touch_activity();
 
         let passkey = self
@@ -2310,19 +2342,34 @@ impl PersonaService {
         Ok(Some(row))
     }
 
+    /// token 读裁决的 404 形映射：统一授权入口判 Denied → `false`，
+    /// 端点层映射空列表/None（与 404 同形，不泄露存在性）。
+    fn token_allows_read(principal: &AuthzPrincipal, resource: &AuthzResource) -> bool {
+        authorize(
+            principal,
+            resource,
+            AuthzAction::Read,
+            &AuthzContext::CONNECT,
+        )
+        .is_allowed()
+    }
+
     /// scope 内身份列表（id + 名称）。
     pub async fn connect_list_identities(
         &self,
         scope: &ConnectTokenScope,
     ) -> Result<Vec<Identity>> {
         self.connect_gate()?;
-        if !scope.allows_verb(ConnectVerb::Read) {
+        let principal = AuthzPrincipal::ConnectToken {
+            scope: scope.clone(),
+        };
+        if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
             return Ok(vec![]);
         }
         let all = self.get_identities().await?;
         Ok(all
             .into_iter()
-            .filter(|i| scope.allows_identity(&i.id))
+            .filter(|i| Self::token_allows_read(&principal, &AuthzResource::Identity { id: i.id }))
             .collect())
     }
 
@@ -2336,11 +2383,14 @@ impl PersonaService {
         title: Option<String>,
     ) -> Result<Vec<Credential>> {
         self.connect_gate()?;
-        if !scope.allows_verb(ConnectVerb::Read) {
+        let principal = AuthzPrincipal::ConnectToken {
+            scope: scope.clone(),
+        };
+        if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
             return Ok(vec![]);
         }
         if let Some(want) = &identity {
-            if !scope.allows_identity(want) {
+            if !Self::token_allows_read(&principal, &AuthzResource::Identity { id: *want }) {
                 return Ok(vec![]);
             }
         }
@@ -2349,8 +2399,15 @@ impl PersonaService {
             .into_iter()
             .filter(|c| c.is_active)
             .filter(|c| identity.as_ref().is_none_or(|want| &c.identity_id == want))
-            .filter(|c| scope.allows_identity(&c.identity_id))
-            .filter(|c| scope.allows_credential_type(&c.credential_type))
+            .filter(|c| {
+                Self::token_allows_read(
+                    &principal,
+                    &AuthzResource::Credential {
+                        identity_id: c.identity_id,
+                        credential_type: c.credential_type.clone(),
+                    },
+                )
+            })
             .filter(|c| {
                 item_type.is_none_or(|want| {
                     ConnectItemType::from_credential_type(&c.credential_type) == Some(want)
@@ -2368,15 +2425,23 @@ impl PersonaService {
         id: &Uuid,
     ) -> Result<Option<(Credential, CredentialData)>> {
         self.connect_gate()?;
-        if !scope.allows_verb(ConnectVerb::Read) {
+        let principal = AuthzPrincipal::ConnectToken {
+            scope: scope.clone(),
+        };
+        if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
             return Ok(None);
         }
         let Some(cred) = self.get_credential(id).await? else {
             return Ok(None);
         };
         if !cred.is_active
-            || !scope.allows_identity(&cred.identity_id)
-            || !scope.allows_credential_type(&cred.credential_type)
+            || !Self::token_allows_read(
+                &principal,
+                &AuthzResource::Credential {
+                    identity_id: cred.identity_id,
+                    credential_type: cred.credential_type.clone(),
+                },
+            )
         {
             return Ok(None);
         }
@@ -2394,16 +2459,26 @@ impl PersonaService {
         id: &Uuid,
     ) -> Result<Option<crate::crypto::totp::TotpCode>> {
         self.connect_gate()?;
-        if !scope.allows_verb(ConnectVerb::Read) {
+        let principal = AuthzPrincipal::ConnectToken {
+            scope: scope.clone(),
+        };
+        if !Self::token_allows_read(&principal, &AuthzResource::Vault) {
             return Ok(None);
         }
         let Some(cred) = self.get_credential(id).await? else {
             return Ok(None);
         };
-        if !cred.is_active || !scope.allows_identity(&cred.identity_id) {
-            return Ok(None);
-        }
-        if !scope.allows_credential_type(&CredentialType::TwoFactor) {
+        // 单条裁决涵盖身份与类型两维；非 TwoFactor 条目随后的数据门
+        // （`CredentialData::TwoFactor`）同形 None。
+        if !cred.is_active
+            || !Self::token_allows_read(
+                &principal,
+                &AuthzResource::Credential {
+                    identity_id: cred.identity_id,
+                    credential_type: cred.credential_type.clone(),
+                },
+            )
+        {
             return Ok(None);
         }
         let Some(data) = self.get_credential_data(id).await? else {

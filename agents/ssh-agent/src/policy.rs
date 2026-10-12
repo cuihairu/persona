@@ -581,6 +581,26 @@ pub enum SignatureDecision {
     Denied { reason: String },
 }
 
+impl SignatureDecision {
+    /// 折算到统一授权裁决词汇（架构校正批1）：Denied 与需要交互的变体
+    /// 一一对应。策略逻辑本身不变（主机规则/频率/确认计数仍是本模块
+    /// 的机制层职责），只是对外裁决表达统一到 `persona_core::authz`。
+    pub fn to_authz(&self) -> persona_core::authz::AuthzDecision {
+        use persona_core::authz::AuthzDecision;
+        match self {
+            Self::Allowed => AuthzDecision::Allowed,
+            Self::RequireConfirm { reason } | Self::RequireBiometric { reason } => {
+                AuthzDecision::InteractionRequired {
+                    reason: reason.clone(),
+                }
+            }
+            Self::Denied { reason } => AuthzDecision::Denied {
+                reason: reason.clone(),
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
