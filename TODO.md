@@ -724,6 +724,13 @@ Security & Auth
 - [x] Biometric unlock hooks (Touch ID/Face ID/Windows Hello)
 - [x] Auto-lock timers and “re-authenticate for sensitive ops”
 - [x] Secrets redaction policy for logs
+- [ ] **KDF 参数评审决策点（2026-10-12 首次有记录季度评审）**：评审
+      （`docs/review/2026-10-12-kdf-parameter-review.md`）结论——Argon2id
+      各路径恰在/高于 OWASP 下限（维持）；**PBKDF2-HMAC-SHA256 主密钥派生
+      100k 低于 OWASP 现行建议 600k**（1Password 用 650k）。等用户拍板：
+      ① 是否升 600k（re-wrap 迁移，不能就地改常量）；② 惰性升级（下次
+      解锁顺带）还是显式迁移命令；③ Argon2id 是否同批上浮（如 m=64 MiB）。
+      解锁延迟约 ×6（数十 ms → 0.2-0.4s 级）。拍板前参数不动
 
 Storage & Data
 

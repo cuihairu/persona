@@ -27,6 +27,8 @@ Note: `core/src/crypto/encryption.rs` (Argon2 `Argon2::default()`, i.e. m≈19 M
 
 The PBKDF2 iteration count and the Argon2 parameters must be re-reviewed quarterly (see `THREAT_MODEL.md`). When raising parameters, apply the change with a re-wrap/re-encrypt migration rather than in place, so existing rows stay readable and legacy rows get upgraded on next write.
 
+> **最近评审：2026-10-12**（`docs/review/2026-10-12-kdf-parameter-review.md`）：各 Argon2id 路径恰在 OWASP 下限、PERSENC1 在下限以上——均维持；**PBKDF2-HMAC-SHA256 100k 低于 OWASP 现行建议（600k）**，升级走 re-wrap 迁移的提案已登记、等用户拍板，拍板前参数不动。
+
 ## Legacy compatibility
 
 Older rows that lack `wrapped_item_key` are treated as legacy and will be decrypted directly with the master key. New writes always use per-item keys.

@@ -62,4 +62,4 @@ Ongoing quality
 
 - [x] Threat model + periodic review process (`THREAT_MODEL.md`)
 - [~] Fuzz-style parser tests: passkey clientData/creation-options parsing has a deterministic mutation harness (no cargo-fuzz scaffolding yet; `core/src/crypto/passkey.rs` §12); mnemonic covered by proptest-style property tests; keystore/QR lack dedicated harnesses. Secrets redaction policy for logs is done
-- [ ] KDF parameter review: both paths documented (`KEY_HIERARCHY.md`); PBKDF2 iteration count and Argon2 parameters revisited quarterly, changes applied via re-wrap/re-encrypt migrations
+- [ ] KDF parameter review: both paths documented (`KEY_HIERARCHY.md`); PBKDF2 iteration count and Argon2 parameters revisited quarterly, changes applied via re-wrap/re-encrypt migrations — **latest review 2026-10-12** (`docs/review/2026-10-12-kdf-parameter-review.md`): all Argon2id paths at/above the OWASP floor (kept), PBKDF2-HMAC-SHA256 100k is 6× below the OWASP recommendation (600k) — bump proposal registered, awaiting user sign-off (re-wrap migration, no code change until decided)
