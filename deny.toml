@@ -43,6 +43,13 @@ ignore = [
     "RUSTSEC-2025-0080",
     "RUSTSEC-2025-0100",
     "RUSTSEC-2025-0098",
+    # unsafe-libyaml (via serde_yaml -> persona-cli): repository archived
+    # 2024-03, advisory re-published 2026-10-12. serde_yaml itself is archived
+    # with no maintained successor (the serde_yml fork carries its own unsound
+    # advisory), so there is nothing to upgrade to; YAML usage is
+    # serialization of trusted in-memory values. Revisit when migrating off
+    # serde_yaml.
+    "RUSTSEC-2024-0449",
     # Marvin Attack timing sidechannel in rsa (via ssh-key + ssh-agent rsa-sha2-*
     # signing); upstream has published no patched release (Solution: none), so
     # there is nothing to upgrade to. Revisit when RustCrypto/RSA ships a fix.
