@@ -15,16 +15,16 @@
 
 ## 1. 现状代码地图（盘点，2026-10-13）
 
-| 层 | 位置 | 要点 |
-| --- | --- | --- |
-| BIP39 助记词 | `core/src/crypto/wallet_crypto.rs` `SecureMnemonic`（bip39 3.0） | 12–24 词，`to_seed(passphrase)` = BIP39 64 字节 seed |
-| secp256k1 主钥 | `MasterKey`（bip32 0.6 `XPrv`） | `from_seed` → `derive_path` → `to_xpub`；**序列化即 base58 xprv/xpub 字符串** |
-| Solana 主钥 | `Ed25519Key`（SLIP-0010 ed25519，自研，仅硬化派生） | HMAC-SHA512 链；持久化 `(secret, chain_code)` 64 字节；drop 时 zeroize |
-| 单钥包装 | `EncryptedWalletKey {version:1, encrypted_data, salt, nonce}` | Argon2id（argon2 crate 默认 m≈19MiB/t=2/p=1，参数不落盘）+ AES-256-GCM（`crypto/encryption.rs`） |
-| 助记词包装 | `EncryptedMnemonic {version:1, encrypted_phrase, salt, nonce}` | 同上 |
-| keystore v3 | `crypto/wallet_encryption.rs` | scrypt(n=2^18,r=8,p=1)/pbkdf2 + AES-128-CTR + keccak MAC；导入 256MiB 内存上限、常数时间 MAC 比较；geth 规范向量锁定 |
-| 派生路径 | `recommended_derivation_path`（BTC `m/44'/0'/{a}'/0`、ETH `m/44'/60'/{a}'/0`、Solana `m/44'/501'/{a}'/0'`） | BIP-84/86 目前只是 `BipVersion` 类型与 path builder（测试向量覆盖），**未进默认流程**；BTC 地址生成现仅 P2WPKH |
-| 签名 | `crypto/transaction_signing.rs` | ETH EIP-155/1559（alloy）、BTC BIP-143 P2WPKH（rust-bitcoin）、Solana ed25519（调用方供序列化消息） |
+| 层             | 位置                                                                                                        | 要点                                                                                                                 |
+| -------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| BIP39 助记词   | `core/src/crypto/wallet_crypto.rs` `SecureMnemonic`（bip39 3.0）                                            | 12–24 词，`to_seed(passphrase)` = BIP39 64 字节 seed                                                                 |
+| secp256k1 主钥 | `MasterKey`（bip32 0.6 `XPrv`）                                                                             | `from_seed` → `derive_path` → `to_xpub`；**序列化即 base58 xprv/xpub 字符串**                                        |
+| Solana 主钥    | `Ed25519Key`（SLIP-0010 ed25519，自研，仅硬化派生）                                                         | HMAC-SHA512 链；持久化 `(secret, chain_code)` 64 字节；drop 时 zeroize                                               |
+| 单钥包装       | `EncryptedWalletKey {version:1, encrypted_data, salt, nonce}`                                               | Argon2id（argon2 crate 默认 m≈19MiB/t=2/p=1，参数不落盘）+ AES-256-GCM（`crypto/encryption.rs`）                     |
+| 助记词包装     | `EncryptedMnemonic {version:1, encrypted_phrase, salt, nonce}`                                              | 同上                                                                                                                 |
+| keystore v3    | `crypto/wallet_encryption.rs`                                                                               | scrypt(n=2^18,r=8,p=1)/pbkdf2 + AES-128-CTR + keccak MAC；导入 256MiB 内存上限、常数时间 MAC 比较；geth 规范向量锁定 |
+| 派生路径       | `recommended_derivation_path`（BTC `m/44'/0'/{a}'/0`、ETH `m/44'/60'/{a}'/0`、Solana `m/44'/501'/{a}'/0'`） | BIP-84/86 目前只是 `BipVersion` 类型与 path builder（测试向量覆盖），**未进默认流程**；BTC 地址生成现仅 P2WPKH       |
+| 签名           | `crypto/transaction_signing.rs`                                                                             | ETH EIP-155/1559（alloy）、BTC BIP-143 P2WPKH（rust-bitcoin）、Solana ed25519（调用方供序列化消息）                  |
 
 ## 2. 密钥层级（定案）
 
