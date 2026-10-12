@@ -199,9 +199,9 @@ pub struct ConnectTokenScope {
 
 ### 低优先级（文档完善）
 
-- [ ] **密钥层次图**：补充主密码 → 工作区密钥 → 凭证密钥的关系图。
-- [ ] **身份切换状态机**：补充 Locked/Unlocked/StepUpRequired 状态转换。
-- [ ] **组件职责表**：明确各组件"不负责"的边界。
+- [x] **密钥层次图**：补充主密码 → 工作区密钥 → 凭证密钥的关系图。（2026-10-12 落地，见 [§11.1](#111-密钥层次图代码口径)。**口径修正**：实际不存在「工作区密钥」——层次是 主密码 →(PBKDF2-HMAC-SHA256 100k)→ 主密钥 →(AES-GCM 包裹)→ 每条凭据独立 item key；多 workspace 共享同一主密钥（单 vault 假设，见审计报告缺口 #10））
+- [x] **身份切换状态机**：补充 Locked/Unlocked/StepUpRequired 状态转换。（2026-10-12 落地，见 [§11.2](#112-解锁与身份切换状态机代码口径)）
+- [x] **组件职责表**：明确各组件"不负责"的边界。（2026-10-12 落地，见 [§11.3](#113-组件职责表不负责边界)）
 
 ---
 
@@ -244,3 +244,82 @@ Code Agent 应按以下步骤执行：
 - 文档中的每个概念都能对应到真实代码、明确接口或标记为 Planned/Unverified。
 - 自动化调用方不能仅凭凭证 ID 读取敏感数据。
 - SSH 私钥使用与私钥导出有不同的授权语义。
+
+---
+
+## 11. 批3 落地明细（2026-10-12）
+
+> 三项均按 [2026-10-12-audit-report.md](./2026-10-12-audit-report.md) 第 2 节的代码依据绘制——
+> 本节不引入任何目标态设计，只把代码真实行为画清楚。Security Level 密钥边界方案（L4）
+> 仍待拍板，未在此落地。
+
+### 11.1 密钥层次图（代码口径）
+
+**没有「工作区密钥」**：层次是两层（主密钥 → per-item key），多 workspace 共享同一把
+主密钥。
+
+```mermaid
+flowchart TD
+    MP["主密码 / 生物识别恢复"] -->|PBKDF2-HMAC-SHA256<br/>100,000 次迭代<br/>authentication.rs:203 → keys.rs:105| MK["主密钥 [u8;32]<br/>不落盘，解锁时现场派生<br/>service.rs unlock() / lock() 清零"]
+    MK -->|AES-GCM 包裹 wrap| IK["per-item key<br/>每条凭据 / passkey 独立<br/>key_hierarchy.rs:37-44"]
+    IK -->|AES-GCM 加密正文| CT["密文列（SQLite credential 表）"]
+    IK -->|同一把 item key 再封| AUX["附件 / custom_fields blob / 同步快照"]
+    MK -.->|改密只 rewrap item key，密文不动<br/>key_hierarchy.rs:113-135| IK
+```
+
+**平行链（与主密钥链不相交）**：
+
+| 链 | 机制 | 依据 |
+| --- | --- | --- |
+| 口令验证哈希 | Argon2id PHC（`PasswordHash`/`PasswordHasher`），**只做验证、不派生加密密钥** | `core/src/crypto/hashing.rs:17`、`authentication.rs:88-91` |
+| 生物识别包裹 | `BIOWRAP1` 信封，**主密钥唯一持久化例外** | `core/src/auth/biometric_wrap.rs:21-25` |
+| 同步 GroupKey | 独立 32B 密钥，存 OS keyring `persona-sync-group`，只封同步 oplog/信封 | `core/src/sync/keys.rs:18` |
+| 备份 / 旅行 sidecar | Argon2id（64MiB×3），**唯一用 Argon2id 加密的文件** | `core/src/backup/file_crypto.rs:29` |
+
+**双哈希分工**（沿用旧口径会误判）：PBKDF2 派生**加密主密钥**，Argon2id 做**口令验证哈希**
+与备份文件加密——审计报告第 4 节已把「Argon2id 派生密钥」的目标态描述收敛掉。
+
+**图上故意不画 Security Level**：`SecurityLevel`（`models/credential.rs:83`）是纯标签，
+无独立密钥边界、无等级化授权（审计报告缺口 #7）。分级只出现在存储映射、统计与展示层。
+
+### 11.2 解锁与身份切换状态机（代码口径）
+
+```mermaid
+stateDiagram-v2
+    [*] --> Locked
+    Locked --> Unlocked: unlock(master_password)<br/>Argon2id 验证哈希通过后<br/>PBKDF2 派生主密钥入内存
+    Locked --> Unlocked: 生物识别恢复<br/>unwrap BIOWRAP1 包裹
+    Unlocked --> Locked: lock() 清内存密钥<br/>或 AutoLockManager 空闲 300s 巡检<br/>或 force_lock_sensitive 默认 true<br/>→ LockReason::SecurityViolation 强锁
+    Unlocked --> StepUpRequired: 敏感操作且距上次认证 > 300s<br/>service.rs needs_reauth()
+    StepUpRequired --> Unlocked: 重新认证通过
+    StepUpRequired --> Locked: force_lock_sensitive<br/>（策略判为异常）
+    Locked --> Locked: 账户连续 5 次失败<br/>锁 300s（authentication.rs:157-161）
+    Unlocked --> Unlocked: switch_identity<br/>仅改 workspace.active_identity_id<br/>指针切换，不重派生密钥
+```
+
+| 状态 | 内存主密钥 | 数据面可读 | Connect 数据面 | 依据 |
+| --- | --- | --- | --- | --- |
+| Locked | 无 | 否，全 `VaultLocked` | 否，`connect_gate` → `VaultLocked` → 端点 503 | `service.rs` `is_unlocked()`/`lock()`；session `locked` 旗标（`auth/session.rs:116`）；AutoLock 巡检（`auth/auto_lock.rs:463-574`，默认 300s `service.rs:138`） |
+| Unlocked | 有 | 是 | 是，scope 内（身份 × 类型 × 动词三维） | 敏感操作另受 300s 冷却窗口约束 |
+| StepUpRequired | 有（未清） | 敏感操作被拒：`ReauthRequired` 错误变体，桌面/CLI 据此弹重认证 | 否——Connect 无人值守，重认证不可能；策略层 `InteractionRequired` 在非交互上下文折叠为 `Denied` | `auth/session.rs:105` `requires_sensitive_reauth`；折叠规则见 `core/src/authz.rs` 模块注释 |
+
+**与状态机正交的条目级第二因子**：钱包种子的 `item_password_hash`（`models/credential.rs:305-308`）
+——条目本身锁着，即使 Unlocked 也要再解一层。
+
+### 11.3 组件职责表（不负责边界）
+
+| 组件 | 负责 | 明确**不负责** |
+| --- | --- | --- |
+| `core/src/service.rs`（`PersonaService` 单体，8858 行） | 领域编排：解锁态编排、数据面/管理面授权组合（`ensure_authorized`）、审计落库、Connect 生命周期编排、TOTP/passkey 编排 | 加密原语（`core/crypto`）、HTTP/协议、UI、同步协议实现；管理面（token 创建/吊销、旅行模式）保持既有敏感门禁，不引入数据面动词 |
+| `core/src/authz.rs` | 唯一策略裁决点 `authorize(principal, resource, action, ctx)` | **无状态**（会话锁/自动锁/敏感重认证、token 吊销查表、agent 主机规则与计数各归机制层）；不做交互履约（确认框在调用边）；不写审计 |
+| `core/src/auth/`（authentication/session/auto_lock/biometric_wrap） | 认证与锁定机制：口令验证、会话旗标、自动锁巡检、生物识别包裹 | 资源/动词裁决（在 `authz` + 各机制层）；AutoLock 是**锁定语义不是授权** |
+| `core/src/crypto/`（key_hierarchy/encryption/passkey/…） | 密钥层次与加密原语：PBKDF2 派生、AES-GCM 包裹/unwrap、re-wrap | 不知道授权、审计、身份与 workspace；对调用方是无状态纯函数 |
+| `core/src/storage/`（repository、connect_repository、database） | SQLite 行存取与迁移 | 业务判定不在 SQL 里（scope/等级/策略一律不进查询条件）；`audit_logs` 表只是存证载体 |
+| `connect-server/`（本机 127.0.0.1） | Connect HTTP 面：Host/Origin 三防线、限速、响应包络、token → service 映射 | 策略裁决（scope 判定在 core `authz`）、token 生成/哈希（`core/connect/token.rs`）；**不是** `server/` 的成员 |
+| `server/`（可选云服务） | 账户、审计远端副本、备份端点 | 无 Connect 端点；不接触主密钥与 vault 内容 |
+| `agents/ssh-agent/` | SSH agent 协议面 + 条件策略（主机规则/频率/确认计数） | 密钥材料读取或导出（`authz` 层 `Export` 拒绝）；签名动作边界先过 core `authz` |
+| `cli/` | 命令行 UX、导出确认框（`Export` 的履约边）、非交互模式 | 策略裁决（消费 `authz` 结果）；确认文案与默认值是 UX，不是策略 |
+| `desktop/src-tauri/` | 桌面 UX、命令映射、Locked 事件独立任务、重认证弹窗 | **独立 cargo workspace**（不是根 workspace 成员，需单独 fmt/check）；授权判定 |
+| `core/src/events/emitter.rs` | 审计远端副本（尽力而为） | 失败丢队列不回补；本地 SQLite `audit_logs` 才是存证源 |
+| `core/src/sync/`（`keys.rs` GroupKey、materialize） | 同步协议与 GroupKey 平行链 | 不接触主密钥；无分级同步（等级无关） |
+
