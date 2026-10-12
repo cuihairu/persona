@@ -61,7 +61,7 @@ alloy-primitives = "1.7"
 bech32 = "0.12"
 # WebAuthn/passkey：P-256 与 COSE/CBOR 用审计过的实现
 p256 = { version = "0.14", features = ["ecdsa"] }
-coset = "0.3"
+coset = "0.4"
 base64 = "0.23"
 webauthn-rs = "0.5"
 # SSH 密钥：OpenSSH 私钥容器（openssh-key-v1/aes*-ctr/cbc/bcrypt-pbkdf）解析与
