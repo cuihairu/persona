@@ -2106,6 +2106,7 @@ impl StateDirGuard {
 
     /// sandbox 同时注入 PERSONA_AGENT_SOCKET_PATH：两个 env 必须在同一把
     /// 锁内设置（std Mutex 不可重入，分别构造两个 guard 会死锁）。
+    #[cfg(unix)]
     pub(crate) fn sandbox_with_socket(
         dir: &tempfile::TempDir,
         socket_path: &std::path::Path,
@@ -2435,6 +2436,9 @@ async fn approval_respond_commands_resolve_and_reject_unknown() {
     assert!(!resp.success, "double answer must not re-deliver");
 }
 
+// Unix-socket probing (stale file / live listener) has no Windows
+// counterpart in this test; the named-pipe flow is a separate work item.
+#[cfg(unix)]
 #[tokio::test]
 async fn ssh_agent_status_reflects_state_files() {
     let dir = tempfile::tempdir().unwrap();

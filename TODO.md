@@ -895,7 +895,13 @@ SSH Agent (developer focus)
       守护；src-tauri 独立 workspace 补 `rust-windows-desktop` job
       （windows-latest `cargo check --all-targets`，compile-layer only——
       缺 dist 的 codegen 容错与 ubuntu desktop job 同口径，本地 host check
-      2m20s 绿 + actionlint 过）。原「msvc target 已装可作 CI 矩阵候选」
+      2m20s 绿 + actionlint 过）。**首跑即抓到真实回归**：`ssh_agent_status_
+      reflects_state_files`（2026-09-25 引入）裸用 `std::os::unix::net::
+      UnixListener` 无 `#[cfg(unix)]`——三周内 ubuntu job（只编 linux）与
+      09-28 手工复查（lib 口径未含 tests target）都看不见；已补门禁（连同
+      仅 unix 侧调用的 `sandbox_with_socket` helper），windows-gnu 交叉
+      check 0 警告 + host check/clippy/fmt/测试全绿。原「msvc target 已装
+      可作 CI 矩阵候选」
       注记作废：msvc 真机 runner 守卫强于本地交叉 check。
       **剩余（阻塞，需真 Windows 桌面会话）**：运行时行为验收——命名管道
       审批流、TPM biometric、NSIS 安装器、SSH agent named-pipe 同流程
