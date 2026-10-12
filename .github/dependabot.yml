@@ -50,3 +50,9 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "ci"
+    # dtolnay/rust-toolchain 不走 dependabot：它的版本 tag 由上游随发布流
+    # 晚于 semver 数字出现，dependabot 会拿不存在的版本号开 PR（幻影版本，
+    # 已三次：#32/#45 秒挂未遂、#62 被合入致 main 全红）。工具链升级改为
+    # 人工定期整体对齐（真实最新 stable 钉 @1.99.0，六处 workflow 引用）。
+    ignore:
+      - dependency-name: "dtolnay/rust-toolchain"

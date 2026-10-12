@@ -55,9 +55,10 @@ cli/Cargo.toml 弄出重复键、main 三条 workflow 全红——见下方 P0�
       保留；本地扩展 157 测试 + desktop lint/build + website build 全绿
       - [ ] TS7 迁移（独立工程）：ts-jest 官方路径是装 `@typescript/native`
             并把 `@typescript/typescript6` alias 给 ts-jest，等真需求再排
-- [ ] 建议（待拍板）：dependabot ignore 掉 dtolnay/rust-toolchain——幻影版本
-      bump 已第三次（#32/#45 秒挂未遂、#62 被合入致 main 全红）；工具链
-      升级改由人工定期整体对齐（真实最新 stable 见 1.99.0@2026-09-28）
+- [x] dtolnay/rust-toolchain 已 dependabot ignore（`.github/dependabot.yml`
+      github-actions 段写明理由）——幻影版本 bump 已第三次（#32/#45 秒挂
+      未遂、#62 被合入致 main 全红）；工具链升级改由人工定期整体对齐
+      （真实最新 stable 见 1.99.0@2026-09-28，六处 workflow 引用）
 - [x] handlebars 三告警（Dependabot #312/#313/#314，2 critical +1 moderate，
       2026-10-12 登记）已修——登记时「上游无修复版（fixed: null）」已过时：
       2026-10-08 上线补丁版 4.7.10（CVE-2026-106445 / GHSA-p8wg-vrv2-v86f，
