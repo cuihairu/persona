@@ -9,11 +9,11 @@
 外部项目（CI 脚本、deploy 工具、其他本地服务）读取 Persona vault 的
 **正式接口形态二选一**：
 
-| 形态 | 适合 | 依赖 |
-| --- | --- | --- |
-| **HTTP（Connect API）** | 跨进程消费者：CI、后台服务、任何语言的程序 | `persona connect serve` 监听中 + token |
-| **CLI（`persona secrets`）** | shell 脚本、Makefile、Terraform/K8s 声明式工具 | 仅 persona CLI 在 PATH |
-| ~~库引用~~ | **不推荐**：core crate 无稳定 API/版本承诺，且要求消费者进程拿到主密码才能解锁——等价于交出整个 vault | — |
+| 形态                         | 适合                                                                                                 | 依赖                                   |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **HTTP（Connect API）**      | 跨进程消费者：CI、后台服务、任何语言的程序                                                           | `persona connect serve` 监听中 + token |
+| **CLI（`persona secrets`）** | shell 脚本、Makefile、Terraform/K8s 声明式工具                                                       | 仅 persona CLI 在 PATH                 |
+| ~~库引用~~                   | **不推荐**：core crate 无稳定 API/版本承诺，且要求消费者进程拿到主密码才能解锁——等价于交出整个 vault | —                                      |
 
 权限模型对两种形态一致：授权由
 `core/src/authz.rs` 的统一裁决点 `authorize(principal, resource, action, ctx)`
@@ -60,9 +60,11 @@ pconn_C-LUE7XcPUhlPMdbh6v7Rx_Z6GzrbDqRDqx_DN_1Yrg
   ```bash
   persona connect token revoke 20a19e6d-9d42-4851-b2e7-d8da03f9049b   # 或 4b322627054123fd
   ```
+
   实测：revoke 成功输出
   `✓ Token 67474c13-3496-4f71-a08c-1dc01644b2b7 revoked`，随后该 token 的
   请求立刻 401。
+
 - `persona connect token list` 状态列：`active`（绿）/ `revoked`（红）/
   `expired`（黄，按 `expires_at` 现算），附 `never used` / `last used …` /
   `revoked at …` 与 `expires at …` 行。
@@ -106,7 +108,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 ### `GET /health` — 免认证存活探针
 
 ```json
-{"data":{"service":"persona-connect","version":"0.1.0"},"ok":true}
+{ "data": { "service": "persona-connect", "version": "0.1.0" }, "ok": true }
 ```
 
 不携带任何 vault 信息，供监听探活。
@@ -114,19 +116,36 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 ### `GET /identities` — scope 内身份列表
 
 ```json
-{"data":[{"id":"b5b6b785-08a1-4d30-85cc-b5854915af3e","name":"ci-project"}],"ok":true}
+{
+  "data": [
+    { "id": "b5b6b785-08a1-4d30-85cc-b5854915af3e", "name": "ci-project" }
+  ],
+  "ok": true
+}
 ```
 
 ### `GET /items` — scope 内条目列表（仅元数据）
 
 ```json
-{"data":[
-  {"id":"d4ac3439-c311-4454-ac49-a669c0034a9e","title":"Deploy dashboard 2FA",
-   "type":"totp","updated_at":"2026-10-12T15:09:40.314861814+00:00","urls":[]},
-  {"id":"134a2c8e-e129-486e-8b09-31b85eefc954","title":"Deploy dashboard login",
-   "type":"password","updated_at":"2026-10-12T15:09:18.610407644+00:00",
-   "urls":["https://dash.example.com/login"]}
-],"ok":true}
+{
+  "data": [
+    {
+      "id": "d4ac3439-c311-4454-ac49-a669c0034a9e",
+      "title": "Deploy dashboard 2FA",
+      "type": "totp",
+      "updated_at": "2026-10-12T15:09:40.314861814+00:00",
+      "urls": []
+    },
+    {
+      "id": "134a2c8e-e129-486e-8b09-31b85eefc954",
+      "title": "Deploy dashboard login",
+      "type": "password",
+      "updated_at": "2026-10-12T15:09:18.610407644+00:00",
+      "urls": ["https://dash.example.com/login"]
+    }
+  ],
+  "ok": true
+}
 ```
 
 `type` 为 snake_case。列表**不含**秘密字段。
@@ -134,14 +153,24 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 ### `GET /items/{id}` — 条目详情（含解密后的秘密）
 
 ```json
-{"data":{
-  "data":{"Password":{"email":null,"password":"smoke-secret-9f8e7d6c","security_questions":[]}},
-  "id":"134a2c8e-e129-486e-8b09-31b85eefc954",
-  "title":"Deploy dashboard login","type":"password",
-  "updated_at":"2026-10-12T15:09:18.610407644+00:00",
-  "urls":["https://dash.example.com/login"],
-  "username":"deploy-bot"
-},"ok":true}
+{
+  "data": {
+    "data": {
+      "Password": {
+        "email": null,
+        "password": "smoke-secret-9f8e7d6c",
+        "security_questions": []
+      }
+    },
+    "id": "134a2c8e-e129-486e-8b09-31b85eefc954",
+    "title": "Deploy dashboard login",
+    "type": "password",
+    "updated_at": "2026-10-12T15:09:18.610407644+00:00",
+    "urls": ["https://dash.example.com/login"],
+    "username": "deploy-bot"
+  },
+  "ok": true
+}
 ```
 
 注意 `data` 内字段名为 **PascalCase**（`Password` / `ApiKey` / …，serde
@@ -150,7 +179,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 ### `POST /items/{id}/totp` — 现算 TOTP 验证码
 
 ```json
-{"data":{"code":"539466","remaining_seconds":8},"ok":true}
+{ "data": { "code": "539466", "remaining_seconds": 8 }, "ok": true }
 ```
 
 ---
@@ -162,27 +191,27 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 404 形**（实测：password-only token 读 totp 条目 → `not_found`，与编造
 id 无差别），不泄露存在性。
 
-| 边界 | 语义 |
-| --- | --- |
-| verbs | 仅 `read` 可授予且 HTTP 仅暴露 `read`；`use` 已入授权模型但**暂无消费端点**（预留，勿依赖）；`export` / `sign` 对 token 主体不可授予 |
-| 类型排除 | ssh-key / crypto-wallet / custom **永不可授权**（不在可授权类型集）；passkey 不走此端点（独立 Unix socket 审批通道） |
-| 可授权类型 | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license |
-| 网络面 | 只监听 `127.0.0.1`；`Host` 头非 `127.0.0.1`/`localhost` → 421；带 `Origin` 头（浏览器侧请求）→ 403 |
-| 速率 | 每 token 120 请求/分钟（固定窗），超限 429 |
-| 锁定 | vault 锁定 → 503 `vault_locked`，不消耗限额 |
-| 审计 | 每次 token 校验/拒绝留审计记录；解密路径与桌面/CLI 展示相同 |
+| 边界       | 语义                                                                                                                                 |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| verbs      | 仅 `read` 可授予且 HTTP 仅暴露 `read`；`use` 已入授权模型但**暂无消费端点**（预留，勿依赖）；`export` / `sign` 对 token 主体不可授予 |
+| 类型排除   | ssh-key / crypto-wallet / custom **永不可授权**（不在可授权类型集）；passkey 不走此端点（独立 Unix socket 审批通道）                 |
+| 可授权类型 | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license              |
+| 网络面     | 只监听 `127.0.0.1`；`Host` 头非 `127.0.0.1`/`localhost` → 421；带 `Origin` 头（浏览器侧请求）→ 403                                   |
+| 速率       | 每 token 120 请求/分钟（固定窗），超限 429                                                                                           |
+| 锁定       | vault 锁定 → 503 `vault_locked`，不消耗限额                                                                                          |
+| 审计       | 每次 token 校验/拒绝留审计记录；解密路径与桌面/CLI 展示相同                                                                          |
 
 ## 错误码表（实测形状）
 
-| HTTP | code | 实测 message | 触发 |
-| --- | --- | --- | --- |
-| 401 | `unauthorized` | `missing or malformed bearer token` | 无/格式错 Authorization 头 |
-| 401 | `unauthorized` | `invalid token` | 未知、已吊销、已过期的 token（三者同形） |
-| 403 | `origin_forbidden` | `browser-originated requests are not allowed` | 请求带 `Origin` 头 |
-| 404 | `not_found` | `item not found` | 条目不存在 / 已归档 / scope 外（同形） |
-| 421 | `bad_host` | `host not allowed` | `Host` 头非 `127.0.0.1`/`localhost` |
-| 429 | `rate_limited` | — | 超过 120 req/min |
-| 503 | `vault_locked` | — | vault 锁定（不耗限额） |
+| HTTP | code               | 实测 message                                  | 触发                                     |
+| ---- | ------------------ | --------------------------------------------- | ---------------------------------------- |
+| 401  | `unauthorized`     | `missing or malformed bearer token`           | 无/格式错 Authorization 头               |
+| 401  | `unauthorized`     | `invalid token`                               | 未知、已吊销、已过期的 token（三者同形） |
+| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | 请求带 `Origin` 头                       |
+| 404  | `not_found`        | `item not found`                              | 条目不存在 / 已归档 / scope 外（同形）   |
+| 421  | `bad_host`         | `host not allowed`                            | `Host` 头非 `127.0.0.1`/`localhost`      |
+| 429  | `rate_limited`     | —                                             | 超过 120 req/min                         |
+| 503  | `vault_locked`     | —                                             | vault 锁定（不耗限额）                   |
 
 重试纪律：401 不要重试（确定性拒绝，去查吊销/到期）；503 可退避重试
 （等属主解锁）；429 按分钟窗退避。
