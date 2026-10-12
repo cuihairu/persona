@@ -25,7 +25,8 @@ Milestone 4 – 1Password Parity (current focus)
 - [x] Desktop: SSH agent controls; signature approvals via in-app modal + system notification (agent stays UI-free behind an ApprovalHandler seam; CLI keeps TTY prompts unchanged)
 - [x] Desktop: auto-lock end-to-end (backend event → countdown banner → enforced lock clears in-memory master key even if the frontend is gone)
 - [x] Browser: polished TOTP autofill UX (chained fill after login, stale-code refetch, remaining-seconds notices, multi-candidate picker — 2026-09)
-- [ ] SSH agent: real-host E2E test (`ssh -T git@github.com`); Windows-specific testing and optimization
+- [x] SSH agent: real-host E2E test — `ssh -T git@github.com` passed 2026-09-25 (real GitHub round-trip via `scripts/e2e-ssh-github.sh`, "successfully authenticated"; negative cases — confirm-deny, rate limiting, audit rows — closed same day; audit chain verified)
+- [ ] SSH agent: Windows-specific testing and optimization — compile level closed 2026-09-28 (`cargo check --target x86_64-pc-windows-gnu` green across workspaces); runtime acceptance (named-pipe approval flow, biometric gating, NSIS installer, SSH agent named-pipe end-to-end) needs a real Windows machine — blocked on hardware, same blocker family as OS autofill (gap #13)
 - [x] Reproducible builds (2026-09-24: deb reproducible bit-for-bit on the same machine; toolchain pinned at 1.97.0 via `rust-toolchain.toml` + CI; `$HOME` remapped via `scripts/build-repro.sh`; remaining gaps in `docs/REPRODUCIBLE_BUILDS.md`)
 
 Milestone 5 – Wallet Graduation (deferred until Milestone 4; experimental today)
