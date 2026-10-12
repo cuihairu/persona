@@ -14,7 +14,7 @@ use persona_core::crypto::EncryptionService;
 use persona_core::sync::capture::SyncCapture;
 use persona_core::sync::keys::{wrap_item_key_with_group, GroupKey};
 use persona_core::sync::oplog::{ItemKind, OpType};
-use persona_core::sync::snapshot::SyncItemSnapshot;
+use persona_core::sync::snapshot::{SyncItemSnapshot, SyncPasskeySnapshot};
 use persona_core::*;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -352,4 +352,74 @@ async fn detaching_capture_stops_recording() {
         .await
         .unwrap();
     assert_eq!(capture.snapshot().len(), 1, "拆卸后不再捕获");
+}
+
+#[tokio::test]
+async fn create_passkey_captures_put_snapshot_and_delete_captures_tombstone() {
+    let service = unlocked_service().await;
+    let capture = RecordingCapture::default();
+    service
+        .attach_sync_capture(Some(Arc::new(capture.clone())))
+        .await;
+
+    let identity = service
+        .create_identity("Alice".to_string(), IdentityType::Personal)
+        .await
+        .unwrap();
+    let client_data =
+        br#"{"type":"webauthn.create","challenge":"Y2hhbGxlbmdl","origin":"https://example.com"}"#;
+    let created = service
+        .create_passkey(
+            identity.id,
+            "example.com".to_string(),
+            "https://example.com",
+            client_data,
+            None,
+            Some("alice@example.com".to_string()),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+
+    let events = capture.snapshot();
+    assert_eq!(events.len(), 1, "passkey create 恰好产生一次捕获");
+    let ev = &events[0];
+    assert_eq!(ev.item_id, created.id);
+    assert_eq!(ev.kind, ItemKind::Passkey);
+    assert_eq!(ev.op, OpType::Put);
+
+    // 快照可被捕获的 item key 拆开，语义字段与主库行一致（不含使用态）
+    let snapshot = SyncPasskeySnapshot::open(
+        ev.ciphertext.as_ref().unwrap(),
+        ev.item_key.as_ref().unwrap(),
+    )
+    .unwrap();
+    assert_eq!(snapshot.identity_id, identity.id);
+    assert_eq!(snapshot.rp_id, "example.com");
+    assert_eq!(snapshot.user_name.as_deref(), Some("alice@example.com"));
+
+    // 私钥信封原样搬运（快照与主库行同密文），捕获的 item key 能解开它
+    let row = service
+        .list_passkeys(&identity.id)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
+    assert_eq!(snapshot.encrypted_private_key, row.encrypted_private_key);
+    let scalar = EncryptionService::new(ev.item_key.as_ref().unwrap())
+        .decrypt(&row.encrypted_private_key)
+        .unwrap();
+    assert_eq!(scalar.len(), 32, "解出的是 P-256 私钥标量");
+
+    // 删除 → tombstone（无 payload）
+    assert!(service.delete_passkey(&created.id).await.unwrap());
+    let events = capture.snapshot();
+    assert_eq!(events.len(), 2, "delete 恰好追加一次捕获");
+    let ev = &events[1];
+    assert_eq!(ev.item_id, created.id);
+    assert_eq!(ev.kind, ItemKind::Passkey);
+    assert_eq!(ev.op, OpType::Delete);
+    assert!(ev.ciphertext.is_none());
+    assert!(ev.item_key.is_none());
 }

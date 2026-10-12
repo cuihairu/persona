@@ -10,7 +10,16 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
 
 - [ ] **OS 自动填充集成**（gap #13，未实现）：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello 作为 authenticator）同属此缺口。口径：iOS 需 macOS+Xcode、鸿蒙需 DevEco（与 #24 同因），本机 Linux 无环境——**需对应平台机器才能启动**，先登记
 - [ ] **桌面应用级填充**（gap #12，未实现）：Windows 桌面应用内的填充注入（现状仅浏览器桥）。顺延原因已在 gap 文档登记：需 Windows 桌面会话实机注入验收，本机无 Windows 桌面会话
-- [ ] **Passkey 跨设备同步**（gap #14 已完成项的后续）：软件认证器与桥接审批已落，跨设备同步等 E2EE 同步阶段推进
+- [x] **Passkey 跨设备同步**（gap #14 已完成项的后续，2026-10-12 落地）：
+      `ItemKind::Passkey` 全链路——`create_passkey_full` 改用 revealed item
+      key 变体并捕获 put（`SyncPasskeySnapshot` 语义快照：rp/credential id/
+      私钥信封/COSE 公钥/算法/UV/导出标记/标签，**不含**设备本地使用态
+      sign_count/last_used/created_at）；`delete_passkey` 捕获 tombstone；
+      物化臂 `materialize_passkey_put`（identity 检查挂起→item key 重包本机
+      主密钥→`upsert_synced` 覆写语义字段并保留本机使用态）。测试：快照
+      round-trip/fail-closed 2 例、物化 4 例、repo upsert 1 例、service 捕获
+      1 例、双设备真服务器 E2E 1 例（put→物化→私钥可解→tombstone 清行）。
+      Identity 同步仍是后续批次（passkey 物化遇缺失身份挂起等待）
 - [x] **Secrets 自动化三件套**（gap #28，2026-10-11 完成）：`persona
       secrets` 直读三件套一次落地——`resolve`（脚本基元）/ `run`（env 注入
       =shell plugins 通用机制）/ `k8s`（Opaque Secret YAML，base64 data，

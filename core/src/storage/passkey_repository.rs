@@ -150,6 +150,58 @@ impl PasskeyRepository {
         Ok(())
     }
 
+    /// 同步物化路径 upsert：新行插入（`created_at` 用物化时刻、
+    /// `sign_count`/`last_used_at` 走零值/NULL 默认）；既有行则覆写全部
+    /// 语义字段（含私钥信封与本机重包的 wrapped key），**保留**设备本地
+    /// 使用态（`created_at`/`sign_count`/`last_used_at`）——使用计数在各
+    /// 设备独立推进，远端值只会伪造 WebAuthn 克隆检测基线。
+    pub async fn upsert_synced(&self, item: &PasskeyItem) -> PersonaResult<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO passkeys (
+                id, identity_id, rp_id, rp_name, user_handle, user_name,
+                user_display_name, credential_id, encrypted_private_key,
+                wrapped_item_key, public_key_cose, alg, sign_count,
+                uv_initialized, export_allowed, created_at, last_used_at, tags
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, $13, $14, $15, NULL, $16)
+            ON CONFLICT(id) DO UPDATE SET
+                identity_id = $2,
+                rp_id = $3,
+                rp_name = $4,
+                user_handle = $5,
+                user_name = $6,
+                user_display_name = $7,
+                credential_id = $8,
+                encrypted_private_key = $9,
+                wrapped_item_key = $10,
+                public_key_cose = $11,
+                alg = $12,
+                uv_initialized = $13,
+                export_allowed = $14,
+                tags = $16
+            "#,
+        )
+        .bind(item.id.to_string())
+        .bind(item.identity_id.to_string())
+        .bind(&item.rp_id)
+        .bind(&item.rp_name)
+        .bind(&item.user_handle)
+        .bind(&item.user_name)
+        .bind(&item.user_display_name)
+        .bind(&item.credential_id)
+        .bind(&item.encrypted_private_key)
+        .bind(&item.wrapped_item_key)
+        .bind(&item.public_key_cose)
+        .bind(item.alg)
+        .bind(item.uv_initialized as i64)
+        .bind(item.export_allowed as i64)
+        .bind(item.created_at.timestamp())
+        .bind(serde_json::to_string(&item.tags)?)
+        .execute(self.db.pool())
+        .await?;
+        Ok(())
+    }
+
     /// Delete a passkey by ID
     pub async fn delete(&self, id: &Uuid) -> PersonaResult<bool> {
         let result = sqlx::query("DELETE FROM passkeys WHERE id = $1")
@@ -328,6 +380,54 @@ mod tests {
             .await
             .expect_err("updating a missing passkey must fail");
         assert!(matches!(err, PersonaError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn upsert_synced_inserts_then_overwrites_semantics_but_keeps_local_usage() {
+        let db = setup_db().await;
+        let repo = PasskeyRepository::new(db.clone());
+        let identity_id = seed_identity(&db).await;
+        let item = make_item(&db, identity_id);
+        repo.create(&item).await.unwrap();
+
+        // 模拟本机已用过的行：直接写使用态（repo.update 的字段集不含 sign_count）
+        sqlx::query("UPDATE passkeys SET sign_count = 7, last_used_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now().timestamp())
+            .bind(item.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        let before = repo.find_by_id(&item.id).await.unwrap().unwrap();
+
+        // 远端物化同名条目（语义字段与本机不同）
+        let mut synced = item.clone();
+        synced.user_display_name = Some("Synced".to_string());
+        synced.export_allowed = false;
+        synced.tags = vec!["from-remote".to_string()];
+        synced.encrypted_private_key = vec![1; 48];
+        synced.wrapped_item_key = vec![2; 48];
+        repo.upsert_synced(&synced).await.unwrap();
+
+        let after = repo.find_by_id(&item.id).await.unwrap().unwrap();
+        // 语义字段被远端覆写
+        assert_eq!(after.user_display_name.as_deref(), Some("Synced"));
+        assert!(!after.export_allowed);
+        assert_eq!(after.tags, vec!["from-remote".to_string()]);
+        assert_eq!(after.encrypted_private_key, vec![1; 48]);
+        assert_eq!(after.wrapped_item_key, vec![2; 48]);
+        // 设备本地使用态保留
+        assert_eq!(after.sign_count, 7);
+        assert_eq!(after.last_used_at, before.last_used_at);
+        assert_eq!(after.created_at, before.created_at);
+
+        // 插入臂：全新 id 落行，使用态走零值/NULL
+        let mut fresh = item.clone();
+        fresh.id = Uuid::new_v4();
+        fresh.credential_id = b"another-credential-id-32-bytes-x".to_vec();
+        repo.upsert_synced(&fresh).await.unwrap();
+        let inserted = repo.find_by_id(&fresh.id).await.unwrap().unwrap();
+        assert_eq!(inserted.sign_count, 0);
+        assert!(inserted.last_used_at.is_none());
     }
 
     #[tokio::test]
