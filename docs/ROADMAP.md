@@ -32,11 +32,12 @@ Milestone 4 – 1Password Parity (current focus)
 Milestone 5 – Wallet Graduation (deferred until Milestone 4; experimental today)
 Existing experimental base: BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana derivation and signing on audited crates (rust-bitcoin, alloy, bech32), CLI wallet flows, official test vectors as regression harness.
 
-- [ ] `docs/WALLET_DESIGN.md`: wallet key hierarchy (seed ↔ master key wrapping, re-wrap on password change), identity-binding model, signing-confirmation UX, wallet threat-model extension
+- [x] `docs/WALLET_DESIGN.md` (2026-10-13: key hierarchy inventory — BIP39 mnemonic + BIP32 xprv double-wrap under an independent wallet password, master-password rotation deliberately leaves `crypto_wallets` untouched; identity binding via `CryptoWallet.identity_id`; signing-confirmation UX policy; `persona wallet passwd` + v2 re-wrap migration decided as M5 follow-ups; threat-model wallet section landed in THREAT_MODEL.md)
 - [x] keystore JSON import/export (2026-10-13: full Web3 Secret Storage v3 — scrypt/pbkdf2 KDF (untagged params), keccak MAC verified before AES-128-CTR, geth default export factors (n=2^18,r=8,p=1) with 256MiB import memory cap, constant-time MAC compare; canonical geth spec vector + OpenSSL cross-language KDF pins as tests; CLI `wallet import/export --format keystore`)
 - [ ] PSBT workflow
 - [ ] Signing confirmations verifying recipient address, amount, fees and chain id (anti address-poisoning)
-  - [x] Desktop confirmation modal exists: from/to/amount/fee display, address-poisoning heuristic warning, password stays in the modal, signature verified before persisting; backend signing UX policy (threat model) still pending
+  - [x] Desktop confirmation modal exists: from/to/amount/fee display, address-poisoning heuristic warning, password stays in the modal, signature verified before persisting
+  - [x] Backend signing UX policy documented (2026-10-13, `docs/WALLET_DESIGN.md` §5 + THREAT_MODEL.md wallet section): verify-before-persist, mandatory confirm fields, password stays out of logs, digest-level audit, anti-poisoning heuristic enforced at the backend signing entry (decision landed; enforcement code pending as an M5 follow-up)
 - [x] Desktop wallet UI (addresses, QR, confirmations)
 - [ ] Open question: hardware wallets (Ledger/Trezor) in-scope here or a separate later track
 
