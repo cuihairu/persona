@@ -48,6 +48,15 @@ enum Commands {
     /// Switch to a different identity
     Switch(commands::switch::SwitchArgs),
 
+    /// Confirm the suggested identity (alias of `switch`; audits the reason)
+    Use(commands::switch::SwitchArgs),
+
+    /// Print the shell snippet that shows the suggested identity in the prompt
+    ShellHook {
+        /// Target shell (bash or zsh; default: detected from $SHELL)
+        shell: Option<String>,
+    },
+
     /// Suggest the likely identity for the current context (cwd/repo/host)
     Suggest(commands::suggest::SuggestArgs),
 
@@ -169,8 +178,10 @@ async fn main() -> Result<()> {
         Commands::Add(args) => commands::add::execute(args, &config).await,
         Commands::List(args) => commands::list::execute(args, &config).await,
         Commands::Switch(args) => commands::switch::execute(args, &config).await,
+        Commands::Use(args) => commands::switch::execute_use(args, &config).await,
+        Commands::ShellHook { shell } => commands::shell_hook::execute(shell.as_deref()),
         Commands::Suggest(args) => commands::suggest::execute(args, &config).await,
-        Commands::Context(args) => commands::context::execute(args).await,
+        Commands::Context(args) => commands::context::execute(args, &config).await,
         Commands::Show(args) => commands::show::execute(args, &config).await,
         Commands::Remove(args) => commands::remove::execute(args, &config).await,
         Commands::Edit(args) => commands::edit::execute(args, &config).await,
@@ -233,10 +244,12 @@ fn command_requires_workspace(cmd: &Commands) -> bool {
         Commands::Init(_)
             | Commands::Bridge(_)
             | Commands::Password(_)
-            // suggest/context 在任意项目目录里用（shell 集成前提）：
+            // suggest/context/use/shell-hook 在任意项目目录里用（shell 集成前提）：
             // 走 PERSONA_WORKSPACE_PATH / 全局默认工作区，不要求 cwd 有 config.toml
             | Commands::Suggest(_)
             | Commands::Context(_)
+            | Commands::Use(_)
+            | Commands::ShellHook { .. }
     )
 }
 

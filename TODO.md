@@ -39,8 +39,19 @@ Priority policy (2026-10, 定位升级令): **账号系统 + 多设备同步进�
       map/get/unmap/status`（两命令豁免 workspace 要求，任意项目目录可跑；
       映射文件损坏按「忽略该层并告警」不崩）。铁律落地：Context 只建议
       不授权——激活仍走 `persona switch`，建议无任何写路径/审计旁路。
-      阶段 2–4（shell-hook/学习表/SSH host 维度/桥协议字段）未做。测试：
+      阶段 3–4（SSH host 维度/桥协议字段）未做。测试：
       core 30 例 + CLI 8 例；文档：设计稿状态表与 ROADMAP 同步翻绿
+- [x] **Context-aware identity suggestion 阶段 2**（ROADMAP M7，2026-10-13
+      落地）：`persona shell-hook [bash|zsh]`（PS1 前缀 ⛵ 候选，
+      `PERSONA_NO_CONTEXT` 拒绝开关，`suggest --short` 供提示符；片段经
+      `bash -n`/`zsh -n` 语法冒烟 + source 直调降级冒烟）+ `persona use`
+      （= switch 别名，目标=建议首位时审计 details 记
+      "confirmed context suggestion: {reason}"）+ 历史学习（migration 020
+      `context_learn`/`context_settings`，默认关，
+      `persona context learn on/off/status/clear`；只存 cwd SHA-256 +
+      分身名，不进同步；建议权重 0.7、30 天窗口，任何映射命中都在其上）。
+      测试：core context 39 例（+9 学习）+ 仓库层 4 例 + CLI 新增 5 例；
+      文档：设计稿状态表与 ROADMAP 同步翻绿
 - [ ] **Web 端**（gap #25，未实现，低优先）：1Password.com 形态的浏览器端；Persona 取向是本地优先，出现真实需求再评估
 - [x] **生成器全局热键**（gap #9 余项，2026-10-11 完成）：OS 级任意应用内
       呼出生成器浮窗（generator-panel，无边框置顶不进任务栏），平台默认

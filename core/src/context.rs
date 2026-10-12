@@ -23,6 +23,10 @@ pub const MIN_SUGGEST: f64 = 0.6;
 pub const PROJECT_WEIGHT: f64 = 1.0;
 /// 主机正则命中权重（低于项目命中，高于阈值）。
 pub const HOST_WEIGHT: f64 = 0.8;
+/// 历史学习候选权重（设计 §4.1 示例：score 0.7，低于任何映射命中）。
+pub const LEARN_WEIGHT: f64 = 0.7;
+/// 学习计数窗口（设计示例「最近 30 天」）：窗口外记录不计入。
+pub const LEARN_WINDOW_DAYS: i64 = 30;
 
 /// 客户端采集的上下文信号（设计 §3 v1 行）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -229,12 +233,23 @@ pub struct SuggestResult {
     pub active: Option<String>,
 }
 
-/// 纯决策函数（设计 §4 算法 v1）：
+/// 目录哈希：学习记录只存 cwd 的 SHA-256，不存路径原文（设计 §4.1）。
+pub fn cwd_hash(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(path.to_string_lossy().as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// 纯决策函数（设计 §4 算法 v1 + §4.1 学习层）：
 ///
 /// - `PERSONA_CONTEXT_OVERRIDE` 命中有效分身 → 它就是唯一候选；
 /// - 项目映射精确匹配归一化 repo；主机映射逐条正则匹配 host；
 /// - 同一信号仓库内映射遮蔽全局映射同键条目；多信号命中同一分身则
 ///   得分累加、原因合并；
+/// - `learn_counts`（同目录 30 天窗口计数，次数降序/名字升序）给出
+///   历史学习候选，权重 [`LEARN_WEIGHT`]，排在任何映射命中之下
+///   （覆盖链：override > 仓库内映射 > 全局映射 > 历史学习 > active）；
 /// - 名字不在 `valid_names` 的候选跳过并告警（与 switch 同源校验）；
 /// - 排序：得分降序 → 平局 active 优先 → 分身名升序；
 /// - score < `MIN_SUGGEST` 不入选；全空则 `candidates` 为空、调用方
@@ -246,6 +261,7 @@ pub fn suggest(
     env_override: Option<&str>,
     active: Option<&str>,
     valid_names: &BTreeSet<String>,
+    learn_counts: Option<&[(String, u64)]>,
 ) -> SuggestResult {
     let mut warnings: Vec<String> = Vec::new();
     let mut result = SuggestResult {
@@ -310,6 +326,28 @@ pub fn suggest(
                     &entry.identity,
                     HOST_WEIGHT,
                     format!("host matches {pattern} ({source})"),
+                    valid_names,
+                    &mut warnings,
+                );
+            }
+        }
+    }
+
+    // 历史学习：同目录计数之首出一个学习候选（计数已由仓库层按
+    // 次数降序/名字升序排好，取首个即确定性）。
+    if let Some(counts) = learn_counts {
+        if let Some((identity, count)) = counts.first() {
+            if *count > 0 {
+                let reason = if *count == 1 {
+                    "used recently in this directory".to_string()
+                } else {
+                    format!("used {count} times recently in this directory")
+                };
+                push_candidate(
+                    &mut result,
+                    identity,
+                    LEARN_WEIGHT,
+                    reason,
                     valid_names,
                     &mut warnings,
                 );
@@ -565,6 +603,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["OpenSource", "Default"]),
+            None,
         );
         assert_eq!(r.candidates.len(), 1);
         assert_eq!(r.candidates[0].identity, "OpenSource");
@@ -583,6 +622,7 @@ mod tests {
             None,
             None,
             &names(&["Ops"]),
+            None,
         );
         assert_eq!(r.candidates.len(), 1);
         assert_eq!(r.candidates[0].identity, "Ops");
@@ -598,6 +638,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["Default"]),
+            None,
         );
         assert!(r.candidates.is_empty());
         assert_eq!(r.active.as_deref(), Some("Default"));
@@ -614,6 +655,7 @@ mod tests {
             None,
             None,
             &names(&["Global", "Local"]),
+            None,
         );
         assert_eq!(r.candidates.len(), 1);
         assert_eq!(r.candidates[0].identity, "Local");
@@ -630,6 +672,7 @@ mod tests {
             None,
             None,
             &names(&["Global", "Local"]),
+            None,
         );
         assert_eq!(r.candidates[0].identity, "Local");
         let r2 = suggest(
@@ -639,6 +682,7 @@ mod tests {
             None,
             None,
             &names(&["Global", "Local"]),
+            None,
         );
         assert_eq!(r2.candidates[0].identity, "Global");
     }
@@ -656,6 +700,7 @@ mod tests {
             None,
             None,
             &names(&["Work"]),
+            None,
         );
         assert_eq!(r.candidates.len(), 1);
         assert!((r.candidates[0].score - (PROJECT_WEIGHT + HOST_WEIGHT)).abs() < 1e-9);
@@ -674,6 +719,7 @@ mod tests {
             None,
             Some("Alpha"),
             &names(&["Alpha", "Beta"]),
+            None,
         );
         assert_eq!(r.candidates.len(), 2);
         assert_eq!(r.candidates[0].identity, "Alpha"); // 平局 active 优先
@@ -684,6 +730,7 @@ mod tests {
             None,
             Some("Zeta"),
             &names(&["Alpha", "Beta", "Zeta"]),
+            None,
         );
         assert_eq!(r2.candidates[0].identity, "Alpha"); // 无 active 命中 → 名字升序
     }
@@ -698,6 +745,7 @@ mod tests {
             Some("Forced"),
             Some("Default"),
             &names(&["Forced", "Mapped", "Default"]),
+            None,
         );
         assert_eq!(r.candidates.len(), 1);
         assert_eq!(r.candidates[0].identity, "Forced");
@@ -714,6 +762,7 @@ mod tests {
             Some("Ghost"),
             Some("Default"),
             &names(&["Mapped", "Default"]),
+            None,
         );
         assert_eq!(r.candidates[0].identity, "Mapped");
         assert!(r.warnings.iter().any(|w| w.contains("Ghost")));
@@ -729,6 +778,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["Default"]),
+            None,
         );
         assert!(r.candidates.is_empty());
         assert!(r.warnings.iter().any(|w| w.contains("Ghost")));
@@ -747,6 +797,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["Ops", "Default"]),
+            None,
         );
         let forged = suggest(
             &signals(None, Some("evil")),
@@ -755,6 +806,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["Ops", "Default"]),
+            None,
         );
         assert!(legit.candidates.is_empty());
         assert_eq!(legit.active.as_deref(), Some("Default"));
@@ -773,6 +825,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["Ops", "Default"]),
+            None,
         );
         assert!(r.candidates.is_empty());
     }
@@ -787,6 +840,7 @@ mod tests {
             None,
             Some("Default"),
             &names(&["Default"]),
+            None,
         );
         assert!(r.candidates.is_empty());
         assert!(r.warnings.iter().any(|w| w.contains("empty identity")));
@@ -802,9 +856,164 @@ mod tests {
             None,
             Some("Solo"),
             &names(&["Solo"]),
+            None,
         );
         assert!(r.candidates.is_empty());
         assert!(r.warnings.is_empty());
         assert_eq!(r.active.as_deref(), Some("Solo"));
+    }
+
+    // ---- 历史学习（阶段 2，设计 §4.1） ----
+
+    #[test]
+    fn learn_counts_produce_low_weight_candidate() {
+        let counts = vec![("Client-A".to_string(), 41), ("Other".to_string(), 2)];
+        let r = suggest(
+            &signals(Some("github.com/client-a/repo"), Some("dev-pc")),
+            None,
+            None,
+            None,
+            Some("Default"),
+            &names(&["Client-A", "Other", "Default"]),
+            Some(&counts),
+        );
+        assert_eq!(r.candidates.len(), 1);
+        assert_eq!(r.candidates[0].identity, "Client-A");
+        assert_eq!(r.candidates[0].score, LEARN_WEIGHT);
+        assert!(r.candidates[0].reason.contains("41 times"));
+    }
+
+    #[test]
+    fn learn_single_count_reason_reads_naturally() {
+        let counts = vec![("Solo".to_string(), 1)];
+        let r = suggest(
+            &signals(None, None),
+            None,
+            None,
+            None,
+            None,
+            &names(&["Solo"]),
+            Some(&counts),
+        );
+        assert_eq!(r.candidates[0].reason, "used recently in this directory");
+    }
+
+    #[test]
+    fn learn_ranks_below_any_mapping_hit() {
+        let maps = map_toml("[host.\"^dev-pc$\"]\nidentity = \"Mapped\"\n");
+        let counts = vec![("Learned".to_string(), 99)];
+        let r = suggest(
+            &signals(None, Some("dev-pc")),
+            None,
+            Some(&maps),
+            None,
+            None,
+            &names(&["Mapped", "Learned"]),
+            Some(&counts),
+        );
+        assert_eq!(r.candidates[0].identity, "Mapped");
+        assert_eq!(r.candidates[0].score, HOST_WEIGHT);
+        assert_eq!(r.candidates[1].identity, "Learned");
+    }
+
+    #[test]
+    fn learn_and_mapping_same_identity_accumulate() {
+        let maps = map_toml("[host.\"^dev-pc$\"]\nidentity = \"Both\"\n");
+        let counts = vec![("Both".to_string(), 7)];
+        let r = suggest(
+            &signals(None, Some("dev-pc")),
+            None,
+            Some(&maps),
+            None,
+            None,
+            &names(&["Both"]),
+            Some(&counts),
+        );
+        assert_eq!(r.candidates.len(), 1);
+        assert!((r.candidates[0].score - (HOST_WEIGHT + LEARN_WEIGHT)).abs() < 1e-9);
+        assert!(r.candidates[0].reason.contains("host matches"));
+        assert!(r.candidates[0].reason.contains("7 times"));
+    }
+
+    #[test]
+    fn learn_takes_first_of_prec_sorted_counts() {
+        // 仓库层按 (次数降序, 名字升序) 传参；首名即学习候选——这里锁定
+        // 纯函数「取首个」的契约，平局规则归仓库层。
+        let counts = vec![
+            ("Tied-B".to_string(), 5),
+            ("Tied-A".to_string(), 5),
+            ("Low".to_string(), 2),
+        ];
+        let r = suggest(
+            &signals(None, None),
+            None,
+            None,
+            None,
+            None,
+            &names(&["Tied-A", "Tied-B", "Low"]),
+            Some(&counts),
+        );
+        assert_eq!(r.candidates[0].identity, "Tied-B");
+    }
+
+    #[test]
+    fn learn_unknown_identity_is_skipped_with_warning() {
+        let counts = vec![("Ghost".to_string(), 3)];
+        let r = suggest(
+            &signals(None, None),
+            None,
+            None,
+            None,
+            Some("Default"),
+            &names(&["Default"]),
+            Some(&counts),
+        );
+        assert!(r.candidates.is_empty());
+        assert!(r.warnings.iter().any(|w| w.contains("Ghost")));
+    }
+
+    #[test]
+    fn learn_counts_none_or_empty_changes_nothing() {
+        let empty: Vec<(String, u64)> = Vec::new();
+        for learn in [None, Some(empty.as_slice())] {
+            let r = suggest(
+                &signals(None, Some("dev-pc")),
+                None,
+                None,
+                None,
+                Some("Default"),
+                &names(&["Default"]),
+                learn,
+            );
+            assert!(r.candidates.is_empty());
+            assert!(r.warnings.is_empty());
+        }
+    }
+
+    #[test]
+    fn learn_below_threshold_lone_zero_count_is_ignored() {
+        let counts = vec![("Ghost".to_string(), 0)];
+        let r = suggest(
+            &signals(None, None),
+            None,
+            None,
+            None,
+            Some("Default"),
+            &names(&["Default", "Ghost"]),
+            Some(&counts),
+        );
+        assert!(r.candidates.is_empty());
+    }
+
+    #[test]
+    fn cwd_hash_is_stable_hex_and_path_sensitive() {
+        use std::path::Path;
+        let a = cwd_hash(Path::new("/home/user/workspaces/persona"));
+        let b = cwd_hash(Path::new("/home/user/workspaces/persona"));
+        let c = cwd_hash(Path::new("/home/user/workspaces/other"));
+        assert_eq!(a, b, "same path must hash equal");
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|ch| ch.is_ascii_hexdigit()));
     }
 }

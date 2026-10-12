@@ -20,6 +20,7 @@ pub mod password;
 pub mod remove;
 pub mod secrets;
 pub mod service;
+pub mod shell_hook;
 pub mod show;
 pub mod ssh;
 pub mod suggest;

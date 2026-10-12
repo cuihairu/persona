@@ -6,8 +6,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::config::CliConfig;
-use persona_core::context::{suggest, ContextMapFile, ContextSignals, SuggestResult};
-use persona_core::storage::{IdentityRepository, WorkspaceRepository};
+use persona_core::context::{
+    cwd_hash, suggest, ContextMapFile, ContextSignals, SuggestResult, LEARN_WINDOW_DAYS,
+};
+use persona_core::storage::{ContextLearnRepository, IdentityRepository, WorkspaceRepository};
 use persona_core::{Database, Repository};
 
 /// Suggest the likely identity for the current context (cwd/repo/host).
@@ -19,6 +21,10 @@ pub struct SuggestArgs {
     /// Print machine-readable JSON (signals, candidates, warnings)
     #[arg(long)]
     pub json: bool,
+
+    /// Print only the top candidate's name (empty if none); for shell prompts
+    #[arg(long)]
+    pub short: bool,
 }
 
 pub async fn execute(args: SuggestArgs, config: &CliConfig) -> Result<()> {
@@ -26,6 +32,13 @@ pub async fn execute(args: SuggestArgs, config: &CliConfig) -> Result<()> {
     let paths = MapPaths::current();
     let env_override = std::env::var("PERSONA_CONTEXT_OVERRIDE").ok();
     let result = compute_suggestion(config, &paths, &signals, env_override.as_deref()).await?;
+    if args.short {
+        // PS1 友好：只打分身名，无候选/仅 active 时不打（提示层静默）。
+        if let Some(top) = result.candidates.first() {
+            println!("{}", top.identity);
+        }
+        return Ok(());
+    }
     if args.json {
         print_json(&signals, &result)?;
         return Ok(());
@@ -94,6 +107,22 @@ pub(crate) async fn compute_suggestion(
     let repo_local = read_map_or_empty(&paths.repo_local);
     let global = read_map_or_empty(&paths.global);
 
+    // 历史学习（默认关）：开关打开时读同目录 30 天窗口计数，交给
+    // core 纯决策出学习候选。读失败按「无学习数据」降级（设计 §10）。
+    let learn_counts = match ContextLearnRepository::new(db.clone())
+        .learn_enabled()
+        .await
+    {
+        Ok(true) => ContextLearnRepository::new(db.clone())
+            .counts_since(
+                &cwd_hash(&config.workspace.path),
+                chrono::Utc::now() - chrono::Duration::days(LEARN_WINDOW_DAYS),
+            )
+            .await
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
     let mut result = suggest(
         signals,
         Some(&repo_local.0),
@@ -101,6 +130,7 @@ pub(crate) async fn compute_suggestion(
         env_override,
         active.as_deref(),
         &valid_names,
+        Some(&learn_counts),
     );
     // 损坏映射层：忽略该层并告警（设计 §10），不崩。
     for (label, bad) in [("repo", &repo_local.1), ("global", &global.1)] {
@@ -351,5 +381,75 @@ mod tests {
         assert!(m.is_empty());
         assert!(warn.is_some());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 阶段 2 端到端：学习开关打开 + 有记录 → compute_suggestion 产出学习
+    /// 候选；开关默认关 → 行为与阶段 1 完全一致（无候选）。
+    #[tokio::test]
+    async fn learn_records_surface_through_compute_suggestion() {
+        use persona_core::context::LEARN_WEIGHT;
+        use persona_core::models::{Identity as CoreIdentityModel, IdentityType};
+        use persona_core::storage::ContextLearnRepository;
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&CoreIdentityModel::new(
+                    "Client-A".to_string(),
+                    IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let learn = ContextLearnRepository::new(db);
+            let hash = cwd_hash(&config.workspace.path);
+            for _ in 0..2 {
+                learn
+                    .record("Client-A", &hash, Some("dev-pc"), chrono::Utc::now())
+                    .await
+                    .unwrap();
+            }
+        }
+
+        // 开关未开（默认关）→ 无候选，行为与阶段 1 一致。
+        let result = compute_suggestion(
+            &config,
+            &paths_for(&dir),
+            &signals_with_repo(Some("github.com/other/repo")),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.candidates.is_empty(),
+            "learn off must change nothing"
+        );
+
+        // 打开开关 → 学习候选进位。
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            ContextLearnRepository::new(db)
+                .set_learn_enabled(true)
+                .await
+                .unwrap();
+        }
+        let result = compute_suggestion(
+            &config,
+            &paths_for(&dir),
+            &signals_with_repo(Some("github.com/other/repo")),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].identity, "Client-A");
+        assert_eq!(result.candidates[0].score, LEARN_WEIGHT);
+        assert!(result.candidates[0].reason.contains("2 times"));
     }
 }

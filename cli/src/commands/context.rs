@@ -3,7 +3,10 @@ use clap::{Args, Subcommand};
 use colored::Colorize;
 use std::path::{Path, PathBuf};
 
-use persona_core::context::{ContextMapFile, IdentityEntry};
+use crate::config::CliConfig;
+use persona_core::context::{ContextMapFile, IdentityEntry, LEARN_WINDOW_DAYS};
+use persona_core::storage::ContextLearnRepository;
+use persona_core::Database;
 
 /// Manage context-to-identity mappings (docs/CONTEXT_AWARE_DESIGN.md, stage 1).
 ///
@@ -43,9 +46,15 @@ enum ContextCommand {
     },
     /// Show mapping files, their entries and the current override env var
     Status,
+    /// Local learning: record confirmed switches and suggest from them
+    /// (design §4.1; records stay on this device and never sync)
+    Learn {
+        /// `on` / `off` / `status` / `clear`
+        action: String,
+    },
 }
 
-pub async fn execute(args: ContextArgs) -> Result<()> {
+pub async fn execute(args: ContextArgs, config: &CliConfig) -> Result<()> {
     let global = global_map_path();
     let repo_local = repo_local_map_path();
     match args.command {
@@ -60,7 +69,55 @@ pub async fn execute(args: ContextArgs) -> Result<()> {
             unmap_mapping(&pattern, repo, &global, &repo_local)
         }
         ContextCommand::Status => status(&global, &repo_local),
+        ContextCommand::Learn { action } => learn(&action, config).await,
     }
+}
+
+/// `persona context learn on|off|status|clear`（设计 §4.1，默认关）。
+async fn learn(action: &str, config: &CliConfig) -> Result<()> {
+    let db = Database::from_file(config.get_database_path())
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {e}"))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {e}"))?;
+    let repo = ContextLearnRepository::new(db);
+    match action {
+        "on" => {
+            repo.set_learn_enabled(true).await?;
+            println!(
+                "Learning enabled. Switches in this workspace are now recorded locally \
+                 (never synced). Use `persona context learn off` to stop recording."
+            );
+        }
+        "off" => {
+            repo.set_learn_enabled(false).await?;
+            println!("Learning disabled. Existing records are kept; clear them with `persona context learn clear`.");
+        }
+        "status" => {
+            let enabled = repo.learn_enabled().await?;
+            let count = repo.record_count().await?;
+            println!(
+                "Learning: {}",
+                if enabled {
+                    "on".green()
+                } else {
+                    "off (default)".dimmed()
+                }
+            );
+            println!("Local records: {count}");
+            println!(
+                "Window: last {LEARN_WINDOW_DAYS} days per directory; suggestions score {}",
+                persona_core::context::LEARN_WEIGHT
+            );
+        }
+        "clear" => {
+            let removed = repo.clear().await?;
+            println!("Deleted {removed} local learning record(s).");
+        }
+        other => anyhow::bail!("Unknown learn action '{other}'. Use on, off, status or clear."),
+    }
+    Ok(())
 }
 
 fn global_map_path() -> PathBuf {
@@ -359,5 +416,46 @@ mod tests {
         assert_eq!(find_in("q", &map).unwrap().0, "project");
         assert!(find_in("z", &map).is_none());
         let _: BTreeMap<String, IdentityEntry> = BTreeMap::new();
+    }
+
+    #[tokio::test]
+    async fn learn_subcommand_toggles_reports_and_clears() {
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let mut config = CliConfig::default();
+        config.workspace.path = dir.path().to_path_buf();
+
+        // status 在空库上可跑（迁移顺带建表）。
+        learn("status", &config).await.unwrap();
+
+        // on → 仓库层可见开关。
+        learn("on", &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = ContextLearnRepository::new(db);
+            assert!(repo.learn_enabled().await.unwrap());
+        }
+
+        // clear 清记录不动开关。
+        learn("clear", &config).await.unwrap();
+
+        // off 关闭。
+        learn("off", &config).await.unwrap();
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            let repo = ContextLearnRepository::new(db);
+            assert!(!repo.learn_enabled().await.unwrap());
+        }
+
+        // 未知动作报错并列出合法值。
+        let err = learn("bogus", &config)
+            .await
+            .expect_err("bogus action must fail");
+        assert!(err.to_string().contains("Use on, off, status or clear"));
     }
 }

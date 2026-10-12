@@ -6,7 +6,9 @@ use tracing::info;
 
 use crate::config::CliConfig;
 use crate::utils::prompt::{PromptUi, TerminalUi};
+use persona_core::context::{cwd_hash, ContextSignals};
 use persona_core::models::{AuditAction, AuditLog, ResourceType};
+use persona_core::storage::ContextLearnRepository;
 use persona_core::{
     storage::{IdentityRepository, WorkspaceRepository},
     Database, Repository,
@@ -34,10 +36,49 @@ pub async fn execute(args: SwitchArgs, config: &CliConfig) -> Result<()> {
     execute_with(args, config, &TerminalUi).await
 }
 
+/// `persona use <name>` — one-click confirm of a suggestion. Identical
+/// semantics to `persona switch` (same audit trail); when the target matches
+/// the current top suggestion, the audit entry carries the suggestion reason.
+pub async fn execute_use(args: SwitchArgs, config: &CliConfig) -> Result<()> {
+    let top = suggest_reason_for(config).await;
+    execute_with_reason(args, config, &TerminalUi, top).await
+}
+
+/// 当前建议首位（分身名, reason）；无候选/开库失败返回 None（建议层永不致命）。
+async fn suggest_reason_for(config: &CliConfig) -> Option<(String, String)> {
+    let signals = ContextSignals::collect();
+    let paths = crate::commands::suggest::MapPaths {
+        global: crate::commands::suggest::global_map_path(),
+        repo_local: crate::commands::suggest::repo_local_map_path(),
+    };
+    let env_override = std::env::var("PERSONA_CONTEXT_OVERRIDE").ok();
+    let result = crate::commands::suggest::compute_suggestion(
+        config,
+        &paths,
+        &signals,
+        env_override.as_deref(),
+    )
+    .await
+    .ok()?;
+    let top = result.candidates.first()?;
+    Some((top.identity.clone(), top.reason.clone()))
+}
+
 pub(crate) async fn execute_with(
     args: SwitchArgs,
     config: &CliConfig,
     ui: &dyn PromptUi,
+) -> Result<()> {
+    execute_with_reason(args, config, ui, None).await
+}
+
+/// `suggestion` = (top candidate name, reason); `perform_switch` attaches the
+/// reason to the audit entry when the switch targets exactly that candidate.
+pub(crate) async fn execute_with_reason(
+    args: SwitchArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    suggestion: Option<(String, String)>,
 ) -> Result<()> {
     println!("{}", "🔄 Switching identity...".cyan().bold());
     println!();
@@ -87,7 +128,14 @@ pub(crate) async fn execute_with(
     }
 
     // Perform the switch
-    perform_switch(&target_identity, current_identity.as_deref(), config, ui).await?;
+    perform_switch(
+        &target_identity,
+        current_identity.as_deref(),
+        config,
+        ui,
+        suggestion.as_ref(),
+    )
+    .await?;
 
     println!();
     println!(
@@ -224,6 +272,7 @@ async fn perform_switch(
     current_identity: Option<&str>,
     config: &CliConfig,
     ui: &dyn PromptUi,
+    suggestion: Option<&(String, String)>,
 ) -> Result<()> {
     info!(
         "Switching from {:?} to {}",
@@ -281,10 +330,18 @@ async fn perform_switch(
             .map_err(|e| anyhow!("Failed to update workspace: {}", e))?;
     }
 
-    // 3. Audit log workspace enter / identity switched
-    let log = AuditLog::new(AuditAction::WorkspaceEntered, ResourceType::Workspace, true)
+    // 3. Audit log workspace enter / identity switched. A `persona use`
+    // confirmation of the current top suggestion records the reason —
+    // 设计验收：审计含 reason（只记确认，不记信号本身，§3 隐私边界）。
+    let reason = suggestion
+        .filter(|(name, _)| name == target_identity)
+        .map(|(_, reason)| reason);
+    let mut log = AuditLog::new(AuditAction::WorkspaceEntered, ResourceType::Workspace, true)
         .with_identity_id(Some(identity.id))
         .with_resource_id(Some(path_str));
+    if let Some(reason) = reason {
+        log = log.with_details(Some(format!("confirmed context suggestion: {reason}")));
+    }
     // write audit (no unlock requirement if DB unencrypted)
     let audit_repo = persona_core::storage::AuditLogRepository::new(db);
     let _ = audit_repo
@@ -294,11 +351,37 @@ async fn perform_switch(
     // 该事件直写审计库绕过 service 挂钩，上报链路在这里补发
     crate::commands::service::emit_audit(&log);
 
-    // TODO:
-    // 4. Update environment variables/session for downstream tools
-    // 5. Notify agent/desktop listeners
-    // 6. Record history
+    // 4. Context learning（阶段 2，默认关）：确认落点进本地学习表，供后续
+    // suggest 按「同目录最近使用」排序。降级原则（设计 §10）：学习写入
+    // 失败绝不影响 switch 本身。
+    if let Err(e) = record_learn_sample(target_identity, config).await {
+        info!("context learn recording skipped: {e}");
+    }
 
+    // TODO:
+    // 5. Update environment variables/session for downstream tools
+    // 6. Notify agent/desktop listeners
+
+    Ok(())
+}
+
+/// 学习表写入（开关联动）：开关关闭时 no-op。目录哈希与 suggest 侧同源
+/// （`config.workspace.path`），主机为当前采集信号。
+async fn record_learn_sample(identity_name: &str, config: &CliConfig) -> Result<()> {
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path).await?;
+    db.migrate().await?;
+    let repo = ContextLearnRepository::new(db);
+    if !repo.learn_enabled().await? {
+        return Ok(());
+    }
+    repo.record(
+        identity_name,
+        &cwd_hash(&config.workspace.path),
+        persona_core::context::current_host().as_deref(),
+        chrono::Utc::now(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -835,5 +918,147 @@ mod tests {
             get_current_identity(&config).await.unwrap().as_deref(),
             Some("alice")
         );
+    }
+
+    /// 阶段 2 学习记录：开关默认关 → switch 不产生学习行；开 → 同一目录
+    /// 哈希下出现记录；学习失败不阻断 switch（降级原则）。
+    #[tokio::test]
+    async fn switch_records_learn_sample_only_when_enabled() {
+        use persona_core::context::cwd_hash;
+        use persona_core::storage::ContextLearnRepository;
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+        ensure_workspace_row(&db, &config).await;
+
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .expect("switch with learning off succeeds");
+        {
+            let learn = ContextLearnRepository::new(db.clone());
+            assert!(!learn.learn_enabled().await.unwrap());
+            assert_eq!(learn.record_count().await.unwrap(), 0, "off means no rows");
+        }
+
+        {
+            let learn = ContextLearnRepository::new(db.clone());
+            learn.set_learn_enabled(true).await.unwrap();
+        }
+        execute(switch_args(Some("bob"), true), &config)
+            .await
+            .expect("switch with learning on succeeds");
+        let learn = ContextLearnRepository::new(db.clone());
+        let hash = cwd_hash(&config.workspace.path);
+        let counts = learn
+            .counts_since(&hash, chrono::Utc::now() - chrono::Duration::days(30))
+            .await
+            .unwrap();
+        assert_eq!(counts, vec![("bob".to_string(), 1)]);
+        // already-active switch short-circuits before perform_switch → no row.
+        execute(switch_args(Some("bob"), true), &config)
+            .await
+            .expect("already-active no-op");
+        assert_eq!(learn.record_count().await.unwrap(), 1);
+    }
+
+    /// `persona use`：目标 = 当前建议首位时审计带 reason；目标不是候选时
+    /// 仍是普通 switch（无 reason 审计）；学习行照常落库。
+    #[tokio::test]
+    async fn use_confirming_top_suggestion_audits_reason() {
+        use persona_core::storage::{AuditLogRepository, ContextLearnRepository};
+        use std::path::PathBuf;
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "clienta"]).await;
+        ensure_workspace_row(&db, &config).await;
+        {
+            let learn = ContextLearnRepository::new(db.clone());
+            learn.set_learn_enabled(true).await.unwrap();
+        }
+
+        // 仓库内映射把本目录指到 clienta —— persona use clienta 就是确认。
+        let map_path = dir.path().join(".persona").join("context.toml");
+        std::fs::create_dir_all(map_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &map_path,
+            "[project.\"github.com/other/repo\"]\nidentity = \"clienta\"\n",
+        )
+        .unwrap();
+
+        // 建议首位确实是 clienta（与 use 目标一致 → 审计含 reason）。
+        let signals = persona_core::context::ContextSignals {
+            cwd: config.workspace.path.clone(),
+            repo: Some("github.com/other/repo".to_string()),
+            host: None,
+        };
+        let paths = crate::commands::suggest::MapPaths {
+            global: PathBuf::from("/nonexistent-global.toml"),
+            repo_local: map_path.clone(),
+        };
+        let result = crate::commands::suggest::compute_suggestion(&config, &paths, &signals, None)
+            .await
+            .unwrap();
+        assert_eq!(result.candidates[0].identity, "clienta");
+
+        // execute_use 走 execute_with_reason → perform_switch。
+        execute_with_reason(
+            switch_args(Some("clienta"), true),
+            &config,
+            &ScriptedUi::new(),
+            Some(("clienta".to_string(), result.candidates[0].reason.clone())),
+        )
+        .await
+        .expect("use-confirm succeeds");
+
+        let audits = AuditLogRepository::new(db.clone())
+            .find_by_action(&AuditAction::WorkspaceEntered)
+            .await
+            .unwrap();
+        assert_eq!(audits.len(), 1);
+        assert!(
+            audits[0]
+                .error_message
+                .as_deref()
+                .unwrap_or_default()
+                .contains("confirmed context suggestion: repo github.com/other/repo"),
+            "audit must carry the suggestion reason, got: {:?}",
+            audits[0].error_message
+        );
+
+        // 目标不是建议首位 → 无 reason 的普通切换。
+        execute_with_reason(
+            switch_args(Some("alice"), true),
+            &config,
+            &ScriptedUi::new(),
+            Some((
+                "clienta".to_string(),
+                "repo github.com/other/repo".to_string(),
+            )),
+        )
+        .await
+        .expect("non-matching suggestion still switches");
+        let audits = AuditLogRepository::new(db.clone())
+            .find_by_action(&AuditAction::WorkspaceEntered)
+            .await
+            .unwrap();
+        assert_eq!(audits.len(), 2);
+        assert!(
+            audits[0].error_message.is_none(),
+            "mismatched suggestion leaves no reason"
+        );
+
+        // 学习行：两次确认都进了同目录学习表。
+        let learn = ContextLearnRepository::new(db.clone());
+        let counts = learn
+            .counts_since(
+                &persona_core::context::cwd_hash(&config.workspace.path),
+                chrono::Utc::now() - chrono::Duration::days(30),
+            )
+            .await
+            .unwrap();
+        assert!(counts.iter().any(|(name, _)| name == "clienta"));
+        assert!(counts.iter().any(|(name, _)| name == "alice"));
     }
 }
