@@ -180,7 +180,26 @@ impl Agent {
             return Ok(());
         }
         let identities = service.get_identities().await?;
+        // 身份过滤器（PERSONA_AGENT_IDENTITY，`persona ssh add-to-agent
+        // --identity`）：设置后只加载该分身的 SSH 密钥。名字未知时不加载
+        // 任何密钥（fail-closed，绝不回落全量加载——过滤器失配必须显式
+        // 失败，而不是静默扩大注入面）。
+        let identity_filter = std::env::var("PERSONA_AGENT_IDENTITY")
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        if let Some(filter) = &identity_filter {
+            if !identities.iter().any(|i| i.name == *filter) {
+                warn!("SSH key filter: identity '{filter}' not found; no keys loaded");
+                return Ok(());
+            }
+        }
         for id in identities {
+            if let Some(filter) = &identity_filter {
+                if id.name != *filter {
+                    continue;
+                }
+            }
             let creds = service.get_credentials_for_identity(&id.id).await?;
             for cred in creds {
                 if let CredentialType::SshKey = cred.credential_type {
@@ -1293,6 +1312,86 @@ gitlab.com,192.0.2.1 ssh-rsa AAAA
         assert_eq!(loaded.public_blob, pub_blob);
         assert_eq!(loaded.identity_id, identity.id);
         assert_eq!(loaded.credential_id, cred.id);
+    }
+
+    /// 测试夹具：建一个身份并挂一枚 SSH 密钥，返回身份 id。
+    async fn seed_identity_ssh_key(
+        service: &mut persona_core::PersonaService,
+        name: &str,
+        seed: [u8; 32],
+    ) -> uuid::Uuid {
+        let identity = service
+            .create_identity(
+                name.to_string(),
+                persona_core::models::IdentityType::Personal,
+            )
+            .await
+            .unwrap();
+        let (pub_line, _) = openssh_pub_line(seed);
+        service
+            .create_credential(
+                identity.id,
+                format!("{name} ssh key"),
+                persona_core::models::CredentialType::SshKey,
+                persona_core::models::SecurityLevel::High,
+                &ssh_credential_data(seed, &pub_line),
+            )
+            .await
+            .unwrap();
+        identity.id
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_identity_filter_loads_only_matching_identity() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        let a = seed_identity_ssh_key(&mut service, "agent-a", [51u8; 32]).await;
+        let b = seed_identity_ssh_key(&mut service, "agent-b", [52u8; 32]).await;
+
+        std::env::set_var("PERSONA_AGENT_IDENTITY", "agent-b");
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_AGENT_IDENTITY");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert_eq!(
+            agent.keys.len(),
+            1,
+            "only the filtered identity's key loads"
+        );
+        assert_eq!(agent.keys[0].identity_id, b);
+        assert_ne!(agent.keys[0].identity_id, a);
+        assert_eq!(key_seed(&agent.keys[0]), [52u8; 32]);
+    }
+
+    #[tokio::test]
+    async fn load_keys_from_persona_identity_filter_unknown_name_loads_nothing() {
+        let _guard = env_lock();
+        clear_test_key_env();
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = persona_core::Database::from_file(&db_path).await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = persona_core::PersonaService::new(db).await.unwrap();
+        service.initialize_user("master-pin").await.unwrap();
+        seed_identity_ssh_key(&mut service, "agent-a", [53u8; 32]).await;
+
+        // 过滤器失配 = 不加载任何密钥（fail-closed），绝不回落全量。
+        std::env::set_var("PERSONA_AGENT_IDENTITY", "ghost");
+        let mut agent = Agent::default();
+        agent.load_keys_from_persona(&db_path).await.unwrap();
+        std::env::remove_var("PERSONA_AGENT_IDENTITY");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        assert!(agent.keys.is_empty());
     }
 
     #[tokio::test]

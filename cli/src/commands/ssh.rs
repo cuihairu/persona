@@ -55,7 +55,7 @@ pub enum SshSubcommand {
     Status,
     /// Start persona-ssh-agent and optionally print shell export commands
     AddToAgent {
-        /// Optional: identity name to filter (reserved for future use)
+        /// Identity name to filter: the agent loads only this identity's SSH keys
         #[arg(short, long)]
         identity: Option<String>,
         /// Print shell export command
@@ -66,7 +66,7 @@ pub enum SshSubcommand {
     AgentStatus,
     /// Run a command while setting target host for agent policy
     Run {
-        /// Target host (used for known_hosts policy)
+        /// Target host (known_hosts policy + context-aware suggestion)
         #[arg(long)]
         host: String,
         /// Command to execute (use -- to separate)
@@ -194,11 +194,13 @@ pub(crate) async fn execute_with(
         SshSubcommand::Remove { id, yes } => remove_key(id, yes, config, ui).await,
         SshSubcommand::Status => agent_status(config).await,
         SshSubcommand::AddToAgent {
-            identity: _,
+            identity,
             print_export,
-        } => start_agent(config, print_export, ui).await,
+        } => start_agent(config, print_export, ui, identity.as_deref()).await,
         SshSubcommand::AgentStatus => agent_status(config).await,
-        SshSubcommand::StartAgent { print_export } => start_agent(config, print_export, ui).await,
+        SshSubcommand::StartAgent { print_export } => {
+            start_agent(config, print_export, ui, None).await
+        }
         SshSubcommand::ListAll => list_all_keys(config, ui).await,
         SshSubcommand::Import {
             identity,
@@ -503,6 +505,7 @@ async fn start_agent(
     config: &crate::config::CliConfig,
     print_export: bool,
     ui: &dyn crate::utils::prompt::PromptUi,
+    identity: Option<&str>,
 ) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::process::Command;
@@ -516,9 +519,15 @@ async fn start_agent(
     cmd.env("PERSONA_DB_PATH", db_path.to_string_lossy().to_string());
     cmd.env("PERSONA_AGENT_SOCKET_PATH", &socket_path);
     // if vault encrypted, prompt for master password and pass via env
-    let _ = ensure_service(config, ui).await?; // ensure migrations; may prompt
-                                               // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
-                                               // Here we conservatively ask user again (not stored from ensure_service)
+    let service = ensure_service(config, ui).await?; // ensure migrations; may prompt
+                                                     // If ensure_service prompted, service is unlocked; but agent needs password via env for future reloads
+                                                     // Here we conservatively ask user again (not stored from ensure_service)
+                                                     // 身份过滤器：名字在这里先验存在（未知名早失败），agent 侧
+                                                     // 按 PERSONA_AGENT_IDENTITY fail-closed 只加载该分身的密钥。
+    if let Some(name) = identity {
+        let resolved = resolve_identity(&service, name).await?;
+        cmd.env("PERSONA_AGENT_IDENTITY", resolved.name);
+    }
     let pass = if config.ui.interactive {
         ui.password(
             "Enter master password for agent (leave empty if not set)",
@@ -861,11 +870,16 @@ async fn open_named_pipe_with_retry(
 async fn run_with_host(
     host: &str,
     command: Vec<String>,
-    _config: &crate::config::CliConfig,
+    config: &crate::config::CliConfig,
 ) -> Result<()> {
     use tokio::process::Command;
     if command.is_empty() {
         anyhow::bail!("Provide a command after --");
+    }
+    // 阶段 3 host 维度建议：只建议，不授权——不改 agent 目标主机文件、
+    // 不改任何策略评判；读失败在 suggest 层静默降级。
+    if let Some(line) = crate::commands::suggest::host_suggestion_line(config, host).await {
+        eprintln!("{line}");
     }
     // Write host to state file
     let state_dir = agent_state_dir();
@@ -3319,6 +3333,93 @@ mod tests {
         .await
         .expect_err("failing agent password prompt must abort");
         assert!(err.to_string().contains("failing ui: password prompt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn add_to_agent_identity_filter_env_reaches_the_agent() {
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&dir);
+        let _pw = EnvVarGuard::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let _no_filter = EnvVarGuard::remove("PERSONA_AGENT_IDENTITY");
+
+        let mut config = unlocked_workspace(&dir, "master-pin").await;
+        config.ui.interactive = false;
+
+        // The fake agent records the filter env it was spawned with, then
+        // reports its socket so start_agent completes.
+        let capture = dir.path().join("identity-env");
+        let agent = write_executable(
+            &dir,
+            "agent-capture",
+            &format!(
+                "#!/bin/sh\nprintf '%s' \"$PERSONA_AGENT_IDENTITY\" > \"{}\"\necho \"SSH_AUTH_SOCK=/tmp/persona-fake.sock\"\n",
+                capture.display()
+            ),
+        );
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent);
+
+        execute_with(
+            ssh_args(SshSubcommand::AddToAgent {
+                identity: Some("bob".to_string()),
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("add-to-agent with --identity works");
+        assert_eq!(
+            std::fs::read_to_string(&capture).unwrap(),
+            "bob",
+            "the resolved identity name must reach the agent"
+        );
+
+        // Without --identity the env var is never passed.
+        let _ = std::fs::remove_file(&capture);
+        execute_with(
+            ssh_args(SshSubcommand::StartAgent {
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("start-agent without --identity works");
+        assert_eq!(
+            std::fs::read_to_string(&capture).unwrap(),
+            "",
+            "no filter must leave the agent env empty"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn add_to_agent_unknown_identity_fails_before_spawn() {
+        let _env = lock_process_env();
+        let dir = TempDir::new().unwrap();
+        let _state = sandbox_agent_state_dir(&dir);
+        let _pw = EnvVarGuard::set("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        let mut config = unlocked_workspace(&dir, "master-pin").await;
+        config.ui.interactive = false;
+
+        // The fake agent exits non-zero if it is ever reached — resolution
+        // of an unknown identity must abort before spawning.
+        let agent = write_executable(&dir, "agent-never", "#!/bin/sh\nexit 7\n");
+        let _bin = EnvVarGuard::set("PERSONA_SSH_AGENT_BIN", &agent);
+        let err = execute_with(
+            ssh_args(SshSubcommand::AddToAgent {
+                identity: Some("ghost".to_string()),
+                print_export: false,
+            }),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect_err("unknown identity must abort before the agent starts");
+        assert!(err.to_string().contains("Identity 'ghost' not found"));
     }
 
     #[tokio::test]
