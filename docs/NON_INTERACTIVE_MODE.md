@@ -6,12 +6,12 @@ Persona CLI supports a non-interactive (headless) mode for use in CI/CD pipeline
 
 ### Core Configuration
 
-| Variable                  | Description                        | Example              | Default                    |
-| ------------------------- | ---------------------------------- | -------------------- | -------------------------- |
-| `PERSONA_NON_INTERACTIVE` | Disable all interactive prompts    | `1` or `true`        | `false`                    |
-| `PERSONA_WORKSPACE_PATH`  | Workspace directory path           | `/path/to/workspace` | `~/.persona`               |
-| `PERSONA_MASTER_PASSWORD` | Master password for authentication | `your-password`      | -                          |
-| `PERSONA_DB_PATH`         | Database path override for the SSH agent child process (not read by CLI config) | `/path/to/db.sqlite` | - |
+| Variable                  | Description                                                                     | Example              | Default      |
+| ------------------------- | ------------------------------------------------------------------------------- | -------------------- | ------------ |
+| `PERSONA_NON_INTERACTIVE` | Disable all interactive prompts                                                 | `1` or `true`        | `false`      |
+| `PERSONA_WORKSPACE_PATH`  | Workspace directory path                                                        | `/path/to/workspace` | `~/.persona` |
+| `PERSONA_MASTER_PASSWORD` | Master password for authentication                                              | `your-password`      | -            |
+| `PERSONA_DB_PATH`         | Database path override for the SSH agent child process (not read by CLI config) | `/path/to/db.sqlite` | -            |
 
 ### Output Configuration
 

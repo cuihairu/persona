@@ -16,12 +16,12 @@ Persona Server 的端到端加密同步轨道：服务器**只中继密文**—�
 | GET    | `/api/v1/sync/group-keys`             | 取组密钥信封族（随 epoch 基线下发）         |
 | PUT    | `/api/v1/sync/group-keys`             | 写组密钥信封（轮换时为每台设备重封）        |
 | POST   | `/api/v1/sync/group-key/rotate-begin` | 轮换互斥点：epoch CAS，抢占失败 409         |
-| PUT    | `/api/v1/sync/devices/remark`          | 设备自备注（仅本设备可改自己的备注）      |
+| PUT    | `/api/v1/sync/devices/remark`         | 设备自备注（仅本设备可改自己的备注）        |
 | POST   | `/api/v1/sync/oplog`                  | 推送密文操作日志（幂等，重复推不膨胀）      |
 | GET    | `/api/v1/sync/oplog`                  | 拉取操作日志（游标分页，非空页恒返回游标）  |
-| PUT    | `/api/v1/sync/snapshot`               | 上传快照（水位单调收窄的覆盖语义）        |
-| GET    | `/api/v1/sync/snapshot`               | 取最新快照（bootstrap 起步包；无则 404）  |
-| GET    | `/api/v1/sync/status`                 | 组指令流水位（组最新版本号）              |
+| PUT    | `/api/v1/sync/snapshot`               | 上传快照（水位单调收窄的覆盖语义）          |
+| GET    | `/api/v1/sync/snapshot`               | 取最新快照（bootstrap 起步包；无则 404）    |
+| GET    | `/api/v1/sync/status`                 | 组指令流水位（组最新版本号）                |
 
 ## 关键语义
 

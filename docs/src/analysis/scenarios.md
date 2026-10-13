@@ -4,8 +4,6 @@
 > 通用场景分析，当前产品语义与功能边界以站点各页（用户/概念/开发）
 > 与 `BOUNDARY.md`、`THREAT_MODEL.md` 为准，仅作历史留档。
 
-
-
 ## 项目概述
 
 **Master your digital identity. Switch freely with one click.**
