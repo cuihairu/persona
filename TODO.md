@@ -763,6 +763,10 @@ Storage & Data
 CLI
 
 - [x] add/list/show wired to DB with unlock flow and fallback when no user
+      （2026-10-13: `add --set-active` 不再是 no-op——复用 switch 激活路径
+      （workspace 指针 + 审计链，workspace 行缺失时按 init 同规补建）；
+      `add --from-file` 不再打印假成功——委托 `import-generic` 真导入
+      （CSV/Bitwarden JSON），缺文件如实报错）
 - [x] edit/remove identity (完整实现:交互式编辑、字段验证、备份、审计日志)
 - [x] switch (activate/deactivate, history, config persistence)
 - [x] credential CRUD (filters: type/tag/active/favorite)

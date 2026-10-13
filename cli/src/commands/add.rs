@@ -3,7 +3,6 @@ use clap::Args;
 use colored::*;
 use serde_json::Value;
 use std::collections::HashMap;
-use tracing::info;
 
 use crate::config::CliConfig;
 use crate::utils::prompt::{PromptUi, TerminalUi};
@@ -56,7 +55,7 @@ pub(crate) async fn execute_with(
     println!();
 
     if let Some(file_path) = args.from_file {
-        return import_from_file(&file_path, config).await;
+        return import_from_file(&file_path, config, ui).await;
     }
 
     let identity = if args.yes {
@@ -79,7 +78,7 @@ pub(crate) async fn execute_with(
     );
 
     if args.set_active {
-        set_active_identity(&identity.name, config).await?;
+        set_active_identity(&identity.name, config, ui).await?;
         println!(
             "{} Set '{}' as active identity",
             "✓".green().bold(),
@@ -347,20 +346,61 @@ async fn save_identity(identity: &Identity, config: &CliConfig, ui: &dyn PromptU
     Ok(())
 }
 
-async fn set_active_identity(name: &str, _config: &CliConfig) -> Result<()> {
-    // TODO: Implement setting active identity
-    info!("Setting active identity: {}", name);
-    Ok(())
+/// `persona add --set-active` — point this workspace at the freshly created
+/// identity through the same activation path as `persona switch` (workspace
+/// pointer + audit trail). The identity was just created, so the switch
+/// flow's existence check is skipped; the workspace row is ensured first
+/// with the same naming rule as `persona init` so the flag always takes
+/// effect even when `persona init` never ran.
+async fn set_active_identity(name: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
+    use persona_core::Repository;
+
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
+    let repo = persona_core::storage::WorkspaceRepository::new(db.clone());
+    let path_str = config.workspace.path.to_string_lossy().to_string();
+    if repo
+        .find_by_path(&path_str)
+        .await
+        .map_err(|e| anyhow!("Failed to load workspace: {}", e))?
+        .is_none()
+    {
+        let ws_name = config
+            .workspace
+            .path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("default")
+            .to_string();
+        repo.create(&persona_core::models::Workspace::new(
+            config.workspace.path.clone(),
+            ws_name,
+        ))
+        .await
+        .map_err(|e| anyhow!("Failed to create workspace: {}", e))?;
+    }
+    crate::commands::switch::perform_switch(name, None, config, ui, None).await
 }
 
-async fn import_from_file(file_path: &str, _config: &CliConfig) -> Result<()> {
-    println!("📁 Importing identity from file: {}", file_path.yellow());
-
-    // TODO: Implement file import functionality
-    // This would parse JSON/YAML/CSV files and create identities
-
-    println!("{} Import completed successfully!", "✓".green().bold());
-    Ok(())
+/// `persona add --from-file` — delegate to the generic importer (CSV /
+/// Bitwarden JSON). Replaces the former stub that printed a fake success
+/// line without touching the vault.
+async fn import_from_file(file_path: &str, config: &CliConfig, ui: &dyn PromptUi) -> Result<()> {
+    super::import_generic::execute_with(
+        super::import_generic::ImportGenericArgs {
+            file: std::path::PathBuf::from(file_path),
+            dry_run: false,
+            format: None,
+        },
+        config,
+        ui,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -777,26 +817,97 @@ mod integration {
     }
 
     #[tokio::test]
-    async fn add_from_file_and_set_active_flags_complete() {
+    async fn add_set_active_points_the_workspace_at_the_new_identity() {
+        use persona_core::storage::{IdentityRepository, WorkspaceRepository};
+
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
         let dir = TempDir::new().unwrap();
         let config = config_for(&dir);
 
-        // --from-file takes the stub import path and never touches the DB.
-        let mut file_args = args(Some("unused"), None, None, None, true);
-        file_args.from_file = Some("/tmp/identities.json".to_string());
-        execute(file_args, &config)
-            .await
-            .expect("from-file stub reports success");
-
-        // --set-active runs the (currently no-op) activation step.
-        let _guard = lock_process_env();
-        std::env::remove_var("PERSONA_MASTER_PASSWORD");
         std::env::set_var("PERSONA_MASTER_PASSWORD", "active-pin");
         let mut active_args = args(Some("spark"), None, None, None, true);
         active_args.set_active = true;
         execute(active_args, &config)
             .await
-            .expect("set-active add succeeds");
+            .expect("set-active add creates and activates");
+
+        // The workspace pointer (and the row itself when init never ran)
+        // must land on the freshly created identity — not the old no-op.
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let spark = IdentityRepository::new(db.clone())
+            .find_by_name("spark")
+            .await
+            .unwrap()
+            .expect("identity was created");
+        let ws = WorkspaceRepository::new(db)
+            .find_by_path(&config.workspace.path.to_string_lossy())
+            .await
+            .unwrap()
+            .expect("workspace row must exist after --set-active");
+        assert_eq!(ws.active_identity_id, Some(spark.id));
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    #[tokio::test]
+    async fn add_from_file_imports_through_the_generic_importer() {
+        use persona_core::storage::IdentityRepository;
+
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let csv_path = dir.path().join("team_vault.csv");
+        std::fs::write(
+            &csv_path,
+            "Title,Username,Password,URL,Notes,TOTP,Group\n\
+             Site A,bob,hunter3,https://a.example.com,c1,,Personal\n",
+        )
+        .unwrap();
+
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "import-pin");
+        // The importer expects an initialized workspace (same setup as the
+        // import-generic tests): persona init runs before add --from-file.
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("import-pin").await.unwrap();
+        }
+        let mut file_args = args(Some("unused"), None, None, None, true);
+        file_args.from_file = Some(csv_path.display().to_string());
+        execute_with(file_args, &config, &ScriptedUi::new().confirm(true))
+            .await
+            .expect("from-file imports through the generic importer");
+
+        // The importer lands the file's credentials under an identity named
+        // after the file stem.
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        IdentityRepository::new(db)
+            .find_by_name("team_vault")
+            .await
+            .unwrap()
+            .expect("import must create the file-stem identity");
+
+        // A missing file is now an honest error, not a fake success line.
+        let mut missing = args(Some("unused"), None, None, None, true);
+        missing.from_file = Some("/nonexistent/export.json".to_string());
+        let err = execute_with(missing, &config, &ScriptedUi::new())
+            .await
+            .expect_err("missing file must fail");
+        assert!(err.to_string().contains("Failed to read"));
+
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 }

@@ -267,7 +267,7 @@ async fn verify_identity_exists(name: &str, config: &CliConfig, ui: &dyn PromptU
     Ok(())
 }
 
-async fn perform_switch(
+pub(crate) async fn perform_switch(
     target_identity: &str,
     current_identity: Option<&str>,
     config: &CliConfig,
