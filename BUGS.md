@@ -7,9 +7,9 @@
 ## P0-① SSH agent 点「启动」无法启动（用户复测仍失败）
 
 - **现象**：Windows 下点击启动 SSH agent，报 `SSH agent failed to start: a global default trace dispatcher has already been set`；此前「点了没效果」疑似同族。
-- **根因**：`agents/ssh-agent/src/daemon.rs` 的 `run_agent_with_hooks` 启动即 `RedactedLoggerBuilder…init()?`；desktop 壳（`desktop/src-tauri/src/lib.rs::init_desktop_logging`）在 setup 最前已装全局 subscriber，二次 `try_init` 返回 Err 被 `?` 当致命错误上抛 → `commands.rs` 的 startup_error 槽位 → UI 报启动失败。
-- **修复方向**：① core `logging.rs::init` 幂等（占用 = 保持已装返回 Ok）；② daemon 启动链路日志初始化错误一律不当启动失败。
-- **状态**：修复中。Windows 实机全链（点启动→agent 真起来→状态已启动→重启 app 仍正常）待用户复测；若 trace 修复后仍有第二层根因（进程/端口/权限/杀软），继续挖。
+- **根因（历史记录）**：`agents/ssh-agent/src/daemon.rs` 的 `run_agent_with_hooks` 启动即 `RedactedLoggerBuilder…init()?`；desktop 壳（`desktop/src-tauri/src/lib.rs::init_desktop_logging`）在 setup 最前已装全局 subscriber，二次 `try_init` 返回 Err 被 `?` 当致命错误上抛 → `commands.rs` 的 startup_error 槽位 → UI 报启动失败。
+- **修复**：① core `logging.rs::init` 已幂等（占用 = 保持已装返回 Ok，`core/src/logging.rs:115-133`）；② daemon 启动链路已不再把日志初始化错误当启动失败（`agents/ssh-agent/src/daemon.rs:53-56`，`let _ = …init()`）。
+- **状态**：代码已修，Windows 实机全链（点启动→agent 真起来→状态已启动→重启 app 仍正常）待用户复测；若 trace 修复后仍有第二层根因（进程/端口/权限/杀软），继续挖。
 
 ## P0-② 自动锁定后操作直接报「Authentication failed: Session is auto-locked」
 

@@ -11,7 +11,7 @@ Persona CLI supports a non-interactive (headless) mode for use in CI/CD pipeline
 | `PERSONA_NON_INTERACTIVE` | Disable all interactive prompts    | `1` or `true`        | `false`                    |
 | `PERSONA_WORKSPACE_PATH`  | Workspace directory path           | `/path/to/workspace` | `~/.persona`               |
 | `PERSONA_MASTER_PASSWORD` | Master password for authentication | `your-password`      | -                          |
-| `PERSONA_DB_PATH`         | Database file path (alternative)   | `/path/to/db.sqlite` | `$WORKSPACE/identities.db` |
+| `PERSONA_DB_PATH`         | Database path override for the SSH agent child process (not read by CLI config) | `/path/to/db.sqlite` | - |
 
 ### Output Configuration
 
@@ -132,8 +132,7 @@ persona init \
 export PERSONA_NON_INTERACTIVE=1
 
 # All values must be provided via command-line arguments
-persona add \
-  --name "CI User" \
+persona add "CI User" \
   --email "ci@example.com" \
   --identity-type "automation" \
   --yes
@@ -164,7 +163,7 @@ echo "passphrase" | persona import \
   backup.json \
   --decrypt \
   --mode merge \
-  --yes
+  --force
 ```
 
 ### Credential Operations (Non-Interactive)
@@ -178,8 +177,7 @@ persona credential add \
   --identity "CI User" \
   --name "API Key" \
   --credential-type api_key \
-  --secret "$API_KEY" \
-  --yes
+  --secret "$API_KEY"
 
 # List credentials in JSON format
 export PERSONA_OUTPUT_FORMAT=json
@@ -332,7 +330,8 @@ for cred in credentials:
 In non-interactive mode, the CLI will:
 
 1. **Exit with a non-zero code** on errors
-2. **Never prompt for input** - fail instead if required input is missing
+2. **Suppress interactive confirmation prompts** (`ui.confirm`) - most commands accept `--yes`/`--force` to skip them
+3. **Text input prompts still fire** - `PERSONA_NON_INTERACTIVE` only sets `ui.interactive = false` (cli/src/config/mod.rs:140); commands that require a value not supplied on the command line (e.g. `credential add` without `--note`/`--secret`) still call `ui.input` → dialoguer `interact_text()` (cli/src/utils/terminal_ui.rs:16). Provide all required fields on the command line or the prompt will block/fail on a non-TTY stdin.
 
 ### Exit Codes
 

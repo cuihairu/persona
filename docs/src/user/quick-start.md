@@ -29,7 +29,7 @@ sudo dpkg -i Persona_0.1.0_amd64.deb
 开发调试可直接跑 dev 模式：
 
 ```bash
-pnpm --filter desktop run dev
+pnpm --filter persona-desktop run dev
 ```
 
 > 构建细节与逐字节可复现口径见

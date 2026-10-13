@@ -21,7 +21,11 @@
 **显式**组件，上下文是**隐式**组件，两者合并出最终建议。浏览器扩展的
 `suggesting_for` 正是起源+当前身份的组合。
 
-## 规划方向（路线图，未实现）
+## 规划方向
+
+> **阶段 1+2 已实现**（2026-10-12/13）：`persona suggest [--json]`、
+> `persona context map/get/unmap/status`、`persona shell-hook`、历史学习
+> （migration 020，默认关）。阶段 3–4 未实现。
 
 ```text
 Context:
@@ -36,14 +40,16 @@ Context:
 Identity: OpenSource
 ```
 
-- 终端/CLI 场景：cwd 所在仓库、主机名 → 建议该用得上的分身；
-- 浏览器场景：把「访问 github.com 时该用哪个分身」做成每站点记忆，
-  而不是每次手动切换；
-- CLI 里 `persona ssh --identity` 已标注 "reserved for future use"，
-  正是为这类语义留的口子。
+- 终端/CLI 场景（**已实现**，阶段 1+2）：cwd 所在仓库、主机名 →
+  `persona suggest` 建议该用得上的分身，`persona context map/unmap`
+  管理静态映射；
+- 浏览器场景（阶段 4，未实现）：把「访问 github.com 时该用哪个分身」
+  做成每站点记忆，而不是每次手动切换；
+- CLI 里 `persona ssh --identity` 仍标注 "reserved for future use"
+  （cli/src/commands/ssh.rs:58），为阶段 3 留的口子。
 
 完整设计见
 [CONTEXT_AWARE_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.md)
-（阶段 0：确定性打分、静态映射表 + 可选历史学习、CLI 先行）。
+（阶段 1+2 已实现；阶段 3–4 规划中）。
 在此之前，机制只有一个硬规则：**上下文只会影响建议与默认值，永远不会绕过
 策略放行一个动作**。

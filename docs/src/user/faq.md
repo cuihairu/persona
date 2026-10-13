@@ -34,7 +34,7 @@ SQLite**——对元数据也保密的场景请用 Travel Mode 或整盘加密�
 | CLI / SSH Agent | 支持（cargo build，跨平台） |
 | 浏览器扩展      | Chromium 系                 |
 | macOS / Windows | 未在真机验证，不宣称支持    |
-| 移动端          | 未提供                      |
+| 移动端          | 原生工程已入仓（iOS/Android/HarmonyOS，未发布） |
 
 ## 附件会同步吗？
 

@@ -20,12 +20,12 @@
 ## 详细实现分析
 
 ### 后端行为（核心层）
-- `core/src/service.rs` 的 `init_service` **从不播种**任何 identity
+- core 侧入口是 `PersonaService::initialize_user`（`core/src/service.rs:1836`），**从不播种**任何 identity（桌面侧的 `init_service` 位于 `desktop/src-tauri/src/commands.rs:218`）
 - 身份是用户自建的凭据分组，空库时没有任何可选项
 - 确认：后端 init 不创建默认身份
 
 ### 前端行为（表现层）
-- `desktop/src/hooks/usePersonaService.ts:176-203` 的 `loadIdentities()` 逻辑：
+- `desktop/src/hooks/usePersonaService.ts:199` 的 `loadIdentities()` 逻辑：
   1. **有存储的 currentIdentity**：保持不变，不重新选择
   2. **无存储的 currentIdentity 但有身份列表**：
      - **优先取工作区 active identity**（通过 `getActiveIdentity`）

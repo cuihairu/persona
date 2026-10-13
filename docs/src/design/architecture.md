@@ -57,7 +57,7 @@ sequenceDiagram
 
 ## 数据存储
 
-- **Workspace DB**：SQLite 文件，记录身份、凭据、SSH 密钥、设置等。通过 `sqlx::migrate!` 管理 schema，默认位于 `~/.persona/workspaces/<id>/identities.db`（`cli/src/config/mod.rs:198`）。
+- **Workspace DB**：SQLite 文件，记录身份、凭据、SSH 密钥、设置等。通过 `sqlx::migrate!` 管理 schema，默认位于 `~/.persona/identities.db`（`cli/src/config/mod.rs:199`；workspace 路径可用 `PERSONA_WORKSPACE_PATH` 覆盖）。
 - **加密形态**：没有独立的"vault 加密容器文件"——明文只存在 SQLite 密文列里，由主密钥（PBKDF2-HMAC-SHA256 派生，口令验证用 Argon2id）包裹的 per-item key 逐条加密（`core/src/crypto/key_hierarchy.rs`）；主密钥不落盘，解锁时现场派生。唯一例外是备份/旅行 sidecar（`PERSENC1` 格式，Argon2id 64MiB + AES-256-GCM，`core/src/backup/file_crypto.rs`）与生物识别包裹 blob（`core/src/auth/biometric_wrap.rs`）。
 - **附件存储**：二进制 blobs（已实现，密文落盘、复用所属凭据的 item key，以内容哈希命名；不参与同步）。
 - **审计日志**：SQLite `audit_logs` 表（`core/src/storage/repository.rs:1158`），记录 CRUD、签名、登录等操作；本地库为存证源，远端复制经 `core::events` Emitter 尽力异步（失败丢弃，见下[扩展点]）。

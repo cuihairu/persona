@@ -47,7 +47,7 @@ Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到
 | `/P`（被动，仅进度条）          | 同交互默认路径，页面自动按默认值通过                                                              |
 | `/UPDATE`（Tauri updater 内部） | 基线语义保留：原地更新、不弹重装页、不动卸载键与自启项                                            |
 | `/PURGE`（卸载器专用）          | 卸载器清空所有用户数据（vault + 缓存 + CLI 工作区），无需勾选确认；对安装包无效；`/UPDATE` 下跳过 |
-| 降级                            | 交互模式"不卸载"选项禁用（`ALLOWDOWNGRADES=false` 默认）；`/S` 模式同样先卸载旧版再装             |
+| 降级                            | 当前**无降级保护**：`tauri.conf.json` 未设 `plugins.updater.allowDowngrades`（该 key 未配置，tauri-cli 取默认值 `true`），旧版可被降级安装。如需启用保护须在 `tauri.conf.json` 显式设 `allowDowngrades: false`（属配置决定，未自行改动）；`/S` 模式仍先卸载旧版再装。 |
 
 **不再发布 MSI**（2026-09-25 起 `desktop-build.yml` Windows matrix 只构建
 `nsis`）：同一版本同时发两种安装器是缺口 2 的根源。NSIS 安装器对旧 MSI

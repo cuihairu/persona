@@ -99,7 +99,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "payload": {
     "extension_id": "abcdefghijklmnopabcdefghijklmnop",
     "extension_version": "1.0.0",
-    "protocol_version": 5,
+    "protocol_version": 7,
     "client_instance_id": "uuid-v4"
   }
 }
@@ -113,7 +113,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "ok": true,
   "payload": {
     "server_version": "0.1.0",
-    "protocol_version": 5,
+    "protocol_version": 7,
     "capabilities": [
       "status",
       "pairing_request",
@@ -148,7 +148,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 ```
 
 > 备注：当已经完成配对时，`pairing_required=false` 且会返回 `session_id`（短期会话，默认 24h）。
-> 服务器回自身支持的 `protocol_version`（当前 5）；声明旧版本的扩展对不认识的新消息
+> 服务器回自身支持的 `protocol_version`（当前 7，见 `cli/src/commands/bridge.rs` hello 负载）；声明旧版本的扩展对不认识的新消息
 > 会得到 `unknown_type`，向后兼容。
 > `connect_available` / `connect_port`：本机 desktop/CLI Connect server 的探测
 > 结果（读 `~/.persona/connect.port` 并探活 `/health`，可用 `PERSONA_CONNECT_PORT`
@@ -1050,6 +1050,8 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 | `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）                  |
 | `unsupported_credential_type`       | 条目类型不支持该操作                           |
 | `invalid_payload`                   | payload 校验失败（如空密码）                   |
+| `invalid_request`                   | 参数校验失败（bridge.rs:1297/1300）            |
+| `passkey_assert_failed`             | passkey 断言编排失败（bridge.rs:1336）         |
 | `sync_not_configured`               | 同步未配置（token/URL/workspace 缺失）（v6）   |
 | `sync_not_joined`                   | 保险库尚未加入同步（v6）                       |
 | `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6）        |
@@ -1102,7 +1104,7 @@ OPTIONS:
 {
   "name": "com.persona.native",
   "description": "Persona Password Manager Bridge",
-  "path": "/path/to/persona-bridge-wrapper",
+  "path": "~/.persona/bin/persona-bridge",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
 }

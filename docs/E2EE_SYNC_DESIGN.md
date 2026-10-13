@@ -53,7 +53,7 @@ keyring（service 名 `persona-device`，与既有 `persona-biometric`/`persona-
   重包 + 全设备重注册——把「换密码」从本地操作升级成全网迁移。设备身份密钥是
   长期凭证，不应与可更换的认证口令耦合（1Password 的账户密码与设备 Secret Key
   分离是同款思路）。
-- **keyring 缺失的 fallback**（headless CLI/容器）：经显式 `--device-key-file`
+- **keyring 缺失的 fallback**（headless CLI/容器）：经显式 `--device-key-file`（规划中，未实现；现仅有 `core/src/sync/` 注释提及，无 CLI flag）
   落盘 0600 文件，命令输出红色警告「该文件等同设备私钥，泄露即设备被冒用」。
   无 keyring 又不给文件参数 = 同步功能不可用（fail-closed，不静默生成临时密钥）。
 - **密钥丢失** = 该设备身份作废：重新走加入流程即可，不牵连其他设备。
@@ -311,7 +311,7 @@ travel 激活期间上传直接报错拒绝、装包整体跳过（与 pull 同�
   本来就能读全部密文，自建组不放大信任面。已知边界：两台设备在彼此
   可见前先后见到空组会各自建组，重复一侧 leave 重走即可。
 - **授权**：任一既有设备拆出 group key，为新设备包信封并上传（桌面给设备管理
-  页一行确认；CLI 给 `persona sync authorize` 类命令）。未授权设备 pull 不到
+  页一行确认；CLI 无 sync 子命令（授权经桌面/服务器完成））。未授权设备 pull 不到
   group key，也解不开任何条目——fail-closed。
 - **吊销**：设备管理页/CLI 删除该设备：服务器删其公钥与信封，级联删除
   同名 SRP 登记并**即刻吊销**其已签发的短期令牌与未决握手（2026-09 吊销

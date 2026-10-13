@@ -13,8 +13,8 @@ persona/
 ├── server/                # 可选同步服务器（Rust + Axum）
 ├── connect-server/        # Connect 本机自动化端点（secrets automation）
 ├── agents/                # 代理进程（ssh-agent 等）
-├── browser-extension/     # 浏览器扩展
-├── mobile/                # 移动端（原生 App，规划中，见下文）
+├── browser/              # 浏览器扩展与 wasm 组件
+├── mobile/                # 移动端（iOS/Android/HarmonyOS 原生工程，已入仓 + CI）
 ├── website/               # 项目官网
 ├── scripts/               # 构建/开发脚本
 ├── docker/                # 容器化部署
@@ -52,7 +52,7 @@ persona/
 
 - **职责**: 核心加密、存储、认证逻辑
 - **优势**: 内存安全、高性能、跨平台
-- **依赖**: ring, argon2, aes-gcm, rusqlite
+- **依赖**: ring, argon2, aes-gcm, sqlx（SQLite 走 sqlx，无 rusqlite）
 
 #### Desktop App (Tauri + React)
 
@@ -107,7 +107,7 @@ persona/
 cargo build -p persona-core
 
 # 开发桌面应用
-pnpm --filter desktop run tauri:dev
+pnpm --filter persona-desktop run tauri:dev
 
 # 运行服务器
 cargo run -p persona-server

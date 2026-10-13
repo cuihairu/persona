@@ -57,21 +57,20 @@ cargo audit
 
 ### JavaScript/TypeScript 生态系统
 
-#### npm audit
+#### pnpm audit
 
-Node.js 内置的安全审计工具。
+Node.js 内置的安全审计工具（本仓桌面端走 pnpm workspace）。
 
 **运行检查:**
 
 ```bash
-cd desktop
-npm audit
+pnpm --filter persona-desktop audit
 
 # 仅显示中等及以上级别的漏洞
-npm audit --audit-level=moderate
+pnpm --filter persona-desktop audit --audit-level=moderate
 
 # 自动修复（谨慎使用）
-npm audit fix
+pnpm --filter persona-desktop audit fix
 ```
 
 ## 许可证策略
@@ -114,8 +113,9 @@ CI/CD 流水线自动运行安全检查:
 
 ```yaml
 # .github/workflows/ci.yml — Security Audit job（两个独立 step）
-- run: cargo deny check advisories sources
+- run: cargo deny check
 - run: cargo audit
+  continue-on-error: true # Don't fail CI on advisories, just warn
 ```
 
 ### 2. 漏洞分析
@@ -164,9 +164,9 @@ ignore = [
 | 告警                         | 依赖           | 引入链                                                          | 风险面评估                                                                                    | 解除路径                                                                      |
 | ---------------------------- | -------------- | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
 | GHSA-wrw7-89jp-8q8g (medium) | glib 0.18.5    | Tauri（Linux GTK 后端）→ gtk-rs（仅 Linux 桌面）                | `VariantStrIter` 迭代器 soundness 缺陷；Persona 桌面端不直接以该迭代器遍历不可信 Variant 数据 | 待上游 gtk-rs 传递依赖升级（glib 0.18.5 仍在 `desktop/src-tauri/Cargo.lock`） |
-| GHSA-848j-6mx2-7j84 (low)    | elliptic 6.6.1 | website (umi) → webpack → node-libs-browser → crypto-browserify | 构建链 polyfill 聚合；website 是展示站，产物不调用 node crypto polyfill；上游无补丁版本       | umi/webpack 构建链演进后依赖消失，或迁出 webpack 系构建                       |
+| GHSA-848j-6mx2-7j84 (low)    | ~~elliptic 6.6.1~~ | ~~website (umi) → webpack → node-libs-browser → crypto-browserify~~ | **已断开（2026-10 复审）**：根 `package.json` overrides 将 `crypto-browserify` 指向自研 no-op stub（`vendor/crypto-browserify-stub`，pnpm `link:`），elliptic 整链退出依赖树；umi 的 node-libs-browser polyfill map 仍 require.resolve 该包但不加载，website 产物不调用 node crypto polyfill | 已解除（stub 断链） |
 
-已修复（同批复核）：workspace `lru` 0.12.5→0.18.4（ratatui 0.26→0.30 + rqrr 0.7→0.11）；`desktop/src-tauri` `rand` 0.8.5→0.8.7；docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12（当初用 npm overrides 拉平，后续经 vite ^6.4.3 自然解析到 0.25.12，override 已移除；vitepress 1.6.4 构建验证通过）；`image-size`（GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr，high）pnpm override `less@<4.9.1`→4.9.1 后整链消失——less 4.9.1 已移除 image-size 依赖，另留 `image-size@<2.0.4`→2.0.4 防御性 pin（OSV 确认 2.0.4 无已知漏洞；Dependabot 告警元数据滞后仍标"无补丁"）。
+已修复（同批复核）：workspace `lru` 0.12.5→0.18.4（ratatui 0.26→0.30 + rqrr 0.7→0.11）；`desktop/src-tauri` `rand` 0.8.5→0.8.8；docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12（当初用 npm overrides 拉平，后续经 vite ^6.4.3 自然解析到 0.25.12，override 已移除；vitepress 1.6.4 构建验证通过）；`image-size`（GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr，high）pnpm override `less@<4.9.1`→4.9.1 后整链消失——less 4.9.1 已移除 image-size 依赖，另留 `image-size@<2.0.4`→2.0.4 防御性 pin（OSV 确认 2.0.4 无已知漏洞；Dependabot 告警元数据滞后仍标"无补丁"）。
 
 ## Makefile 命令
 
@@ -229,7 +229,7 @@ cargo deny fetch
 
 # 检查依赖更新
 cargo outdated
-cd desktop && npm outdated
+pnpm --filter persona-desktop outdated
 ```
 
 ### 每月任务
@@ -280,7 +280,7 @@ serde = "1.0.197"  # 好
 ### 4. 依赖锁定
 
 - 提交 `Cargo.lock` 到版本控制
-- 提交 `package-lock.json` 到版本控制
+- 提交 `pnpm-lock.yaml` 到版本控制（docs/ 子站例外：独立 npm + `docs/package-lock.json`）
 - 不提交 `node_modules/` 或 `target/`
 
 ### 5. 安全更新优先

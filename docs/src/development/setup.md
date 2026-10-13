@@ -42,7 +42,7 @@ cargo run -p persona-cli -- init --path ~/Persona --yes --encrypted \
   --master-password "你的主密码"
 
 # 桌面应用 dev 模式
-pnpm --filter desktop run dev
+pnpm --filter persona-desktop run dev
 ```
 
 CLI 与桌面应用共用同一套密码库格式，可混用（见[快速开始](/user/quick-start)）。

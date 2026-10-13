@@ -15,8 +15,6 @@ install: ## 安装所有依赖
 	cargo fetch
 	@echo "安装 JS 依赖 (pnpm workspace)..."
 	pnpm install
-	@echo "安装移动应用依赖..."
-	cd mobile && flutter pub get
 	@echo "依赖安装完成!"
 
 js-install: ## 安装 JS 依赖（pnpm workspace）
@@ -36,7 +34,6 @@ setup: install ## 设置开发环境
 	@echo "检查开发环境..."
 	@command -v cargo >/dev/null 2>&1 || { echo "请先安装 Rust"; exit 1; }
 	@command -v node >/dev/null 2>&1 || { echo "请先安装 Node.js"; exit 1; }
-	@command -v flutter >/dev/null 2>&1 || { echo "请先安装 Flutter"; exit 1; }
 	@echo "开发环境设置完成!"
 
 # 构建项目
@@ -45,8 +42,6 @@ build: ## 构建所有组件
 	cargo build --workspace --release
 	@echo "构建桌面应用..."
 	pnpm --filter persona-desktop run tauri:build
-	@echo "构建移动应用..."
-	cd mobile && flutter build apk
 	@echo "构建完成!"
 
 build-all: build ## 构建所有组件（别名）
@@ -56,14 +51,10 @@ dev: ## 启动开发模式
 	@echo "启动开发服务器..."
 	@echo "1. 文档服务器: http://localhost:3000"
 	@echo "2. 桌面应用: 运行 'make dev-desktop'"
-	@echo "3. 移动应用: 运行 'make dev-mobile'"
 	make docs-serve
 
 dev-desktop: ## 启动桌面应用开发模式
 	pnpm --filter persona-desktop run tauri:dev
-
-dev-mobile: ## 启动移动应用开发模式
-	cd mobile && flutter run
 
 # 测试
 test: ## 运行所有测试
@@ -71,8 +62,6 @@ test: ## 运行所有测试
 	cargo test --workspace --all-features
 	@echo "运行桌面应用测试..."
 	pnpm --filter persona-desktop run test
-	@echo "运行移动应用测试..."
-	cd mobile && flutter test
 	@echo "测试完成!"
 
 test-all: test ## 运行所有测试（别名）
@@ -83,17 +72,12 @@ test-rust: ## 运行 Rust 测试
 test-desktop: ## 运行桌面应用测试
 	pnpm --filter persona-desktop run test
 
-test-mobile: ## 运行移动应用测试
-	cd mobile && flutter test
-
 # 代码检查
 lint: ## 运行代码检查
 	@echo "检查 Rust 代码 (workspace, all targets/features)..."
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 	@echo "检查桌面应用代码..."
 	pnpm --filter persona-desktop run lint
-	@echo "检查移动应用代码..."
-	cd mobile && flutter analyze
 	@echo "代码检查完成!"
 
 lint-all: lint ## 运行所有代码检查（别名）
@@ -104,8 +88,6 @@ format: ## 格式化代码
 	cargo fmt --all
 	@echo "格式化桌面应用代码..."
 	pnpm --filter persona-desktop run format
-	@echo "格式化移动应用代码..."
-	cd mobile && dart format .
 	@echo "代码格式化完成!"
 
 format-all: format ## 格式化所有代码（别名）
@@ -116,8 +98,6 @@ clean: ## 清理构建文件
 	cargo clean
 	@echo "清理桌面应用构建文件..."
 	cd desktop && rm -rf dist node_modules/.cache
-	@echo "清理移动应用构建文件..."
-	cd mobile && flutter clean
 	@echo "清理文档构建文件..."
 	rm -rf docs/book docs/dist docs/.vitepress/dist docs/.vitepress/cache
 	@echo "清理完成!"
@@ -228,8 +208,6 @@ check-deps: ## 检查依赖更新
 	cargo outdated
 	@echo "检查 Node.js 依赖更新..."
 	pnpm --filter persona-desktop outdated
-	@echo "检查 Flutter 依赖更新..."
-	cd mobile && flutter pub outdated
 
 # 生成文档
 generate-docs: ## 生成 API 文档
@@ -240,8 +218,7 @@ generate-docs: ## 生成 API 文档
 # 国际化
 i18n-extract: ## 提取国际化字符串
 	@echo "提取国际化字符串..."
-	@echo "跳过桌面 i18n 提取（未配置）"
-	cd mobile && flutter gen-l10n
+	@echo "跳过桌面与移动端 i18n 提取（未配置）"
 
 # 全面检查
 check-all: lint test security-check ## 运行所有检查（包括安全检查）

@@ -72,7 +72,7 @@
 - **健康扫描（Watchtower）**：弱 / 重用 / 过期凭据的本地元数据报告；
   可选泄露检查（HIBP k-匿名，仅 5 字符哈希前缀出机）。
 - **Passkeys**：本机 passkey 提供者面板与请求审批。
-- **钱包**：加密资产面板（开发中，非当前主线）。
+- **钱包**：加密资产面板（已落地，M5 毕业轨道；密钥层级与定案见 [WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)）。
 
 安全语义与威胁边界统一见[安全特性](/overview/security)与
 [THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。

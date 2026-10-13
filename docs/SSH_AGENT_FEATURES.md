@@ -161,8 +161,8 @@ max_connections_per_hour = 20
 #### 5.3 集成方式
 
 - 使用 `BiometricProvider` trait 进行抽象
-- 默认 fail-closed: 内置 `MockBiometricProvider` (`available=false`,
-  `force_fail=true`), 未注入真实平台实现时 `require_biometric` 一律拒绝签名
+- 内置 `MockBiometricProvider` 默认 `available=true` / `force_fail=false`（core/src/auth/biometric.rs:49-57）
+- 未注入真实平台实现时（provider 不可用）降级为手动确认，不直接拒绝签名（agents/ssh-agent/src/lib.rs:304-325，与 §5.2 流程一致）
 - 桌面/移动应用可注入真实的平台特定实现
 
 ### 6. 速率限制

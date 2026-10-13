@@ -49,7 +49,7 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 | -------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
 | `PERSONA_SERVER_TOKEN`                 | —（必填其一）         | legacy 单令牌；未配且 TOKENS 未配 → `/api/v1` 整体 503（fail-closed），`/health` 仍 200 |
 | `PERSONA_SERVER_TOKENS`                | —                     | 多设备 `name:token,…`；非法格式启动即错                                                 |
-| `PERSONA_SERVER_HOST` / `PORT`         | `0.0.0.0` / `3000`    | 监听面；只放内网/127.0.0.1 时按需改 HOST                                                |
+| `PERSONA_SERVER_HOST` / `PERSONA_SERVER_PORT` | `0.0.0.0` / `3000` | 监听面；只放内网/127.0.0.1 时按需改 HOST                                                |
 | `PERSONA_SERVER_DB`                    | `./persona-server.db` | 事件库（WAL，与 core 身份库分离）                                                       |
 | `PERSONA_SERVER_BACKUP_DIR`            | `./backups`           | 加密备份落盘目录（`{uuid}.persenc`）                                                    |
 | `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0`（不限）           | 超出删最旧（全局跨设备）                                                                |
@@ -68,7 +68,9 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 
 - `/api/v1/events`（POST/GET）：审计事件批量 ≤500/body ≤1MiB，`client_event_id` 部分去重，游标分页。
 - `/api/v1/backups`（POST/GET/DELETE）：流式落盘 256 MiB 上限、同设备最新版本 sha256 去重、下载 ETag=sha256。
-- `/api/v1/sync/devices`（POST/GET/DELETE）：设备注册（公钥+设备名）/列出/吊销。
+- `/api/v1/sync/devices`（POST/GET/DELETE）：设备注册（公钥+设备名）/列出/吊销；`/api/v1/sync/devices/remark`（PUT）：组内设备备注互见（S4）。
+- `/api/v1/sync/snapshot`（PUT/GET）：组快照水位锚点。
+- `/api/v1/sync/status`（GET）：同步状态。
 - `/api/v1/sync/group-keys`（GET/PUT）：设备信封取/传；`/api/v1/sync/group-key/rotate-begin` 以 epoch 乐观锁抢写信封窗口（409 = 后到者重读重试）。
 - `/api/v1/sync/oplog`（POST/GET）：push ≤500 条/批幂等（`op_id`），pull 游标增量。服务器不排序不合并（DR-4，裁决在客户端 LWW + 冲突双版本）。
 - `/api/v1/accounts/*`：账号体系（M2）。`register`、`{id}/srp/register|challenge|verify`（SRP 密码认证，见上文 DR-2 之外的第二套账号域）、`{id}/passkeys/create-options|register|login-options`（WebAuthn 仪式）、`{id}/recovery-codes`（生成/验证一次性恢复码）、`{id}/devices`（POST/GET/DELETE 设备授权与吊销）、`{id}/sessions`（POST 建/DELETE 吊销账号会话）。带 Bearer 门禁的写路径：srp/register、recovery-codes 生成、devices、sessions。

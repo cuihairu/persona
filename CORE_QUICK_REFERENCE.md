@@ -1,5 +1,7 @@
 # Persona Core - 快速参考指南
 
+> **2025-01-14 历史快照**：下列规模数字（行数/文件数/表数/模块行数/测试数）与「缺失」清单均为 2025-01-14 的 core MVP 状态，与现行代码差距很大（如 service.rs 现 8.9k 行、表 25 张、审计/备份/导入均已实现）。以仓库现状为准时请勿直接引用本文数字。
+
 ## 一句话总结
 **3,197 行 Rust 代码，功能完成度 76%，核心身份和凭据管理已完整实现，需要增强会话、权限、审计和测试。**
 
@@ -33,9 +35,10 @@
 - ⚠️ 会话管理 - 内存结构完整，缺数据库持久化
 - ⚠️ 工作区功能 - 数据模型完整，缺 Repository 实现
 
-### 未实现 (10-20%)
+### 未实现 (10-20%)（2026-10-13 注：以下三项均已实现——AuditLogRepository、backup/snapshot 模块、cli/src/commands/{import,import_generic,import_1pux,backup}.rs）
 - 审计日志 - 数据库表已建，代码未实现
 - 备份恢复 - 仅有导出，无导入和完整备份
+- 工作区 Repository - 缺实现
 - 单元测试 - 覆盖率仅 6%
 
 ---
@@ -213,15 +216,15 @@ async fn main() -> Result<()> {
 
 ```toml
 # 加密
+# 以下版本号为 2025-01-14 快照，现行版本以根 Cargo.toml 为准
 ring = "0.17"           # 加密原语
-aes-gcm = "0.10"        # AES-256-GCM
-argon2 = "0.5"          # Argon2 哈希
-ed25519-dalek = "2.0"   # Ed25519 签名
-zeroize = "1.6"         # 内存清零
+aes-gcm = "0.11"        # AES-256-GCM
+argon2 = "0.6"          # Argon2 哈希
+ed25519-dalek = "3.0"   # Ed25519 签名
+zeroize = "1.8"         # 内存清零
 
-# 数据库
-sqlx = "0.7"            # 异步 SQL
-rusqlite = "0.31"       # SQLite 驱动
+# 数据库（SQLite 访问全走 sqlx，rusqlite 从未引入，已删该行）
+sqlx = "0.9"            # 异步 SQL
 
 # 异步
 tokio = "1.0"           # 异步运行时
@@ -247,15 +250,17 @@ uuid = "1.6"            # 唯一标识符
 | 示例代码 | 10 个 | ~ |
 | **总覆盖率** | **~6%** | |
 
+> 2026-10-13 注：现为 core 1174+ 测试函数 + core/tests 7 文件；覆盖率以 CI llvm-cov 为准。
+
 ---
 
 ## 生产部署检查清单
 
-- [ ] 完成 WorkspaceRepository 实现
-- [ ] 实现审计日志系统
-- [ ] 会话管理数据库持久化
-- [ ] 增加单元测试覆盖率到 70%
-- [ ] 进行安全代码审计
+- [x] 完成 WorkspaceRepository 实现（2026-10-13 注：core/src/storage/repository.rs 已实现）
+- [x] 实现审计日志系统（AuditLogRepository + PersonaService 接线）
+- [ ] 会话管理数据库持久化（仍为内存结构）
+- [x] 增加单元测试覆盖率到 70%（core 已有 1174+ 测试函数）
+- [x] 进行安全代码审计（docs/review/ 与 THREAT_MODEL.md 周期评审）
 - [ ] 性能基准测试
 - [ ] 完整的 API 文档
 - [ ] 用户指南编写

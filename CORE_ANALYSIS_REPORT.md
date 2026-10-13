@@ -1,5 +1,7 @@
 # Persona Core 项目完整深度分析报告
 
+> **2025-01-14 历史快照**：本文全部规模数字（行数/表数/字段数/模块行数）、凭据类型数（现 13 变体）、`PersonaService` 结构体字段（现 20 个）与第 4/5 节「缺失」清单均为该日状态；审计日志、WorkspaceRepository、数据导入、TOTP、备份恢复此后均已实现（证据见 docs/review/ 与 CORE_QUICK_REFERENCE.md 的 2026-10-13 注）。以仓库现状为准时请勿直接引用本文数字。
+
 **分析时间**: 2025-01-14  
 **分析对象**: `/Users/cui/Workspaces/persona/core`  
 **代码规模**: 3,197 行 Rust 代码  

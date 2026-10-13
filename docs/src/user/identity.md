@@ -20,7 +20,7 @@
 | `ssh_key` / `gpg_key`             | 备注字段，只是贴了一段公钥文本，**不是**受管密钥                 |
 | `tags` / `attributes`             | 自定义标签与键值对                                               |
 | `is_active`                       | 历史字段，当前代码**不用**它做过滤（见下）                       |
-| `travel_marked`                   | 旅行模式标记：这个身份要随身带走                                 |
+| `travel_marked`                   | 旅行模式标记：这个身份要随身带走（migration 013 加入）           |
 
 其它表通过 `identity_id` 外键挂到身份上（`ON DELETE CASCADE`）：
 

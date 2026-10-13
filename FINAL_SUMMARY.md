@@ -83,7 +83,7 @@
 | **macOS 真机 Secure Enclave / Touch ID 验证** | ⏳ 待办 | 高 | Spike 代码就绪，需物理 Mac 验证 |
 | **Windows 真机 TPM / Windows Hello 验证** | ⏳ 待办 | 高 | 探针框架就绪，需物理 Windows 机器 |
 | **Release 发版流水线注入 `VITE_UPDATE_CHANNEL=release`** | ⏳ 待办 | 中 | 目前仅 nightly 日常构建注入，发版时需手动/自动切换 |
-| **docs 站接入 CI** | ⏳ 待办 | 低 | 目前仅本地构建验证，未在 CI 跑 |
+| **docs 站接入 CI** | ✅ 已完成 | 低 | `.github/workflows/docs.yml` 已存在：VitePress 构建 + 内建死链校验 + 有 diff 自动提交（push(main)/pull_request，paths `docs/**`） |
 | **Dependabot workflow 既有失败** | ⏳ 待办 | 低 | 与本轮改动无关，需单独排查 |
 | **Mermaid 浏览器端 E2E 验证** | ⏳ 待办 | 低 | 仅构建级验证，未做 Playwright/Cypress 真浏览器渲染检查 |
 | **iOS / Android / HarmonyOS 原生工程启动** | 📋 规划 | 最高 | Memory 已记录硬约束，需三端并行起项 |
