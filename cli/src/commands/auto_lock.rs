@@ -1,4 +1,8 @@
-use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
+use crate::{
+    config::CliConfig,
+    utils::core_ext::CoreResultExt,
+    utils::prompt::{PromptUi, TerminalUi},
+};
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::*;
@@ -207,6 +211,14 @@ struct PolicyTable {
 }
 
 pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<()> {
+    handle_auto_lock_with(args, config, &TerminalUi).await
+}
+
+pub(crate) async fn handle_auto_lock_with(
+    args: AutoLockArgs,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<()> {
     let repo = init_repository(config).await?;
     let formatter = OutputFormatter;
 
@@ -439,10 +451,21 @@ pub async fn handle_auto_lock(args: AutoLockArgs, config: &CliConfig) -> Result<
                     bail!("Cannot delete system policy. Use --force to override.");
                 }
 
-                // TODO: Add confirmation prompt
-                formatter.print_warning(&format!("This will delete policy '{}'.", policy.name));
-                formatter.print_warning("Use --force to skip confirmation.");
-                return Ok(());
+                // Scripts and CI never get a confirmation prompt: the row is
+                // kept and the operator is told how to proceed.
+                if !config.ui.interactive {
+                    formatter.print_warning(&format!("This will delete policy '{}'.", policy.name));
+                    formatter.print_warning("Non-interactive mode: re-run with --force to delete.");
+                    return Ok(());
+                }
+
+                if !ui.confirm(
+                    &format!("Delete policy '{}'? This cannot be undone.", policy.name),
+                    false,
+                )? {
+                    formatter.print_warning("Deletion cancelled.");
+                    return Ok(());
+                }
             }
 
             let deleted = repo.delete(&policy_id).await.into_anyhow()?;
@@ -738,6 +761,7 @@ impl OutputFormatter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::prompt::scripted::ScriptedUi;
     use tempfile::TempDir;
 
     fn config_for(dir: &TempDir) -> CliConfig {
@@ -1178,21 +1202,79 @@ mod tests {
         .expect_err("system policy must refuse a plain delete");
         assert!(err.to_string().contains("Cannot delete system policy"));
 
-        // A user policy without --force only warns and keeps the row.
-        handler(
-            AutoLockCommand::Delete {
-                policy_id: user_policy.id,
-                force: false,
+        // Non-interactive mode never prompts: warn and keep the row.
+        let non_interactive_config = {
+            let mut config = config_for(&dir);
+            config.ui.interactive = false;
+            config
+        };
+        let ui = ScriptedUi::new();
+        handle_auto_lock_with(
+            AutoLockArgs {
+                command: AutoLockCommand::Delete {
+                    policy_id: user_policy.id,
+                    force: false,
+                },
             },
-            &dir,
+            &non_interactive_config,
+            &ui,
         )
         .await
-        .expect("warn-only delete returns success");
+        .expect("non-interactive delete refuses without prompting");
+        assert!(
+            ui.exhausted(),
+            "no prompt may be consumed in non-interactive mode"
+        );
         let repo = init_repository(&config_for(&dir)).await.unwrap();
         assert!(
             repo.find_by_id(&user_policy.id).await.unwrap().is_some(),
-            "policy must survive the warn-only delete"
+            "non-interactive refusal must keep the policy"
         );
+        drop(repo);
+
+        // Interactive mode asks for confirmation: a decline keeps the row.
+        let ui = ScriptedUi::new().confirm(false);
+        handle_auto_lock_with(
+            AutoLockArgs {
+                command: AutoLockCommand::Delete {
+                    policy_id: user_policy.id,
+                    force: false,
+                },
+            },
+            &config_for(&dir),
+            &ui,
+        )
+        .await
+        .expect("cancelled delete returns success");
+        assert!(ui.exhausted(), "confirmation must have been asked");
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        assert!(
+            repo.find_by_id(&user_policy.id).await.unwrap().is_some(),
+            "policy must survive a declined confirmation"
+        );
+        drop(repo);
+
+        // A confirmed delete removes the row.
+        let ui = ScriptedUi::new().confirm(true);
+        handle_auto_lock_with(
+            AutoLockArgs {
+                command: AutoLockCommand::Delete {
+                    policy_id: user_policy.id,
+                    force: false,
+                },
+            },
+            &config_for(&dir),
+            &ui,
+        )
+        .await
+        .expect("confirmed delete works");
+        assert!(ui.exhausted());
+        let repo = init_repository(&config_for(&dir)).await.unwrap();
+        assert!(
+            repo.find_by_id(&user_policy.id).await.unwrap().is_none(),
+            "confirmed delete must remove the policy"
+        );
+        drop(repo);
     }
 
     #[tokio::test]
