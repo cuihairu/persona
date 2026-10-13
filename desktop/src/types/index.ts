@@ -702,7 +702,7 @@ export type CredentialDataRequest =
   | { type: 'CryptoWallet'; wallet_type: string; mnemonic_phrase?: string; private_key?: string; public_key: string; address: string; network: string; bip39_passphrase?: string }
   | { type: 'SshKey'; private_key: string; public_key: string; key_type: string; passphrase?: string }
   | { type: 'ApiKey'; api_key: string; api_secret?: string; token?: string; permissions: string[]; expires_at?: string }
-  | { type: 'TwoFactor'; secret_key: string; issuer: string; account_name: string; algorithm: string; digits: number; period: number }
+  | { type: 'TwoFactor'; secret_key: string; issuer: string; account_name: string; algorithm: string; digits: number; period: number; hotp?: boolean; initial_counter?: number }
   | { type: 'GameToken'; provider: string; secret_key: string; issuer: string; account_name: string; url?: string }
   | { type: 'SecureNote'; note: string }
   | {

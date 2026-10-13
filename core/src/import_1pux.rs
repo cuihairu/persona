@@ -686,6 +686,10 @@ pub(crate) struct TotpParams {
     algorithm: Option<String>,
     digits: Option<u8>,
     period: Option<u32>,
+    /// Some(true) = HOTP（计数器型，RFC 4226）；None/false = TOTP。
+    hotp: Option<bool>,
+    /// otpauth://hotp/ URI 的 `counter` 参数，入库作缺省起点。
+    counter: Option<u64>,
 }
 
 pub(crate) fn parse_totp_value(
@@ -703,6 +707,8 @@ pub(crate) fn parse_totp_value(
             algorithm: None,
             digits: None,
             period: None,
+            hotp: None,
+            counter: None,
         }
     };
 
@@ -728,19 +734,24 @@ pub(crate) fn parse_totp_value(
             .filter(|a| !a.is_empty())
             .unwrap_or_else(|| "SHA1".to_string()),
         digits: params.digits.unwrap_or(6),
+        hotp: params.hotp,
+        initial_counter: params.counter,
         period: params.period.unwrap_or(30),
     })
 }
 
-/// Parse an `otpauth://totp/...` URI (mirrors the CLI TOTP template parser).
+/// Parse an `otpauth://totp/...` or `otpauth://hotp/...` URI (mirrors the CLI
+/// TOTP template parser). HOTP 条目按计数器型入库，`counter` 参数作缺省起点。
 fn parse_otpauth_uri(uri: &str) -> Result<TotpParams> {
     let url = url::Url::parse(uri).context("invalid otpauth URI")?;
     if url.scheme() != "otpauth" {
         bail!("URI must start with otpauth://");
     }
-    if url.host_str() != Some("totp") {
-        bail!("only otpauth://totp URIs are supported");
-    }
+    let is_hotp = match url.host_str() {
+        Some("totp") => false,
+        Some("hotp") => true,
+        _ => bail!("only otpauth TOTP/HOTP URIs are supported"),
+    };
     let path = url.path().trim_start_matches('/');
     let (issuer_label, account_label) = match path.find(':') {
         Some(pos) => (
@@ -757,6 +768,8 @@ fn parse_otpauth_uri(uri: &str) -> Result<TotpParams> {
         algorithm: None,
         digits: None,
         period: None,
+        hotp: Some(is_hotp),
+        counter: None,
     };
 
     for (key, value) in url.query_pairs() {
@@ -767,6 +780,7 @@ fn parse_otpauth_uri(uri: &str) -> Result<TotpParams> {
             "algorithm" => params.algorithm = Some(value.to_string()),
             "digits" => params.digits = value.parse().ok(),
             "period" => params.period = value.parse().ok(),
+            "counter" => params.counter = value.parse().ok(),
             _ => {}
         }
     }
@@ -1413,12 +1427,12 @@ mod tests {
             parse_otpauth_uri("https://example.com/x?secret=A").unwrap_err()
         );
         assert!(err.contains("otpauth"), "{err}");
-        // Counter-based HOTP URIs are not supported.
+        // A non-otpauth otpauth host is rejected.
         let err = format!(
             "{:#}",
-            parse_otpauth_uri("otpauth://hotp/x?secret=A").unwrap_err()
+            parse_otpauth_uri("otpauth://foo/x?secret=A").unwrap_err()
         );
-        assert!(err.contains("totp"), "{err}");
+        assert!(err.contains("TOTP/HOTP"), "{err}");
     }
 
     #[test]
@@ -1435,6 +1449,40 @@ mod tests {
             "non-numeric digits fall back to the default"
         );
         assert_eq!(params.period, Some(45));
+        assert_eq!(params.hotp, Some(false), "totp host is time-based");
+        assert_eq!(params.counter, None);
+    }
+
+    #[test]
+    fn parse_otpauth_uri_hotp_host_sets_counter_flag() {
+        let params = parse_otpauth_uri(
+            "otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=3&algorithm=SHA1&digits=6",
+        )
+        .unwrap();
+        assert_eq!(params.hotp, Some(true));
+        assert_eq!(params.counter, Some(3));
+        assert_eq!(params.algorithm.as_deref(), Some("SHA1"));
+        assert_eq!(params.digits, Some(6));
+
+        // 映射进 TwoFactorData 后计数器型标记与起始计数器都要带上，否则导入的
+        // HOTP 条目会退化成时间型、出码即错。
+        let data = parse_totp_value(
+            "otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=7",
+            "Example",
+            None,
+        )
+        .unwrap();
+        assert_eq!(data.hotp, Some(true));
+        assert_eq!(data.initial_counter, Some(7));
+
+        let totp = parse_totp_value(
+            "otpauth://totp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            "Example",
+            None,
+        )
+        .unwrap();
+        assert_eq!(totp.hotp, Some(false));
+        assert_eq!(totp.initial_counter, None);
     }
 
     proptest! {

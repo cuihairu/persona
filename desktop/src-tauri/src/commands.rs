@@ -4730,6 +4730,14 @@ pub async fn get_totp_code(
         ok_or_error_response!(credential_data.ok_or_else(|| "Credential not found".to_string()));
     match data {
         CredentialData::TwoFactor(tf) => {
+            // HOTP 是计数器型，桌面端没有计数器概念：明确报错（指向 CLI
+            // 的 --counter 用法），而不是按时间窗返回错误码。
+            if tf.hotp.unwrap_or(false) {
+                return Ok(ApiResponse::error(
+                    "HOTP entries require an explicit counter — use `persona totp code <id> --counter N`"
+                        .to_string(),
+                ));
+            }
             // 协议逻辑统一下沉到 core（RFC 4226/6238），桌面端只做调用。
             let generated = ok_or_error_response_ctx!(
                 persona_core::crypto::totp::totp_now(&tf),

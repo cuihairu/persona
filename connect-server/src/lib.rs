@@ -653,6 +653,8 @@ mod tests {
             algorithm: "SHA1".to_string(),
             digits: 6,
             period: 30,
+            hotp: None,
+            initial_counter: None,
         })
     }
 

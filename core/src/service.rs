@@ -3812,6 +3812,8 @@ mod tests {
             account_name: "alice".into(),
             algorithm: "SHA1".into(),
             digits: 6,
+            hotp: None,
+            initial_counter: None,
             period: 30,
         });
 
@@ -7164,6 +7166,8 @@ mod tests {
                     account_name: "alice".to_string(),
                     algorithm: "SHA1".to_string(),
                     digits: 6,
+                    hotp: None,
+                    initial_counter: None,
                     period: 30,
                 }),
             )
@@ -8302,6 +8306,8 @@ mod tests {
             account_name: "alice".into(),
             algorithm: "SHA1".into(),
             digits: 6,
+            hotp: None,
+            initial_counter: None,
             period: 30,
         });
         let cred = service

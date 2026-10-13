@@ -13,7 +13,7 @@
 - [ ] KDF 参数评审决策点：PBKDF2-HMAC-SHA256 主密钥派生 100k 低于 OWASP 现行 600k 建议（1Password 650k）；Argon2id 各路径恰在/高于下限（维持）。待用户拍板：是否升 600k（re-wrap 迁移）/惰性升级或显式迁移命令/Argon2id 同批上浮；拍板前参数不动（docs/review/2026-10-12-kdf-parameter-review.md）
 - [ ] Windows 实机测试与优化：编译层（x86_64-pc-windows-gnu 全绿）与 CI 守卫（rust-windows + rust-windows-desktop job）已收口，缺实机行为验收
 - [ ] SCIM/SSO bridging（future）
-- [ ] G3 国际扩展与标准增强：GitHub 二次验证安全密钥/通行密钥走 Passkeys 轨道；HOTP（RFC 4226）录入与出码暂缓（非 1Password 对齐项；core hotp() 原语已在）
+- [ ] G3 国际扩展与标准增强：GitHub 二次验证安全密钥/通行密钥走 Passkeys 轨道（Passkeys 已落地）；HOTP（RFC 4226）录入与出码（见下「已完成 G3 HOTP 条目」）
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）
 
@@ -88,6 +88,7 @@
 - [x] 钱包 UI（地址/QR/签名确认 + 地址投毒告警）；keystore import/export 双向（2026-10-13）
 - [x] 安装与打包：pnpm tauri:build 安装包（待人工验收）；deb control 补全；CI 多平台矩阵 desktop-build.yml；Windows 安装器标准升级流程（docs/WINDOWS_INSTALLER.md）
 - [x] 测试矩阵：134 Rust 集成测试；前端 jest 115 → 257；tsc 类型本底
+- [x] G3 HOTP（RFC 4226）录入与出码：`TwoFactorData` 追加 `hotp`/`initial_counter`（legacy 容忍读）；core `hotp_code`/`code_at_counter`；CLI `totp setup --hotp --counter` + `totp code --counter`；1pux/CSV 导入认 `otpauth://hotp/`；桌面/桥接对 HOTP 显式拒绝（fail-closed，指向 CLI）；RFC 4226 官方向量回归（core 1209+64 / cli 501+19 / desktop 270 全绿）
 
 ### 钱包
 

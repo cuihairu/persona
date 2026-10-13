@@ -359,6 +359,17 @@ pub struct TwoFactorData {
     pub algorithm: String, // SHA1, SHA256, etc.
     pub digits: u8,
     pub period: u32,
+    /// HOTP（RFC 4226）开关：None/false = 时间型 TOTP（RFC 6238），
+    /// Some(true) = 计数器型 HOTP。字段追加规则见 GameTokenData 上方
+    /// 注释——只能以 `#[serde(default)] Option` 追加在末尾，旧六字段
+    /// 密文经 `CredentialData::from_bytes` 的 legacy 容忍读回迁。
+    #[serde(default)]
+    pub hotp: Option<bool>,
+    /// HOTP 起始计数器（otpauth://hotp/ URI 的 `counter` 参数）。出码时由
+    /// 调用方按服务侧当前窗口传显式计数器（CLI：`--counter`），本字段只
+    /// 作缺省起点；计数器递增不落库。
+    #[serde(default)]
+    pub initial_counter: Option<u64>,
 }
 
 /// Game token data for vendor algorithms outside RFC 4226/6238
@@ -398,6 +409,18 @@ struct LegacyGameTokenData {
     issuer: String,
     account_name: String,
     url: Option<String>,
+}
+
+/// TwoFactorData 追加 hotp/initial_counter 之前的旧六字段形状。私有镜像
+/// 结构，仅供 legacy 容忍读使用（口径同 LegacyGameTokenData）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyTwoFactorData {
+    secret_key: String,
+    issuer: String,
+    account_name: String,
+    algorithm: String,
+    digits: u8,
+    period: u32,
 }
 
 /// 1Password「Secure Note」对齐：全文加密的笔记条目。
@@ -482,12 +505,15 @@ impl CredentialData {
     /// Deserialize credential data from bytes after decryption.
     ///
     /// 当前形状反序列化失败时，回退到 legacy 容忍读（见
-    /// [`Self::from_bytes_legacy_game_token`]）；两条路都失败则返回原错误，
-    /// 保证损坏负载不会被静默"修复"。
+    /// [`Self::from_bytes_legacy_game_token`] 与
+    /// [`Self::from_bytes_legacy_two_factor`]）；两条 legacy 路都失败
+    /// 则返回原错误，保证损坏负载不会被静默"修复"。
     pub fn from_bytes(data: &[u8]) -> Result<Self, bincode::Error> {
         match bincode::deserialize(data) {
             Ok(parsed) => Ok(parsed),
-            Err(e) => Self::from_bytes_legacy_game_token(data).ok_or(e),
+            Err(e) => Self::from_bytes_legacy_game_token(data)
+                .or_else(|| Self::from_bytes_legacy_two_factor(data))
+                .ok_or(e),
         }
     }
 
@@ -515,6 +541,34 @@ impl CredentialData {
             url: legacy.url,
             identity_secret: None,
             device_id: None,
+        }))
+    }
+
+    /// TwoFactorData 追加 `hotp`/`initial_counter` 之前的旧密文容忍读。
+    ///
+    /// bincode 外部标签枚举里 TwoFactor 的变体索引是 6（u32 LE 前缀）；
+    /// 旧负载 = 4 字节 tag + 六字段 `LegacyTwoFactorData`。与 GameToken
+    /// 同一口径：先按旧形状解析，再重序列化并逐位比对——只有整个负载
+    /// 恰好是旧形状时才接受，避免把碰巧以 0x06000000 开头的损坏数据
+    /// 误判成 TOTP。映射时新增字段置 None（即旧条目仍是时间型 TOTP）。
+    fn from_bytes_legacy_two_factor(data: &[u8]) -> Option<Self> {
+        const TWO_FACTOR_VARIANT: u32 = 6;
+        if data.len() < 4 || u32::from_le_bytes(data[..4].try_into().ok()?) != TWO_FACTOR_VARIANT {
+            return None;
+        }
+        let legacy: LegacyTwoFactorData = bincode::deserialize(&data[4..]).ok()?;
+        if bincode::serialize(&legacy).ok()?.as_slice() != &data[4..] {
+            return None;
+        }
+        Some(CredentialData::TwoFactor(TwoFactorData {
+            secret_key: legacy.secret_key,
+            issuer: legacy.issuer,
+            account_name: legacy.account_name,
+            algorithm: legacy.algorithm,
+            digits: legacy.digits,
+            period: legacy.period,
+            hotp: None,
+            initial_counter: None,
         }))
     }
 }
@@ -708,6 +762,8 @@ mod tests {
                 account_name: "alice@example.com".to_string(),
                 algorithm: "SHA1".to_string(),
                 digits: 6,
+                hotp: None,
+                initial_counter: None,
                 period: 30,
             }),
             CredentialData::Raw(vec![1, 2, 3]),
@@ -881,6 +937,88 @@ mod tests {
             }
             other => panic!("unexpected data: {:?}", other),
         }
+    }
+
+    /// 追加 hotp/initial_counter 之前写入的 TwoFactor 密文（六字段负载）
+    /// 必须可读，新增字段映射为 None（旧条目仍是时间型 TOTP）。
+    #[test]
+    fn legacy_two_factor_payload_reads_with_none_new_fields() {
+        let legacy = LegacyTwoFactorData {
+            secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+            issuer: "Example".to_string(),
+            account_name: "alice".to_string(),
+            algorithm: "SHA1".to_string(),
+            digits: 6,
+            period: 30,
+        };
+        let mut payload = CredentialData::TwoFactor(TwoFactorData {
+            secret_key: legacy.secret_key.clone(),
+            issuer: legacy.issuer.clone(),
+            account_name: legacy.account_name.clone(),
+            algorithm: legacy.algorithm.clone(),
+            digits: legacy.digits,
+            period: legacy.period,
+            hotp: None,
+            initial_counter: None,
+        })
+        .to_bytes()
+        .unwrap();
+        // 截掉新增的两个 Option 字段（bincode 的 Option::None 各占 1 字节
+        // 标志位）再造旧负载
+        payload.truncate(payload.len() - 2);
+
+        let decoded = CredentialData::from_bytes(&payload).unwrap();
+        let rewritten = decoded.to_bytes().unwrap();
+        assert_ne!(rewritten, payload);
+        match decoded {
+            CredentialData::TwoFactor(data) => {
+                assert_eq!(data.secret_key, "JBSWY3DPEHPK3PXP");
+                assert_eq!(data.issuer, "Example");
+                assert_eq!(data.account_name, "alice");
+                assert_eq!(data.algorithm, "SHA1");
+                assert_eq!(data.digits, 6);
+                assert_eq!(data.period, 30);
+                assert_eq!(data.hotp, None);
+                assert_eq!(data.initial_counter, None);
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+    }
+
+    /// 新形状（hotp=Some(true) + initial_counter=Some(3)）密文直接按当前
+    /// 结构往返，不经 legacy 分支。
+    #[test]
+    fn two_factor_hotp_payload_round_trips_directly() {
+        let payload = CredentialData::TwoFactor(TwoFactorData {
+            secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+            issuer: "Example".to_string(),
+            account_name: "alice".to_string(),
+            algorithm: "SHA1".to_string(),
+            digits: 6,
+            period: 30,
+            hotp: Some(true),
+            initial_counter: Some(3),
+        })
+        .to_bytes()
+        .unwrap();
+        let decoded = CredentialData::from_bytes(&payload).unwrap();
+        match decoded {
+            CredentialData::TwoFactor(data) => {
+                assert_eq!(data.hotp, Some(true));
+                assert_eq!(data.initial_counter, Some(3));
+            }
+            other => panic!("unexpected data: {:?}", other),
+        }
+    }
+
+    /// legacy TwoFactor 分支的 tag 守卫：tag 6 + 截断的字符串负载必须
+    /// 保留反序列化错误，不能被误判成 TOTP。
+    #[test]
+    fn legacy_two_factor_tolerance_rejects_truncated_payloads() {
+        let mut truncated = 6u32.to_le_bytes().to_vec();
+        truncated.extend_from_slice(&13u64.to_le_bytes()); // secret_key 长度前缀
+        truncated.extend_from_slice(b"abc"); // 长度声称 13，实际只有 3 字节
+        assert!(CredentialData::from_bytes(&truncated).is_err());
     }
 
     /// legacy 分支只在"整个负载恰好是旧形状"时接受：以 0x08000000 开头

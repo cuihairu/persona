@@ -791,6 +791,8 @@ async fn credential_commands_round_trip_search_favorite_and_totp() {
         algorithm: "SHA1".to_string(),
         digits: 6,
         period: 30,
+        hotp: None,
+        initial_counter: None,
     };
     let resp = create_credential(totp_req, app.state::<AppState>())
         .await
@@ -3485,6 +3487,8 @@ async fn totp_and_credential_data_rejections() {
         algorithm: "SHA1".to_string(),
         digits: 6,
         period: 30,
+        hotp: None,
+        initial_counter: None,
     };
     let resp = create_credential(totp_req, app.state::<AppState>())
         .await
@@ -3634,6 +3638,58 @@ async fn get_totp_code_supports_game_token_provider() {
             .is_some_and(|e| e.contains("Unsupported game token provider")),
         "unexpected error: {:?}",
         resp.error
+    );
+}
+
+/// get_totp_code 对 HOTP（计数器型）条目必须显式拒绝：桌面端没有计数器
+/// 概念，按时间窗静默出码等于给用户错码。错误消息指向 CLI 的 --counter
+/// 用法（与 core 调度器、CLI、bridge 同一口径）。
+#[tokio::test]
+async fn get_totp_code_rejects_hotp_entries() {
+    use persona_core::models::credential::TwoFactorData;
+
+    let (app, identity_id) = app_with_identity().await;
+    let identity_uuid = uuid::Uuid::parse_str(&identity_id).unwrap();
+
+    let hotp_cred_id = {
+        let state = app.state::<AppState>();
+        let guard = state.service.lock().await;
+        let service = guard.as_ref().expect("service initialized");
+        let cred = service
+            .create_credential(
+                identity_uuid,
+                "HOTP token".to_string(),
+                persona_core::models::credential::CredentialType::TwoFactor,
+                persona_core::models::credential::SecurityLevel::High,
+                &CredentialData::TwoFactor(TwoFactorData {
+                    secret_key: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_string(),
+                    issuer: "Example".to_string(),
+                    account_name: "alice".to_string(),
+                    algorithm: "SHA1".to_string(),
+                    digits: 6,
+                    period: 30,
+                    hotp: Some(true),
+                    initial_counter: Some(3),
+                }),
+            )
+            .await
+            .unwrap();
+        cred.id
+    };
+
+    let resp = get_totp_code(hotp_cred_id.to_string(), app.state::<AppState>())
+        .await
+        .unwrap();
+    assert!(!resp.success, "HOTP must not return a code");
+    assert!(
+        resp.data.is_none(),
+        "rejected HOTP must not carry data: {:?}",
+        resp.data
+    );
+    let err = resp.error.expect("error message");
+    assert!(
+        err.contains("--counter"),
+        "error should point at the CLI counter flag: {err}"
     );
 }
 
@@ -4831,6 +4887,8 @@ fn credential_data_to_json_type_matrix_and_redaction() {
         account_name: "alice@example.com".to_string(),
         algorithm: "SHA1".to_string(),
         digits: 6,
+        hotp: None,
+        initial_counter: None,
         period: 30,
     });
     let json = credential_data_to_json(&totp);
@@ -5340,6 +5398,8 @@ async fn get_credential_data_returns_type_labels_for_all_variants() {
                 algorithm: "SHA1".to_string(),
                 digits: 6,
                 period: 30,
+                hotp: None,
+                initial_counter: None,
             },
         ),
         ("RAW", CredentialDataRequest::Raw { data: vec![9] }),

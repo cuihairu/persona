@@ -733,6 +733,11 @@ pub enum CredentialDataRequest {
         algorithm: String,
         digits: u8,
         period: u32,
+        /// HOTP（RFC 4226）计数器型条目；缺省（旧前端）= 时间型 TOTP。
+        #[serde(default)]
+        hotp: Option<bool>,
+        #[serde(default)]
+        initial_counter: Option<u64>,
     },
     GameToken {
         provider: String,
@@ -1211,6 +1216,8 @@ impl CredentialDataRequest {
                 account_name,
                 algorithm,
                 digits,
+                hotp,
+                initial_counter,
                 period,
             } => CredentialData::TwoFactor(TwoFactorData {
                 secret_key: secret_key.clone(),
@@ -1219,6 +1226,8 @@ impl CredentialDataRequest {
                 algorithm: algorithm.clone(),
                 digits: *digits,
                 period: *period,
+                hotp: *hotp,
+                initial_counter: *initial_counter,
             }),
             CredentialDataRequest::GameToken {
                 provider,

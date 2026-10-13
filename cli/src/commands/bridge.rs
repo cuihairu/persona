@@ -750,6 +750,16 @@ async fn handle_request(
                 .await?
                 .ok_or_else(|| anyhow!("not_found"))?;
 
+            // HOTP 是计数器型，浏览器填充路径没有计数器概念：明确报错，
+            // 而不是按时间窗返回错误码。
+            if let CredentialData::TwoFactor(tf) = &data {
+                if tf.hotp.unwrap_or(false) {
+                    return Err(anyhow!(
+                        "hotp_not_supported: HOTP entries need an explicit counter — use persona totp code <id> --counter N"
+                    ));
+                }
+            }
+
             let (code, remaining_seconds, period) = match data {
                 CredentialData::TwoFactor(tf) => generate_totp_code_from_data(&tf)?,
                 // 游戏令牌经 core 统一调度器（Steam Guard 离线可算；绑定型
@@ -4967,7 +4977,50 @@ pub(crate) mod tests {
                     account_name: "alice@example.com".to_string(),
                     algorithm: "SHA1".to_string(),
                     digits: 6,
+                    hotp: None,
+                    initial_counter: None,
                     period: 30,
+                }),
+            )
+            .await
+            .unwrap();
+        cred.url = url.map(|s| s.to_string());
+        let db = open_db(db_path).await.unwrap();
+        CredentialRepository::new(db).update(&cred).await.unwrap();
+        cred.id
+    }
+
+    /// Seed a HOTP (RFC 4226) credential with an explicit starting counter.
+    async fn seed_hotp_credential(
+        db_path: &Path,
+        identity_id: uuid::Uuid,
+        name: &str,
+        url: Option<&str>,
+        initial_counter: u64,
+    ) -> uuid::Uuid {
+        use persona_core::models::credential::SecurityLevel;
+
+        let db = open_db(db_path).await.unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        assert_eq!(
+            service.authenticate_user(PASSWORD).await.unwrap(),
+            persona_core::auth::authentication::AuthResult::Success
+        );
+        let mut cred = service
+            .create_credential(
+                identity_id,
+                name.to_string(),
+                CredentialType::TwoFactor,
+                SecurityLevel::High,
+                &CredentialData::TwoFactor(TwoFactorData {
+                    secret_key: "JBSWY3DPEHPK3PXP".to_string(),
+                    issuer: "Example".to_string(),
+                    account_name: "alice@example.com".to_string(),
+                    algorithm: "SHA1".to_string(),
+                    digits: 6,
+                    period: 30,
+                    hotp: Some(true),
+                    initial_counter: Some(initial_counter),
                 }),
             )
             .await
@@ -6059,6 +6112,32 @@ pub(crate) mod tests {
         assert_eq!(payload["period"], 30);
         let remaining = payload["remaining_seconds"].as_u64().unwrap();
         assert!((1..=30).contains(&remaining));
+
+        // HOTP entry: the page-side fill path has no counter concept, so the
+        // bridge refuses instead of generating a time-based code.
+        let hotp_id = seed_hotp_credential(
+            &db_path,
+            identity_id,
+            "HOTP entry",
+            Some("https://example.com/hotp"),
+            0,
+        )
+        .await;
+        let err = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_totp",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "item_id": hotp_id.to_string(),
+                    "user_gesture": true
+                }),
+            ),
+        )
+        .await
+        .expect_err("HOTP must be refused on the bridge");
+        assert!(err.to_string().contains("hotp_not_supported"), "got: {err}");
 
         // Bad payload -> context error.
         let err = handle_request(
@@ -7569,6 +7648,8 @@ pub(crate) mod tests {
             account_name: "a@b.c".to_string(),
             algorithm: "SHA1".to_string(),
             digits: 6,
+            hotp: None,
+            initial_counter: None,
             period: 30,
         })
         .unwrap();
@@ -7584,6 +7665,8 @@ pub(crate) mod tests {
             account_name: "a@b.c".to_string(),
             algorithm: "SHA256".to_string(),
             digits: 1,
+            hotp: None,
+            initial_counter: None,
             period: 0,
         })
         .unwrap();
@@ -7598,6 +7681,8 @@ pub(crate) mod tests {
             account_name: "a@b.c".to_string(),
             algorithm: "SHA512".to_string(),
             digits: 9,
+            hotp: None,
+            initial_counter: None,
             period: 60,
         })
         .unwrap();
@@ -7612,6 +7697,8 @@ pub(crate) mod tests {
             account_name: "a@b.c".to_string(),
             algorithm: "SHA1".to_string(),
             digits: 10,
+            hotp: None,
+            initial_counter: None,
             period: 30,
         })
         .unwrap();

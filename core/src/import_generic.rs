@@ -875,9 +875,9 @@ mod tests {
     #[test]
     fn broken_otpauth_totp_goes_to_skipped_without_the_secret() {
         // 与 1PUX 相同的宽容口径：非 otpauth 的裸值按 base32 密钥原样保留；
-        // otpauth 形但 host 不是 totp 才解析失败 → skipped，且原因不带密值。
+        // otpauth 形但 host 既非 totp 也非 hotp 才解析失败 → skipped，且原因不带密值。
         let plan = plan_csv_str(
-            "name,username,password,totp\nX,u,p,otpauth://hotp/x?secret=TOPSECRET\n",
+            "name,username,password,totp\nX,u,p,otpauth://foo/x?secret=TOPSECRET\n",
             "badtotp",
         );
         assert_eq!(
@@ -891,6 +891,29 @@ mod tests {
             "跳过原因不得携带密值: {}",
             plan.skipped[0].reason
         );
+    }
+
+    #[test]
+    fn hotp_otpauth_value_imports_as_counter_based_entry() {
+        // otpauth://hotp/ 与 totp 同为合法 URI：导入后落 hotp 标记与起始
+        // 计数器，不再是 skipped。
+        let plan = plan_csv_str(
+            "name,username,password,totp\nX,u,p,otpauth://hotp/Ex:acct?secret=JBSWY3DPEHPK3PXP&counter=5\n",
+            "hotp",
+        );
+        assert_eq!(plan.skipped.len(), 0, "{:?}", plan.skipped);
+        let totp = plan
+            .credentials
+            .iter()
+            .find(|c| c.credential_type == CredentialType::TwoFactor)
+            .expect("HOTP 条目作为 TwoFactor 导入");
+        match &totp.credential_data {
+            CredentialData::TwoFactor(tf) => {
+                assert_eq!(tf.hotp, Some(true));
+                assert_eq!(tf.initial_counter, Some(5));
+            }
+            other => panic!("unexpected data: {other:?}"),
+        }
     }
 
     #[test]

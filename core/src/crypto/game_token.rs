@@ -73,6 +73,12 @@ pub fn generate_code_at(
     match data {
         CredentialData::GameToken(d) => generate_game_token_code_at(d, at),
         CredentialData::TwoFactor(t) => {
+            // HOTP 是计数器型：调度器不知道调用方当前计数器，统一报
+            // 不支持离线生成，而不是按时间窗静默生成错误码（见模块头
+            // 注释的 fail-closed 口径）。
+            if t.hotp.unwrap_or(false) {
+                bail!("HOTP entries are counter-based and need an explicit counter — use `persona totp code <id> --counter N`");
+            }
             let c = super::totp::totp_at(t, at)?;
             Ok(GameTokenCode {
                 code: c.code,
@@ -110,6 +116,8 @@ mod tests {
             algorithm: "SHA1".to_string(),
             digits: 6,
             period: 30,
+            hotp: None,
+            initial_counter: None,
         }
     }
 
@@ -175,6 +183,20 @@ mod tests {
         let via_dispatcher = generate_code_now(&data).unwrap();
         let via_totp = super::super::totp::totp_now(&two_factor_data()).unwrap();
         assert_eq!(via_dispatcher.code, via_totp.code);
+    }
+
+    /// HOTP 条目经调度器必须显式拒绝（计数器未知），不能按时间窗
+    /// 静默生成错误码。
+    #[test]
+    fn hotp_two_factor_is_rejected_by_dispatcher() {
+        let mut hotp_data = two_factor_data();
+        hotp_data.hotp = Some(true);
+        hotp_data.initial_counter = Some(3);
+        let data = CredentialData::TwoFactor(hotp_data);
+        let err = generate_code_now(&data)
+            .expect_err("counter-based HOTP must not go through time windows");
+        assert!(err.to_string().contains("counter-based"));
+        assert!(err.to_string().contains("--counter"));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use persona_core::{
         PROVIDER_STEAM_GUARD,
     },
     crypto::steam::decode_steam_secret,
-    crypto::totp::totp_now,
+    crypto::totp::{hotp_code, totp_now},
     import_mafile::parse_ma_file,
     models::{CredentialData, CredentialType, GameTokenData, SecurityLevel, TwoFactorData},
     PersonaService,
@@ -66,6 +66,14 @@ pub enum TotpCommand {
         /// Hash algorithm (SHA1/SHA256/SHA512)
         #[arg(long)]
         algorithm: Option<String>,
+        /// HOTP (RFC 4226) counter-based entry instead of time-based TOTP.
+        /// `otpauth://hotp/` URIs and QR codes set this automatically.
+        #[arg(long)]
+        hotp: bool,
+        /// HOTP starting counter (default counter used when generating codes;
+        /// `persona totp code --counter` overrides)
+        #[arg(long)]
+        counter: Option<u64>,
     },
     /// Set up a Steam Guard token from a base64 shared_secret
     SetupSteam {
@@ -121,9 +129,13 @@ pub enum TotpCommand {
         /// Credential UUID (must be TwoFactor)
         #[arg(long)]
         id: Uuid,
-        /// Continuous watch output (refresh every period)
+        /// Continuous watch output (refresh every period; TOTP entries only)
         #[arg(long)]
         watch: bool,
+        /// HOTP counter (HOTP entries only; the stored starting counter is
+        /// used when omitted)
+        #[arg(long)]
+        counter: Option<u64>,
     },
     /// Import Steam Desktop Authenticator (.maFile) exports
     ///
@@ -173,10 +185,12 @@ pub(crate) async fn execute_with(
             digits,
             period,
             algorithm,
+            hotp,
+            counter,
         } => {
             setup_totp(
                 config, ui, identity, name, qr, otpauth, secret, issuer, account, url, digits,
-                period, algorithm,
+                period, algorithm, hotp, counter,
             )
             .await?
         }
@@ -201,7 +215,9 @@ pub(crate) async fn execute_with(
             )
             .await?
         }
-        TotpCommand::Code { id, watch } => generate_codes(config, ui, id, watch).await?,
+        TotpCommand::Code { id, watch, counter } => {
+            generate_codes(config, ui, id, watch, counter).await?
+        }
         TotpCommand::ImportSteam {
             identity,
             file,
@@ -228,8 +244,9 @@ async fn setup_totp(
     digits_override: Option<u8>,
     period_override: Option<u32>,
     algorithm_override: Option<String>,
+    hotp_flag: bool,
+    counter_override: Option<u64>,
 ) -> Result<()> {
-    println!("{}", "🔐 Setting up TOTP credential...".cyan());
     let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
@@ -259,6 +276,18 @@ async fn setup_totp(
     if let Some(algo) = algorithm_override {
         template.algorithm = Some(algo);
     }
+    if hotp_flag {
+        template.hotp = Some(true);
+    }
+    if let Some(counter) = counter_override {
+        template.counter = Some(counter);
+    }
+    let kind = if template.hotp.unwrap_or(false) {
+        "HOTP"
+    } else {
+        "TOTP"
+    };
+    println!("{}", format!("🔐 Setting up {kind} credential...").cyan());
 
     let final_template = template.finalize()?;
     let origin_url = url.map(|s| normalize_origin_url(&s)).transpose()?;
@@ -283,6 +312,8 @@ async fn setup_totp(
         algorithm: final_template.algorithm.clone(),
         digits: final_template.digits,
         period: final_template.period,
+        hotp: Some(final_template.hotp),
+        initial_counter: final_template.counter,
     });
 
     let mut credential = service
@@ -295,7 +326,7 @@ async fn setup_totp(
         )
         .await
         .into_anyhow()
-        .context("Failed to create TOTP credential")?;
+        .context(format!("Failed to create {kind} credential"))?;
 
     credential.username = Some(final_template.account.clone());
     if let Some(url) = origin_url {
@@ -310,25 +341,36 @@ async fn setup_totp(
     credential
         .metadata
         .insert("digits".into(), final_template.digits.to_string());
+    credential.metadata.insert("type".into(), kind.to_string());
     service
         .update_credential(&credential)
         .await
         .into_anyhow()
-        .context("Failed to update TOTP metadata")?;
+        .context(format!("Failed to update {kind} metadata"))?;
 
     println!(
-        "{} Saved TOTP credential '{}' for identity '{}'",
+        "{} Saved {kind} credential '{}' for identity '{}'",
         "✓".green(),
         credential_name.bright_green(),
         identity.name.bright_cyan()
     );
 
-    let (code, remaining) = generate_totp_code(&final_template)?;
-    println!(
-        "Current code: {} (valid for {}s)",
-        code.bold().bright_blue(),
-        remaining
-    );
+    if final_template.hotp {
+        let counter = final_template.counter.unwrap_or(0);
+        let code = generate_hotp_code(&final_template, counter)?;
+        println!(
+            "Current code (counter {counter}): {} — next counter: {}",
+            code.bold().bright_blue(),
+            counter + 1
+        );
+    } else {
+        let (code, remaining) = generate_totp_code(&final_template)?;
+        println!(
+            "Current code: {} (valid for {}s)",
+            code.bold().bright_blue(),
+            remaining
+        );
+    }
 
     Ok(())
 }
@@ -706,6 +748,7 @@ async fn generate_codes(
     ui: &dyn crate::utils::prompt::PromptUi,
     id: Uuid,
     watch: bool,
+    counter: Option<u64>,
 ) -> Result<()> {
     let service = init_service(config, ui).await?;
     let credential = service
@@ -726,6 +769,32 @@ async fn generate_codes(
         d @ (CredentialData::TwoFactor(_) | CredentialData::GameToken(_)) => d,
         _ => bail!("Credential {} does not contain TOTP data", id),
     };
+
+    // HOTP（RFC 4226）是计数器型：调度器不知道调用方计数器，故在此分流到
+    // core hotp_code；core 侧对 HOTP 报不支持离线生成，消费方漏判时不会
+    // 静默出错误码。
+    if let CredentialData::TwoFactor(tf) = &data {
+        if tf.hotp.unwrap_or(false) {
+            if watch {
+                bail!(
+                    "watch mode is for time-based TOTP entries; HOTP codes advance per use — use --counter instead"
+                );
+            }
+            let counter = counter.unwrap_or_else(|| tf.initial_counter.unwrap_or(0));
+            let code = hotp_code(tf, counter)?;
+            println!(
+                "HOTP code for {} (counter {}): {} — next counter: {}",
+                credential.name.bright_cyan(),
+                counter,
+                code.bold().bright_blue(),
+                counter + 1
+            );
+            return Ok(());
+        }
+    }
+    if counter.is_some() {
+        bail!("--counter applies to HOTP entries only");
+    }
 
     if watch {
         loop {
@@ -761,6 +830,10 @@ struct TotpTemplate {
     algorithm: Option<String>,
     digits: Option<u8>,
     period: Option<u32>,
+    /// 计数器型 HOTP（RFC 4226）；otpauth://hotp/ 的 URI/QR 与 --hotp 设置
+    hotp: Option<bool>,
+    /// HOTP 起始计数器（URI 的 counter 参数或 --counter）
+    counter: Option<u64>,
 }
 
 impl TotpTemplate {
@@ -783,6 +856,12 @@ impl TotpTemplate {
         if self.period.is_none() {
             self.period = other.period;
         }
+        if self.hotp.is_none() {
+            self.hotp = other.hotp;
+        }
+        if self.counter.is_none() {
+            self.counter = other.counter;
+        }
     }
 
     fn finalize(self) -> Result<FinalTotpConfig> {
@@ -801,6 +880,8 @@ impl TotpTemplate {
             algorithm: algorithm.to_uppercase(),
             digits,
             period,
+            hotp: self.hotp.unwrap_or(false),
+            counter: self.counter,
         })
     }
 }
@@ -812,6 +893,8 @@ struct FinalTotpConfig {
     algorithm: String,
     digits: u8,
     period: u32,
+    hotp: bool,
+    counter: Option<u64>,
 }
 
 fn parse_otpauth_uri(uri: &str) -> Result<TotpTemplate> {
@@ -819,9 +902,11 @@ fn parse_otpauth_uri(uri: &str) -> Result<TotpTemplate> {
     if url.scheme() != "otpauth" {
         bail!("URI must start with otpauth://");
     }
-    if url.host_str() != Some("totp") {
-        bail!("Only otpauth TOTP URIs are supported");
+    let host = url.host_str().unwrap_or_default();
+    if host != "totp" && host != "hotp" {
+        bail!("Only otpauth TOTP/HOTP URIs are supported");
     }
+    let is_hotp = host == "hotp";
     let path = url.path().trim_start_matches('/');
     let (issuer_label, account_label) = if let Some(pos) = path.find(':') {
         (
@@ -846,6 +931,7 @@ fn parse_otpauth_uri(uri: &str) -> Result<TotpTemplate> {
     let mut algorithm = None;
     let mut digits = None;
     let mut period = None;
+    let mut counter = None;
 
     for (key, value) in url.query_pairs() {
         match key.as_ref() {
@@ -855,6 +941,7 @@ fn parse_otpauth_uri(uri: &str) -> Result<TotpTemplate> {
             "algorithm" => algorithm = Some(value.to_string()),
             "digits" => digits = value.parse().ok(),
             "period" => period = value.parse().ok(),
+            "counter" => counter = value.parse().ok(),
             _ => {}
         }
     }
@@ -866,6 +953,8 @@ fn parse_otpauth_uri(uri: &str) -> Result<TotpTemplate> {
         algorithm,
         digits,
         period,
+        hotp: Some(is_hotp),
+        counter,
     })
 }
 
@@ -884,16 +973,28 @@ fn decode_qr_file(path: &PathBuf) -> Result<String> {
     Ok(content)
 }
 
-fn generate_totp_code(template: &FinalTotpConfig) -> Result<(String, u32)> {
-    let data = TwoFactorData {
+fn two_factor_from_template(template: &FinalTotpConfig) -> TwoFactorData {
+    // 仅供入库前的预览取码：hotp 恒为 None，避免预览路径经 core 调度器
+    // 的 HOTP 门禁（预览按调用方显式选择的路径取码，不依赖条目标记）。
+    TwoFactorData {
         secret_key: template.secret.clone(),
         issuer: template.issuer.clone(),
         account_name: template.account.clone(),
         algorithm: template.algorithm.clone(),
         digits: template.digits,
         period: template.period,
-    };
+        hotp: None,
+        initial_counter: None,
+    }
+}
+
+fn generate_totp_code(template: &FinalTotpConfig) -> Result<(String, u32)> {
+    let data = two_factor_from_template(template);
     generate_totp_code_from_data(&data)
+}
+
+fn generate_hotp_code(template: &FinalTotpConfig, counter: u64) -> Result<String> {
+    hotp_code(&two_factor_from_template(template), counter)
 }
 
 fn generate_totp_code_from_data(data: &TwoFactorData) -> Result<(String, u32)> {
@@ -1095,6 +1196,8 @@ mod tests {
             algorithm: Some("sha256".to_string()),
             digits: Some(8),
             period: None,
+            hotp: None,
+            counter: None,
         });
 
         assert_eq!(template.secret.as_deref(), Some("FIRST"));
@@ -1141,6 +1244,8 @@ mod tests {
             algorithm: "SHA1".into(),
             digits: 99,
             period: 0,
+            hotp: false,
+            counter: None,
         };
         let (code, remaining) = generate_totp_code(&cfg).unwrap();
         assert_eq!(code.len(), 10, "digits clamped to 10");
@@ -1177,14 +1282,39 @@ mod tests {
             .expect("https scheme must be rejected");
         assert!(err.to_string().contains("otpauth://"));
 
-        // otpauth but not TOTP.
-        let err = parse_otpauth_uri("otpauth://hotp/GitHub:alice?secret=ABC")
+        // otpauth but neither TOTP nor HOTP.
+        let err = parse_otpauth_uri("otpauth://foo/GitHub:alice?secret=ABC")
             .err()
-            .expect("hotp must be rejected");
-        assert!(err.to_string().contains("Only otpauth TOTP URIs"));
+            .expect("unknown type host must be rejected");
+        assert!(err.to_string().contains("Only otpauth TOTP/HOTP URIs"));
 
         // Unparseable garbage.
         assert!(parse_otpauth_uri("::not a url::").is_err());
+    }
+
+    #[test]
+    fn parse_otpauth_uri_accepts_hotp_scheme_with_counter() {
+        let t = parse_otpauth_uri(
+            "otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=3&algorithm=SHA1&digits=6",
+        )
+        .unwrap();
+        assert_eq!(t.hotp, Some(true));
+        assert_eq!(t.counter, Some(3));
+        assert_eq!(
+            t.secret.as_deref(),
+            Some("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+        );
+        assert_eq!(t.issuer.as_deref(), Some("Example"));
+        assert_eq!(t.account.as_deref(), Some("alice"));
+        assert_eq!(t.algorithm.as_deref(), Some("SHA1"));
+        assert_eq!(t.digits, Some(6));
+
+        // 缺省 counter=0；totp 型 URI 保持 hotp=false。
+        let t = parse_otpauth_uri("otpauth://hotp/Example?secret=ABC").unwrap();
+        assert_eq!(t.hotp, Some(true));
+        assert_eq!(t.counter, None);
+        let t = parse_otpauth_uri("otpauth://totp/Example:alice?secret=ABC").unwrap();
+        assert_eq!(t.hotp, Some(false));
     }
 
     #[test]
@@ -1222,6 +1352,8 @@ mod tests {
             algorithm: "SHA1".into(),
             digits: 1,
             period: 30,
+            hotp: false,
+            counter: None,
         };
         let (code, _) = generate_totp_code(&cfg).unwrap();
         assert_eq!(code.len(), 4, "digits clamped up to 4");
@@ -1293,6 +1425,8 @@ mod tests {
             None,
             None,
             None,
+            false,
+            None,
         )
         .await
         .expect_err("unknown identity must fail");
@@ -1312,6 +1446,8 @@ mod tests {
             Some("github.com".to_string()),
             None,
             None,
+            None,
+            false,
             None,
         )
         .await
@@ -1343,6 +1479,7 @@ mod tests {
             &crate::utils::prompt::TerminalUi,
             uuid::Uuid::new_v4(),
             false,
+            None,
         )
         .await
         .expect_err("missing credential must fail");
@@ -1387,15 +1524,196 @@ mod tests {
                 .unwrap()
                 .id
         };
-        let err = generate_codes(&config, &crate::utils::prompt::TerminalUi, pw_id, false)
-            .await
-            .expect_err("non-TOTP credential must fail");
+        let err = generate_codes(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            pw_id,
+            false,
+            None,
+        )
+        .await
+        .expect_err("non-TOTP credential must fail");
         assert!(err.to_string().contains("is not a TOTP entry"));
 
         // The real TOTP credential generates a 6-digit code.
-        generate_codes(&config, &crate::utils::prompt::TerminalUi, totp_id, false)
+        generate_codes(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            totp_id,
+            false,
+            None,
+        )
+        .await
+        .expect("code generated");
+
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// HOTP（RFC 4226）全链路：otpauth://hotp/ 录入 → 入库标记 hotp +
+    /// initial_counter → 显式计数器出码；watch 与 --counter 的互斥边界。
+    #[tokio::test]
+    async fn setup_then_generate_hotp_code_uses_explicit_counter() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            IdentityRepository::new(db.clone())
+                .create(&Identity::new(
+                    "alice".to_string(),
+                    persona_core::models::IdentityType::Personal,
+                ))
+                .await
+                .unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+
+        setup_totp(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            "alice".to_string(),
+            Some("Hotp Example".to_string()),
+            None,
+            Some(
+                "otpauth://hotp/Example:alice?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=3&algorithm=SHA1&digits=6"
+                    .to_string(),
+            ),
+            None,
+            None,
+            Some("alice@example.com".to_string()),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("HOTP setup must succeed");
+
+        let id = {
+            let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+            let identity_id = IdentityRepository::new(service_db(&config).await)
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap()
+                .id;
+            let all = service
+                .get_credentials_for_identity(&identity_id)
+                .await
+                .into_anyhow()
+                .unwrap();
+            let cred = all
+                .into_iter()
+                .find(|c| c.credential_type == CredentialType::TwoFactor)
+                .expect("HOTP credential stored");
+            // 入库形状：hotp=Some(true) + URI 的 counter 作为初始计数器
+            match service
+                .get_credential_data(&cred.id)
+                .await
+                .into_anyhow()
+                .unwrap()
+                .expect("data readable")
+            {
+                CredentialData::TwoFactor(tf) => {
+                    assert_eq!(tf.hotp, Some(true));
+                    assert_eq!(tf.initial_counter, Some(3));
+                    assert_eq!(tf.digits, 6);
+                }
+                other => panic!("unexpected credential data: {:?}", other),
+            }
+            cred.id
+        };
+
+        // 显式计数器出码（RFC 4226 附录 D 向量由 core 层锁定）
+        generate_codes(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            id,
+            false,
+            Some(1),
+        )
+        .await
+        .expect("counter 1 code generated");
+        // 缺省计数器 = 入库的 initial_counter
+        generate_codes(&config, &crate::utils::prompt::TerminalUi, id, false, None)
             .await
-            .expect("code generated");
+            .expect("initial counter code generated");
+        // watch 与 HOTP 互斥
+        let err = generate_codes(&config, &crate::utils::prompt::TerminalUi, id, true, None)
+            .await
+            .expect_err("watch must be rejected for HOTP");
+        assert!(
+            err.to_string().contains("--counter"),
+            "unexpected error: {}",
+            err
+        );
+
+        // --counter 对时间型 TOTP 条目报错，而不是被静默忽略
+        setup_totp(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            "alice".to_string(),
+            Some("Totp Example".to_string()),
+            None,
+            None,
+            Some(BASE32_NOPAD.encode(b"seed-secret")),
+            Some("Example".to_string()),
+            Some("alice@totp".to_string()),
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+        )
+        .await
+        .expect("TOTP setup must succeed");
+        let totp_id = {
+            let service = init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+            let identity_id = IdentityRepository::new(service_db(&config).await)
+                .find_by_name("alice")
+                .await
+                .unwrap()
+                .unwrap()
+                .id;
+            let all = service
+                .get_credentials_for_identity(&identity_id)
+                .await
+                .into_anyhow()
+                .unwrap();
+            all.iter()
+                .find(|c| c.id != id)
+                .expect("TOTP credential stored")
+                .id
+        };
+        let err = generate_codes(
+            &config,
+            &crate::utils::prompt::TerminalUi,
+            totp_id,
+            false,
+            Some(1),
+        )
+        .await
+        .expect_err("--counter must be rejected for time-based TOTP");
+        assert!(
+            err.to_string()
+                .contains("--counter applies to HOTP entries only"),
+            "unexpected error: {}",
+            err
+        );
 
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
@@ -1445,6 +1763,8 @@ mod tests {
                     digits: None,
                     period: None,
                     algorithm: None,
+                    hotp: false,
+                    counter: None,
                 },
             },
             &config,
@@ -1476,6 +1796,7 @@ mod tests {
                 command: TotpCommand::Code {
                     id: totp_id,
                     watch: false,
+                    counter: None,
                 },
             },
             &config,
@@ -1527,6 +1848,8 @@ mod tests {
                     digits: None,
                     period: None,
                     algorithm: None,
+                    hotp: false,
+                    counter: None,
                 },
             },
             &config,
@@ -1608,6 +1931,7 @@ mod tests {
             &crate::utils::prompt::TerminalUi,
             pw_cred_id,
             false,
+            None,
         )
         .await
         .expect_err("password payload must not be shown as TOTP");
@@ -1659,6 +1983,8 @@ mod tests {
             Some(8),
             Some(60),
             Some("sha512".to_string()),
+            false,
+            None,
         )
         .await
         .expect("setup with overrides must succeed");
@@ -1720,6 +2046,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             None,
         )
         .await
@@ -1855,6 +2183,7 @@ mod tests {
                 command: TotpCommand::Code {
                     id: steam_id,
                     watch: false,
+                    counter: None,
                 },
             },
             &config,
@@ -2059,6 +2388,8 @@ mod tests {
             None,
             None,
             None,
+            false,
+            None,
         )
         .await
         .expect_err("uninitialized workspace must fail");
@@ -2086,6 +2417,8 @@ mod tests {
             None,
             None,
             None,
+            None,
+            false,
             None,
         )
         .await
@@ -2233,6 +2566,7 @@ mod tests {
             &crate::utils::prompt::TerminalUi,
             creds[0].id,
             false,
+            None,
         )
         .await
         .expect("code generated for imported Steam Guard entry");

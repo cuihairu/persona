@@ -73,18 +73,30 @@ pub fn hotp(secret: &[u8], counter: u64, algorithm: &str) -> Result<u32> {
     Ok(binary)
 }
 
-/// 在指定时刻按 `TwoFactorData` 的参数（算法/位数/周期）计算 TOTP
-pub fn totp_at(data: &TwoFactorData, at: chrono::DateTime<chrono::Utc>) -> Result<TotpCode> {
+/// 在指定计数器上按 `TwoFactorData` 的参数（算法/位数）计算 HOTP 码
+/// （RFC 4226）。TOTP 与 HOTP 共享同一 HMAC 原语，差别只在计数器来源：
+/// TOTP 用时间窗，HOTP 用显式计数。
+pub fn code_at_counter(data: &TwoFactorData, counter: u64) -> Result<String> {
     let secret_bytes = decode_base32_secret(&data.secret_key)?;
-    let period = data.period.max(1) as u64;
-    let timestamp = at.timestamp().max(0) as u64;
-    let counter = timestamp / period;
     let digits = data.digits.clamp(4, 10) as u32;
     let code_num = hotp(&secret_bytes, counter, &data.algorithm)?;
     // u32: hotp() returns u32; 10^10 exceeds u32::MAX so widen first.
     let modulo = 10_u64.pow(digits);
     let value = u64::from(code_num) % modulo;
-    let code = format!("{:0width$}", value, width = digits as usize);
+    Ok(format!("{:0width$}", value, width = digits as usize))
+}
+
+/// 在指定计数器上计算 HOTP 码（`hotp: Some(true)` 的 TwoFactor 条目）
+pub fn hotp_code(data: &TwoFactorData, counter: u64) -> Result<String> {
+    code_at_counter(data, counter)
+}
+
+/// 在指定时刻按 `TwoFactorData` 的参数（算法/位数/周期）计算 TOTP
+pub fn totp_at(data: &TwoFactorData, at: chrono::DateTime<chrono::Utc>) -> Result<TotpCode> {
+    let period = data.period.max(1) as u64;
+    let timestamp = at.timestamp().max(0) as u64;
+    let counter = timestamp / period;
+    let code = code_at_counter(data, counter)?;
     let remaining = (period - (timestamp % period)) as u32;
     Ok(TotpCode {
         code,
@@ -109,6 +121,8 @@ mod tests {
             algorithm: algorithm.to_string(),
             digits,
             period,
+            hotp: None,
+            initial_counter: None,
         }
     }
 
@@ -195,6 +209,57 @@ mod tests {
         assert_eq!(totp_at(&data, at).unwrap().code.len(), 4);
         let data = two_factor(&rfc6238_sha1_secret(), "SHA1", 16, 30);
         assert_eq!(totp_at(&data, at).unwrap().code.len(), 10);
+    }
+
+    /// RFC 4226 附录 D 官方测试向量（SHA1、6 位、ASCII secret
+    /// "12345678901234567890"，计数器 0-9）。HOTP 与 TOTP 共享 HMAC 原语，
+    /// 这组向量锁定 `hotp_code` 的正确性；计数器是入参而不是时间推导。
+    #[test]
+    fn rfc4226_official_hotp_vectors() {
+        let data = two_factor("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 6, 30);
+        // 把同一个数据标成 hotp 也无关紧要：hotp_code 只看计数器入参。
+        let mut hotp_data = data.clone();
+        hotp_data.hotp = Some(true);
+        let expected = [
+            "755224", "287082", "359152", "969429", "338314", "254676", "287922", "162583",
+            "399871", "520489",
+        ];
+        for (counter, code) in expected.iter().enumerate() {
+            assert_eq!(
+                hotp_code(&hotp_data, counter as u64).unwrap(),
+                *code,
+                "RFC 4226 counter {counter}"
+            );
+        }
+    }
+
+    /// HOTP 码只依赖计数器入参：同一计数器上任意时刻算出同一码（与
+    /// TOTP 的时间窗行为相反）。
+    #[test]
+    fn hotp_code_is_counter_driven_not_time_driven() {
+        let data = two_factor("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 6, 30);
+        let t0 = chrono::DateTime::from_timestamp(0, 0).unwrap();
+        let t1 = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+        let c0 = code_at_counter(&data, 1).unwrap();
+        assert_eq!(totp_at(&data, t0).unwrap().code, "755224"); // t=0 → 计数器 0
+        assert_eq!(totp_at(&data, t1).unwrap().code.len(), 6);
+        assert_eq!(c0, "287082");
+        // 换计数器必须换码
+        assert_ne!(code_at_counter(&data, 2).unwrap(), c0);
+    }
+
+    /// 位数钳制对 HOTP 同样生效（4/10 位上下限）。
+    #[test]
+    fn hotp_code_clamps_digits() {
+        let data = two_factor("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SHA1", 2, 30);
+        assert_eq!(hotp_code(&data, 0).unwrap().len(), 4);
+        let data = two_factor(
+            "GEZDGNBVGY3TQ3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQGEZA",
+            "SHA256",
+            6,
+            30,
+        );
+        assert_eq!(hotp_code(&data, 0).unwrap().len(), 6);
     }
 
     #[test]

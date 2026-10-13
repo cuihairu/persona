@@ -1562,6 +1562,8 @@ mod tests {
                     account_name: "faye".to_string(),
                     algorithm: "SHA1".to_string(),
                     digits: 6,
+                    hotp: None,
+                    initial_counter: None,
                     period: 30,
                 }),
             )
