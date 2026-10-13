@@ -268,6 +268,16 @@ pub const SCRYPT_EXPORT_DEFAULT: ScryptExportParams = ScryptExportParams {
 /// rejected before any work is done.
 const SCRYPT_IMPORT_MAX_MEM: u64 = 256 * 1024 * 1024;
 
+/// Upper bound on the derived-key length accepted from an untrusted keystore.
+/// Web3 v3 files use 32; anything above 128 is nonsense, and an unchecked
+/// u32 dklen would allocate up to 4 GiB before any check runs.
+const KEYSTORE_DKLEN_MAX: u32 = 128;
+
+/// Upper bound on pbkdf2 iteration count accepted from an untrusted keystore.
+/// c is a free-form u32; without a cap a hostile file can pin the import for
+/// hours. 1,000,000 is ~8x geth's default (262,144) and ~2s of SHA-256 work.
+const PBKDF2_IMPORT_MAX_ITERATIONS: u32 = 1_000_000;
+
 fn hex_decode_field(field: &str, name: &str) -> PersonaResult<Vec<u8>> {
     hex::decode(field)
         .map_err(|e| PersonaError::InvalidInput(format!("Invalid hex in keystore {name}: {e}")))
@@ -300,6 +310,12 @@ fn derive_keystore_key(crypto: &KeystoreCrypto, password: &str) -> PersonaResult
                     mem, SCRYPT_IMPORT_MAX_MEM
                 )));
             }
+            if *dklen > KEYSTORE_DKLEN_MAX {
+                return Err(PersonaError::InvalidInput(format!(
+                    "keystore dklen too high ({} > {} cap)",
+                    dklen, KEYSTORE_DKLEN_MAX
+                )));
+            }
             let log_n = u8::try_from(31 - n.leading_zeros())
                 .map_err(|_| PersonaError::InvalidInput("scrypt n out of range".to_string()))?;
             if 1u32 << log_n != *n {
@@ -329,6 +345,18 @@ fn derive_keystore_key(crypto: &KeystoreCrypto, password: &str) -> PersonaResult
             if prf != "hmac-sha256" {
                 return Err(PersonaError::InvalidInput(format!(
                     "Unsupported pbkdf2 prf: {prf}"
+                )));
+            }
+            if *c > PBKDF2_IMPORT_MAX_ITERATIONS {
+                return Err(PersonaError::InvalidInput(format!(
+                    "pbkdf2 work factor too high ({} > {} cap)",
+                    c, PBKDF2_IMPORT_MAX_ITERATIONS
+                )));
+            }
+            if *dklen > KEYSTORE_DKLEN_MAX {
+                return Err(PersonaError::InvalidInput(format!(
+                    "keystore dklen too high ({} > {} cap)",
+                    dklen, KEYSTORE_DKLEN_MAX
                 )));
             }
             let salt = hex_decode_field(salt, "kdfparams.salt")?;
@@ -975,6 +1003,148 @@ mod tests {
         let err = import_from_keystore(&json, "pw")
             .expect_err("oversized scrypt must be rejected before any work");
         assert!(err.to_string().contains("work factor too high"));
+    }
+
+    /// pbkdf2 迭代数无上界 = 恶意 keystore 可让导入挂死（c 是 u32，
+    /// 40 亿次 HMAC 在真机上要跑数小时）。必须在派生前拒绝。
+    #[test]
+    fn keystore_rejects_oversized_pbkdf2_iterations() {
+        let json = build_pbkdf2_keystore_json(&[0x33u8; 32], "pw", 100)
+            .replace("\"c\":100", "\"c\":4000000000");
+        let err = import_from_keystore(&json, "pw")
+            .expect_err("oversized pbkdf2 iteration count must be rejected before any work");
+        assert!(
+            err.to_string().contains("work factor too high"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// dklen 无上界 = 恶意 keystore 可凭一个 u32 让派生输出缓冲直接分配
+    /// 4 GiB（u32::MAX），内存 DoS。scrypt 与 pbkdf2 两条 KDF 臂都要拦。
+    #[test]
+    fn keystore_rejects_oversized_dklen_before_allocating() {
+        let base = build_pbkdf2_keystore_json(&[0x44u8; 32], "pw", 100);
+        let json = base.replace("\"dklen\":32", "\"dklen\":4000000000");
+        let err = import_from_keystore(&json, "pw")
+            .expect_err("oversized pbkdf2 dklen must be rejected before allocating");
+        assert!(err.to_string().contains("dklen"), "unexpected error: {err}");
+
+        let crypto = KeystoreCrypto {
+            cipher: "aes-128-ctr".to_string(),
+            ciphertext: "00".to_string(),
+            cipherparams: CipherParams {
+                iv: "00".repeat(16),
+            },
+            kdf: "scrypt".to_string(),
+            kdfparams: KdfParams::Scrypt {
+                dklen: 4_000_000_000,
+                n: 1024,
+                r: 8,
+                p: 1,
+                salt: "aa".repeat(16),
+            },
+            mac: "00".to_string(),
+        };
+        let keystore = KeystoreV3 {
+            version: 3,
+            id: Uuid::new_v4().to_string(),
+            address: None,
+            crypto,
+        };
+        let json = serde_json::to_string(&keystore).unwrap();
+        let err = import_from_keystore(&json, "pw")
+            .expect_err("oversized scrypt dklen must be rejected before allocating");
+        assert!(err.to_string().contains("dklen"), "unexpected error: {err}");
+    }
+
+    /// 确定性变异 harness：以合法小工作因子 keystore 为基线，做字节翻转、
+    /// 截断与字段级篡改，断言解析器是全函数——任何变异要么 Ok 要么 Err，
+    /// 绝不 panic。补上 ROADMAP 登记的 keystore 变异 harness 缺口。
+    #[test]
+    fn keystore_mutation_harness_is_total() {
+        let base = build_pbkdf2_keystore_json(&[0x55u8; 32], "harness-pass", 100);
+        // 基线本身必须可解，否则 harness 锚点失效。
+        assert!(import_from_keystore(&base, "harness-pass").is_ok());
+
+        let mut cases: Vec<(String, String)> = Vec::new();
+        let bytes = base.as_bytes();
+        // 字节翻转：全串按步长取样，每个位置打三种替换值。
+        for pos in (0..bytes.len()).step_by(7) {
+            for val in [0x00u8, 0xFF, 0x22] {
+                let mut mutated = base.clone().into_bytes();
+                mutated[pos] = val;
+                cases.push((
+                    format!("flip@{pos}=0x{val:02X}"),
+                    String::from_utf8_lossy(&mutated).into_owned(),
+                ));
+            }
+        }
+        // 截断：从空串到接近全长的锚点长度。
+        for len in [0usize, 1, 2, 5, 10, 50, 100, base.len() / 2, base.len() - 1] {
+            cases.push((
+                format!("truncate@{len}"),
+                base[..len.min(base.len())].to_string(),
+            ));
+        }
+        // 字段级篡改：类型混淆、未知算法、越界参数、坏 hex。
+        for (label, mutation) in [
+            (
+                "version-string",
+                base.replace("\"version\":3", "\"version\":\"3\""),
+            ),
+            (
+                "version-zero",
+                base.replace("\"version\":3", "\"version\":0"),
+            ),
+            ("cipher-unknown", base.replace("aes-128-ctr", "aes-256-gcm")),
+            ("kdf-unknown", base.replace("\"pbkdf2\"", "\"argon2id\"")),
+            ("prf-unknown", base.replace("hmac-sha256", "hmac-sha1")),
+            ("c-negative", base.replace("\"c\":100", "\"c\":-1")),
+            ("c-huge", base.replace("\"c\":100", "\"c\":4000000000")),
+            (
+                "dklen-huge",
+                base.replace("\"dklen\":32", "\"dklen\":4000000000"),
+            ),
+            ("dklen-zero", base.replace("\"dklen\":32", "\"dklen\":0")),
+            (
+                "iv-short",
+                base.replace("43434343434343434343434343434343", "4343"),
+            ),
+            (
+                "iv-odd-hex",
+                base.replace(
+                    "43434343434343434343434343434343",
+                    "4343434343434343434343434343434g",
+                ),
+            ),
+            ("mac-empty", {
+                // 用 serde 改 mac 更稳：直接定位 `"mac":"..."` 值段。
+                let mut keystore: serde_json::Value = serde_json::from_str(&base).unwrap();
+                keystore["crypto"]["mac"] = serde_json::json!("");
+                keystore.to_string()
+            }),
+            ("salt-nonhex", {
+                let mut keystore: serde_json::Value = serde_json::from_str(&base).unwrap();
+                keystore["crypto"]["kdfparams"]["salt"] = serde_json::json!("zz-not-hex");
+                keystore.to_string()
+            }),
+            ("ciphertext-array", {
+                let mut keystore: serde_json::Value = serde_json::from_str(&base).unwrap();
+                keystore["crypto"]["ciphertext"] = serde_json::json!([1, 2, 3]);
+                keystore.to_string()
+            }),
+        ] {
+            cases.push((label.to_string(), mutation));
+        }
+
+        for (label, mutated) in cases {
+            let result =
+                std::panic::catch_unwind(|| import_from_keystore(&mutated, "harness-pass"));
+            match result {
+                Ok(Ok(_)) | Ok(Err(_)) => {} // 全函数：两种返回都合法
+                Err(_) => panic!("keystore mutation harness panicked on case: {label}"),
+            }
+        }
     }
 
     #[test]

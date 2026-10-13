@@ -1274,6 +1274,46 @@ mod tests {
         assert!(err.to_string().contains("No QR code detected"));
     }
 
+    /// 确定性变异 harness：垃圾字节、截断/伪造的 PNG/JPEG 头、确定性
+    /// 噪声载荷。`decode_qr_file` 必须全函数——任何输入要么 Ok 要么 Err，
+    /// 绝不 panic（rqrr/image 的历史 panic 面正是本 harness 的目标）。
+    #[test]
+    fn decode_qr_file_mutation_harness_is_total() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // PNG/JPEG 魔数按各自格式规范的前缀。
+        let png_magic: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+        let jpeg_magic: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0];
+        let mut cases: Vec<(String, PathBuf)> = Vec::new();
+        let push = |cases: &mut Vec<(String, PathBuf)>, name: &str, bytes: &[u8]| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            cases.push((name.to_string(), path));
+        };
+
+        push(&mut cases, "empty.png", &[]);
+        push(&mut cases, "text.png", b"this is definitely not an image");
+        push(&mut cases, "png-magic-only.png", png_magic);
+        push(&mut cases, "jpeg-magic-only.jpg", jpeg_magic);
+        let mut png_noise = png_magic.to_vec();
+        png_noise.extend_from_slice(&[0xAAu8; 64]);
+        push(&mut cases, "png-magic-plus-noise.png", &png_noise);
+        let mut jpeg_noise = jpeg_magic.to_vec();
+        jpeg_noise.extend_from_slice(&[0x55u8; 256]);
+        push(&mut cases, "jpeg-magic-plus-noise.jpg", &jpeg_noise);
+        // 有效 PNG 头 + 全零载荷：解码器要么报错要么当纯色图，不得 panic。
+        let mut png_zero = png_magic.to_vec();
+        png_zero.extend_from_slice(&[0x00u8; 24]);
+        push(&mut cases, "truncated-noise.png", &png_zero);
+
+        for (label, path) in cases {
+            let result = std::panic::catch_unwind(|| decode_qr_file(&path));
+            match result {
+                Ok(Ok(_)) | Ok(Err(_)) => {}
+                Err(_) => panic!("QR decode mutation harness panicked on case: {label}"),
+            }
+        }
+    }
+
     #[test]
     fn parse_otpauth_uri_rejects_bad_scheme_host_and_garbage() {
         // Not an otpauth URI at all.
