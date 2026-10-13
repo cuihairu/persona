@@ -150,6 +150,17 @@ pub(crate) async fn compute_suggestion(
 /// `PERSONA_NO_CONTEXT` 非空时整层关闭（与 shell hook 同一口径）；任何
 /// 加载失败（开库/读映射/读历史）静默降级为无建议（设计 §10）。
 pub(crate) async fn host_suggestion_line(config: &CliConfig, host: &str) -> Option<String> {
+    host_suggestion_line_for(config, &MapPaths::current(), host).await
+}
+
+/// 同上，映射表路径由调用方注入（`MapPaths::current()` 的环境推导在
+/// Windows 上走 known-folder API、不认 HOME 环境变量，测试无法重定向
+/// ——与 `compute_suggestion` 同一注入口径）。
+pub(crate) async fn host_suggestion_line_for(
+    config: &CliConfig,
+    paths: &MapPaths,
+    host: &str,
+) -> Option<String> {
     if std::env::var("PERSONA_NO_CONTEXT")
         .map(|v| !v.is_empty())
         .unwrap_or(false)
@@ -160,14 +171,13 @@ pub(crate) async fn host_suggestion_line(config: &CliConfig, host: &str) -> Opti
     if host.is_empty() {
         return None;
     }
-    let paths = MapPaths::current();
     let signals = ContextSignals {
         cwd: PathBuf::new(),
         repo: None,
         host: Some(host.to_string()),
     };
     let env_override = std::env::var("PERSONA_CONTEXT_OVERRIDE").ok();
-    let result = compute_suggestion(config, &paths, &signals, env_override.as_deref())
+    let result = compute_suggestion(config, paths, &signals, env_override.as_deref())
         .await
         .ok()?;
     let top = result.candidates.first()?;
@@ -494,7 +504,7 @@ mod tests {
     // 阶段 3：host 维度建议（`persona ssh run --host`）
     // ------------------------------------------------------------------
 
-    /// 串行化会改写进程环境变量的测试（HOME / PERSONA_NO_CONTEXT）。
+    /// 串行化会改写进程环境变量的测试（PERSONA_NO_CONTEXT / PERSONA_CONTEXT_OVERRIDE）。
     fn lock_env() -> (
         std::sync::MutexGuard<'static, ()>,
         std::sync::MutexGuard<'static, ()>,
@@ -542,29 +552,27 @@ mod tests {
         }
     }
 
-    /// 把全局映射表目录指到 TempDir：`~/.persona/context.toml`。
-    fn with_home_map(dir: &TempDir, body: &str) -> PathBuf {
-        let dir_path = dir.path().join(".persona");
-        std::fs::create_dir_all(&dir_path).unwrap();
-        let path = dir_path.join("context.toml");
-        std::fs::write(&path, body).unwrap();
-        path
+    /// 写注入的全局映射表（不走 home 目录推导：Windows 上 dirs 走
+    /// known-folder API、不认 HOME/USERPROFILE 环境变量，测试无法重定向）。
+    fn write_global_map(dir: &TempDir, body: &str) -> MapPaths {
+        let paths = paths_for(dir);
+        std::fs::write(&paths.global, body).unwrap();
+        paths
     }
 
     #[tokio::test]
     async fn host_suggestion_line_reports_matching_host() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
         seeded_db(&dir, false).await;
-        with_home_map(
+        let paths = write_global_map(
             &dir,
             "[host.'^git\\.company\\.com$']\nidentity = \"OpenSource\"\n",
         );
 
-        let line = host_suggestion_line(&config_for(&dir), "git.company.com")
+        let line = host_suggestion_line_for(&config_for(&dir), &paths, "git.company.com")
             .await
             .expect("a host hit must produce a line");
         assert!(line.contains("persona switch OpenSource"));
@@ -577,38 +585,35 @@ mod tests {
     async fn host_suggestion_line_ignores_repo_signals_and_project_maps() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
         seeded_db(&dir, false).await;
-        // 只有 project 命中：host 维度不得借道 project 权重出题。
-        with_home_map(
-            &dir,
-            "[project.\"github.com/example/repo\"]\nidentity = \"OpenSource\"\n",
-        );
 
         let config = config_for(&dir);
         let paths = paths_for(&dir);
+        // 只有 project 命中：host 维度不得借道 project 权重出题。
         std::fs::write(
             &paths.repo_local,
             "[project.\"github.com/example/repo\"]\nidentity = \"OpenSource\"\n",
         )
         .unwrap();
         // host 信号未命中任何映射 → 无建议。
-        assert!(host_suggestion_line(&config, "github.com").await.is_none());
-        // 同一 host 命中 hosts 模式时，project 映射不参与（只出 host 候选）。
-        with_home_map(&dir, "[host.'github\\.com']\nidentity = \"OpenSource\"\n");
-        let line = host_suggestion_line(&config, "github.com").await.unwrap();
-        assert!(line.contains("persona switch OpenSource"));
-        // 与 project 精确命中的权重不同（0.8 < 1.0），行内含分数字符。
-        assert!(line.contains("0.80"));
-        // 顺带证明 repo 维度未介入：注入路径的映射表走 project 权重，
-        // host 命中走 HOST_WEIGHT；同分身双命中聚合为一条候选。
+        assert!(host_suggestion_line_for(&config, &paths, "github.com")
+            .await
+            .is_none());
+        // 同一 host 命中 host 模式时，project 映射不参与（只出 host 候选）。
         std::fs::write(
             &paths.global,
             "[host.'github\\.com']\nidentity = \"OpenSource\"\n",
         )
         .unwrap();
+        let line = host_suggestion_line_for(&config, &paths, "github.com")
+            .await
+            .unwrap();
+        assert!(line.contains("persona switch OpenSource"));
+        // 与 project 精确命中的权重不同（0.8 < 1.0），行内含分数 0.80。
+        assert!(line.contains("0.80"));
+        // repo 维度走 project 权重、host 命中走 HOST_WEIGHT；同分身双命中聚合为一条。
         let with_repo = ContextSignals {
             cwd: PathBuf::new(),
             repo: Some("github.com/example/repo".to_string()),
@@ -617,7 +622,6 @@ mod tests {
         let result = compute_suggestion(&config, &paths, &with_repo, None)
             .await
             .unwrap();
-        // 同分身双命中聚合为一条候选，得分相加（project 1.0 + host 0.8）。
         assert_eq!(result.candidates.len(), 1);
         assert_eq!(
             result.candidates[0].score,
@@ -629,25 +633,25 @@ mod tests {
     async fn host_suggestion_line_no_match_returns_none() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
         seeded_db(&dir, true).await; // active 已设：仍不得凭 active 出题
-        with_home_map(&dir, "[host.'^github\\.com$']\nidentity = \"OpenSource\"\n");
+        let paths = write_global_map(&dir, "[host.'^github\\.com$']\nidentity = \"OpenSource\"\n");
 
-        assert!(host_suggestion_line(&config_for(&dir), "git.company.com")
-            .await
-            .is_none());
+        assert!(
+            host_suggestion_line_for(&config_for(&dir), &paths, "git.company.com")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
     async fn host_suggestion_line_no_context_flag_disables_the_layer() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
         seeded_db(&dir, false).await;
-        with_home_map(
+        let paths = write_global_map(
             &dir,
             "[host.'git\\.company\\.com']\nidentity = \"OpenSource\"\n",
         );
@@ -655,19 +659,19 @@ mod tests {
 
         // 未设 → 建议照出。
         let _clear = EnvRestore::remove("PERSONA_NO_CONTEXT");
-        assert!(host_suggestion_line(&config, "git.company.com")
+        assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_some());
         drop(_clear);
         // 空串 = 与未设同义（shell hook 用 [ -z ] 判定）。
         let _empty = EnvRestore::set("PERSONA_NO_CONTEXT", "");
-        assert!(host_suggestion_line(&config, "git.company.com")
+        assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_some());
         drop(_empty);
         // 非空 = 整层关闭。
         let _off = EnvRestore::set("PERSONA_NO_CONTEXT", "1");
-        assert!(host_suggestion_line(&config, "git.company.com")
+        assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
     }
@@ -676,50 +680,62 @@ mod tests {
     async fn host_suggestion_line_blank_host_returns_none() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
         seeded_db(&dir, false).await;
-        with_home_map(&dir, "[host.\"\"]\nidentity = \"OpenSource\"\n");
+        let paths = write_global_map(&dir, "[host.'']\nidentity = \"OpenSource\"\n");
         let config = config_for(&dir);
 
-        assert!(host_suggestion_line(&config, "   ").await.is_none());
-        assert!(host_suggestion_line(&config, "").await.is_none());
+        assert!(host_suggestion_line_for(&config, &paths, "   ")
+            .await
+            .is_none());
+        assert!(host_suggestion_line_for(&config, &paths, "")
+            .await
+            .is_none());
     }
 
     #[tokio::test]
     async fn host_suggestion_line_degrades_silently_on_bad_inputs() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
         seeded_db(&dir, false).await;
         let config = config_for(&dir);
+        let paths = paths_for(&dir);
 
         // 映射文件损坏 → 该层忽略，静默无建议（不崩、不告警外泄）。
-        with_home_map(&dir, "[hosts\nbroken");
-        assert!(host_suggestion_line(&config, "git.company.com")
+        std::fs::write(&paths.global, "[hosts\nbroken").unwrap();
+        assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
         // 映射里写了不存在的分身名 → 无候选。
-        with_home_map(&dir, "[host.'git\\.company\\.com']\nidentity = \"Ghost\"\n");
-        assert!(host_suggestion_line(&config, "git.company.com")
+        std::fs::write(
+            &paths.global,
+            "[host.'git\\.company\\.com']\nidentity = \"Ghost\"\n",
+        )
+        .unwrap();
+        assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
         // 无效正则 → 该条目不命中。
-        with_home_map(&dir, "[host.'[unclosed']\nidentity = \"OpenSource\"\n");
-        assert!(host_suggestion_line(&config, "git.company.com")
+        std::fs::write(
+            &paths.global,
+            "[host.'[unclosed']\nidentity = \"OpenSource\"\n",
+        )
+        .unwrap();
+        assert!(host_suggestion_line_for(&config, &paths, "git.company.com")
             .await
             .is_none());
         // 数据库打不开 → 整条链路降级为无建议，不向调用方上抛。
-        with_home_map(
-            &dir,
+        std::fs::write(
+            &paths.global,
             "[host.'git\\.company\\.com']\nidentity = \"OpenSource\"\n",
-        );
+        )
+        .unwrap();
         let mut broken = config_for(&dir);
         broken.workspace.path = dir.path().join("no-such-dir");
-        assert!(host_suggestion_line(&broken, "git.company.com")
+        assert!(host_suggestion_line_for(&broken, &paths, "git.company.com")
             .await
             .is_none());
     }
@@ -728,21 +744,23 @@ mod tests {
     async fn host_suggestion_line_honors_context_override_env() {
         let _lock = lock_env();
         let dir = TempDir::new().unwrap();
-        let _home = EnvRestore::set("HOME", dir.path());
         let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
         seeded_db(&dir, false).await;
+        let paths = paths_for(&dir);
         // 无映射表：覆盖变量单独成候选（与 `persona context suggest` 同一口径）。
-        let line = host_suggestion_line(&config_for(&dir), "github.com").await;
+        let line = host_suggestion_line_for(&config_for(&dir), &paths, "github.com").await;
         assert!(line.is_none(), "override unset: no candidates without maps");
         let _ovr = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "OpenSource");
-        let line = host_suggestion_line(&config_for(&dir), "github.com")
+        let line = host_suggestion_line_for(&config_for(&dir), &paths, "github.com")
             .await
             .expect("override produces a candidate");
         assert!(line.contains("persona switch OpenSource"));
         // 无效分身名 → 与 suggest 命令一致，不成为候选。
         let _bad = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "Ghost");
-        assert!(host_suggestion_line(&config_for(&dir), "github.com")
-            .await
-            .is_none());
+        assert!(
+            host_suggestion_line_for(&config_for(&dir), &paths, "github.com")
+                .await
+                .is_none()
+        );
     }
 }
