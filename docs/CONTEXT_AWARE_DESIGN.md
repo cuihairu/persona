@@ -6,9 +6,12 @@
 `persona use`（= switch 别名，确认首位建议时审计带 reason）+ 历史学习
 （migration 020 `context_learn`/`context_settings`，默认关，
 `persona context learn on|off|status|clear`，建议权重 0.7、30 天窗口）；
-阶段 3–4 未实现。关联：[核心概念：上下文](src/concepts/context.md)、
-[ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows)、
-`cli/src/commands/ssh.rs` 的 `--identity`（reserved for future use）。
+2026-10-13 阶段 3：`persona ssh run --host` 以目标主机为唯一信号出建议行
+（stderr，只建议不授权），`--identity` 由 reserved 变为 agent 密钥过滤器
+（CLI 先验名存在，agent 按 `PERSONA_AGENT_IDENTITY` fail-closed 只加载
+该分身密钥）；
+阶段 4 未实现。关联：[核心概念：上下文](src/concepts/context.md)、
+[ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows)。
 
 ## 1. 目标与定位
 
@@ -44,16 +47,16 @@ core: ContextService（纯函数，可单测）
 
 ## 3. 上下文信号清单
 
-| 维度   | 信号                                                          | 来源                                      | 可靠性                           | v1 纳入?   |
-| ------ | ------------------------------------------------------------- | ----------------------------------------- | -------------------------------- | ---------- |
-| 终端   | `cwd`                                                         | `std::env::current_dir`                   | 脚本可伪造，但建议不授权所以无害 | ✅         |
-| Git    | `cwd` 上溯到 `.git`，读 `remote origin` → forge 与 owner/repo | shell 调用 git 或 `git2`                  | 高                               | ✅         |
-| 终端   | `hostname`                                                    | `gethostname` / `PERSONA_HOST` 覆盖       | 高（可通过环境变量改，见下）     | ✅         |
-| 终端   | 父进程链（shell 是否交互）                                    | `/proc/<ppid>/comm` 启发式                | 中；交互 TTY 才提示，脚本不打扰  | ⚠️ 阶段 2  |
-| SSH    | Agent 请求的 host / key                                       | 已有 agent 策略输入                       | 高                               | ⚠️ 阶段 3  |
-| 浏览器 | page origin / 每站点默认                                      | 已有 autofillDefaults                     | 高                               | ⚠️ 阶段 4  |
-| 桌面   | 当前窗口/项目                                                 | Tauri 侧                                  | 中                               | ⚠️ 阶段 4  |
-| 设备   | 机器角色（dev-pc / laptop / server）                          | 主机名约定或 `~/.persona/machine-profile` | 用户自声明                       | ✅（可选） |
+| 维度   | 信号                                                          | 来源                                      | 可靠性                           | v1 纳入?     |
+| ------ | ------------------------------------------------------------- | ----------------------------------------- | -------------------------------- | ------------ |
+| 终端   | `cwd`                                                         | `std::env::current_dir`                   | 脚本可伪造，但建议不授权所以无害 | ✅           |
+| Git    | `cwd` 上溯到 `.git`，读 `remote origin` → forge 与 owner/repo | shell 调用 git 或 `git2`                  | 高                               | ✅           |
+| 终端   | `hostname`                                                    | `gethostname` / `PERSONA_HOST` 覆盖       | 高（可通过环境变量改，见下）     | ✅           |
+| 终端   | 父进程链（shell 是否交互）                                    | `/proc/<ppid>/comm` 启发式                | 中；交互 TTY 才提示，脚本不打扰  | ⚠️ 阶段 2    |
+| SSH    | Agent 请求的 host / key                                       | 已有 agent 策略输入                       | 高                               | ✅（阶段 3） |
+| 浏览器 | page origin / 每站点默认                                      | 已有 autofillDefaults                     | 高                               | ⚠️ 阶段 4    |
+| 桌面   | 当前窗口/项目                                                 | Tauri 侧                                  | 中                               | ⚠️ 阶段 4    |
+| 设备   | 机器角色（dev-pc / laptop / server）                          | 主机名约定或 `~/.persona/machine-profile` | 用户自声明                       | ✅（可选）   |
 
 隐私边界：信号全部本地计算，永不外发；建议历史不进同步、不进服务器；
 审计只记「用户确认了哪个建议」（复用已有 switch 审计），不记信号本身。
@@ -135,12 +138,12 @@ cwd/host 信号主要在终端场景价值最大。v1 锁 CLI，把 ContextServi
 
 ## 8. 阶段计划
 
-| 阶段 | 交付                                                                                        | 验收                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ---- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | core `ContextService` + `context.toml` 解析 + `persona suggest [--json]` + `context` 子命令 | 单测：映射命中/无命中/覆盖链/平局/伪造信号；无映射时输出=active **——已实现 2026-10-12（`core/src/context.rs` 30 例 + CLI 8 例；suggest/context 豁免 workspace 要求，可在任意项目目录运行；映射文件损坏按「忽略该层并告警」处理）**                                                                                                                                                                                                                                                      |
-| 2    | shell-hook、交互 TTY 提示、`persona use`、历史学习表（默认关）                              | 双 shell 冒烟；学习开关默认关；审计含 reason **——已实现 2026-10-13（`persona shell-hook [bash\|zsh]` 生成片段经 `bash -n`/`zsh -n` 语法冒烟 + source 直调降级冒烟；`persona suggest --short` 供 PS1；`persona use` = switch 别名，确认首位建议时审计 details 记 "confirmed context suggestion: {reason}"；学习表 migration 020，开关默认关，`persona context learn on/off/status/clear`，记录只存 cwd SHA-256 + 分身名，不进同步；学习候选权重 0.7、30 天窗口，任何映射命中都在其上）** |
-| 3    | SSH host 维度接入、`--identity` 生效                                                        | `ssh -T git@github.com` 场景建议正确；host 策略联动不变                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 4    | 桥协议字段、桌面托盘候选、浏览器建议排序                                                    | 全部入口一致候选；旧扩展（未知字段）不回归                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 阶段 | 交付                                                                                        | 验收                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ---- | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | core `ContextService` + `context.toml` 解析 + `persona suggest [--json]` + `context` 子命令 | 单测：映射命中/无命中/覆盖链/平局/伪造信号；无映射时输出=active **——已实现 2026-10-12（`core/src/context.rs` 30 例 + CLI 8 例；suggest/context 豁免 workspace 要求，可在任意项目目录运行；映射文件损坏按「忽略该层并告警」处理）**                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 2    | shell-hook、交互 TTY 提示、`persona use`、历史学习表（默认关）                              | 双 shell 冒烟；学习开关默认关；审计含 reason **——已实现 2026-10-13（`persona shell-hook [bash\|zsh]` 生成片段经 `bash -n`/`zsh -n` 语法冒烟 + source 直调降级冒烟；`persona suggest --short` 供 PS1；`persona use` = switch 别名，确认首位建议时审计 details 记 "confirmed context suggestion: {reason}"；学习表 migration 020，开关默认关，`persona context learn on/off/status/clear`，记录只存 cwd SHA-256 + 分身名，不进同步；学习候选权重 0.7、30 天窗口，任何映射命中都在其上）**                                                                                                                                                                                                   |
+| 3    | SSH host 维度接入、`--identity` 生效                                                        | `ssh -T git@github.com` 场景建议正确；host 策略联动不变 **——已实现 2026-10-13（`persona ssh run --host` 以目标主机为唯一信号走 ContextService：命中时 stderr 打一行建议（不改 agent 目标主机文件、不改策略评判），`PERSONA_NO_CONTEXT` 非空整层关闭，任何加载失败静默无建议；agent 策略链路未动。`ssh add-to-agent --identity <名>` 先验名存在再 spawn，agent 按 `PERSONA_AGENT_IDENTITY` 只加载该分身的 SSH 密钥、未知名不加载任何密钥（fail-closed）。suggest host 建议 7 例 + agent 过滤 2 例 + CLI 传参/早失败 2 例全绿；实机走查：scratch workspace 中 `--host git.company.com` 出建议行、未知主机静默、opt-out 静默、假 agent 收到过滤器 env、`--identity Ghost` 先失败不 spawn）** |
+| 4    | 桥协议字段、桌面托盘候选、浏览器建议排序                                                    | 全部入口一致候选；旧扩展（未知字段）不回归                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 ## 9. 开放问题
 
