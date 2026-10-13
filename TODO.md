@@ -769,6 +769,9 @@ CLI
       （CSV/Bitwarden JSON），缺文件如实报错）
 - [x] edit/remove identity (完整实现:交互式编辑、字段验证、备份、审计日志)
 - [x] switch (activate/deactivate, history, config persistence)
+      （2026-10-13: `switch --previous` 不再是存根——从审计轨迹解析最近一次
+      WorkspaceEntered 指向的、非当前活跃的身份（跳过已删身份与当前身份），
+      无历史时如实报 "No previous identity recorded yet"）
 - [x] credential CRUD (filters: type/tag/active/favorite)
 - [x] TOTP: setup via QR + code generation
 - [x] password generator options (length, symbol sets, pronounceable)

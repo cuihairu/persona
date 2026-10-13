@@ -10,7 +10,7 @@ use persona_core::context::{cwd_hash, ContextSignals};
 use persona_core::models::{AuditAction, AuditLog, ResourceType};
 use persona_core::storage::ContextLearnRepository;
 use persona_core::{
-    storage::{IdentityRepository, WorkspaceRepository},
+    storage::{AuditLogRepository, IdentityRepository, WorkspaceRepository},
     Database, Repository,
 };
 
@@ -194,9 +194,42 @@ async fn get_current_identity(config: &CliConfig) -> Result<Option<String>> {
     Ok(None)
 }
 
-async fn get_previous_identity(_config: &CliConfig) -> Result<String> {
-    // TODO: implement history; fallback to error for now
-    anyhow::bail!("Previous identity history not available yet")
+/// Resolve the previous identity from the audit trail: the most recent
+/// WorkspaceEntered entry pointing at a live identity other than the one
+/// that is currently active.
+async fn get_previous_identity(config: &CliConfig) -> Result<String> {
+    let current = get_current_identity(config).await?;
+
+    let db_path = config.get_database_path();
+    let db = Database::from_file(&db_path)
+        .await
+        .map_err(|e| anyhow!("Failed to open database: {}", e))?;
+    db.migrate()
+        .await
+        .map_err(|e| anyhow!("Failed to run database migrations: {}", e))?;
+
+    let entries = AuditLogRepository::new(db.clone())
+        .find_by_action(&AuditAction::WorkspaceEntered)
+        .await
+        .map_err(|e| anyhow!("Failed to read audit history: {}", e))?;
+    let irepo = IdentityRepository::new(db);
+    for entry in entries {
+        let Some(id) = entry.identity_id else {
+            continue;
+        };
+        let Some(identity) = irepo
+            .find_by_id(&id)
+            .await
+            .map_err(|e| anyhow!("Failed to fetch identity: {}", e))?
+        else {
+            continue; // identity was deleted since the switch
+        };
+        if Some(&identity.name) == current.as_ref() {
+            continue;
+        }
+        return Ok(identity.name);
+    }
+    anyhow::bail!("No previous identity recorded yet")
 }
 
 async fn select_identity_interactive(config: &CliConfig, ui: &dyn PromptUi) -> Result<String> {
@@ -631,15 +664,24 @@ mod tests {
             .expect_err("unknown identity must fail");
         assert!(err.to_string().contains("Identity 'ghost' not found"));
 
-        // Previous-identity history is not implemented yet.
+        // --previous resolves the last identity that differs from the
+        // current one (bob), i.e. alice, straight from the audit trail.
         let mut prev = switch_args(None, true);
         prev.previous = true;
-        let err = execute(prev, &config)
+        execute(prev, &config)
             .await
-            .expect_err("previous must fail");
-        assert!(err
-            .to_string()
-            .contains("Previous identity history not available"));
+            .expect("previous resolves alice");
+        let ws = repo
+            .find_by_path(&path_str)
+            .await
+            .unwrap()
+            .expect("workspace row survived");
+        let alice = IdentityRepository::new(db)
+            .find_by_name("alice")
+            .await
+            .unwrap()
+            .expect("alice exists");
+        assert_eq!(ws.active_identity_id, Some(alice.id));
 
         // Interactive selection with an empty database reports the hint.
         let empty = TempDir::new().unwrap();
@@ -647,6 +689,28 @@ mod tests {
             .await
             .expect_err("empty selection must fail");
         assert!(err.to_string().contains("No identities found"));
+    }
+
+    #[tokio::test]
+    async fn switch_previous_without_other_history_is_a_clear_error() {
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        let db = seeded_db(&dir, &["alice", "bob"]).await;
+        ensure_workspace_row(&db, &config).await;
+
+        // Only alice was ever entered; every history row matches the
+        // current identity, so there is no previous to return.
+        execute(switch_args(Some("alice"), true), &config)
+            .await
+            .unwrap();
+        let mut prev = switch_args(None, true);
+        prev.previous = true;
+        let err = execute(prev, &config)
+            .await
+            .expect_err("previous must fail");
+        assert!(err
+            .to_string()
+            .contains("No previous identity recorded yet"));
     }
 
     #[tokio::test]
