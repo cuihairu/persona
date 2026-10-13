@@ -25,6 +25,16 @@ Build
 - JS workspaces: `pnpm install`
 - Desktop: `pnpm --filter persona-desktop run dev`
 
+Testing
+
+- Build the whole workspace before running CLI integration tests:
+  `cargo test -p persona-cli` does not rebuild `persona-ssh-agent`, and the
+  SSH agent tests spawn the sibling binary found next to
+  `target/debug/persona`. A stale agent (built before a newer migration
+  landed) fails against fresh databases with a confusing
+  `migration N was previously applied but is missing in the resolved
+  migrations` error.
+
 Contrib
 
 - Follow Rust 2021 edition style; run `cargo fmt && cargo clippy`
