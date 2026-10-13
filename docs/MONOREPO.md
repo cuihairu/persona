@@ -33,7 +33,7 @@ Testing
   `target/debug/persona`. A stale agent (built before a newer migration
   landed) fails against fresh databases with a confusing
   `migration N was previously applied but is missing in the resolved
-  migrations` error.
+migrations` error.
 
 Contrib
 
