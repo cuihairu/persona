@@ -9,7 +9,7 @@
 - [ ] OS 自动填充集成：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello）同属此缺口。解锁条件：需对应平台机器（iOS=macOS+Xcode、鸿蒙=DevEco），本机 Linux 无环境
 - [ ] 桌面应用级填充：Windows 桌面应用内的填充注入（现状仅浏览器桥）。解锁条件：需 Windows 桌面会话实机验收
 - [ ] Web 端：1Password.com 形态的浏览器端（低优先，出现真实需求再评估）
-- [ ] M5 浏览器插件接账号：插件登录账号 → 读写云端保险库（HTTP 直连 server 出 native messaging 桥）、离线可用（本地缓存兜底）、同步冲突解决；chromium 与 safari 两份。批1（桥发云参数 + 插件 HTTP 直连读）已落地 2026-10-07
+- [ ] M5 浏览器插件接账号（Safari 侧）：Swift 宿主端实现桥协议 v7（报文 → `persona bridge` 子进程封装）。解锁条件：需 macOS+Xcode 实机（挂起待实机批次，docs/BRIDGE_PROTOCOL.md §20 + browser/safari-extension/README.md）
 - [ ] KDF 参数评审决策点：PBKDF2-HMAC-SHA256 主密钥派生 100k 低于 OWASP 现行 600k 建议（1Password 650k）；Argon2id 各路径恰在/高于下限（维持）。待用户拍板：是否升 600k（re-wrap 迁移）/惰性升级或显式迁移命令/Argon2id 同批上浮；拍板前参数不动（docs/review/2026-10-12-kdf-parameter-review.md）
 - [ ] Windows 实机测试与优化：编译层（x86_64-pc-windows-gnu 全绿）与 CI 守卫（rust-windows + rust-windows-desktop job）已收口，缺实机行为验收
 - [ ] SCIM/SSO bridging（future）
@@ -63,6 +63,7 @@
 
 ### Browser
 
+- [x] M5 浏览器插件接账号（chromium）：sync_connect 桥发云参数 + HTTP 直连读（批1）；account_login/status/logout 账号域三件套 + sync_push_now 云端写路径 + sync_resolve_conflict（批2/3，桥协议 v7）；密文缓存离线兜底（批4a）2026-10-07 `e4ee9af`（桥侧门禁/错误分类 + 扩展侧测试，CI 全绿）
 - [x] Browser extension skeleton（autofill + domain rules）
 - [x] Safari WebExtension host shell（Swift bridge + manifest 同步）
 - [x] Chrome/Chromium 扩展 Native Messaging + 本地服务桥
