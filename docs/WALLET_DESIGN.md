@@ -26,6 +26,7 @@
 | keystore v3    | `crypto/wallet_encryption.rs`                                                                               | scrypt(n=2^18,r=8,p=1)/pbkdf2 + AES-128-CTR + keccak MAC；导入 256MiB 内存上限、常数时间 MAC 比较；geth 规范向量锁定 |
 | 派生路径       | `recommended_derivation_path`（BTC `m/44'/0'/{a}'/0`、ETH `m/44'/60'/{a}'/0`、Solana `m/44'/501'/{a}'/0'`） | BIP-84/86 目前只是 `BipVersion` 类型与 path builder（测试向量覆盖），**未进默认流程**；BTC 地址生成现仅 P2WPKH       |
 | 签名           | `crypto/transaction_signing.rs`                                                                             | ETH EIP-155/1559（alloy）、BTC BIP-143 P2WPKH（rust-bitcoin）、Solana ed25519（调用方供序列化消息）                  |
+| PSBT           | `crypto/transaction_psbt.rs`                                                                                | BIP-174 单签 P2WPKH export/sign/finalize（finalize 自写）；CLI `wallet export-psbt/sign-psbt/finalize-psbt`          |
 
 ## 2. 密钥层级（定案）
 
@@ -141,8 +142,11 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
 
 - **硬件钱包**（Ledger/Trezor）：`WalletType::Hardware` 类型已预留；
   是否进主线待用户裁定（ROADMAP M5 open question）。
-- **PSBT 工作流**：BTC 多方签名/离线签名依赖 BIP-174；现 BTC 只有
-  单签 P2WPKH 直签。另列。
+- **PSBT 工作流**：**单签切片已落地（2026-10-13）**——`export-psbt` /
+  `sign-psbt` / `finalize-psbt`（BIP-174，单签 P2WPKH，core
+  `crypto/transaction_psbt.rs`；finalize 自写，rust-bitcoin 无 finalizer；
+  直签与 PSBT 路径产物字节级一致由回归锚锁定）。仍开放：多方
+  `Psbt::combine` 合签、桌面 UI 臂。
 - **桌面端 keystore 臂**：~~`import_wallet_from_request`/`export_wallet_from_request`
   尚无 keystore 分支~~ **已补齐（2026-10-13）**：桌面 `wallet import/export`
   均支持 `keystore`（导出 geth 默认参数；导入解出私钥后走存储包装），
@@ -160,6 +164,12 @@ persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），
   salt/nonce + 错旧口令拒绝）；CLI `persona wallet passwd` 集成 4 例
   （双 blob 轮换后新口令可解/旧口令失效且 salt/nonce 已换、错旧口令
   报错且原行不动、watch_only 拒绝、同口令/弱口令拒绝）。
+- PSBT：`psbt_roundtrip_matches_direct_signing`（直签 vs
+  export→sign→finalize 字节级一致，RFC-6979 确定性锚）；export 确定性/
+  可反序列化/字段完备 + txid 不变量；signed 逐输入 partial_sigs 形状 +
+  幂等重签；异钥拒绝（sign）；未签/异钥签名集拒绝（finalize）；magic
+  校验 + inputs metadata 契约复用；CLI 集成 3 例（roundtrip wiring、
+  防投毒/网络门、watch-only·异钥·坏 base64 拒绝）。
 - 篡改路径：keystore 密文篡改 MAC 拒绝、超大 scrypt work factor 拒绝、
   不支持 KDF/cipher/prf 拒绝。
 - 防投毒：core 启发式 7 例（命中/同址豁免/部分匹配拒绝/base58 保守/

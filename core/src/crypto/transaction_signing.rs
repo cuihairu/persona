@@ -489,10 +489,10 @@ const MAX_MONEY_SATS: u64 = 2_100_000_000_000_000;
 
 /// A segwit transaction input as provided by the caller.
 #[derive(Debug, Clone)]
-struct BtcInput {
+pub(crate) struct BtcInput {
     outpoint: OutPoint,
     /// Prevout value in satoshis (required by BIP-143).
-    amount: u64,
+    pub(crate) amount: u64,
     sequence: Sequence,
 }
 
@@ -591,15 +591,19 @@ fn script_pubkey_for_address(address: &str) -> PersonaResult<ScriptBuf> {
 
 /// The P2WPKH output script (`OP_0 <20-byte key hash>`) whose script code
 /// BIP-143 derives when signing.
-fn p2wpkh_output_script(pubkey_hash: &[u8; 20]) -> ScriptBuf {
+pub(crate) fn p2wpkh_output_script(pubkey_hash: &[u8; 20]) -> ScriptBuf {
     let mut bytes = Vec::with_capacity(22);
     bytes.extend_from_slice(&[0x00, 0x14]);
     bytes.extend_from_slice(pubkey_hash);
     ScriptBuf::from_bytes(bytes)
 }
 
-/// Build the broadcastable segwit (BIP-141) transaction spending the given
-/// P2WPKH prevouts, signed with SIGHASH_ALL.
+/// Shared P2WPKH spend construction for the direct-sign
+/// ([`build_bitcoin_raw_transaction`]) and PSBT
+/// ([`crate::crypto::transaction_psbt`]) paths: parse the UTXO inputs,
+/// validate `from_address` as a native P2WPKH output (optionally pinned to
+/// the signing key's hash), and assemble the unsigned transaction per the
+/// metadata contract below.
 ///
 /// Metadata contract:
 /// - `inputs`: JSON array of `{txid, vout, amount}` (satoshis)
@@ -609,13 +613,11 @@ fn p2wpkh_output_script(pubkey_hash: &[u8; 20]) -> ScriptBuf {
 /// - `locktime`: optional u32 (default 0); `rbf`: "true" enables BIP-125
 ///   replace-by-fee signalling.
 ///
-/// Only P2WPKH inputs (native segwit, BIP-84 addresses) can be signed.
-/// `from_address` must be the address of the signing key.
-pub fn build_bitcoin_raw_transaction(
+/// Returns `(unsigned transaction, parsed inputs, from_address witness script)`.
+pub(crate) fn build_p2wpkh_transaction(
     request: &TransactionRequest,
-    signing_key: &SigningKey,
-) -> PersonaResult<RawSignedTransaction> {
-    use crate::crypto::address_generator::hash160;
+    expected_pubkey_hash: Option<&[u8; 20]>,
+) -> PersonaResult<(Transaction, Vec<BtcInput>, ScriptBuf)> {
     use crate::crypto::bech32::decode_witness_address;
 
     let inputs = parse_btc_inputs(request)?;
@@ -630,13 +632,13 @@ pub fn build_bitcoin_raw_transaction(
         ));
     }
 
-    // Guard against signing away funds from an address we don't control.
-    let pubkey = secp_compressed_pubkey(signing_key);
-    let pubkey_hash = hash160(&pubkey);
-    if pubkey_hash != program.as_slice() {
-        return Err(PersonaError::InvalidInput(
-            "from_address does not match the signing key".to_string(),
-        ));
+    // Guard against spending funds from an address we don't control.
+    if let Some(expected) = expected_pubkey_hash {
+        if *expected != program.as_slice() {
+            return Err(PersonaError::InvalidInput(
+                "from_address does not match the signing key".to_string(),
+            ));
+        }
     }
 
     let send_amount = parse_satoshis(&request.amount, "amount")?;
@@ -689,7 +691,7 @@ pub fn build_bitcoin_raw_transaction(
         }
     }
 
-    let mut tx = Transaction {
+    let tx = Transaction {
         version: Version::TWO,
         lock_time: LockTime::from_consensus(locktime),
         input: inputs
@@ -704,9 +706,30 @@ pub fn build_bitcoin_raw_transaction(
         output: outputs,
     };
 
+    let mut program20 = [0u8; 20];
+    program20.copy_from_slice(&program);
+    let witness_script = p2wpkh_output_script(&program20);
+    Ok((tx, inputs, witness_script))
+}
+
+/// Build the broadcastable segwit (BIP-141) transaction spending the given
+/// P2WPKH prevouts, signed with SIGHASH_ALL.
+///
+/// Only P2WPKH inputs (native segwit, BIP-84 addresses) can be signed.
+/// `from_address` must be the address of the signing key.
+pub fn build_bitcoin_raw_transaction(
+    request: &TransactionRequest,
+    signing_key: &SigningKey,
+) -> PersonaResult<RawSignedTransaction> {
+    use crate::crypto::address_generator::hash160;
+
+    let pubkey = secp_compressed_pubkey(signing_key);
+    let pubkey_hash = hash160(&pubkey);
+
+    let (mut tx, inputs, witness_script) = build_p2wpkh_transaction(request, Some(&pubkey_hash))?;
+
     // Sign each input (BIP-143 P2WPKH, SIGHASH_ALL) via rust-bitcoin's
     // sighash implementation.
-    let witness_script = p2wpkh_output_script(&pubkey_hash);
     let mut witnesses = Vec::with_capacity(inputs.len());
     {
         let mut cache = SighashCache::new(&mut tx);

@@ -1,13 +1,14 @@
 use crate::utils::prompt::{PromptUi, TerminalUi};
 use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use anyhow::{anyhow, bail, Context, Result};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use clap::{Args, Subcommand};
 use colored::*;
 use persona_core::{
     crypto::{
         build_raw_transaction, change_mnemonic_password, change_wallet_password, sign_transaction,
         signing_key_for_address, verify_ethereum_transaction, verify_solana_transaction,
-        EncryptedMnemonic, EncryptedWalletKey,
+        EncryptedMnemonic, EncryptedWalletKey, WalletSigningKey,
     },
     models::wallet::{
         AddressType, BipVersion, BlockchainNetwork, CryptoWallet, SignedTransaction,
@@ -202,6 +203,45 @@ pub enum WalletCommand {
     Passwd {
         /// Wallet ID or name
         wallet_identifier: String,
+    },
+    /// Export an unsigned Bitcoin PSBT (BIP-174) for offline signing
+    ExportPsbt {
+        /// Wallet ID or name
+        wallet_identifier: String,
+
+        /// Recipient address
+        to: String,
+
+        /// Amount in satoshis
+        amount: String,
+
+        /// Fee in satoshis
+        fee: String,
+
+        /// UTXOs to spend as a JSON array of {txid, vout, amount}
+        #[arg(long)]
+        inputs: String,
+
+        /// Change address for the remainder (inputs - amount - fee)
+        #[arg(long)]
+        change_address: Option<String>,
+
+        /// Confirm a recipient that mimics a known address (address-poisoning check)
+        #[arg(long)]
+        confirm_poisoning_check: bool,
+    },
+    /// Sign a Bitcoin PSBT's inputs with this wallet's key
+    SignPsbt {
+        /// Wallet ID or name
+        wallet_identifier: String,
+
+        /// Base64-encoded PSBT
+        psbt: String,
+    },
+    /// Finalize a signed Bitcoin PSBT into the raw broadcastable transaction
+    FinalizePsbt {
+        /// Base64-encoded PSBT
+        psbt: String,
     },
     /// Add address to wallet
     AddAddress {
@@ -790,6 +830,48 @@ pub(crate) async fn handle_wallet_with(
             execute_passwd(&repo, &wallet_identifier, config, ui, &formatter).await?;
         }
 
+        WalletCommand::ExportPsbt {
+            wallet_identifier,
+            to,
+            amount,
+            fee,
+            inputs,
+            change_address,
+            confirm_poisoning_check,
+        } => {
+            let psbt = run_export_psbt(
+                &repo,
+                &wallet_identifier,
+                &to,
+                &amount,
+                &fee,
+                &inputs,
+                change_address.as_deref(),
+                confirm_poisoning_check,
+            )
+            .await?;
+            formatter.print_info("Unsigned PSBT (base64, BIP-174):");
+            println!("{}", BASE64.encode(&psbt));
+        }
+
+        WalletCommand::SignPsbt {
+            wallet_identifier,
+            psbt,
+        } => {
+            let signed = run_sign_psbt(&repo, &wallet_identifier, &psbt, config, ui).await?;
+            formatter.print_info("Signed PSBT (base64):");
+            println!("{}", BASE64.encode(&signed));
+            formatter.print_info("Finalize with: persona wallet finalize-psbt <psbt>");
+        }
+
+        WalletCommand::FinalizePsbt { psbt } => {
+            let bytes = decode_psbt_input(&psbt)?;
+            let finalized = persona_core::crypto::finalize_bitcoin_psbt(&bytes)?;
+            formatter.print_success(&format!("Finalized transaction {}", finalized.hash));
+            formatter.print_info("Raw transaction (hex, not broadcast):");
+            println!("{}", hex::encode(&finalized.raw));
+        }
+
         WalletCommand::AddAddress {
             wallet_id,
             address,
@@ -1368,6 +1450,125 @@ async fn execute_passwd(
 
     formatter.print_success(&format!("Wallet password changed for '{}'", updated.name));
     Ok(())
+}
+
+/// Decode a base64-encoded PSBT artifact (`wallet sign-psbt` / `finalize-psbt`).
+fn decode_psbt_input(psbt_b64: &str) -> Result<Vec<u8>> {
+    BASE64
+        .decode(psbt_b64.trim())
+        .context("Invalid base64 PSBT input")
+}
+
+/// `persona wallet export-psbt` — build the unsigned BIP-174 artifact for a
+/// single-sig P2WPKH spend (WALLET_DESIGN.md §7). Needs no wallet password:
+/// no key material is touched, so watch-only wallets can prepare it for an
+/// airgapped signer. The address-poisoning check applies (the PSBT is a
+/// spend authorization), same backend enforcement as the signing path.
+#[allow(clippy::too_many_arguments)]
+async fn run_export_psbt(
+    repo: &CryptoWalletRepository,
+    wallet_identifier: &str,
+    to: &str,
+    amount: &str,
+    fee: &str,
+    inputs: &str,
+    change_address: Option<&str>,
+    confirmed_poisoning_check: bool,
+) -> Result<Vec<u8>> {
+    let wallet = find_wallet_by_identifier(repo, wallet_identifier).await?;
+    if wallet.network != BlockchainNetwork::Bitcoin {
+        bail!("PSBT export is only supported for Bitcoin wallets");
+    }
+    let from_address = wallet
+        .addresses
+        .first()
+        .map(|a| a.address.clone())
+        .ok_or_else(|| anyhow!("Wallet '{}' has no addresses", wallet.name))?;
+
+    let known_addresses: Vec<String> = wallet.addresses.iter().map(|a| a.address.clone()).collect();
+    persona_core::crypto::enforce_poisoning_check(to, &known_addresses, confirmed_poisoning_check)
+        .with_context(|| format!("Address-poisoning check refused '{to}'"))?;
+
+    let mut metadata = std::collections::HashMap::new();
+    metadata.insert("inputs".to_string(), inputs.to_string());
+    if let Some(change) = change_address {
+        metadata.insert("change_address".to_string(), change.to_string());
+    }
+
+    let request = TransactionRequest {
+        id: uuid::Uuid::new_v4(),
+        wallet_id: wallet.id,
+        network: wallet.network.clone(),
+        from_address,
+        to_address: to.to_string(),
+        amount: amount.to_string(),
+        fee: fee.to_string(),
+        gas_price: None,
+        gas_limit: None,
+        nonce: None,
+        memo: None,
+        raw_transaction_data: None,
+        required_signatures: 1,
+        created_at: chrono::Utc::now(),
+        expires_at: None,
+        metadata,
+    };
+    persona_core::crypto::export_bitcoin_psbt(&request).context("Failed to build PSBT")
+}
+
+/// `persona wallet sign-psbt` — sign every input owned by this wallet
+/// (single-sig: one key must own all inputs), returning the signed PSBT.
+async fn run_sign_psbt(
+    repo: &CryptoWalletRepository,
+    wallet_identifier: &str,
+    psbt_b64: &str,
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+) -> Result<Vec<u8>> {
+    let wallet = find_wallet_by_identifier(repo, wallet_identifier).await?;
+    if wallet.watch_only {
+        bail!(
+            "Watch-only wallets hold no key material; \
+             sign the PSBT on the key-holding wallet"
+        );
+    }
+    if wallet.addresses.is_empty() {
+        bail!("Wallet '{}' has no addresses", wallet.name);
+    }
+
+    let password = if config.ui.interactive {
+        ui.password("Enter wallet password to sign the PSBT:", false, None)?
+    } else {
+        std::env::var("PERSONA_WALLET_PASSWORD")
+            .context("PERSONA_WALLET_PASSWORD must be set in non-interactive mode")?
+    };
+
+    let psbt_bytes = decode_psbt_input(psbt_b64)?;
+
+    // 单签口径：钱包的任一地址的钥必须持有全部输入。第一把钥失败（错
+    // 口令派生不出任何钥）直接终止；其余钥逐把尝试，按 witness script
+    // 归属校验（核心侧强制）。
+    let first_address = &wallet.addresses[0].address;
+    let first_key = signing_key_for_address(&wallet, &password, first_address)
+        .map_err(|e| anyhow!("Failed to derive signing key (wrong password?): {e}"))?;
+    let mut keys = vec![first_key];
+    for address in wallet.addresses.iter().skip(1) {
+        if let Ok(key) = signing_key_for_address(&wallet, &password, &address.address) {
+            keys.push(key);
+        }
+    }
+
+    let mut last_err = String::new();
+    for key in &keys {
+        let WalletSigningKey::Secp256k1(secp_key) = key else {
+            continue;
+        };
+        match persona_core::crypto::sign_bitcoin_psbt(&psbt_bytes, secp_key) {
+            Ok(signed) => return Ok(signed),
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    bail!("No wallet key owns all PSBT inputs ({last_err})")
 }
 
 async fn init_wallet_repository(config: &CliConfig) -> Result<CryptoWalletRepository> {
@@ -3525,6 +3726,300 @@ mod integration {
         .await
         .expect_err("short password must be refused");
         assert!(err.to_string().contains("at least 8 characters"));
+    }
+
+    const PSBT_INPUTS_JSON: &str = r#"[
+        {"txid":"1111111111111111111111111111111111111111111111111111111111111111","vout":0,"amount":"100000"},
+        {"txid":"2222222222222222222222222222222222222222222222222222222222222222","vout":1,"amount":"200000"}
+    ]"#;
+
+    fn psbt_export_args(wallet: &str, to: &str, confirm: bool) -> WalletArgs {
+        WalletArgs {
+            command: WalletCommand::ExportPsbt {
+                wallet_identifier: wallet.to_string(),
+                to: to.to_string(),
+                amount: "280000".to_string(),
+                fee: "20000".to_string(),
+                inputs: PSBT_INPUTS_JSON.to_string(),
+                change_address: None,
+                confirm_poisoning_check: confirm,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn psbt_export_sign_finalize_roundtrip() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = true;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let password = "psbt-pass-123";
+
+        let wallet = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "psbt-wallet".to_string(),
+            "619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9",
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        assert!(wallet.addresses[0].address.starts_with("bc1q"));
+        insert_wallet(&config, &wallet).await;
+        let to = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string();
+
+        // Export through the command arm (wiring), then through the helper
+        // for the bytes (content): both must agree.
+        let repo = init_wallet_repository(&config).await.unwrap();
+        handle_wallet_with(
+            psbt_export_args("psbt-wallet", &to, false),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("psbt export wiring must succeed");
+        let unsigned = run_export_psbt(
+            &repo,
+            "psbt-wallet",
+            &to,
+            "280000",
+            "20000",
+            PSBT_INPUTS_JSON,
+            None,
+            false,
+        )
+        .await
+        .expect("psbt export helper must succeed");
+        let unsigned_again = run_export_psbt(
+            &repo,
+            "psbt-wallet",
+            &to,
+            "280000",
+            "20000",
+            PSBT_INPUTS_JSON,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(unsigned, unsigned_again, "export must be deterministic");
+
+        // Sign via the command arm needs no captured output; use the helper
+        // for the bytes and chain them into finalize.
+        let signed = run_sign_psbt(
+            &repo,
+            "psbt-wallet",
+            &BASE64.encode(&unsigned),
+            &config,
+            &ScriptedUi::new().password(password),
+        )
+        .await
+        .expect("psbt sign must succeed");
+        assert_ne!(signed, unsigned, "signing must change the PSBT");
+
+        // Deterministic signing (RFC-6979): same inputs → same artifact.
+        let signed_again = run_sign_psbt(
+            &repo,
+            "psbt-wallet",
+            &BASE64.encode(&unsigned),
+            &config,
+            &ScriptedUi::new().password(password),
+        )
+        .await
+        .unwrap();
+        assert_eq!(signed, signed_again);
+
+        // Finalize via the command arm wiring; via the core path for content.
+        handle_wallet_with(
+            WalletArgs {
+                command: WalletCommand::FinalizePsbt {
+                    psbt: BASE64.encode(&signed),
+                },
+            },
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .expect("finalize wiring must succeed");
+        let finalized = persona_core::crypto::finalize_bitcoin_psbt(&signed).unwrap();
+        assert_eq!(finalized.hash.len(), 64);
+        assert!(!finalized.raw.is_empty());
+    }
+
+    #[tokio::test]
+    async fn psbt_export_enforces_poisoning_and_network_gates() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = true;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+
+        // Non-Bitcoin wallet is refused outright.
+        let eth = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "eth-only".to_string(),
+            "4f3edf983ac636a65a842ce7c78d9aa706d3b113bce036f9b14da7c84f0f4f6b",
+            BlockchainNetwork::Ethereum,
+            "psbt-pass-123",
+        )
+        .unwrap();
+        insert_wallet(&config, &eth).await;
+        let err = run_export_psbt(
+            &init_wallet_repository(&config).await.unwrap(),
+            "eth-only",
+            "0x3535353535353535353535353535353535353535",
+            "280000",
+            "20000",
+            PSBT_INPUTS_JSON,
+            None,
+            false,
+        )
+        .await
+        .expect_err("non-Bitcoin export must be refused");
+        assert!(err.to_string().contains("only supported for Bitcoin"));
+
+        // A spoofed recipient is refused before any artifact is built.
+        let btc = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "btc-spoofed".to_string(),
+            "619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9",
+            BlockchainNetwork::Bitcoin,
+            "psbt-pass-123",
+        )
+        .unwrap();
+        insert_wallet(&config, &btc).await;
+        let own = btc.addresses[0].address.clone();
+        let spoof = format!(
+            "{}{}{}",
+            &own[..6],
+            "q".repeat(own.len() - 12),
+            &own[own.len() - 6..]
+        );
+        let err = run_export_psbt(
+            &init_wallet_repository(&config).await.unwrap(),
+            "btc-spoofed",
+            &spoof,
+            "280000",
+            "20000",
+            PSBT_INPUTS_JSON,
+            None,
+            false,
+        )
+        .await
+        .expect_err("spoofed recipient must be refused");
+        assert!(err.to_string().contains("Address-poisoning check refused"));
+    }
+
+    #[tokio::test]
+    async fn psbt_sign_rejects_watch_only_foreign_psbt_and_bad_base64() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_WALLET_PASSWORD");
+
+        let dir = TempDir::new().unwrap();
+        let mut config = config_for(&dir);
+        config.ui.interactive = true;
+        let identity_id = seed_identity_get_id(&dir, "alice").await;
+        let password = "psbt-pass-123";
+
+        let wallet = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "btc-signer".to_string(),
+            "619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9",
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &wallet).await;
+        let repo = init_wallet_repository(&config).await.unwrap();
+
+        // Bad base64.
+        let err = run_sign_psbt(
+            &repo,
+            "btc-signer",
+            "!!!not base64!!!",
+            &config,
+            &ScriptedUi::new().password(password),
+        )
+        .await
+        .expect_err("bad base64 must be refused");
+        assert!(err.to_string().contains("Invalid base64 PSBT"));
+
+        // Wrong password fails at key derivation, before the PSBT is touched.
+        let to = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4".to_string();
+        let unsigned = run_export_psbt(
+            &repo,
+            "btc-signer",
+            &to,
+            "280000",
+            "20000",
+            PSBT_INPUTS_JSON,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        let err = run_sign_psbt(
+            &repo,
+            "btc-signer",
+            &BASE64.encode(&unsigned),
+            &config,
+            &ScriptedUi::new().password("wrong-pass-1"),
+        )
+        .await
+        .expect_err("wrong password must be refused");
+        assert!(err.to_string().contains("wrong password?"));
+
+        // A PSBT from a foreign key is refused by ownership.
+        let stranger = persona_core::crypto::import_from_private_key(
+            identity_id,
+            "btc-stranger".to_string(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            BlockchainNetwork::Bitcoin,
+            password,
+        )
+        .unwrap();
+        insert_wallet(&config, &stranger).await;
+        let repo2 = init_wallet_repository(&config).await.unwrap();
+        let err = run_sign_psbt(
+            &repo2,
+            "btc-stranger",
+            &BASE64.encode(&unsigned),
+            &config,
+            &ScriptedUi::new().password(password),
+        )
+        .await
+        .expect_err("foreign PSBT must be refused");
+        assert!(err
+            .to_string()
+            .contains("No wallet key owns all PSBT inputs"));
+
+        // Watch-only wallets refuse to sign.
+        let mut watcher = CryptoWallet::new(
+            identity_id,
+            "psbt-watcher".to_string(),
+            BlockchainNetwork::Bitcoin,
+            persona_core::models::wallet::WalletType::SingleAddress,
+            vec![],
+        );
+        watcher.watch_only = true;
+        watcher.extended_public_key = Some("xpub661MyMwAqRbcFW31YEwpkMuc5THy2PSt5bDHsk3PeQXtoy3xsj5BfuDGLJbl26NZf8Koc1tSNevURNWrqzEMBEq9VXdGiJZzhyTNt7ESChi".to_string());
+        insert_wallet(&config, &watcher).await;
+        let err = run_sign_psbt(
+            &repo,
+            "psbt-watcher",
+            &BASE64.encode(&unsigned),
+            &config,
+            &ScriptedUi::new().password(password),
+        )
+        .await
+        .expect_err("watch-only sign must be refused");
+        assert!(err
+            .to_string()
+            .contains("Watch-only wallets hold no key material"));
     }
 
     #[tokio::test]

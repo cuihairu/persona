@@ -926,7 +926,7 @@ Wallet Material (experimental — deferred until 1Password parity; see priority 
 - [x] Address encoding: BIP‑173 bech32 / BIP‑350 bech32m (P2WPKH/P2WSH/P2TR)、Base58Check、EIP‑55 checksum
 - [x] Import (mnemonic/private key) & export with confirmations; WIF 已支持（mainnet compressed，`import --wif` 及私钥导入自动识别）；keystore JSON 已支持（2026-10-13: Web3 Secret Storage v3 标准 scrypt/pbkdf2，geth 规范向量锁定，CLI `--format keystore` 双向）
 - [x] Sign: ETH (EIP‑155 legacy + EIP‑1559 dynamic fee, 字节级规范向量/结构自洽验证)、Solana (ed25519, 签名即 tx id)；本地签名验证后再持久化；后端防投毒强制（2026-10-13: core `crypto/address_poisoning.rs` 首 6+末 6 字符启发式，CLI `create-transaction --sign` 口令 prompt 前拦截、需 `--confirm-poisoning-check` 放行，桌面 `wallet_sign_transaction` 同口径 + 确认弹窗二次确认 ack）
-- [x] Sign: BTC raw transaction (BIP‑143 P2WPKH + BIP‑141 segwit 组装, 官方规范向量逐字节验证) — 需 UTXO `inputs` metadata；无 inputs 时仅存审计签名；PSBT 仍待做
+- [x] Sign: BTC raw transaction (BIP‑143 P2WPKH + BIP‑141 segwit 组装, 官方规范向量逐字节验证) — 需 UTXO `inputs` metadata；无 inputs 时仅存审计签名；PSBT 单签切片已补（2026-10-13: BIP‑174 export/sign/finalize，CLI `wallet export-psbt/sign-psbt/finalize-psbt`，直签与 PSBT 路径字节级一致锚定；多方 combine/桌面 UI 仍开放）
 - [x] 签名/编码层全面换用审计过的第三方库：交易序列化与签名哈希 → `alloy-consensus`（EVM）/ `rust-bitcoin`（BTC，`SighashCache::p2wpkh_signature_hash`）、地址编码 → `bech32` crate（BIP‑173/350）/ `bs58`(check) / `alloy-primitives`（EIP‑55）、WIF 解析 → `rust-bitcoin`；手写 RLP/BIP‑143/wire 组装已删除，官方规范向量保留作回归验证（SLIP‑0010 ed25519 派生暂无成熟库，保留自行开发）
 - [x] CLI: wallet create/import/derive/list/sign (`create-transaction --sign`)；`wallet passwd` 口令轮换已补（2026-10-13: 原子 re-wrap 私钥+助记词两份包装（fresh salt/nonce，先解后写、错旧口令不动原行），新口令仅交互输入与 `persona passwd` 同规，watch_only 拒绝）
 - [x] Desktop: wallet overview, address lists, QR, signing confirmations

@@ -18,6 +18,7 @@ pub mod ssh_generate;
 pub mod sshsig;
 pub mod steam;
 pub mod totp;
+pub mod transaction_psbt;
 pub mod transaction_signing;
 pub mod wallet_crypto;
 pub mod wallet_encryption;
@@ -35,6 +36,7 @@ pub use passkey::*;
 // 太容易撞语义；调用方走 `crypto::sshsig::` 限定路径。
 pub use steam::*;
 pub use totp::*;
+pub use transaction_psbt::*;
 pub use transaction_signing::*;
 pub use wallet_crypto::*;
 pub use wallet_encryption::*;
