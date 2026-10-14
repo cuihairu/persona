@@ -9,15 +9,21 @@
 //! 符号命名对应：`Java_com_persona_mobile_PersonaBridge_<method>`。
 //!
 //! 导出签名铁律（2026-10-11 实机走查实锤，String 出参曾恒为 null——NPE 崩溃
-//! aa771f4 只治了症状）：`JNIEnv` 是 `#[repr(transparent)]` 裸指针包装，
-//! 导出函数必须**按值**收 `JNIEnv`（写 `&mut JNIEnv` 会变成双重间接，一切
-//! 经 env 的出参都废）；内部 helper 收 `&mut JNIEnv` 引用则没问题。
-
+//! aa771f4 只治了症状）：`EnvUnowned` 是 `#[repr(transparent)]` 裸指针包装，
+//! 导出函数必须**按值**收 `EnvUnowned`（写 `&mut EnvUnowned` 会变成双重间接，
+//! 一切经 env 的出参都废）；内部 helper 收 `&mut Env` 引用则没问题。
+//!
+//! jni 0.22 把旧 `JNIEnv` 拆成 `Env`（环境句柄）与 `EnvUnowned`（裸指针，旧
+//! 名沦为 deprecated 别名）：`new_string`/`try_to_string` 只挂在 `Env` 上。
+//! 导出函数体必须经 `EnvUnowned::with_env` 换到 `&mut Env`——不创建新 JNI
+//! 栈帧，闭包由 `catch_unwind` 包住不会 unwind 进 JVM。`run_in_env` 收掉这层
+//! 样板，且闭包内错误不会丢（映射为可解析的降级 JSON，而不是把 null 递给
+//! Kotlin）。
 use std::ffi::{CStr, CString};
 
 use jni::objects::{JClass, JString};
 use jni::sys::{jboolean, jint, jstring};
-use jni::JNIEnv;
+use jni::{Env, EnvUnowned};
 
 use super::PersonaResult;
 
@@ -26,8 +32,23 @@ use super::PersonaResult;
 /// 错误，2026-10-03 走查实锤的崩溃路径之一）。
 const JNI_DEGRADED_JSON: &str = "{\"success\":false,\"error\":\"jni bridge degraded\"}";
 
+/// 在 JNI 栈帧内取到 `&mut Env` 执行闭包（见模块文档的 jni 0.22 说明）。
+/// 闭包本身不返回错误——字符串降级路径在闭包内完成，这里只做搬运。
+fn run_in_env(env: &mut EnvUnowned, f: impl FnOnce(&mut Env) -> jstring) -> jstring {
+    match env
+        .with_env(|e: &mut Env| -> Result<jstring, jni::errors::Error> {
+            let value = f(e);
+            Ok(value)
+        })
+        .into_outcome()
+    {
+        jni::Outcome::Ok(value) => value,
+        _ => std::ptr::null_mut(),
+    }
+}
+
 /// 把 PersonaResult 转成 JSON jstring；error_message 消费后归还。
-fn result_to_json(env: &mut JNIEnv, result: PersonaResult) -> jstring {
+fn result_to_json(env: &mut Env, result: PersonaResult) -> jstring {
     let error = if result.error_message.is_null() {
         None
     } else {
@@ -59,24 +80,22 @@ fn result_to_json(env: &mut JNIEnv, result: PersonaResult) -> jstring {
 }
 
 /// 入参 jstring → CString（拷出 owned），失败时返回 None 并记错误消息。
-fn jstring_to_cstring(env: &mut JNIEnv, input: &JString) -> Result<CString, String> {
-    let owned = env
-        .get_string(input)
-        .map_err(|_| "failed to read JNI string argument".to_string())?
-        .to_string_lossy()
-        .into_owned();
+fn jstring_to_cstring(env: &mut Env, input: &JString) -> Result<CString, String> {
+    let owned = input
+        .try_to_string(env)
+        .map_err(|_| "failed to read JNI string argument".to_string())?;
     CString::new(owned).map_err(|_| "argument contains interior NUL".to_string())
 }
 
 /// 入参非法时的统一 JSON 错误出参。
-fn arg_error(env: &mut JNIEnv, message: &str) -> jstring {
+fn arg_error(env: &mut Env, message: &str) -> jstring {
     let result = PersonaResult::error(message);
     result_to_json(env, result)
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaInit(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
 ) -> jint {
     super::persona_init()
@@ -84,7 +103,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaInit(
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaVersion(
-    env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
 ) -> jstring {
     // SAFETY: persona_version 返回本库分配的 CString 指针，取值后立即归还。
@@ -94,57 +113,66 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaVersion(
         let _ = CString::from_raw(ptr);
         owned
     };
-    env.new_string(&version)
-        .or_else(|_| env.new_string("unknown"))
-        .map(|s| s.into_raw())
-        .unwrap_or(std::ptr::null_mut())
+    run_in_env(&mut env, |env| {
+        env.new_string(&version)
+            .or_else(|_| env.new_string("unknown"))
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut())
+    })
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceInit(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
     db_path: JString,
     master_password: JString,
 ) -> jstring {
-    let (db_path, master_password) = match (
-        jstring_to_cstring(&mut env, &db_path),
-        jstring_to_cstring(&mut env, &master_password),
-    ) {
-        (Ok(a), Ok(b)) => (a, b),
-        (Err(e), _) | (_, Err(e)) => return arg_error(&mut env, &e),
-    };
-    // SAFETY: 两个 CString 保活到调用结束，指针在 persona_service_init 内有效。
-    let result = unsafe { super::persona_service_init(db_path.as_ptr(), master_password.as_ptr()) };
-    result_to_json(&mut env, result)
+    run_in_env(&mut env, |env| {
+        let (db_path, master_password) = match (
+            jstring_to_cstring(env, &db_path),
+            jstring_to_cstring(env, &master_password),
+        ) {
+            (Ok(a), Ok(b)) => (a, b),
+            (Err(e), _) | (_, Err(e)) => return arg_error(env, &e),
+        };
+        // SAFETY: 两个 CString 保活到调用结束，指针在 persona_service_init 内有效。
+        let result =
+            unsafe { super::persona_service_init(db_path.as_ptr(), master_password.as_ptr()) };
+        result_to_json(env, result)
+    })
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceUnlock(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
     master_password: JString,
 ) -> jstring {
-    let master_password = match jstring_to_cstring(&mut env, &master_password) {
-        Ok(s) => s,
-        Err(e) => return arg_error(&mut env, &e),
-    };
-    // SAFETY: CString 保活到调用结束，指针在 persona_service_unlock 内有效。
-    let result = unsafe { super::persona_service_unlock(master_password.as_ptr()) };
-    result_to_json(&mut env, result)
+    run_in_env(&mut env, |env| {
+        let master_password = match jstring_to_cstring(env, &master_password) {
+            Ok(s) => s,
+            Err(e) => return arg_error(env, &e),
+        };
+        // SAFETY: CString 保活到调用结束，指针在 persona_service_unlock 内有效。
+        let result = unsafe { super::persona_service_unlock(master_password.as_ptr()) };
+        result_to_json(env, result)
+    })
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceLock(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
 ) -> jstring {
-    result_to_json(&mut env, super::persona_service_lock())
+    run_in_env(&mut env, |env| {
+        result_to_json(env, super::persona_service_lock())
+    })
 }
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceIsUnlocked(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
 ) -> jboolean {
     super::persona_service_is_unlocked() as jboolean
@@ -152,10 +180,12 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaServiceIsUnl
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaShutdown(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
 ) -> jstring {
-    result_to_json(&mut env, super::persona_shutdown())
+    run_in_env(&mut env, |env| {
+        result_to_json(env, super::persona_shutdown())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +195,7 @@ pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaShutdown(
 
 /// business C ABI 出参（owned CString JSON）→ jstring；取值后归还所有权。
 /// null（两层全挂）降级为可解析失败包络，不把 null 递给 Kotlin。
-fn business_json_to_jstring(env: &mut JNIEnv, json: *mut std::os::raw::c_char) -> jstring {
+fn business_json_to_jstring(env: &mut Env, json: *mut std::os::raw::c_char) -> jstring {
     const BUSINESS_DEGRADED: &str = "{\"ok\":false,\"error\":\"jni bridge degraded\"}";
     let owned = if json.is_null() {
         BUSINESS_DEGRADED.to_string()
@@ -185,25 +215,27 @@ fn business_json_to_jstring(env: &mut JNIEnv, json: *mut std::os::raw::c_char) -
 
 #[no_mangle]
 pub extern "system" fn Java_com_persona_mobile_PersonaBridge_personaCredentialSearch(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
     query: JString,
 ) -> jstring {
-    let query = match jstring_to_cstring(&mut env, &query) {
-        Ok(s) => s,
-        Err(e) => {
-            // 入参非法也走 business 包络语义，Kotlin 只需解析一种业务格式
-            let degraded = format!(
-                "{{\"ok\":false,\"error\":{}}}",
-                serde_json::to_string(&e).unwrap_or_else(|_| "\"error\"".to_string())
-            );
-            return env
-                .new_string(&degraded)
-                .map(|s| s.into_raw())
-                .unwrap_or(std::ptr::null_mut());
-        }
-    };
-    // SAFETY: CString 保活到调用结束，指针在 persona_credential_search 内有效。
-    let json = unsafe { super::business::persona_credential_search(query.as_ptr()) };
-    business_json_to_jstring(&mut env, json)
+    run_in_env(&mut env, |env| {
+        let query = match jstring_to_cstring(env, &query) {
+            Ok(s) => s,
+            Err(e) => {
+                // 入参非法也走 business 包络语义，Kotlin 只需解析一种业务格式
+                let degraded = format!(
+                    "{{\"ok\":false,\"error\":{}}}",
+                    serde_json::to_string(&e).unwrap_or_else(|_| "\"error\"".to_string())
+                );
+                return env
+                    .new_string(&degraded)
+                    .map(|s| s.into_raw())
+                    .unwrap_or(std::ptr::null_mut());
+            }
+        };
+        // SAFETY: CString 保活到调用结束，指针在 persona_credential_search 内有效。
+        let json = unsafe { super::business::persona_credential_search(query.as_ptr()) };
+        business_json_to_jstring(env, json)
+    })
 }
