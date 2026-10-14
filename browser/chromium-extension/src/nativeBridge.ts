@@ -25,11 +25,22 @@ export interface SuggestionItem {
     username_hint?: string;
     match_strength: number;
     credential_type?: string;
+    /** Stage 4 (protocol v7+): identity name owning the credential. */
+    identity?: string;
+}
+
+/** Stage 4 (protocol v7+): the bridge's identity-level context suggestion. */
+export interface ContextSuggestion {
+    identity: string;
+    score: number;
+    reason: string;
 }
 
 export interface SuggestionsPayload {
     items: SuggestionItem[];
     suggesting_for: string;
+    /** Omitted by the bridge when there is no candidate (v7 shape unchanged). */
+    context?: ContextSuggestion;
 }
 
 export interface FillPayload {

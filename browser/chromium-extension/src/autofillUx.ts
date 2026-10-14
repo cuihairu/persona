@@ -74,3 +74,35 @@ export function pickSuggestion<T extends AutofillCandidate>(
     }
     return { picked: null, ambiguous: true };
 }
+
+/**
+ * Per-row meta line for the popup. Optional fields come from the bridge
+ * (protocol v7+): `identity` labels which identity owns the entry, so users
+ * can tell two same-host entries apart. Missing fields keep the old line.
+ */
+export function suggestionMetaLine(
+    item: {
+        credential_type?: string;
+        match_strength?: number;
+        username_hint?: string | null;
+        identity?: string | null
+    }
+): string {
+    const kind = (item.credential_type ?? 'password').toUpperCase().replace(/_/g, ' ');
+    const parts = [`${kind} • match ${item.match_strength ?? '?'}`];
+    if (item.username_hint) parts.push(item.username_hint);
+    if (item.identity) parts.push(item.identity);
+    return parts.join(' • ');
+}
+
+/** One-line context hint for the popup header; null when there is none. */
+export function contextHintLine(
+    ctx: { identity?: string; score?: number; reason?: string } | null | undefined
+): string | null {
+    if (!ctx?.identity) return null;
+    const score =
+        typeof ctx.score === 'number' && Number.isFinite(ctx.score)
+            ? ctx.score.toFixed(2)
+            : '?';
+    return `Context suggests ${ctx.identity} (score ${score})`;
+}

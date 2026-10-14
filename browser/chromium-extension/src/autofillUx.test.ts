@@ -4,9 +4,11 @@
  */
 import {
     TOTP_STALE_THRESHOLD_SECONDS,
+    contextHintLine,
     freshTotpWaitMs,
     pickSuggestion,
     shouldWaitForFreshTotp,
+    suggestionMetaLine,
     totpCopiedNotice,
     totpFilledNotice,
     type AutofillCandidate
@@ -101,5 +103,61 @@ describe('pickSuggestion', () => {
         const bare: AutofillCandidate[] = [{ item_id: 'x', match_strength: 95 }];
         expect(pickSuggestion(bare, 'password', 90, null).picked?.item_id).toBe('x');
         expect(pickSuggestion(bare, 'totp', 90, null).picked).toBeNull();
+    });
+});
+
+describe('suggestionMetaLine (stage 4 identity labels)', () => {
+    it('renders kind, match and username hint as before', () => {
+        expect(
+            suggestionMetaLine({
+                credential_type: 'password',
+                match_strength: 100,
+                username_hint: 'a@b.c'
+            })
+        ).toBe('PASSWORD • match 100 • a@b.c');
+    });
+
+    it('appends the owning identity when the bridge provides one', () => {
+        expect(
+            suggestionMetaLine({
+                credential_type: 'totp',
+                match_strength: 90,
+                username_hint: 'a@b.c',
+                identity: 'Work'
+            })
+        ).toBe('TOTP • match 90 • a@b.c • Work');
+    });
+
+    it('keeps the legacy shape when identity is absent', () => {
+        expect(suggestionMetaLine({ match_strength: 80 })).toBe('PASSWORD • match 80');
+        expect(suggestionMetaLine({ match_strength: 80, identity: null })).toBe(
+            'PASSWORD • match 80'
+        );
+    });
+
+    it('spells card kinds with a space', () => {
+        expect(
+            suggestionMetaLine({ credential_type: 'bank_card', match_strength: 100, identity: 'Work' })
+        ).toBe('BANK CARD • match 100 • Work');
+    });
+});
+
+describe('contextHintLine (stage 4 context field)', () => {
+    it('returns null when the bridge sent no context suggestion', () => {
+        expect(contextHintLine(undefined)).toBeNull();
+        expect(contextHintLine(null)).toBeNull();
+    });
+
+    it('formats identity and score', () => {
+        expect(contextHintLine({ identity: 'Work', score: 1, reason: 'repo x' })).toBe(
+            'Context suggests Work (score 1.00)'
+        );
+    });
+
+    it('tolerates a missing or non-numeric score', () => {
+        expect(contextHintLine({ identity: 'Work' })).toBe('Context suggests Work (score ?)');
+        expect(contextHintLine({ identity: 'OpenSource', score: NaN, reason: '' })).toBe(
+            'Context suggests OpenSource (score ?)'
+        );
     });
 });

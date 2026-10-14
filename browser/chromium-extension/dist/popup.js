@@ -1,6 +1,7 @@
 import { hello, requestPairingCode, finalizePairing, getPairingState, generatePassword, accountLogin, accountStatus, accountLogout, syncPushNow, syncResolveConflict } from './nativeBridge.js';
 import { getAutofillSettings, setAutofillSettings } from './settings.js';
 import { getAutofillDefaultsForOrigin, setAutofillDefaultsForOrigin } from './autofillDefaults.js';
+import { contextHintLine, suggestionMetaLine } from './autofillUx.js';
 import { connectViaBridge, loadCloudConn, saveCloudConn, saveCloudCache, loadCloudCache, isUsableCache, pullCloudOps, buildItemViews, decryptItemViews, conflictCopyViews, } from './cloudSync.js';
 const statusEl = document.getElementById('status');
 const toggleButton = document.getElementById('toggle');
@@ -600,10 +601,19 @@ async function getActiveTabOrigin() {
         return null;
     }
 }
-function renderSuggestions(items, tabId, origin, defaults) {
+function renderSuggestions(items, tabId, origin, defaults, context) {
     if (!suggestionsEl)
         return;
     suggestionsEl.textContent = '';
+    // Stage 4: the bridge's identity-level context suggestion (advisory —
+    // the ordering already reflects it; this just explains it).
+    const hint = contextHintLine(context);
+    if (hint) {
+        const banner = document.createElement('div');
+        banner.style.cssText = 'font-size:12px;color:#2563eb;';
+        banner.textContent = hint;
+        suggestionsEl.appendChild(banner);
+    }
     if (!items?.length) {
         const empty = document.createElement('div');
         empty.className = 'status';
@@ -628,7 +638,7 @@ function renderSuggestions(items, tabId, origin, defaults) {
         title.textContent = `${item.title ?? item.item_id}${isDefault ? ' (Default)' : ''}`;
         const meta = document.createElement('div');
         meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
-        meta.textContent = `${kind.toUpperCase()} • match ${item.match_strength ?? '?'}${item.username_hint ? ` • ${item.username_hint}` : ''}`;
+        meta.textContent = suggestionMetaLine(item);
         const actions = document.createElement('div');
         actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
         const fillBtn = document.createElement('button');
@@ -698,7 +708,7 @@ function renderCardRow(item) {
     title.textContent = item.title ?? item.item_id;
     const meta = document.createElement('div');
     meta.style.cssText = 'font-size:12px;color:#6b7280;display:flex;justify-content:space-between;gap:8px;';
-    meta.textContent = `BANK CARD • match ${item.match_strength ?? '?'}`;
+    meta.textContent = suggestionMetaLine(item);
     const actions = document.createElement('div');
     actions.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;';
     const fillBtn = document.createElement('button');
@@ -761,8 +771,9 @@ async function refreshAutofill() {
         .catch(() => null);
     const cardItems = cardResp?.success ? cardResp?.data?.items ?? [] : [];
     const items = resp?.data?.items ?? resp?.data?.payload?.items ?? resp?.data?.items;
+    const context = resp?.data?.context ?? resp?.data?.payload?.context ?? null;
     const defaults = await getAutofillDefaultsForOrigin(active.origin).catch(() => null);
-    renderSuggestions([...(items ?? []), ...cardItems], active.tabId, active.origin, defaults);
+    renderSuggestions([...(items ?? []), ...cardItems], active.tabId, active.origin, defaults, context);
 }
 async function requestCopy(origin, itemId, field) {
     if (!autofillStatusEl)

@@ -38,7 +38,7 @@
 - [x] CLI context-aware 建议阶段 1：ContextService 打分 + suggest + context map/get/unmap/status（只建议不授权）（core 30 + CLI 8 测试，2026-10-12）
 - [x] CLI context-aware 建议阶段 2：shell-hook + use 别名 + 历史学习（migration 020）（core 39 + 仓库 4 + CLI 5 测试，2026-10-13）
 - [x] CLI context-aware 建议阶段 3：`ssh run --host` host 维度建议（stderr 一行，只建议不授权，`PERSONA_NO_CONTEXT` opt-out）+ `add-to-agent --identity` 生效（agent 按 `PERSONA_AGENT_IDENTITY` fail-closed 过滤）（agent 2 + CLI 9 测试，2026-10-13 `b77b87f`）
-- [x] CLI context-aware 建议阶段 4（桥半）：桥协议 `get_suggestions` 可选 `host`/`cwd` 信号 + 响应 `context` 字段 + items `identity` 标注 + 建议分身凭证并入排最前（同一 core `suggest()`；`PERSONA_NO_CONTEXT` 整层开关；映射损坏静默降级）（CLI 9 测试，2026-10-14）
+- [x] CLI context-aware 建议阶段 4（桥 + 浏览器）：桥协议 `get_suggestions` 可选 `host`/`cwd` 信号 + 响应 `context` 字段 + items `identity` 标注 + 建议分身凭证并入排最前（同一 core `suggest()`；`PERSONA_NO_CONTEXT` 整层开关；映射损坏静默降级）；扩展 popup 消费 `context`/`identity`（沿用桥端序、逐条标分身名、顶部 context 提示）（CLI 9 + 扩展 5 测试，2026-10-14）
 - [x] CLI passkey create/list/show/self-test/remove（WebAuthn ES256/P-256，每条目密钥层级密封）
 - [x] Passkey 跨设备同步：ItemKind::Passkey 全链路（语义快照 + tombstone + 物化臂）（2026-10-12）
 
