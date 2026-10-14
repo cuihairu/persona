@@ -255,10 +255,21 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
   "type": "get_suggestions",
   "payload": {
     "origin": "https://github.com",
-    "form_type": "login"
+    "form_type": "login",
+    "host": "github.com",
+    "cwd": "/home/user/projects/widgets"
   }
 }
 ```
+
+| 字段        | 必填 | 说明                                                                   |
+| ----------- | ---- | ---------------------------------------------------------------------- |
+| `origin`    | 是   | 页面 origin，解析出主机名做 URL 匹配与主机映射信号                     |
+| `form_type` | 否   | `"login"`（默认）或 `"card"`                                           |
+| `host`      | 否   | 显式主机信号（如页面在别的域表单里填充）；缺省用 origin 主机           |
+| `cwd`       | 否   | 终端当前目录（桌面桥场景），用于仓库发现与仓库内映射；浏览器扩展不发送 |
+
+`host`/`cwd` 均为可选扩展：不发送时行为与旧版完全一致（向后兼容）。
 
 **响应：**
 
@@ -274,12 +285,32 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
         "title": "GitHub (Work)",
         "username_hint": "user@example.com",
         "match_strength": 100,
-        "credential_type": "password"
+        "credential_type": "password",
+        "identity": "Work"
       }
-    ]
+    ],
+    "context": {
+      "identity": "OpenSource",
+      "score": 1.0,
+      "reason": "repo github.com/acme/widgets"
+    }
   }
 }
 ```
+
+| 字段               | 说明                                                                                                 |
+| ------------------ | ---------------------------------------------------------------------------------------------------- |
+| `items[].identity` | 凭证所属分身名（2026-10 起恒携带，弹窗可据此标注条目）                                               |
+| `context`          | 上下文层给出的分身级建议；无候选 / `PERSONA_NO_CONTEXT` 时整个字段缺省（旧消费者看到的仍是 v7 形态） |
+
+**上下文感知（2026-10 起，阶段 4 桥半）：**
+
+- `host`/`cwd` 信号经与 `persona suggest` **同一** core `suggest()` 打分（映射链
+  `PERSONA_CONTEXT_OVERRIDE` > 仓库内 `.persona/context.toml` > 全局
+  `~/.persona/context.toml` > 学习 > active），所有入口候选一致。
+- 建议分身的凭证并入候选并排在最前（URL 匹配强度仍是同分身内排序依据）；
+  **只建议不授权**——不切换 active 分身、不放宽任何填充授权门。
+- 任何映射加载失败静默降级为无建议（设计 §10）。
 
 | match_strength | 含义         |
 | -------------- | ------------ |
@@ -294,7 +325,8 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 - `"card"`：返回当前 workspace 的**全部 active BankCard**，不做 URL 过滤
   （卡没有规范归属站点，结账页因商户而异），`match_strength` 恒为 100，
   `credential_type` 为 `"bank_card"`，`username_hint` 为 `null`；由用户在
-  弹窗里自行选择。
+  弹窗里自行选择。上下文层建议分身的卡同样并入并排最前，`identity` 字段
+  标注归属。
 
 ### 6. request_fill - 请求填充
 

@@ -9,6 +9,7 @@ use reqwest;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use sha2::Sha512;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,10 +18,13 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, info, warn};
 use url::Url;
 
+use persona_core::context::{
+    discover_git_repo, suggest as context_suggest, ContextMapFile, ContextSignals,
+};
 use persona_core::crypto::{parse_creation_options, validate_origin_matches_rp_id};
 use persona_core::models::{CredentialData, CredentialType, PasswordCredentialData, TwoFactorData};
 use persona_core::password::{PasswordGenerator, PasswordGeneratorOptions};
-use persona_core::storage::{CredentialRepository, WorkspaceRepository};
+use persona_core::storage::{CredentialRepository, IdentityRepository, WorkspaceRepository};
 use persona_core::{Database, PersonaError, PersonaService, Repository};
 
 /// Native Messaging host for the Persona browser extension.
@@ -130,6 +134,16 @@ struct SuggestionsPayload {
     /// back to "login" so existing behavior is unchanged.
     #[serde(default)]
     form_type: Option<String>,
+    /// Stage 4 context signals (optional): an explicit host signal, e.g. a
+    /// page whose fill happens on another host's form. When omitted the
+    /// origin host is the signal.
+    #[serde(default)]
+    host: Option<String>,
+    /// Stage 4 context signals (optional): terminal cwd (desktop bridge
+    /// case) used for the repo-local map and repo discovery. Browser
+    /// extensions never send it; absent signals change nothing.
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 /// Card fields safe for in-page fill. Deliberately excludes CVV: fill
@@ -151,6 +165,22 @@ struct SuggestionItem {
     username_hint: Option<String>,
     match_strength: u8,
     credential_type: String,
+    /// Stage 4: identity name that owns the credential. Always present in
+    /// bridge responses so the popup can label entries; it is additive for
+    /// older extensions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<String>,
+}
+
+/// Stage 4 identity-level suggestion for the requested context. Advisory
+/// only — it never switches the active identity and never widens any
+/// authorization gate; activation still requires `persona switch`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+struct ContextSuggestion {
+    identity: String,
+    score: f64,
+    reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -158,6 +188,11 @@ struct SuggestionItem {
 struct SuggestionsResponse {
     items: Vec<SuggestionItem>,
     suggesting_for: String,
+    /// Stage 4 context suggestion; omitted when no candidate (or the layer
+    /// is opted out via PERSONA_NO_CONTEXT) so old consumers see exactly the
+    /// v7 payload shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<ContextSuggestion>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -570,10 +605,20 @@ async fn handle_request(
                 .context("invalid payload for get_suggestions")?;
             let host = origin_to_host(&parsed.origin)?;
             let form_type = parsed.form_type.as_deref().unwrap_or("login");
-            let items = get_credential_suggestions(db_path, &host, form_type).await?;
+
+            // Stage 4 (context-aware, bridge half): optional host/cwd signals
+            // let the bridge rank the context-suggested identity's
+            // credentials first and carry an identity-level `context` field.
+            // Old extensions send neither and see byte-identical responses.
+            // PERSONA_NO_CONTEXT opts the layer out (gate lives in the seam);
+            // any load failure degrades to no suggestion (design §10).
+            let context = context_suggestion_for_bridge(db_path, &host, &parsed).await;
+            let items =
+                get_credential_suggestions(db_path, &host, form_type, context.as_ref()).await?;
             let payload = serde_json::to_value(SuggestionsResponse {
                 items,
                 suggesting_for: host,
+                context,
             })?;
             Ok(ok(req.request_id, "suggestions_response", payload))
         }
@@ -2069,36 +2114,70 @@ async fn get_credential_suggestions(
     db_path: &Path,
     host: &str,
     form_type: &str,
+    context: Option<&ContextSuggestion>,
 ) -> Result<Vec<SuggestionItem>> {
     let db = open_db(db_path).await?;
     let active_identity_id = get_active_identity_id(&db).await;
-    let repo = CredentialRepository::new(db);
-    let all = match active_identity_id {
-        Some(identity_id) => repo.find_by_identity(&identity_id).await?,
-        None => repo.find_all().await?,
+
+    // Stage 4: resolve the suggested identity (by name) so its credentials
+    // merge into the candidate pool ahead of the active identity's. Core
+    // suggest() already filters invalid names; resolution is belt and braces.
+    let irepo = IdentityRepository::new(db.clone());
+    let identities = irepo.find_all().await.unwrap_or_default();
+    let name_of = |id: &uuid::Uuid| {
+        identities
+            .iter()
+            .find(|i| &i.id == id)
+            .map(|i| i.name.clone())
     };
+    let suggested_id = context.as_ref().and_then(|s| {
+        identities
+            .iter()
+            .find(|i| i.name == s.identity)
+            .map(|i| i.id)
+    });
+
+    let repo = CredentialRepository::new(db);
+    let mut all = Vec::new();
+    match active_identity_id {
+        Some(identity_id) => all.extend(repo.find_by_identity(&identity_id).await?),
+        None => all = repo.find_all().await?,
+    }
+    if let Some(sid) = suggested_id {
+        if Some(sid) != active_identity_id {
+            all.extend(repo.find_by_identity(&sid).await?);
+        }
+    }
 
     // Card fills intentionally skip URL matching: a bank card has no canonical
     // site (checkout pages differ per merchant), so every active BankCard is a
     // candidate and the user picks one in the popup — same as 1Password.
     let want_cards = form_type.eq_ignore_ascii_case("card");
 
-    let mut out = Vec::new();
+    let mut out: Vec<(SuggestionItem, bool)> = Vec::new();
     for cred in all {
         if !cred.is_active {
             continue;
         }
+        let owner = name_of(&cred.identity_id);
+        let boosted = context
+            .as_ref()
+            .is_some_and(|s| owner.as_deref() == Some(s.identity.as_str()));
         if want_cards {
             if cred.credential_type != CredentialType::BankCard {
                 continue;
             }
-            out.push(SuggestionItem {
-                item_id: cred.id.to_string(),
-                title: cred.name,
-                username_hint: None,
-                match_strength: 100,
-                credential_type: "bank_card".to_string(),
-            });
+            out.push((
+                SuggestionItem {
+                    item_id: cred.id.to_string(),
+                    title: cred.name,
+                    username_hint: None,
+                    match_strength: 100,
+                    credential_type: "bank_card".to_string(),
+                    identity: owner,
+                },
+                boosted,
+            ));
             continue;
         }
         let kind = match cred.credential_type {
@@ -2118,26 +2197,129 @@ async fn get_credential_suggestions(
             continue;
         }
 
-        out.push(SuggestionItem {
-            item_id: cred.id.to_string(),
-            title: cred.name,
-            username_hint: cred.username,
-            match_strength,
-            credential_type: kind.to_string(),
-        });
+        out.push((
+            SuggestionItem {
+                item_id: cred.id.to_string(),
+                title: cred.name,
+                username_hint: cred.username,
+                match_strength,
+                credential_type: kind.to_string(),
+                identity: owner,
+            },
+            boosted,
+        ));
     }
 
-    // Sort by match strength descending.
-    out.sort_by_key(|b| std::cmp::Reverse(b.match_strength));
+    // Sort: context-suggested identity first, then match strength descending.
+    out.sort_by_key(|(item, boosted)| (!*boosted, std::cmp::Reverse(item.match_strength)));
 
     debug!(
         host = %host,
         form_type = %form_type,
         suggestions = out.len(),
+        context = context.as_ref().map(|c| c.identity.as_str()),
         "credential suggestions retrieved"
     );
 
-    Ok(out)
+    Ok(out.into_iter().map(|(item, _)| item).collect())
+}
+
+/// Stage 4 map paths for the bridge context layer. `repo_local` exists only
+/// when the request carried a `cwd` signal; the global map always does.
+struct BridgeMapPaths {
+    global: PathBuf,
+    repo_local: Option<PathBuf>,
+}
+
+impl BridgeMapPaths {
+    fn current(cwd: &Option<String>) -> BridgeMapPaths {
+        BridgeMapPaths {
+            global: crate::commands::suggest::global_map_path(),
+            repo_local: cwd
+                .as_deref()
+                .map(|c| Path::new(c).join(".persona").join("context.toml")),
+        }
+    }
+}
+
+/// Stage 4 bridge context suggestion (design §6): score the request's
+/// host/cwd signals through the same core `suggest()` every entry point
+/// uses, so all clients rank candidates identically. Returns None when
+/// nothing matched or the layer is degraded — suggestions never block the
+/// flow. Host signal precedence: explicit `host` field > origin host.
+async fn context_suggestion_for_bridge(
+    db_path: &Path,
+    page_host: &str,
+    parsed: &SuggestionsPayload,
+) -> Option<ContextSuggestion> {
+    let maps = BridgeMapPaths::current(&parsed.cwd);
+    context_suggestion_for_bridge_with(db_path, page_host, parsed, &maps).await
+}
+
+/// Same as [`context_suggestion_for_bridge`] with injected map paths (the
+/// Windows dirs-sys constraint: `dirs::home_dir()` ignores HOME, so tests
+/// redirect by injecting paths).
+async fn context_suggestion_for_bridge_with(
+    db_path: &Path,
+    page_host: &str,
+    parsed: &SuggestionsPayload,
+    maps: &BridgeMapPaths,
+) -> Option<ContextSuggestion> {
+    // 整层开关（与 shell hook / ssh run 同一口径）：非空即关闭。
+    if std::env::var("PERSONA_NO_CONTEXT")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let explicit_host = parsed
+        .host
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty());
+    let signals = ContextSignals {
+        cwd: PathBuf::new(),
+        repo: parsed
+            .cwd
+            .as_deref()
+            .and_then(|c| discover_git_repo(Path::new(c))),
+        host: Some(explicit_host.unwrap_or(page_host).to_string()),
+    };
+    let db = open_db(db_path).await.ok()?;
+    let irepo = IdentityRepository::new(db.clone());
+    let valid_names: BTreeSet<String> = irepo
+        .find_all()
+        .await
+        .ok()?
+        .into_iter()
+        .map(|i| i.name)
+        .collect();
+    let active = match get_active_identity_id(&db).await {
+        Some(id) => irepo.find_by_id(&id).await.ok().flatten().map(|i| i.name),
+        None => None,
+    };
+    let (global, _) = crate::commands::suggest::read_map_or_empty(&maps.global);
+    let (repo_local, _) = match &maps.repo_local {
+        Some(path) => crate::commands::suggest::read_map_or_empty(path),
+        None => (ContextMapFile::default(), None),
+    };
+    // Bridge log pollution is stdout-forbidden: load warnings degrade silently
+    // (design §10), same as the ssh-run host suggestion.
+    let env_override = std::env::var("PERSONA_CONTEXT_OVERRIDE").ok();
+    let result = context_suggest(
+        &signals,
+        Some(&repo_local),
+        Some(&global),
+        env_override.as_deref(),
+        active.as_deref(),
+        &valid_names,
+        None,
+    );
+    result.candidates.first().map(|c| ContextSuggestion {
+        identity: c.identity.clone(),
+        score: c.score,
+        reason: c.reason.clone(),
+    })
 }
 
 async fn get_active_identity_id(db: &Database) -> Option<uuid::Uuid> {
@@ -5713,6 +5895,374 @@ pub(crate) mod tests {
         assert_eq!(items[0]["credential_type"], "password");
         assert_eq!(items[0]["username_hint"], "alice@example.com");
         assert_eq!(items[1]["match_strength"], 90);
+
+        std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
+    }
+
+    // -----------------------------------------------------------------------
+    // Stage 4 (context-aware bridge): seam tests with injected map paths.
+    //
+    // The Windows dirs-sys constraint (`dirs::home_dir()` ignores HOME) means
+    // the real global map path cannot be redirected by tests, so every case
+    // below drives `context_suggestion_for_bridge_with` / the merge in
+    // `get_credential_suggestions` with paths inside a TempDir — the same
+    // seam pattern as `persona suggest` stage 1-3.
+    // -----------------------------------------------------------------------
+
+    /// Serializes tests that mutate process env vars; restores on drop.
+    struct EnvRestore {
+        name: &'static str,
+        original: Option<std::ffi::OsString>,
+    }
+
+    impl EnvRestore {
+        fn set(name: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(name);
+            std::env::set_var(name, value);
+            EnvRestore { name, original }
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var(self.name, v),
+                None => std::env::remove_var(self.name),
+            }
+        }
+    }
+
+    /// Two identities — "Work" (active) and "OpenSource" — no credentials.
+    async fn seeded_context_bridge() -> (tempfile::TempDir, PathBuf, uuid::Uuid, uuid::Uuid) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("identities.db");
+        let db = open_db(&db_path).await.unwrap();
+        let mut service = crate::commands::service::new_service(db.clone())
+            .await
+            .unwrap();
+        service.initialize_user(PASSWORD).await.unwrap();
+        let work = service
+            .create_identity("Work".to_string(), IdentityType::Work)
+            .await
+            .unwrap();
+        let opensource = service
+            .create_identity("OpenSource".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        sqlx::query(
+            r#"INSERT INTO workspaces (id, name, created_at, updated_at, is_active, active_identity_id, settings)
+               VALUES (?, ?, ?, ?, 1, ?, '{}')"#,
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind("test")
+        .bind(&now)
+        .bind(&now)
+        .bind(work.id.to_string())
+        .execute(db.pool())
+        .await
+        .unwrap();
+        drop(service);
+        drop(db);
+        (dir, db_path, work.id, opensource.id)
+    }
+
+    /// Injected map paths inside the temp dir (never touch the real HOME).
+    fn context_maps_for(dir: &Path) -> BridgeMapPaths {
+        BridgeMapPaths {
+            global: dir.join("global-context.toml"),
+            repo_local: Some(dir.join("repo-context.toml")),
+        }
+    }
+
+    fn context_payload(origin: &str, host: Option<&str>, cwd: Option<&str>) -> SuggestionsPayload {
+        SuggestionsPayload {
+            origin: origin.to_string(),
+            form_type: None,
+            host: host.map(str::to_string),
+            cwd: cwd.map(str::to_string),
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_host_map_hit_and_credential_merge() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, work_id, os_id) = seeded_context_bridge().await;
+
+        // Global map: host regex → OpenSource (deliberately NOT the active
+        // identity, so the cross-identity merge is exercised; suggesting the
+        // active identity would be a no-op dedupe). Regex keys must be
+        // single-quoted TOML literal strings (a basic-string `\.` is illegal
+        // and would silently void the whole table).
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^github\\.com$']\nidentity = \"OpenSource\"\n",
+        )
+        .unwrap();
+
+        seed_password_credential(
+            &db_path,
+            work_id,
+            "Work GitHub",
+            Some("https://github.com/login"),
+            Some("work@corp.com"),
+            "pw-work",
+        )
+        .await;
+        seed_password_credential(
+            &db_path,
+            os_id,
+            "OpenSource GitHub",
+            Some("https://github.com/open"),
+            Some("oss@example.com"),
+            "pw-oss",
+        )
+        .await;
+
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", None, None);
+        let ctx = context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+            .await
+            .expect("host map hit must produce a suggestion");
+        assert_eq!(ctx.identity, "OpenSource");
+        assert!((ctx.score - 0.8).abs() < f64::EPSILON);
+
+        // The suggested identity's credential merges into the pool and
+        // sorts ahead of the active identity's; every item carries its
+        // owning identity name.
+        let items = get_credential_suggestions(&db_path, "github.com", "login", Some(&ctx))
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "OpenSource GitHub");
+        assert_eq!(items[0].identity.as_deref(), Some("OpenSource"));
+        assert_eq!(items[1].title, "Work GitHub");
+        assert_eq!(items[1].identity.as_deref(), Some("Work"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_no_maps_returns_none() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, _work_id, _os_id) = seeded_context_bridge().await;
+
+        // Empty temp dir: no map files anywhere → no candidate.
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", None, None);
+        assert!(
+            context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_broken_map_degrades_to_none() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, _work_id, _os_id) = seeded_context_bridge().await;
+
+        // Malformed TOML: the layer degrades to no suggestion (design §10),
+        // never an error.
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^github\\.com$'\nidentity = \"Work\"\n",
+        )
+        .unwrap();
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", None, None);
+        assert!(
+            context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_env_override_wins_over_map() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, _work_id, _os_id) = seeded_context_bridge().await;
+
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^github\\.com$']\nidentity = \"Work\"\n",
+        )
+        .unwrap();
+        let _ovr = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "OpenSource");
+
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", None, None);
+        let ctx = context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+            .await
+            .expect("env override must produce a suggestion");
+        assert_eq!(ctx.identity, "OpenSource");
+        assert!(ctx.reason.contains("PERSONA_CONTEXT_OVERRIDE"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_explicit_host_field_beats_origin_host() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, _work_id, _os_id) = seeded_context_bridge().await;
+
+        // Map keys on gitlab.com; the origin host (github.com) would match
+        // nothing — the explicit `host` signal must win.
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^gitlab\\.com$']\nidentity = \"OpenSource\"\n",
+        )
+        .unwrap();
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", Some("gitlab.com"), None);
+        let ctx = context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+            .await
+            .expect("explicit host signal must produce a suggestion");
+        assert_eq!(ctx.identity, "OpenSource");
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_cwd_repo_map_outranks_global_host_map() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, _work_id, _os_id) = seeded_context_bridge().await;
+
+        // A real (fake) git dir: repo discovery reads .git/config's origin.
+        let proj = dir.path().join("proj");
+        std::fs::create_dir_all(proj.join(".git")).unwrap();
+        std::fs::write(
+            proj.join(".git").join("config"),
+            "[remote \"origin\"]\nurl = git@github.com:acme/widgets.git\n",
+        )
+        .unwrap();
+
+        // Global host map: github.com → Work (0.8). Repo-local project map:
+        // the discovered repo → OpenSource (1.0, outranks the host hit).
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^github\\.com$']\nidentity = \"Work\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("repo-context.toml"),
+            "[project.\"github.com/acme/widgets\"]\nidentity = \"OpenSource\"\n",
+        )
+        .unwrap();
+
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", None, Some(&proj.to_string_lossy()));
+        let ctx = context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+            .await
+            .expect("repo-local project map must produce a suggestion");
+        assert_eq!(ctx.identity, "OpenSource");
+        assert!(ctx.reason.contains("acme/widgets"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_no_context_opt_out() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, _work_id, _os_id) = seeded_context_bridge().await;
+
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^github\\.com$']\nidentity = \"Work\"\n",
+        )
+        .unwrap();
+        let _no_ctx = EnvRestore::set("PERSONA_NO_CONTEXT", "1");
+
+        let maps = context_maps_for(dir.path());
+        let parsed = context_payload("https://github.com", None, None);
+        assert!(
+            context_suggestion_for_bridge_with(&db_path, "github.com", &parsed, &maps)
+                .await
+                .is_none(),
+            "PERSONA_NO_CONTEXT must switch the whole layer off"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_context_suggestion_card_form_merges_suggested_identity_first() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, db_path, work_id, os_id) = seeded_context_bridge().await;
+
+        std::fs::write(
+            dir.path().join("global-context.toml"),
+            "[host.'^shop\\.example$']\nidentity = \"OpenSource\"\n",
+        )
+        .unwrap();
+        seed_bank_card_credential(&db_path, work_id, "Work Card", "1111").await;
+        seed_bank_card_credential(&db_path, os_id, "OSS Card", "2222").await;
+
+        let maps = context_maps_for(dir.path());
+        let mut parsed = context_payload("https://shop.example", None, None);
+        parsed.form_type = Some("card".to_string());
+        let ctx = context_suggestion_for_bridge_with(&db_path, "shop.example", &parsed, &maps)
+            .await
+            .expect("host map hit must produce a suggestion");
+        assert_eq!(ctx.identity, "OpenSource");
+
+        let items = get_credential_suggestions(&db_path, "shop.example", "card", Some(&ctx))
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].title, "OSS Card");
+        assert_eq!(items[0].identity.as_deref(), Some("OpenSource"));
+        assert_eq!(items[0].credential_type, "bank_card");
+        assert_eq!(items[1].title, "Work Card");
+        assert_eq!(items[1].identity.as_deref(), Some("Work"));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn bridge_get_suggestions_accepts_optional_signals_without_maps() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_BRIDGE_REQUIRE_PAIRING", "0");
+
+        let (_dir, db_path, state_dir, identity_id) = seeded_bridge().await;
+        let exact = seed_password_credential(
+            &db_path,
+            identity_id,
+            "Exact match",
+            Some("https://example.com/login"),
+            Some("alice@example.com"),
+            "pw-exact",
+        )
+        .await;
+
+        // The stage-4 optional signals are accepted; with no maps anywhere
+        // the response keeps the v7 shape (context null) and items are
+        // unchanged — now carrying the owning identity name.
+        let resp = handle_request(
+            &db_path,
+            &state_dir,
+            request(
+                "get_suggestions",
+                serde_json::json!({
+                    "origin": "https://example.com",
+                    "host": "example.com",
+                    "cwd": "/tmp/persona-bridge-no-such-dir"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(resp.ok, "suggestions must succeed: {:?}", resp.error);
+        let payload = resp.payload.unwrap();
+        assert_eq!(payload["suggesting_for"], "example.com");
+        assert!(
+            payload["context"].is_null(),
+            "no maps → context must be null, got: {}",
+            payload["context"]
+        );
+        let items = payload["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["item_id"], exact.to_string());
+        assert_eq!(items[0]["match_strength"], 100);
+        assert_eq!(items[0]["identity"], "Bridge Identity");
 
         std::env::remove_var("PERSONA_BRIDGE_REQUIRE_PAIRING");
     }

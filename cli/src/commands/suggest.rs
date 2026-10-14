@@ -205,7 +205,8 @@ pub fn repo_local_map_path() -> PathBuf {
 
 /// 读映射文件：(解析结果, 解析失败原因)。文件不存在 = 空表无告警；
 /// 损坏 = 空表 + 告警文本（调用方并进 suggest 告警）。
-fn read_map_or_empty(path: &PathBuf) -> (ContextMapFile, Option<String>) {
+/// pub(crate)：桥协议阶段 4 复用同一读取口径。
+pub(crate) fn read_map_or_empty(path: &PathBuf) -> (ContextMapFile, Option<String>) {
     match std::fs::read_to_string(path) {
         Ok(text) => match ContextMapFile::parse(&text) {
             Ok(m) => (m, None),
