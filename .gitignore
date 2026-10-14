@@ -28,6 +28,10 @@ profile.cov
 target/
 .target-*/
 
+# cargo-fuzz 运行产物（语料库与 crash dump 不进仓；target/ 已被上面的模式覆盖）
+fuzz/corpus/
+fuzz/artifacts/
+
 # Go workspace file
 go.work
 go.work.sum

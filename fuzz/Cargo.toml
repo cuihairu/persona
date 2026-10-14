@@ -1,0 +1,53 @@
+# cargo-fuzz 脚手架（收口 ROADMAP「no cargo-fuzz scaffolding yet」，2026-10-14）。
+#
+# 独立 workspace：libFuzzer 需要 nightly 的 -Zsanitizer 通道，根
+# rust-toolchain.toml 把整树钉在 1.97.0 stable（可复现构建前提，不能松）；
+# fuzz/rust-toolchain.toml 做局部覆盖，根 workspace 与 CI 不受影响。
+# 不能 default-features = false：四个目标虽是纯解析入口，但 `storage` 模块
+# 无条件引用 sqlx（`sqlite` 只是关 dep 不 cfg 门禁模块），关掉会 246 处编译错。
+#
+# 用法（在 fuzz/ 下）：
+#   cargo fuzz run <target>                       # 跑到 Ctrl-C
+#   cargo fuzz run <target> -- -max_total_time=60
+#   cargo fuzz coverage <target>                  # 覆盖率报告
+# 语料与 crash dump 落在 fuzz/corpus、fuzz/artifacts（已 gitignore，不进仓）。
+# 不进 CI：本机无 nightly runner，长跑也不适合流水线。
+
+[package]
+name = "persona-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+# 精确钉 0.4.13：本工作区自带 Cargo.lock 复用根的解析结果（缓存命中），
+# 松散 "0.4" 会解析到未缓存的更新版，离线构建会卡在一次下载上。
+libfuzzer-sys = "=0.4.13"
+persona-core = { path = "../core" }
+serde_json = "1.0"
+uuid = "1.6"
+
+[[bin]]
+name = "ssh_openssh_key"
+path = "fuzz_targets/ssh_openssh_key.rs"
+
+[[bin]]
+name = "keystore_json"
+path = "fuzz_targets/keystore_json.rs"
+
+[[bin]]
+name = "context_map_toml"
+path = "fuzz_targets/context_map_toml.rs"
+
+[[bin]]
+name = "passkey_creation_options"
+path = "fuzz_targets/passkey_creation_options.rs"
+
+# ASAN 报告需要行号：debug=1 保留 DWARF 但不带完整调试信息。
+[profile.release]
+debug = 1

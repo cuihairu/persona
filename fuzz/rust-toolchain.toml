@@ -1,0 +1,5 @@
+# 局部工具链覆盖：libFuzzer 走 nightly 的 -Zsanitizer 通道。根
+# rust-toolchain.toml 钉 1.97.0 stable（可复现构建前提），两者互不干扰——
+# rustup 取最近的 toolchain 文件，故只有 fuzz/ 下的构建用 nightly。
+[toolchain]
+channel = "nightly"
