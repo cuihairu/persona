@@ -16,3 +16,13 @@
   - 修法：真值源进既有 locale 表（新增 `tray.*` 命名空间，两语言各 5 键）；Rust 只渲染不存词——`set_tray_locale` 无状态命令（无锁屏门禁：锁屏时菜单也要跟界面语言）按推送文案重建菜单，setup 兜底 zh-CN 默认（与 DEFAULT_LOCALE 一致，前端首推即覆盖）；推送点 = App 启动语言恢复 ×2 + SettingsModal 切换成功。**坑**：组件级 `t` 是 `getFixedT` 旧语言快照（react-i18next useTranslation.js:76），切换后立刻推会推旧语言 → 推送处一律用全局 `i18n.t`。
   - 验证：jest 80 绿（新增回归 3：切换后推英文真值——旧实现（用组件级 t）实测红；持久化失败不推送并回滚 UI）；`cargo test --lib` 265 绿（新增 `set_tray_locale_is_harmless_noop_without_tray`：无托盘降级运行无害 no-op）；tsc/eslint/cargo fmt/clippy 干净。
 
+- [ ] 文档首页预览图拆分：电脑版 / 手机版分开展示（来源：用户 2026-10-14）
+  - 现状：`README.md:39` 有 `## UI Preview`，**未按设备分栏**；仓库内无 `docs/screenshots/` 目录
+  - 要求：预览拆成**电脑版**与**手机版**两组分别展示，各自标注设备/尺寸，**截图取自真实运行界面**（不是示意图）
+  - 验收：两组截图清晰可辨、路径相对引用、首页直接可见
+- [ ] 文档双语未落地（来源：用户 2026-10-14）
+  - 现状：`README.md` **377 行单语英文**，无 `README.zh.md`
+  - 要求：按全局规矩——**英文为 README 主文档**，中文转 **`README.zh.md`**，两份**顶部加切换器**（`> **English** | [中文](README.zh.md)` / `> [English](README.md) | **中文**`），切换器必须在首屏
+  - 覆盖范围：**README 及 docs 下文档**（用户点名"文档没有双语"，不止 README）；中文版要完整对应，不是摘要
+  - 验收：zh 行数与 en 相当；逐节覆盖；顶部切换器两份都有
+
