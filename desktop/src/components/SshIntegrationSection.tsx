@@ -68,9 +68,11 @@ const SshIntegrationSection: React.FC = () => {
         op === 'enable'
           ? await personaAPI.sshAgentIntegrationEnable()
           : await personaAPI.sshAgentIntegrationDisable();
-      if (resp.success && resp.data) {
-        setStatus(resp.data);
-        void refreshAnalysis();
+      if (resp.success) {
+        // 统一回读点：以盘上真实状态为准刷新（不信写入响应里的快照）——
+        // 快照与盘上漂移（响应迟到/为空、外部并发改 config）时界面不会
+        // 停在旧状态；回读完成前按钮保持禁用，避免用户在过期状态上连点。
+        await refresh();
         toast.success(
           t(
             op === 'enable'

@@ -82,26 +82,115 @@ describe('components/SshIntegrationSection', () => {
 
   it('enables idempotently and flips to enabled badge', async () => {
     mockStatus.mockResolvedValue({ success: true, data: statusOf() });
-    mockEnable.mockResolvedValue({
+    // enable 落盘的同时把状态查询（回读）切到已生效值
+    const enabledStatus = {
       success: true,
       data: statusOf({ enabled: true, identityAgent: '/run/user/1000/persona/ssh-agent.sock' }),
+    };
+    mockEnable.mockImplementation(async () => {
+      mockStatus.mockResolvedValue(enabledStatus);
+      return enabledStatus;
     });
 
     const { getByTestId } = render(<SshIntegrationSection />);
     await waitFor(() => expect(getByTestId('ssh-integration-toggle')).toBeInTheDocument());
+    const statusCallsBefore = mockStatus.mock.calls.length;
     fireEvent.click(getByTestId('ssh-integration-toggle'));
 
     await waitFor(() => expect(mockEnable).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getByTestId('ssh-integration-badge')).toHaveTextContent('已启用'));
-    // 启用后按钮变成「一键停用」（状态联动）
+    // 启用后按钮变成「一键停用」（状态联动），且联动来自回读而非响应快照
     expect(getByTestId('ssh-integration-toggle')).toHaveTextContent('一键停用');
+    expect(mockStatus.mock.calls.length).toBeGreaterThan(statusCallsBefore);
     expect(toast.success).toHaveBeenCalled();
 
     // 再点 = 停用链路
-    mockDisable.mockResolvedValue({ success: true, data: statusOf() });
+    mockDisable.mockImplementation(async () => {
+      mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+      return { success: true, data: statusOf() };
+    });
     fireEvent.click(getByTestId('ssh-integration-toggle'));
     await waitFor(() => expect(mockDisable).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(getByTestId('ssh-integration-badge')).toHaveTextContent('未启用'));
+  });
+
+  it('re-reads real state after mutation instead of trusting the response snapshot', async () => {
+    // 写入响应的快照谎报未启用（响应迟到/为空的漂移场景）：
+    // 界面必须以盘上真实状态回读为准，不允许停在快照值
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockEnable.mockImplementation(async () => {
+      mockStatus.mockResolvedValue({
+        success: true,
+        data: statusOf({ enabled: true, identityAgent: '/run/user/1000/persona/ssh-agent.sock' }),
+      });
+      return { success: true, data: statusOf() };
+    });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-integration-badge')).toHaveTextContent('未启用'));
+    fireEvent.click(getByTestId('ssh-integration-toggle'));
+
+    await waitFor(() => expect(getByTestId('ssh-integration-badge')).toHaveTextContent('已启用'));
+    expect(getByTestId('ssh-integration-toggle')).toHaveTextContent('一键停用');
+  });
+
+  it('brings the config analysis panel along through the same readback', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockAnalysis.mockResolvedValue({ success: true, data: analysisOf() });
+    mockEnable.mockImplementation(async () => {
+      // 盘上已生效：回读到的配置分析出现锚点块条目
+      mockStatus.mockResolvedValue({
+        success: true,
+        data: statusOf({ enabled: true, identityAgent: '/run/user/1000/persona/ssh-agent.sock' }),
+      });
+      mockAnalysis.mockResolvedValue({
+        success: true,
+        data: analysisOf({
+          identityAgentEffective: '/run/user/1000/persona/ssh-agent.sock',
+          effectiveSocket: '/run/user/1000/persona/ssh-agent.sock',
+          socketAlive: true,
+          entries: [
+            {
+              file: '/home/user/.ssh/config',
+              line: 1,
+              scope: '',
+              keyword: 'IdentityAgent',
+              value: '/run/user/1000/persona/ssh-agent.sock',
+            },
+          ],
+        }),
+      });
+      return { success: true, data: statusOf({ enabled: true }) };
+    });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-analysis-refresh')).toBeInTheDocument());
+    const analysisCallsBefore = mockAnalysis.mock.calls.length;
+    fireEvent.click(getByTestId('ssh-integration-toggle'));
+
+    // 不点手动刷新：一键启用后的统一回读应把配置分析面板一起带到最新
+    await waitFor(() => expect(getByTestId('ssh-analysis-entries')).toBeInTheDocument());
+    expect(getByTestId('ssh-analysis-entries')).toHaveTextContent(
+      'IdentityAgent /run/user/1000/persona/ssh-agent.sock',
+    );
+    expect(mockAnalysis.mock.calls.length).toBeGreaterThan(analysisCallsBefore);
+  });
+
+  it('keeps the previous state and reports the error when the mutation fails', async () => {
+    mockStatus.mockResolvedValue({ success: true, data: statusOf() });
+    mockEnable.mockResolvedValue({ success: false, error: 'boom' });
+
+    const { getByTestId } = render(<SshIntegrationSection />);
+    await waitFor(() => expect(getByTestId('ssh-integration-toggle')).toBeInTheDocument());
+    const statusCallsBefore = mockStatus.mock.calls.length;
+    fireEvent.click(getByTestId('ssh-integration-toggle'));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('boom'));
+    expect(getByTestId('ssh-integration-badge')).toHaveTextContent('未启用');
+    // 失败没有变更发生：不触发状态回读
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockStatus.mock.calls.length).toBe(statusCallsBefore);
   });
 
   it('shows anomaly with the found value and re-enable hint', async () => {
