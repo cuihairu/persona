@@ -23,6 +23,7 @@ Persona is a local-first, zero-knowledge manager for one person operating multip
 The product focuses on identity-scoped credentials and developer workflows: passwords, API keys, TOTP, SSH keys, browser autofill, and active identity switching. Wallet material fits the same conceptual model, but is currently a deferred priority rather than part of the main product track.
 
 ### Key Features
+
 - Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata
 - Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access
 - Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults
@@ -61,6 +62,7 @@ vaults, tags, and tools in one sidebar, with the item detail pane on the right.
 ## Architecture
 
 ### Monorepo Layout
+
 ```
 persona/
 ├── core/               # Rust core library: models, crypto, storage, service layer
@@ -76,6 +78,7 @@ persona/
 ```
 
 ### Tech Stack
+
 - Core library: Rust with sqlx + SQLite
 - Cryptography: Argon2id key derivation and AES-256-GCM symmetric encryption (RustCrypto-family crates)
 - Desktop: Tauri + React + TypeScript
@@ -95,10 +98,12 @@ Persona builds on established open-source foundations — Tauri, React, Axum, sq
 ## Getting Started
 
 ### Requirements
+
 - Rust 1.97+ (pinned via `rust-toolchain.toml` for reproducible builds)
 - Node.js 18+
 
 ### Build and Install (CLI + Agent)
+
 ```bash
 # Clone the repository
 git clone git@github.com:cuihairu/persona.git
@@ -112,6 +117,7 @@ make ci
 ```
 
 ### JS/Desktop Dependencies (pnpm)
+
 ```bash
 # Install workspace dependencies (desktop + browser extension + website)
 pnpm install
@@ -127,6 +133,7 @@ pnpm --filter persona-website run dev
 ```
 
 ### Initialize a Workspace and Perform Basic Actions
+
 ```bash
 # Initialize an unencrypted workspace
 persona init --path ~/PersonaDemo --yes
@@ -238,6 +245,7 @@ persona secrets external   # Terraform external provider: stdin JSON -> stdout J
 ```
 
 ### Export / Import (Compression + Encryption)
+
 ```bash
 # Export to JSON with sensitive content (requires unlock)
 persona export --include-sensitive --output backup.json
@@ -250,12 +258,15 @@ persona import backup.enc --decrypt --mode merge --backup
 ```
 
 ### Migrating from 1Password
+
 Export an unencrypted `.1pux` file from 1Password (Settings → Export),
 then preview and import it:
+
 ```bash
 persona import-1pux export.1pux --dry-run   # show the plan, touch nothing
 persona import-1pux export.1pux             # confirm, then import
 ```
+
 Each 1Password vault becomes one identity (same-name identities are reused);
 Login items map to password credentials with TOTP secrets split into their own
 credentials, and API Credential / SSH Key items map to their persona
@@ -264,6 +275,7 @@ reported and skipped — nothing is silently dropped or forced into a lossy
 shape.
 
 ### SSH Agent (Developer Enhancements)
+
 ```bash
 # Generate an SSH key (ed25519) and store it in the vault
 persona ssh generate --identity <name> --name "GitHub Key"
@@ -340,8 +352,8 @@ Priority policy: the password-manager track targets 1Password parity first; wall
 - [x] Watchtower-class health checks (weak/reused/expired, breach checks)
 - [x] Desktop app data wiring and polished UI
 - [x] Optional sync/automation service with a local-first design (E2EE sync, accounts, backups, pairing relay)
-- [ ] Sync group mode (default sync): dynamic-password PAKE pairing, instruction-stream sync, three relay forms (S1 protocol + relay done; desktop wiring and S2+ in progress)
-- [ ] Wallet graduation: design doc, signing confirmations, PSBT, keystore JSON (after parity)
+- [x] Sync group mode (default sync): dynamic-password PAKE pairing, instruction-stream sync, three relay forms — S1–S5 all landed (2026-10-05~10-10)
+- [x] Wallet experimental track: design doc, signing confirmations (anti address-poisoning), PSBT single-sig, keystore JSON import/export (2026-10-13); graduation still deferred until Milestone 4 parity
 
 ## Contributing
 
