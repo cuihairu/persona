@@ -687,6 +687,42 @@ mod tests {
     }
 
     #[test]
+    fn write_then_reread_round_trip_keeps_enabled_truthful() {
+        // 真实文件往返：一键启用（upsert + 原子写）→ 按
+        // ssh_agent_integration_status 的同一种读法回读 → enabled 判据必须为真；
+        // 一键停用（整块移除 + 原子写）→ 回读必须为假。前端启用/停用后
+        // 一律走这个回读点，所以这里钉住「写→读」的一致性。
+        let dir = std::env::temp_dir().join(format!("persona-ssh-int-{}", std::process::id()));
+        let path = dir.join(".ssh").join("config");
+        let config = "Host github.com\n  User git\n";
+
+        // 启用链路
+        write_config_atomic(&path, &upsert_managed_block(config, AGENT))
+            .expect("write enabled config");
+        let (reread, read_error) = match std::fs::read_to_string(&path) {
+            Ok(c) => (c, None),
+            Err(e) => (String::new(), Some(e.to_string())),
+        };
+        assert_eq!(read_error, None);
+        assert_eq!(
+            managed_block_identity_agent(&reread).as_deref(),
+            Some(AGENT),
+            "enabled 判据（锚点块 == agent socket）在回读后必须为真"
+        );
+
+        // 停用链路
+        write_config_atomic(&path, &remove_managed_block(&reread))
+            .expect("write disabled config");
+        let reread = std::fs::read_to_string(&path).expect("reread disabled config");
+        assert_eq!(managed_block_identity_agent(&reread), None);
+        // 用户配置在两次往返中保持原样
+        assert!(reread.contains("Host github.com"));
+        assert!(reread.contains("  User git"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn damaged_block_begin_without_end_is_replaced_not_duplicated() {
         let damaged = format!("Host a\n\n{BLOCK_BEGIN}\nIdentityAgent /stale\n");
         let fixed = upsert_managed_block(&damaged, AGENT);
