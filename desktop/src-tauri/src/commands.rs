@@ -893,6 +893,25 @@ pub async fn set_locale(
     Ok(ApiResponse::success(updated.settings))
 }
 
+/// 托盘右键菜单换文案：前端把 i18n locale 表（tray.* 命名空间）的真值
+/// 推过来渲染——原生托盘菜单不归 useTranslation 管，这是它接入既有 i18n
+/// 体系的唯一通道。无状态、无锁屏门禁（锁屏时右键菜单也要跟着界面语言）；
+/// 无托盘（无显示会话的降级运行）时是无害 no-op。
+#[command(rename_all = "snake_case")]
+pub fn set_tray_locale<R: tauri::Runtime>(
+    labels: crate::TrayLocaleLabels,
+    app: tauri::AppHandle<R>,
+) -> ApiResponse<bool> {
+    if let Some(tray) = app.tray_by_id("persona-tray") {
+        if let Err(e) =
+            crate::build_tray_menu(&app, &labels).and_then(|menu| tray.set_menu(Some(menu)))
+        {
+            tracing::warn!("tray locale update failed: {e}");
+        }
+    }
+    ApiResponse::success(true)
+}
+
 /// 窄写主密码过期策略（天）；None = 不过期。`Some(0)` 无意义，拒绝。
 /// 与 `set_feature_flags` 同范式：解锁门禁 + 窄写单字段 + 返回全量 settings。
 #[command]

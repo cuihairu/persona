@@ -109,6 +109,7 @@ import type {
   ConnectTokenView,
   ConnectTokenCreatedView,
   WorkspaceSettings,
+  TrayLocaleLabels,
   BackupExportOutcome,
   BackupRestoreOutcome,
   BackupPushOutcome,
@@ -283,6 +284,11 @@ class PersonaAPI {
   /** 窄写界面语言（"zh-CN" / "en"）。返回更新后的全量设置 */
   async setLocale(locale: string): Promise<ApiResponse<WorkspaceSettings>> {
     return invoke('set_locale', { locale });
+  }
+
+  /** 托盘右键菜单文案换语言：真值在 i18n locale 表（tray.*），Rust 只渲染 */
+  async setTrayLocale(labels: TrayLocaleLabels): Promise<ApiResponse<boolean>> {
+    return invoke('set_tray_locale', { labels });
   }
 
   /** 修改主密码（旧密码仅存在于本次请求，不落盘不进日志）；成功后前端需重新 init */

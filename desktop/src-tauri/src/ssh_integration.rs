@@ -711,8 +711,7 @@ mod tests {
         );
 
         // 停用链路
-        write_config_atomic(&path, &remove_managed_block(&reread))
-            .expect("write disabled config");
+        write_config_atomic(&path, &remove_managed_block(&reread)).expect("write disabled config");
         let reread = std::fs::read_to_string(&path).expect("reread disabled config");
         assert_eq!(managed_block_identity_agent(&reread), None);
         // 用户配置在两次往返中保持原样

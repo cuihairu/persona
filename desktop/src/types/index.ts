@@ -1098,6 +1098,15 @@ export interface SyncStatusReport {
 
 /** `ssh_agent_integration_status` 返回（对应 Rust SshIntegrationStatus）：
  *  ~/.ssh/config 的 IdentityAgent 锚点块三态快照 */
+/** 托盘右键菜单文案（i18n locale 表是真值源，Rust 只渲染不存词） */
+export interface TrayLocaleLabels {
+  open: string;
+  quickAccess: string;
+  generator: string;
+  lock: string;
+  quit: string;
+}
+
 export interface SshIntegrationStatus {
   /** 锚点块存在且指向当前 agent socket */
   enabled: boolean;

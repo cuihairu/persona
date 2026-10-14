@@ -1272,4 +1272,11 @@ export default {
     openToApprove: '{{source}} —— 打开 Persona 批准或拒绝',
     unknownHost: '未知主机',
   },
+  tray: {
+    open: '打开 Persona',
+    quickAccess: '快速访问',
+    generator: '密码生成器',
+    lock: '锁定',
+    quit: '退出',
+  },
 };

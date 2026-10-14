@@ -1297,4 +1297,11 @@ export default {
     openToApprove: '{{source}} — open Persona to approve or deny',
     unknownHost: 'Unknown host',
   },
+  tray: {
+    open: 'Open Persona',
+    quickAccess: 'Quick Access',
+    generator: 'Password Generator',
+    lock: 'Lock',
+    quit: 'Quit',
+  },
 };

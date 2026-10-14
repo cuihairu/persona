@@ -10801,6 +10801,29 @@ async fn set_locale_round_trips_zh_cn_and_en() {
 }
 
 // ---------------------------------------------------------------------------
+// set_tray_locale：托盘右键菜单文案（真值在前端 i18n locale 表）的无状态
+// 渲染通道——无锁屏门禁（锁屏时菜单也要跟界面语言），无托盘时是无害 no-op。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn set_tray_locale_is_harmless_noop_without_tray() {
+    let app = mock_app();
+
+    // 测试环境无托盘（tray_by_id 找不到）：应报成功而非报错——降级运行不该
+    // 把语言切换炸红
+    let labels = crate::TrayLocaleLabels {
+        open: "Open Persona".to_string(),
+        quick_access: "Quick Access".to_string(),
+        generator: "Password Generator".to_string(),
+        lock: "Lock".to_string(),
+        quit: "Quit".to_string(),
+    };
+    let resp = set_tray_locale(labels, app.handle().clone());
+    assert!(resp.success);
+    assert_eq!(resp.data, Some(true));
+}
+
+// ---------------------------------------------------------------------------
 // connect_token_* 的 Err 臂：锁定（error_with_code 路径）与坏库（纯错误
 // 路径）——上轮 round-trip 只测了 Ok 臂。
 // ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import SettingsModal from './SettingsModal';
+import i18n from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
@@ -50,6 +51,9 @@ jest.mock('@/utils/api', () => ({
     sshAgentIntegrationStatus: jest.fn(),
     sshAgentIntegrationEnable: jest.fn(),
     sshAgentIntegrationDisable: jest.fn(),
+    // 语言切换（GeneralPane 的 locale-select）与其后的托盘文案推送
+    setLocale: jest.fn(),
+    setTrayLocale: jest.fn().mockResolvedValue({ success: true, data: true }),
   },
 }));
 
@@ -59,6 +63,8 @@ jest.mock('react-hot-toast', () => ({
 }));
 
 const mockSetFlags = personaAPI.setFeatureFlags as jest.Mock;
+const mockSetLocale = personaAPI.setLocale as jest.Mock;
+const mockSetTrayLocale = personaAPI.setTrayLocale as jest.Mock;
 const mockGetSettings = personaAPI.getWorkspaceSettings as jest.Mock;
 const mockSetSync = personaAPI.setSyncConfig as jest.Mock;
 const mockTokenPresent = personaAPI.syncTokenPresent as jest.Mock;
@@ -270,6 +276,69 @@ describe('components/SettingsModal', () => {
 
     // Theme 与功能开关互不相干（组件只写 store，html class 由 App 层 useTheme 应用）
     expect(mockSetFlags).not.toHaveBeenCalled();
+  });
+
+  it('pushes new-language tray labels to the backend right after a locale switch', async () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+    mockSetLocale.mockResolvedValue({ success: true, data: {} });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    // 初始 zh-CN：选择 en 后，托盘文案必须是英文真值——
+    // 组件级 t 是 getFixedT 旧语言快照，这里若误用会推回中文标签
+    fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'en' } });
+
+    await waitFor(() => {
+      expect(mockSetLocale).toHaveBeenCalledWith('en');
+      expect(mockSetTrayLocale).toHaveBeenCalledWith({
+        open: 'Open Persona',
+        quickAccess: 'Quick Access',
+        generator: 'Password Generator',
+        lock: 'Lock',
+        quit: 'Quit',
+      });
+    });
+    expect(mockSetTrayLocale).toHaveBeenCalledTimes(1);
+
+    // 真实 i18n 单例跨用例共享：切回 zh-CN 复位（setupTests 基准语言）
+    await act(async () => {
+      await i18n.changeLanguage('zh-CN');
+    });
+  });
+
+  it('rolls back the locale switch and skips the tray push when persistence fails', async () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+    mockSetLocale.mockResolvedValue({ success: false, error: 'Service is locked' });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'en' } });
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Service is locked');
+    });
+    expect(mockSetTrayLocale).not.toHaveBeenCalled();
+    expect(screen.getByTestId('locale-select')).toHaveValue('zh-CN');
+
+    await act(async () => {
+      await i18n.changeLanguage('zh-CN');
+    });
   });
 
   it('toggles a flag optimistically and adopts the server truth', async () => {

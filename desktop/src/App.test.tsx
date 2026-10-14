@@ -130,6 +130,8 @@ jest.mock('@/utils/api', () => ({
       success: true,
       data: { features: { ssh_agent: true, wallet: true, passkeys: true, fetch_favicons: true } },
     }),
+    // 托盘右键菜单文案推送（启动恢复语言 / 切换语言时）
+    setTrayLocale: jest.fn().mockResolvedValue({ success: true, data: true }),
   },
 }));
 

@@ -54,21 +54,55 @@ fn display_session_available() -> bool {
     true
 }
 
-/// 构建系统托盘与菜单（需显示会话；关窗驻留时的常驻入口）。
-fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {
-    let open_item = MenuItem::with_id(app, "open", "Open Persona", true, None::<&str>)?;
-    let quick_item = MenuItem::with_id(app, "quick-access", "Quick Access", true, None::<&str>)?;
-    let generator_item = MenuItem::with_id(
-        app,
-        "generator-panel",
-        "Password Generator",
+/// 托盘右键菜单文案。真值在前端 i18n locale 表（`tray.*` 命名空间），
+/// 前端经 `set_tray_locale` 把当前语言的文案推过来渲染；这里的默认值
+/// 只覆盖「前端尚未上报」的启动窗口（默认语言 zh-CN，与前端
+/// DEFAULT_LOCALE 一致），首次推送后即被真值覆盖。
+#[derive(Clone, Debug, serde::Deserialize)]
+pub struct TrayLocaleLabels {
+    pub open: String,
+    pub quick_access: String,
+    pub generator: String,
+    pub lock: String,
+    pub quit: String,
+}
+
+/// 启动兜底文案（前端未上报前）。
+fn default_tray_labels() -> TrayLocaleLabels {
+    TrayLocaleLabels {
+        open: "打开 Persona".to_string(),
+        quick_access: "快速访问".to_string(),
+        generator: "密码生成器".to_string(),
+        lock: "锁定".to_string(),
+        quit: "退出".to_string(),
+    }
+}
+
+/// 按文案构建托盘菜单：setup 兜底与运行期语言切换共用同一条构建路径，
+/// 菜单项 id 与 on_menu_event 的分发一一对应，别动 id。
+pub(crate) fn build_tray_menu<R: tauri::Runtime, M: tauri::Manager<R>>(
+    manager: &M,
+    labels: &TrayLocaleLabels,
+) -> Result<Menu<R>, tauri::Error> {
+    let open_item = MenuItem::with_id(manager, "open", labels.open.as_str(), true, None::<&str>)?;
+    let quick_item = MenuItem::with_id(
+        manager,
+        "quick-access",
+        labels.quick_access.as_str(),
         true,
         None::<&str>,
     )?;
-    let lock_item = MenuItem::with_id(app, "lock", "Lock", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let tray_menu = Menu::with_items(
-        app,
+    let generator_item = MenuItem::with_id(
+        manager,
+        "generator-panel",
+        labels.generator.as_str(),
+        true,
+        None::<&str>,
+    )?;
+    let lock_item = MenuItem::with_id(manager, "lock", labels.lock.as_str(), true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(manager, "quit", labels.quit.as_str(), true, None::<&str>)?;
+    Menu::with_items(
+        manager,
         &[
             &open_item,
             &quick_item,
@@ -76,7 +110,12 @@ fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std:
             &lock_item,
             &quit_item,
         ],
-    )?;
+    )
+}
+
+/// 构建系统托盘与菜单（需显示会话；关窗驻留时的常驻入口）。
+fn setup_tray<R: tauri::Runtime>(app: &tauri::App<R>) -> Result<(), Box<dyn std::error::Error>> {
+    let tray_menu = build_tray_menu(app, &default_tray_labels())?;
 
     TrayIconBuilder::with_id("persona-tray")
         .icon(
@@ -313,6 +352,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::set_feature_flags,
             commands::set_password_expiry,
             commands::set_locale,
+            commands::set_tray_locale,
             commands::quick_access_status,
             commands::quick_access_set,
             commands::quick_access_open,

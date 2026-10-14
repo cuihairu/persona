@@ -13,6 +13,7 @@ import { useTheme } from '@/hooks/useTheme';
 import { personaAPI } from '@/utils/api';
 import { copyToClipboardWithToast } from '@/utils/clipboard';
 import { checkForUpdate, isUpdateCheckEnabled } from '@/utils/updateCheck';
+import { trayLocaleLabels } from '@/utils/trayLocale';
 import { useAppStore, DEFAULT_FEATURE_FLAGS } from '@/stores/appStore';
 import UnlockScreen from '@/components/UnlockScreen';
 import { CreateIdentityModal } from '@/components/IdentitySwitcher';
@@ -71,7 +72,12 @@ const App: React.FC = () => {
       try {
         const resp = await personaAPI.getWorkspaceSettings();
         if (resp.success && resp.data) {
-          void i18n.changeLanguage(normalizeLocale(resp.data.locale));
+          const next = normalizeLocale(resp.data.locale);
+          await i18n.changeLanguage(next);
+          // 托盘右键菜单是原生菜单，不吃 useTranslation：把 locale 表的
+          // 真值推给后端渲染。用全局 i18n.t（调用时取当前语言）——组件级
+          // t 是 getFixedT 定语快照，切语言后仍是旧语言
+          void personaAPI.setTrayLocale(trayLocaleLabels((key) => i18n.t(key)));
         }
       } catch {
         // keep default
@@ -235,8 +241,12 @@ const App: React.FC = () => {
         const resp = await personaAPI.getWorkspaceSettings();
         if (resp.success && resp.data) {
           setFeatureFlags(resp.data.features);
-          // 同一次读取顺带刷新语言偏好（解锁前后设置可能变化，幂等）
-          void i18n.changeLanguage(normalizeLocale(resp.data.locale));
+          // 同一次读取顺带刷新语言偏好（解锁前后设置可能变化，幂等）；
+          // 托盘右键菜单文案一并重推（原生菜单只认推送的真值，
+          // 用全局 i18n.t 取切换后的语言，组件级 t 是旧语言快照）
+          const next = normalizeLocale(resp.data.locale);
+          await i18n.changeLanguage(next);
+          void personaAPI.setTrayLocale(trayLocaleLabels((key) => i18n.t(key)));
         }
       } catch {
         // keep defaults

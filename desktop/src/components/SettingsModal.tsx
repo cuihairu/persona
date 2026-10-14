@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
 import { personaAPI } from '@/utils/api';
+import { trayLocaleLabels } from '@/utils/trayLocale';
 import { useAppStore } from '@/stores/appStore';
 import type {
   BiometricStatus,
@@ -1190,6 +1191,10 @@ const GeneralPane: React.FC<{
         setLocale(previous);
         void i18n.changeLanguage(previous);
         toast.error(resp.error || t('settings.saveFailed'));
+      } else {
+        // 托盘右键菜单同步换文案（原生菜单走 set_tray_locale，不另起一套）；
+        // 用全局 i18n.t 取切换后的语言——组件级 t 是 getFixedT 旧语言快照
+        void personaAPI.setTrayLocale(trayLocaleLabels((key) => i18n.t(key)));
       }
     } catch (err) {
       setLocale(previous);
