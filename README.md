@@ -14,6 +14,8 @@
   </p>
 </div>
 
+> **English** | [中文](README.zh.md)
+
 Manage your digital selves. Switch identity material with confidence.
 
 ## Project Overview
