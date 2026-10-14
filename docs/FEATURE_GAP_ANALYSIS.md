@@ -1,5 +1,7 @@
 # Feature Gap Analysis (Persona vs 1Password)
 
+> [English](FEATURE_GAP_ANALYSIS.md) | [中文](FEATURE_GAP_ANALYSIS.zh.md)
+
 Status as of 2026-09-25. Legend: [=] parity or similar, [≈] partial, [+] Persona advantage, [−] missing/incomplete
 
 ## 对标矩阵（逐项）

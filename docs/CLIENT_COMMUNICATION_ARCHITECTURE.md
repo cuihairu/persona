@@ -1,5 +1,7 @@
 # 客户端通信架构
 
+> [English](CLIENT_COMMUNICATION_ARCHITECTURE.md) | [中文](CLIENT_COMMUNICATION_ARCHITECTURE.zh.md)
+
 > **Status: target architecture / protocol design — NOT the current state.**
 > 本文描述的统一 IPC 层（`IpcMessage` 消息结构、`identity.*`/`credential.*` RPC
 > 方法表、`~/.persona/persona.sock`、JWT SessionToken、MessagePack+LZ4、

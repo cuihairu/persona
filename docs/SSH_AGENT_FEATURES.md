@@ -1,5 +1,7 @@
 # Persona SSH Agent - 完整功能说明
 
+> [English](SSH_AGENT_FEATURES.md) | [中文](SSH_AGENT_FEATURES.zh.md)
+
 ## 概述
 
 Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安全地存储在 Persona 加密保险库中,并提供企业级的策略控制和生物识别认证。

@@ -1,5 +1,7 @@
 # 自托管 persona-server（一键起）
 
+> [English](SELF_HOST_SERVER.md) | [中文](SELF_HOST_SERVER.zh.md)
+
 `persona-server` 是可选的同步/备份中继。默认不用：桌面与 CLI 在不配置服务器时全功能本地可用（隐私红线：账号/同步默认关闭、显式开启）。
 
 定位：**纯中继 + 密文保管**。服务器只见密文与最小元数据（备份是 PERSENC1 整库密文，同步 oplog 是密文载荷 + item UUID/kind/lamport/时间戳/设备公钥/信封——完整可见面清单见 `E2EE_SYNC_DESIGN.md` §10）。主密码不出设备。

@@ -1,5 +1,7 @@
 # Contributing Guide
 
+> [English](CONTRIBUTING.md) | [中文](CONTRIBUTING.zh.md)
+
 Thanks for helping improve Persona! This guide captures the conventions we expect contributors to follow so reviews stay fast and predictable.
 
 ## Conventional Commits

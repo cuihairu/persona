@@ -1,5 +1,7 @@
 # Persona 威胁模型与周期性安全审查
 
+> [English](THREAT_MODEL.md) | [中文](THREAT_MODEL.zh.md)
+
 本文档定义 Persona 当前主线产品的安全边界、主要威胁、已落地控制和复审机制。范围以根目录 `BOUNDARY.md` 为准：Persona 是本地优先、零知识的身份材料管理器，主要保护同一用户在不同身份上下文中的密码、API Key、TOTP、SSH Key、浏览器填充数据和相关元数据。
 
 ## 目标与非目标

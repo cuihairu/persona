@@ -1,5 +1,7 @@
 # E2EE 同步设计稿（阶段 0）
 
+> [English](E2EE_SYNC_DESIGN.md) | [中文](E2EE_SYNC_DESIGN.zh.md)
+
 > 状态：**设计稿，阶段 1–4 均已落地（2026-09，逐阶段状态见 §11 表）**。本文是
 > TODO「第 3 步」（Connect endpoint + E2EE sync + SRP 设备认证）的开工文档：把四个
 > 必须先拍板的设计决策定下来，并给出实施阶段映射与威胁模型登记骨架。当前活跃的

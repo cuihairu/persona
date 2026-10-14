@@ -1,5 +1,7 @@
 # Connect 本机自动化端点设计稿（阶段 0）
 
+> [English](CONNECT_AUTOMATION_DESIGN.md) | [中文](CONNECT_AUTOMATION_DESIGN.zh.md)
+
 > 状态：**设计稿，阶段 1–4 均已落地（2026-09）**。本文是 TODO「Connect-like
 > local-first secrets automation endpoint」（ROADMAP Milestone 6）的开工文档，
 > 对标 1Password Secrets Automation / Connect server 在 Persona 本地优先架构

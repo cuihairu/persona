@@ -1,5 +1,7 @@
 # 生物识别解锁设计（调用系统功能解锁 vault）
 
+> [English](biometric-unlock-design.md) | [中文](biometric-unlock-design.zh.md)
+
 状态：2026-09-26 设计定稿 + 架构落地；macOS（§5.2）与 Windows（§6.3）
 硬件绑定路线均**已实现、待真机 spike**。
 本文是 `docs/THREAT_MODEL.md`「Biometric Unlock」章的展开设计稿。

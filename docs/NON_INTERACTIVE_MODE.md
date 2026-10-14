@@ -1,5 +1,7 @@
 # CLI Non-Interactive Mode Guide
 
+> [English](NON_INTERACTIVE_MODE.md) | [中文](NON_INTERACTIVE_MODE.zh.md)
+
 Persona CLI supports a non-interactive (headless) mode for use in CI/CD pipelines, automation scripts, and other scenarios where user interaction is not possible.
 
 ## Environment Variables

@@ -1,5 +1,7 @@
 # Persona Bridge Protocol v2
 
+> [English](BRIDGE_PROTOCOL.md) | [中文](BRIDGE_PROTOCOL.zh.md)
+
 Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desktop 之间的安全通信。
 
 ## 概述

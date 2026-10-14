@@ -1,5 +1,7 @@
 # Passkey Gate Audit（批 E 核查）
 
+> [English](PASSKEY_GATE_AUDIT.md) | [中文](PASSKEY_GATE_AUDIT.zh.md)
+
 核查日期：2026-10-04。范围：浏览器插件轨的 passkey/WebAuthn 能力（TODO 批 E：
 「Passkey 补缺口核查 + 端到端测试」），对照 [PASSKEYS_DESIGN.md](PASSKEYS_DESIGN.md)
 的 P1–P4 阶段与桥协议 v2/v3 落地情况。分工口径：E1/E3 的代码与测试由扩展轨

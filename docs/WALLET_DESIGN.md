@@ -1,5 +1,7 @@
 # Wallet Key Hierarchy & Signing — Design
 
+> [English](WALLET_DESIGN.md) | [中文](WALLET_DESIGN.zh.md)
+
 状态：**现状盘点 + 定案**（2026-10-13，M5 钱包毕业轨道）。本文回答四件事：
 密钥层级（seed ↔ master key 包装）、口令变更的 re-wrap 语义、分身与钱包的
 绑定模型、签名确认的 UX 与后端策略；威胁模型扩展见

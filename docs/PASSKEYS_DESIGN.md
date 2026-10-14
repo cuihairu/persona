@@ -1,5 +1,7 @@
 # Persona Passkeys (WebAuthn) 设计
 
+> [English](PASSKEYS_DESIGN.md) | [中文](PASSKEYS_DESIGN.zh.md)
+
 状态：设计稿（待评审） · 日期：2026-09-13 · 对应路线图：Milestone 4「1Password Parity」
 
 ## 1. 背景与目标

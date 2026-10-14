@@ -1,5 +1,7 @@
 # 供应链安全检查指南
 
+> [English](SUPPLY_CHAIN_SECURITY.md) | [中文](SUPPLY_CHAIN_SECURITY.zh.md)
+
 本项目实施全面的供应链安全检查,确保所有依赖项的安全性、许可证合规性和来源可信度。
 
 ## 工具链

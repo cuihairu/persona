@@ -1,5 +1,7 @@
 # Windows 安装器与升级流程（NSIS）
 
+> [English](WINDOWS_INSTALLER.md) | [中文](WINDOWS_INSTALLER.zh.md)
+
 状态：2026-09-25 落地。配置在 `desktop/src-tauri/tauri.conf.json`
 （`bundle.windows.nsis`），定制模板在 `desktop/src-tauri/nsis/installer.nsi`，
 回归断言在 `desktop/src-tauri/src/packaging_tests.rs`。

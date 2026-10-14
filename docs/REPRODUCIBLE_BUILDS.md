@@ -1,5 +1,7 @@
 # 可复现构建（Reproducible Builds）
 
+> [English](REPRODUCIBLE_BUILDS.md) | [中文](REPRODUCIBLE_BUILDS.zh.md)
+
 状态：**deb 产物同机逐字节可复现**（2026-09-24 基线实测）；工具链已钉版
 （1.97.0）、构建机路径已重映射（`scripts/build-repro.sh`），跨机器产物
 应当一致但**真跨机复验未做**（见「剩余差距」）。本文记录测量方法、实测

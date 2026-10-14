@@ -1,5 +1,7 @@
 # Biometric Unlock Hooks
 
+> [English](BIOMETRIC_HOOKS.md) | [中文](BIOMETRIC_HOOKS.zh.md)
+
 Persona core defines a `BiometricProvider` trait so platform-specific layers (desktop/mobile/CLI) can plug in Touch ID, Face ID, Windows Hello, or Linux Secret Service prompts without forcing those dependencies into the core crate.
 
 ## Provider contract

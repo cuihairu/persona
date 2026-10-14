@@ -1,0 +1,433 @@
+> [English](STORAGE_AND_SYNC.md) | **中文**
+
+# 存储与同步模式（用户指南）
+
+Persona 是**本地优先**的：你的密码库永远是一台设备上的一个加密 SQLite 文件，
+联网能力全部是**可选附件**。本文说明数据实际放在哪、有哪些同步/备份选项、
+各自的配置方法与安全边界。
+
+> 工程视角的架构设计见 [`CLIENT_COMMUNICATION_ARCHITECTURE.md`](./CLIENT_COMMUNICATION_ARCHITECTURE.md)
+> （愿景设计稿）与 [`THREAT_MODEL.md`](./THREAT_MODEL.md)（威胁与不宣称事项）。
+
+## 总览：存储与同步模式
+
+| 模式                             | 状态     | 你得到什么                           | 需要什么                   |
+| -------------------------------- | -------- | ------------------------------------ | -------------------------- |
+| **纯本地**（默认）               | 完整可用 | 零网络、全部功能                     | 什么都不配                 |
+| **自托管 Persona Server**        | 已实现   | 审计事件异地副本 + 整库加密备份保管  | 一台自己控制的服务器       |
+| **端到端加密凭据同步**（桌面版） | 已实现   | 多设备凭据保持一致（服务器只见密文） | 模式二的服务器 + ≥2 台设备 |
+| **网盘目录（iCloud/Dropbox/…）** | 仅限冷备 | 把加密备份文件放进云盘               | 手动拷贝（见下文警告）     |
+
+**凭据级同步已实现**（2026-09，桌面版）：两台及以上设备通过自托管服务器
+中继密文操作日志，凭据的增删改在设备间收敛；离线并发修改同一凭据时保留
+双版本、由你在界面上裁决。服务器全程只见密文。细节与边界见下文
+「[端到端加密凭据同步](#端到端加密凭据同步多设备)」一节。
+
+## 你的数据放在哪
+
+初始化后的 workspace 目录（默认 `~/.persona`，可经 `--path` 或
+`PERSONA_WORKSPACE_PATH` 指定）：
+
+| 路径                                     | 内容                                    | 加密与否                                                                     |
+| ---------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------- |
+| `identities.db`                          | 主库：身份/凭据/审计/设置等全部表       | 凭据载荷 per-item key 加密；**元数据列（名称、URL、用户名等）是明文 SQLite** |
+| `attachments/`                           | 附件文件体                              | 密文（复用所属凭据的 item key）                                              |
+| `backups/`、`exports/`、`temp/`、`logs/` | 工作目录（导出文件路径由 `--out` 自定） | 混合（导出可选加密）                                                         |
+| `config.toml`                            | CLI 配置                                | **明文，不含密钥**                                                           |
+
+密钥层级：每条凭据一个随机 item key（AES-256-GCM 加密载荷），item key 由
+主密码派生的 master key 包裹——见 [`KEY_HIERARCHY.md`](./KEY_HIERARCHY.md)。
+主密码不在任何文件里（验证用 Argon2 哈希）；启用指纹解锁后主密码托管进
+OS 钥匙串（service 名 `persona-biometric`，详见 THREAT_MODEL「Biometric
+Unlock」一节的固有暴露说明）。
+
+> **注意**：主库的元数据列是明文。对元数据也保密的场景（共用机器、被
+> 扣押设备），考虑 Travel Mode（见下文）或整盘加密。
+
+## 模式一：纯本地（默认）
+
+不配置任何服务器时 Persona **零外联**——没有遥测、没有更新检查、没有
+任何网络调用。
+
+冷备建议（按优先序）：
+
+1. **加密导出**：`persona export --encrypt --out vault-backup.persenc`
+   （Argon2id + AES-256-GCM，导出时设独立口令）。文件可随意拷贝到
+   U 盘/云盘。
+2. **整库加密备份**：需要模式二的服务器（`persona backup push` 没有
+   "备份到本地文件"的路径；离线恢复可用 `persona backup restore --file`
+   吃任何 `.persenc` 密文）。
+3. OS 级快照：直接拷 `identities.db` 前请先锁定/退出 Persona（热拷贝
+   活跃 SQLite 有损坏风险）。
+
+## 模式二：自托管 Persona Server
+
+### 你得到什么
+
+1. **审计事件异地副本**：设备把操作审计（动作/资源类型/成败/时间戳等
+   **元数据**，不含凭据名称、不含任何密文或明文密钥）批量上报，服务器
+   存一份副本供事后查询。本地审计库仍是第一存证源，上报是尽力而为的
+   复制（断网不丢本地记录，只丢异地副本的连续性）。
+2. **整库加密备份保管**：`persona backup push` 把整库快照
+   （VACUUM INTO → gzip → PERSENC1 加密）上传，服务器只见密文；
+   `list/pull/restore/delete` 管理版本。桌面端同一能力在设置 → 备份 →
+   「服务器密文仓」（推送/版本列表/恢复/删除；快照在本地加密后才出网，
+   备份口令与主密码不出本机；未配置服务器时入口不可用——默认关闭、
+   显式开启）。
+
+### 你得不到什么
+
+- **服务器侧合并/裁决**：凭据同步的合并（LWW）与冲突裁决全部在客户端
+  完成，服务器只中继密文操作日志（见下节）。触发仍是手动的——设置页
+  「立即同步」，不是毫秒级推送。
+- **服务器侧防篡改**：服务器操作者（也就是你自己，或攻破它的人）可以
+  扣留、删除或回滚备份与同步日志，客户端不做新鲜度校验（THREAT_MODEL
+  「备份保管端点」「E2EE 同步中继」明确不宣称）。
+
+### 部署服务器
+
+`persona-server` crate（axum），全部配置走环境变量：
+
+| 变量                                   | 默认                  | 说明                                                                                                 |
+| -------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
+| `PERSONA_SERVER_HOST`                  | `0.0.0.0`             | 监听地址（本机试玩用 `127.0.0.1`）                                                                   |
+| `PERSONA_SERVER_PORT`                  | `3000`                | 监听端口                                                                                             |
+| `PERSONA_SERVER_DB`                    | `./persona-server.db` | 服务器自己的元数据库                                                                                 |
+| `PERSONA_SERVER_TOKENS`                | —                     | **多设备令牌**：`"laptop:tok1,phone:tok2"`；非法格式启动即错                                         |
+| `PERSONA_SERVER_TOKEN`                 | —                     | legacy 单令牌（视为 "default" 设备）；建议迁移到 TOKENS                                              |
+| `PERSONA_SERVER_BACKUP_DIR`            | `<DB 目录>/backups`   | 备份密文存放目录                                                                                     |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0`（不限）           | 每设备保留版本数上限，超限删最旧                                                                     |
+| `PERSONA_SERVER_OPS_RETENTION_DAYS`    | `0`（不清理）         | 同步中继日志保留天数。开窗 = 放弃向「离线超过窗口」的设备补发历史的责任，**须 ≥ 最慢设备的离线周期** |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理）         | 审计事件副本保留天数，按你的 SIEM 摘取周期定                                                         |
+
+**fail-closed**：`TOKENS`/`TOKEN` 都没配时 `/api/v1` 整体禁用（不是裸奔）。
+
+HTTP 端点（除 health/metrics 外全部要求 Bearer 令牌）：
+
+| 端点                  | 方法                | 用途                                                                      | 请求上限                          |
+| --------------------- | ------------------- | ------------------------------------------------------------------------- | --------------------------------- |
+| `/api/v1/events`      | POST                | 上报审计事件批（单批 ≤500 条）                                            | 线上 1 MiB（gzip）/ 解压后 10 MiB |
+| `/api/v1/events`      | GET                 | 查询已存事件（按动作/成败/时间过滤 + 游标分页）                           | —                                 |
+| `/api/v1/backups`     | POST / GET          | 上传备份 / 列版本                                                         | 256 MiB                           |
+| `/api/v1/backups/:id` | GET / DELETE        | 下载 / 删除某版本                                                         | —                                 |
+| `/api/v1/sync/*`      | POST / GET / DELETE | 设备注册、组密钥信封取/传、oplog 推拉（本文端到端同步一节的承载面）       | —                                 |
+| `/api/v1/auth/*`      | POST                | 设备 SRP 认证（register/challenge/verify 换短期 token）                   | —                                 |
+| `/api/v1/accounts/*`  | POST / GET / DELETE | 账号域（SRP 密码、passkey 仪式、恢复码、账号设备/会话）                   | 线上 1 MiB                        |
+| `/api/v1/pairing/*`   | POST / GET / DELETE | 同步组动态密码配对信箱（**免 Bearer**，TTL 600s、队列 ≤4、payload ≤4KiB） | 4 KiB                             |
+| `/health`、`/metrics` | GET                 | 存活与指标                                                                | 公开                              |
+
+设备名由命中的令牌推导（客户端不可自报）；同设备与最新版本 sha256 相同
+的 push 幂等去重。端点细节见 `SELF_HOST_SERVER.md` 端点速查。
+
+### 配置客户端
+
+**桌面应用**（设置 → 同步）：填 server URL + 设备令牌，开关启用。令牌
+真值存 OS 钥匙串（service `persona-sync`），数据库里只留空占位——把
+`identities.db` 拷到别的机器不会带走令牌，需重新输入。禁用即清钥匙串。
+
+**CLI**：只认环境变量、**故意不落盘**——
+
+```bash
+export PERSONA_SERVER_URL="https://your-server:8443"
+export PERSONA_SERVER_TOKEN="tok1"          # 与服务器 TOKENS 中某条匹配
+export PERSONA_PAYLOAD_PASSPHRASE="..."     # 备份口令（交互输入也行）
+persona backup push
+```
+
+两个通道**相互独立**：桌面设置页的同步配置同时驱动事件上报与端到端
+同步（设置 → 同步的 `sync_now` 与同步管理命令共用这一个 URL+令牌）；
+CLI 的 backup 命令只认自己的 env。想在桌面和 CLI 共用一台服务器，
+两处各配一次。
+
+## 端到端加密凭据同步（多设备）
+
+桌面版在模式二之上提供**凭据级的端到端加密同步**：每台设备生成自己的
+密钥对（私钥存 OS 钥匙串，service `persona-device`），第一台设备创建
+组密钥后，其余设备由已授权设备「授权」加入。组密钥只以「仅目标设备
+私钥能拆开」的信封形式经服务器流转——**服务器永远见不到组密钥与任何
+明文**，它只中继密文操作日志。
+
+### 它同步什么
+
+- **凭据**（元数据 + 载荷整体）：增、改、删在设备间收敛，删除以墓碑
+  记录传播。加入同步**之前**就存在的凭据也会在下一次同步时自动灌入。
+- 同步是**手动触发**的：设置 → 端到端加密同步 → 「立即同步」，跑一轮
+  「拉取 → 应用 → 推送」。两台设备都联网时一轮即收敛；本地改动先记账、
+  联网后自动补推。
+
+### 入组方式（当前与规划中）
+
+- **当前（已实现）**：第一台设备自举建组 → 第二台「加入同步」显示待
+  授权 → 已授权设备点「授权」。见下文双设备演示走查。
+- **已实现（S1 桌面接线）**：同步组动态密码配对——
+  一端出示 9 位短时效动态密码，另一端输入后经 PAKE 换出组密钥入组，
+  双端比对 6 位短指纹防中间人，全程零账号（`docs/sync-group-mode.md`）。
+  协议核心、无账号中转信箱与中转客户端已落（`core/src/sync/pairing.rs`、
+  服务器 `/api/v1/pairing/*`），桌面设置页出码/输码/指纹比对/入组界面已接线（`desktop/src/components/SyncGroupSection.tsx` + `desktop/src-tauri/src/commands.rs` 七个 `sync_group_*` 命令）。
+
+### 它不同步什么（诚实边界）
+
+- **身份（Identity）不同步**——凭据与 Passkey 已同步；身份行仍由各设备
+  自建，物化遇到缺失身份先挂起（pending_identity）等补齐。
+- **Passkey 的设备本地使用态不同步**——`sign_count`/`last_used_at` 在各
+  设备独立推进（跨设备复制计数会伪造 WebAuthn 克隆检测基线）；同步的是
+  注册语义字段（rp、credential id、私钥信封、COSE 公钥、算法、UV/导出
+  标记、标签），私钥信封原样搬运（item key 经组信封流转并重包到本机
+  主密钥，字节不变故照常可解）。
+- **附件文件体不同步**。
+- **本地审计、应用设置、主密码体系不参与同步**——每台设备的主密码相互
+  独立（可以不同），改主密码只影响本机，对同步零影响。
+- 冲突裁决是**整体取舍**：采纳哪个版本就整个用哪个，不做字段级合并。
+
+### 冲突怎么裁决
+
+多数情况没有冲突：并发改动按操作版本号（Lamport 时钟）自动排出先后，
+新者胜。真冲突只出现在「两台设备离线各自改了**同一条**凭据、且改动
+轮次相同」——此时两个版本都保留（数据不丢、不静默覆盖），同步完成后
+设置页出现琥珀色横幅；「查看冲突」打开裁决弹窗，左右对照两版，采纳
+其中一个即可（其余版本不再出现）。
+
+本机操作日志**自动瘦身**：每次同步结束时，已被新版本取代的旧操作、
+以及超过 30 天保留期的删除记录会被清理——未推送的改动、未裁决的冲突
+版本与当前生效版本永远保留。append-only 指不覆写、不静默改动，不承诺
+永久保留每一版历史。
+
+### 服务器能看到什么
+
+密文、条目 UUID、操作类型、版本号、时间戳、设备公钥与信封。**条目
+大小可被观察**（尺寸侧信道，THREAT_MODEL 有诚实登记）。服务器可以
+扣留、删除或回滚日志（不宣称防篡改），但读不出任何内容；「Travel
+Mode」激活期间同步整体暂停（推拉双停），被移出的身份不会被写回。
+
+### 上手：加入与授权
+
+1. 部署服务器（同模式二；`/api/v1/sync/*` 无需额外配置，复用同一份
+   设备令牌）。
+2. 桌面应用 → 设置 → 端到端加密同步：填设备名称 → 「加入同步」。
+   **全新服务器上第一台设备自动建组**（自举），即加入即授权。
+3. 第二台设备同样「加入同步」→ 显示「待授权」徽标；回到已授权设备的
+   设备列表，对它点「授权」。
+4. 各点一次「立即同步」，凭据开始收敛。
+
+### 双设备演示脚本
+
+拿来即可走一遍（两台设备 = 两个装了 Persona 桌面版的环境，共用同一台
+服务器与令牌）：
+
+1. **设备 A 加入**：设置 → 端到端加密同步 → 设备名称 `laptop` → 加入。
+   全新服务器上 A 自举建组，状态行「已加入：laptop」，无待授权徽标。
+2. **设备 B 加入**：同样加入，名称 `phone` → 提示「已登记——请在另一台
+   已授权设备上授权本机」；设备列表中 phone 带「待授权」徽标。
+3. **A 授权 B**：A 的设备列表 → `phone` 行 → 「授权」→ 提示已授权，
+   phone 行的待授权徽标消失。
+4. **A 新建一条凭据 → A「立即同步」**：提示同步完成（推送若干条——
+   存量凭据首次会一并灌入）。
+5. **B「立即同步」**（拉取同批条数）→ B 的凭据列表出现同一条。
+6. **离线冲突**：断开两台设备与服务器的连接（或直接停掉服务器），
+   A 与 B 各自修改**同一条**凭据（如 A 改用户名、B 改 URL）→ 恢复
+   服务器 → 两台各点「立即同步」→ 至少一端出现琥珀色横幅「N 个条目
+   存在并发修改的冲突版本」→ 点「查看冲突」打开裁决弹窗：一版标
+   「当前版本」，另一版标「内容不同」。
+7. **裁决**：点其中一版「采纳此版本」→ 提示「已采纳所选版本」，弹窗
+   内该条目消失；另一台设备再「立即同步」后收敛到同一版本。
+8. **（可选）吊销**：A 的设备列表 → `phone` → 「吊销」→ phone 即刻
+   失去同步资格（后续同步被服务器拒绝）；phone 上的本库数据不受影响
+   （主库密文归主密码体系）。吊销后如需 phone 也读不到同步历史，见
+   下节「轮换组密钥」。
+
+> 已知边界：两台设备在「彼此都尚未加入」的极短窗口内先后对空组加入，
+> 可能各自建组（并发自举）——表现为互相看不到对方的条目。在其中一侧
+> 「离开同步」后重新加入即可回到正常流程。
+
+### 轮换组密钥
+
+吊销设备后，它移除前已知的组密钥仍能解开同步历史（组密钥不可追溯
+撤销）——**轮换**是真正的闭环：设置 → 端到端加密同步 →
+「轮换组密钥」。轮换 = 生成新组密钥，为全部**仍授权**的设备重封信封，
+并把全部凭据以新密钥重新加密入账；此后被吊销设备的旧密钥拆不开任何
+新密文。以下情形也建议轮换：怀疑某台设备密钥泄露，或想把某个已离开
+的成员彻底请出历史。
+
+三条诚实边界（确认弹窗同样提示）：
+
+- **轮换前先各点一次「立即同步」**：轮换只重包当下已推送的条目；其他
+  设备停在本地、尚未推送的改动仍以旧密钥入账，只有新信封的设备将解不
+  开它们（本地数据本身不受影响）。
+- **未裁决的冲突副本**会被轮换清出裁决视图（主库当前态为准；操作日志
+  append-only，原始记录仍在）。
+- **两台设备同时轮换有乐观锁互斥**（2026-09-24）：轮换开始前先在服务器
+  以 epoch 乐观锁抢占互斥（`rotate-begin`），后到的一侧收到
+  `CONCURRENT_CONFLICT` 错误干净中止——未写信封、未重包，重读状态后
+  重试即可。这只防诚实客户端的意外并发，不防恶意客户端绕过（写入
+  真实性边界见 THREAT_MODEL）。
+
+## 备份与恢复实操
+
+> 备份/恢复两条通道并行——CLI（下表的 `persona backup` 五命令）与桌面设置页
+> 的 BackupSection（`desktop/src/components/BackupSection.tsx`，`desktop/src-tauri/src/commands.rs` 六个 `backup_*` 命令）。桌面设置里的"同步"开关驱动事件上报与端到端同步。
+
+| 命令                                    | 作用                                       |
+| --------------------------------------- | ------------------------------------------ |
+| `persona backup push`                   | 快照当前库 → 加密 → 上传（无需解锁主密码） |
+| `persona backup list`                   | 列出版本（新→旧，分页）                    |
+| `persona backup pull <id> --out f`      | 下载密文到文件（不解密）                   |
+| `persona backup restore <id>\|--file f` | 解密复验 → 留 `.bak` → 换库                |
+| `persona backup delete <id>`            | 删除服务器上的版本                         |
+
+要点：
+
+- **备份口令与主密码相互独立**。恢复 = 下载密文 + 备份口令解密 + 主密码
+  解锁。备份口令丢失 = 该备份永久不可恢复（无托管、无重置）。
+- push 设双录确认、restore 不设（口令是既有的）；restore 前自动把现库
+  拷为 `identities.bak`。
+- **附件文件体不在 v1 备份内**：恢复后附件元数据在、文件体缺失（CLI 与
+  桌面均明示此限制）。
+- 备份是快照不是增量：恢复把库整体回到备份时刻。
+
+## 网盘目录（iCloud / Dropbox / WebDAV…）
+
+⚠️ **不要把活跃的 `identities.db` 放进云盘同步目录**。SQLite 假定独占
+写文件，网盘的双向同步会产生冲突副本与损坏风险——这是最常见的踩坑。
+
+正确姿势：云盘只放**密文成品**——
+
+- `persona export --encrypt` 的导出文件，或
+- `persona backup pull` 下载的 `.persenc` 备份密文。
+
+两者都带独立口令，云盘供应商只见密文。代价是手动（或用脚本定时）执行，
+以及恢复是整库级的。
+
+（"文件系统同步 adapter"——本地服务监听变更、自动推拉加密 blob——是
+[设计稿](./CLIENT_COMMUNICATION_ARCHITECTURE.md)中的未来项，当前未实现。）
+
+## 多设备与 Travel Mode
+
+- 多台设备各自 init、各自独立成库。多设备协作现在有三条路：
+  **凭据级 E2EE 同步**（见上文专节，增量、自动收敛）、**备份版本池 +
+  整库恢复**（每台设备用自己的令牌 push，版本按设备归组；整库快照、
+  手动）、网盘冷备（密文成品手动拷贝）。
+- 把一台设备的库恢复成另一台的备份 = **整库替换**（含现有数据被
+  `.bak` 换下），不是合并；要增量保持一致请用凭据同步。
+- [`Travel Mode`](./THREAT_MODEL.md#travel-mode-travelpersenc-sidecar2026-09)
+  （`persona travel …` / 桌面设置通用页 → 安全区）用于暂时把若干身份**整包移出**
+  一台设备（加密 sidecar 随身带走），回来时口令恢复——多设备场景下
+  控制单台设备数据暴露面的工具。Travel 激活期间凭据同步整体暂停
+  （推拉双停），防止把移出身份的墓碑推给其他设备、或把已移出身份拉回
+  本库。
+
+## 本机自动化（Connect API）
+
+让本机的脚本 / CI / 命令行工具**只读**读取 vault 条目的 HTTP 接口。默认
+关闭；开启后只监听 `127.0.0.1`（端口由系统分配），请求永不离开本机。
+详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)、
+[THREAT_MODEL](./THREAT_MODEL.md#connect-本机自动化端点127001-http2026-09-secrets-automation)。
+**外部项目接入指南（三步 + 实测响应样例 + 令牌到期/吊销语义 + 权限边界）
+见 [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)。**
+
+**两步用起来：**
+
+1. 创建 token（明文只展示一次，丢了只能吊销重建）：
+
+   ```bash
+   # 桌面：设置通用页 → Connect 本机自动化 → 创建 Token
+   # CLI（默认授权全部身份的全部可授权类型，只读）：
+   persona connect token create --label "我的 CI 脚本"
+   # 收窄 scope（给了限定就收窄，缺省 = 全部）：
+   persona connect token create --label "deploy" --identity work --type password --type api_key
+   ```
+
+2. 启动监听（前台进程，Ctrl-C 退出；桌面版在设置里开关）：
+
+   ```bash
+   persona connect serve            # 或 --port 8737 固定端口
+   ```
+
+**curl 快速上手**（`$TOKEN` 为创建时保存的 `pconn_…` 明文，`$PORT` 见
+serve 启动输出）：
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/health
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/identities
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items/<id>/totp
+```
+
+边界（诚实版）：
+
+- **只读**。写路径不存在；scope 只能收窄不能提权；passkey / wallet /
+  SSH 密钥 / 自定义类型**永远不可**经此接口授权。
+- token 只存 SHA-256 哈希，列表只见指纹；`persona connect token revoke`
+  （id 或指纹均可）即时生效、幂等。
+- 限速 120 请求/分钟；vault 锁定时返回 503（锁定不消耗限额）。
+- 防线只对本机浏览器侧攻击（恶意网页）有效——**不要**把 token 交给浏览
+  器扩展或任何网页可达的存储；本机恶意进程本来就在信任边界之外。
+
+## Secrets 自动化（CLI 直读）
+
+Connect API 面向**跨进程**消费者（HTTP 客户端）；`persona secrets` 是
+**同进程** CLI 直读路径，给脚本 / CI / 声明式工具提供明文，覆盖三件套：
+shell plugins（env 注入 + 子进程执行）、Kubernetes Secret 清单渲染、
+Terraform `external` provider 协议。
+
+**引用语法**统一为 `IDENTITY/ITEM/FIELD`（身份按名称、条目按凭据名，
+精确匹配；重名即报错，不猜）：
+
+- `name` / `username` / `url` / `notes` 取元数据，**不解密**；
+- 其余字段按条目类型的字段词汇表取值（`persona secrets` 会把合法字段
+  列在报错里），可选字段未设置即报错——**不静默给空串**；
+- `secret` 是各类型主秘密的别名（Password→`password`、API Key→
+  `api_key`、TOTP→`secret_key`、SSH Key→`private_key`、Server→
+  `password`、Secure Note→`note`、钱包→`private_key`、License→
+  `license_key`）。
+
+每次解密都走与桌面/CLI 展示相同的审计路径（`CredentialDecrypted`），
+触碰自动锁计时。
+
+**四个子命令：**
+
+```bash
+# 1. resolve：脚本基元，一行一值（顺序与参数一致）
+export API_KEY="$(persona secrets resolve work/deploy/api_key)"
+
+# 2. run：把明文注入子进程环境后执行（不进 shell 历史，不落盘）
+persona secrets run --env GITHUB_TOKEN=work/ci/api_key -- gh repo view
+
+# 3. k8s：渲染 Secret 清单（data 走 base64）到 stdout，kubectl apply 消费
+persona secrets k8s --name deploy-secrets --namespace prod \
+  --key password=work/deploy/password --key token=work/ci/api_key \
+  --label app.kubernetes.io/managed-by=persona | kubectl apply -f -
+
+# 4. external：Terraform external provider 协议助手（stdin JSON 查询 →
+#    stdout JSON 明文；native gRPC provider 需 Go SDK，刻意不做）
+```
+
+```hcl
+data "external" "persona" {
+  program = ["persona", "secrets", "external"]
+  query = { db_password = "work/db/password" }
+}
+```
+
+边界（诚实版）：
+
+- **只读**；与 Connect 共用解锁链（无已解锁会话时提示主密码）。CI 里配
+  `PERSONA_WORKSPACE_PATH` + `PERSONA_MASTER_PASSWORD` 即全程非交互（见
+  [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md)）。
+- 明文经 stdout / 环境变量交付——`resolve` 的重定向落盘、CI 日志回显
+  属使用方责任；`run` 的注入只存在于子进程环境。
+- 银行卡类型没有 `secret` 别名（卡号/CVV 无单一"主秘密"），按具体字段
+  引用。
+
+## 故障后果速查
+
+| 场景                 | 后果                                                                       | 能否补救                                          |
+| -------------------- | -------------------------------------------------------------------------- | ------------------------------------------------- |
+| 主密码丢失           | 库内所有凭据不可解密                                                       | 否（无托管、无重置）                              |
+| 备份口令丢失         | 该备份不可恢复                                                             | 否（其他版本不受影响）                            |
+| 误删身份/凭据        | 本地即删                                                                   | 可——整库 restore 到旧备份（快照点之后的数据全丢） |
+| `identities.db` 损坏 | 本地库不可用                                                               | 可——restore；但**最后一次 push 之后的变更丢失**   |
+| 服务器数据被删/回滚  | 备份版本池受损；同步日志被回滚会丢「已推未拉」的传播（各端本地库不受影响） | 否——不宣称防服务器操作者；本地库仍是第一事实源    |
+| Travel sidecar 丢失  | 被移出身份永久丢失                                                         | 否（THREAT_MODEL「Travel Mode」红色警告场景）     |
+
+原则一句话：**本地库是第一事实源，一切备份手段都只是在别处多放一份
+密文**——把"定期 push/export"纳入习惯，其他交给威胁模型里的诚实边界。

@@ -1,5 +1,7 @@
 # Persona Monorepo
 
+> [English](MONOREPO.md) | [中文](MONOREPO.zh.md)
+
 Persona is organized as a polyglot monorepo: Rust workspace for core/CLI/server/agents, JS workspace for desktop (Tauri+React), and shared docs.
 
 Structure

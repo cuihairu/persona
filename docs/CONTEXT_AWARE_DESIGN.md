@@ -1,5 +1,7 @@
 # Context-Aware Identity Suggestion — Design
 
+> [English](CONTEXT_AWARE_DESIGN.md) | [中文](CONTEXT_AWARE_DESIGN.zh.md)
+
 状态：**阶段 1+2 已实现**（2026-10-12：core `ContextService` + `context.toml`
 解析 + `persona suggest [--json]` + `persona context map/get/unmap/status`；
 2026-10-13 阶段 2：`persona shell-hook`（bash/zsh 片段，PS1 前缀 ⛵ 候选）+

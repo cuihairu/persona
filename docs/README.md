@@ -1,5 +1,7 @@
 # Persona 项目文档
 
+> [English](README.md) | [中文](README.zh.md)
+
 **Master your digital identity. Switch freely with one click.**
 
 本目录是 Persona 的设计与安全文档入口。里程碑视图见 [ROADMAP](./ROADMAP.md)，每日任务见根目录 [TODO](../TODO.md)。

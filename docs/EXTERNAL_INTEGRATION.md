@@ -1,5 +1,7 @@
 # 外部项目接入 Persona（External Integration）
 
+> [English](EXTERNAL_INTEGRATION.md) | [中文](EXTERNAL_INTEGRATION.zh.md)
+
 > **Status: current state（2026-10-12 实测）**。本文每一处 JSON / 输出均来自
 > 真实冒烟运行（隔离 workspace + `persona connect serve` + curl），非手写
 > 示意。设计背景见

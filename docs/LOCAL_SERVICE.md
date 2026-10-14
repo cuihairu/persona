@@ -1,5 +1,7 @@
 # Persona Client Communication & Storage Modes
 
+> [English](LOCAL_SERVICE.md) | [中文](LOCAL_SERVICE.zh.md)
+
 > **Status: target architecture (design), not the current state.** Today there is
 > no local service daemon and no IPC layer: the CLI links the core library and
 > opens SQLite directly, the desktop app holds `Arc<Mutex<Option<PersonaService>>>`
