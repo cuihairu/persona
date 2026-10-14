@@ -38,6 +38,8 @@ The product focuses on identity-scoped credentials and developer workflows: pass
 
 ## UI Preview
 
+### Desktop — 1600×1000 window (2× DPR captures, 3200×2000 px)
+
 The desktop vault after the 1Password-style sidebar redesign: items, categories,
 vaults, tags, and tools in one sidebar, with the item detail pane on the right.
 
@@ -60,6 +62,21 @@ vaults, tags, and tools in one sidebar, with the item detail pane on the right.
 </p>
 
 </details>
+
+### Mobile — Android phone, 1080×2400 px
+
+Unlock screen, credential list, tools, and settings — captured on Android with
+the default (zh-CN) locale, dark theme.
+
+<p align="center">
+  <img src="docs/branding/ui/mobile-android-home.png" width="24%" alt="Android unlock screen" />
+  <img src="docs/branding/ui/mobile-android-data.png" width="24%" alt="Android credential list" />
+</p>
+
+<p align="center">
+  <img src="docs/branding/ui/mobile-android-tools.png" width="24%" alt="Android tools tab" />
+  <img src="docs/branding/ui/mobile-android-settings.png" width="24%" alt="Android settings tab" />
+</p>
 
 ## Architecture
 

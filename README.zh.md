@@ -38,6 +38,8 @@ Persona 是一个本地优先、零知识的管理器，服务于「一个人运
 
 ## 界面预览
 
+### 电脑版 — 1600×1000 窗口（2× DPR 截图，3200×2000 像素）
+
 1Password 风格侧边栏改版之后的桌面保险库：条目、分类、保险库、标签与工具
 都收在同一个侧边栏里，右侧是条目详情面板。
 
@@ -60,6 +62,20 @@ Persona 是一个本地优先、零知识的管理器，服务于「一个人运
 </p>
 
 </details>
+
+### 手机版 — Android 手机，1080×2400 像素
+
+解锁页、凭据列表、工具与设置——Android 真机界面，默认（zh-CN）语言，深色主题。
+
+<p align="center">
+  <img src="docs/branding/ui/mobile-android-home.png" width="24%" alt="Android 解锁页" />
+  <img src="docs/branding/ui/mobile-android-data.png" width="24%" alt="Android 凭据列表" />
+</p>
+
+<p align="center">
+  <img src="docs/branding/ui/mobile-android-tools.png" width="24%" alt="Android 工具页" />
+  <img src="docs/branding/ui/mobile-android-settings.png" width="24%" alt="Android 设置页" />
+</p>
 
 ## 架构
 
