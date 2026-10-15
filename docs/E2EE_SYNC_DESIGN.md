@@ -32,14 +32,14 @@
 **Non-goals (explicitly out of scope for the first phase)**
 
 - **CRDT / field-level merge**: a credential is an atomic whole; conflicts keep both
-   versions for the user to adjudicate (§7).
+  versions for the user to adjudicate (§7).
 - **Tampering and rollback protection against a malicious/compromised server**: same
-   boundary as backup custody — the client does no freshness validation and makes no
-   claim of defending against the server operator.
+  boundary as backup custody — the client does no freshness validation and makes no
+  claim of defending against the server operator.
 - **Device-private-key signing of the oplog** (against a server forging history):
-   long-term item, see §12.
+  long-term item, see §12.
 - **Attachment blob sync**: v1 syncs in-database rows only; attachments go through the
-   existing backup channel (whose v1 boundary is the same).
+  existing backup channel (whose v1 boundary is the same).
 - **Mobile**: desktop and CLI go first; mobile FFI is untouched.
 
 ## 2. Trust Model
@@ -135,7 +135,7 @@ pure mock):
   a device in plaintext** — on the server it exists only in "device envelope" form
   (one per device, wrapped with that device's X25519 public key, DR-1 format).
 - **Sync entry**: `{ciphertext payload (encrypted by item key), item key envelope
-  (wrapped by group key)}`. The only difference from a local row is the wrapping
+(wrapped by group key)}`. The only difference from a local row is the wrapping
   key: local `wrapped_item_key` is wrapped by the master key (`key_hierarchy.rs`),
   the transport version is wrapped by the group key — **the sync format is therefore
   fully decoupled from the master password** (changing the master password only
@@ -213,13 +213,13 @@ SyncOp {
 **Endpoints** (on the existing axum server, `/api/v1/sync/*`, auth = DR-2's SRP
 session token):
 
-| Endpoint                   | Method     | Purpose                                            |
-| -------------------------- | ---------- | -------------------------------------------------- |
-| `/sync/devices`            | POST / GET | Register (public key + device name) / list          |
-| `/sync/devices/{id}`       | DELETE     | Revoke that device                                 |
-| `/sync/group-keys`         | GET / PUT  | Fetch all device envelopes / upload this device's group key envelope |
+| Endpoint                   | Method     | Purpose                                                                            |
+| -------------------------- | ---------- | ---------------------------------------------------------------------------------- |
+| `/sync/devices`            | POST / GET | Register (public key + device name) / list                                         |
+| `/sync/devices/{id}`       | DELETE     | Revoke that device                                                                 |
+| `/sync/group-keys`         | GET / PUT  | Fetch all device envelopes / upload this device's group key envelope               |
 | `/sync/oplog`              | POST       | Push new local oplog batches (≤500 entries/batch, following the events convention) |
-| `/sync/oplog?since=cursor` | GET        | Pull deltas (cursor pagination)                    |
+| `/sync/oplog?since=cursor` | GET        | Pull deltas (cursor pagination)                                                    |
 
 **Push/pull semantics**: push is idempotent by `op_id`; pull increments from the
 since cursor. The server appends in arrival order without sorting or merging (DR-4).
@@ -322,10 +322,10 @@ trust within the group); no new defense is added.
 
 **Endpoints** (two new ones, same auth family as `/sync/*`):
 
-| Endpoint         | Method | Purpose                                                                                                                                       |
-| ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Endpoint         | Method | Purpose                                                                                                                                                                                     |
+| ---------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/sync/snapshot` | PUT    | Upload the ciphertext package + the client-declared coverage point S; server-side in one transaction: write the snapshot row, delete the superseded old snapshot, delete ops with `seq ≤ S` |
-| `/sync/snapshot` | GET    | Return the latest snapshot `{seq, ciphertext}`; 404 if none                                                                                   |
+| `/sync/snapshot` | GET    | Return the latest snapshot `{seq, ciphertext}`; 404 if none                                                                                                                                 |
 
 **Merged with the existing oplog retention (2026-10-07 revision, replacing the 410 realignment scheme)**:
 the server already has day-based retention (`enforce_oplog_retention`, under the

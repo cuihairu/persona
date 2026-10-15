@@ -13,11 +13,11 @@
 External projects (CI scripts, deploy tools, other local services) read the
 Persona vault through exactly one of **two supported interface forms**:
 
-| Form                         | Best for                                                                                             | Depends on                             |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| **HTTP (Connect API)**       | Cross-process consumers: CI, background services, programs in any language                           | `persona connect serve` listening + token |
-| **CLI (`persona secrets`)**  | Shell scripts, Makefiles, Terraform/K8s declarative tooling                                          | Only the persona CLI on PATH           |
-| ~~Library linkage~~          | **Not recommended**: the core crate has no stable API or version promise, and it requires the consumer process to hold the master password in order to unlock — equivalent to handing over the entire vault | —                                      |
+| Form                        | Best for                                                                                                                                                                                                    | Depends on                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| **HTTP (Connect API)**      | Cross-process consumers: CI, background services, programs in any language                                                                                                                                  | `persona connect serve` listening + token |
+| **CLI (`persona secrets`)** | Shell scripts, Makefiles, Terraform/K8s declarative tooling                                                                                                                                                 | Only the persona CLI on PATH              |
+| ~~Library linkage~~         | **Not recommended**: the core crate has no stable API or version promise, and it requires the consumer process to hold the master password in order to unlock — equivalent to handing over the entire vault | —                                         |
 
 The authorization model is identical for both forms: enforcement happens at the
 single adjudication point `authorize(principal, resource, action, ctx)` in

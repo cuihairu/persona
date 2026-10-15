@@ -55,16 +55,16 @@ User confirms → persona switch (the only identity-change path, audited)
 
 ## 3. Context signal inventory
 
-| Dimension | Signal                                                          | Source                                      | Reliability                           | In v1?       |
-| --------- | --------------------------------------------------------------- | ------------------------------------------- | ------------------------------------- | ------------ |
-| Terminal  | `cwd`                                                           | `std::env::current_dir`                     | Scripts can forge it, but suggestions do not authorize, so it is harmless | ✅           |
-| Git       | Walk up from `cwd` to `.git`, read `remote origin` → forge and owner/repo | Shell call into git, or `git2`              | High                                | ✅           |
-| Terminal  | `hostname`                                                      | `gethostname` / `PERSONA_HOST` override     | High (can be changed via env var; see below) | ✅           |
-| Terminal  | Parent process chain (is the shell interactive)                 | `/proc/<ppid>/comm` heuristic               | Medium; only prompt on an interactive TTY, leave scripts alone | ⚠️ Stage 2    |
-| SSH       | Host / key requested by the agent                               | Existing agent policy input                 | High                                | ✅ (stage 3) |
-| Browser   | page origin / per-site default                                  | Existing autofillDefaults                   | High                                | ⚠️ Stage 4    |
-| Desktop   | Current window/project                                          | Tauri side                                  | Medium                              | ⚠️ Stage 4    |
-| Device    | Machine role (dev-pc / laptop / server)                         | Hostname convention, or `~/.persona/machine-profile` | User self-declared          | ✅ (optional) |
+| Dimension | Signal                                                                    | Source                                               | Reliability                                                               | In v1?        |
+| --------- | ------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------- | ------------- |
+| Terminal  | `cwd`                                                                     | `std::env::current_dir`                              | Scripts can forge it, but suggestions do not authorize, so it is harmless | ✅            |
+| Git       | Walk up from `cwd` to `.git`, read `remote origin` → forge and owner/repo | Shell call into git, or `git2`                       | High                                                                      | ✅            |
+| Terminal  | `hostname`                                                                | `gethostname` / `PERSONA_HOST` override              | High (can be changed via env var; see below)                              | ✅            |
+| Terminal  | Parent process chain (is the shell interactive)                           | `/proc/<ppid>/comm` heuristic                        | Medium; only prompt on an interactive TTY, leave scripts alone            | ⚠️ Stage 2    |
+| SSH       | Host / key requested by the agent                                         | Existing agent policy input                          | High                                                                      | ✅ (stage 3)  |
+| Browser   | page origin / per-site default                                            | Existing autofillDefaults                            | High                                                                      | ⚠️ Stage 4    |
+| Desktop   | Current window/project                                                    | Tauri side                                           | Medium                                                                    | ⚠️ Stage 4    |
+| Device    | Machine role (dev-pc / laptop / server)                                   | Hostname convention, or `~/.persona/machine-profile` | User self-declared                                                        | ✅ (optional) |
 
 Privacy boundary: all signals are computed locally and never leave the machine; suggestion history never enters sync and never enters the server;
 the audit log records only "which suggestion the user confirmed" (reusing the existing switch audit), never the signal itself.
