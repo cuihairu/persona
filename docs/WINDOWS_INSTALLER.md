@@ -1,112 +1,139 @@
-# Windows 安装器与升级流程（NSIS）
+# Windows installer and upgrade flow (NSIS)
 
 > [English](WINDOWS_INSTALLER.md) | [中文](WINDOWS_INSTALLER.zh.md)
 
-状态：2026-09-25 落地。配置在 `desktop/src-tauri/tauri.conf.json`
-（`bundle.windows.nsis`），定制模板在 `desktop/src-tauri/nsis/installer.nsi`，
-回归断言在 `desktop/src-tauri/src/packaging_tests.rs`。
+Status: landed 2026-09-25. Configuration lives in `desktop/src-tauri/tauri.conf.json`
+(`bundle.windows.nsis`), the custom template in `desktop/src-tauri/nsis/installer.nsi`,
+and the regression assertions in `desktop/src-tauri/src/packaging_tests.rs`.
 
-## 1. 背景：旧版升级逻辑的问题
+## 1. Background: problems with the old upgrade logic
 
-Tauri 官方 NSIS 模板其实自带"重装页"（`PageReinstall`）：检测到旧版本时让用户
-在"**卸载后安装** / 不卸载直接装"之间二选一，且升级场景下"卸载后安装"
-**默认勾选**。但在本仓库旧配置下它实际上不可用/不可见，原因有四：
+Tauri's official NSIS template actually ships a reinstall page (`PageReinstall`)
+built in: when an older version is detected it makes the user choose between
+"**install after uninstalling** / install without uninstalling", and in upgrade
+scenarios "install after uninstalling" is **checked by default**. But under this
+repo's old configuration it was effectively unusable/invisible, for four reasons:
 
-| #   | 缺口                                                                                                          | 后果                                                                                                                                                                        |
+| #   | Gap                                                                                                           | Consequence                                                                                                                                                                 |
 | --- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | `tauri.conf.json` 没有 `bundle.windows` 段 → `installMode` 走默认 `currentUser`，旧版检测只读 HKCU（`SHCTX`） | 旧版若是 per-machine（HKLM，例如 MSI 或 perMachine NSIS）安装，**重装页根本不出现**，新版并排装进 `%LOCALAPPDATA%` —— 旧文件、旧开始菜单/桌面快捷方式、旧卸载注册表全部残留 |
-| 2   | CI 同时发布 NSIS（per-user）与 MSI（per-machine）两种安装器                                                   | MSI 升级走 `msiexec`/UpgradeCode，只认 MSI 自己的旧版，**不会清 NSIS 安装**；用户在两种安装器之间切换就产生混装                                                             |
-| 3   | NSIS 静默安装（`/S`）跳过所有自定义页面                                                                       | 原版模板在 `/S` 下**完全不卸载旧版**：新文件原地覆盖，版本间改名/删除过的旧文件永久残留在安装目录                                                                           |
-| 4   | 交互式升级时旧版卸载器以**完整 UI** 运行                                                                      | 用户要一路点完旧版的卸载向导（含"删除应用数据"勾选框），不是"静默卸载"，也容易中途取消                                                                                      |
+| 1   | `tauri.conf.json` had no `bundle.windows` section → `installMode` fell back to the default `currentUser`, and old-version detection only read HKCU (`SHCTX`) | If the old version was installed per-machine (HKLM, e.g. an MSI or perMachine NSIS), the **reinstall page never appeared at all**; the new version was installed side by side into `%LOCALAPPDATA%` — old files, old Start Menu/desktop shortcuts, and old uninstall registry entries all left behind |
+| 2   | CI published both installers (NSIS per-user and MSI per-machine)                                              | MSI upgrades go through `msiexec`/UpgradeCode and only recognize MSI's own older versions — **they never remove NSIS installations**; users switching between the two installer types ended up with mixed installs                                                             |
+| 3   | NSIS silent install (`/S`) skips all custom pages                                                             | The stock template under `/S` **never uninstalled the old version at all**: new files were overwritten in place, and old files that had been renamed or removed between versions stayed in the install directory forever                                                                           |
+| 4   | During interactive upgrades the old version's uninstaller ran with the **full UI**                           | Users had to click through the old version's entire uninstall wizard (including a "delete application data" checkbox) — not a "silent uninstall" — and it was easy to cancel midway                                                                                      |
 
-## 2. 现在的标准升级流程
+## 2. The standard upgrade flow today
 
-四处改动（相对 `@tauri-apps/cli` 2.12.1 锁定链里的 `tauri-cli-v2.12.1`
-基线模板，差异全部标注 `Persona 定制` 注释）：
+Four changes (relative to the `tauri-cli-v2.12.1` baseline template in the
+`@tauri-apps/cli` 2.12.1 locked chain; every divergence is marked with a
+`Persona 定制` comment):
 
-1. **`installMode: "both"`**：首次安装出现"为本机所有用户 / 仅当前用户"
-   选择页（默认当前用户，无需管理员）；选择会被记忆，升级时自动沿用旧
-   安装的上下文 —— 旧版检测同时覆盖 HKCU 与 HKLM，杜绝缺口 1。
-2. **升级路径默认静默卸载旧版**：重装页默认勾选"卸载后安装"（基线行为
-   保留），且给旧版卸载器追加 `/S` —— 全程无 UI、无确认页（缺口 4）。
-3. **完全静默安装（`/S`）同样先卸载旧版**：在 `EarlyChecks`（Section，
-   静默模式照常运行）里调用 `UninstallPreviousSilent`，检测规则与重装页
-   一致：先查 SHCTX 的 NSIS 卸载键，再枚举 HKLM 匹配
-   `DisplayName`+`Publisher` 的 WiX/MSI 条目并以
-   `msiexec /x {ProductCode} /quiet /norestart` 卸载（缺口 3）。卸载失败
-   则安装器中止（fail-closed，拒绝在旧版残留之上继续安装）。
-4. **`!include "Win\RestartManager.nsh"`**（2026-10-04 随 2.12.1 基线新增）：
-   CLI 2.12.x 的 `utils.nsh` 强制改用 Restart Manager 宏关闭运行中进程，
-   模板必须带上这个 include，否则 makensis 报
-   `macro named RestartManager_StartSession not found`。
+1. **`installMode: "both"`**: first install shows a "all users on this machine /
+   current user only" choice page (defaults to current user, no administrator
+   needed); the choice is remembered and upgrades automatically reuse the old
+   install's context — old-version detection now covers both HKCU and HKLM,
+   closing gap 1.
+2. **Upgrade path silently uninstalls the old version by default**: the reinstall
+   page checks "install after uninstalling" (baseline behavior preserved), and
+   the old version's uninstaller is passed `/S` — no UI and no confirmation page
+   at all (gap 4).
+3. **Fully silent install (`/S`) also uninstalls the old version first**:
+   `EarlyChecks` (a Section that runs as usual in silent mode) calls
+   `UninstallPreviousSilent`, with the same detection rules as the reinstall
+   page: it first checks the NSIS uninstall key under SHCTX, then enumerates
+   HKLM for WiX/MSI entries matching `DisplayName`+`Publisher` and uninstalls
+   them with `msiexec /x {ProductCode} /quiet /norestart` (gap 3). If uninstalling
+   fails the installer aborts (fail-closed — it refuses to install on top of
+   leftovers from the old version).
+4. **`!include "Win\RestartManager.nsh"`** (added 2026-10-04 with the 2.12.1
+   baseline): CLI 2.12.x's `utils.nsh` mandates the Restart Manager macros for
+   closing running processes, so the template must carry this include or
+   makensis fails with `macro named RestartManager_StartSession not found`.
 
-各入口的行为：
+Behavior by entry point:
 
-| 入口                            | 行为                                                                                                                                                                                                                                                                  |
+| Entry point                     | Behavior                                                                                                                                                                                                                                                              |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 双击运行（交互）                | 检测旧版 → 重装页，默认勾选"卸载后安装" → 旧版**静默**卸载 → 安装新版                                                                                                                                                                                                 |
-| `/S`（静默/无人值守）           | 检测旧版（NSIS 或 MSI）→ **静默**卸载 → 安装；失败以非零退出码中止                                                                                                                                                                                                    |
-| `/P`（被动，仅进度条）          | 同交互默认路径，页面自动按默认值通过                                                                                                                                                                                                                                  |
-| `/UPDATE`（Tauri updater 内部） | 基线语义保留：原地更新、不弹重装页、不动卸载键与自启项                                                                                                                                                                                                                |
-| `/PURGE`（卸载器专用）          | 卸载器清空所有用户数据（vault + 缓存 + CLI 工作区），无需勾选确认；对安装包无效；`/UPDATE` 下跳过                                                                                                                                                                     |
-| 降级                            | 当前**无降级保护**：`tauri.conf.json` 未设 `plugins.updater.allowDowngrades`（该 key 未配置，tauri-cli 取默认值 `true`），旧版可被降级安装。如需启用保护须在 `tauri.conf.json` 显式设 `allowDowngrades: false`（属配置决定，未自行改动）；`/S` 模式仍先卸载旧版再装。 |
+| Double-click (interactive)      | Detect old version → reinstall page with "install after uninstalling" checked by default → old version **silently** uninstalled → new version installed                                                                                                                                                                                  |
+| `/S` (silent/unattended)        | Detect old version (NSIS or MSI) → **silent** uninstall → install; aborts with a non-zero exit code on failure                                                                                                                                                                                                                        |
+| `/P` (passive, progress bar only) | Same as the interactive default path, pages advance automatically with default values                                                                                                                                                                                                                                                |
+| `/UPDATE` (internal to the Tauri updater) | Baseline semantics preserved: updates in place, no reinstall page, leaves uninstall keys and autostart entries untouched                                                                                                                                              |
+| `/PURGE` (uninstaller only)      | The uninstaller wipes all user data (vault + cache + CLI workspace) without a confirmation checkbox; no effect on the installer package; skipped under `/UPDATE`                                                                                                                                                                       |
+| Downgrade                       | **No downgrade protection today**: `tauri.conf.json` does not set `plugins.updater.allowDowngrades` (the key is unconfigured, so tauri-cli takes the default `true`), and an older version can be downgraded onto. To enable protection you must set `allowDowngrades: false` explicitly in `tauri.conf.json` (a configuration decision, not changed on our own); `/S` mode still uninstalls the old version first. |
 
-**不再发布 MSI**（2026-09-25 起 `desktop-build.yml` Windows matrix 只构建
-`nsis`）：同一版本同时发两种安装器是缺口 2 的根源。NSIS 安装器对旧 MSI
-安装有迁移卸载（`msiexec /x` 静默），反向不存在。确需 MSI（如 GPO 批量
-部署）时把 matrix 加回 `msi` 即可，但混装风险自负。
+**MSI is no longer published** (since 2026-09-25 the `desktop-build.yml` Windows
+matrix only builds `nsis`): shipping both installers for the same version is the
+root cause of gap 2. The NSIS installer has a migration uninstall for old MSI
+installs (silent `msiexec /x`); the reverse does not exist. If you genuinely need
+an MSI (e.g. for GPO mass deployment), add `msi` back to the matrix — but you
+own the risk of mixed installs.
 
-## 3. 数据与配置保留的保证
+## 3. Guarantees around data and configuration retention
 
-- Persona 桌面端库默认在 **`%APPDATA%\persona\persona.db`**
-  （`commands.rs` 的 `default_db_path`：`dirs::data_dir()/persona`）。
-- NSIS 卸载器自带的"删除应用数据"勾选框删的是
-  `%APPDATA%\com.persona.desktop` 与 `%LOCALAPPDATA%\com.persona.desktop`
-  （Tauri/WebView 缓存类数据），**不碰库目录**；且只有用户在手动卸载时
-  显式勾选才会执行。升级路径的静默卸载（`/S`）没有 UI，该勾选恒为未勾。
-- OS keyring 条目（生物识别/同步令牌，`token_store.rs`）与安装器无关，
-  升级/卸载均不受影响。
-- 结论：**升级（含 `/S` 无人值守）不会丢库、丢配置**。想彻底清理本机
-  数据需在卸载后手动删除 `%APPDATA%\persona`。
-- 跨平台口径（Linux/macOS/CLI 卸载同样不删数据 + 显式 purge 步骤）见
-  [UNINSTALL](./UNINSTALL.md)；`packaging_tests.rs` 的
-  `nsis_uninstall_never_targets_vault_data_dir` 把"vault 目录永不出现在
-  卸载删除指令里"钉成回归断言（2026-09-28）。
+- The Persona desktop database defaults to **`%APPDATA%\persona\persona.db`**
+  (`default_db_path` in `commands.rs`: `dirs::data_dir()/persona`).
+- The NSIS uninstaller's built-in "delete application data" checkbox removes
+  `%APPDATA%\com.persona.desktop` and `%LOCALAPPDATA%\com.persona.desktop`
+  (Tauri/WebView cache-type data) and **never touches the database directory**;
+  it only runs when the user explicitly checks it during a manual uninstall. The
+  upgrade path's silent uninstall (`/S`) has no UI, so that checkbox is always
+  unchecked.
+- OS keyring entries (biometrics/sync tokens, `token_store.rs`) are unrelated to
+  the installer and are unaffected by upgrades and uninstalls.
+- Bottom line: **upgrades (including `/S` unattended) do not lose the database or
+  configuration**. To wipe all local data you must delete `%APPDATA%\persona`
+  manually after uninstalling.
+- For the cross-platform policy (Linux/macOS/CLI uninstalls likewise never delete
+  data, plus an explicit purge step) see [UNINSTALL](./UNINSTALL.md);
+  `packaging_tests.rs`'s `nsis_uninstall_never_targets_vault_data_dir` pins
+  "the vault directory never appears in uninstall delete instructions" as a
+  regression assertion (2026-09-28).
 
-## 4. 升级矩阵
+## 4. Upgrade matrix
 
-| 旧安装                   | 新安装 | 结果                                                               |
+| Old install              | New    | Result                                                             |
 | ------------------------ | ------ | ------------------------------------------------------------------ |
-| NSIS per-user（HKCU）    | NSIS   | 重装页默认勾选卸载 → 静默卸载旧版（含旧快捷方式/注册表）→ 装新     |
-| NSIS per-machine（HKLM） | NSIS   | `installMode=both` 沿用旧上下文，检测到 HKLM 键 → 同上（需管理员） |
-| MSI（HKLM）              | NSIS   | 重装页强制走 WiX 迁移卸载（交互），`/S` 走 `msiexec /x /quiet`     |
-| 无                       | NSIS   | 全新安装（出现 per-user/per-machine 选择页）                       |
-| NSIS                     | MSI    | **不支持**（MSI 不会清 NSIS 安装，产生残留）—— 已停发 MSI          |
+| NSIS per-user (HKCU)     | NSIS   | Reinstall page checks uninstall by default → silent uninstall of the old version (including old shortcuts/registry) → install new |
+| NSIS per-machine (HKLM)  | NSIS   | `installMode=both` reuses the old context, detects the HKLM key → same as above (administrator required) |
+| MSI (HKLM)               | NSIS   | Reinstall page forces the WiX migration uninstall (interactive), `/S` goes through `msiexec /x /quiet` |
+| None                     | NSIS   | Fresh install (the per-user/per-machine choice page appears)       |
+| NSIS                     | MSI    | **Not supported** (MSI never removes NSIS installs, leaving leftovers) — MSI publication has stopped |
 
-## 5. Windows 机器验收清单
+## 5. Windows machine acceptance checklist
 
-本仓库在 Linux 上开发，NSIS 无法本机编译验证；以下清单供有 Windows 环境
-时执行（对应 `packaging_tests.rs` 只能覆盖的配置层之上的行为层）：
+This repo is developed on Linux, where NSIS cannot be compiled and verified
+locally; run the checklist below when you have a Windows environment (it covers
+the behavior layer above what `packaging_tests.rs` can only cover at the
+configuration layer):
 
-1. `pnpm install --frozen-lockfile --filter persona-desktop... && pnpm exec tauri build --bundles nsis` 成功产出 `-setup.exe`。
-2. 全新安装 ×2：分别选"仅当前用户"与"所有用户"，确认安装目录
-   （`%LOCALAPPDATA%\Persona` / `Program Files\Persona`）与卸载键位置符合选择。
-3. 升级：装旧版 → 运行新版安装器 → 确认 ① 重装页出现且"卸载后安装"
-   **默认勾选**；② 旧版卸载全程无 UI；③ 完成后 HKCU/HKLM 里产品卸载键
-   **只剩一条**；④ `%APPDATA%\persona\persona.db` 原样保留，旧库可直接解锁。
-4. 静默升级：`persona-setup.exe /S`（cmd 检查 `%ERRORLEVEL%`=0），结果同上 ③④。
-5. MSI 迁移：装旧版 MSI → 运行新版 NSIS `/S` → HKLM 旧 MSI 条目消失。
-6. 手动卸载 ×2：不勾/勾选"删除应用数据"，确认两种情况下
-   `%APPDATA%\persona` 都保留（勾选只清 `com.persona.desktop` 缓存目录）。
-7. 降级：交互模式"不卸载"灰显；`/S` 模式仍先卸载旧版。
+1. `pnpm install --frozen-lockfile --filter persona-desktop... && pnpm exec tauri build --bundles nsis` succeeds and produces `-setup.exe`.
+2. Fresh install ×2: choose "current user only" and "all users" respectively,
+   confirming the install directory (`%LOCALAPPDATA%\Persona` /
+   `Program Files\Persona`) and the uninstall key location match the choice.
+3. Upgrade: install the old version → run the new installer → confirm
+   ① the reinstall page appears with "install after uninstalling" **checked by
+   default**; ② the old version's uninstall runs entirely without UI; ③
+   afterwards only **one** product uninstall key remains in HKCU/HKLM;
+   ④ `%APPDATA%\persona\persona.db` is preserved as-is and the old database can
+   be unlocked directly.
+4. Silent upgrade: `persona-setup.exe /S` (check `%ERRORLEVEL%`=0 in cmd); the
+   result matches ③④ above.
+5. MSI migration: install the old MSI → run the new NSIS `/S` → the old MSI
+   entry disappears from HKLM.
+6. Manual uninstall ×2: leave "delete application data" unchecked and checked,
+   confirming `%APPDATA%\persona` survives in both cases (checking it only
+   clears the `com.persona.desktop` cache directories).
+7. Downgrade: "do not uninstall" is greyed out in interactive mode; `/S` mode
+   still uninstalls the old version first.
 
-## 6. 模板维护
+## 6. Template maintenance
 
-`nsis/installer.nsi` 基于
+`nsis/installer.nsi` is based on the
 [`tauri-cli-v2.12.1`](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.12.1/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi)
-基线（`desktop/package.json` 的 `@tauri-apps/cli ^2.12.1`，lock 锁
-`tauri` 2.12.1）。升级 CLI 时：下载新基线模板 → 重放四处
-`Persona 定制`（见文件头注释，含 2.12.x 起强制的
-`!include "Win\RestartManager.nsh"`——缺它 makensis 直接报
-`RestartManager_StartSession not found`）→ 更新头注释里的基线标签 →
-`cargo test -p persona-desktop packaging`（或全量测试）确认断言仍过。
+baseline (`@tauri-apps/cli ^2.12.1` in `desktop/package.json`, the lock pinning
+`tauri` to 2.12.1). When upgrading the CLI: download the new baseline template →
+replay the four `Persona 定制` changes (see the header comment, including the
+`!include "Win\RestartManager.nsh"` that became mandatory in 2.12.x — without it
+makensis fails immediately with `RestartManager_StartSession not found`) →
+update the baseline tag in the header comment → run
+`cargo test -p persona-desktop packaging` (or the full test suite) to confirm
+the assertions still pass.

@@ -16,7 +16,7 @@
 
 - [ONEPASSWORD_FEATURES](./ONEPASSWORD_FEATURES.md) – 1Password 功能全集（对标清单）
 - [FEATURE_GAP_ANALYSIS](./FEATURE_GAP_ANALYSIS.md) – Persona vs 1Password 现状对比
-- [审计-文档一致性](./审计-文档一致性.md) – 文档-源码一致性审计表（三类差异分桶，2026-10-13）
+- [审计-文档一致性](./审计-文档一致性.md) – 文档-源码一致性审计表（三类差异分桶，67 项，2026-10-13；英文版：[DOC_SOURCE_CONSISTENCY_AUDIT](./DOC_SOURCE_CONSISTENCY_AUDIT.md)）
 
 ## 架构
 

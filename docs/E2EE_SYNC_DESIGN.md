@@ -1,133 +1,184 @@
-# E2EE 同步设计稿（阶段 0）
+# E2EE Sync Design (Stage 0)
 
 > [English](E2EE_SYNC_DESIGN.md) | [中文](E2EE_SYNC_DESIGN.zh.md)
 
-> 状态：**设计稿，阶段 1–4 均已落地（2026-09，逐阶段状态见 §11 表）**。本文是
-> TODO「第 3 步」（Connect endpoint + E2EE sync + SRP 设备认证）的开工文档：把四个
-> 必须先拍板的设计决策定下来，并给出实施阶段映射与威胁模型登记骨架。当前活跃的
-> 后续批次是同步组模式（[`sync-group-mode.md`](./sync-group-mode.md)）——S2 把现有
-> 快照+LWW oplog 管线向指令流（op_id 幂等+位点续传）收敛。
+> Status: **Design doc; stages 1–4 have all landed (2026-09, per-stage status in the §11 table)**.
+> This is the kickoff document for TODO "step 3" (Connect endpoint + E2EE sync + SRP device
+> auth): it settles the four design decisions that had to be decided up front, and gives the
+> implementation-stage mapping plus a threat-model registration skeleton. The currently active
+> follow-on batch is sync group mode ([`sync-group-mode.md`](./sync-group-mode.md)) — S2
+> converges the existing snapshot + LWW oplog pipeline onto an instruction stream
+> (op_id idempotency + cursor resumption).
 >
-> 相关文档：[`ROADMAP.md`](./ROADMAP.md) Milestone 6、[`REMOTE_AUTH.md`](./REMOTE_AUTH.md)
-> （既有 SRP 抽象与 mock）、[`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md)（用户视角
-> 的现状）、[`THREAT_MODEL.md`](./THREAT_MODEL.md)（「备份保管端点」与「Travel Mode」
-> 的诚实边界先例）。
+> Related docs: [`ROADMAP.md`](./ROADMAP.md) Milestone 6, [`REMOTE_AUTH.md`](./REMOTE_AUTH.md)
+> (the existing SRP abstraction and mock), [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md)
+> (the current state from the user's perspective), [`THREAT_MODEL.md`](./THREAT_MODEL.md)
+> (the honest-boundary precedent set by the "backup custody endpoint" and "Travel Mode").
 
-## 1. 目标与非目标
+## 1. Goals and Non-Goals
 
-**目标**
+**Goals**
 
-1. 多台设备对**同一 Persona 工作区**做凭据级增量同步；服务器只见密文与最小元数据。
-2. 同步层与主密码**解耦**：换主密码是纯本地操作，不触发全网重包。
-3. 设备加入/移除有明确流程；移除的爆炸半径诚实登记（见 §9）。
-4. 复用既有资产：per-item key 信封结构、server 骨架、`RemoteAuthProvider` 抽象、
-   fail-closed 惯例、备份保管链（不打断它）。
+1. Credential-level incremental sync of **the same Persona workspace** across multiple
+   devices; the server only ever sees ciphertext and minimal metadata.
+2. Sync layer **decoupled from the master password**: changing the master password is a
+   purely local operation that triggers no fleet-wide re-wrapping.
+3. Explicit join/removal flows for devices; the blast radius of removal is honestly
+   registered (see §9).
+4. Reuse of existing assets: the per-item key envelope structure, the server skeleton,
+   the `RemoteAuthProvider` abstraction, the fail-closed convention, and the backup
+   custody chain (without disrupting it).
 
-**非目标（第一阶段明确不做）**
+**Non-goals (explicitly out of scope for the first phase)**
 
-- **CRDT / 字段级合并**：凭据是原子整体，冲突保双版本供用户裁决（§7）。
-- **防恶意/被攻破服务器的篡改与回滚**：与备份保管同一边界——客户端不做新鲜度
-  校验，不宣称防服务器操作者。
-- **设备私钥签名 oplog**（防服务器伪造历史）：远期项，见 §12。
-- **附件文件体同步**：v1 只同步库内行数据；附件走既有备份通道（其 v1 边界一致）。
-- **移动端**：desktop 与 CLI 先行，mobile FFI 不动。
+- **CRDT / field-level merge**: a credential is an atomic whole; conflicts keep both
+   versions for the user to adjudicate (§7).
+- **Tampering and rollback protection against a malicious/compromised server**: same
+   boundary as backup custody — the client does no freshness validation and makes no
+   claim of defending against the server operator.
+- **Device-private-key signing of the oplog** (against a server forging history):
+   long-term item, see §12.
+- **Attachment blob sync**: v1 syncs in-database rows only; attachments go through the
+   existing backup channel (whose v1 boundary is the same).
+- **Mobile**: desktop and CLI go first; mobile FFI is untouched.
 
-## 2. 信任模型
+## 2. Trust Model
 
-- **信任根 = 主密码 + 每设备私钥**。解锁本地库靠主密码；解开同步密文靠设备私钥
-  （拆 group key 信封）→ group key → item key。二者独立存放、独立轮换。
-- **服务器定位 = 纯中继 + 密文保管**。它存储 oplog、设备公钥、信封，但不持有
-  任何能解密同步数据的密钥；不承担合并裁决（裁决在客户端，§7）。
-- **服务端可见面**（完整清单见 §9）：密文载荷、item 的 UUID、类型枚举、Lamport
-  计数、时间戳、设备公钥、信封尺寸。**无任何明文名称/URL/用户名**——同步条目把
-  元数据也封进密文区，可见面严格小于本地 SQLite（后者元数据列是明文，
-  STORAGE_AND_SYNC 已如实说明）。
+- **Trust root = master password + per-device private key**. The local vault unlocks
+  with the master password; the sync ciphertext unlocks with the device private key
+  (unwraps the group key envelope) → group key → item key. The two are stored
+  independently and rotated independently.
+- **Server role = pure relay + ciphertext custody**. It stores the oplog, device
+  public keys, and envelopes, but holds no key that can decrypt sync data; it does not
+  perform merge adjudication (adjudication happens on the client, §7).
+- **Server-visible surface** (full list in §9): ciphertext payload, item UUID, kind
+  enum, Lamport counter, timestamp, device public key, envelope size. **No plaintext
+  names/URLs/usernames whatsoever** — sync entries seal their metadata inside the
+  ciphertext region too, so the visible surface is strictly smaller than the local
+  SQLite (whose metadata columns are plaintext, as honestly noted in
+  STORAGE_AND_SYNC).
 
-## 3. 决策记录
+## 3. Decision Records
 
-### DR-1 设备密钥：独立生成，存 OS keyring（否决：主密码派生）
+### DR-1 Device key: generated independently, stored in the OS keyring (rejected: derived from the master password)
 
-每台设备在**加入同步时生成一次性 X25519 密钥对**：私钥 32 字节随机数存 OS
-keyring（service 名 `persona-device`，与既有 `persona-biometric`/`persona-sync`
-并列）；公钥随设备注册上服务器。
+Each device **generates a one-time X25519 keypair when joining sync**: the private key,
+32 random bytes, goes into the OS keyring (service name `persona-device`, alongside
+the existing `persona-biometric`/`persona-sync`); the public key goes to the server
+with the device registration.
 
-- **为何不派生自主密码**：派生意味着换主密码 = 每台设备的公钥全变 = 全部信封
-  重包 + 全设备重注册——把「换密码」从本地操作升级成全网迁移。设备身份密钥是
-  长期凭证，不应与可更换的认证口令耦合（1Password 的账户密码与设备 Secret Key
-  分离是同款思路）。
-- **keyring 缺失的 fallback**（headless CLI/容器）：经显式 `--device-key-file`（规划中，未实现；现仅有 `core/src/sync/` 注释提及，无 CLI flag）
-  落盘 0600 文件，命令输出红色警告「该文件等同设备私钥，泄露即设备被冒用」。
-  无 keyring 又不给文件参数 = 同步功能不可用（fail-closed，不静默生成临时密钥）。
-- **密钥丢失** = 该设备身份作废：重新走加入流程即可，不牵连其他设备。
-- **算法与依赖**：`x25519-dalek`（dalek 家族，公开审视充分）+ `hkdf`（RustCrypto，
-  与已有 `sha2` 配套）+ 既有 `aes-gcm`。信封格式（`persona-dev-env-1`）：
+- **Why not derive from the master password**: derivation means changing the master
+  password = every device's public key changes = every envelope re-wrapped + every
+  device re-registered — upgrading "change password" from a local operation to a
+  fleet-wide migration. The device identity key is a long-lived credential and
+  should not be coupled to a replaceable authentication passphrase (1Password's
+  separation of account password and device Secret Key is the same idea).
+- **Fallback when no keyring is available** (headless CLI/container): an explicit
+  `--device-key-file` (planned, not implemented; currently only mentioned in
+  `core/src/sync/` comments, no CLI flag) writes a 0600 file, and the command
+  prints a red warning "this file is equivalent to the device private key; leaking
+  it means the device can be impersonated". No keyring and no file parameter =
+  sync unavailable (fail-closed; no silently generated ephemeral key).
+- **Lost key** = that device identity is void: just re-run the join flow; no other
+  device is affected.
+- **Algorithms and dependencies**: `x25519-dalek` (the dalek family, extensively
+  publicly reviewed) + `hkdf` (RustCrypto, pairs with the existing `sha2`) + the
+  existing `aes-gcm`. Envelope format (`persona-dev-env-1`):
   `ephemeral_pub(32) ‖ AES-256-GCM(key = HKDF-SHA256(x25519(eph, device_pub),
-info="persona-dev-env-1"), plaintext = group key)`。组合层自写约 30 行，
-  round-trip + 篡改 + 跨设备失败路径测试覆盖；不为此引入 HPKE 重依赖（远期可选）。
+info="persona-dev-env-1"), plaintext = group key)`. The composition layer is ~30
+  lines of our own code with round-trip + tampering + cross-device failure-path test
+  coverage; no heavyweight HPKE dependency is pulled in for this (optional long-term).
 
-### DR-2 设备认证：SRP-6a + RFC 5054 4096-bit group 起步（OPAQUE 列远期升级）
+### DR-2 Device auth: SRP-6a with the RFC 5054 4096-bit group to start (OPAQUE listed as a long-term upgrade)
 
-实化 `core/src/auth/remote.rs` 的 `RemoteAuthProvider`（现为 129 行纯 mock）：
+Make the `RemoteAuthProvider` in `core/src/auth/remote.rs` real (currently a 129-line
+pure mock):
 
-- **协议**：SRP-6a，RFC 5054 4096-bit group（有官方测试向量，跨实现互通）。
-  数学内联实现在 `core/src/auth/srp.rs`（原拟采用的 RustCrypto `srp` 0.6 crate
-  因 digest 生态漂移未采用、已不在依赖中），握手哈希 SHA-256；实现正确性由
-  RFC 5054 附录 B 官方向量（1024-bit/SHA-1 interop 向量）回归锁定。
-- **防 verifier 泄露离线爆破**：客户端先对「主密码 ‖ 域分隔盐
-  （`persona-srp-v1` ‖ 服务器 salt）」做 Argon2id（Argon2id v19，m=19 MiB、
-  t=2、p=1——argon2 crate 默认参数，与本地密码验证哈希同族；本地库解锁是
-  另一条 PBKDF2-600k 路径，算法与参数都不同，见 `KEY_HIERARCHY.md`；较备份
-  文件 KDF 的 64 MiB/t3 轻，因登录路径高频执行）得到 SRP 私钥 x——服务器存
-  的是 SRP verifier，泄露后离线猜解的成本 ≈ Argon2 成本，与本地密码验证同级。
-- **会话**：SRP 握手成功 → 双方派生会话密钥 → 客户端用它换取短期 access token
-  （TTL 分钟级），后续请求 `Authorization: Bearer`。锁户对齐本机 5 次语义。
-- **兼容硬约束**：既有 `PERSONA_SERVER_TOKENS` Bearer 路径**保留共存**——备份链
-  （push 无需解锁主密码）与事件上报不打断；SRP 是同步端点的认证方式，不是
-  全端点的前置改造。
-- **crate 现状（2026-09 调研，选型依据）**：RustCrypto `srp` 0.6 可用但维护缓慢
-  （PAKEs 仓库标注 "USE AT YOUR OWN RISK"，0.7 停在 rc、随依赖漂移编不过）；活跃
-  替代有 `srp6-rs`。实际落地：不引任何 SRP crate——按 `srp` 0.6 公式把 SRP 数学
-  内联进 `core/src/auth/srp.rs`，调用方经 `RemoteAuthProvider` seam 隔离可整体换
-  实现，正确性由 **RFC 5054 官方测试向量做回归**。**OPAQUE（`opaque-ke` 4.x，
-  RFC 9807 已定稿、防服务器模拟攻击且 verifier 不可离线爆破）列为远期升级**——
-  实现重、依赖链深，等同步链路稳定后评估；seam 层已为此留位。
+- **Protocol**: SRP-6a with the RFC 5054 4096-bit group (official test vectors exist;
+  interoperable across implementations). The math is implemented inline in
+  `core/src/auth/srp.rs` (the RustCrypto `srp` 0.6 crate originally considered was
+  dropped due to digest-ecosystem drift and is no longer a dependency), handshake
+  hash SHA-256; correctness is regression-locked by the official RFC 5054 Appendix B
+  vectors (the 1024-bit/SHA-1 interop vectors).
+- **Against offline cracking of a leaked verifier**: the client first runs Argon2id
+  over "master password ‖ domain-separated salt (`persona-srp-v1` ‖ server salt)"
+  (Argon2id v19, m=19 MiB, t=2, p=1 — the argon2 crate defaults, same family as the
+  local password-verification hash; local vault unlock is a separate PBKDF2-600k
+  path with a different algorithm and parameters, see `KEY_HIERARCHY.md`; lighter
+  than the backup-file KDF's 64 MiB/t3 because the login path runs frequently) to
+  obtain the SRP private value x — the server stores the SRP verifier, so the cost
+  of offline guessing after a leak ≈ the Argon2 cost, on par with local password
+  verification.
+- **Sessions**: SRP handshake succeeds → both sides derive a session key → the client
+  exchanges it for a short-lived access token (minutes-scale TTL); subsequent requests
+  use `Authorization: Bearer`. Lockout follows the local 5-attempt semantics.
+- **Compatibility hard constraint**: the existing `PERSONA_SERVER_TOKENS` bearer path
+  **stays and coexists** — the backup chain (push requires no unlocked master
+  password) and event reporting are not disrupted; SRP is the auth method for the
+  sync endpoints, not a retrofit across all endpoints.
+- **Crate landscape (2026-09 survey, selection rationale)**: RustCrypto `srp` 0.6
+  works but is slow to maintain (the PAKEs repo is marked "USE AT YOUR OWN RISK";
+  0.7 is stuck at rc and no longer compiles against current dependencies); active
+  alternatives include `srp6-rs`. What actually landed: no SRP crate at all — the
+  SRP math is inlined into `core/src/auth/srp.rs` following the `srp` 0.6 formulas,
+  callers are isolated behind the `RemoteAuthProvider` seam so the implementation
+  can be swapped wholesale, and correctness is **regression-locked against the
+  official RFC 5054 test vectors**. **OPAQUE (`opaque-ke` 4.x, RFC 9807 finalized,
+  prevents server-impersonation attacks and is not offline-crackable from the
+  verifier) is listed as a long-term upgrade** — heavy to implement with a deep
+  dependency chain; evaluate once the sync path has stabilized; the seam layer
+  already reserves room for it.
 
-### DR-3 信封方向：组密钥层级（否决：逐 item 逐设备收件人列表）
+### DR-3 Envelope direction: group key hierarchy (rejected: per-item per-device recipient list)
 
-- **同步组密钥（group key）**：随机 256 位，工作区一份，**永不明文离开设备**——
-  在服务器上只以「设备信封」形态存在（每台设备一个，用该设备 X25519 公钥包裹，
-  DR-1 格式）。
-- **同步条目**：`{密文载荷（item key 加密）, item key 信封（group key 包裹）}`。
-  与本地行的唯一差别是包裹密钥：本地 `wrapped_item_key` 是 master key 包的
-  （`key_hierarchy.rs`），传输版是 group key 包的——**同步格式因此与主密码彻底
-  解耦**（换主密码只影响本地包裹，DR-1 的派生方案若被采纳则无此优点）。
-- **新设备加入 = O(1) 重包**：任一现有设备拆出 group key → 用新设备公钥包一个
-  新信封上传。否决逐 item 收件人列表（N 设备 × 全部 item 的信封膨胀）的原因
-  在此——1Password 的 vault key 层级是同款结构。
-- **设备移除的诚实边界**：被移除设备已知道 group key，**已同步历史的密钥不可
-  追溯撤销**。真正的移除 = 手动触发「安全轮换」（rotate group key + 全量重包 +
-  各设备重新拉取），已于 2026-09 阶段 3d 落地（`SyncSession::rotate_group_key`：
-  先以服务器 epoch 乐观锁抢占互斥（rotate-begin，2026-09-24，见 §12-2）→
-  drain 旧组密文上线 → 为每个仍授权设备重封新信封 → 全量重包推空；
-  桌面「轮换组密钥」入口 + 诚实边界确认文案）。吊销与轮换分离：第一阶段
-  只做「吊销该设备的认证与访问」，轮换是事后手动的一步。
+- **Sync group key (group key)**: random 256 bits, one per workspace, **never leaves
+  a device in plaintext** — on the server it exists only in "device envelope" form
+  (one per device, wrapped with that device's X25519 public key, DR-1 format).
+- **Sync entry**: `{ciphertext payload (encrypted by item key), item key envelope
+  (wrapped by group key)}`. The only difference from a local row is the wrapping
+  key: local `wrapped_item_key` is wrapped by the master key (`key_hierarchy.rs`),
+  the transport version is wrapped by the group key — **the sync format is therefore
+  fully decoupled from the master password** (changing the master password only
+  affects local wrapping; the DR-1 derivation approach would have lacked this
+  advantage).
+- **New device join = O(1) re-wrapping**: any existing device unwraps the group key →
+  wraps a new envelope with the new device's public key → uploads. The reason the
+  per-item recipient list was rejected (envelope bloat of N devices × all items) is
+  right here — 1Password's vault key hierarchy is the same structure.
+- **Honest boundary of device removal**: a removed device already knows the group key,
+  so **keys to already-synced history cannot be retroactively revoked**. True
+  removal = manually triggering "secure rotation" (rotate group key + full re-wrap +
+  every device re-pulls), which landed in 2026-09 stage 3d
+  (`SyncSession::rotate_group_key`: first take the mutex with a server epoch
+  optimistic lock (rotate-begin, 2026-09-24, see §12-2) → drain the old group
+  ciphertext's head → re-seal a new envelope for each still-authorized device →
+  push-empty full re-wrap; desktop "rotate group key" entry point + honest-boundary
+  confirmation copy). Revocation and rotation are separate: phase one only
+  "revokes that device's auth and access"; rotation is a manual step afterwards.
 
-### DR-4 冲突解决：LWW + 客户端 Lamport 时钟（否决：服务器裁决 / CRDT）
+### DR-4 Conflict resolution: LWW + client Lamport clocks (rejected: server adjudication / CRDT)
 
-- **全序**：每条 item 携带 `(lamport: u64, device_id: u128)`。本地写 = 本机
-  lamport + 1；pull 时本机 lamport = max(本机, 收到值)。比较：lamport 大者赢；
-  相等则 device_id 字典序定胜负——**两端独立计算结果必然一致**。
-- **时钟来源**：只信客户端 Lamport 计数，不信任何服务器/墙钟；时间戳仅展示。
-- **真冲突**：同一 item 两个版本 lamport 相同且来自不同设备（离线双编辑典型
-  形态）→ **保双版本**：胜者占主位，负者以「冲突副本」入同 item 的冲突区
-  （`conflict_of` 字段），用户在 UI 裁决合并或取舍（裁决 UI 属阶段 3；阶段 2
-  core 层先保证双版本不丢、不静默覆盖）。
-- **删除 = tombstone**：删除记墓碑条目（含 lamport），防止离线删除被旧版本
-  复活；墓碑按保留策略惰性清理。
-- **服务器角色**：只存 oplog、按游标转发，**不做任何胜负判定**——与「服务器
-  不可信」一致；让服务器裁决意味着把合并语义交给一个我们拒绝信任其诚实的组件。
+- **Total order**: every item carries `(lamport: u64, device_id: u128)`. Local write
+  = local lamport + 1; on pull, local lamport = max(local, received). Comparison:
+  higher lamport wins; on ties, lexicographic device_id breaks it — **both ends
+  computing independently necessarily reach the same result**.
+- **Clock source**: only client Lamport counters are trusted, never any server/wall
+  clock; timestamps are display-only.
+- **True conflict**: two versions of the same item with equal lamport from different
+  devices (the typical offline dual-edit shape) → **keep both versions**: the winner
+  takes the primary slot, the loser goes into the same item's conflict area as a
+  "conflict copy" (`conflict_of` field), and the user adjudicates merge or choice in
+  the UI (adjudication UI is stage 3; stage 2's core layer first guarantees both
+  versions survive, with no silent overwrite).
+- **Delete = tombstone**: deletions record a tombstone entry (with lamport),
+  preventing an offline delete from being resurrected by an older version;
+  tombstones are cleaned lazily per retention policy.
+- **Server role**: only stores the oplog and forwards by cursor, **making no
+  win/lose calls whatsoever** — consistent with "the server is not trusted"; letting
+  the server adjudicate means handing merge semantics to a component whose honesty
+  we refuse to trust.
 
-## 4. 密钥层级（全图）
+## 4. Key Hierarchy (full diagram)
 
 ```
 主密码 ──Argon2id──> master key ──包──> item key ──加密──> 本地载荷与元数据   （本地存储，现状不变）
@@ -140,10 +191,11 @@ group key（随机 256b，不落盘不明文上服务器）
 主密码 ──Argon2id──> SRP x ──SRP-6a 握手──> 短期 access token              （认证层，DR-2）
 ```
 
-## 5. 同步协议
+## 5. Sync Protocol
 
-**oplog 条目**（服务器逐条存储，独立于 change_history——那是本地审计，含明文
-元数据，永不直接上同步通道）：
+**oplog entry** (stored one-by-one by the server, independent of change_history —
+that is local audit trail containing plaintext metadata, never sent directly over the
+sync channel):
 
 ```
 SyncOp {
@@ -158,49 +210,61 @@ SyncOp {
 }
 ```
 
-**端点**（挂现有 axum server，`/api/v1/sync/*`，认证 = DR-2 的 SRP 会话 token）：
+**Endpoints** (on the existing axum server, `/api/v1/sync/*`, auth = DR-2's SRP
+session token):
 
-| 端点                       | 方法       | 用途                                               |
+| Endpoint                   | Method     | Purpose                                            |
 | -------------------------- | ---------- | -------------------------------------------------- |
-| `/sync/devices`            | POST / GET | 注册（公钥+设备名）/ 列出                          |
-| `/sync/devices/{id}`       | DELETE     | 吊销该设备                                         |
-| `/sync/group-keys`         | GET / PUT  | 取全部设备信封 / 上传本设备的 group key 信封       |
-| `/sync/oplog`              | POST       | push 本地新 oplog 段（≤500 条/批，沿 events 惯例） |
-| `/sync/oplog?since=cursor` | GET        | pull 增量（游标分页）                              |
+| `/sync/devices`            | POST / GET | Register (public key + device name) / list          |
+| `/sync/devices/{id}`       | DELETE     | Revoke that device                                 |
+| `/sync/group-keys`         | GET / PUT  | Fetch all device envelopes / upload this device's group key envelope |
+| `/sync/oplog`              | POST       | Push new local oplog batches (≤500 entries/batch, following the events convention) |
+| `/sync/oplog?since=cursor` | GET        | Pull deltas (cursor pagination)                    |
 
-**推送/拉取语义**：push 按 `op_id` 幂等；pull 从 since 游标起增量。服务端按到达
-顺序追加存储，不排序、不合并（DR-4）。body 上限沿用 server 既有 1 MiB/批；
-`/sync/*` 子路由**没有解压层**（密文不可压，兼免第二个解压炸弹面），10 MiB
-解压防线只挂在 events 子路由（`server/src/lib.rs` 分层注释，THREAT_MODEL 已
-如实登记）。
+**Push/pull semantics**: push is idempotent by `op_id`; pull increments from the
+since cursor. The server appends in arrival order without sorting or merging (DR-4).
+The body limit follows the server's existing 1 MiB/batch; the `/sync/*` subrouter
+**has no decompression layer** (ciphertext does not compress; this also avoids a
+second decompression-bomb surface), while the 10 MiB decompression defense is only
+mounted on the events subrouter (the layered comment in `server/src/lib.rs`;
+registered honestly in THREAT_MODEL).
 
-**捕获点**：在 service 层写路径（与 change_history 相同的调用点）同步生成
-oplog——元数据明文只留在本地 change_history，oplog 只持有 §5 的密文结构。
+**Capture point**: on the service-layer write path (the same call sites as
+change_history), the oplog is generated alongside — plaintext metadata stays only
+in the local change_history; the oplog holds only the ciphertext structure of §5.
 
-### 库级快照与指令压缩（S2 收口——2026-10-07 设计定稿，**2026-10-07 全链路落地**）
+### Library-level snapshot and instruction compaction (S2 closed out — design finalized 2026-10-07, **full pipeline landed 2026-10-07**)
 
-动机：oplog 是 append-only 指令流，新设备入组或长期离线后回归都要从游标
-起步重放全量指令——个人凭据库生命周期内指令数可观（改名/开密码/收藏
-每次都产生新 put），首同步时长随历史线性涨。快照 = 某一 seq 处的整库
-状态包，让落后者「快照起步 + 点后增量」。
+Motivation: the oplog is an append-only instruction stream, and a new device joining
+the group or a long-offline device returning must replay the full instruction set
+from its cursor — over the lifetime of a personal credential vault the instruction
+count is substantial (rename / rotate password / favorite each produce a new put),
+so first-sync duration grows linearly with history. A snapshot = a whole-vault
+state package at some seq, letting laggards start "snapshot + post-snapshot
+increment".
 
-**实现进度**（2026-10-07）：✅ 00010 迁移 + server PUT/GET 端点（事务删
-`seq ≤ S`，a30a2ca）；✅ core 格式层 `LibrarySnapshotPayload`（seal/open
-fail-closed + 零知识测试；条目 = oplog 视图充分集原 op，见下）；✅
-`SyncRemote` wire（HttpSyncRemote PUT/GET，404→None）；✅ engine 原语
-`upload_library_snapshot` / `install_library_snapshot`（哨兵游标续拉、
-travel 双闸）；✅ 触发基线与阈值判定（迁移 018 `sync_state.last_snapshot_seq`
-MAX 语义 + `UPLOAD_THRESHOLD_OPS` + `engine::library_snapshot_needed`）。
-✅ service 装配层（2026-10-07：`SyncSession::snapshot_payload` /
-`install_snapshot_ops` + run_cycle 尾部阈值触发与 bootstrap 游标空时
-装包；失败仅记日志不阻断）；✅ 双设备收敛等价性集成测试（core 内存
-remote `snapshot_bootstrap_converges_like_full_replay` + 真 TCP
-`sync_two_device_e2e::snapshot_bootstrap_plus_increment_converges_over_real_tcp`
-——A 推满阈值触发真实生产上传路径，B 快照起步 pulled==0 且物化全量、
-水位在覆盖位点、点后增量照常续拉，2026-10-10）。
+**Implementation progress** (2026-10-07): ✅ 00010 migration + server PUT/GET
+endpoints (transactionally deletes `seq ≤ S`, a30a2ca); ✅ core format layer
+`LibrarySnapshotPayload` (seal/open fail-closed + zero-knowledge tests; entries =
+the oplog view-sufficient set of original ops, see below); ✅ `SyncRemote` wire
+(HttpSyncRemote PUT/GET, 404→None); ✅ engine primitives
+`upload_library_snapshot` / `install_library_snapshot` (sentinel cursor
+continuation, travel dual gate); ✅ trigger baseline and threshold determination
+(migration 018 `sync_state.last_snapshot_seq` MAX semantics +
+`UPLOAD_THRESHOLD_OPS` + `engine::library_snapshot_needed`). ✅ service assembly
+layer (2026-10-07: `SyncSession::snapshot_payload` / `install_snapshot_ops` +
+run_cycle tail threshold trigger and bootstrap install when the cursor is empty;
+failures only log, never block); ✅ two-device convergence-equivalence integration
+tests (core in-memory remote `snapshot_bootstrap_converges_like_full_replay` +
+real TCP `sync_two_device_e2e::snapshot_bootstrap_plus_increment_converges_over_real_tcp`
+— A pushes past the threshold triggering the real production upload path, B starts
+from the snapshot with pulled==0 and materializes the full set, the watermark sits
+at the coverage point, and post-snapshot increments continue to pull as usual,
+2026-10-10).
 
-**快照格式**（服务器只见一个 BLOB，零知识不变；**2026-10-07 实现修订**：
-条目从初稿的「凭据表行快照」改为**本机 oplog 的视图充分集**）：
+**Snapshot format** (the server sees only a BLOB, zero-knowledge unchanged;
+**2026-10-07 implementation revision**: entries changed from the draft's
+"credential-table row snapshot" to **the local oplog's view-sufficient set**):
 
 ```
 LibrarySnapshotPayload {          // bincode 后用 group key AES-256-GCM 整包加密
@@ -209,56 +273,75 @@ LibrarySnapshotPayload {          // bincode 后用 group key AES-256-GCM 整包
 }
 ```
 
-打包原 op 而非凭据表行（装包 = 按 op_id 幂等入本地 oplog + 既有物化路径，
-全链路复用）：
+Packing original ops rather than credential-table rows (install = idempotently
+insert by op_id into the local oplog + the existing materialization path, reusing
+the full pipeline):
 
-- **pending identity 不丢**：新设备缺身份行时物化会 `SkippedPendingIdentity`
-  ——凭据表快照会把条目直接丢弃而其 op 已被压缩（真数据洞）；op 入
-  oplog 与全量重放同款挂起重试。
-- **冲突副本不丢**：未裁决双版本是「数据不丢」底线的一部分，快照点前的
-  冲突 ops 同样会被压缩。
-- **tombstone 在场防复活**（修订：初稿「tombstone 不进快照」作废）：
-  `seq ≤ S` 被压缩后「点后增量」并不携带快照点前的删除，快照缺席删除
-  会让装到非空库的设备复活已删条目。
-- **LWW 全序原样**：op_id/lamport/device_id 原封搬运——「快照起步 + 点后
-  增量 == 全量重放」按 `item_view` 逐条相等（收敛等价性锚点的口径）。
-  被 GC 的旧版本视图中性，缺席不改变视图。
+- **pending identity not lost**: when a new device lacks the identity row,
+  materialization returns `SkippedPendingIdentity` — a credential-table snapshot
+  would discard the entry outright while its op has already been compacted (a real
+  data hole); an op entering the oplog is held-pending for retry the same way as in
+  full replay.
+- **conflict copies not lost**: unadjudicated dual versions are part of the "no
+  data loss" floor, and conflict ops before the snapshot point would likewise be
+  compacted.
+- **tombstones present to prevent resurrection** (revision: the draft's
+  "tombstones don't enter the snapshot" is void): after `seq ≤ S` is compacted,
+  "post-snapshot increments" do not carry pre-snapshot deletions, and a snapshot
+  absent of deletions would let a device installing into a non-empty vault
+  resurrect already-deleted entries.
+- **LWW total order preserved verbatim**: op_id/lamport/device_id are carried
+  over intact — "snapshot start + post-snapshot increment == full replay" holds
+  per-item under `item_view` (the standard used by the convergence-equivalence
+  anchor). GC'd older versions are view-neutral; their absence does not change the
+  view.
 
-**LWW 衔接语义（FAQ 收口，2026-10-07）**：指令流（oplog）下冲突
-**显式化**——真冲突（同 lamport 并发双写）双版本留驻 oplog，
-`item_view` 推出 primary + conflicts，裁决 UI 消费；定型（非冲突
-的先后写）**静默 LWW**——`compare_ops` 全序、回放顺序无关。
-「静默 LWW 为可选项」落实在用户裁决界面：默认自动采高位，裁决
-落到败方副本删除 = 用户显式认可 LWW 结果；不另开自动解决策略
-开关。
+**LWW convergence semantics (FAQ closed out, 2026-10-07)**: under the instruction
+stream (oplog), conflicts are made **explicit** — true conflicts (concurrent dual
+writes at the same lamport) keep both versions resident in the oplog, `item_view`
+produces primary + conflicts for the adjudication UI to consume; settled cases
+(sequential, non-conflicting writes) use **silent LWW** — `compare_ops` total
+order, independent of replay order. "Silent LWW as an option" is realized in the
+user adjudication UI: the higher version is adopted automatically by default, and
+an adjudication that ends in deleting the losing copy = the user explicitly
+endorsing the LWW outcome; no separate auto-resolution policy switch exists.
 
-**覆盖语义（竞态的核心解法，实现精化为水位口径）**：客户端**先推平本机
-待推队列、再拉平远端增量**（`upload_library_snapshot` 内的周期顺序），
-以收敛后的「本机已同步水位」（`local_watermark`，最后一条已消费 op 的
-服务器 seq）为覆盖位点 S——快照声明覆盖 `seq ≤ S`。周期顺序保证服务器上
-seq ≤ S 的每条 op 都已反映进本机状态（设计稿初版的「push acked seq」
-口径会多 claim 并发设备的落点区间，水位口径严格不超 claim）；push/pull
-之间其他设备的并发推送落在 `> S` 区间，拉取者从 S 增量补齐，无需分布式
-快照点协议。客户端谎报 S 的威胁 = 组内设备本来就能推伪造条目（§2 信任
-模型，组内互信），不新增防线。
+**Coverage semantics (the core answer to races, refined in the implementation to
+the watermark standard)**: the client **first drains its local pending-push queue,
+then pulls the remote increment** (the cycle order inside `upload_library_snapshot`),
+and uses the converged "local synced watermark" (`local_watermark`, the server seq
+of the last consumed op) as coverage point S — the snapshot declares coverage of
+`seq ≤ S`. The cycle order guarantees every op on the server with seq ≤ S is
+already reflected in local state (the draft's "push acked seq" standard would
+over-claim the landing interval of concurrent devices; the watermark standard
+strictly never over-claims); concurrent pushes by other devices between push/pull
+land in the `> S` interval, which pullers fill incrementally from S — no
+distributed snapshot-point protocol needed. The threat of a client lying about S
+= devices in the group can already push forged entries (§2 trust model, mutual
+trust within the group); no new defense is added.
 
-**端点**（新增两条，认证与 `/sync/*` 同族）：
+**Endpoints** (two new ones, same auth family as `/sync/*`):
 
-| 端点             | 方法 | 用途                                                                                               |
-| ---------------- | ---- | -------------------------------------------------------------------------------------------------- |
-| `/sync/snapshot` | PUT  | 上传密文包 + 客户端声明的覆盖位点 S；服务器事务内：写快照行、删被覆盖的旧快照、删 `seq ≤ S` 的 ops |
-| `/sync/snapshot` | GET  | 返回最新快照 `{seq, ciphertext}`；无快照 404                                                       |
+| Endpoint         | Method | Purpose                                                                                                                                       |
+| ---------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/sync/snapshot` | PUT    | Upload the ciphertext package + the client-declared coverage point S; server-side in one transaction: write the snapshot row, delete the superseded old snapshot, delete ops with `seq ≤ S` |
+| `/sync/snapshot` | GET    | Return the latest snapshot `{seq, ciphertext}`; 404 if none                                                                                   |
 
-**与既有 oplog retention 合流（2026-10-07 修订，取代 410 重对齐方案）**：
-服务器已有按天 retention（`enforce_oplog_retention`，「缩水子集也收敛」
-宽容口径——游标后数据被删时，缺失部分靠各端本地事实源与重推幂等补齐）。
-快照压缩与它同向且更准：PUT 快照事务内删 `seq ≤ S` 的 ops，语义与
-「retention 删掉旧段」完全等价——pull **不拒绝、不 410**，落在快照点前的
-`since` 照旧返回快照点之后的缩水页。差别在**空库新设备**：retention 删掉
-的段对新设备是真丢数据（没有本地事实源可补），快照恰好补洞——客户端
-bootstrap 时先 GET 快照（404 则照旧从空拉），命中则装快照、从快照 seq 起
-增量 pull。老设备零改动。显式 410 引导留作后续增强（当前宽容口径下无
-正确性必要）。
+**Merged with the existing oplog retention (2026-10-07 revision, replacing the 410 realignment scheme)**:
+the server already has day-based retention (`enforce_oplog_retention`, under the
+lenient "a shrunken subset still converges" standard — when post-cursor data is
+deleted, the missing part is filled by each end's local source of truth and
+idempotent re-push). Snapshot compaction runs in the same direction and is more
+precise: the PUT-snapshot transaction deletes ops with `seq ≤ S`, semantically
+identical to "retention deleted the old segment" — pull **does not reject, no
+410**; a `since` falling before the snapshot point still returns the shrunken
+page after the snapshot point. The difference is **empty-vault new devices**:
+segments deleted by retention are true data loss for a new device (no local
+source of truth to fill from), which the snapshot fills exactly — on bootstrap
+the client first GETs the snapshot (on 404 it pulls from empty as before); on a
+hit it installs the snapshot and incrementally pulls from the snapshot seq. Old
+devices need zero changes. Explicit 410 guidance is left as a follow-up
+enhancement (no correctness need under the current lenient standard).
 
 **触发时机**（客户端 engine，第一版保守口径）：① push ack 后
 `head_seq − last_snapshot_seq > 1000` → 打包上传（防频繁重打包）；② pull

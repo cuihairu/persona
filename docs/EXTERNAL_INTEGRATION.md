@@ -1,40 +1,44 @@
-# 外部项目接入 Persona（External Integration）
+# External project integration with Persona (External Integration)
 
 > [English](EXTERNAL_INTEGRATION.md) | [中文](EXTERNAL_INTEGRATION.zh.md)
 
-> **Status: current state（2026-10-12 实测）**。本文每一处 JSON / 输出均来自
-> 真实冒烟运行（隔离 workspace + `persona connect serve` + curl），非手写
-> 示意。设计背景见
-> [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)，
-> 简版速查见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#本机自动化connect-api)。
+> **Status: current state (verified live on 2026-10-12)**. Every JSON snippet
+> and output in this document comes from a real smoke run (isolated workspace +
+> `persona connect serve` + curl), not hand-written illustration. For the design
+> background see
+> [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md); for a short
+> quick-reference see
+> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#本机自动化connect-api).
 
-外部项目（CI 脚本、deploy 工具、其他本地服务）读取 Persona vault 的
-**正式接口形态二选一**：
+External projects (CI scripts, deploy tools, other local services) read the
+Persona vault through exactly one of **two supported interface forms**:
 
-| 形态                         | 适合                                                                                                 | 依赖                                   |
+| Form                         | Best for                                                                                             | Depends on                             |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| **HTTP（Connect API）**      | 跨进程消费者：CI、后台服务、任何语言的程序                                                           | `persona connect serve` 监听中 + token |
-| **CLI（`persona secrets`）** | shell 脚本、Makefile、Terraform/K8s 声明式工具                                                       | 仅 persona CLI 在 PATH                 |
-| ~~库引用~~                   | **不推荐**：core crate 无稳定 API/版本承诺，且要求消费者进程拿到主密码才能解锁——等价于交出整个 vault | —                                      |
+| **HTTP (Connect API)**       | Cross-process consumers: CI, background services, programs in any language                           | `persona connect serve` listening + token |
+| **CLI (`persona secrets`)**  | Shell scripts, Makefiles, Terraform/K8s declarative tooling                                          | Only the persona CLI on PATH           |
+| ~~Library linkage~~          | **Not recommended**: the core crate has no stable API or version promise, and it requires the consumer process to hold the master password in order to unlock — equivalent to handing over the entire vault | —                                      |
 
-权限模型对两种形态一致：授权由
-`core/src/authz.rs` 的统一裁决点 `authorize(principal, resource, action, ctx)`
-执行（动词 `read/use/export/sign`；Connect token 主体只能拿到 `read/use`，
-经 HTTP 只暴露 `read`）。export（明文批量导出）与 sign（SSH 签名）对
-token 主体**不可授予**。
+The authorization model is identical for both forms: enforcement happens at the
+single adjudication point `authorize(principal, resource, action, ctx)` in
+`core/src/authz.rs` (verbs `read/use/export/sign`; a Connect token principal can
+only be granted `read/use`, and only `read` is exposed over HTTP). export (bulk
+plaintext export) and sign (SSH signing) can **never be granted** to a token
+principal.
 
 ---
 
-## 三步接入（HTTP 形态）
+## Three-step integration (HTTP form)
 
-### 第 1 步：发 token（vault 属主操作，一次性）
+### Step 1: issue a token (vault owner action, one-time)
 
 ```bash
 persona connect token create --label "other-project" \
   --identity ci-project --type password --type totp --expires-in 30d
 ```
 
-实测输出（明文 `pconn_…` **只展示这一次**，丢了只能吊销重建）：
+Actual output (the plaintext `pconn_…` is **shown only this once** — if you lose
+it, you can only revoke and re-create):
 
 ```
 🔑 Connect token created
@@ -47,47 +51,53 @@ pconn_C-LUE7XcPUhlPMdbh6v7Rx_Z6GzrbDqRDqx_DN_1Yrg
    expires at: 2026-11-11T15:09:47.568039674+00:00
 ```
 
-**令牌发放与到期语义：**
+**Token issuance and expiry semantics:**
 
-- 存储只落 **SHA-256 哈希**；列表与日志只见 16 hex 指纹，明文不可恢复。
-- `--expires-in <N><s|m|h|d>`：相对当前时刻的存活期（如 `30d`、`12h`、
-  `30m`、`45s`）。**缺省 = 永不过期**——给外部项目的 token 强烈建议必设。
-- 参数在主密码解锁**之前**解析：写错单位/负数/`1h30m` 这类复合式直接报
-  `Error: invalid duration "1h30m": unknown unit "h30m" (valid: s, m, h, d)`，
-  不触发密码提示。
-- 到期即拒：`expires_at` 过后请求得与未知 token **同形**的 401（实测
-  `--expires-in 1s` 三秒后 curl → 401 `invalid token`）。
-- 吊销（即时生效、幂等；收 **id（UUID）或指纹（hex）**，不收明文）：
+- Only the **SHA-256 hash** is stored; lists and logs show just a 16-hex
+  fingerprint, and the plaintext cannot be recovered.
+- `--expires-in <N><s|m|h|d>`: the lifetime relative to the current time (e.g.
+  `30d`, `12h`, `30m`, `45s`). **Omitted = never expires** — for tokens given
+  to external projects, setting it is strongly recommended.
+- The argument is parsed **before** master-password unlock: a wrong unit, a
+  negative number, or a compound form like `1h30m` fails immediately with
+  `Error: invalid duration "1h30m": unknown unit "h30m" (valid: s, m, h, d)`
+  and never triggers a passphrase prompt.
+- Requests are rejected once expired: after `expires_at` the request gets a 401
+  **identical in shape** to an unknown token (verified: `--expires-in 1s`, curl
+  three seconds later → 401 `invalid token`).
+- Revocation (takes effect immediately, idempotent; accepts **id (UUID) or
+  fingerprint (hex)**, never the plaintext):
 
   ```bash
-  persona connect token revoke 20a19e6d-9d42-4851-b2e7-d8da03f9049b   # 或 4b322627054123fd
+  persona connect token revoke 20a19e6d-9d42-4851-b2e7-d8da03f9049b   # or 4b322627054123fd
   ```
 
-  实测：revoke 成功输出
-  `✓ Token 67474c13-3496-4f71-a08c-1dc01644b2b7 revoked`，随后该 token 的
-  请求立刻 401。
+  Verified: a successful revoke prints
+  `✓ Token 67474c13-3496-4f71-a08c-1dc01644b2b7 revoked`, and requests with
+  that token get a 401 immediately afterwards.
 
-- `persona connect token list` 状态列：`active`（绿）/ `revoked`（红）/
-  `expired`（黄，按 `expires_at` 现算），附 `never used` / `last used …` /
-  `revoked at …` 与 `expires at …` 行。
+- `persona connect token list` status column: `active` (green) / `revoked` (red)
+  / `expired` (yellow, computed from `expires_at`), with `never used` /
+  `last used …` / `revoked at …` and `expires at …` lines.
 
-### 第 2 步：起 listener（本机后台，一次性）
+### Step 2: start the listener (local background, one-time)
 
 ```bash
-persona connect serve --port 8737        # 默认 --port 0 由 OS 分配；Ctrl-C 退出
+persona connect serve --port 8737        # default --port 0 lets the OS assign; Ctrl-C to exit
 ```
 
-- 只监听 `127.0.0.1`，请求不出本机；vault 需处于解锁态——前台终端用
-  `--passphrase-env <VAR>` 指定读哪个环境变量（须已设且非空），桌面版在
-  设置里开关。非交互解锁的完整说明见
-  [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md)。
-- listener 进程与消费者进程解耦：token 校验每请求进行，vault 锁定时
-  返回 503（见错误码表）。
+- Listens only on `127.0.0.1`; requests never leave the machine; the vault must
+  be unlocked — in a foreground terminal use `--passphrase-env <VAR>` to specify
+  which environment variable to read (it must already be set and non-empty), and
+  the desktop app toggles this in Settings. For the full non-interactive unlock
+  story see [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md).
+- The listener process is decoupled from the consumer process: token validation
+  happens per request, and a locked vault returns 503 (see the error code table).
 
-### 第 3 步：调用（消费者侧，任何 HTTP 客户端）
+### Step 3: call it (consumer side, any HTTP client)
 
 ```bash
-TOKEN=pconn_C-LUE7XcPUhlPMdbh6v7Rx_Z6GzrbDqRDqx_DN_1Yrg   # 第 1 步保存
+TOKEN=pconn_C-LUE7XcPUhlPMdbh6v7Rx_Z6GzrbDqRDqx_DN_1Yrg   # saved in step 1
 B=http://127.0.0.1:8737/api/v1/connect
 
 curl -s -H "Authorization: Bearer $TOKEN" $B/health
@@ -97,25 +107,26 @@ curl -s -H "Authorization: Bearer $TOKEN" $B/items/<id>
 curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 ```
 
-**就这些。** token 之外无注册、无握手、无 SDK 必需品。
+**That's all.** There is no registration, no handshake, and no required SDK
+beyond the token.
 
 ---
 
-## 端点参考（实测响应）
+## Endpoint reference (verified responses)
 
-所有响应带 `content-type: application/json` 与
-`cache-control: no-store`；成功包络 `{"ok":true,"data":…}`，错误包络
-`{"ok":false,"error":{"code","message"}}`。
+Every response carries `content-type: application/json` and
+`cache-control: no-store`; success envelopes look like `{"ok":true,"data":…}`,
+error envelopes like `{"ok":false,"error":{"code","message"}}`.
 
-### `GET /health` — 免认证存活探针
+### `GET /health` — unauthenticated liveness probe
 
 ```json
 { "data": { "service": "persona-connect", "version": "0.1.0" }, "ok": true }
 ```
 
-不携带任何 vault 信息，供监听探活。
+Carries no vault information; provided for listener health probing.
 
-### `GET /identities` — scope 内身份列表
+### `GET /identities` — identities in scope
 
 ```json
 {
@@ -126,7 +137,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 }
 ```
 
-### `GET /items` — scope 内条目列表（仅元数据）
+### `GET /items` — items in scope (metadata only)
 
 ```json
 {
@@ -150,9 +161,9 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 }
 ```
 
-`type` 为 snake_case。列表**不含**秘密字段。
+`type` is snake_case. The list contains **no** secret fields.
 
-### `GET /items/{id}` — 条目详情（含解密后的秘密）
+### `GET /items/{id}` — item detail (with the decrypted secret)
 
 ```json
 {
@@ -175,10 +186,11 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 }
 ```
 
-注意 `data` 内字段名为 **PascalCase**（`Password` / `ApiKey` / …，serde
-默认外部标签，无 rename_all）——消费者解析时按下条目类型取对应键。
+Note that the field names inside `data` are **PascalCase** (`Password` /
+`ApiKey` / …, serde's default externally tagged representation, no rename_all) —
+consumers parsing it should take the key matching the item's type.
 
-### `POST /items/{id}/totp` — 现算 TOTP 验证码
+### `POST /items/{id}/totp` — compute a TOTP code on demand
 
 ```json
 { "data": { "code": "539466", "remaining_seconds": 8 }, "ok": true }

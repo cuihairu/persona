@@ -2,89 +2,89 @@
 
 > [English](CONTEXT_AWARE_DESIGN.md) | [中文](CONTEXT_AWARE_DESIGN.zh.md)
 
-状态：**阶段 1+2 已实现**（2026-10-12：core `ContextService` + `context.toml`
-解析 + `persona suggest [--json]` + `persona context map/get/unmap/status`；
-2026-10-13 阶段 2：`persona shell-hook`（bash/zsh 片段，PS1 前缀 ⛵ 候选）+
-`persona use`（= switch 别名，确认首位建议时审计带 reason）+ 历史学习
-（migration 020 `context_learn`/`context_settings`，默认关，
-`persona context learn on|off|status|clear`，建议权重 0.7、30 天窗口）；
-2026-10-13 阶段 3：`persona ssh run --host` 以目标主机为唯一信号出建议行
-（stderr，只建议不授权），`--identity` 由 reserved 变为 agent 密钥过滤器
-（CLI 先验名存在，agent 按 `PERSONA_AGENT_IDENTITY` fail-closed 只加载
-该分身密钥）；
-2026-10-14 阶段 4 桥半：桥协议 `get_suggestions` 支持可选 `host`/`cwd` 信号，
-响应新增 `context` 字段与 items `identity` 标注，建议分身凭证并入候选排最前
-（与 `persona suggest` 共用 core `suggest()`；`PERSONA_NO_CONTEXT` 整层开关；
-映射损坏静默降级）；同日浏览器半：popup 消费 `context`/`identity` —— 排序
-沿用桥端序（建议分身已排最前），逐条标分身名，顶部一行 "Context suggests X"
-（`autofillUx.ts` 纯函数 5 例测试）。剩余：桌面托盘候选。
-关联：[核心概念：上下文](src/concepts/context.md)、
-[ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows)。
+Status: **Stages 1+2 implemented** (2026-10-12: core `ContextService` + `context.toml`
+parsing + `persona suggest [--json]` + `persona context map/get/unmap/status`;
+2026-10-13, stage 2: `persona shell-hook` (bash/zsh snippet, PS1 prefix ⛵ candidate) +
+`persona use` (= an alias for switch; the audit entry carries the reason when the top suggestion is confirmed) + history learning
+(migration 020 `context_learn`/`context_settings`, off by default,
+`persona context learn on|off|status|clear`, suggestion weight 0.7, 30-day window);
+2026-10-13, stage 3: `persona ssh run --host` prints a suggestion line using the target host as its only signal
+(stderr; it suggests without authorizing), and `--identity` moves from reserved to an agent key filter
+(the CLI first verifies the name exists, and the agent loads only
+that identity's keys under `PERSONA_AGENT_IDENTITY`, failing closed);
+2026-10-14, stage 4 bridge half: the bridge protocol's `get_suggestions` accepts optional `host`/`cwd` signals,
+the response gains a `context` field and items gain an `identity` annotation, and the suggested identity's credentials merge into the candidate list ranked first
+(shared with `persona suggest` through core `suggest()`; `PERSONA_NO_CONTEXT` switches the whole layer off;
+corrupt mappings degrade silently); same day, browser half: the popup consumes `context`/`identity` — ordering
+follows the bridge-side order (the suggested identity is already ranked first), each entry is labeled with its identity name, and one line at the top reads "Context suggests X"
+(`autofillUx.ts` pure-function test, 5 cases). Remaining: the desktop tray candidate.
+Related: [Core concept: context](src/concepts/context.md),
+[ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows).
 
-## 1. 目标与定位
+## 1. Goals and positioning
 
-自动填充的下一步是**分身建议**：当用户进入一个目录、打开一个仓库、连上一台
-主机时，Persona 应该知道「现在最可能是哪个分身」并把它排到最前——而不是让
-用户在 6 个分身里手选。
+The next step after autofill is **identity suggestion**: when the user enters a directory, opens a repository, or connects to a
+host, Persona should know "which identity is most likely now" and rank it first — rather than leaving the
+user to pick by hand among six identities.
 
-铁律（与 `concepts/context.md` 一致）：
+Iron rule (consistent with `concepts/context.md`):
 
-> **Context 只建议，不授权。** 建议结果永远不会绕过策略放行动作；未被确认的
-> 建议不改变 `active_identity_id`，只改变「默认/首个候选」。
+> **Context suggests; it never authorizes.** A suggestion never bypasses policy to allow an action; an unconfirmed
+> suggestion does not change `active_identity_id` — it only changes the "default/first candidate".
 
-## 2. 概念落点
+## 2. Where the concepts land
 
 ```
-信号采集（客户端可观察的事实）
+Signal collection (facts observable by the client)
       │
       ▼
-core: ContextService（纯函数，可单测）
-      │  输入：Context { cwd, host, remote, origin, ... } + 映射表
-      │  输出：候选分身份列表（identity, score, reason）— 排序、阈值、fallback
+core: ContextService (pure function, unit-testable)
+      │  Input: Context { cwd, host, remote, origin, ... } + mapping table
+      │  Output: candidate identity list (identity, score, reason) — ranking, threshold, fallback
       ▼
-消费方（CLI 提示 / 桥协议建议 / 桌面端 UI）
+Consumers (CLI prompt / bridge suggestions / desktop UI)
       │
       ▼
-用户确认 → persona switch（唯一的身份变更路径，落审计）
+User confirms → persona switch (the only identity-change path, audited)
 ```
 
-- 决策必须在 **core**（ContextService），所有客户端共享同一套打分；
-- 客户端只负责**采集信号**（cwd、host、origin），不自带推理；
-- 身份变更仍走 `persona switch` 与 `active_identity_id` 指针——建议只是
-  把「默认选哪个」这块替换掉。
+- Decisions must live in **core** (ContextService); all clients share one scoring implementation;
+- Clients only **collect signals** (cwd, host, origin); they carry no reasoning of their own;
+- Identity changes still go through `persona switch` and the `active_identity_id` pointer — a suggestion only
+  replaces the "which one is the default" decision.
 
-## 3. 上下文信号清单
+## 3. Context signal inventory
 
-| 维度   | 信号                                                          | 来源                                      | 可靠性                           | v1 纳入?     |
-| ------ | ------------------------------------------------------------- | ----------------------------------------- | -------------------------------- | ------------ |
-| 终端   | `cwd`                                                         | `std::env::current_dir`                   | 脚本可伪造，但建议不授权所以无害 | ✅           |
-| Git    | `cwd` 上溯到 `.git`，读 `remote origin` → forge 与 owner/repo | shell 调用 git 或 `git2`                  | 高                               | ✅           |
-| 终端   | `hostname`                                                    | `gethostname` / `PERSONA_HOST` 覆盖       | 高（可通过环境变量改，见下）     | ✅           |
-| 终端   | 父进程链（shell 是否交互）                                    | `/proc/<ppid>/comm` 启发式                | 中；交互 TTY 才提示，脚本不打扰  | ⚠️ 阶段 2    |
-| SSH    | Agent 请求的 host / key                                       | 已有 agent 策略输入                       | 高                               | ✅（阶段 3） |
-| 浏览器 | page origin / 每站点默认                                      | 已有 autofillDefaults                     | 高                               | ⚠️ 阶段 4    |
-| 桌面   | 当前窗口/项目                                                 | Tauri 侧                                  | 中                               | ⚠️ 阶段 4    |
-| 设备   | 机器角色（dev-pc / laptop / server）                          | 主机名约定或 `~/.persona/machine-profile` | 用户自声明                       | ✅（可选）   |
+| Dimension | Signal                                                          | Source                                      | Reliability                           | In v1?       |
+| --------- | --------------------------------------------------------------- | ------------------------------------------- | ------------------------------------- | ------------ |
+| Terminal  | `cwd`                                                           | `std::env::current_dir`                     | Scripts can forge it, but suggestions do not authorize, so it is harmless | ✅           |
+| Git       | Walk up from `cwd` to `.git`, read `remote origin` → forge and owner/repo | Shell call into git, or `git2`              | High                                | ✅           |
+| Terminal  | `hostname`                                                      | `gethostname` / `PERSONA_HOST` override     | High (can be changed via env var; see below) | ✅           |
+| Terminal  | Parent process chain (is the shell interactive)                 | `/proc/<ppid>/comm` heuristic               | Medium; only prompt on an interactive TTY, leave scripts alone | ⚠️ Stage 2    |
+| SSH       | Host / key requested by the agent                               | Existing agent policy input                 | High                                | ✅ (stage 3) |
+| Browser   | page origin / per-site default                                  | Existing autofillDefaults                   | High                                | ⚠️ Stage 4    |
+| Desktop   | Current window/project                                          | Tauri side                                  | Medium                              | ⚠️ Stage 4    |
+| Device    | Machine role (dev-pc / laptop / server)                         | Hostname convention, or `~/.persona/machine-profile` | User self-declared          | ✅ (optional) |
 
-隐私边界：信号全部本地计算，永不外发；建议历史不进同步、不进服务器；
-审计只记「用户确认了哪个建议」（复用已有 switch 审计），不记信号本身。
+Privacy boundary: all signals are computed locally and never leave the machine; suggestion history never enters sync and never enters the server;
+the audit log records only "which suggestion the user confirmed" (reusing the existing switch audit), never the signal itself.
 
-## 4. 建议算法 v1（确定性打分）
+## 4. Suggestion algorithm v1 (deterministic scoring)
 
-纯函数 `score(ctx) -> Vec<(identity, score, reason)>`，禁止随机/ML：
+Pure function `score(ctx) -> Vec<(identity, score, reason)>`; no randomness or ML allowed:
 
 ```
 score = Σ (signal_match × signal_weight)
-阈值：score ≥ MIN_SUGGEST (如 0.6) 的才进候选；候选中取第一
-平局：活跃最近使用优先（SQLite 记录每次 switch 的 identity + ts）
-无候选：fallback = 当前 active identity（行为与今日完全一致）
+Threshold: only entries with score ≥ MIN_SUGGEST (e.g. 0.6) qualify as candidates; take the first
+Tie: most recently used active entry wins (SQLite records the identity + ts of every switch)
+No candidate: fallback = current active identity (behavior identical to today)
 ```
 
-示例（静态映射表）：
+Example (static mapping table):
 
 ```toml
-# ~/.persona/context.toml（用户可维护；v1 也支持 persona context map 子命令）
-# TOML 合法语法是点分隔引号键（设计初稿的空格形式是 git-config 风格，无效）
+# ~/.persona/context.toml (user-maintained; v1 also supports the persona context map subcommand)
+# Valid TOML syntax is dot-separated quoted keys (the whitespace form in the first design draft was git-config style and is invalid)
 [project."github.com/cuihairu/persona"]
 identity = "OpenSource"
 
@@ -93,53 +93,53 @@ identity = "Ops"
 ```
 
 - `cwd=~/workspace/persona` → remote `github.com/cuihairu/persona` →
-  命中 `[project ...]` → OpenSource（score 1.0，reason="仓库 github.com/cuihairu/persona"）；
-- `cwd=~/workspace/client-a` → 无项目映射，host=`dev-pc` 无 `-server` 匹配，
-  但最近 30 天在该目录 `persona switch` 过 41 次到 "Client-A" →
-  学习候选 "Client-A"（score 0.7，reason="最近在此目录使用"）；
-- 都不中 → active identity，行为不变。
+  hits `[project ...]` → OpenSource (score 1.0, reason="repository github.com/cuihairu/persona");
+- `cwd=~/workspace/client-a` → no project mapping, host=`dev-pc` matches no `-server` pattern,
+  but `persona switch` was run 41 times in this directory within the last 30 days, to "Client-A" →
+  learned candidate "Client-A" (score 0.7, reason="used in this directory recently");
+- Nothing hits → active identity, behavior unchanged.
 
-### 4.1 历史学习（可选，默认关）
+### 4.1 History learning (optional, off by default)
 
-默认关；`persona context learn on` 后，每次 `persona switch` 把
-`(identity, cwd_hash, host, ts)` 记入 SQLite 一张新表（本地，不进同步）。
-建议时按「同组信号最近使用次数」产出一个学习候选。理由：
-学习建立在用户已有行为上，且结果只影响默认值，风险低；但默认关
-保持「不意外」原则。
+Off by default; once `persona context learn on` is set, every `persona switch` writes
+`(identity, cwd_hash, host, ts)` into a new SQLite table (local, never synced).
+When suggesting, one learned candidate is produced from "how recently the same signal group was used". Rationale:
+learning builds on behavior the user already has, and the result only affects the default, so the risk is low; but keeping it off by default
+preserves the "no surprises" principle.
 
-## 5. 用户模型与数据
+## 5. User model and data
 
-- 映射表：`~/.persona/context.toml`（全局）+ 可选 `$repo/.persona/context.toml`
-  （仓库内，`.gitignore` 默认忽略——仓库共享的分身偏好属于团队决策，
-  先不自动共享；仓库内**明文**映射只允许指向分身名，不涉及密钥材料）；
-- 覆盖链（高优先在上）：环境变量 `PERSONA_CONTEXT_OVERRIDE=<identity>` >
-  仓库内映射 > 全局映射 > 历史学习 > active identity；
-- 身份名称引用与 `persona switch` 同源（同名校验失败则跳过该候选并告警）。
+- Mapping table: `~/.persona/context.toml` (global) + optional `$repo/.persona/context.toml`
+  (inside the repository; ignored by `.gitignore` by default — sharing identity preferences across a repository is a team decision,
+  so nothing is auto-shared; an in-repo **plaintext** mapping may only reference identity names and never touches key material);
+- Override chain (highest precedence first): environment variable `PERSONA_CONTEXT_OVERRIDE=<identity>` >
+  in-repo mapping > global mapping > history learning > active identity;
+- Identity name references share their source with `persona switch` (if the name check fails, skip that candidate and warn).
 
-## 6. 集成点
+## 6. Integration points
 
-- **CLI（v1 核心）**：`persona suggest`（人类可读）与 `persona suggest --json`
-  （脚本友好）；`persona context map/get/unmap/learn on|off/status`；
-- **交互提示（v1）**：`persona shell-hook` 生成 zsh/bash 片段，仅交互 TTY
-  且 `PERSONA_NO_CONTEXT` 未设置时在 PS1 显示「⛵ OpenSource」候选，
-  并提供 `persona use` 一键确认（= `persona switch` 的别名，落审计）
-  ——注意 `persona switch` 语义不变，建议不自动执行；
-- **桥协议（阶段 4，2026-10-14 已实现）**：`get_suggestions` 请求可携带
-  可选 `host`/`cwd` 字段；服务端（bridge、非 server）用**同一** core
-  `suggest()` 打分后：响应新增 `context`（identity/score/reason）、items 新增
-  `identity` 标注、建议分身凭证并入候选并排最前（card 同样合并）——
-  向后兼容：缺省字段 / 无映射时行为与今日一致（响应里 `context` 缺省，
-  旧扩展形态不变）；扩展侧（`popup.ts`）消费同一响应：排序沿用桥端序、
-  逐条标分身名、顶部一行 context 提示（`autofillUx.ts` 纯函数，
-  `nativeBridge.ts` 类型补齐 `identity`/`context` 可选项）；
-- **SSH（阶段 3）**：agent 策略已有的 host 维度接进 ContextService——
-  访问 `*.company.com` 时建议 Work 分身；`--identity` 由 reserved 变为过滤器。
+- **CLI (v1 core)**: `persona suggest` (human-readable) and `persona suggest --json`
+  (script-friendly); `persona context map/get/unmap/learn on|off/status`;
+- **Interactive prompt (v1)**: `persona shell-hook` generates a zsh/bash snippet; on an interactive TTY only,
+  and only when `PERSONA_NO_CONTEXT` is unset, it shows an "⛵ OpenSource" candidate in PS1,
+  and offers `persona use` for one-keystroke confirmation (= an alias for `persona switch`, audited)
+  — note that `persona switch` semantics are unchanged; a suggestion is never executed automatically;
+- **Bridge protocol (stage 4, implemented 2026-10-14)**: a `get_suggestions` request may carry
+  optional `host`/`cwd` fields; the serving side (the bridge, not the server) scores with the **same** core
+  `suggest()`: the response gains `context` (identity/score/reason), items gain an
+  `identity` annotation, and the suggested identity's credentials merge into the candidates ranked first (cards merge the same way) —
+  backward compatible: with fields omitted / no mappings, behavior matches today (no `context` in the response,
+  legacy extension shape unchanged); the extension side (`popup.ts`) consumes the same response: ordering follows the bridge-side order,
+  each entry is labeled with its identity name, and one context hint line sits at the top (`autofillUx.ts` pure function;
+  `nativeBridge.ts` types gain the optional `identity`/`context` fields);
+- **SSH (stage 3)**: the host dimension already present in agent policy feeds into ContextService —
+  when touching `*.company.com`, suggest the Work identity; `--identity` moves from reserved to a filter.
 
-### 6.1 为什么不在桥协议首发
+### 6.1 Why not debut in the bridge protocol
 
-浏览器扩展是当前最高频入口但已有「每站点默认值 + active identity」的基础建议；
-cwd/host 信号主要在终端场景价值最大。v1 锁 CLI，把 ContextService 在 core
-测稳，再横向铺到浏览器/桌面。
+The browser extension is the highest-frequency entry point today, but it already has a baseline suggestion from "per-site default + active identity";
+cwd/host signals are worth the most in terminal scenarios. v1 locks onto the CLI, gets ContextService
+proven in core, and only then rolls out horizontally to the browser and desktop.
 
 ## 7. 兼容性与安全
 

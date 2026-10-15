@@ -1,171 +1,171 @@
-# Persona 威胁模型与周期性安全审查
+# Persona Threat Model and Periodic Security Review
 
 > [English](THREAT_MODEL.md) | [中文](THREAT_MODEL.zh.md)
 
-本文档定义 Persona 当前主线产品的安全边界、主要威胁、已落地控制和复审机制。范围以根目录 `BOUNDARY.md` 为准：Persona 是本地优先、零知识的身份材料管理器，主要保护同一用户在不同身份上下文中的密码、API Key、TOTP、SSH Key、浏览器填充数据和相关元数据。
+This document defines the security boundary, principal threats, landed controls, and review mechanism for Persona's current mainline product. Scope follows the root `BOUNDARY.md`: Persona is a local-first, zero-knowledge identity-material manager, primarily protecting passwords, API keys, TOTP, SSH keys, browser fill data, and related metadata for the same user across different identity contexts.
 
-## 目标与非目标
+## Goals and Non-Goals
 
-目标：
+Goals:
 
-- 保护本地工作区中的身份材料，避免未授权读取、填充、导出和签名。
-- 将凭据、SSH Key、TOTP 等敏感材料限制在明确的身份上下文和来源上下文内使用。
-- 在 CLI、桌面端、浏览器扩展和 SSH Agent 之间保持一致的加密、审计和策略边界。
-- 在发生误用、异常填充、异常签名或配置变更时留下足够的本地审计证据。
+- Protect identity material in the local workspace from unauthorized read, fill, export, and signing.
+- Constrain sensitive material such as credentials, SSH keys, and TOTP to use within explicit identity contexts and origin contexts.
+- Maintain consistent encryption, audit, and policy boundaries across CLI, desktop, browser extension, and SSH Agent.
+- Leave sufficient local audit evidence when misuse, anomalous fill, anomalous signing, or configuration changes occur.
 
-非目标：
+Non-goals:
 
-- 不防御已经完全控制当前用户会话的恶意内核、调试器或系统级恶意软件。
-- 不承诺在未解锁且主密码丢失时恢复明文数据。
-- 不把 Server/Sync 作为强依赖；可选服务端不得接触明文身份材料（加密备份恢复点除外——见"备份保管端点"，服务端持密文不持密钥）。
-- 不把钱包能力作为当前安全主线，钱包相关能力仍按实验性范围处理。
+- Does not defend against malicious kernels, debuggers, or system-level malware that has fully taken control of the current user session.
+- Does not promise plaintext recovery when the master password is lost and the vault cannot be unlocked.
+- Does not treat Server/Sync as a hard dependency; the optional server must not touch plaintext identity material (except for encrypted backup restore points — see "Backup Custody Endpoint"; the server holds ciphertext but not keys).
+- Does not treat wallet capabilities as part of the current security mainline; wallet-related capabilities remain in experimental scope.
 
-## 资产
+## Assets
 
-| 资产                  | 示例                                           | 主要风险                                                                         |
+| Asset                        | Example                                                        | Primary risk                                                                              |
 | --------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- |
-| 主密码与派生主密钥    | `PERSONA_MASTER_PASSWORD`、内存中的解锁密钥    | 泄露后可解密本地工作区                                                           |
-| 单项凭据密钥          | `wrapped_item_key` 解封后的 item key           | 单项明文泄露或横向扩大                                                           |
-| 凭据明文              | 密码、API Key、TOTP secret、SSH 私钥 seed      | 数据外泄、未授权填充、未授权签名                                                 |
-| 工作区数据库          | SQLite、迁移、用户认证记录、元数据             | 离线暴力破解、篡改、回滚                                                         |
-| 浏览器桥接会话        | 配对密钥、短期 session、Native Messaging 消息  | 恶意扩展请求填充或复制                                                           |
-| SSH Agent socket/pipe | `SSH_AUTH_SOCK`、Windows Named Pipe            | 未授权签名、agent 转发滥用                                                       |
-| 审计日志              | 登录、解锁、凭据解密、SSH 签名摘要             | 篡改、删除、敏感字段误写入                                                       |
-| 备份/导入导出文件     | JSON/YAML/CSV、加密备份                        | 备份泄露、格式注入、弱 passphrase                                                |
-| 钱包密钥（实验轨道）  | BIP39 助记词、xprv/派生私钥、keystore/WIF 导出 | 不可逆丢失、投毒地址、伪造签名 —— 最高级资产，实验性声明见「钱包（实验轨道）」节 |
-| OS 钥匙串托管条目     | keyring 中的主密码（biometric unlock 用）      | 同用户恶意进程读取、陈旧条目                                                     |
+| Master password and derived master key | `PERSONA_MASTER_PASSWORD`, in-memory unlock key | Once compromised, decrypts the local workspace                                                  |
+| Per-item credential key            | item key after unwrapping `wrapped_item_key`          | Single-item plaintext disclosure or lateral expansion                                        |
+| Credential plaintext               | password, API key, TOTP secret, SSH private key seed   | Data exfiltration, unauthorized fill, unauthorized signing                                    |
+| Workspace database                 | SQLite, migrations, user auth records, metadata          | Offline brute force, tampering, rollback                                                     |
+| Browser bridge session             | pairing key, short-term session, Native Messaging messages | Malicious extension requests fill or copy                                            |
+| SSH Agent socket/pipe              | `SSH_AUTH_SOCK`, Windows Named Pipe                     | Unauthorized signing, agent-forwarding abuse                                               |
+| Audit log                          | login, unlock, credential decryption, SSH signature digests | Tampering, deletion, sensitive fields written by mistake                              |
+| Backup/import-export files         | JSON/YAML/CSV, encrypted backups                         | Backup disclosure, format injection, weak passphrase                                      |
+| Wallet keys (experimental track)   | BIP39 mnemonic, xprv/derived private key, keystore/WIF export | Irreversible loss, poisoned address, forged signature — highest-tier asset; the experimental declaration is in the "Wallet (Experimental Track)" section |
+| OS keyring escrow entry            | master password in keyring (for biometric unlock)        | Read by a same-user malicious process, stale entries                                      |
 
-## 信任边界
+## Trust Boundaries
 
-1. **本地用户边界**：当前 OS 用户账户是主要安全边界。Persona 不应把明文写入 world-readable 路径，也不应依赖云端保密。
-2. **进程内解锁边界**：解锁后的主密钥和部分明文只应存在于短期内存路径，锁定后必须清理服务状态。
-3. **工作区边界**：SQLite、附件和配置文件属于同一个本地工作区；迁移必须保持向后兼容和最小权限。
-4. **浏览器桥接边界**：浏览器扩展通过 Native Messaging 调用 `persona bridge`，敏感操作必须经过配对、HMAC、短期 session、origin binding 和 user gesture。
-5. **SSH Agent 边界**：OpenSSH 客户端通过 socket/pipe 请求签名；agent 只暴露公钥列表和签名能力，不导出私钥。
-6. **可选服务端边界**：server/sync 只能处理事件摘要、密文或同步元数据，不得成为明文解密方。已落地的 events API 仅接收审计事件摘要（action、资源类型、可选 ID、时间戳、成功标记与受限 metadata），以 Bearer 令牌认证（多设备令牌或 legacy 单令牌），未配置令牌即整体禁用（fail-closed）。备份保管端点（2026-09）只存储客户端加密的 PERSENC1 密文与元数据，恢复需备份口令 + 主密码双要素，详见"备份保管端点"一节。
-7. **自动化边界**：非交互模式允许用环境变量注入主密码，适合 CI，但环境变量由调用方负责隔离和清理。
+1. **Local user boundary**: the current OS user account is the primary security boundary. Persona must not write plaintext to world-readable paths, nor rely on the cloud for secrecy.
+2. **In-process unlock boundary**: the unlocked master key and partial plaintext must exist only on short-lived in-memory paths; on lock, service state must be cleared.
+3. **Workspace boundary**: SQLite, attachments, and configuration files belong to the same local workspace; migrations must stay backward-compatible and least-privilege.
+4. **Browser bridge boundary**: the browser extension invokes `persona bridge` over Native Messaging; sensitive operations must pass pairing, HMAC, short-term session, origin binding, and user gesture.
+5. **SSH Agent boundary**: OpenSSH clients request signatures over a socket/pipe; the agent exposes only public-key listing and signing capability, never exports private keys.
+6. **Optional server boundary**: server/sync may handle only event digests, ciphertext, or sync metadata; it must never become the plaintext decryption party. The landed events API receives only audit event digests (action, resource type, optional ID, timestamp, success flag, and bounded metadata), authenticated by Bearer token (multi-device tokens or the legacy single token), and is fully disabled when no token is configured (fail-closed). The backup custody endpoint (2026-09) stores only client-encrypted PERSENC1 ciphertext and metadata; restore requires two factors — the backup passphrase + the master password. See the "Backup Custody Endpoint" section.
+7. **Automation boundary**: non-interactive mode allows injecting the master password via environment variable, which suits CI, but the caller is responsible for isolating and clearing that environment variable.
 
-## 主要威胁与控制
+## Principal Threats and Controls
 
-| STRIDE                 | 威胁                                             | 已有控制                                                                                              | 仍需关注                                                |
+| STRIDE               | Threat                                                | Existing controls                                                                                              | Still needs attention                                                |
 | ---------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| Spoofing               | 恶意浏览器扩展伪装成已配对客户端                 | 配对码、`client_instance_id`、短期 session、HMAC-SHA256 请求认证                                      | 配对状态文件权限和撤销 UX 需要持续检查                  |
-| Spoofing               | SSH 连接目标主机被冒充                           | known_hosts 强制模式、未知主机确认、每主机策略                                                        | known_hosts 解析仍需随 OpenSSH 格式演进复测             |
-| Tampering              | 本地 SQLite 或配置被离线篡改                     | AES-GCM 认证加密保护凭据密文，迁移测试覆盖 schema                                                     | 明文元数据和审计日志仍可能被本地攻击者修改              |
-| Tampering              | 导入文件或 Native Messaging 消息被构造为恶意输入 | JSON 解析、长度前缀协议、格式解析测试与 fuzz 路径                                                     | 需把新增解析器纳入 fuzz 清单                            |
-| Repudiation            | 用户否认敏感操作                                 | 审计记录身份 CRUD、凭据解密、导出、SSH 签名摘要                                                       | 审计日志当前不是防篡改账本                              |
-| Spoofing（钱包）       | 地址投毒：历史记录诱导复制伪造地址               | 桌面确认面板启发式告警 + 后端签名入口强制检查（CLI/桌面，命中未确认即拒签——见「钱包（实验轨道）」节） | 启发式误报/漏报需实盘样本；无硬件钱包                   |
-| Repudiation            | 客户端向 server 伪造/重放上报审计事件            | server 明确不宣称防抵赖；events API 仅作聚合观测（单 Bearer 令牌门禁、`client_event_id` 幂等去重）    | per-client 设备身份与防抵赖（SRP/事件签名）留待同步轨道 |
-| Information Disclosure | 工作区文件被复制并离线攻击                       | Argon2id/PBKDF2 派生、AES-256-GCM、单项 item key 包裹                                                 | 主密码强度仍是核心风险；KDF 参数需周期性复审            |
-| Information Disclosure | 浏览器后台页面悄悄读取密码/TOTP                  | user gesture、origin binding、活动身份过滤、只返回匹配凭据                                            | 没有 URL 的凭据无法绑定来源，应在 UI/CLI 中提示风险     |
-| Information Disclosure | 日志泄露 secret、token、验证码                   | 日志脱敏策略和单元测试覆盖常见 secret/key/value 形式                                                  | 新增日志字段必须先确认不含明文                          |
-| Denial of Service      | Agent 被频繁请求签名或耗尽资源                   | 全局最小间隔、每小时/每日限制、每密钥/每主机策略                                                      | 长期运行 agent 需要实机压力测试                         |
-| Elevation of Privilege | 被低信任自动化脚本借用解锁态执行敏感操作         | 自动锁、敏感操作再认证、非交互模式显式环境开关                                                        | 解锁态是高风险窗口，桌面端接线时要避免隐式授权          |
+| Spoofing            | A malicious browser extension impersonates a paired client | Pairing code, `client_instance_id`, short-term session, HMAC-SHA256 request authentication                    | Pairing state file permissions and revocation UX need ongoing review  |
+| Spoofing            | SSH connection target host impersonated                    | known_hosts forced mode, unknown-host confirmation, per-host policy                                          | known_hosts parsing needs retesting as OpenSSH formats evolve       |
+| Tampering           | Local SQLite or configuration tampered offline             | AES-GCM authenticated encryption protects credential ciphertext; migration tests cover schema                | Plaintext metadata and audit logs can still be modified by a local attacker |
+| Tampering           | Import files or Native Messaging messages crafted as malicious input | JSON parsing, length-prefixed protocol, format-parser tests and fuzz paths                          | New parsers must be added to the fuzz list                         |
+| Repudiation         | User denies a sensitive operation                          | Audit records identity CRUD, credential decryption, export, SSH signature digests                        | The audit log is not currently a tamper-evident ledger                |
+| Spoofing (wallet)   | Address poisoning: history lures copying a forged address  | Desktop confirmation-panel heuristic alerts + mandatory backend check at signing entry points (CLI/desktop; an unconfirmed hit refuses to sign — see the "Wallet (Experimental Track)" section) | Heuristic false positives/negatives need real-world samples; no hardware wallet |
+| Repudiation         | Client forges/replays audit events reported to the server  | The server explicitly claims no non-repudiation; the events API is aggregation-only observability (single Bearer token gate, `client_event_id` idempotent dedup) | Per-client device identity and non-repudiation (SRP/event signing) deferred to the sync track |
+| Information Disclosure | Workspace files copied and attacked offline            | Argon2id/PBKDF2 derivation, AES-256-GCM, per-item key wrapping                                             | Master password strength remains the core risk; KDF parameters need periodic review |
+| Information Disclosure | Browser background page quietly reads passwords/TOTP   | user gesture, origin binding, active-identity filtering, return only matching credentials                    | Credentials without a URL cannot be origin-bound; the UI/CLI should surface this risk |
+| Information Disclosure | Logs leak secrets, tokens, verification codes         | Log redaction policy and unit tests cover common secret/key/value shapes                                   | New log fields must first be confirmed plaintext-free             |
+| Denial of Service   | Agent flooded with signature requests or resource exhaustion | Global minimum interval, per-hour/per-day limits, per-key/per-host policy                                   | Long-running agents need real-machine stress tests                 |
+| Elevation of Privilege | A low-trust automation script borrows the unlocked state to run sensitive ops | Auto-lock, sensitive-operation re-authentication, explicit env switch for non-interactive mode           | The unlocked state is a high-risk window; desktop wiring must avoid implicit authorization |
 
-## 已落地安全控制
+## Landed Security Controls
 
-- **本地加密**：凭据明文使用 AES-256-GCM 加密；新写入凭据使用随机 item key，并由主密钥包裹。附件（attachments）复用所属凭据的 item key 封存——主密码轮换只重包 wrapped key、item key 不变，附件无需重写即跨轮换可解密；legacy 凭据（无 wrapped key）首次挂加密附件时原地升级为 item key 包裹，凭据删除级联清理附件 blob（孤儿 blob 持有的 item key 已不可恢复）。
-- **密钥派生**：密码导出与部分数据加密使用 Argon2id；核心主密钥服务当前仍包含 PBKDF2 路径，需在安全复审中跟踪参数和迁移策略。
-- **会话与锁定**：服务层支持自动锁、敏感操作再认证、生物识别 Provider 抽象和远程认证抽象。
-- **浏览器桥接**：Native Messaging 协议包含配对、HMAC 请求认证、短期 session、重放窗口、origin binding 和 user gesture 要求。
-- **SSH Agent 策略**：支持 deny-all、速率限制、known_hosts、每密钥/每主机 allow/deny、确认和生物识别优先级。
-- **审计**：身份、凭据、解锁、导出、SSH 签名等敏感事件写入本地审计日志，SSH 签名只记录待签名数据 digest。
-- **供应链检查**：`deny.toml`、cargo-deny、cargo-audit、npm audit/pnpm audit 和许可证策略已有文档化流程。
-- **解析器测试**：TOTP、钱包导入导出、SSH 协议编码、浏览器桥协议具备单元/集成测试路径，部分 parser 已列入 fuzz 方向。
+- **Local encryption**: credential plaintext is encrypted with AES-256-GCM; newly written credentials use a random item key wrapped by the master key. Attachments reuse the owning credential's item key for sealing — master-password rotation only rewraps the wrapped key, the item key is unchanged, so attachments remain decryptable across rotation without rewriting; legacy credentials (without a wrapped key) are upgraded in place to item-key wrapping the first time an encrypted attachment is attached, and credential deletion cascade-cleans attachment blobs (an orphaned blob's item key is already unrecoverable).
+- **Key derivation**: password export and some data encryption use Argon2id; the core master-key service still contains a PBKDF2 path today — track its parameters and migration strategy in security review.
+- **Session and locking**: the service layer supports auto-lock, sensitive-operation re-authentication, a biometric provider abstraction, and a remote-authentication abstraction.
+- **Browser bridge**: the Native Messaging protocol includes pairing, HMAC request authentication, short-term session, replay window, origin binding, and user gesture requirements.
+- **SSH Agent policy**: supports deny-all, rate limiting, known_hosts, per-key/per-host allow/deny, confirmation, and biometric priority.
+- **Audit**: sensitive events such as identity, credential, unlock, export, and SSH signing are written to the local audit log; SSH signing records only the digest of the data to be signed.
+- **Supply-chain checks**: `deny.toml`, cargo-deny, cargo-audit, npm audit/pnpm audit, and license policy have documented processes.
+- **Parser tests**: TOTP, wallet import/export, SSH protocol encoding, and the browser bridge protocol have unit/integration test paths; some parsers are already listed as fuzz targets.
 
-## 当前接受的限制
+## Currently Accepted Limitations
 
-- 本地管理员、内核级恶意软件、调试器和内存转储仍可攻击解锁后的明文。
-- 当前审计日志强调可追踪性，不提供加密签名链或远端不可抵赖性。
-- `PERSONA_MASTER_PASSWORD` 适合自动化，但会暴露给同一执行环境中的进程/日志风险；CI 必须使用 secret store 并禁用命令回显。
-- 没有 URL 的浏览器凭据无法做严格 origin binding；高价值凭据必须绑定 URL。
-- 可选 Server/Sync 仍不是信任根：加密备份让服务端可作为密文快照的恢复点，但恢复能力以本地持有备份口令与主密码为前提，服务端不可用不应导致数据不可恢复（本地库是第一事实源）。
-- persona-server 的 events API 是令牌门禁的观测面：接受客户端自报的事件摘要（`client_timestamp` 不可信，排序只用 server 的 `received_at`），默认不开保留窗口（事件库无界增长；配置 `PERSONA_SERVER_EVENTS_RETENTION_DAYS` 后按天 prune），不构成防篡改审计账本。
-- 钱包能力仍是实验性，不能用当前主线安全承诺覆盖生产级资金安全。
+- Local administrators, kernel-level malware, debuggers, and memory dumps can still attack unlocked plaintext.
+- The current audit log emphasizes traceability; it provides no cryptographic signature chain or remote non-repudiation.
+- `PERSONA_MASTER_PASSWORD` suits automation, but is exposed to processes/logs in the same execution environment; CI must use a secret store and disable command echo.
+- Browser credentials without a URL cannot do strict origin binding; high-value credentials must be bound to a URL.
+- The optional Server/Sync is still not a trust root: encrypted backups let the server act as a restore point for ciphertext snapshots, but restore capability presupposes locally holding the backup passphrase and the master password; server unavailability must not make data unrecoverable (the local vault is the first source of truth).
+- persona-server's events API is a token-gated observability surface: it accepts self-reported client event digests (`client_timestamp` is untrusted, ordering uses only the server's `received_at`), retention is off by default (the event store grows unboundedly; setting `PERSONA_SERVER_EVENTS_RETENTION_DAYS` prunes by day), and it is not a tamper-evident audit ledger.
+- Wallet capabilities remain experimental; the current mainline security commitments do not cover production-grade fund safety.
 
-## 安全复审节奏
+## Security Review Cadence
 
-每个版本发布前必须完成：
+Every release must complete:
 
-- 运行 `cargo test --workspace`，并运行对应前端/扩展测试。
-- 运行 `cargo deny check` 和 JS 依赖审计。
-- 检查新增日志、错误消息和审计 metadata，确认不包含明文 secret。
-- 检查新增 CLI/bridge/agent 参数是否绕过 user gesture、origin binding、确认或自动锁。
-- 检查新增迁移是否保护历史密文和 `wrapped_item_key`。
+- Run `cargo test --workspace`, plus the corresponding frontend/extension tests.
+- Run `cargo deny check` and the JS dependency audit.
+- Check new logs, error messages, and audit metadata for plaintext secrets.
+- Check whether new CLI/bridge/agent parameters bypass user gesture, origin binding, confirmation, or auto-lock.
+- Check whether new migrations protect historical ciphertext and `wrapped_item_key`.
 
-每月必须完成：
+Every month must complete:
 
-- 复查 RustSec、npm/pnpm audit 和过期依赖。
-- 抽查 `PERSONA_*` 环境变量文档，确认没有新增高风险默认值。
-- 抽查浏览器桥配对状态、session 过期和 nonce/HMAC 逻辑。
-- 抽查 SSH Agent 策略默认值，确认默认不扩大签名权限。
+- Review RustSec, npm/pnpm audit, and outdated dependencies.
+- Spot-check `PERSONA_*` environment-variable documentation for new high-risk defaults.
+- Spot-check browser bridge pairing state, session expiry, and nonce/HMAC logic.
+- Spot-check SSH Agent policy defaults to confirm signing permissions are not widened by default.
 
-每季度必须完成：
+Every quarter must complete:
 
-- 重新评估 KDF 参数、主密钥迁移和备份加密参数。
-- 复审本威胁模型和 `BOUNDARY.md`，确认新功能仍在产品边界内。
-- 对浏览器填充、SSH 签名、导入导出、备份恢复执行一次手工安全场景演练。
-- 清理或解释 `deny.toml`、审计忽略项和未修复安全 TODO。
+- Re-evaluate KDF parameters, master-key migration, and backup encryption parameters.
+- Re-review this threat model and `BOUNDARY.md` to confirm new features stay within the product boundary.
+- Run one manual security drill covering browser fill, SSH signing, import/export, and backup restore.
+- Clean up or explain `deny.toml`, audit exemptions, and unfixed security TODOs.
 
-## 变更门槛
+## Change Thresholds
 
-以下改动必须在 PR 中显式更新本威胁模型或说明不更新的理由：
+The following changes must explicitly update this threat model in the PR, or state why an update is not needed:
 
-- 新增明文 secret 类型、导出格式、同步路径或长期后台进程。
-- 改变主密钥、item key、KDF、nonce、备份加密或签名算法。
-- 改变浏览器桥接、Native Messaging、SSH Agent、自动化环境变量的认证/授权规则。
-- 改变审计日志结构、脱敏策略、敏感 metadata 或日志保留策略。
-- 引入新的生产网络 API、生产遥测或云端存储路径。
+- New plaintext secret types, export formats, sync paths, or long-running background processes.
+- Changes to the master key, item key, KDF, nonce, backup encryption, or signing algorithms.
+- Changes to authentication/authorization rules of the browser bridge, Native Messaging, SSH Agent, or automation environment variables.
+- Changes to audit log structure, redaction policy, sensitive metadata, or log retention policy.
+- Introducing new production network APIs, production telemetry, or cloud storage paths.
 
-## 可选同步服务器（persona-server）
+## Optional Sync Server (persona-server)
 
-Events API（`POST/GET /api/v1/events`）与 `/metrics` 是 persona-server 的第一批生产网络端点，按"变更门槛"在此登记：
+The Events API (`POST/GET /api/v1/events`) and `/metrics` are persona-server's first production network endpoints, registered here per "Change Thresholds":
 
-- **数据处理范围**：仅接收与存储审计事件摘要与元数据——action、resource_type、可选的 user/identity/credential/session ID、时间戳、成功标记、受限 metadata（≤32 条、键值长度有界）。协议上不承载明文 secret 或密钥材料；请求体双层限长——`Content-Length` 预检线上字节 ≤1 MiB（含 gzip 压缩传输）、解压后明文 ≤10 MiB（防解压炸弹，兼兜底无 Content-Length 的 chunked）、单批 ≤500 条。
-- **认证**：共享 Bearer 令牌（legacy 单令牌 `PERSONA_SERVER_TOKEN` 或多设备令牌 `PERSONA_SERVER_TOKENS`），对全部条目常量时间比较；未配置即 503 整体禁用（fail-closed）。`/`、`/health`、`/metrics` 免认证。
-- **明确不宣称**：该存储不是防篡改账本，不提供防抵赖保证——持有令牌的客户端可上报任意内容，`client_timestamp` 不可信；审计语义以各端本地审计日志为准，server 侧只作聚合观测。
-- **指标面**：`/metrics` 输出请求计数（方法 + 路由模板 + 状态码）与事件接入计数，标签基数有界，不含用户数据或路径参数。
-- **已知限制**：保留窗口默认关闭（事件库无界增长；`PERSONA_SERVER_EVENTS_RETENTION_DAYS` 设为正整数即按天 prune，默认 0 = 不清理，见 `server/src/main.rs`）；无速率限制与配额；`ip_address`/`user_agent` 为客户端自报字段；permissive CORS（当前客户端非浏览器）；单令牌无 per-client 身份。
+- **Data scope**: receives and stores only audit event digests and metadata — action, resource_type, optional user/identity/credential/session ID, timestamp, success flag, bounded metadata (≤32 entries, bounded key/value lengths). The protocol carries no plaintext secrets or key material; the request body is length-limited on two layers — `Content-Length` pre-check of on-the-wire bytes ≤1 MiB (including gzip-compressed transfer) and post-decompression plaintext ≤10 MiB (defuses decompression bombs and backstops chunked requests without Content-Length); ≤500 entries per batch.
+- **Authentication**: shared Bearer token (legacy single token `PERSONA_SERVER_TOKEN` or multi-device tokens `PERSONA_SERVER_TOKENS`), constant-time comparison against all entries; unconfigured means 503 full disable (fail-closed). `/`, `/health`, and `/metrics` are unauthenticated.
+- **Explicitly not claimed**: this store is not a tamper-evident ledger and provides no non-repudiation — a token-holding client can report arbitrary content, and `client_timestamp` is untrusted; audit semantics defer to each endpoint's local audit log, with the server side as aggregation-only observability.
+- **Metrics surface**: `/metrics` exposes request counters (method + route template + status code) and event-ingress counters, with bounded label cardinality and no user data or path parameters.
+- **Known limitations**: the retention window is off by default (the event store grows unboundedly; a positive integer for `PERSONA_SERVER_EVENTS_RETENTION_DAYS` prunes by day, default 0 = no cleanup, see `server/src/main.rs`); no rate limiting or quota; `ip_address`/`user_agent` are client self-reported fields; permissive CORS (current clients are not browsers); a single token carries no per-client identity.
 
-客户端上报器（`core::events::Emitter` + `ServerEventSink`，把本地审计事件尽力复制到上述 Events API）：
+Client reporter (`core::events::Emitter` + `ServerEventSink`, best-effort replication of local audit events to the Events API above):
 
-- **数据范围**：与 server 存储范围一致——本地审计摘要与受限元数据，不承载明文 secret 或密钥材料；wire 层逐条按 server 上限做字节级预校验，毒丸事件在客户端丢弃（server 是全有或全无校验，不让单条拖垮整批）。
-- **令牌**：Bearer token 由宿主注入（`ServerEventSink::new(base_url, token)`），core 不读环境变量、不落盘；上报仅发往显式配置的 base_url。
-- **非持久**：内存队列尽力而为复制——进程崩溃丢未 flush 批，无持久 outbox、不回补；本地 sqlite 审计库仍是唯一存证源（延续"不宣称防篡改/防抵赖"）。
-- **背压**：上报绝不阻塞审计写入——队满丢最旧并计数；发送失败整批按原序回队，1s→5min 指数退避；`stop()` 的最终 flush 尽力而为，abort 丢失窗口上限 = 一个 batch_size。
-- **传输压缩**（缺口已闭合）：明文 body >1 KiB 的批以 gzip（flate2 默认等级）发送并声明 `Content-Encoding: gzip`，server 侧 `RequestDecompressionLayer` 解压（tower-http 0.6）；小批明文直发。纯传输层压缩，协议形状、认证、审计存证语义不变；压缩封装在 `ServerEventSink` 内部，宿主零改动。解压面已限长（线上 1 MiB / 明文 10 MiB），损坏 gzip 流返回 4xx。
-- **AutoLock 事件**（缺口已闭合）：`PersonaService::set_event_emitter` 同步传播给 `AutoLockManager`，其 SessionLocked/Unlocked 审计写库后走同一上报链；后台监控超时落锁的审计行同批补齐 session_id/user_id/details。`LockPending`/`Activity` 是 UI 事件不是审计动作，不写审计也不上报（维持现状）。
+- **Data scope**: identical to the server's storage scope — local audit digests and bounded metadata, carrying no plaintext secrets or key material; the wire layer pre-validates each entry byte-wise against the server's limits, and poison-pill events are dropped client-side (the server validates all-or-nothing, so a single entry never drags down the whole batch).
+- **Token**: the Bearer token is host-injected (`ServerEventSink::new(base_url, token)`); core reads no environment variables and persists nothing to disk; reports go only to the explicitly configured base_url.
+- **Non-persistent**: an in-memory queue replicates best-effort — a process crash loses unflushed batches, with no persistent outbox and no backfill; the local sqlite audit store remains the only evidentiary source (continuing the "no tamper-evidence / non-repudiation claim").
+- **Backpressure**: reporting never blocks audit writes — a full queue drops the oldest and counts it; on send failure the whole batch requeues in original order with 1s→5min exponential backoff; the final flush in `stop()` is best-effort, so the abort loss window is capped at one batch_size.
+- **Transport compression** (gap closed): batches with plaintext body >1 KiB are gzip-compressed (flate2 default level) and sent with `Content-Encoding: gzip`; the server side decompresses via `RequestDecompressionLayer` (tower-http 0.6); smaller batches are sent as plaintext. Purely transport-layer compression — protocol shape, authentication, and audit-evidence semantics are unchanged; compression is encapsulated inside `ServerEventSink` with zero host changes. The decompression surface is already length-limited (1 MiB on the wire / 10 MiB plaintext); corrupted gzip streams return 4xx.
+- **AutoLock events** (gap closed): `PersonaService::set_event_emitter` propagates synchronously to `AutoLockManager`, whose SessionLocked/Unlocked audits go through the same reporting chain after being written to the store; audit rows for background-monitor timeout locks get session_id/user_id/details backfilled in the same batch. `LockPending`/`Activity` are UI events, not audit actions — neither written to the audit log nor reported (status quo maintained).
 
-宿主接线（desktop / CLI / mobile 构造 Emitter 并注入 `PersonaService` 的端点）：
+Host wiring (the endpoints where desktop / CLI / mobile construct the Emitter and inject it into `PersonaService`):
 
-- **desktop（Tauri）**：`settings.sync` 段存 vault 的 `workspaces.settings` JSON 列，但 `server_token` **恒写空串占位**——token 真值存 OS keyring（keyring 4：Linux secret-service / macOS Keychain / Windows Credential Manager；service `"persona-sync"`、键为 vault db_path，字段级加密缺口已闭合）。keyring 批次之前的 legacy 明文在运行时一次性迁移进 keyring、DB 清空；迁移前 keyring 不可用时**保留明文不销毁数据**（上报禁用，下次 attach 重试）。`get_workspace_settings` 免解锁（解锁屏裁剪 UI 需要）返回的 sync 段因此不再含 token，锁定状态下 IPC 不暴露令牌；新增免解锁 `sync_token_present` 布尔查询（仅泄露"是否配置过"一位元数据），前端 placeholder 由它驱动、token 不回填。fail-closed 语义：提交非空 token 时 keyring 写失败拒绝保存；挂上报器要求 enabled + url 非空 + keyring 有 token 三者齐备；禁用即清 keyring（失败仅 warn，残留令牌在同一 OS 用户信任域内）；vault 文件拷到他机 → keyring 无对应条目 → 上报不启用，需重输入。配置保存即重挂上报器（停旧换新）；进程退出经 `RunEvent::Exit` 尽力最终 flush。
-- **CLI**：env-only（`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用，空白视同未设置），**不落盘**——配置文件通道故意不提供；`main` 尾部 `stop()` 尽力 flush，release `panic = "abort"` 的崩溃路径不经 flush（丢失窗口与上面内存队列限制一致）。
-- **mobile（persona-mobile，三端原生宿主 + Rust FFI 桥）**：Flutter 壳已于 2026-10-02 整体移除，现为三端原生宿主（iOS Swift / Android Kotlin / 鸿蒙 ArkTS）经各自平台标准 native 绑定（C ABI staticlib / JNI cdylib / NAPI）共用同一 Rust 桥（`mobile/rust`，手写 extern "C"）。桥函数：`persona_service_init`（建户/认证序列对齐 desktop）、`persona_service_unlock/lock/is_unlocked`、`persona_configure_sync`（url+token trim 后都非空才启用、任一空白即摘除，fail-closed 对齐 CLI；URL 不做格式预校验，与 desktop attach 一致，格式错误在发送期暴露并退避）、`persona_shutdown`（落锁清密钥 + 尽力最终 flush + 清槽位）。**Rust 侧不落盘、不读环境变量**：url/token 由宿主（Swift/Kotlin/ArkTS 层）经 FFI 参数注入，服务状态留 Rust 侧全局槽位、密钥材料不跨 FFI 边界。如实标注未完成面：iOS/Android 宿主已接 init/unlock/lock/is_unlocked/shutdown 序列；鸿蒙 `PersonaBridge.ets` 为同签名 stub（napi 包装层待接，真机验收需实机/模拟器）；`persona_configure_sync` 尚未暴露到宿主侧（iOS C 头 `Persona.h` 与 JNI 层均未导出该函数）——三端宿主上的上报配置还没有接线，当前安全结论覆盖 Rust FFI 桥层与已接序列；杀进程丢未 flush 批为已知限制（与 CLI/desktop 同）。Android cdylib 交叉编译已入 CI（`desktop-build.yml`：cargo-ndk aarch64 → `libpersona_mobile.so` + arm64 APK artifact）；真 server 上报验收待有设备环境执行。
-- **上报面不变**：三宿主沿用同一 `ServerEventSink`（Bearer + POST /api/v1/events），仅发往用户显式配置的 base_url；desktop 侧新增的外联面即该配置指向的服务器。
+- **desktop (Tauri)**: the `settings.sync` section lives in the vault's `workspaces.settings` JSON column, but `server_token` is **always written as an empty-string placeholder** — the real token value lives in the OS keyring (keyring 4: Linux secret-service / macOS Keychain / Windows Credential Manager; service `"persona-sync"`, key = vault db_path; the field-level encryption gap is closed). Legacy plaintext from before the keyring batch is migrated into the keyring once at runtime and the DB is cleared; if the keyring is unavailable before migration, **the plaintext is kept rather than destroying data** (reporting disabled, retried at the next attach). `get_workspace_settings`, which is unlock-free (needed by the unlock-screen trimmed UI), therefore returns a sync section without the token — IPC exposes no token while locked; a new unlock-free boolean query `sync_token_present` (leaking only the single "ever configured" bit of metadata) drives the frontend placeholder, with no token backfill. Fail-closed semantics: submitting a non-empty token whose keyring write fails refuses the save; attaching the reporter requires all three of enabled + non-empty url + keyring token present; disabling clears the keyring (failure only warns — a leftover token stays within the same OS user's trust domain); copying the vault file to another machine → no matching keyring entry → reporting stays off and requires re-entry. Saving the config re-attaches the reporter (stop old, start new); process exit does a best-effort final flush via `RunEvent::Exit`.
+- **CLI**: env-only (`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` must both be non-empty to enable; whitespace counts as unset), **never persisted to disk** — the config-file channel is deliberately not provided; `stop()` at the end of `main` flushes best-effort, and the release `panic = "abort"` crash path skips the flush (loss window identical to the in-memory queue limit above).
+- **mobile (persona-mobile, three-platform native hosts + Rust FFI bridge)**: the Flutter shell was removed entirely on 2026-10-02; there are now three native hosts (iOS Swift / Android Kotlin / HarmonyOS ArkTS) sharing one Rust bridge (`mobile/rust`, hand-written extern "C") through each platform's standard native binding (C ABI staticlib / JNI cdylib / NAPI). Bridge functions: `persona_service_init` (account-creation/auth sequence aligned with desktop), `persona_service_unlock/lock/is_unlocked`, `persona_configure_sync` (enables only when url+token are both non-empty after trim, detached if either is blank — fail-closed aligned with CLI; the URL gets no format pre-validation, consistent with desktop attach, so format errors surface at send time with backoff), `persona_shutdown` (lock and clear keys + best-effort final flush + clear the slot). **The Rust side never persists to disk or reads environment variables**: url/token are injected by the host (Swift/Kotlin/ArkTS layer) via FFI parameters; service state stays in a Rust-side global slot, and key material never crosses the FFI boundary. Unfinished surfaces, stated honestly: iOS/Android hosts have wired the init/unlock/lock/is_unlocked/shutdown sequence; HarmonyOS `PersonaBridge.ets` is a same-signature stub (napi wrapper layer pending; real-machine acceptance needs a device/emulator); `persona_configure_sync` is not yet exposed to the host side (neither the iOS C header `Persona.h` nor the JNI layer exports it) — reporting configuration is not yet wired on any of the three hosts, so the current security conclusions cover the Rust FFI bridge layer and the already-wired sequences; losing unflushed batches on process kill is a known limitation (same as CLI/desktop). Android cdylib cross-compilation is in CI (`desktop-build.yml`: cargo-ndk aarch64 → `libpersona_mobile.so` + arm64 APK artifact); acceptance against a real server awaits a device environment.
+- **Reporting surface unchanged**: all three hosts use the same `ServerEventSink` (Bearer + POST /api/v1/events) and send only to the user-configured base_url; on desktop, the new egress surface is exactly the server that configuration points to.
 
-## 备份保管端点（`/api/v1/backups`，2026-09）
+## Backup Custody Endpoint (`/api/v1/backups`, 2026-09)
 
-同步第一阶段：整库加密备份的保管。客户端把 VACUUM INTO 物理快照 gzip 后按 PERSENC1（Argon2id + AES-256-GCM，与 CLI `--encrypt` 导出同一格式）加密上传，服务器只见密文。
+Sync phase one: custody of whole-database encrypted backups. The client gzips a VACUUM INTO physical snapshot and encrypts it with PERSENC1 (Argon2id + AES-256-GCM, the same format as the CLI `--encrypt` export) before uploading; the server only ever sees ciphertext.
 
-- **数据处理范围**：仅存储密文文件（`{backup_dir}/{uuid}.persenc`）与元数据（设备名、字节数、sha256、时间戳）。服务器无备份口令与主密码，密文不可解；设备名由命中的设备令牌推导，客户端不可自报。
-- **认证**：与 events 同一 Bearer 门禁——多设备令牌 `PERSONA_SERVER_TOKENS`（`"laptop:tok1,phone:tok2"`，对全部条目无早退常量时间比较）或 legacy 单令牌（"default" 设备）；非法格式启动即错（fail-closed）。上传上限 256 MiB（Content-Length 预检 + 流式计数双保险，超限删半成品）；子路由无解压层（密文不可压，少一个解压炸弹面）。
-- **明确不宣称**：不防服务器操作者**扣留、删除或回滚**备份——无哈希链、无签名、无版本不可抵赖证明，持有令牌或主机控制权的一方可将库回退到旧版本（客户端恢复时无新鲜度校验）。phase 2 可加哈希链/签名；当前接受此风险并以"本地库是第一事实源"对冲。
-- **恢复双要素**：恢复 = 下载密文 + 备份口令解密 + 主密码解锁库。备份口令丢失 = 备份不可恢复（无托管、无重置）；主密码丢失同理。
-- **保留与去重**：同设备与最新版本 sha256 相同则去重（幂等重传）；`PERSONA_SERVER_BACKUP_MAX_VERSIONS`（默认 0 不限）全局删最旧（文件与行同删）。
-- **已知限制**：附件 blob 不在 v1 备份内（恢复后附件元数据在、文件体缺失，客户端 UI/CLI 明示）；备份内容为新版本创建时的完整快照，不含后续增量。
+- **Data scope**: stores only the ciphertext file (`{backup_dir}/{uuid}.persenc`) and metadata (device name, byte count, sha256, timestamp). The server has neither the backup passphrase nor the master password, so the ciphertext is undecryptable; the device name is derived from the matched device token and cannot be self-reported by the client.
+- **Authentication**: the same Bearer gate as events — multi-device tokens `PERSONA_SERVER_TOKENS` (`"laptop:tok1,phone:tok2"`, constant-time comparison against all entries with no early exit) or a legacy single token (the "default" device); an invalid format is a startup error (fail-closed). Upload limit 256 MiB (Content-Length pre-check plus streaming counter as a double guard; over-limit uploads delete the partial file); the sub-route has no decompression layer (ciphertext is incompressible, removing one decompression-bomb surface).
+- **Explicitly not claimed**: does not protect against a server operator **withholding, deleting, or rolling back** backups — there is no hash chain, no signatures, no non-repudiable version proof, so a party holding the token or host control can roll the database back to an older version (client restore performs no freshness check). Phase 2 could add a hash chain/signatures; this risk is accepted today and hedged by treating the local vault as the first source of truth.
+- **Two-factor restore**: restore = download ciphertext + decrypt with the backup passphrase + unlock the vault with the master password. Losing the backup passphrase = the backup is unrecoverable (no escrow, no reset); the same holds for the master password.
+- **Retention and dedup**: a re-upload with the same sha256 as the latest version from the same device is deduplicated (idempotent re-upload); `PERSONA_SERVER_BACKUP_MAX_VERSIONS` (default 0 = unlimited) deletes the oldest globally (file and row deleted together).
+- **Known limitations**: attachment blobs are not in v1 backups (after restore, attachment metadata is present but the file bodies are missing, stated explicitly by the client UI/CLI); a backup contains the complete snapshot as of creation time, with no subsequent increments.
 
-## SRP 设备认证端点（`/api/v1/auth/*`，2026-09，E2EE 同步轨道阶段 1）
+## SRP Device Authentication Endpoint (`/api/v1/auth/*`, 2026-09, E2EE sync track phase 1)
 
-SRP-6a（RFC 5054 4096-bit group + SHA-256）设备登录：客户端本地以 Argon2id
+SRP-6a (RFC 5054 4096-bit group + SHA-256) device login: the client pre-hashes the master password locally with Argon2id to derive the SRP private key, and the server stores only the verifier (`auth_devices` table: device name, salt, verifier — the password and the Argon2-derived value never leave the device). Design in
 预 hash 主密码派生 SRP 私钥，服务器只存 verifier（`auth_devices` 表：设备名、
-salt、verifier，密码与 Argon2 派生值永不出机）。设计见
+`docs/E2EE_SYNC_DESIGN.md` DR-2.
 `docs/E2EE_SYNC_DESIGN.md` DR-2。
 
-- **数据处理范围**：落盘仅设备名 + salt + verifier（注册时经既有 Bearer 上传——引导链）；未决握手（session_id、服务器临时私钥、客户端公开值，TTL 120s）、已签发短期令牌（TTL 15 分钟）、失败计数**全部内存态、有意不持久化**——服务器重启即全部失效（fail-closed，重新登录）。
-- **认证**：`/register` 需既有 Bearer（静态令牌或已登录 SRP 令牌）；`/challenge` 与 `/verify` 免 Bearer（它们就是换取令牌的登录步骤），凭 SRP 证明放行；签发令牌为随机 ≥256-bit base64url，`require_bearer` 静态令牌优先、miss 后查 SRP 令牌表——**TOKENS Bearer 路径保留共存，备份链不打断**。认证体系未配置（无 TOKENS）时三端点整体 503（与 events/backups 同 fail-closed）。
-- **爆破与滥用缓解**：Argon2id 预 hash（v19，m=19 MiB、t=2、p=1——argon2 crate 默认参数，与本地密码验证哈希同族；本地库解锁是另一条 PBKDF2-600k 路径（`core/src/crypto/keys.rs`，迭代数按库持久化在 `user_auth.kdf_iterations`），算法与参数均不同，见 `KEY_HIERARCHY.md`；域分隔盐 `persona-srp-v1`）使 verifier 泄露后的离线猜解成本 ≈ Argon2 成本；连续 5 次验证失败锁 15 分钟（对齐本机 user_auth 语义，返回 423）；challenge 一次性（verify 即从缓存取走）+ 120s TTL；设备名不存在与任何握手失败同形 401（不暴露注册状态）；M1/M2 双向证明核验（客户端核验 M2 防恶意服务器/中间人降级）。`/auth` 子路由整体 64 KiB body 上限，base64 字段解码有逐字段字节上限。
-- **明确不宣称**：不防服务器操作者对 `auth_devices` 表**离线爆破 verifier**（verifier 在服务器手里，成本 = Argon2 + 主密码强度——与本地库被拖库同级，主密码强度仍是核心风险）；不防**未认证 challenge 刷量**（内存会话缓存无速率限制，已知 DoS 面，部署侧反代缓解）；不防服务器**拒绝服务/删除注册记录**（设备无第二副本，重新注册即可，但属可用性损失）；SRP 数学内联实现于 `core/src/auth/srp.rs`（RustCrypto `srp` crate 因 digest 生态漂移未采用、已不在依赖中）——由 RFC 5054 官方向量回归测试锁定实现，seam 隔离可换。
-- **已知限制**：设备吊销/移除已落地（2026-09 吊销闭环）：同步设备吊销（`DELETE /sync/devices/:id`）级联删除同名 `auth_devices` 行（SRP 登记以设备名为键），并即刻吊销其内存短期令牌与未决握手（`SrpAuthState::revoke_device`——被吊销设备的既有凭证不再能用，真 TCP 测试锁定）；但吊销粒度是**设备**——无独立的「只吊令牌不吊设备」操作，令牌离开设备吊销仍以 TTL（15 分钟）自然失效；无变更门槛外的审计——注册/登录仅服务器日志（`tracing`），不入事件库。
+- **Data scope**: persisted data is only device name + salt + verifier (uploaded at registration via the existing Bearer — the bootstrap chain); pending handshakes (session_id, server ephemeral private key, client public value, TTL 120s), issued short-term tokens (TTL 15 minutes), and failure counts are **all in-memory and deliberately not persisted** — a server restart invalidates all of them (fail-closed, re-login required).
+- **Authentication**: `/register` requires an existing Bearer (a static token or an already-logged-in SRP token); `/challenge` and `/verify` are Bearer-free (they are the login steps that exchange for a token) and pass on the SRP proof alone; issued tokens are random ≥256-bit base64url, and `require_bearer` prefers the static token, falling back to the SRP token table on a miss — **the TOKENS Bearer path is preserved in coexistence so the backup chain is not interrupted**. With the auth system unconfigured (no TOKENS), all three endpoints return 503 (same fail-closed as events/backups).
+- **Brute-force and abuse mitigation**: Argon2id pre-hash (v19, m=19 MiB, t=2, p=1 — the argon2 crate defaults, same family as the local password-verification hash; the local vault unlock is a separate PBKDF2-600k path (`core/src/crypto/keys.rs`, iteration count persisted per vault in `user_auth.kdf_iterations`), a different algorithm and parameters — see `KEY_HIERARCHY.md`; domain-separated salt `persona-srp-v1`) makes the offline guessing cost after verifier exposure ≈ Argon2 cost; five consecutive verification failures lock for 15 minutes (aligned with local user_auth semantics, returning 423); a challenge is single-use (verify takes it from the cache) + 120s TTL; a nonexistent device name and any handshake failure return an identical 401 (does not expose registration state); M1/M2 bidirectional proof verification (the client verifies M2 against malicious-server/MITM downgrade). The `/auth` sub-route has an overall 64 KiB body limit, and base64 fields have per-field byte decode limits.
+- **Explicitly not claimed**: does not protect against a server operator **offline brute-forcing the verifier in the `auth_devices` table** (the verifier is in the server's hands; cost = Argon2 + master password strength — same class as the local vault being dragged off, and master password strength remains the core risk); does not protect against **unauthenticated challenge flooding** (the in-memory session cache has no rate limit — a known DoS surface, mitigated by a deployment-side reverse proxy); does not protect against the server **refusing service / deleting registration records** (a device has no second copy; simply re-register, but this is an availability loss); the SRP math is implemented inline in `core/src/auth/srp.rs` (the RustCrypto `srp` crate was not adopted due to digest-ecosystem drift and is no longer a dependency) — the implementation is pinned by RFC 5054 official test vectors, with a seam isolated so it can be swapped.
+- **Known limitations**: device revocation/removal has landed (2026-09 revocation closed loop): revoking a synced device (`DELETE /sync/devices/:id`) cascade-deletes the same-named `auth_devices` row (SRP registration is keyed by device name) and immediately revokes its in-memory short-term token and pending handshake (`SrpAuthState::revoke_device` — a revoked device's existing credentials no longer work, pinned by real TCP tests); but the revocation granularity is the **device** — there is no independent "revoke the token only, not the device" operation, and a token leaving the device still expires naturally by TTL (15 minutes); no audit beyond the change threshold — registration/login appear only in server logs (`tracing`), not in the event store.
 
 ## E2EE 同步中继（`/api/v1/sync/*`，2026-09，E2EE 同步轨道阶段 2）
 

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="docs/branding/logo.svg" width="180" alt="Persona logo" />
+  <img src="docs/branding/logo.svg" width="64" alt="Persona logo" />
   <h1>Persona</h1>
   <p><strong>Local-First Identity Material Manager</strong></p>
   <p>

@@ -17,6 +17,7 @@
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
 - [x] CLI help 文案语言一致性：`travel`/`backup` 子命令 help 中译英（2026-10-16 `2576e53`，travel 11 + backup 20 测试全绿）
+- [ ] 文档双语·第二轮（子目录）：2026-10-16 已收口 `docs/` 根目录（29 对 + `审计-文档一致性.md` 配对完成，见 docs/DOC_SOURCE_CONSISTENCY_AUDIT.md）。剩余三块：① `docs/src/**` 27 页（VitePress 单站点，`docs/.vitepress/config.mts` 单一 `lang: zh-CN` 设计——做双语需先决定是加 i18n locale 还是只给英文侧留指向说明）；② `docs/review/*.md` 5 篇中文内部评审（带日期的一次性评审记录，是否纳入双语待定）；③ `docs/branding/*.md` 3 篇仅英文无中文 twin。本轮不扩，先定 docs/src 双语形态再动。
 
 ## 已完成
 
@@ -126,3 +127,4 @@
 - docs/FEATURE_GAP_ANALYSIS.md
 - docs/ROADMAP.md
 - docs/MONOREPO.md
+- docs/DOC_SOURCE_CONSISTENCY_AUDIT.md（中文 twin：docs/审计-文档一致性.md）
