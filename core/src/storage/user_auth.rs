@@ -31,7 +31,7 @@ impl UserAuthRepository {
             r#"
             SELECT user_id, master_password_hash, master_key_salt, enabled_factors,
                    failed_attempts, locked_until, last_auth, password_change_required,
-                   password_updated_at, created_at, updated_at
+                   password_updated_at, created_at, updated_at, kdf_iterations
             FROM user_auth LIMIT 1
             "#,
         )
@@ -51,7 +51,7 @@ impl UserAuthRepository {
             r#"
             SELECT user_id, master_password_hash, master_key_salt, enabled_factors,
                    failed_attempts, locked_until, last_auth, password_change_required,
-                   password_updated_at, created_at, updated_at
+                   password_updated_at, created_at, updated_at, kdf_iterations
             FROM user_auth WHERE user_id = ?
             "#,
         )
@@ -76,8 +76,8 @@ impl UserAuthRepository {
             INSERT INTO user_auth (
                 user_id, master_password_hash, master_key_salt, enabled_factors,
                 failed_attempts, locked_until, last_auth, password_change_required,
-                password_updated_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                password_updated_at, created_at, updated_at, kdf_iterations
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(auth.user_id.to_string())
@@ -91,6 +91,7 @@ impl UserAuthRepository {
         .bind(system_time_to_rfc3339(auth.password_updated_at))
         .bind(system_time_to_rfc3339(Some(auth.created_at)).unwrap())
         .bind(system_time_to_rfc3339(Some(auth.updated_at)).unwrap())
+        .bind(auth.kdf_iterations as i64)
         .execute(self.db.pool())
         .await
         .map_err(|e| PersonaError::Database(e.to_string()))?;
@@ -114,7 +115,8 @@ impl UserAuthRepository {
                 last_auth = ?,
                 password_change_required = ?,
                 password_updated_at = ?,
-                updated_at = ?
+                updated_at = ?,
+                kdf_iterations = ?
             WHERE user_id = ?
             "#,
         )
@@ -127,6 +129,7 @@ impl UserAuthRepository {
         .bind(auth.password_change_required)
         .bind(system_time_to_rfc3339(auth.password_updated_at))
         .bind(system_time_to_rfc3339(Some(auth.updated_at)).unwrap())
+        .bind(auth.kdf_iterations as i64)
         .bind(auth.user_id.to_string())
         .execute(self.db.pool())
         .await
@@ -157,6 +160,10 @@ impl UserAuthRepository {
         user.password_change_required = row.get("password_change_required");
         user.password_updated_at = rfc3339_to_system_time(row.get("password_updated_at"));
         // created_at/updated_at are informational; keep defaults
+        // kdf_iterations: rows predating migration 021 read back as the legacy
+        // figure via the column default; never fall back to the floor here —
+        // that would derive a key the vault was not wrapped with.
+        user.kdf_iterations = row.get("kdf_iterations");
         Ok(user)
     }
 }
@@ -308,6 +315,59 @@ mod tests {
             err.downcast_ref::<PersonaError>(),
             Some(PersonaError::Database(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn kdf_iterations_roundtrips() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        let repo = UserAuthRepository::new(db.clone());
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        auth.kdf_iterations = crate::crypto::LEGACY_MASTER_KEY_PBKDF2_ITERATIONS;
+        repo.create(&auth).await.unwrap();
+
+        assert_eq!(
+            repo.get_first().await.unwrap().unwrap().kdf_iterations,
+            crate::crypto::LEGACY_MASTER_KEY_PBKDF2_ITERATIONS
+        );
+
+        // Advancing the count persists as well.
+        let mut advanced = auth.clone();
+        advanced.kdf_iterations = crate::crypto::MASTER_KEY_PBKDF2_ITERATIONS;
+        repo.update(&advanced).await.unwrap();
+        assert_eq!(
+            repo.get_by_id(&auth.user_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            crate::crypto::MASTER_KEY_PBKDF2_ITERATIONS
+        );
+    }
+
+    #[tokio::test]
+    async fn pre_migration_rows_read_back_as_the_legacy_iteration_count() {
+        // A row written before migration 021 omits the column; the DEFAULT must
+        // be the old figure so the vault keeps deriving the key its wrapped
+        // item keys were made with.
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO user_auth (user_id, enabled_factors, failed_attempts, created_at, updated_at)
+             VALUES ('00000000-0000-4000-8000-000000000001', '[]', 0,
+                     '2024-01-01T00:00:00+00:00', '2024-01-01T00:00:00+00:00')",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        let repo = UserAuthRepository::new(db);
+        assert_eq!(
+            repo.get_first().await.unwrap().unwrap().kdf_iterations,
+            crate::crypto::LEGACY_MASTER_KEY_PBKDF2_ITERATIONS
+        );
     }
 
     #[tokio::test]

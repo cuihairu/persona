@@ -76,7 +76,7 @@ info="persona-dev-env-1"), plaintext = group key)`。组合层自写约 30 行�
 - **防 verifier 泄露离线爆破**：客户端先对「主密码 ‖ 域分隔盐
   （`persona-srp-v1` ‖ 服务器 salt）」做 Argon2id（Argon2id v19，m=19 MiB、
   t=2、p=1——argon2 crate 默认参数，与本地密码验证哈希同族；本地库解锁是
-  另一条 PBKDF2-100k 路径，算法与参数都不同，见 `KEY_HIERARCHY.md`；较备份
+  另一条 PBKDF2-600k 路径，算法与参数都不同，见 `KEY_HIERARCHY.md`；较备份
   文件 KDF 的 64 MiB/t3 轻，因登录路径高频执行）得到 SRP 私钥 x——服务器存
   的是 SRP verifier，泄露后离线猜解的成本 ≈ Argon2 成本，与本地密码验证同级。
 - **会话**：SRP 握手成功 → 双方派生会话密钥 → 客户端用它换取短期 access token

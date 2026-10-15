@@ -12,7 +12,7 @@ use crate::{
     connect::{ConnectItemType, ConnectTokenRow, ConnectTokenScope},
     crypto::{
         assert_passkey, random_bytes32, register_passkey, self_test_client_data, verify_assertion,
-        EncryptionService, KeyHierarchy, Sha256Hasher,
+        EncryptionService, KeyHierarchy, Sha256Hasher, MASTER_KEY_PBKDF2_ITERATIONS,
     },
     custom_fields::{decode_custom_fields, encode_custom_fields, CUSTOM_FIELDS_METADATA_KEY},
     events::Emitter,
@@ -1915,7 +1915,67 @@ impl PersonaService {
             .unwrap_or(false))
     }
 
-    /// Authenticate existing user
+    /// Derive the master encryption service for a verified password, lazily
+    /// upgrading a legacy PBKDF2 iteration count along the way.
+    ///
+    /// Password verification is Argon2id over the password, so it is
+    /// independent of the PBKDF2 count — only the derived *key* changes when
+    /// the count moves. Because the iteration count is an input to derivation,
+    /// upgrading changes the master key, so every item key wrapped by the old
+    /// key must be re-wrapped (same transactional path as password rotation).
+    /// Salt and password stay untouched.
+    ///
+    /// Travel mode defers the upgrade: the sidecar holds keys wrapped by the
+    /// old master key, and this re-wrap only reaches the live vault (same
+    /// limitation as `change_master_password`, which refuses outright). Unlock
+    /// keeps working at the legacy count; the upgrade lands on the next
+    /// unlock after travel mode exits.
+    async fn derive_verified_master_key(
+        &mut self,
+        user_auth: &mut UserAuth,
+        master_password: &str,
+    ) -> Result<[u8; 32]> {
+        let salt = user_auth.get_master_key_salt()?;
+        if user_auth.kdf_iterations >= MASTER_KEY_PBKDF2_ITERATIONS {
+            return Ok(self
+                .master_key_service
+                .derive_master_key(master_password, &salt));
+        }
+        #[cfg(feature = "backup")]
+        if self.travel_mode_active().await? {
+            return Ok(self.master_key_service.derive_master_key_with_iterations(
+                master_password,
+                &salt,
+                user_auth.kdf_iterations,
+            ));
+        }
+        let old_enc = self
+            .master_key_service
+            .create_encryption_service_with_iterations(
+                master_password,
+                &salt,
+                user_auth.kdf_iterations,
+            );
+        let new_enc = self
+            .master_key_service
+            .create_encryption_service(master_password, &salt);
+        // Advance the count *before* the rewrap so it commits in the same
+        // transaction: a crash in between must never leave rewrapped rows tagged
+        // with the old count — that would re-derive the old key on the next
+        // unlock and fail to open the item keys.
+        user_auth.kdf_iterations = MASTER_KEY_PBKDF2_ITERATIONS;
+        self.rewrap_all_item_keys(&old_enc, &new_enc, user_auth)
+            .await?;
+        Ok(self
+            .master_key_service
+            .derive_master_key(master_password, &salt))
+    }
+
+    /// Authenticate an existing user with the master password.
+    ///
+    /// The single converged unlock entry: password verification via Argon2id,
+    /// then master-key derivation through [`Self::derive_verified_master_key`],
+    /// which also performs the lazy PBKDF2 iteration upgrade for legacy vaults.
     pub async fn authenticate_user(&mut self, master_password: &str) -> Result<AuthResult> {
         // Load first user (single-user MVP)
         let mut user_auth = match self.user_auth_repo.get_first().await? {
@@ -1937,9 +1997,12 @@ impl PersonaService {
         self.user_auth_repo.update(&user_auth).await?;
 
         if auth_result == AuthResult::Success {
-            // Unlock with stored salt
-            let salt = user_auth.get_master_key_salt()?;
-            self.unlock(master_password, &salt)?;
+            // Unlock with the stored salt, upgrading a legacy KDF iteration
+            // count in place (see derive_verified_master_key).
+            let master_key = self
+                .derive_verified_master_key(&mut user_auth, master_password)
+                .await?;
+            self.unlock_with_master_key(&master_key)?;
             self.current_user = Some(user_auth.user_id);
             self.touch_activity();
 
@@ -2004,9 +2067,14 @@ impl PersonaService {
         let Some(user_auth) = self.user_auth_repo.get_first().await? else {
             return Err(crate::PersonaError::NotFound("no user initialized".to_string()).into());
         };
-        Ok(self
-            .master_key_service
-            .derive_master_key(master_password, &user_auth.get_master_key_salt()?))
+        // Derive at the *stored* iteration count: vaults not yet lazily
+        // upgraded still hold their item keys wrapped by the legacy count, so
+        // a wrap produced at the floor would not match what unlock decrypts.
+        Ok(self.master_key_service.derive_master_key_with_iterations(
+            master_password,
+            &user_auth.get_master_key_salt()?,
+            user_auth.kdf_iterations,
+        ))
     }
 
     /// 用主密钥认证（硬件绑定生物识别解锁的服务层入口）。
@@ -2134,17 +2202,26 @@ impl PersonaService {
             .into());
         }
 
-        // Salt is stable across password changes by design.
+        // Salt is stable across password changes by design. The old key is
+        // derived at the *stored* iteration count — vaults that have not been
+        // lazily upgraded yet still hold item keys wrapped by the legacy count.
         let salt = user_auth.get_master_key_salt()?;
         let old_enc = self
             .master_key_service
-            .create_encryption_service(old_password, &salt);
+            .create_encryption_service_with_iterations(
+                old_password,
+                &salt,
+                user_auth.kdf_iterations,
+            );
         let new_enc = self
             .master_key_service
             .create_encryption_service(new_password, &salt);
         // Re-hashes, stamps password_updated_at, clears password_change_required.
         user_auth.set_master_password(new_password)?;
         user_auth.failed_attempts = 0;
+        // Rotation re-wraps under a key derived at the current floor, so record
+        // it — even for a vault that had never been lazily upgraded yet.
+        user_auth.kdf_iterations = MASTER_KEY_PBKDF2_ITERATIONS;
 
         self.rewrap_all_item_keys(&old_enc, &new_enc, &user_auth)
             .await?;
@@ -2852,7 +2929,8 @@ impl PersonaService {
                 last_auth = ?,
                 password_change_required = ?,
                 password_updated_at = ?,
-                updated_at = ?
+                updated_at = ?,
+                kdf_iterations = ?
             WHERE user_id = ?
             "#,
         )
@@ -2864,6 +2942,7 @@ impl PersonaService {
         .bind(user_auth.password_change_required)
         .bind(system_time_to_rfc3339_opt(user_auth.password_updated_at))
         .bind(system_time_to_rfc3339_opt(Some(user_auth.updated_at)))
+        .bind(user_auth.kdf_iterations as i64)
         .bind(user_auth.user_id.to_string())
         .execute(tx.as_mut())
         .await
@@ -4861,6 +4940,330 @@ mod tests {
         assert_eq!(
             service.authenticate_user("master-pin").await.unwrap(),
             AuthResult::AccountLocked
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // PBKDF2 iteration upgrade (migration 021, 2026-10-16 已代决)
+    // ------------------------------------------------------------------
+
+    /// Turn a live vault into its pre-migration-021 shape: item keys
+    /// re-wrapped under the legacy iteration count and the stored count pinned
+    /// to it. That is exactly what migration 021 produced for vaults created
+    /// before the count was persisted.
+    async fn downgrade_to_legacy_kdf(service: &PersonaService) {
+        use crate::crypto::{EncryptionService, LEGACY_MASTER_KEY_PBKDF2_ITERATIONS};
+
+        const PASSWORD: &str = "master-pin";
+        let user_auth = service.user_auth_repo.get_first().await.unwrap().unwrap();
+        let salt = user_auth.get_master_key_salt().unwrap();
+        let current_key = service
+            .master_key_service
+            .derive_master_key(PASSWORD, &salt);
+        let legacy_key = service
+            .master_key_service
+            .derive_master_key_with_iterations(
+                PASSWORD,
+                &salt,
+                LEGACY_MASTER_KEY_PBKDF2_ITERATIONS,
+            );
+        service
+            .rewrap_all_item_keys(
+                &EncryptionService::new(&current_key),
+                &EncryptionService::new(&legacy_key),
+                &user_auth,
+            )
+            .await
+            .unwrap();
+        sqlx::query("UPDATE user_auth SET kdf_iterations = ?")
+            .bind(i64::from(LEGACY_MASTER_KEY_PBKDF2_ITERATIONS))
+            .execute(service.db.pool())
+            .await
+            .unwrap();
+    }
+
+    fn assert_password_credential(data: CredentialData) {
+        match data {
+            CredentialData::Password(p) => assert_eq!(p.password, "pw"),
+            other => panic!("unexpected credential data: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn new_vault_records_the_kdf_floor() {
+        let (_db, service) = unlocked_service().await;
+        assert_eq!(
+            service
+                .user_auth_repo
+                .get_first()
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            MASTER_KEY_PBKDF2_ITERATIONS
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_kdf_vault_upgrades_on_unlock_without_losing_data() {
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Legacy".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential =
+            seed_credential(&service, identity.id, "Google", CredentialType::Password).await;
+
+        let before = service.user_auth_repo.get_first().await.unwrap().unwrap();
+        downgrade_to_legacy_kdf(&service).await;
+        assert_eq!(
+            service
+                .user_auth_repo
+                .get_first()
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            crate::crypto::LEGACY_MASTER_KEY_PBKDF2_ITERATIONS
+        );
+
+        // One unlock re-derives at the legacy count, re-wraps, then advances
+        // the stored count — password and salt stay put.
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+
+        let upgraded = service.user_auth_repo.get_first().await.unwrap().unwrap();
+        assert_eq!(upgraded.kdf_iterations, MASTER_KEY_PBKDF2_ITERATIONS);
+        assert_eq!(upgraded.master_key_salt, before.master_key_salt);
+        assert!(upgraded.verify_master_password("master-pin").unwrap());
+        assert!(!upgraded.verify_master_password("old-pin").unwrap());
+
+        assert_password_credential(
+            service
+                .get_credential_data(&credential.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn second_unlock_after_kdf_upgrade_is_a_noop() {
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Legacy".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential =
+            seed_credential(&service, identity.id, "Google", CredentialType::Password).await;
+        downgrade_to_legacy_kdf(&service).await;
+
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+        assert_eq!(
+            service
+                .user_auth_repo
+                .get_first()
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            MASTER_KEY_PBKDF2_ITERATIONS
+        );
+        let stored = service
+            .get_credential(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // At the floor the fast path runs: no re-wrap, no envelope rewrite.
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+        let stored_after = service
+            .get_credential(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.encrypted_data, stored_after.encrypted_data);
+        assert_eq!(stored.wrapped_item_key, stored_after.wrapped_item_key);
+        assert_eq!(
+            service
+                .user_auth_repo
+                .get_first()
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            MASTER_KEY_PBKDF2_ITERATIONS
+        );
+
+        assert_password_credential(
+            service
+                .get_credential_data(&credential.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn change_master_password_rotates_and_upgrades_a_legacy_vault() {
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Legacy".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential =
+            seed_credential(&service, identity.id, "Rotated", CredentialType::Password).await;
+        downgrade_to_legacy_kdf(&service).await;
+
+        service
+            .change_master_password("master-pin", "rotated-pin")
+            .await
+            .unwrap();
+
+        let rotated = service.user_auth_repo.get_first().await.unwrap().unwrap();
+        assert_eq!(rotated.kdf_iterations, MASTER_KEY_PBKDF2_ITERATIONS);
+        assert!(rotated.verify_master_password("rotated-pin").unwrap());
+        assert!(!rotated.verify_master_password("master-pin").unwrap());
+
+        // The unlocked path swaps the in-memory key, so the credential reads
+        // back under the new password.
+        assert_password_credential(
+            service
+                .get_credential_data(&credential.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+
+        // A fresh unlock goes straight to the upgraded count.
+        service.force_lock_session().await.unwrap();
+        assert_eq!(
+            service.authenticate_user("rotated-pin").await.unwrap(),
+            AuthResult::Success
+        );
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::InvalidCredentials
+        );
+    }
+
+    #[tokio::test]
+    async fn upgraded_kdf_count_survives_a_restart() {
+        let (db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Legacy".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        let credential =
+            seed_credential(&service, identity.id, "Google", CredentialType::Password).await;
+        downgrade_to_legacy_kdf(&service).await;
+        assert_eq!(
+            service.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+        let wrapped = service
+            .get_credential(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            service
+                .user_auth_repo
+                .get_first()
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            MASTER_KEY_PBKDF2_ITERATIONS
+        );
+
+        // A brand-new service over the same database must read the upgraded
+        // count from the row and unlock without a second re-wrap.
+        let mut restarted = PersonaService::new(db).await.unwrap();
+        assert_eq!(
+            restarted.authenticate_user("master-pin").await.unwrap(),
+            AuthResult::Success
+        );
+        let stored = restarted
+            .get_credential(&credential.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(wrapped.encrypted_data, stored.encrypted_data);
+        assert_eq!(wrapped.wrapped_item_key, stored.wrapped_item_key);
+        assert_password_credential(
+            restarted
+                .get_credential_data(&credential.id)
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+    }
+
+    #[tokio::test]
+    async fn count_wrapped_under_the_wrong_master_key_fails_closed() {
+        // Torn rotation: rows already rewrapped under the floor while the
+        // stored count still claims the legacy figure. Unlock must error out
+        // rather than derive the legacy key, unwrap garbage, and hand back
+        // ciphertext. (Both real paths commit the count inside the same
+        // transaction as the rewrap; this guards the invariant from a future
+        // non-transactional writer.)
+        let (_db, mut service) = unlocked_service().await;
+        let identity = service
+            .create_identity("Legacy".to_string(), IdentityType::Personal)
+            .await
+            .unwrap();
+        seed_credential(&service, identity.id, "Google", CredentialType::Password).await;
+        downgrade_to_legacy_kdf(&service).await;
+
+        let user_auth = service.user_auth_repo.get_first().await.unwrap().unwrap();
+        let salt = user_auth.get_master_key_salt().unwrap();
+        service
+            .rewrap_all_item_keys(
+                &service
+                    .master_key_service
+                    .create_encryption_service_with_iterations(
+                        "master-pin",
+                        &salt,
+                        user_auth.kdf_iterations,
+                    ),
+                &service
+                    .master_key_service
+                    .create_encryption_service("master-pin", &salt),
+                &user_auth,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .user_auth_repo
+                .get_first()
+                .await
+                .unwrap()
+                .unwrap()
+                .kdf_iterations,
+            crate::crypto::LEGACY_MASTER_KEY_PBKDF2_ITERATIONS
+        );
+        service.force_lock_session().await.unwrap();
+
+        let err = service
+            .authenticate_user("master-pin")
+            .await
+            .expect_err("a torn rotation must fail closed");
+        assert!(
+            matches!(
+                err.downcast_ref::<PersonaError>(),
+                Some(PersonaError::CryptographicError(_))
+            ),
+            "expected a cryptographic error, got: {err}"
         );
     }
 

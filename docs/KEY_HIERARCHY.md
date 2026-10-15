@@ -6,7 +6,7 @@ Persona encrypts each stored item with its own random key and wraps that item ke
 
 ## Flow
 
-1. Derive the **master key** from the master password + per-user salt via PBKDF2 (100k iterations).
+1. Derive the **master key** from the master password + per-user salt via PBKDF2 (600k iterations, the count in effect for the vault being recorded in `user_auth.kdf_iterations`).
 2. When creating a secret, generate a fresh 32-byte **item key**.
 3. Encrypt the payload with AES-256-GCM using the item key.
 4. Wrap the item key by encrypting it with AES-256-GCM under the master key.
@@ -19,7 +19,7 @@ Persona currently has six distinct password-based KDF paths. They serve differen
 
 | Path                                       | Algorithm           | Parameters                                                                                         | Used by                                                                                                                                                        |
 | ------------------------------------------ | ------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Master key derivation (local vault unlock) | PBKDF2-HMAC-SHA256  | 100,000 iterations                                                                                 | `core/src/auth/authentication.rs` (`MasterKeyService::derive_master_key`; wraps item keys). Local only — remote auth is the SRP/Argon2id row below, not PBKDF2 |
+| Master key derivation (local vault unlock) | PBKDF2-HMAC-SHA256  | 600,000 iterations, persisted per vault in `user_auth.kdf_iterations` (migration 021). Vaults created before the column read back as 100,000 and are lazily re-wrapped to the current floor on their next unlock — the iteration count is an input to derivation, so it must be stored per vault rather than flipped in place | `core/src/crypto/keys.rs` (`MASTER_KEY_PBKDF2_ITERATIONS` / `LEGACY_MASTER_KEY_PBKDF2_ITERATIONS`), `core/src/auth/authentication.rs` (`MasterKeyService::derive_master_key` / `derive_master_key_with_iterations`; wraps item keys), `core/src/service.rs` (`derive_verified_master_key`). Local only — remote auth is the SRP/Argon2id row below, not PBKDF2 |
 | Export/backup encryption (PERSENC1)        | Argon2id            | m=64 MiB / t=3 / p=1 (custom `KdfParams::default`)                                                 | `core/src/backup/file_crypto.rs` (CLI `--encrypt` export, encrypted vault backup, travel sidecar — all share the PERSENC1 format)                              |
 | Password hash verification                 | Argon2 (PHC string) | crate defaults                                                                                     | `core/src/crypto/hashing.rs`                                                                                                                                   |
 | SRP login pre-hash (remote device auth)    | Argon2id            | crate defaults (m≈19 MiB / t=2 / p=1); domain-separated salt `persona-srp-v1` ‖ server-issued salt | `core/src/auth/srp.rs` (`derive_srp_secret` — derives the bytes fed into the SRP-6a protocol as the "password")                                                |
@@ -28,9 +28,11 @@ Persona currently has six distinct password-based KDF paths. They serve differen
 
 Note: the wallet keystore row (last) is a **separate** path from PERSENC1 above — same algorithm, different purpose and salt domain. Do not conflate the two.
 
-The PBKDF2 iteration count and the Argon2 parameters must be re-reviewed quarterly (see `THREAT_MODEL.md`). When raising parameters, apply the change with a re-wrap/re-encrypt migration rather than in place, so existing rows stay readable and legacy rows get upgraded on next write.
+The PBKDF2 iteration count and the Argon2 parameters must be re-reviewed quarterly (see `THREAT_MODEL.md`). When raising parameters, apply the change with a re-wrap/re-encrypt migration rather than in place, so existing rows stay readable and legacy rows get upgraded on next write. The master-key iteration count is persisted per vault for exactly this reason: the iteration count is an input to derivation, so it must travel with the vault it wrapped.
 
 > **最近评审：2026-10-12**（`docs/review/2026-10-12-kdf-parameter-review.md`）：各 Argon2id 路径恰在 OWASP 下限、PERSENC1 在下限以上——均维持；**PBKDF2-HMAC-SHA256 100k 低于 OWASP 现行建议（600k）**，升级走 re-wrap 迁移的提案已登记、等用户拍板，拍板前参数不动。
+>
+> **最近决策：2026-10-16（已代决）**（`docs/review/2026-10-16-kdf-decision.md`）：① PBKDF2 升 600k；② 惰性升级——下次解锁在同一次事务里 re-wrap 并把 `user_auth.kdf_iterations` 推进到 600k，不做显式迁移命令（旅行模式下暂缓而非拒绝）；③ Argon2id 维持 OWASP 下限、2027-01 季度复核。用户对任一项事后均可推翻。
 
 ## Legacy compatibility
 

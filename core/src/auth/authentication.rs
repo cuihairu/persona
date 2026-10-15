@@ -1,4 +1,7 @@
-use crate::crypto::{EncryptionService, PasswordHasher};
+use crate::crypto::{
+    EncryptionService, PasswordHasher, LEGACY_MASTER_KEY_PBKDF2_ITERATIONS,
+    MASTER_KEY_PBKDF2_ITERATIONS,
+};
 use crate::{PersonaError, Result};
 use serde::{Deserialize, Serialize};
 use std::time::{Duration, SystemTime};
@@ -40,6 +43,15 @@ pub struct UserAuth {
     /// Master key salt for key derivation
     pub master_key_salt: Option<String>,
 
+    /// PBKDF2 iteration count the vault's master key was derived with.
+    ///
+    /// Persisted per vault (migration 021) because the iteration count is an
+    /// input to key derivation: flipping the constant in place would make every
+    /// existing vault's wrapped item keys undecryptable. Legacy rows predate
+    /// the column and read back as the old figure; new vaults carry the floor.
+    #[serde(default = "default_legacy_kdf_iterations")]
+    pub kdf_iterations: u32,
+
     /// Enabled authentication factors
     pub enabled_factors: Vec<AuthFactor>,
 
@@ -73,6 +85,7 @@ impl UserAuth {
             user_id,
             master_password_hash: None,
             master_key_salt: None,
+            kdf_iterations: MASTER_KEY_PBKDF2_ITERATIONS,
             enabled_factors: Vec::new(),
             failed_attempts: 0,
             locked_until: None,
@@ -189,6 +202,13 @@ impl UserAuth {
     }
 }
 
+/// Serde fallback for rows predating migration 021. Deliberately the legacy
+/// figure, not the floor: a legacy row must keep deriving the key it was
+/// wrapped with, or the whole vault becomes undecryptable.
+fn default_legacy_kdf_iterations() -> u32 {
+    LEGACY_MASTER_KEY_PBKDF2_ITERATIONS
+}
+
 /// Master key derivation service
 pub struct MasterKeyService;
 
@@ -197,15 +217,40 @@ impl MasterKeyService {
         Self
     }
 
-    /// Derive master encryption key from password
+    /// Derive master encryption key from password at the current iteration
+    /// floor. For vaults whose wrapped item keys use an older iteration count,
+    /// use [`Self::derive_master_key_with_iterations`] with the stored value —
+    /// deriving at the wrong count yields a key that cannot decrypt anything.
     pub fn derive_master_key(&self, password: &str, salt: &[u8]) -> [u8; 32] {
         use crate::crypto::KeyDerivation;
-        KeyDerivation::derive_key_pbkdf2(password, salt, 100_000)
+        KeyDerivation::derive_key_pbkdf2(password, salt, MASTER_KEY_PBKDF2_ITERATIONS)
     }
 
-    /// Create encryption service from master password
+    /// Derive the master key at a specific iteration count (legacy vaults).
+    pub fn derive_master_key_with_iterations(
+        &self,
+        password: &str,
+        salt: &[u8],
+        iterations: u32,
+    ) -> [u8; 32] {
+        use crate::crypto::KeyDerivation;
+        KeyDerivation::derive_key_pbkdf2(password, salt, iterations)
+    }
+
+    /// Create encryption service from master password (current iteration floor)
     pub fn create_encryption_service(&self, password: &str, salt: &[u8]) -> EncryptionService {
         let key = self.derive_master_key(password, salt);
+        EncryptionService::new(&key)
+    }
+
+    /// Create encryption service at a specific iteration count (legacy vaults).
+    pub fn create_encryption_service_with_iterations(
+        &self,
+        password: &str,
+        salt: &[u8],
+        iterations: u32,
+    ) -> EncryptionService {
+        let key = self.derive_master_key_with_iterations(password, salt, iterations);
         EncryptionService::new(&key)
     }
 
@@ -437,6 +482,69 @@ mod tests {
         let ciphertext = enc.encrypt(b"secret data").unwrap();
         assert_ne!(ciphertext, b"secret data");
         assert_eq!(enc.decrypt(&ciphertext).unwrap(), b"secret data");
+    }
+
+    #[test]
+    fn test_create_encryption_service_with_iterations_round_trip() {
+        let service = MasterKeyService::new();
+        let salt = service.generate_salt();
+        let legacy = service.create_encryption_service_with_iterations(
+            "master-pass",
+            &salt,
+            LEGACY_MASTER_KEY_PBKDF2_ITERATIONS,
+        );
+
+        let ciphertext = legacy.encrypt(b"secret data").unwrap();
+        assert_eq!(legacy.decrypt(&ciphertext).unwrap(), b"secret data");
+    }
+
+    #[test]
+    fn test_iteration_count_changes_the_derived_key() {
+        // The iteration count is an input to derivation, so a legacy vault and
+        // an upgraded one derive different keys from the same password+salt.
+        // That is exactly why the upgrade must re-wrap item keys instead of
+        // flipping a constant in place.
+        let service = MasterKeyService::new();
+        let salt = service.generate_salt();
+
+        let at_floor = service.derive_master_key("hunter2", &salt);
+        let at_legacy = service.derive_master_key_with_iterations(
+            "hunter2",
+            &salt,
+            LEGACY_MASTER_KEY_PBKDF2_ITERATIONS,
+        );
+
+        assert_ne!(at_floor, at_legacy);
+        assert_eq!(
+            at_legacy,
+            service.derive_master_key_with_iterations(
+                "hunter2",
+                &salt,
+                LEGACY_MASTER_KEY_PBKDF2_ITERATIONS
+            )
+        );
+        assert_eq!(at_floor, service.derive_master_key("hunter2", &salt));
+    }
+
+    #[test]
+    fn test_new_user_auth_defaults_to_the_kdf_floor() {
+        assert_eq!(
+            UserAuth::new(Uuid::new_v4()).kdf_iterations,
+            MASTER_KEY_PBKDF2_ITERATIONS
+        );
+    }
+
+    #[test]
+    fn test_missing_kdf_iterations_deserializes_as_legacy() {
+        // Payloads written before migration 021 carry no kdf_iterations field.
+        // They must fall back to the legacy figure, never the floor.
+        let mut auth = UserAuth::new(Uuid::new_v4());
+        auth.kdf_iterations = MASTER_KEY_PBKDF2_ITERATIONS;
+        let mut value: serde_json::Value = serde_json::to_value(&auth).unwrap();
+        value.as_object_mut().unwrap().remove("kdf_iterations");
+
+        let restored: UserAuth = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.kdf_iterations, LEGACY_MASTER_KEY_PBKDF2_ITERATIONS);
     }
 
     #[test]

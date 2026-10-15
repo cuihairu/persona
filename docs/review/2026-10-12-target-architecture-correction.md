@@ -264,7 +264,7 @@ Code Agent 应按以下步骤执行：
 
 ```mermaid
 flowchart TD
-    MP["主密码 / 生物识别恢复"] -->|PBKDF2-HMAC-SHA256<br/>100,000 次迭代<br/>authentication.rs:203 → keys.rs:105| MK["主密钥 [u8;32]<br/>不落盘，解锁时现场派生<br/>service.rs unlock() / lock() 清零"]
+    MP["主密码 / 生物识别恢复"] -->|PBKDF2-HMAC-SHA256<br/>600,000 次迭代<br/>按库持久化 user_auth.kdf_iterations<br/>keys.rs MASTER_KEY_PBKDF2_ITERATIONS| MK["主密钥 [u8;32]<br/>不落盘，解锁时现场派生<br/>service.rs unlock() / lock() 清零"]
     MK -->|AES-GCM 包裹 wrap| IK["per-item key<br/>每条凭据 / passkey 独立<br/>key_hierarchy.rs:37-44"]
     IK -->|AES-GCM 加密正文| CT["密文列（SQLite credential 表）"]
     IK -->|同一把 item key 再封| AUX["附件 / custom_fields blob / 同步快照"]

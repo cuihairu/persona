@@ -94,6 +94,20 @@ impl VerifyingKey {
     }
 }
 
+/// PBKDF2-HMAC-SHA256 iteration count used for master-key derivation.
+///
+/// OWASP Password Storage Cheat Sheet (accessed 2026-10-12) recommends
+/// 600,000 for PBKDF2-HMAC-SHA256; the previous 100,000 was a pre-2023
+/// figure. Raising it is a data-affecting change, so the value in effect for
+/// each vault is persisted per user (`user_auth.kdf_iterations`, migration 021)
+/// and upgraded lazily on the next unlock rather than flipped in place.
+pub const MASTER_KEY_PBKDF2_ITERATIONS: u32 = 600_000;
+
+/// Iteration count written before migration 021. Rows that predate the
+/// column are read back as this value so their wrapped item keys still
+/// verify; it must stay equal to the constant the old code derived with.
+pub const LEGACY_MASTER_KEY_PBKDF2_ITERATIONS: u32 = 100_000;
+
 /// Key derivation utilities
 pub struct KeyDerivation;
 
