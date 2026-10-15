@@ -24,7 +24,7 @@
 ## 规划方向
 
 > **阶段 1–4 已实现**（2026-10-12 ~ 2026-10-14）：`persona suggest
-> [--json|--short]`、`persona context map/get/unmap/status`、
+[--json|--short]`、`persona context map/get/unmap/status`、
 > `persona shell-hook`、历史学习（migration 020，默认关）、
 > `persona ssh run --host` 主机维度建议、桥接与浏览器扩展的建议排序。
 
