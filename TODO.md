@@ -16,6 +16,7 @@
 - [x] G3 国际扩展与标准增强：GitHub 二次验证安全密钥/通行密钥走 Passkeys 轨道（Passkeys 已落地）；HOTP（RFC 4226）录入与出码（见下「已完成」）
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
+- [ ] CLI help 文案语言一致性：`travel` 子命令 help 为中文（cli/src/commands/travel.rs:29-45），其余子命令全英文；`backup` 子命令同为中文。2026-10-16 巡检发现，待统一
 
 ## 已完成
 
