@@ -23,9 +23,10 @@
 
 ## 规划方向
 
-> **阶段 1+2 已实现**（2026-10-12/13）：`persona suggest [--json]`、
-> `persona context map/get/unmap/status`、`persona shell-hook`、历史学习
-> （migration 020，默认关）。阶段 3–4 未实现。
+> **阶段 1–4 已实现**（2026-10-12 ~ 2026-10-14）：`persona suggest
+> [--json|--short]`、`persona context map/get/unmap/status`、
+> `persona shell-hook`、历史学习（migration 020，默认关）、
+> `persona ssh run --host` 主机维度建议、桥接与浏览器扩展的建议排序。
 
 ```text
 Context:
@@ -40,16 +41,21 @@ Context:
 Identity: OpenSource
 ```
 
-- 终端/CLI 场景（**已实现**，阶段 1+2）：cwd 所在仓库、主机名 →
+- 终端/CLI 场景（阶段 1+2）：cwd 所在仓库、主机名 →
   `persona suggest` 建议该用得上的分身，`persona context map/unmap`
-  管理静态映射；
-- 浏览器场景（阶段 4，未实现）：把「访问 github.com 时该用哪个分身」
-  做成每站点记忆，而不是每次手动切换；
-- CLI 里 `persona ssh --identity` 仍标注 "reserved for future use"
-  （cli/src/commands/ssh.rs:58），为阶段 3 留的口子。
+  管理静态映射，`persona shell-hook` 把候选挂进提示符，`persona use`
+  一键确认；
+- SSH 场景（阶段 3）：`persona ssh run --host <host>` 连接前在 stderr
+  打一行目标主机维度的分身建议（只建议不授权；`PERSONA_NO_CONTEXT=1`
+  可关）；`persona ssh add-to-agent --identity <name>` 让 agent 只加载
+  该分身的 SSH 密钥（按 `PERSONA_AGENT_IDENTITY` fail-closed 过滤）；
+- 浏览器场景（阶段 4）：桥协议 `get_suggestions` 接受可选
+  `host`/`cwd` 信号，响应带 `context` 提示与逐条目 `identity` 标注，
+  建议分身的凭据并入结果并排最前；扩展弹窗消费同一套信号
+  （同一 core `suggest()`；映射损坏时静默降级为普通建议）。
 
 完整设计见
 [CONTEXT_AWARE_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.md)
-（阶段 1+2 已实现；阶段 3–4 规划中）。
+（阶段 1–4 已实现）。
 在此之前，机制只有一个硬规则：**上下文只会影响建议与默认值，永远不会绕过
 策略放行一个动作**。

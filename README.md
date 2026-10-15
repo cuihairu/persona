@@ -26,8 +26,10 @@ The product focuses on identity-scoped credentials and developer workflows: pass
 
 ### Key Features
 
-- Identity-scoped vault: passwords, TOTP secrets, API keys, SSH keys, tags, and secure metadata
+- Identity-scoped vault: passwords, TOTP/HOTP secrets, API keys, SSH keys, tags, and secure metadata
 - Developer tooling: built-in SSH agent, CLI workflows, and automation-friendly credential access
+- Context-aware suggestions: `suggest`/`shell-hook`/`use` propose the right identity from cwd/repo/host — suggestions only, never silent authorization
+- Desktop Quick Access: OS-level global hotkey summoning a search overlay and a password-generator panel (opt-in, off by default)
 - Browser assistance: autofill, suggestion, phishing resistance, and per-site identity defaults
 - Passkeys (WebAuthn): ES256/P-256 keys sealed under the per-item key hierarchy, create/list/self-test from the CLI
 - End-to-end encrypted sync: multi-device credential sync with server-sees-ciphertext-only, conflict adjudication UI, and group key rotation
@@ -168,6 +170,9 @@ persona list
 # Switch the active identity (Workspace v2 persists the state)
 persona switch <name>
 
+# Switch back to the previous identity (resolved from the audit trail)
+persona switch --previous
+
 # Run migrations to keep the schema up to date
 persona migrate
 
@@ -225,6 +230,12 @@ persona totp import-steam --identity alice --file ~/Downloads/maFiles --yes
 # Battle.net authenticator: export via a community tool (serial + restore code ->
 # standard TOTP secret), then import like any TOTP with 8 digits
 persona totp setup --identity alice --secret <base32-secret> --issuer Battle.net --digits 8
+
+# HOTP (RFC 4226) counter-based tokens: add --hotp to the same setup path.
+# otpauth://hotp/ URIs and QR codes are detected and stored automatically
+persona totp setup --identity alice --secret <base32-secret> --issuer LegacyOTP --hotp --counter 0
+persona totp code --id <UUID>               # uses the stored starting counter
+persona totp code --id <UUID> --counter 5   # explicit counter (HOTP entries only)
 
 # Vendor-bound game tokens (Tencent Game Security Center, NetEase Da Shen,
 # miHoYo security token, ...): recorded as vault entries only — their seeds live
@@ -329,13 +340,105 @@ git commit -S   # signed with the vault key
 persona ssh authorize --identity work --host deploy@prod-1.example.com
 ```
 
+### Context-Aware Suggestions
+
+Context signals (cwd, repository, target host) feed an advisory suggestion —
+context only ever proposes an identity, never authorizes one:
+
+```bash
+# Print the suggested identity for the current directory/repo
+persona suggest                # human-readable
+persona suggest --json         # machine-readable
+persona suggest --short        # one candidate name (feeds shell-hook)
+
+# Show the candidate inline in your shell prompt
+# (prints a snippet; append it to your shell rc)
+persona shell-hook bash   # or zsh
+
+# Confirm the suggestion (alias of switch; audits the suggestion reason)
+persona use
+
+# Manage static context-to-identity mappings (pattern: host/owner/repo,
+# or a host regex with --host)
+persona context map github.com/acme/api --identity work
+persona context status
+```
+
+The same signal reaches more surfaces: `persona ssh run --host <host>` prints a
+one-line identity suggestion on stderr before connecting, and the browser
+extension popup ranks the suggested identity's credentials first. Set
+`PERSONA_NO_CONTEXT=1` to disable the whole layer. Local learning of
+cwd→identity candidates is off by default (`persona context learn status`).
+
+### Maintenance & Utilities
+
+```bash
+# Password generator (also: --pronounceable, or --words N for a passphrase)
+persona password generate --length 24
+persona password generate --words 5 --count 3
+
+# Vault health scan: weak / reused / expired / stale credentials, metadata only
+persona watchtower
+persona watchtower --check-breaches   # + HIBP k-anonymity check (5-char hash prefix only)
+persona watchtower --json             # machine-readable report
+
+# Auto-lock policies (list/show/create/update/delete/assign/set-default/stats)
+persona auto-lock list
+persona auto-lock stats
+
+# Rotate the workspace master password (re-wraps keys; wallets use their own
+# independent password via `persona wallet passwd`)
+persona passwd
+
+# Travel mode: move marked identities off this device and restore them back
+persona travel mark <identity>   # flag identities to travel with you
+persona travel enter             # pack marked identities into an encrypted sidecar
+persona travel exit              # restore them from the sidecar (needs travel passphrase)
+persona travel status
+
+# Encrypted server backups (custody endpoints; push needs no unlock)
+persona backup push
+persona backup list
+persona backup pull <id> --out vault.enc
+persona backup restore <id>
+```
+
+### Wallet (Experimental)
+
+Crypto wallet management is on the deferred M5 track — treat it as
+experimental until that track graduates:
+
+```bash
+# Create a wallet (BIP-39 mnemonic; BTC / ETH / Solana derivation)
+persona wallet generate --name "Main" --network bitcoin --hd
+# Watch-only: an xpub, no private key material on this device
+persona wallet create-watch-only --name "Cold" --network bitcoin --xpub <XPUB>
+
+# Addresses and transactions (identifier = wallet ID or name; amounts in the
+# chain's smallest unit — satoshis, wei, ...)
+persona wallet list-addresses "Main"
+persona wallet create-transaction "Main" --to <address> --amount 50000 --sign
+
+# PSBT workflow (offline signing round trip; PSBTs travel as base64)
+persona wallet export-psbt "Main" <address> 50000 140 --inputs <outpoint>
+persona wallet sign-psbt "Main" <base64-psbt>
+persona wallet finalize-psbt <base64-psbt>
+
+# Wallets have their own password, independent from the master password
+persona wallet passwd "Main"
+```
+
+Signing confirmations verify recipient, amount, and chain id with an
+address-poisoning heuristic; see
+[WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md).
+
 ## Documentation
 
 - [ONEPASSWORD_FEATURES](./docs/ONEPASSWORD_FEATURES.md) – reference checklist for 1Password parity
 - [FEATURE_GAP_ANALYSIS](./docs/FEATURE_GAP_ANALYSIS.md) – Persona vs. 1Password comparison
 - [PASSKEYS_DESIGN](./docs/PASSKEYS_DESIGN.md) – passkeys (WebAuthn) design draft
 - [MONOREPO](./docs/MONOREPO.md) – monorepo rationale and tooling
-- [UNINSTALL](./docs/UNINSTALL.md) – 卸载与数据保留（卸载不删数据，重装接续；显式 purge 步骤）
+- [UNINSTALL](./docs/UNINSTALL.md) – uninstall and data retention (uninstall keeps data; reinstall picks up where you left off; explicit purge steps)
 - [ROADMAP](./docs/ROADMAP.md) – roadmap and detailed TODO items
 - [TODO](./TODO.md) – daily-maintained task list
 - [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – browser extension native messaging protocol

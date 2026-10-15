@@ -26,8 +26,10 @@ Persona 是一个本地优先、零知识的管理器，服务于「一个人运
 
 ### 核心特性
 
-- 身份域保险库：密码、TOTP 密钥、API key、SSH 密钥、标签与安全元数据
+- 身份域保险库：密码、TOTP/HOTP 密钥、API key、SSH 密钥、标签与安全元数据
 - 开发者工具：内置 SSH agent、CLI 工作流、便于自动化的凭据访问
+- 上下文感知建议：`suggest`/`shell-hook`/`use` 依据 cwd/仓库/主机建议合适的分身——只建议，绝不静默授权
+- 桌面 Quick Access：OS 级全局热键唤出检索浮窗与密码生成器浮窗（可选开关，默认关闭）
 - 浏览器辅助：自动填充、建议、防钓鱼、按站点设置身份默认值
 - Passkey（WebAuthn）：ES256/P-256 密钥封装在逐条目的密钥层级之下，可在 CLI 创建 / 列出 / 自测
 - 端到端加密同步：多设备凭据同步，服务端只见到密文，冲突裁决界面，群组密钥轮换
@@ -167,6 +169,9 @@ persona list
 # Switch the active identity (Workspace v2 persists the state)
 persona switch <name>
 
+# 切回上一个身份（从审计轨迹解析）
+persona switch --previous
+
 # Run migrations to keep the schema up to date
 persona migrate
 
@@ -224,6 +229,12 @@ persona totp import-steam --identity alice --file ~/Downloads/maFiles --yes
 # Battle.net authenticator: export via a community tool (serial + restore code ->
 # standard TOTP secret), then import like any TOTP with 8 digits
 persona totp setup --identity alice --secret <base32-secret> --issuer Battle.net --digits 8
+
+# HOTP（RFC 4226）计数器型令牌：同一条 setup 路径加 --hotp；
+# otpauth://hotp/ 的 URI 与二维码会被自动识别入库
+persona totp setup --identity alice --secret <base32-secret> --issuer LegacyOTP --hotp --counter 0
+persona totp code --id <UUID>               # 使用入库时的起始计数器
+persona totp code --id <UUID> --counter 5   # 显式计数器（仅 HOTP 条目）
 
 # Vendor-bound game tokens (Tencent Game Security Center, NetEase Da Shen,
 # miHoYo security token, ...): recorded as vault entries only — their seeds live
@@ -324,6 +335,93 @@ git commit -S   # signed with the vault key
 # --dry-run previews, --list reads, --remove revokes)
 persona ssh authorize --identity work --host deploy@prod-1.example.com
 ```
+
+### 上下文感知建议
+
+上下文信号（cwd、仓库、目标主机）驱动一条**建议**——上下文只会提议分身，
+绝不会替你授权：
+
+```bash
+# 输出当前目录/仓库对应的建议分身
+persona suggest                # 人类可读
+persona suggest --json         # 机器可读
+persona suggest --short        # 只输出首选候选名（供 shell 提示符用）
+
+# 在 shell 提示符里内联显示候选分身
+# （输出一段代码片段，追加进 shell 配置文件即可）
+persona shell-hook bash   # 或 zsh
+
+# 确认建议（switch 的别名；审计会带上建议原因）
+persona use
+
+# 管理静态的上下文→分身映射（pattern：host/owner/repo，
+# 或加 --host 用主机正则）
+persona context map github.com/acme/api --identity work
+persona context status
+```
+
+同一信号还接入更多面：`persona ssh run --host <host>` 连接前会在 stderr
+打印一行分身建议；浏览器扩展弹窗会把建议分身的凭据排到最前。设
+`PERSONA_NO_CONTEXT=1` 可整体关闭该层。本地 cwd→分身候选学习默认关闭
+（`persona context learn status`）。
+
+### 维护与工具
+
+```bash
+# 密码生成器（另有 --pronounceable，或 --words N 生成口令短语）
+persona password generate --length 24
+persona password generate --words 5 --count 3
+
+# 保险库健康扫描：弱 / 重用 / 过期 / 陈旧凭据，仅元数据
+persona watchtower
+persona watchtower --check-breaches   # 附加 HIBP k-匿名泄露检查（仅出机 5 字符哈希前缀）
+persona watchtower --json             # 机器可读报告
+
+# 自动锁定策略（list/show/create/update/delete/assign/set-default/stats）
+persona auto-lock list
+persona auto-lock stats
+
+# 轮换工作区主密码（重封装各密钥；钱包有独立口令，走 `persona wallet passwd`）
+persona passwd
+
+# 旅行模式：把标记的分身移出本设备，回来再恢复
+persona travel mark <identity>   # 标记随身分身
+persona travel enter             # 把标记分身打包加密进 sidecar 并移出主库
+persona travel exit              # 输旅行口令从 sidecar 原样恢复
+persona travel status
+
+# 服务器加密备份（保管端点；push 无需解锁主密码）
+persona backup push
+persona backup list
+persona backup pull <id> --out vault.enc
+persona backup restore <id>
+```
+
+### 钱包（实验性）
+
+加密钱包管理在延后的 M5 轨道上——该轨毕业前请按实验性对待：
+
+```bash
+# 创建钱包（BIP-39 助记词；BTC / ETH / Solana 派生）
+persona wallet generate --name "Main" --network bitcoin --hd
+# 仅watch：只要 xpub，本机不落任何私钥材料
+persona wallet create-watch-only --name "Cold" --network bitcoin --xpub <XPUB>
+
+# 地址与交易（标识符 = 钱包 ID 或名称；金额用链的最小单位——聪、wei……）
+persona wallet list-addresses "Main"
+persona wallet create-transaction "Main" --to <address> --amount 50000 --sign
+
+# PSBT 工作流（离线签名往返；PSBT 以 base64 传递）
+persona wallet export-psbt "Main" <address> 50000 140 --inputs <outpoint>
+persona wallet sign-psbt "Main" <base64-psbt>
+persona wallet finalize-psbt <base64-psbt>
+
+# 钱包有独立口令，与主密码互不相干
+persona wallet passwd "Main"
+```
+
+签名确认会校验收款地址、金额与链 ID，并带地址投毒启发式拦截；详见
+[WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)。
 
 ## 文档
 
