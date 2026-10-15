@@ -26,30 +26,30 @@ pub struct TravelArgs {
 
 #[derive(Subcommand)]
 enum TravelCommand {
-    /// 显示旅行模式状态（旗标/sidecar/一致性）与被标记身份
+    /// Show travel mode status (flag/sidecar/consistency) and marked identities
     Status,
-    /// 标记身份：进入旅行模式时随之移出本设备
+    /// Mark an identity to leave this device when entering travel mode
     Mark {
-        /// 身份名
+        /// Identity name
         name: String,
     },
-    /// 取消标记（身份留在本设备）
+    /// Unmark an identity (it stays on this device)
     Unmark {
-        /// 身份名
+        /// Identity name
         name: String,
     },
-    /// 进入旅行模式：被标记身份打包加密进 sidecar 并从主库删除
+    /// Enter travel mode: pack marked identities into the encrypted sidecar and remove them from the vault
     Enter {
-        /// 从指定环境变量读 travel 口令（必须已设且非空）
+        /// Read the travel passphrase from this env var (must be set and non-empty)
         #[arg(long)]
         passphrase_env: Option<String>,
-        /// 跳过确认提示（危险：被标记身份将立即从本机移除）
+        /// Skip the confirmation prompt (dangerous: marked identities are removed from this device immediately)
         #[arg(short, long)]
         yes: bool,
     },
-    /// 退出旅行模式：输 travel 口令把数据原样恢复回主库
+    /// Exit travel mode: enter the travel passphrase to restore the packed identities into the vault
     Exit {
-        /// 从指定环境变量读 travel 口令
+        /// Read the travel passphrase from this env var
         #[arg(long)]
         passphrase_env: Option<String>,
     },

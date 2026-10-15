@@ -25,48 +25,48 @@ pub struct BackupArgs {
 
 #[derive(Subcommand)]
 enum BackupCommand {
-    /// 快照当前库 → 加密 → 推送到服务器（无需解锁主密码）
+    /// Snapshot the vault, encrypt it, and push to the server (no master-password unlock needed)
     Push {
-        /// 从指定环境变量读备份口令（CI/自动化；变量必须已设且非空）
+        /// Read the backup passphrase from this env var (CI/automation; must be set and non-empty)
         #[arg(long)]
         passphrase_env: Option<String>,
     },
-    /// 列出服务器上的备份版本（新→旧）
+    /// List server-side backup versions (newest first)
     List {
-        /// 每页条数（服务器默认 20、上限 100）
+        /// Page size (server default 20, cap 100)
         #[arg(long, default_value_t = 20)]
         limit: u32,
-        /// 上一页返回的游标
+        /// Cursor returned by the previous page
         #[arg(long)]
         cursor: Option<String>,
     },
-    /// 下载备份密文到文件（不解密、不换库）
+    /// Download a backup ciphertext to a file (no decryption, no vault swap)
     Pull {
-        /// 备份版本 id
+        /// Backup version id
         id: String,
-        /// 输出路径
+        /// Output path
         #[arg(short, long)]
         out: PathBuf,
     },
-    /// 恢复：下载（或 --file 本地密文）→ 解密复验 → 留 .bak → 换库
+    /// Restore: download (or --file local ciphertext), verify, keep a .bak, swap the vault
     Restore {
-        /// 要恢复的服务器备份版本 id（与 --file 二选一）
+        /// Server backup version id to restore (mutually exclusive with --file)
         id: Option<String>,
-        /// 本地密文文件（与 id 二选一；离线恢复路径）
+        /// Local ciphertext file (mutually exclusive with id; offline restore path)
         #[arg(long)]
         file: Option<PathBuf>,
-        /// 从指定环境变量读备份口令
+        /// Read the backup passphrase from this env var
         #[arg(long)]
         passphrase_env: Option<String>,
-        /// 跳过确认提示（危险：直接覆盖当前库）
+        /// Skip the confirmation prompt (dangerous: overwrites the current vault)
         #[arg(short, long)]
         yes: bool,
     },
-    /// 删除服务器上的备份版本
+    /// Delete a server-side backup version
     Delete {
-        /// 备份版本 id
+        /// Backup version id
         id: String,
-        /// 跳过确认提示
+        /// Skip the confirmation prompt
         #[arg(short, long)]
         yes: bool,
     },
