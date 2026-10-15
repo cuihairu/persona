@@ -195,21 +195,70 @@ fn create_workspace_structure(workspace_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// 写 workspace 配置。**已有配置绝不整体重写为默认值**（merge 语义）：
+/// 重跑 `persona init` 只允许动本次显式拥有的字段（workspace.path；加密
+/// 标志只升不降；--backup-dir 给了才动备份目录），其余用户自定义值原样
+/// 保留。覆写前先落 `config.toml.bak`，正式写入走临时文件 + rename 原子
+/// 替换；已有文件解析失败时不动原文件（保留现场让用户自查，绝不拿默认
+/// 值盖掉它）。
 fn initialize_config(
     workspace_path: &Path,
     encryption_enabled: bool,
     backup_dir: Option<PathBuf>,
 ) -> Result<()> {
     let config_path = workspace_path.join("config.toml");
-    let mut config = CliConfig::default();
-    config.workspace.path = workspace_path.to_path_buf();
-    config.security.encryption_enabled = encryption_enabled;
-    config.backup.directory = backup_dir.unwrap_or_else(|| workspace_path.join("backups"));
+    let config = if config_path.exists() {
+        let existing = std::fs::read_to_string(&config_path).with_context(|| {
+            format!("Failed to read existing config: {}", config_path.display())
+        })?;
+        let parsed: CliConfig = match toml::from_str(&existing) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                // 解析失败不覆盖、不备份后改写：原样保留，交由用户修复。
+                warn!(
+                    "Existing config.toml is invalid ({}); leaving it untouched",
+                    e
+                );
+                println!(
+                    "{} Existing config.toml is invalid and was left untouched: {}",
+                    "⚠".yellow(),
+                    e
+                );
+                return Ok(());
+            }
+        };
+        // 保留用户现值，仅同步本次 init 显式拥有的字段
+        let mut merged = parsed;
+        merged.workspace.path = workspace_path.to_path_buf();
+        // 加密标志只升不降：--encrypted 升 true；未带该 flag 不把加密配置
+        // 降回未加密（库的真实加密态在 DB，配置只是展示层，但也不能说谎）
+        if encryption_enabled {
+            merged.security.encryption_enabled = true;
+        }
+        if let Some(dir) = backup_dir {
+            merged.backup.directory = dir;
+        }
+        let backup_path = workspace_path.join("config.toml.bak");
+        std::fs::write(&backup_path, existing)
+            .with_context(|| format!("Failed to back up config to {}", backup_path.display()))?;
+        merged
+    } else {
+        let mut config = CliConfig::default();
+        config.workspace.path = workspace_path.to_path_buf();
+        config.security.encryption_enabled = encryption_enabled;
+        config.backup.directory = backup_dir.unwrap_or_else(|| workspace_path.join("backups"));
+        config
+    };
 
     let config_content =
         toml::to_string_pretty(&config).context("Failed to serialize configuration")?;
 
-    std::fs::write(&config_path, config_content).context("Failed to write configuration file")?;
+    // 原子替换：先写临时文件再 rename，避免半截配置文件
+    let tmp_path = workspace_path.join("config.toml.tmp");
+    std::fs::write(&tmp_path, &config_content)
+        .with_context(|| format!("Failed to write temporary config: {}", tmp_path.display()))?;
+    std::fs::rename(&tmp_path, &config_path)
+        .with_context(|| format!("Failed to replace config: {}", config_path.display()))?;
 
     println!("{} Created configuration file", "✓".green().bold());
     Ok(())
@@ -261,18 +310,32 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
             .await
             .map_err(|e| anyhow::anyhow!("Failed to create PersonaService: {}", e))?;
 
-        // Initialize first-time user
-        match service.initialize_user(password).await {
-            Ok(_user_id) => {
-                println!("{} Initialized user authentication", "✓".green().bold());
-            }
-            Err(e) => {
-                warn!("Failed to initialize user: {}", e);
-                println!(
-                    "{} Database created, but user initialization failed",
-                    "⚠".yellow().bold()
-                );
-                println!("  You can set up authentication later using 'persona unlock'");
+        // 红线：已有用户的库**绝不**再插第二行 user_auth——新 salt 让
+        // master key 层次错位，旧密码解不开已存凭据（改密走 `persona
+        // passwd`）。用户存在性查询出错时同样 fail-closed（报错而非"当
+        // 空库"），否则多进程并发/库锁超时会被误判成首启，写出幽灵行。
+        let has_users = service
+            .has_users()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to check vault users: {}", e))?;
+        if has_users {
+            println!(
+                "{} Vault already has a user; master password left unchanged (use `persona passwd` to rotate)",
+                "⚠".yellow().bold()
+            );
+        } else {
+            match service.initialize_user(password).await {
+                Ok(_user_id) => {
+                    println!("{} Initialized user authentication", "✓".green().bold());
+                }
+                Err(e) => {
+                    warn!("Failed to initialize user: {}", e);
+                    println!(
+                        "{} Database created, but user initialization failed",
+                        "⚠".yellow().bold()
+                    );
+                    println!("  You can set up authentication later using `persona passwd`");
+                }
             }
         }
     } else {
@@ -593,6 +656,205 @@ mod tests {
         assert_eq!(
             get_master_password(Some("from-cli".to_string()), false, &ui).unwrap(),
             Some("from-cli".to_string())
+        );
+    }
+
+    /// user_auth 行数（幽灵用户检测：重跑 init 不得插第二行）。
+    async fn user_auth_row_count(path: &Path) -> i64 {
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(1) FROM user_auth")
+            .fetch_one(db.pool())
+            .await
+            .unwrap()
+    }
+
+    /// 回归（数据丢失级）：重跑 `persona init` 必须 merge 已有配置，
+    /// 用户自定义值不得被默认值覆盖，且覆写前留 `config.toml.bak`。
+    #[tokio::test]
+    async fn reinitializing_preserves_custom_config_and_backs_up() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let mut first = init_args(true);
+        first.path = Some(path.clone());
+        execute(first, &crate::config::CliConfig::default())
+            .await
+            .expect("first init must succeed");
+
+        // 用户改了三处非默认值（含未加密首启的 security 段）
+        let config_path = path.join("config.toml");
+        let original = std::fs::read_to_string(&config_path).unwrap();
+        let customized = original
+            .replace("auto_lock_timeout = 300", "auto_lock_timeout = 7777")
+            .replace("max_backups = 30", "max_backups = 99")
+            .replace("level = \"info\"", "level = \"debug\"");
+        assert_ne!(
+            customized, original,
+            "test fixture must have changed the values"
+        );
+        std::fs::write(&config_path, &customized).unwrap();
+
+        // 重跑 init：不带 --encrypted，不得把加密标志从用户值上动掉
+        let mut second = init_args(true);
+        second.path = Some(path.clone());
+        second.encrypted = false;
+        execute(second, &crate::config::CliConfig::default())
+            .await
+            .expect("re-init must not fail on an existing workspace");
+
+        let written = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            written.contains("auto_lock_timeout = 7777"),
+            "custom auto_lock_timeout must survive re-init:\n{written}"
+        );
+        assert!(
+            written.contains("max_backups = 99"),
+            "custom max_backups must survive re-init:\n{written}"
+        );
+        assert!(
+            written.contains("level = \"debug\""),
+            "custom logging level must survive re-init:\n{written}"
+        );
+        assert!(
+            path.join("config.toml.bak").exists(),
+            "an existing config must be backed up before being rewritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("config.toml.bak")).unwrap(),
+            customized,
+            "the backup must hold the pre-init content"
+        );
+        assert!(
+            !path.join("config.toml.tmp").exists(),
+            "the atomic write must leave no temp file behind"
+        );
+    }
+
+    /// 回归（数据丢失级）：已有用户的库上重跑 `persona init --master-password`
+    /// 不得插第二行 user_auth（新 salt 会让旧密码解不开已存凭据），
+    /// 已保存凭据与可解密性必须完好。
+    #[tokio::test]
+    async fn reinitializing_an_initialized_vault_never_adds_a_second_user() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+
+        let mut first = init_args(true);
+        first.path = Some(path.clone());
+        first.master_password = Some("first-pin".to_string());
+        execute(first, &crate::config::CliConfig::default())
+            .await
+            .expect("first init must succeed");
+        assert_eq!(
+            user_auth_row_count(&path).await,
+            1,
+            "one user after first init"
+        );
+
+        // 已保存的密码：建身份 + 凭据
+        let db = Database::from_file(path.join("identities.db"))
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db.clone())
+            .await
+            .unwrap();
+        assert!(matches!(
+            service.authenticate_user("first-pin").await.unwrap(),
+            persona_core::auth::AuthResult::Success
+        ));
+        let identity = service
+            .create_identity(
+                "alice".to_string(),
+                persona_core::models::IdentityType::Personal,
+            )
+            .await
+            .unwrap();
+        let created = service
+            .create_credential(
+                identity.id,
+                "GitHub".to_string(),
+                persona_core::models::CredentialType::Password,
+                persona_core::models::SecurityLevel::High,
+                &persona_core::models::CredentialData::Password(
+                    persona_core::models::PasswordCredentialData {
+                        password: "ghp-real-secret-value".to_string(),
+                        email: Some("alice@example.com".to_string()),
+                        security_questions: Vec::new(),
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+
+        // 重跑 init 带另一个主密码：不得新建用户、不得毁掉已存凭据
+        let mut second = init_args(true);
+        second.path = Some(path.clone());
+        second.master_password = Some("second-pin".to_string());
+        execute(second, &crate::config::CliConfig::default())
+            .await
+            .expect("re-init must not fail on an existing vault");
+
+        assert_eq!(
+            user_auth_row_count(&path).await,
+            1,
+            "re-init must not insert a phantom second user row"
+        );
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        assert!(
+            matches!(
+                service.authenticate_user("first-pin").await.unwrap(),
+                persona_core::auth::AuthResult::Success
+            ),
+            "the original master password must still unlock"
+        );
+        assert!(
+            !matches!(
+                service.authenticate_user("second-pin").await.unwrap(),
+                persona_core::auth::AuthResult::Success
+            ),
+            "the re-init password must not be accepted as a second vault owner"
+        );
+        let credential = service
+            .get_credential(&created.id)
+            .await
+            .unwrap()
+            .expect("the saved credential must still exist");
+        let data = service
+            .get_credential_data(&credential.id)
+            .await
+            .unwrap()
+            .expect("the saved credential must still decrypt");
+        let persona_core::models::CredentialData::Password(password_data) = data else {
+            panic!("credential data must round trip as password data");
+        };
+        assert_eq!(
+            password_data.password.as_str(),
+            "ghp-real-secret-value",
+            "the saved password must be intact after re-init"
+        );
+    }
+
+    /// 回归（数据丢失级）：已有配置损坏时绝不拿默认值覆盖它——保留现场。
+    #[tokio::test]
+    async fn reinitializing_with_an_invalid_config_leaves_it_untouched() {
+        let dir = TempDir::new().unwrap();
+        let path = fresh_subdir(&dir);
+        std::fs::create_dir_all(&path).unwrap();
+        let config_path = path.join("config.toml");
+        let broken = "not [valid toml";
+        std::fs::write(&config_path, broken).unwrap();
+
+        let mut args = init_args(true);
+        args.path = Some(path.clone());
+        execute(args, &crate::config::CliConfig::default())
+            .await
+            .expect("re-init must not fail on an invalid existing config");
+
+        assert_eq!(
+            std::fs::read_to_string(&config_path).unwrap(),
+            broken,
+            "an unparseable config must be left untouched, never overwritten with defaults"
         );
     }
 }

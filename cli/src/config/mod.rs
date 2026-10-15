@@ -3,13 +3,21 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+// 各段缺键回退默认：旧版本写出的配置少新字段/新段时不至于整份解析失败
+// （否则部分合并、前向兼容都无从谈起）。整份损坏仍由调用方显式处理。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CliConfig {
+    #[serde(default)]
     pub workspace: WorkspaceConfig,
+    #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
     pub backup: BackupConfig,
+    #[serde(default)]
     pub sync: SyncConfig,
+    #[serde(default)]
     pub ui: UiConfig,
+    #[serde(default)]
     pub logging: LoggingConfig,
 }
 
@@ -35,7 +43,7 @@ pub struct BackupConfig {
     pub max_backups: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncConfig {
     pub enabled: bool,
     pub server_url: String,
@@ -57,44 +65,63 @@ pub struct LoggingConfig {
     pub max_files: u32,
 }
 
-impl Default for CliConfig {
+impl Default for WorkspaceConfig {
     fn default() -> Self {
-        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let workspace_path = home_dir.join(".persona");
-
+        let workspace_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".persona");
         Self {
-            workspace: WorkspaceConfig {
-                path: workspace_path.clone(),
-                version: "0.1.0".to_string(),
-            },
-            security: SecurityConfig {
-                encryption_enabled: true,
-                auto_lock_timeout: 300,
-                require_biometric: false,
-            },
-            backup: BackupConfig {
-                enabled: true,
-                directory: workspace_path.join("backups"),
-                auto_backup: true,
-                backup_interval: 86400,
-                max_backups: 30,
-            },
-            sync: SyncConfig {
-                enabled: false,
-                server_url: String::new(),
-                auto_sync: false,
-            },
-            ui: UiConfig {
-                color_enabled: true,
-                interactive: true,
-                default_output_format: "table".to_string(),
-            },
-            logging: LoggingConfig {
-                level: "info".to_string(),
-                file_enabled: true,
-                max_file_size: "10MB".to_string(),
-                max_files: 5,
-            },
+            path: workspace_path,
+            version: "0.1.0".to_string(),
+        }
+    }
+}
+
+// 缺段回退必须落到**产品默认值**而不是 derive 出来的零值——serde 的
+// `#[serde(default)]` 直接调用这里，零值会把加密/交互/彩色/日志全部静默
+// 关掉（等于又一次默认值覆盖用户配置）。
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            encryption_enabled: true,
+            auto_lock_timeout: 300,
+            require_biometric: false,
+        }
+    }
+}
+
+impl Default for BackupConfig {
+    fn default() -> Self {
+        let workspace_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".persona");
+        Self {
+            enabled: true,
+            directory: workspace_path.join("backups"),
+            auto_backup: true,
+            backup_interval: 86400,
+            max_backups: 30,
+        }
+    }
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            color_enabled: true,
+            interactive: true,
+            default_output_format: "table".to_string(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            file_enabled: true,
+            max_file_size: "10MB".to_string(),
+            max_files: 5,
         }
     }
 }
@@ -372,6 +399,35 @@ max_files = 2
 
         let err = CliConfig::load_file(&path).unwrap_err();
         assert!(err.to_string().contains("Failed to parse config file"));
+    }
+
+    /// 缺段/缺字段回退默认：旧版本写出的配置没有新段时仍能加载，
+    /// 既有自定义值不受影响（`persona init` 做 merge 而非整体覆盖的前提）。
+    #[test]
+    fn load_file_fills_missing_sections_with_defaults() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "[workspace]\npath = \"/home/u/ws\"\nversion = \"0.2.0\"\n",
+        )
+        .unwrap();
+
+        let config = CliConfig::load_file(&path).unwrap();
+        assert_eq!(
+            config.workspace.path,
+            PathBuf::from("/home/u/ws"),
+            "an existing value must be preserved"
+        );
+        assert_eq!(config.workspace.version, "0.2.0");
+        assert!(config.security.encryption_enabled);
+        assert_eq!(config.security.auto_lock_timeout, 300);
+        assert!(config.backup.enabled);
+        assert_eq!(config.logging.level, "info");
+        assert!(
+            !config.sync.enabled,
+            "a missing section must fall back to a safe default, not error"
+        );
     }
 
     #[test]

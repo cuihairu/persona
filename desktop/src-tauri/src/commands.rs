@@ -277,8 +277,21 @@ async fn init_service_inner<R: tauri::Runtime>(
                     {
                         tracing::warn!("attachment storage init failed: {}", e);
                     }
-                    // Check if this is first-time setup or existing user
-                    let is_first_time = !service.has_users().await.unwrap_or(false);
+                    // Check if this is first-time setup or existing user.
+                    // 红线：查询出错必须 fail-closed——把错误当成"空库"会在
+                    // 已有用户的保险库上插第二行 user_auth（新 salt），旧密
+                    // 码从此解不开已存凭据。多实例并发/库锁超时正是会走到
+                    // 这里的场景。
+                    let has_users = match service.has_users().await {
+                        Ok(has_users) => has_users,
+                        Err(e) => {
+                            return Ok(ApiResponse::error(format!(
+                                "Failed to check vault state: {}",
+                                e
+                            )));
+                        }
+                    };
+                    let is_first_time = !has_users;
 
                     if is_first_time {
                         // 硬件密钥路径对首次建户无意义（还没有用户/密钥可验）
