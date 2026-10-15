@@ -6,16 +6,16 @@
 
 ## 未完成
 
-- [ ] OS 自动填充集成：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello）同属此缺口。解锁条件：需对应平台机器（iOS=macOS+Xcode、鸿蒙=DevEco），本机 Linux 无环境
-- [ ] 桌面应用级填充：Windows 桌面应用内的填充注入（现状仅浏览器桥）。解锁条件：需 Windows 桌面会话实机验收
-- [ ] Web 端：1Password.com 形态的浏览器端（低优先，出现真实需求再评估）
-- [ ] M5 浏览器插件接账号（Safari 侧）：Swift 宿主端实现桥协议 v7（报文 → `persona bridge` 子进程封装）。解锁条件：需 macOS+Xcode 实机（挂起待实机批次，docs/BRIDGE_PROTOCOL.md §20 + browser/safari-extension/README.md）
-- [ ] KDF 参数评审决策点：PBKDF2-HMAC-SHA256 主密钥派生 100k 低于 OWASP 现行 600k 建议（1Password 650k）；Argon2id 各路径恰在/高于下限（维持）。待用户拍板：是否升 600k（re-wrap 迁移）/惰性升级或显式迁移命令/Argon2id 同批上浮；拍板前参数不动（docs/review/2026-10-12-kdf-parameter-review.md）
-- [ ] Windows 实机测试与优化：编译层（x86_64-pc-windows-gnu 全绿）与 CI 守卫（rust-windows + rust-windows-desktop job）已收口，缺实机行为验收
-- [ ] SCIM/SSO bridging（future）
+- [ ] OS 自动填充集成：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello）同属此缺口。解锁条件：需对应平台机器（iOS=macOS+Xcode、鸿蒙=DevEco），本机 Linux 无环境。2026-10-16 巡检复核：条件仍成立（本机 Linux，无 Xcode/DevEco）
+- [ ] 桌面应用级填充：Windows 桌面应用内的填充注入（现状仅浏览器桥）。解锁条件：需 Windows 桌面会话实机验收。2026-10-16 巡检复核：条件仍成立（本机无 Windows 会话）
+- [ ] Web 端：1Password.com 形态的浏览器端（低优先，出现真实需求再评估）。2026-10-16 巡检复核：未出现真实需求信号
+- [ ] M5 浏览器插件接账号（Safari 侧）：Swift 宿主端实现桥协议 v7（报文 → `persona bridge` 子进程封装）。解锁条件：需 macOS+Xcode 实机（挂起待实机批次，docs/BRIDGE_PROTOCOL.md §20 + browser/safari-extension/README.md）。2026-10-16 巡检复核：条件仍成立（本机无 macOS）
+- [ ] KDF 参数评审决策点：PBKDF2-HMAC-SHA256 主密钥派生 100k 低于 OWASP 现行 600k 建议（1Password 650k）；Argon2id 各路径恰在/高于下限（维持）。待用户拍板：是否升 600k（re-wrap 迁移）/惰性升级或显式迁移命令/Argon2id 同批上浮；拍板前参数不动（docs/review/2026-10-12-kdf-parameter-review.md）。2026-10-16 巡检复核：仍待拍板（评审文档明确「等用户拍板」「拍板前不动代码」；PBKDF2 仍 100k 未动）
+- [ ] Windows 实机测试与优化：编译层（x86_64-pc-windows-gnu 全绿）与 CI 守卫（rust-windows + rust-windows-desktop job）已收口，缺实机行为验收。2026-10-16 巡检复核：条件仍成立（本机 Linux，无 Windows 实机；ROADMAP.md M4 同条目一并复核）
+- [ ] SCIM/SSO bridging（future）。2026-10-16 巡检复核：无触发信号，维持 future
 - [x] G3 国际扩展与标准增强：GitHub 二次验证安全密钥/通行密钥走 Passkeys 轨道（Passkeys 已落地）；HOTP（RFC 4226）录入与出码（见下「已完成」）
-- [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态
-- [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）
+- [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
+- [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
 
 ## 已完成
 
