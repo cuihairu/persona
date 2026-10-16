@@ -1,35 +1,37 @@
-# 品牌使用说明（Brand Guidelines）
+# Brand Guidelines
 
-名称与读法
+> [English](brand-guidelines.md) | [中文](brand-guidelines.zh.md)
 
-- 对外名称：Persona（数钥）
-- 中文读音：shù yào
-- 场景建议：正式文案与产品页可用“Persona（数钥）”，开发者文档与命令行维持英文 Persona 一致性。
+Name and pronunciation
 
-Logo 与留白
+- Public name: Persona（数钥）
+- Chinese reading: shù yào
+- Usage advice: formal copy and product pages may use "Persona（数钥）"; developer docs and the CLI keep the plain English "Persona" for consistency.
 
-- 主 Logo 文件：`docs/branding/logo.svg`
-- 最小尺寸：24×24 px（屏幕）、12 mm（印刷）
-- 留白：四周至少等于取景框线宽（当前 Logo 形状为识别取景框 + 人像）
-- 禁止：拉伸变形、低对比度叠底、强饱和背景撞色
+Logo and clear space
 
-横排文字标（Wordmark）
+- Main logo file: `docs/branding/logo.svg`
+- Minimum size: 24×24 px (screen), 12 mm (print)
+- Clear space: at least the viewfinder line weight on all sides (the current logo shape is a recognition viewfinder + portrait)
+- Not allowed: stretching/distortion, low-contrast backgrounds, clashing saturated backgrounds
 
-- 文件：`docs/branding/wordmark-horizontal.svg`
-- 推荐用于页眉/导航/欢迎页；缩放时保持等比
+Horizontal wordmark
 
-颜色
+- File: `docs/branding/wordmark-horizontal.svg`
+- Recommended for headers / navigation / welcome pages; keep the aspect ratio when scaling
 
-- 见 `docs/branding/color-palette.md`
-- 渐变主色：`#4C6FFF` → `#00D1B2`
-- 深浅模式自适应，注意文字和背景对比度
+Colors
 
-图标导出建议
+- See `docs/branding/color-palette.md`
+- Gradient primary: `#4C6FFF` → `#00D1B2`
+- Adapts to light/dark mode; watch text and background contrast
 
-- 应用图标：从 `logo.svg` 导出多尺寸 PNG/ICO（16/32/48/64/128/256/512）
-- 桌面 App（Tauri）：放置于 `desktop/src/assets/brand/`，并在打包配置中引用
-- Favicon：导出 32×32/48×48，同时保留 SVG 版本以支持高清缩放
+Icon export advice
 
-命名与路径稳定性
+- App icon: export multi-size PNG/ICO from `logo.svg` (16/32/48/64/128/256/512)
+- Desktop app (Tauri): place under `desktop/src/assets/brand/` and reference it in the packaging config
+- Favicon: export 32×32 / 48×48 and keep the SVG version for high-DPI scaling
 
-- 生产前视需要替换视觉方案，但建议保持相同文件路径，以免影响引用
+Naming and path stability
+
+- The visual pass may be replaced before production, but keep the same file paths so existing references keep working

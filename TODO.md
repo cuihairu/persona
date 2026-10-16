@@ -17,7 +17,7 @@
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
 - [x] CLI help 文案语言一致性：`travel`/`backup` 子命令 help 中译英（2026-10-16 `2576e53`，travel 11 + backup 20 测试全绿）
-- [ ] 文档双语·第二轮（子目录）：2026-10-16 已收口 `docs/` 根目录（29 对 + `审计-文档一致性.md` 配对完成，见 docs/DOC_SOURCE_CONSISTENCY_AUDIT.md）。剩余三块：① `docs/src/**` 27 页（VitePress 单站点，`docs/.vitepress/config.mts` 单一 `lang: zh-CN` 设计——做双语需先决定是加 i18n locale 还是只给英文侧留指向说明）；② `docs/review/*.md` 5 篇中文内部评审（带日期的一次性评审记录，是否纳入双语待定）；③ `docs/branding/*.md` 3 篇仅英文无中文 twin。本轮不扩，先定 docs/src 双语形态再动。
+- [x] 文档双语·第二轮（子目录）（2026-10-16 R1021PATROL 收口）：① `docs/src/**` 采用 VitePress 原生 i18n——`config.mts` 重构为 `locales{root: zh-CN, en: en-US}`（en 挂 `/en/`，两侧各自 sidebar/nav/主题字符串），28 个英文页 `docs/src/en/**` 全译配对；被取代的历史页 `analysis/*` 英文侧按"如实标注"红线只做 superseded 横幅（指向 docs 根英文版），不硬造翻译。② `docs/branding/*.md` 3 篇实为中文主体——按根目录约定改为英文主文件 + `.zh.md` twin + 双向切换器。③ `docs/review/*.md` 5 篇为带日期的一次性内部评审记录，按性质不纳入双语配对（结论已收口进对应工程文档，KDF 决策例见本表 L13）。门禁：`npx prettier@3.6.2 --check .` 全绿，`npm run build`（VitePress 内建死链校验）exit 0，28 英文页 + 29 中文页全部生成。
 
 ## 已完成
 
