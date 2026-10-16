@@ -1,34 +1,34 @@
-# 供应链安全检查指南
+# Supply Chain Security Check Guide
 
 > [English](SUPPLY_CHAIN_SECURITY.md) | [中文](SUPPLY_CHAIN_SECURITY.zh.md)
 
-本项目实施全面的供应链安全检查,确保所有依赖项的安全性、许可证合规性和来源可信度。
+This project runs comprehensive supply chain security checks to ensure the security, license compliance, and source trustworthiness of every dependency.
 
-## 工具链
+## Toolchains
 
-### Rust 生态系统
+### Rust Ecosystem
 
 #### 1. cargo-deny
 
-[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) 是一个全面的 Cargo 依赖检查工具。
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny) is a comprehensive Cargo dependency checking tool.
 
-**安装:**
+**Install:**
 
 ```bash
 cargo install cargo-deny
 ```
 
-**功能:**
+**Features:**
 
-- 安全漏洞检查 (基于 RustSec Advisory Database)
-- 许可证合规性验证
-- 依赖来源验证
-- 重复依赖检测
-- 禁用依赖管理
+- Security vulnerability checks (based on the RustSec Advisory Database)
+- License compliance verification
+- Dependency source verification
+- Duplicate dependency detection
+- Banned dependency management
 
-**配置文件:** `deny.toml`
+**Configuration file:** `deny.toml`
 
-**运行检查:**
+**Run checks:**
 
 ```bash
 # 完整检查
@@ -43,27 +43,27 @@ cargo deny check sources     # 仅来源检查
 
 #### 2. cargo-audit
 
-[cargo-audit](https://github.com/RustSec/rustsec/tree/main/cargo-audit) 专注于已知漏洞扫描。
+[cargo-audit](https://github.com/RustSec/rustsec/tree/main/cargo-audit) focuses on scanning for known vulnerabilities.
 
-**安装:**
+**Install:**
 
 ```bash
 cargo install cargo-audit
 ```
 
-**运行检查:**
+**Run checks:**
 
 ```bash
 cargo audit
 ```
 
-### JavaScript/TypeScript 生态系统
+### JavaScript/TypeScript Ecosystem
 
 #### pnpm audit
 
-Node.js 内置的安全审计工具（本仓桌面端走 pnpm workspace）。
+Node.js's built-in security audit tool (the desktop side of this repo uses the pnpm workspace).
 
-**运行检查:**
+**Run checks:**
 
 ```bash
 pnpm --filter persona-desktop audit
@@ -75,43 +75,43 @@ pnpm --filter persona-desktop audit --audit-level=moderate
 pnpm --filter persona-desktop audit fix
 ```
 
-## 许可证策略
+## License Policy
 
-### 允许的许可证
+### Allowed Licenses
 
-`deny.toml` 的 allowlist（未列入即拒绝，机制是 allowlist 而非分级警告）:
+The allowlist in `deny.toml` (anything not listed is rejected — the mechanism is an allowlist, not tiered warnings):
 
-- **MIT** - 最宽松的许可证
-- **Apache-2.0**（含 `Apache-2.0 WITH LLVM-exception`）- 商业友好的许可证
-- **BSD-2-Clause / BSD-3-Clause** - 简洁的许可证
-- **ISC** - 与 MIT 类似
-- **Unicode-3.0 / Zlib / MITNFA / CDLA-Permissive-2.0 / BSL-1.0** - 常见宽松许可
+- **MIT** - the most permissive license
+- **Apache-2.0** (including `Apache-2.0 WITH LLVM-exception`) - a business-friendly license
+- **BSD-2-Clause / BSD-3-Clause** - concise licenses
+- **ISC** - similar to MIT
+- **Unicode-3.0 / Zlib / MITNFA / CDLA-Permissive-2.0 / BSL-1.0** - common permissive licenses
 - **MPL-2.0** - Mozilla Public License
-- **CC0-1.0** - 公共领域声明
-- **0BSD** - 零条款 BSD
+- **CC0-1.0** - public domain dedication
+- **0BSD** - zero-clause BSD
 
-### 禁止的许可证
+### Prohibited Licenses
 
-以下许可证因其 copyleft 性质被禁止（allowlist 之外全部拒绝）:
+The following licenses are prohibited due to their copyleft nature (everything outside the allowlist is rejected):
 
-- **GPL-2.0 / GPL-3.0** - 强 copyleft
-- **AGPL-3.0** - 网络 copyleft
-- **LGPL** - 较弱的 copyleft
+- **GPL-2.0 / GPL-3.0** - strong copyleft
+- **AGPL-3.0** - network copyleft
+- **LGPL** - weaker copyleft
 
-### 处理许可证问题
+### Handling License Issues
 
-如果检测到不兼容的许可证:
+If an incompatible license is detected:
 
-1. **评估依赖:** 确认是否真正需要该依赖
-2. **寻找替代:** 查找具有兼容许可证的替代库
-3. **联系上游:** 与库维护者沟通许可证变更可能性
-4. **例外申请:** 记录在 `deny.toml` 中 (需团队审批)
+1. **Evaluate the dependency:** confirm whether it is truly needed
+2. **Look for alternatives:** find a substitute library with a compatible license
+3. **Contact upstream:** discuss with the library maintainers whether a license change is possible
+4. **Exception request:** record it in `deny.toml` (requires team approval)
 
-## 安全漏洞处理流程
+## Security Vulnerability Handling Process
 
-### 1. 检测阶段
+### 1. Detection Phase
 
-CI/CD 流水线自动运行安全检查:
+The CI/CD pipeline runs the security checks automatically:
 
 ```yaml
 # .github/workflows/ci.yml — Security Audit job（两个独立 step）
@@ -120,17 +120,17 @@ CI/CD 流水线自动运行安全检查:
   continue-on-error: true # Don't fail CI on advisories, just warn
 ```
 
-### 2. 漏洞分析
+### 2. Vulnerability Analysis
 
-当检测到漏洞时:
+When a vulnerability is detected:
 
-1. **查看详情:** 访问 [RustSec Advisory Database](https://rustsec.org/)
-2. **评估影响:** 确定漏洞是否影响项目的使用场景
-3. **检查补丁:** 查看是否有修复版本
+1. **View the details:** visit the [RustSec Advisory Database](https://rustsec.org/)
+2. **Assess the impact:** determine whether the vulnerability affects this project's usage scenarios
+3. **Check for patches:** see whether a fixed version exists
 
-### 3. 修复步骤
+### 3. Remediation Steps
 
-#### 立即修复 (高危/严重)
+#### Immediate Fix (High/Critical)
 
 ```bash
 # 更新到修复版本
@@ -141,13 +141,13 @@ cargo deny check advisories
 cargo audit
 ```
 
-#### 计划修复 (中危/低危)
+#### Planned Fix (Medium/Low)
 
-1. 在 GitHub Issues 创建跟踪任务
-2. 评估升级影响
-3. 在下个 sprint 中修复
+1. Create a tracking task in GitHub Issues
+2. Assess the upgrade impact
+3. Fix it in the next sprint
 
-#### 临时忽略 (误报/不适用)
+#### Temporary Ignore (False Positive/Not Applicable)
 
 ```toml
 # deny.toml
@@ -157,22 +157,22 @@ ignore = [
 ]
 ```
 
-**注意:** 必须在 PR 中说明忽略原因!
+**Note:** the reason for the ignore must be explained in the PR!
 
-### 已知未修复依赖登记（2026-09 复审）
+### Known Unfixed Dependency Registry (2026-09 Review)
 
-下列 Dependabot 告警上游**无补丁版本**或修复被宿主框架锁定，记录风险面与解除路径。每月复审时核对上游是否已发修复。
+For the Dependabot alerts below, upstream has **no patched version** or the fix is locked by the host framework; the risk surface and the path to resolution are recorded here. At each monthly review, check whether upstream has shipped a fix.
 
-| 告警                         | 依赖               | 引入链                                                              | 风险面评估                                                                                                                                                                                                                                                                                   | 解除路径                                                                      |
+| Alert                        | Dependency         | Introduction chain                                                  | Risk surface assessment                                                                                                                                                                                                                                                                                   | Resolution path                                                                      |
 | ---------------------------- | ------------------ | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| GHSA-wrw7-89jp-8q8g (medium) | glib 0.18.5        | Tauri（Linux GTK 后端）→ gtk-rs（仅 Linux 桌面）                    | `VariantStrIter` 迭代器 soundness 缺陷；Persona 桌面端不直接以该迭代器遍历不可信 Variant 数据                                                                                                                                                                                                | 待上游 gtk-rs 传递依赖升级（glib 0.18.5 仍在 `desktop/src-tauri/Cargo.lock`） |
-| GHSA-848j-6mx2-7j84 (low)    | ~~elliptic 6.6.1~~ | ~~website (umi) → webpack → node-libs-browser → crypto-browserify~~ | **已断开（2026-10 复审）**：根 `package.json` overrides 将 `crypto-browserify` 指向自研 no-op stub（`vendor/crypto-browserify-stub`，pnpm `link:`），elliptic 整链退出依赖树；umi 的 node-libs-browser polyfill map 仍 require.resolve 该包但不加载，website 产物不调用 node crypto polyfill | 已解除（stub 断链）                                                           |
+| GHSA-wrw7-89jp-8q8g (medium) | glib 0.18.5        | Tauri (Linux GTK backend) → gtk-rs (Linux desktop only)            | `VariantStrIter` iterator soundness flaw; the Persona desktop side does not use that iterator directly to traverse untrusted Variant data                                                                                                                                                                                                | Waiting on an upstream gtk-rs transitive dependency upgrade (glib 0.18.5 is still in `desktop/src-tauri/Cargo.lock`) |
+| GHSA-848j-6mx2-7j84 (low)    | ~~elliptic 6.6.1~~ | ~~website (umi) → webpack → node-libs-browser → crypto-browserify~~ | **Broken (2026-10 review)**: the root `package.json` overrides point `crypto-browserify` at an in-house no-op stub (`vendor/crypto-browserify-stub`, pnpm `link:`), so the whole elliptic chain left the dependency tree; umi's node-libs-browser polyfill map still require.resolve's the package but never loads it, and the website build never calls the node crypto polyfill | Resolved (stub breaks the chain)                                                            |
 
-已修复（同批复核）：workspace `lru` 0.12.5→0.18.4（ratatui 0.26→0.30 + rqrr 0.7→0.11）；`desktop/src-tauri` `rand` 0.8.5→0.8.8；docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12（当初用 npm overrides 拉平，后续经 vite ^6.4.3 自然解析到 0.25.12，override 已移除；vitepress 1.6.4 构建验证通过）；`image-size`（GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr，high）pnpm override `less@<4.9.1`→4.9.1 后整链消失——less 4.9.1 已移除 image-size 依赖，另留 `image-size@<2.0.4`→2.0.4 防御性 pin（OSV 确认 2.0.4 无已知漏洞；Dependabot 告警元数据滞后仍标"无补丁"）。
+Fixed (reviewed in the same batch): workspace `lru` 0.12.5→0.18.4 (ratatui 0.26→0.30 + rqrr 0.7→0.11); `desktop/src-tauri` `rand` 0.8.5→0.8.8; docs `vite` 5.4.21→6.4.3 + `esbuild` 0.21.5→0.25.12 (initially flattened with npm overrides, later resolved naturally to 0.25.12 via vite ^6.4.3 and the override removed; vitepress 1.6.4 build verified); `image-size` (GHSA-5p2g-fcmc-qvqq / GHSA-w3rx-r6r6-pgpr, high) — after the pnpm override `less@<4.9.1`→4.9.1 the whole chain disappeared, because less 4.9.1 dropped its image-size dependency; a defensive pin `image-size@<2.0.4`→2.0.4 remains (OSV confirms 2.0.4 has no known vulnerabilities; Dependabot's alert metadata lags and still marks it "no patch").
 
-## Makefile 命令
+## Makefile Commands
 
-项目提供了便捷的 Makefile 命令:
+The project provides convenient Makefile commands:
 
 ```bash
 # 完整安全检查 (推荐)
@@ -194,36 +194,36 @@ make security-sources
 make security-audit
 ```
 
-## CI/CD 集成
+## CI/CD Integration
 
 ### GitHub Actions
 
-安全检查已集成到 CI 流水线:
+The security checks are integrated into the CI pipeline:
 
-**触发条件:**
+**Triggers:**
 
-- 每次 `push` 到 `main` 分支
-- 每个 `pull_request`
+- Every `push` to the `main` branch
+- Every `pull_request`
 
-**检查项目:**
+**Checks:**
 
-1. Rust 依赖安全
-2. JavaScript/TypeScript 依赖安全
-3. 许可证合规性
-4. 依赖来源验证
+1. Rust dependency security
+2. JavaScript/TypeScript dependency security
+3. License compliance
+4. Dependency source verification
 
-**失败策略:**
+**Failure policy:**
 
-- Rust 侧（`cargo deny check advisories`，v2 advisories）：任何级别
-  RustSec 漏洞都令 CI 失败（"Vulnerable" 默认 deny，豁免需显式登记）；
-- JS/TS 侧（pnpm audit）：`--audit-level=moderate` 且 `continue-on-error`
-  ——高危以上报告出来，但不阻塞合并；
-- 许可证违规 → CI 失败（allowlist 机制）
-- 未知依赖来源 → 警告
+- Rust side (`cargo deny check advisories`, v2 advisories): any level of
+  RustSec vulnerability fails CI ("Vulnerable" is denied by default; an exemption requires explicit registration);
+- JS/TS side (pnpm audit): `--audit-level=moderate` with `continue-on-error`
+  — vulnerabilities of high and above are reported but do not block merges;
+- License violations → CI failure (allowlist mechanism)
+- Unknown dependency sources → warning
 
-## 定期维护
+## Scheduled Maintenance
 
-### 每周任务
+### Weekly Tasks
 
 ```bash
 # 更新漏洞数据库
@@ -234,7 +234,7 @@ cargo outdated
 pnpm --filter persona-desktop outdated
 ```
 
-### 每月任务
+### Monthly Tasks
 
 ```bash
 # 完整安全审计
@@ -245,22 +245,22 @@ cargo update
 cd desktop && npm update
 ```
 
-### 季度审查
+### Quarterly Review
 
-1. 审查所有安全忽略项
-2. 评估依赖项健康度 (维护状态、社区活跃度)
-3. 清理未使用的依赖
-4. 更新安全策略
+1. Review all security ignores
+2. Assess dependency health (maintenance status, community activity)
+3. Clean up unused dependencies
+4. Update the security policy
 
-## 最佳实践
+## Best Practices
 
-### 1. 最小化依赖
+### 1. Minimize Dependencies
 
-- 不添加不必要的依赖
-- 优先使用标准库
-- 评估依赖的传递依赖树大小
+- Do not add unnecessary dependencies
+- Prefer the standard library
+- Evaluate the size of the transitive dependency tree
 
-### 2. 固定版本
+### 2. Pin Versions
 
 ```toml
 # Cargo.toml - 使用精确版本
@@ -269,43 +269,43 @@ serde = "1.0.197"  # 好
 # serde = "*"      # 坏
 ```
 
-### 3. 审查新依赖
+### 3. Review New Dependencies
 
-添加新依赖前检查:
+Before adding a new dependency, check:
 
-- 许可证是否兼容
-- 维护活跃度（最近提交时间）
-- 社区信任度（stars、downloads、contributors）
-- 安全历史（是否有漏洞记录）
-- 代码质量（测试覆盖率、CI 状态）
+- Whether the license is compatible
+- Maintenance activity (most recent commit time)
+- Community trust (stars, downloads, contributors)
+- Security history (any vulnerability records)
+- Code quality (test coverage, CI status)
 
-### 4. 依赖锁定
+### 4. Dependency Locking
 
-- 提交 `Cargo.lock` 到版本控制
-- 提交 `pnpm-lock.yaml` 到版本控制（docs/ 子站例外：独立 npm + `docs/package-lock.json`）
-- 不提交 `node_modules/` 或 `target/`
+- Commit `Cargo.lock` to version control
+- Commit `pnpm-lock.yaml` to version control (exception for the docs/ subsite: standalone npm + `docs/package-lock.json`)
+- Do not commit `node_modules/` or `target/`
 
-### 5. 安全更新优先
+### 5. Prioritize Security Updates
 
-- 高危/严重漏洞: 24小时内修复
-- 中危漏洞: 1周内修复
-- 低危漏洞: 1个月内修复
+- High/critical vulnerabilities: fix within 24 hours
+- Medium vulnerabilities: fix within 1 week
+- Low vulnerabilities: fix within 1 month
 
-## 故障排除
+## Troubleshooting
 
-### cargo-deny 检查失败
+### cargo-deny Check Failures
 
-**症状:** `cargo deny check` 返回错误
+**Symptom:** `cargo deny check` returns an error
 
-**解决步骤:**
+**Resolution steps:**
 
-1. 查看详细输出:
+1. View the detailed output:
 
    ```bash
    cargo deny check -vv
    ```
 
-2. 针对性修复:
+2. Fix the specific problem:
 
    ```bash
    # 漏洞问题
@@ -318,61 +318,61 @@ serde = "1.0.197"  # 好
    # 检查是否使用了非 crates.io 源
    ```
 
-### cargo-audit 误报
+### cargo-audit False Positives
 
-**症状:** 报告的漏洞不影响项目
+**Symptom:** the reported vulnerabilities do not affect this project
 
-**解决步骤:**
+**Resolution steps:**
 
-1. 仔细阅读漏洞详情
-2. 确认不影响项目使用场景
-3. 在 `deny.toml` 中添加忽略项并说明原因
+1. Read the vulnerability details carefully
+2. Confirm that it does not affect this project's usage scenarios
+3. Add an ignore entry in `deny.toml` with a stated reason
 
-### npm audit 大量警告
+### npm audit Flood of Warnings
 
-**症状:** `npm audit` 显示数十个漏洞
+**Symptom:** `npm audit` shows dozens of vulnerabilities
 
-**解决步骤:**
+**Resolution steps:**
 
-1. 检查是否为开发依赖:
+1. Check whether they are dev dependencies:
 
    ```bash
    npm audit --production
    ```
 
-2. 尝试自动修复:
+2. Try an automatic fix:
 
    ```bash
    npm audit fix
    ```
 
-3. 手动升级主要依赖:
+3. Upgrade the major dependencies by hand:
    ```bash
    npm update <package-name>
    ```
 
-## 参考资源
+## Reference Resources
 
-### 官方文档
+### Official Documentation
 
 - [RustSec Advisory Database](https://rustsec.org/)
-- [cargo-deny 文档](https://embarkstudios.github.io/cargo-deny/)
-- [cargo-audit 文档](https://github.com/RustSec/rustsec/tree/main/cargo-audit)
-- [npm audit 文档](https://docs.npmjs.com/cli/v8/commands/npm-audit)
+- [cargo-deny Documentation](https://embarkstudios.github.io/cargo-deny/)
+- [cargo-audit Documentation](https://github.com/RustSec/rustsec/tree/main/cargo-audit)
+- [npm audit Documentation](https://docs.npmjs.com/cli/v8/commands/npm-audit)
 
-### 安全公告订阅
+### Security Advisory Subscriptions
 
 - [RustSec Advisories RSS](https://rustsec.org/feed.xml)
 - [GitHub Security Advisories](https://github.com/advisories)
 - [npm Security Advisories](https://github.com/advisories?query=ecosystem%3Anpm)
 
-### 社区资源
+### Community Resources
 
 - [Rust Security Working Group](https://www.rust-lang.org/governance/wgs/wg-security-response)
 - [OWASP Dependency-Check](https://owasp.org/www-project-dependency-check/)
 
 ---
 
-**维护者:** Persona Security Team
-**最后更新:** 2026-10-05
-**审阅周期:** 季度
+**Maintainer:** Persona Security Team
+**Last updated:** 2026-10-05
+**Review cycle:** Quarterly

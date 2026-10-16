@@ -1,85 +1,97 @@
-# Passkey Gate Audit（批 E 核查）
+# Passkey Gate Audit (Batch E Verification)
 
 > [English](PASSKEY_GATE_AUDIT.md) | [中文](PASSKEY_GATE_AUDIT.zh.md)
 
-核查日期：2026-10-04。范围：浏览器插件轨的 passkey/WebAuthn 能力（TODO 批 E：
-「Passkey 补缺口核查 + 端到端测试」），对照 [PASSKEYS_DESIGN.md](PASSKEYS_DESIGN.md)
-的 P1–P4 阶段与桥协议 v2/v3 落地情况。分工口径：E1/E3 的代码与测试由扩展轨
-（批 A–D）交付，本审计负责**逐项核实 + 裁定 + 登记残留**。
+Audit date: 2026-10-04. Scope: the passkey/WebAuthn capabilities of the browser-extension
+track (TODO batch E: "Passkey gap verification + end-to-end tests"), checked against the
+P1–P4 phases in [PASSKEYS_DESIGN.md](PASSKEYS_DESIGN.md) and the state of bridge protocol
+v2/v3. Division of labour: the E1/E3 code and tests were delivered by the extension track
+(batches A–D); this audit is responsible for **verifying each item + ruling + logging
+residuals**.
 
-## 结论速览
+## Verdict at a Glance
 
-| 任务                                  | 判定                | 证据  |
-| ------------------------------------- | ------------------- | ----- |
-| E1 扩展侧 passkey 创建/断言双闸门回归 | ✅ 已覆盖           | 见 §1 |
-| E2 OS passkey provider（v3）真机验收  | ⏸ 顺延（真机前提） | 见 §2 |
-| E3 跨源 iframe passkey hook 行为      | ✅ 设计裁定：不注入 | 见 §3 |
+| Item                                      | Verdict                  | Evidence |
+| ----------------------------------------- | ------------------------ | -------- |
+| E1 Extension-side passkey create/assert dual-gate regression | ✅ Covered      | See §1 |
+| E2 OS passkey provider (v3) on-device acceptance               | ⏸ Deferred (on-device prerequisite) | See §2 |
+| E3 Cross-origin iframe passkey hook behavior                   | ✅ Design ruling: no injection | See §3 |
 
-净结论：v2/v3 协议、core 校验、双闸门、审计元数据无不预期缺口；残留都是
-真机/平台前提（E2、P4.2/P4.3）或显式非目标（§4）。
+Net verdict: the v2/v3 protocol, core validation, dual gates, and audit metadata have no
+unexpected gaps; the residuals are all on-device/platform prerequisites (E2, P4.2/P4.3) or
+explicit non-goals (§4).
 
-## 1. E1：手势闸门 + 桌面审批双闸门回归 — 已覆盖
+## 1. E1: Gesture Gate + Desktop Approval Dual-Gate Regression — Covered
 
-- 扩展消息层：`passkey_list` / `passkey_create` / `passkey_assert` 均为
-  authed 消息（配对 + session HMAC）；`passkeyCreate`/`passkeyAssert` 原样
-  转发页面报告的 `user_gesture`（`nativeBridge.ts`）。转发逻辑的扩展测试
-  （`nativeBridge.test.ts`）只覆盖 `gesture=true` 一例；`true/false` 双向
-  闸门用例在 core 桥测试（cli `bridge.rs` 协议用例，含
-  `user_gesture_required` 拒绝路径）与断言选择条目用例。
-- 内容层：确认 UI 在 `persona_passkey_create/list/assert` 消息后触发
-  （`content.ts`），手势来自真实点击。
-- core 侧：桥协议用例（cli bridge 测试）+ 桌面审批白名单用例
-  （`desktop/src-tauri/src/passkey_bridge.rs` 的 op 与解析测试，含
-  `parse_query` 拒绝非法 op）。`passkey_create`/`passkey_assert` 均经
-  `desktop_approval_gate` 与 active identity 检查。
-- 审计：`passkey_asserted` 携带 `via=extension|os_provider` 元数据
-  （P4.4，协议测试已锁）。
+- Extension message layer: `passkey_list` / `passkey_create` / `passkey_assert` are all
+  authed messages (pairing + session HMAC); `passkeyCreate`/`passkeyAssert` forward the
+  page-reported `user_gesture` verbatim (`nativeBridge.ts`). The extension test for the
+  forwarding logic (`nativeBridge.test.ts`) covers only the `gesture=true` case; the
+  two-way `true/false` gate cases live in the core bridge tests (cli `bridge.rs` protocol
+  cases, including the `user_gesture_required` refusal path) and the assertion-selection
+  item tests.
+- Content layer: the confirmation UI is triggered after the
+  `persona_passkey_create/list/assert` messages (`content.ts`), and the gesture comes from
+  a real click.
+- Core side: bridge protocol cases (cli bridge tests) plus desktop approval whitelist cases
+  (the op and parsing tests in `desktop/src-tauri/src/passkey_bridge.rs`, including
+  `parse_query` rejecting illegal ops). Both `passkey_create` and `passkey_assert` pass
+  through `desktop_approval_gate` and the active-identity check.
+- Audit: `passkey_asserted` carries `via=extension|os_provider` metadata (P4.4, locked by
+  the protocol tests).
 
-复核方式：`browser/chromium-extension` 内 `npx jest`（11 套件 129 例全绿）
+Verification: `npx jest` inside `browser/chromium-extension` (11 suites, 129 cases, all green)
 
-- `npx tsc --noEmit`；扩展测试含 manifest 契约测试（webauthnHook 仅顶层、
-  content.js 全 frame、ISOLATED world）。
+- `npx tsc --noEmit`; the extension tests include a manifest contract test (webauthnHook
+  top-frame only, content.js all frames, ISOLATED world).
 
-## 2. E2：OS passkey provider 真机验收 — 顺延（登记）
+## 2. E2: OS Passkey Provider On-Device Acceptance — Deferred (Logged)
 
-与 `FEATURE_GAP_ANALYSIS.md` #23/#24 同一类前提缺失：OS provider 需要
-macOS（Signing & WebAuthn entitlement 签名）与 Windows（Hello 插件）实机
+Same class of missing prerequisite as `FEATURE_GAP_ANALYSIS.md` #23/#24: the OS provider
+needs real hardware — macOS (Signing & WebAuthn entitlement signing) and Windows
+(Hello plugin)
 
-- 签名环境；CI 的编译/协议面已覆盖 macOS/Windows（`ci.yml` 含 windows job，
-  `desktop-build.yml` 跑 macos/windows 矩阵），但 runner 是无 SE/Hello 硬件
-  的 VM，只能跑协议与 core 回归（P4.1/P4.4 已在此闭环），真机行为仍需
-  实机验收。顺延登记，重启条件：拿到 macOS/Windows 实机 + Developer ID
-  签名环境（对照 PASSKEYS_DESIGN §13.1 的 P4.2/P4.3 验收）。
+- signing environment; the CI build/protocol surface already covers macOS/Windows
+  (`ci.yml` includes a windows job, `desktop-build.yml` runs a macos/windows matrix), but
+  the runners are VMs without Secure Enclave / Hello hardware, so they can only run protocol
+  and core regression (P4.1/P4.4 are already closed there). On-device behavior still needs
+  real-hardware acceptance. Deferred and logged; reactivation conditions: a macOS/Windows
+  machine plus a Developer ID signing environment (see PASSKEYS_DESIGN §13.1 for the
+  P4.2/P4.3 acceptance).
 
-## 3. E3：跨源 iframe passkey — 设计裁定：不注入
+## 3. E3: Cross-Origin iframe Passkey — Design Ruling: No Injection
 
-`all_frames: true` 只作用于 ISOLATED world 的 `content.js`；MAIN world 的
-`webauthnHook.ts` **保持 top frame only**。裁定依据：
+`all_frames: true` applies only to `content.js` in the ISOLATED world; `webauthnHook.ts`
+in the MAIN world **stays top-frame only**. Basis for the ruling:
 
-1. 给每个第三方 iframe 都包一层 `navigator.credentials` 侵入面太大，
-   且跨源 iframe 的 passkey 请求本来就应该走浏览器原生流程（用户已有
-   OS/浏览器 passkey 时的最优路径）；
-2. 同源 iframe（oauth 弹层内嵌登录等）由 content.js 的逐 frame 自填
-   机制覆盖（批 B），不走 WebAuthn hook；
-3. v3 provider 路径（P4.1）不经过 content-script hook，与 iframe 无关。
+1. Wrapping every third-party iframe with a `navigator.credentials` layer is too much
+   surface area, and cross-origin iframe passkey requests should go through the browser's
+   native flow anyway (the best path when the user already has an OS/browser passkey);
+2. Same-origin iframes (embedded login in an oauth popup, etc.) are covered by content.js's
+   per-frame autofill mechanism (batch B) and do not use the WebAuthn hook;
+3. The v3 provider path (P4.1) does not go through the content-script hook and is unrelated
+   to iframes.
 
-该裁定由 manifest 契约测试**锁定**（防回归：`manifest.test.ts` 断言
-webauthnHook 不入 iframe）。iframe 段落在 README 有对应设计说明。
+The ruling is **locked** by the manifest contract test (regression guard: `manifest.test.ts`
+asserts webauthnHook is not injected into iframes). The iframe behavior is documented in the
+README.
 
-## 4. 残留缺口（均登记，不属本批）
+## 4. Remaining Gaps (All Logged, Out of Scope for This Batch)
 
-| 项                                                    | 状态                                                                                    | 归属                     |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------ |
-| P4.2 macOS provider / P4.3 Windows Hello 插件         | 真机前提                                                                                | 顺延（同 E2）            |
-| 开放问题 1：多身份命中同一 rp_id 的选择 UI 过滤       | 倾向 active identity 过滤 + 「显示其他身份」展开                                        | PASSKEYS_DESIGN §14 待决 |
-| 开放问题 2：私钥备份格式（自定义 JSON vs PKCS#12 类） | 标准（CXF）定稿前维持 v1 自定义 + schema 文档                                           | 同上                     |
-| 开放问题 3：`confirm_on_passkey_assert` 独立策略键    | 该策略键未落库；当前实际走独立桌面审批闸门 `PERSONA_BRIDGE_DESKTOP_APPROVAL`，P3 后评估 | 同上                     |
-| P4.5 CXF 字段预留                                     | 计划中：`foreign_key_ref` 字段未落库，标准定稿前不实现                                  | 跟踪项                   |
-| 扩展 passkey 真站互操作（webauthn.io/GitHub）         | 无浏览器 E2E 基建，同批 B 实机勾稽待补                                                  | 与 E2 一并重启           |
+| Item                                                             | Status                                                                                    | Owner                      |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
+| P4.2 macOS provider / P4.3 Windows Hello plugin                 | On-device prerequisite                                                                     | Deferred (same as E2)      |
+| Open question 1: selection-UI filtering when multiple identities match the same rp_id | Leaning toward active-identity filtering + a "show other identities" expansion      | PASSKEYS_DESIGN §14, pending |
+| Open question 2: private-key backup format (custom JSON vs PKCS#12-class) | Stay on v1 custom + schema docs until the standard (CXF) is finalized            | Same as above              |
+| Open question 3: a dedicated policy key `confirm_on_passkey_assert` | The policy key is not persisted; today it effectively goes through the separate desktop approval gate `PERSONA_BRIDGE_DESKTOP_APPROVAL`, to be revisited after P3 | Same as above |
+| P4.5 CXF field reservation                                       | Planned: `foreign_key_ref` is not persisted and will not be implemented before the standard is finalized | Tracking item |
+| Extension passkey interoperability with real sites (webauthn.io/GitHub) | No browser E2E harness yet; the on-device cross-check with batch B is still owed | Reactivate together with E2 |
 
-## 5. 建议的后续动作（不阻塞收口）
+## 5. Suggested Follow-Up Actions (Not Blocking Closure)
 
-1. 选一个真站回归工具（Playwright 冒烟）时，把 webauthn.io 注册/断言
-   定为扩展轨首位用例（同时覆盖批 B 的 GitHub 多步登录勾稽）；
-2. 开放问题 1 随桌面 passkey 管理页迭代裁决（P3 已在）；
-3. E2 重启前不新增 OS provider 代码承诺。
+1. When a real-site regression tool is picked (a Playwright smoke test), make webauthn.io
+   registration/assertion the first extension-track case (covering the GitHub multi-step
+   login cross-check owed by batch B at the same time);
+2. Open question 1 gets resolved as part of the desktop passkey management page iteration
+   (P3 already exists);
+3. No new OS provider code commitments before E2 is reactivated.

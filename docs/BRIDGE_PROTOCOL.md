@@ -2,36 +2,36 @@
 
 > [English](BRIDGE_PROTOCOL.md) | [中文](BRIDGE_PROTOCOL.zh.md)
 
-Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desktop 之间的安全通信。
+The Persona Native Messaging Bridge Protocol defines secure communication between the browser extension and the local CLI/Desktop.
 
-## 概述
+## Overview
 
-浏览器扩展通过 Chrome Native Messaging API 与本地运行的 `persona bridge` 进程通信。该协议支持：
+The browser extension communicates with the locally running `persona bridge` process through the Chrome Native Messaging API. The protocol supports:
 
-- 状态查询（锁定/解锁状态）
-- 自动填充建议获取
-- 凭证填充请求
-- TOTP 代码获取
-- Passkey（WebAuthn）创建/断言/列表（v2 新增）
-- 会话管理
+- Status queries (locked/unlocked state)
+- Autofill suggestion retrieval
+- Credential fill requests
+- TOTP code retrieval
+- Passkey (WebAuthn) create / assert / list (added in v2)
+- Session management
 
-## 传输层
+## Transport Layer
 
-### Native Messaging 帧格式
+### Native Messaging frame format
 
-遵循 Chrome Native Messaging 标准：
+Follows the Chrome Native Messaging standard:
 
 ```
 [4 bytes: little-endian length][JSON payload]
 ```
 
-- 长度字段为 32 位无符号整数（小端序）
-- 最大消息大小：10MB（硬限制，超出返回 `invalid_frame_length`）
-- 编码：UTF-8 JSON
+- The length field is a 32-bit unsigned integer (little-endian)
+- Maximum message size: 10MB (hard limit; exceeding it returns `invalid_frame_length`)
+- Encoding: UTF-8 JSON
 
-## 消息结构
+## Message Structure
 
-### 请求格式
+### Request format
 
 ```json
 {
@@ -42,14 +42,14 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段         | 类型   | 必需 | 描述                             |
+| Field         | Type   | Required | Description                             |
 | ------------ | ------ | ---- | -------------------------------- |
-| `request_id` | string | 否   | 用于关联请求/响应的唯一 ID       |
-| `type`       | string | 是   | 消息类型                         |
-| `payload`    | object | 否   | 类型相关的负载数据               |
-| `auth`       | object | 否   | 消息认证（配对后，敏感操作必需） |
+| `request_id` | string | No       | Unique ID used to correlate request/response |
+| `type`       | string | Yes      | Message type                            |
+| `payload`    | object | No       | Type-specific payload data              |
+| `auth`       | object | No       | Message authentication (required for sensitive operations once paired) |
 
-#### auth 字段（HMAC）
+#### auth field (HMAC)
 
 ```json
 {
@@ -60,14 +60,14 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段         | 类型   | 必需 | 描述                                         |
+| Field         | Type   | Required | Description                                         |
 | ------------ | ------ | ---- | -------------------------------------------- |
-| `session_id` | string | 是   | 由 `hello_response` 下发的短期会话 ID        |
-| `ts_ms`      | number | 是   | 客户端时间戳（毫秒），服务端用于限制重放窗口 |
-| `nonce`      | string | 是   | 单次请求随机值                               |
-| `signature`  | string | 是   | `HMAC-SHA256` 签名（base64url 无 padding）   |
+| `session_id` | string | Yes  | Short-lived session ID issued by `hello_response`   |
+| `ts_ms`      | number | Yes  | Client timestamp (milliseconds); bounds the server-side replay window |
+| `nonce`      | string | Yes  | Per-request random value                          |
+| `signature`  | string | Yes  | `HMAC-SHA256` signature (base64url, no padding) |
 
-### 响应格式
+### Response format
 
 ```json
 {
@@ -79,21 +79,21 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段         | 类型    | 必需 | 描述                      |
+| Field         | Type    | Required | Description                      |
 | ------------ | ------- | ---- | ------------------------- |
-| `request_id` | string  | 否   | 对应请求的 ID             |
-| `type`       | string  | 是   | 响应类型                  |
-| `ok`         | boolean | 是   | 操作是否成功              |
-| `error`      | string  | 否   | 错误描述（仅当 ok=false） |
-| `payload`    | object  | 否   | 响应数据                  |
+| `request_id` | string  | No       | ID of the request being answered       |
+| `type`       | string  | Yes      | Response type                  |
+| `ok`         | boolean | Yes      | Whether the operation succeeded |
+| `error`      | string  | No       | Error description (only when `ok=false`) |
+| `payload`    | object  | No       | Response data                  |
 
-## 消息类型
+## Message Types
 
-### 1. hello - 握手
+### 1. hello - Handshake
 
-用于初始化会话并获取服务器能力。
+Initializes the session and retrieves the server's capabilities.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -107,7 +107,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -149,18 +149,15 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-> 备注：当已经完成配对时，`pairing_required=false` 且会返回 `session_id`（短期会话，默认 24h）。
-> 服务器回自身支持的 `protocol_version`（当前 7，见 `cli/src/commands/bridge.rs` hello 负载）；声明旧版本的扩展对不认识的新消息
-> 会得到 `unknown_type`，向后兼容。
-> `connect_available` / `connect_port`：本机 desktop/CLI Connect server 的探测
-> 结果（读 `~/.persona/connect.port` 并探活 `/health`，可用 `PERSONA_CONNECT_PORT`
-> 覆盖），用于解锁联动；无运行中的 server 时为 `false` / `null`。
+> Note: when pairing is already complete, `pairing_required=false` and a `session_id` is returned (short-lived session, 24h by default).
+> The server returns its own supported `protocol_version` (currently 7; see the hello payload in `cli/src/commands/bridge.rs`). An extension that declares an older version receives `unknown_type` for message types it does not recognize, so older extensions keep working.
+> `connect_available` / `connect_port`: the probe result for the local desktop/CLI Connect server (reads `~/.persona/connect.port` and pings `/health`, overridable via `PERSONA_CONNECT_PORT`), used for unlock integration; `false` / `null` when no server is running.
 
-### 2. pairing_request - 申请配对码
+### 2. pairing_request - Request a pairing code
 
-扩展向本地桥申请一次性配对码（需用户在终端批准）。
+The extension asks the local bridge for a one-time pairing code (the user must approve it in the terminal).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -172,7 +169,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -186,11 +183,11 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-### 3. pairing_finalize - 完成配对
+### 3. pairing_finalize - Complete pairing
 
-用户执行 `approval_command` 后，扩展提交配对码完成绑定并获取配对密钥与会话信息。
+After the user runs `approval_command`, the extension submits the pairing code to finalize the binding and obtain the pairing key and session information.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -203,7 +200,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -218,11 +215,11 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-### 4. status - 状态查询
+### 4. status - Status query
 
-获取当前解锁状态和活动身份。
+Returns the current unlock state and the active identity.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -231,7 +228,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -244,13 +241,13 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-### 5. get_suggestions - 获取建议
+### 5. get_suggestions - Get suggestions
 
-根据当前页面 origin 获取匹配的凭证建议。
+Returns credential suggestions matching the current page origin.
 
-> 备注：建议默认基于当前 workspace 的 `active_identity_id` 过滤（可通过 `persona switch` 切换）。
+> Note: suggestions are filtered by the current workspace's `active_identity_id` by default (switchable with `persona switch`).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -264,16 +261,16 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段        | 必填 | 说明                                                                   |
+| Field        | Required | Description                                                                   |
 | ----------- | ---- | ---------------------------------------------------------------------- |
-| `origin`    | 是   | 页面 origin，解析出主机名做 URL 匹配与主机映射信号                     |
-| `form_type` | 否   | `"login"`（默认）或 `"card"`                                           |
-| `host`      | 否   | 显式主机信号（如页面在别的域表单里填充）；缺省用 origin 主机           |
-| `cwd`       | 否   | 终端当前目录（桌面桥场景），用于仓库发现与仓库内映射；浏览器扩展不发送 |
+| `origin`    | Yes  | Page origin; the host is parsed from it for URL matching and host-mapping signals |
+| `form_type` | No   | `"login"` (default) or `"card"`                                        |
+| `host`      | No   | Explicit host signal (e.g. when the page fills a form on a different domain); falls back to the origin's host when omitted |
+| `cwd`       | No   | Current terminal directory (desktop bridge scenario), used for repo discovery and in-repo mapping; the browser extension never sends it |
 
-`host`/`cwd` 均为可选扩展：不发送时行为与旧版完全一致（向后兼容）。
+`host`/`cwd` are both optional extensions: when omitted, behavior is identical to older versions (backwards compatible).
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -300,41 +297,42 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-| 字段               | 说明                                                                                                 |
+| Field              | Description                                                                                                 |
 | ------------------ | ---------------------------------------------------------------------------------------------------- |
-| `items[].identity` | 凭证所属分身名（2026-10 起恒携带，弹窗可据此标注条目）                                               |
-| `context`          | 上下文层给出的分身级建议；无候选 / `PERSONA_NO_CONTEXT` 时整个字段缺省（旧消费者看到的仍是 v7 形态） |
+| `items[].identity` | Name of the identity the credential belongs to (always present since 2026-10; the popup can use it to label entries) |
+| `context`          | Identity-level suggestion from the context layer; the whole field is omitted when there are no candidates or `PERSONA_NO_CONTEXT` is set (older consumers still see the v7 shape) |
 
-**上下文感知（2026-10 起，阶段 4 桥半）：**
+**Context awareness (since 2026-10, phase 4 bridge-half):**
 
-- `host`/`cwd` 信号经与 `persona suggest` **同一** core `suggest()` 打分（映射链
-  `PERSONA_CONTEXT_OVERRIDE` > 仓库内 `.persona/context.toml` > 全局
-  `~/.persona/context.toml` > 学习 > active），所有入口候选一致。
-- 建议分身的凭证并入候选并排在最前（URL 匹配强度仍是同分身内排序依据）；
-  **只建议不授权**——不切换 active 分身、不放宽任何填充授权门。
-- 任何映射加载失败静默降级为无建议（设计 §10）。
+- `host`/`cwd` signals are scored by the **same** core `suggest()` used by `persona suggest` (mapping chain
+  `PERSONA_CONTEXT_OVERRIDE` > in-repo `.persona/context.toml` > global
+  `~/.persona/context.toml` > learned > active), so every entry point yields the same candidate set.
+- Credentials of the suggested identity are merged into the candidates and placed first (URL match strength
+  still ranks within an identity); **suggest only, never authorize** — the active identity is not switched and
+  no fill authorization gate is relaxed.
+- Any mapping load failure silently degrades to no suggestion (design §10).
 
-| match_strength | 含义         |
-| -------------- | ------------ |
-| 100            | 精确域名匹配 |
-| 90             | 子域名匹配   |
-| 80             | 域名包含匹配 |
-| 60             | 顶级域名匹配 |
+| match_strength | Meaning            |
+| -------------- | ------------------ |
+| 100            | Exact domain match |
+| 90             | Subdomain match    |
+| 80             | Domain-contains match |
+| 60             | Top-level domain match |
 
-**`form_type` 参数（2026-09 起）：**
+**`form_type` parameter (since 2026-09):**
 
-- `"login"`（默认，缺省时回退）：返回 password/totp 建议并按 URL 匹配强度过滤。
-- `"card"`：返回当前 workspace 的**全部 active BankCard**，不做 URL 过滤
-  （卡没有规范归属站点，结账页因商户而异），`match_strength` 恒为 100，
-  `credential_type` 为 `"bank_card"`，`username_hint` 为 `null`；由用户在
-  弹窗里自行选择。上下文层建议分身的卡同样并入并排最前，`identity` 字段
-  标注归属。
+- `"login"` (default; falls back to it when omitted): returns password/totp suggestions filtered by URL match strength.
+- `"card"`: returns **all active BankCards** of the current workspace with no URL filtering
+  (a card has no canonical home site, and checkout pages vary by merchant); `match_strength` is always 100,
+  `credential_type` is `"bank_card"`, `username_hint` is `null`; the user picks one in the popup.
+  Cards of the context-suggested identity are likewise merged in and placed first, with the `identity`
+  field recording ownership.
 
-### 6. request_fill - 请求填充
+### 6. request_fill - Request fill
 
-请求特定凭证的实际值用于填充。
+Requests the actual values of a specific credential for filling.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -347,7 +345,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -360,9 +358,9 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**BankCard 填充（2026-09 起）：** BankCard 凭据也可 `request_fill`（需要
-`user_gesture`；卡无 URL，不做 origin 绑定校验）。响应负载的 `card` 字段
-仅在卡填充时出现，登录填充的响应形状不变：
+**BankCard fill (since 2026-09):** BankCard credentials can also use `request_fill` (requires
+`user_gesture`; a card has no URL, so there is no origin binding check). The `card` field of the
+response payload only appears for card fills; the response shape for login fills is unchanged:
 
 ```json
 {
@@ -380,26 +378,26 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-> 安全登记：**CVV 永远不出现在 `request_fill` 响应里。** fill 的去向是页面
-> DOM 输入框，同页任意脚本可读；CVV 仅支持 `copy`（剪贴板路径），由用户
-> 手动粘贴后自行清理剪贴板（桥接侧没有自动清除）。扩展侧同样不得把 CVV
-> 注入页内元素。
+> Security note: **CVV never appears in a `request_fill` response.** A fill targets page
+> DOM input fields, which any script on the page can read; CVV is only available through `copy`
+> (the clipboard path), and the user clears the clipboard manually after pasting (the bridge
+> does not clear it automatically). The extension must likewise never inject CVV into page elements.
 
-**错误码：**
+**Error codes:**
 
-- `locked` - 保险库已锁定
-- `not_found` - 凭证不存在
-- `origin_mismatch` - 请求 origin 与凭证 URL 不匹配
-- `user_confirmation_required` - 需要用户确认
-- `authentication_failed` - 认证失败
+- `locked` - The vault is locked
+- `not_found` - The credential does not exist
+- `origin_mismatch` - The request origin does not match the credential URL
+- `user_confirmation_required` - User confirmation is required
+- `authentication_failed` - Authentication failed
 
-### 7. get_totp - 获取 TOTP
+### 7. get_totp - Get TOTP
 
-获取关联凭证的当前 TOTP 代码。
+Returns the current TOTP code for the linked credential.
 
-> 注意：为了进行 Origin 绑定，TOTP 条目必须设置 URL（否则返回 `origin_binding_required`）。
+> Note: TOTP entries must have a URL set for origin binding to apply (otherwise `origin_binding_required` is returned).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -412,7 +410,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -426,11 +424,11 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-### 8. copy - 复制到剪贴板
+### 8. copy - Copy to clipboard
 
-请求将特定字段复制到剪贴板（由 CLI/Desktop 执行）。
+Asks for a specific field to be copied to the clipboard (performed by the CLI/Desktop).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -444,7 +442,7 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -456,19 +454,19 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-> 剪贴板没有自动清除：字段复制后由用户自行清理（`clear_after_seconds`
-> 恒不返回）。
+> The clipboard is never cleared automatically: after a copy the user is responsible for clearing it (`clear_after_seconds`
+> is never returned).
 
-**`field` 取值：** `username`、`password`、`totp`，以及 BankCard 的
-`card_number` / `cardholder_name` / `expiry_date` / `cvv`（2026-09 起）。
-卡字段要求凭据类型为 BankCard 且对应字段非空（空串返回 `not_found`）；
-卡无 URL，origin 绑定对卡一律放行。
+**`field` values:** `username`, `password`, `totp`, plus the BankCard fields
+`card_number` / `cardholder_name` / `expiry_date` / `cvv` (since 2026-09).
+Card fields require the credential to be a BankCard and the corresponding field to be non-empty (an empty string returns `not_found`);
+a card has no URL, so origin binding always passes for cards.
 
-### 9. passkey_list - 列出 Passkey
+### 9. passkey_list - List passkeys
 
-列出某个 RP（relying party）下的 passkey 摘要（**不含任何密钥材料**，仅非敏感字段）。
+Returns passkey summaries for a given RP (relying party) (**no key material of any kind**, non-sensitive fields only).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -481,9 +479,9 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-> `rp_id` 缺省时按 origin 的 effective domain 推导；显式给出且与 origin 不符时返回 `passkey_rp_mismatch`。
+> When `rp_id` is omitted it is derived from the origin's effective domain; if supplied explicitly and it does not match the origin, `passkey_rp_mismatch` is returned.
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -505,11 +503,11 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-### 10. passkey_create - 创建 Passkey
+### 10. passkey_create - Create passkey
 
-为当前 active identity 在指定 RP 下创建软件 passkey，返回注册产物（attestationObject）。
+Creates a software passkey for the current active identity under the given RP and returns the registration artifact (attestationObject).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -531,16 +529,16 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-约定：
+Conventions:
 
-- `request_json` 是 `PublicKeyCredentialCreationOptions` 的 JSON 形态，所有 `BufferSource` 字段（`user.id`、`challenge`、`excludeCredentials[].id`）已由扩展序列化为 base64url 字符串
-- `pubKeyCredParams` 必须包含 `{type: "public-key", alg: -7}`（ES256），否则返回 `passkey_alg_unsupported`
-- `rp.id` 缺省时取 origin 的 effective domain；与 origin 不符时返回 `passkey_rp_mismatch`
-- `client_data_json_b64` 是扩展侧构造的原始 clientDataJSON 字节；core 只做 SHA-256 哈希入签，不重组
-- 桥接会话刚通过主密码认证，因此落库的 `uv_initialized=true` 属实
-- 未设置 active identity 时返回 `no_active_identity`
+- `request_json` is the JSON form of `PublicKeyCredentialCreationOptions`; every `BufferSource` field (`user.id`, `challenge`, `excludeCredentials[].id`) has already been serialized by the extension into a base64url string
+- `pubKeyCredParams` must contain `{type: "public-key", alg: -7}` (ES256), otherwise `passkey_alg_unsupported` is returned
+- When `rp.id` is omitted, the origin's effective domain is used; if it does not match the origin, `passkey_rp_mismatch` is returned
+- `client_data_json_b64` is the raw clientDataJSON bytes built on the extension side; core only hashes them with SHA-256 into the signature and never reassembles them
+- The bridge session has just authenticated with the master password, so persisting `uv_initialized=true` is accurate
+- Returns `no_active_identity` when no active identity is set
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -556,11 +554,11 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-### 11. passkey_assert - Passkey 断言
+### 11. passkey_assert - Passkey assertion
 
-用指定的 passkey 对 ceremony 签名（不允许静默选钥：`item_id` 必填）。
+Signs the ceremony with the specified passkey (silent key selection is not allowed: `item_id` is required).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -575,14 +573,14 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-约定：
+Conventions:
 
-- `item_id` 缺省直接拒绝——扩展侧的选择 UI 必须让用户显式点选，即使只有单个候选
-- `user_verification` 缺省 `true`；扩展将 WebAuthn 的 `discouraged` 映射为 `false`
-- passkey 不存在返回 `passkey_item_not_found`；属于其他 identity 返回 `wrong_identity`
-- origin 与 rp_id 不符返回 `passkey_rp_mismatch`
+- An omitted `item_id` is rejected outright — the extension's picker UI must require an explicit user selection even when there is only one candidate
+- `user_verification` defaults to `true`; the extension maps WebAuthn's `discouraged` to `false`
+- A missing passkey returns `passkey_item_not_found`; one belonging to another identity returns `wrong_identity`
+- An origin that does not match rp_id returns `passkey_rp_mismatch`
 
-**响应：**
+**Response:**
 
 ```json
 {
@@ -598,16 +596,16 @@ Persona Native Messaging Bridge Protocol 用于浏览器扩展与本地 CLI/Desk
 }
 ```
 
-> 签名对象为 `authenticatorData ‖ SHA-256(clientDataJSON)`，签名算法 ES256，输出 DER 编码。
+> The signed data is `authenticatorData ‖ SHA-256(clientDataJSON)`; the signature algorithm is ES256 with DER-encoded output.
 
-### 12. passkey_credential_provider_list - Provider 侧 Passkey 枚举
+### 12. passkey_credential_provider_list - Provider-side passkey enumeration
 
-OS passkey provider（Phase 4：macOS AuthenticationServices / Windows Hello 插件）
-的数据源消息：枚举本 origin 可用的 passkey 供系统选择 UI 展示。语义与校验链
-与 `passkey_list`（§9）完全一致（origin↔rp_id 校验 + user gesture + HMAC），
-仅消息名与审计口径不同。
+Data-source message for OS passkey providers (Phase 4: macOS AuthenticationServices / Windows Hello plugin):
+enumerates the passkeys available for this origin so the system picker UI can display them. The semantics and
+validation chain are identical to `passkey_list` (§9) (origin↔rp_id check + user gesture + HMAC);
+only the message name and the audit semantics differ.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -618,29 +616,30 @@ OS passkey provider（Phase 4：macOS AuthenticationServices / Windows Hello 插
 }
 ```
 
-**响应：** `passkey_credential_provider_list_response`，payload 形状同 §9
-（`{items, rp_id}`，非敏感摘要，不含 key material）。
+**Response:** `passkey_credential_provider_list_response`; the payload has the same shape as §9
+(`{items, rp_id}`, non-sensitive summaries, no key material).
 
-### 13. passkey_credential_provider_assert - Provider 代断言
+### 13. passkey_credential_provider_assert - Provider-mediated assertion
 
-OS provider 已在系统 UI 完成用户点选后代为执行断言。信任链与
-`passkey_assert`（§11）完全一致：user gesture + 桌面审批闸门（op 名透传为
-`passkey_credential_provider_assert`，弹窗 UI 可辨识来源）+ core 侧
-origin↔rp_id 校验 + 敏感操作门禁。差异仅审计：`passkey_asserted` 事件携带
-`via=os_provider` 元数据（扩展路径为 `via=extension`），provider 断言可独立追溯。
+The OS provider performs the assertion on the user's behalf after the selection has been completed in the system UI.
+The trust chain is identical to `passkey_assert` (§11): user gesture + the desktop approval gate (the op name is passed through as
+`passkey_credential_provider_assert`, so the popup UI can identify the source) + the core-side
+origin↔rp_id check + the sensitive-operation gate. The only difference is auditing: the `passkey_asserted` event carries
+`via=os_provider` metadata (the extension path is `via=extension`), so provider assertions are independently traceable.
 
-**请求 / 响应：** 形状同 §11；响应类型为
-`passkey_credential_provider_assert_response`。
+**Request / Response:** same shape as §11; the response type is
+`passkey_credential_provider_assert_response`.
 
-> v2 扩展对这两个新消息会得到 `unknown_type`（向后兼容）。
+> A v2 extension receives `unknown_type` for these two new messages (backwards compatible).
 
-### 14. find_for_save - 保存前查重（协议 v4）
+### 14. find_for_save - Pre-save duplicate check (protocol v4)
 
-插件的保存/更新条在表单提交后调用：按 host + username 查既有同站同名
-password 条目，决定条默认给「更新」还是「另存」。纯元数据（无任何密文/
-密码材料），与 `get_suggestions` 同级——只需会话认证，不要求 user gesture。
+Called by the extension's save/update bar after form submission: looks up existing
+same-site, same-username password entries by host + username, so the bar can default to
+"update" or "save as new". Pure metadata (no ciphertext or password
+material), on the same level as `get_suggestions` — session authentication only, no user gesture required.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -652,7 +651,7 @@ password 条目，决定条默认给「更新」还是「另存」。纯元数�
 }
 ```
 
-**响应：** `find_for_save_response`
+**Response:** `find_for_save_response`
 
 ```json
 {
@@ -662,25 +661,25 @@ password 条目，决定条默认给「更新」还是「另存」。纯元数�
 }
 ```
 
-匹配规则：password 类型 + `validate_origin_binding` + username trim 后
-大小写不敏感全等。`validate_origin_binding` 对无 URL 条目直接放行
-（不校验站点归属，仅靠 username 全等），因此**无 URL 条目同样参与匹配**
-（已知行为：条目无法归属站点时只以 username 为准）。
+Matching rule: password type + `validate_origin_binding` + username equality after trimming,
+case-insensitive. `validate_origin_binding` lets URL-less entries through outright
+(no site attribution is checked, only username equality decides), so **URL-less entries take part in matching as well**
+(known behavior: when an entry cannot be attributed to a site, username alone decides).
 
-### 15. save_credential - 保存 / 更新登录（协议 v4）
+### 15. save_credential - Save / update login (protocol v4)
 
-保存条上一次显式点击背后的写路径。`item_id` 缺省 = 新建（绑定请求 origin、
-`SecurityLevel::High`、name 取 `name_hint` 否则 host、username 里的 email
-同步进 payload 的 email 字段）；`item_id` 在 = 更新该条目的密码——**只替换
-password 字段**，payload 其余（email、安全问题）原样保留；更新必须带明确的
-item_id，没有「替用户挑一个覆盖」的路径。
+The write path behind a single explicit click on the save bar. An omitted `item_id` means create (bound to the request origin,
+`SecurityLevel::High`, name from `name_hint` falling back to the host, and the email inside the username
+is copied into the payload's email field); a present `item_id` means update that entry's password — **only the
+password field is replaced**, the rest of the payload (email, security questions) is kept as-is; an update must carry an explicit
+item_id — there is no "pick one to overwrite on the user's behalf" path.
 
-**闸门**（与 passkey 写入同构）：user gesture 必需（保存条点击）→ 桌面审批
-闸门（op=`credential_save`，auto/require/off 语义同上节）→ 活动身份校验
-（新建必需；更新要求条目属于活动身份）→ origin 绑定校验（更新时条目有
-URL 即强制 TLD+1 匹配）→ 审计 `bridge_save_credential`。
+**Gates** (isomorphic to the passkey write path): user gesture required (the save-bar click) → the desktop approval
+gate (op=`credential_save`, auto/require/off semantics as in the previous section) → active identity check
+(mandatory for create; for update the entry must belong to the active identity) → origin binding check (on update, a TLD+1 match is enforced whenever the entry has
+a URL) → audit `bridge_save_credential`.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -696,30 +695,30 @@ URL 即强制 TLD+1 匹配）→ 审计 `bridge_save_credential`。
 }
 ```
 
-**响应：** `save_credential_response`
+**Response:** `save_credential_response`
 
 ```json
 { "item_id": "…", "action": "created", "name": "Example Login" }
 ```
 
-错误码：`user_gesture_required`、`invalid_payload`（空密码）、
-`save_desktop_denied`、`no_active_identity`、`not_found`、
-`unsupported_credential_type`、`wrong_identity`、`origin_mismatch`、
-`locked` / `authentication_failed`。
+Error codes: `user_gesture_required`, `invalid_payload` (empty password),
+`save_desktop_denied`, `no_active_identity`, `not_found`,
+`unsupported_credential_type`, `wrong_identity`, `origin_mismatch`,
+`locked` / `authentication_failed`.
 
-扩展侧行为（参考实现见 `browser/chromium-extension/src/content.ts`）：表单提交
-（真 `submit` 事件或 SPA 的提交按钮点击）后捕获字段 → 保存条给「保存 / 更新 /
-此站永不 / 关闭」四选一，唯一一次显式点击才是 `user_gesture`。多数登录会跳转，
-捕获到的提案暂存进 `chrome.storage.session`（内存区，不落盘），落地页在 2 分钟
-内按**完全相同**的 origin 取回并重放保存条；关闭即丢弃暂存，「此站永不」按
-origin 记进 storage。blocked / suspicious 域与填充同一道闸门——把密码写进钓鱼
-站和填进去一样有害。
+Extension-side behavior (reference implementation in `browser/chromium-extension/src/content.ts`): after form submission
+(a real `submit` event or an SPA submit-button click) the fields are captured → the save bar offers four choices, "Save / Update /
+Never for this site / Dismiss"; only that single explicit click counts as `user_gesture`. Most logins navigate away,
+so the captured proposal is parked in `chrome.storage.session` (in-memory, never written to disk); the landing page retrieves it within 2 minutes
+by **exactly identical** origin and replays the save bar; dismissing drops the parked proposal, and "Never for this site" is recorded per
+origin in storage. Blocked / suspicious domains pass the same gate as fills — writing a password into a phishing
+site is just as harmful as filling one in.
 
-### 16. generate_password - 密码生成（协议 v5）
+### 16. generate_password - Password generation (protocol v5)
 
-纯计算消息：不读写保险库，只需会话认证，不要求 user gesture。
+A pure computation message: it neither reads nor writes the vault, needs only session authentication, and requires no user gesture.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -736,29 +735,29 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 }
 ```
 
-- 全部字段可缺省：`length` 默认 16，四个字符集默认全开，`pronounceable` 默认 false
-- `words`（Diceware 词数，3–10）给出时覆盖 `length` 与字符集设置
-- 校验失败（`length` 越界、`words` 越界、非 words 模式下未启用任何字符集）返回 `invalid_payload`
+- Every field may be omitted: `length` defaults to 16, all four character sets default to on, `pronounceable` defaults to false
+- `words` (Diceware word count, 3–10), when given, overrides `length` and the character set settings
+- Validation failures (`length` out of range, `words` out of range, or no character set enabled outside words mode) return `invalid_payload`
 
-**响应：** `generate_password_response`
+**Response:** `generate_password_response`
 
 ```json
 { "password": "…" }
 ```
 
-生成失败返回 `generation_failed`。
+A generation failure returns `generation_failed`.
 
-### 17. sync_connect - 云端同步引导（协议 v6）
+### 17. sync_connect - Cloud sync bootstrap (protocol v6)
 
-把本地同步配置交给扩展：桥发放 `(server_url, token, device_id, group_key)` 四件套，
-扩展随后**HTTP 直连**同步服务器的 `/api/v1/sync/*` 拉取/解密云端保险库——数据面
-出 native messaging 桥，桥只做认证与密钥交接（M5 批1）。
+Hands the local sync configuration to the extension: the bridge issues the `(server_url, token, device_id, group_key)` quartet,
+and the extension then connects **directly over HTTP** to the sync server's `/api/v1/sync/*` to fetch and decrypt the cloud vault — the data plane
+bypasses the native messaging bridge, which only handles authentication and key handover (M5 batch 1).
 
-零知识不变式不受影响：token 与 group key 只进扩展的 `chrome.storage.session`
-（内存区，浏览器关闭即失）；桥读的是 OS keyring（`persona-sync` / `persona-device`，
-与桌面同条目）与 workspace settings 里的服务器 URL，全程不解密任何条目。
+The zero-knowledge invariant is unaffected: the token and group key only enter the extension's `chrome.storage.session`
+(in-memory; lost when the browser closes); the bridge reads the OS keyring (`persona-sync` / `persona-device`,
+the same entries the desktop uses) and the server URL from the workspace settings, never decrypting any entry.
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -769,11 +768,11 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 }
 ```
 
-- 三重门禁：配对会话 HMAC + `user_gesture: true`（缺省 → `user_gesture_required`，
-  本消息交出保险库解密钥，必须显式点击触发）+ 会话必需（未配对 → `pairing_required`）
-- 门禁顺序：先会话认证，后 payload 解析，再 gesture 检查
+- Triple gate: paired-session HMAC + `user_gesture: true` (omitted → `user_gesture_required`;
+  this message hands out the vault decryption key, so it must be triggered by an explicit click) + a session is mandatory (unpaired → `pairing_required`)
+- Gate order: session authentication first, then payload parsing, then the gesture check
 
-**响应：** `sync_connect_response`
+**Response:** `sync_connect_response`
 
 ```json
 {
@@ -785,30 +784,29 @@ origin 记进 storage。blocked / suspicious 域与填充同一道闸门——�
 }
 ```
 
-- `group_key_hex`：同步组的 group key（64 位十六进制，与桌面 sync_group_store 同编码）
-- token 来自 OS keyring；device 身份来自 `persona-device` 条目
+- `group_key_hex`: the sync group's group key (64 hex characters, same encoding as the desktop sync_group_store)
+- The token comes from the OS keyring; the device identity comes from the `persona-device` entry
 
-**错误码（v6 新增）：**
+**Error codes (new in v6):**
 
-| 错误码                    | 触发条件                                                          |
+| Error code                 | Trigger                                                          |
 | ------------------------- | ----------------------------------------------------------------- |
-| `sync_not_configured`     | keyring 无 sync token / 无 workspace / 服务器 URL 为空 / 配置非法 |
-| `sync_not_joined`         | keyring 无设备身份（该保险库尚未加入同步）                        |
-| `sync_not_authorized`     | 信封表里没有本机设备（待管理员授权，fail-closed）                 |
-| `sync_group_key_failed`   | 本机 group key 信封拆封失败                                       |
-| `sync_identity_corrupted` | 存储的设备身份不可读                                              |
-| `sync_server_unreachable` | `group_keys()` 远端调用失败                                       |
+| `sync_not_configured`     | No sync token in the keyring / no workspace / empty server URL / invalid configuration |
+| `sync_not_joined`         | No device identity in the keyring (this vault has not joined sync) |
+| `sync_not_authorized`     | No envelope for this device in the envelope table (awaiting admin authorization, fail-closed) |
+| `sync_group_key_failed`   | Unwrapping this device's group key envelope failed                |
+| `sync_identity_corrupted` | The stored device identity is unreadable                          |
+| `sync_server_unreachable` | The remote `group_keys()` call failed                             |
 
-### 18. account_login / account_status / account_logout - 账号域三件套（协议 v7）
+### 18. account_login / account_status / account_logout - Account-domain trio (protocol v7)
 
-扩展经本地桥登录/查询/登出**账号域**会话（M5 批2）：SRP 数学（Argon2id 预
-hash、M1 推导、M2 核验）全在宿主 Rust 侧（core `AccountsApi::srp_login` 编排），
-口令与 premaster 不出编排模块。令牌直写 OS keyring（`persona-account` 条目，
-键 = vault db_path，与桌面 token_store 同名同键）——**令牌本体不过桥协议**，
-扩展只见有效期与会话指纹。服务器 URL 复用 vault settings 的 sync 配置
-（与 §17 同一读取口径）。
+The extension logs in / queries / logs out of the **account-domain** session through the local bridge (M5 batch 2): all SRP math (Argon2id pre-hash, M1 derivation, M2 verification)
+runs on the host Rust side (orchestrated by core `AccountsApi::srp_login`), and the password and premaster secret never leave the orchestration module.
+The token is written straight to the OS keyring (`persona-account` entry, key = vault db_path, same name and key as the desktop token_store) — **the token itself never crosses the bridge protocol**;
+the extension only sees the expiry and the session fingerprint. The server URL reuses the sync configuration from the vault settings
+(the same read path as §17).
 
-**account_login 请求：**
+**account_login request:**
 
 ```json
 {
@@ -822,18 +820,18 @@ hash、M1 推导、M2 核验）全在宿主 Rust 侧（core `AccountsApi::srp_lo
 }
 ```
 
-- 门禁：配对会话 HMAC + `user_gesture`（口令换令牌，敏感操作）
-- 响应 `account_login_response`：`{ "expires_in_secs": 900, "session_key_fingerprint": "…hex…" }`
-- 失败分类：`sync_not_configured`（服务器 URL 未配置）、`account_not_configured`
-  （URL 非法）、`account_login_failed`（SRP 编排失败，含服务器拒绝）、
-  `account_keyring_unavailable`（令牌落 keyring 失败——登录成功也不交付，
-  fail-closed）
+- Gates: paired-session HMAC + `user_gesture` (a password is exchanged for a token — a sensitive operation)
+- Response `account_login_response`: `{ "expires_in_secs": 900, "session_key_fingerprint": "…hex…" }`
+- Failure classification: `sync_not_configured` (server URL not configured), `account_not_configured`
+  (invalid URL), `account_login_failed` (SRP orchestration failure, including server rejection),
+  `account_keyring_unavailable` (writing the token to the keyring failed — a successful login is still not delivered,
+  fail-closed)
 
-**account_status 请求：** `{}`（需配对会话，无 gesture 要求——只报在场与否）
+**account_status request:** `{}` (requires a paired session, no gesture requirement — it only reports presence)
 
-- 响应 `account_status_response`：`{ "has_session": true, "server_configured": true }`
+- Response `account_status_response`: `{ "has_session": true, "server_configured": true }`
 
-**account_logout 请求：**
+**account_logout request:**
 
 ```json
 {
@@ -842,24 +840,24 @@ hash、M1 推导、M2 核验）全在宿主 Rust 侧（core `AccountsApi::srp_lo
 }
 ```
 
-- 门禁：配对会话 HMAC + `user_gesture`
-- 语义与桌面 `account_sign_out` 同口径：无令牌 = 幂等成功
-  （`revoked_on_server: false`）；有令牌则 best-effort 吊销服务器会话
-  （`DELETE /accounts/{id}/sessions/{token}`），**本地令牌照删不因服务器
-  失联卡死**，`revoked_on_server` 如实反映吊销结果
-- 响应 `account_logout_response`：`{ "revoked_on_server": false }`
+- Gates: paired-session HMAC + `user_gesture`
+- Same semantics as the desktop `account_sign_out`: no token = idempotent success
+  (`revoked_on_server: false`); with a token, best-effort revocation of the server session
+  (`DELETE /accounts/{id}/sessions/{token}`) — **the local token is deleted regardless of whether the
+  server is reachable**, and `revoked_on_server` reports the revocation outcome faithfully
+- Response `account_logout_response`: `{ "revoked_on_server": false }`
 
-### 19. sync_push_now - 立即同步（协议 v7）
+### 19. sync_push_now - Sync now (protocol v7)
 
-云端写路径（M5 批3）：宿主开 `SyncSession` 跑 backfill → pull →
-materialize → push 周期，把主库（含经 `save_credential` 落库的扩展侧写入）
-推上云。与桌面 `sync_now` 同一 core 编排；差异：
+The cloud write path (M5 batch 3): the host opens a `SyncSession` and runs the backfill → pull →
+materialize → push cycle, pushing the main database (including extension-side writes persisted via `save_credential`)
+to the cloud. Same core orchestration as the desktop `sync_now`; the differences:
 
-- master 密钥来自桥锁态（`PERSONA_MASTER_PASSWORD`），锁定 → `locked:`
-- **不挂捕获缝**——桥一请求一进程，缝随进程消亡；请求之外经桥落库的
-  写入由下一轮 `backfill_existing` 幂等补齐
+- The master key comes from the bridge's lock state (`PERSONA_MASTER_PASSWORD`); locked → `locked:`
+- **No capture seam is attached** — the bridge is one process per request, and the seam dies with the process; writes persisted through the bridge outside of a request
+  are picked up idempotently by the next `backfill_existing` round
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -868,8 +866,8 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
 }
 ```
 
-- 门禁：配对会话 HMAC + `user_gesture`（写路径推云）
-- 响应 `sync_push_now_response`（与 core `SyncNowReport` 同字段的计数汇总）：
+- Gates: paired-session HMAC + `user_gesture` (a write path pushing to the cloud)
+- Response `sync_push_now_response` (a count summary with the same fields as core `SyncNowReport`):
 
 ```json
 {
@@ -882,19 +880,19 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
 }
 ```
 
-- 失败分类：`sync_not_configured` / `sync_not_joined` /
-  `sync_identity_corrupted`（配置段，先于解锁）、`sync_session_failed`
-  （信封拆封/装配失败）、`sync_cycle_failed`（backfill 或周期失败）、
-  `locked:`（桥锁态无主密码）
+- Failure classification: `sync_not_configured` / `sync_not_joined` /
+  `sync_identity_corrupted` (configuration stage, before unlock), `sync_session_failed`
+  (envelope unwrap/assembly failure), `sync_cycle_failed` (backfill or cycle failure),
+  `locked:` (the bridge's lock state has no master password)
 
-### 20. sync_resolve_conflict - 冲突裁决（协议 v7）
+### 20. sync_resolve_conflict - Conflict resolution (protocol v7)
 
-真冲突（同条目、lamport 相等、device_id 不同的并发双版本）的裁决入口
-（M5 批4）：采纳 `adopt_op_id` 指向的并发副本，其内容覆盖保险库中的当前
-胜者，其余副本淘汰出视图。与桌面 `SyncConflictsModal` 走同一 core 编排
-（`SyncSession::resolve_conflict`，先主库后 oplog）。
+The resolution entry point for true conflicts (same entry, equal lamport, concurrent double versions with different device_id)
+(M5 batch 4): adopts the concurrent copy pointed to by `adopt_op_id`, whose content overwrites the current
+winner in the vault, and the remaining copies are dropped from the view. Same core orchestration as the desktop `SyncConflictsModal`
+(`SyncSession::resolve_conflict`, main database first, then the oplog).
 
-**请求：**
+**Request:**
 
 ```json
 {
@@ -907,44 +905,44 @@ materialize → push 周期，把主库（含经 `save_credential` 落库的扩�
 }
 ```
 
-- 门禁：配对会话 HMAC + `user_gesture`（裁决覆写败选副本，不可静默）
-- 校验顺序：`item_id` / `adopt_op_id` 必须是合法 UUID（`invalid_payload:`），
-  先于任何配置/解锁检查
-- 响应 `sync_resolve_conflict_response`：`{ "resolved": true }`
-- 失败分类：`sync_not_configured` / `sync_not_joined` /
-  `sync_identity_corrupted`（配置段，先于解锁）、`sync_session_failed`
-  （装配失败）、`sync_resolve_failed`（采纳的副本不存在——多半已被
-  别处裁决，或非 Credential kind）、`locked:`
+- Gates: paired-session HMAC + `user_gesture` (resolution overwrites the losing copy — it must not happen silently)
+- Validation order: `item_id` / `adopt_op_id` must be valid UUIDs (`invalid_payload:`),
+  before any configuration/unlock check
+- Response `sync_resolve_conflict_response`: `{ "resolved": true }`
+- Failure classification: `sync_not_configured` / `sync_not_joined` /
+  `sync_identity_corrupted` (configuration stage, before unlock), `sync_session_failed`
+  (assembly failure), `sync_resolve_failed` (the adopted copy does not exist — most likely already
+  resolved elsewhere, or not a Credential kind), `locked:`
 
-## 安全机制
+## Security Mechanisms
 
-### Origin 绑定
+### Origin binding
 
-所有涉及敏感数据的请求必须包含 `origin` 字段：
+Every request that touches sensitive data must include the `origin` field:
 
-1. 扩展从 `window.location.origin` 获取当前页面 origin
-2. CLI 验证 origin 与凭证 URL（或 passkey 的 rp_id）是否匹配
-3. 不匹配时返回 `origin_mismatch`（凭证类）或 `passkey_rp_mismatch`（passkey 类）错误
+1. The extension obtains the current page origin from `window.location.origin`
+2. The CLI verifies that the origin matches the credential URL (or the passkey's rp_id)
+3. On a mismatch it returns `origin_mismatch` (credential classes) or `passkey_rp_mismatch` (passkey classes)
 
-### User Gesture 要求
+### User gesture requirement
 
-`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` / `account_login` / `account_logout` / `sync_push_now` / `sync_resolve_conflict` 操作要求：
+`request_fill` / `get_totp` / `copy` / `passkey_*` / `save_credential` / `sync_connect` / `account_login` / `account_logout` / `sync_push_now` / `sync_resolve_conflict` operations require:
 
-1. 必须由用户明确操作触发（点击、键盘快捷键）
-2. 请求中应包含 `user_gesture: true` 表示这是用户主动操作（passkey 由扩展在 MAIN world 拦截点同步读取 `navigator.userActivation.isActive`）
-3. CLI 可配置对未确认的请求要求桌面通知确认（见下节）
+1. Triggering by an explicit user action (a click or a keyboard shortcut)
+2. `user_gesture: true` in the request to indicate a deliberate user action (for passkeys, the extension reads `navigator.userActivation.isActive` synchronously at the MAIN-world interception point)
+3. The CLI can be configured to require a desktop-notification confirmation for unconfirmed requests (see the next section)
 
-### 桌面审批（Passkey 确认闸门）
+### Desktop approval (passkey confirmation gate)
 
 `passkey_create` / `passkey_assert` / `passkey_credential_provider_assert`
-（§13）/ `credential_save`（§15）在桌面应用运行时可要求第二道确认——独立于扩展的
-user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模型见 `PASSKEYS_DESIGN.md` §10）。
+(§13) / `credential_save` (§15) can require a second confirmation while the desktop app is running — independent of the
+extension's self-reported user gesture, so a compromised extension cannot sign or write silently (threat model in `PASSKEYS_DESIGN.md` §10).
 
-**传输**：bridge（每个请求的短命进程）作为客户端连接 Unix domain socket
-`<agent state dir>/passkey-approval.sock`（默认 `~/.persona/passkey-approval.sock`，
-可用 `PERSONA_PASSKEY_APPROVAL_SOCKET` 覆盖；权限 0600）。一请求一连接、JSON 行协议：
+**Transport**: the bridge (a short-lived process per request) connects as a client to the Unix domain socket
+`<agent state dir>/passkey-approval.sock` (default `~/.persona/passkey-approval.sock`,
+overridable via `PERSONA_PASSKEY_APPROVAL_SOCKET`; mode 0600). One connection per request, JSON line protocol:
 
-请求（bridge → 桌面）：
+Request (bridge → desktop):
 
 ```json
 {
@@ -957,83 +955,83 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 }
 ```
 
-- `op` 白名单：`passkey_create` / `passkey_assert` /
-  `passkey_credential_provider_assert` / `credential_save`；`passkey_list`
-  非敏感不走审批（在白名单外，收到也按 `unsupported` 拒绝）
+- `op` whitelist: `passkey_create` / `passkey_assert` /
+  `passkey_credential_provider_assert` / `credential_save`; `passkey_list`
+  is non-sensitive and bypasses approval (it is outside the whitelist, and receiving it is rejected as `unsupported`)
 
-响应（桌面 → bridge）：
+Response (desktop → bridge):
 
 ```json
 {"approved":true}
 {"approved":false,"reason":"denied"}
 ```
 
-- `reason` 取值：`denied`（用户/前端拒绝）、`timeout`（桌面 120s 无应答；bridge 侧
-  150s 兜底断开）、`locked`（桌面已锁定，直接拒绝不弹窗）、`unsupported`（坏 JSON /
-  未知版本 / 未知 op）
+- `reason` values: `denied` (rejected by the user or frontend), `timeout` (no reply from the desktop within 120s; the bridge
+  disconnects after a 150s backstop), `locked` (the desktop is locked; rejected outright without a popup), `unsupported` (malformed JSON /
+  unknown version / unknown op)
 
-**开关** `PERSONA_BRIDGE_DESKTOP_APPROVAL`（默认 `auto`）：
+**Switch** `PERSONA_BRIDGE_DESKTOP_APPROVAL` (default `auto`):
 
-| 值        | 行为                                                                           |
+| Value        | Behavior                                                                           |
 | --------- | ------------------------------------------------------------------------------ |
-| `auto`    | socket 存在 → 必须桌面批准；桌面未运行/连接失败 → 现有行为（gesture 闸门照旧） |
-| `require` | 策略强制：socket 不在也拒绝该 passkey 请求（fail closed）                      |
-| `off`     | 永不询问                                                                       |
+| `auto`    | Socket present → desktop approval is mandatory; desktop not running / connection failed → existing behavior (the gesture gate applies as before) |
+| `require` | Policy-enforced: reject the passkey request even when the socket is absent (fail closed) |
+| `off`     | Never ask                                                                       |
 
-拒绝/不可达时 bridge 对该请求返回错误，错误码前缀随 op 不同：
-`passkey_desktop_denied: <op> rejected by desktop approval (<reason>)`、
-`save_desktop_denied: ...`（保存路径）、
-`passkey_desktop_approval_required: ...`（`require` 模式下桌面不可达）。
+On denial or unreachability the bridge returns an error for that request, with an error-code prefix that varies by op:
+`passkey_desktop_denied: <op> rejected by desktop approval (<reason>)`,
+`save_desktop_denied: ...` (save path),
+`passkey_desktop_approval_required: ...` (desktop unreachable in `require` mode).
 
-此协议是本地实现细节，不占用桥接协议版本号（`protocol_version` 由 hello
-响应承载，当前 5；下一版方向见 `CLIENT_COMMUNICATION_ARCHITECTURE.md`）。
+This protocol is a local implementation detail and does not consume a bridge protocol version number (`protocol_version` is carried by the hello
+response, currently 5; see `CLIENT_COMMUNICATION_ARCHITECTURE.md` for the direction of the next version).
 
-### 会话管理（可选）
+### Session management (optional)
 
-当 `pairing_required: true` 时（默认开启，可用 `PERSONA_BRIDGE_REQUIRE_PAIRING=0` 关闭）：
+When `pairing_required: true` (on by default; disable with `PERSONA_BRIDGE_REQUIRE_PAIRING=0`):
 
-1. 扩展首次连接时需要完成配对流程（`pairing_request` → 用户批准 → `pairing_finalize`）
-2. 配对成功后生成配对密钥（扩展本地保存），并下发短期会话（默认 24 小时）
-3. 对于敏感操作（建议/填充/TOTP/复制），扩展必须携带 `auth`（HMAC）字段
-4. 本地桥持久化配对状态到 `~/.persona/bridge/state.json`（可通过 `--state-dir` 覆盖）
+1. On first connection the extension must complete the pairing flow (`pairing_request` → user approval → `pairing_finalize`)
+2. A pairing key is generated after successful pairing (stored locally by the extension), and a short-lived session is issued (24 hours by default)
+3. For sensitive operations (suggestions / fill / TOTP / copy), the extension must carry the `auth` (HMAC) field
+4. The local bridge persists pairing state to `~/.persona/bridge/state.json` (overridable via `--state-dir`)
 
-#### HMAC 签名输入
+#### HMAC signing input
 
-对每个需认证的请求，计算：
+For every request that requires authentication, compute:
 
 ```
 <type>\n<request_id>\n<payload_json>\n<session_id>\n<ts_ms>\n<nonce>
 ```
 
-- `payload_json` 使用“键排序后的 JSON”序列化（canonical JSON）
+- `payload_json` is serialized as key-sorted JSON (canonical JSON)
 - `signature = base64url_no_pad(HMAC_SHA256(pairing_key, signing_input))`
 
-### 敏感操作确认
+### Sensitive operation confirmation
 
-以下策略键为**计划中，当前未实现**（bridge/CLI 尚无任何配置读取，也不会
-据此改变行为）：
+The following policy keys are **planned and not yet implemented** (the bridge/CLI does no configuration reading for them and does not
+change behavior accordingly):
 
-- `confirm_on_unknown_origin` - 未知域名首次请求（未实现）
-- `confirm_on_fill` - 每次填充都需确认（未实现）
-- `require_biometric` - 敏感操作需要生物识别（未实现）
+- `confirm_on_unknown_origin` - First request for an unknown domain (not implemented)
+- `confirm_on_fill` - Confirmation required for every fill (not implemented)
+- `require_biometric` - Biometric authentication required for sensitive operations (not implemented)
 
-当前实际生效的确认手段是 user gesture 闸门 + 桌面审批闸门（见上节）。
+The confirmation mechanisms actually in effect today are the user gesture gate plus the desktop approval gate (see above).
 
-## 审计日志
+## Audit Log
 
-桥接会话的敏感操作以结构化日志事件记录（Tracing，落到桥接进程日志），
-事件名清单：
+Sensitive operations in a bridge session are recorded as structured log events (Tracing, written to the bridge process log).
+The event names are:
 
-- `bridge_fill_success` - 凭据填充成功
-- `bridge_totp_success` - TOTP 生成
-- `bridge_copy_success` - 剪贴板复制
-- `bridge_save_credential` - 保存/更新登录
-- `bridge_passkey_create` / `bridge_passkey_assert` - passkey 写入/断言
-- `bridge_generate_password` - 密码生成
-- `bridge_passkey_list` - passkey 枚举（**debug 级**，默认 info 级别不输出）
+- `bridge_fill_success` - A credential fill succeeded
+- `bridge_totp_success` - TOTP generated
+- `bridge_copy_success` - Clipboard copy
+- `bridge_save_credential` - Save/update login
+- `bridge_passkey_create` / `bridge_passkey_assert` - Passkey write/assertion
+- `bridge_generate_password` - Password generated
+- `bridge_passkey_list` - Passkey enumeration (**debug level**; not emitted at the default info level)
 
-不是"所有操作默认记录"：`passkey_list` 只在 debug 级可见，且记录的是
-日志事件而非数据库 `audit_log` 表。
+This is not "every operation is logged by default": `passkey_list` is only visible at debug level, and these are
+log events, not rows in the database `audit_log` table.
 
 ```json
 {
@@ -1046,9 +1044,9 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 }
 ```
 
-## 错误处理
+## Error Handling
 
-### 通用错误响应
+### Generic error response
 
 ```json
 {
@@ -1059,60 +1057,60 @@ user gesture 自报，扩展被攻破也无法静默签名或写入（威胁模�
 }
 ```
 
-### 错误码列表
+### Error code list
 
-| 错误码                              | 描述                                           |
+| Error code                          | Description                                      |
 | ----------------------------------- | ---------------------------------------------- |
-| `invalid_json`                      | JSON 解析失败                                  |
-| `unknown_type`                      | 未知的消息类型                                 |
-| `locked`                            | 保险库已锁定，需要解锁                         |
-| `not_found`                         | 请求的资源不存在                               |
-| `origin_mismatch`                   | Origin 不匹配                                  |
-| `origin_binding_required`           | 条目未设置 URL，无法进行 Origin 绑定           |
-| `authentication_failed`             | 认证失败                                       |
-| `wrong_identity`                    | 当前 active identity 不匹配                    |
-| `user_confirmation_required`        | 需要用户确认                                   |
-| `session_expired`                   | 会话已过期                                     |
-| `user_gesture_required`             | 缺少用户手势（v2）                             |
-| `no_active_identity`                | 未设置 active identity（v2）                   |
-| `passkey_rp_mismatch`               | origin 与 passkey 的 rp_id 不符（v2）          |
-| `passkey_alg_unsupported`           | pubKeyCredParams 不含 ES256（v2）              |
-| `passkey_item_not_found`            | 指定的 passkey 不存在（v2）                    |
-| `passkey_origin_mismatch`           | passkey origin 校验失败（预留）（v2）          |
-| `passkey_desktop_denied`            | passkey 创建/断言被桌面审批拒绝                |
-| `passkey_desktop_approval_required` | `require` 模式下桌面审批不可达                 |
-| `save_desktop_denied`               | 保存/更新被桌面审批拒绝（v4）                  |
-| `unsupported_credential_type`       | 条目类型不支持该操作                           |
-| `invalid_payload`                   | payload 校验失败（如空密码）                   |
-| `invalid_request`                   | 参数校验失败（bridge.rs:1297/1300）            |
-| `passkey_assert_failed`             | passkey 断言编排失败（bridge.rs:1336）         |
-| `sync_not_configured`               | 同步未配置（token/URL/workspace 缺失）（v6）   |
-| `sync_not_joined`                   | 保险库尚未加入同步（v6）                       |
-| `sync_not_authorized`               | 设备尚无 group key 信封（待授权）（v6）        |
-| `sync_group_key_failed`             | group key 信封拆封失败（v6）                   |
-| `sync_identity_corrupted`           | 设备身份不可读（v6）                           |
-| `sync_server_unreachable`           | 同步服务器不可达（v6）                         |
-| `account_not_configured`            | 账号服务器 URL 非法（v7）                      |
-| `account_login_failed`              | SRP 登录编排失败（含服务器拒绝）（v7）         |
-| `account_keyring_unavailable`       | 账号令牌 keyring 读写失败（v7）                |
-| `sync_session_failed`               | 同步会话装配失败（信封/授权）（v7）            |
-| `sync_cycle_failed`                 | 同步周期失败（backfill/cycle）（v7）           |
-| `sync_resolve_failed`               | 冲突裁决失败（副本不存在/非 Credential）（v7） |
+| `invalid_json`                      | JSON parsing failed                            |
+| `unknown_type`                      | Unknown message type                           |
+| `locked`                            | The vault is locked and needs unlocking        |
+| `not_found`                         | The requested resource does not exist          |
+| `origin_mismatch`                   | Origin does not match                          |
+| `origin_binding_required`           | The entry has no URL set, so origin binding cannot apply |
+| `authentication_failed`             | Authentication failed                          |
+| `wrong_identity`                    | The current active identity does not match     |
+| `user_confirmation_required`        | User confirmation is required                  |
+| `session_expired`                   | The session has expired                        |
+| `user_gesture_required`             | Missing user gesture (v2)                      |
+| `no_active_identity`                | No active identity is set (v2)                 |
+| `passkey_rp_mismatch`               | Origin does not match the passkey's rp_id (v2) |
+| `passkey_alg_unsupported`           | pubKeyCredParams does not include ES256 (v2)   |
+| `passkey_item_not_found`            | The specified passkey does not exist (v2)      |
+| `passkey_origin_mismatch`           | Passkey origin check failed (reserved) (v2)    |
+| `passkey_desktop_denied`            | Passkey create/assertion denied by desktop approval |
+| `passkey_desktop_approval_required` | Desktop approval unreachable in `require` mode |
+| `save_desktop_denied`               | Save/update denied by desktop approval (v4)    |
+| `unsupported_credential_type`       | The entry type does not support this operation |
+| `invalid_payload`                   | Payload validation failed (e.g. empty password)|
+| `invalid_request`                   | Parameter validation failed (bridge.rs:1297/1300) |
+| `passkey_assert_failed`             | Passkey assertion orchestration failed (bridge.rs:1336) |
+| `sync_not_configured`               | Sync not configured (token/URL/workspace missing) (v6) |
+| `sync_not_joined`                   | The vault has not joined sync (v6)             |
+| `sync_not_authorized`               | The device has no group key envelope yet (awaiting authorization) (v6) |
+| `sync_group_key_failed`             | Group key envelope unwrap failed (v6)          |
+| `sync_identity_corrupted`           | The device identity is unreadable (v6)         |
+| `sync_server_unreachable`           | The sync server is unreachable (v6)            |
+| `account_not_configured`            | Invalid account server URL (v7)                |
+| `account_login_failed`              | SRP login orchestration failed (including server rejection) (v7) |
+| `account_keyring_unavailable`       | Account token keyring read/write failed (v7)   |
+| `sync_session_failed`               | Sync session assembly failed (envelope/authorization) (v7) |
+| `sync_cycle_failed`                 | Sync cycle failed (backfill/cycle) (v7)        |
+| `sync_resolve_failed`               | Conflict resolution failed (copy missing / not a Credential) (v7) |
 
-## 配置
+## Configuration
 
-### 环境变量
+### Environment variables
 
-| 变量                              | 描述                                    | 默认值                     |
+| Variable                          | Description                            | Default                  |
 | --------------------------------- | --------------------------------------- | -------------------------- |
-| `PERSONA_MASTER_PASSWORD`         | 主密码（自动化场景）                    | -                          |
-| `PERSONA_DB_PATH`                 | 数据库路径                              | `~/.persona/identities.db` |
-| `PERSONA_BRIDGE_STATE_DIR`        | Bridge 状态目录（pairing/session）      | `~/.persona/bridge`        |
-| `PERSONA_BRIDGE_REQUIRE_PAIRING`  | 是否强制 pairing + HMAC                 | `true`                     |
-| `PERSONA_BRIDGE_REQUIRE_GESTURE`  | 是否强制 user_gesture（fill/totp/copy） | `true`                     |
-| `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | HMAC 时间戳最大偏移（防重放）           | `300000`                   |
+| `PERSONA_MASTER_PASSWORD`         | Master password (automation scenarios) | -                          |
+| `PERSONA_DB_PATH`                 | Database path                          | `~/.persona/identities.db` |
+| `PERSONA_BRIDGE_STATE_DIR`        | Bridge state directory (pairing/session) | `~/.persona/bridge`      |
+| `PERSONA_BRIDGE_REQUIRE_PAIRING`  | Whether to enforce pairing + HMAC      | `true`                     |
+| `PERSONA_BRIDGE_REQUIRE_GESTURE`  | Whether to enforce user_gesture (fill/totp/copy) | `true`              |
+| `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | Maximum HMAC timestamp skew (replay protection) | `300000`            |
 
-### CLI 参数
+### CLI parameters
 
 ```bash
 persona bridge [OPTIONS]
@@ -1127,7 +1125,7 @@ OPTIONS:
 
 ### macOS
 
-位置（按浏览器）：
+Location (by browser):
 
 - Chrome: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.persona.native.json`
 - Chromium: `~/Library/Application Support/Chromium/NativeMessagingHosts/com.persona.native.json`
@@ -1146,26 +1144,26 @@ OPTIONS:
 
 ### Linux
 
-位置（按浏览器）：
+Location (by browser):
 
 - Chrome: `~/.config/google-chrome/NativeMessagingHosts/com.persona.native.json`
 - Chromium: `~/.config/chromium/NativeMessagingHosts/com.persona.native.json`
 - Brave: `~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/com.persona.native.json`
 - Edge: `~/.config/microsoft-edge/NativeMessagingHosts/com.persona.native.json`
 
-manifest 结构同上。
+The manifest structure is the same as above.
 
 ### Windows
 
-注册表键（默认值为 manifest 文件路径）：
+Registry key (the default value is the manifest file path):
 
 `HKEY_CURRENT_USER\Software\Google\Chrome\NativeMessagingHosts\com.persona.native`
 
-示例默认值：
+Example default value:
 
 `C:\Users\<YOU>\AppData\Local\Persona\native-messaging\com.persona.native.json`
 
-manifest 文件内容示例：
+Example manifest file contents:
 
 ```json
 {
@@ -1177,35 +1175,37 @@ manifest 文件内容示例：
 }
 ```
 
-## 版本兼容性
+## Protocol Version Compatibility
 
-| Protocol Version | CLI Version | 功能                                                                                                                                                        |
-| ---------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy                                                      |
-| 2                | 0.1.0+      | v1 全部 + passkey_list/passkey_create/passkey_assert（软件 passkey 轨道）                                                                                   |
-| 3                | 0.1.0+      | v2 全部 + passkey_credential_provider_list/assert（OS provider 数据源/代断言，P4.1/P4.4）                                                                   |
-| 4                | 0.1.0+      | v3 全部 + find_for_save/save_credential（保险库写路径：保存/更新登录，§14/§15）                                                                             |
-| 5                | 0.1.0+      | v4 全部 + generate_password（密码生成，§16）+ hello 响应携带 connect_available/connect_port                                                                 |
-| 6                | 0.1.0+      | v5 全部 + sync_connect（云端同步引导，§17）：扩展经桥取连接参数后 HTTP 直连数据面                                                                           |
-| 7                | 0.1.0+      | v6 全部 + account_login/status/logout（账号域三件套，§18）+ sync_push_now（立即同步，§19）+ sync_resolve_conflict（冲突裁决，§20）：令牌只落 keyring 不过桥 |
+| Protocol Version | CLI Version | Features |
+| ---------------- | ----------- | -------- |
+| 1 | 0.1.0+ | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
+| 2 | 0.1.0+ | everything in v1 + passkey_list/passkey_create/passkey_assert (software passkey track) |
+| 3 | 0.1.0+ | everything in v2 + passkey_credential_provider_list/assert (OS provider data source / delegated assertion, P4.1/P4.4) |
+| 4 | 0.1.0+ | everything in v3 + find_for_save/save_credential (vault write path: save or update a login, §14/§15) |
+| 5 | 0.1.0+ | everything in v4 + generate_password (password generation, §16) + the hello response carries connect_available/connect_port |
+| 6 | 0.1.0+ | everything in v5 + sync_connect (cloud sync bootstrap, §17): the extension fetches the connection parameters through the bridge and then talks to the data plane over HTTP directly |
+| 7 | 0.1.0+ | everything in v6 + account_login/status/logout (the account-domain trio, §18) + sync_push_now (sync now, §19) + sync_resolve_conflict (conflict adjudication, §20): tokens land only in the keyring and never cross the bridge |
 
-> v2 起未改变帧格式与 HMAC 签名规则，只是新增消息类型并升级 `protocol_version`；旧扩展对桥接发送的未知消息仍会得到 `unknown_type`，向后兼容。
+> From v2 onward the frame format and the HMAC signing rules are unchanged; only new message types were added and `protocol_version` was bumped. Older extensions still get `unknown_type` for messages the bridge does not know, so compatibility is preserved.
 
-## 安装脚本
+## Installation Scripts
 
 - macOS / Linux: `scripts/native-messaging/install-native-host.sh <EXTENSION_ID>`
 - Windows: `scripts/native-messaging/install-native-host.ps1 -ExtensionId <EXTENSION_ID>`
 
-### Safari 传输映射（协议同份，宿主端待实机）
+### Safari Transport Mapping (Same Protocol, Host Side Pending Real-Device Verification)
 
-Safari Web Extension 没有 NMH stdio 通道：`browser.runtime.sendNativeMessage(<app
-bundle id>, …)` 把同一份 JSON 报文交给宿主 app 的 `SafariWebExtensionHandler`，
-由宿主进程代为拉起 `persona bridge`（一请求一进程语义不变，桥协议层零改动）。
-扩展侧已按 `browser` 优先/`chrome` 兜底做传输 shim 并可用 `setNativeHost(bundleId)`
-注入宿主包名；Swift 宿主端（报文 → `persona bridge` 子进程封装）依赖 macOS/Xcode，
-挂起待实机批次（见 `browser/safari-extension/README.md`）。
+Safari Web Extensions have no NMH stdio channel: `browser.runtime.sendNativeMessage(<app
+bundle id>, …)` hands the same JSON payload to the host app's `SafariWebExtensionHandler`,
+and the host process spawns `persona bridge` on the extension's behalf (one request / one
+process semantics unchanged, zero changes to the bridge protocol layer). The extension side
+already has a transport shim that prefers `browser` and falls back to `chrome`, and
+`setNativeHost(bundleId)` injects the host bundle id; the Swift host side (payload →
+`persona bridge` subprocess wrapper) depends on macOS/Xcode and is parked pending a
+real-device batch (see `browser/safari-extension/README.md`).
 
-## 参考
+## References
 
 - [Chrome Native Messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
 - [1Password Browser Extension Architecture](https://support.1password.com/getting-started-browser/)

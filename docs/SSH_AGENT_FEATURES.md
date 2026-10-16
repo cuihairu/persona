@@ -1,70 +1,71 @@
-# Persona SSH Agent - 完整功能说明
+# Persona SSH Agent - Feature Reference
 
 > [English](SSH_AGENT_FEATURES.md) | [中文](SSH_AGENT_FEATURES.zh.md)
 
-## 概述
+## Overview
 
-Persona SSH Agent 是一个开发者友好的 SSH Agent 实现,将 SSH 密钥安全地存储在 Persona 加密保险库中,并提供企业级的策略控制和生物识别认证。
+Persona SSH Agent is a developer-friendly SSH agent implementation that stores SSH keys securely in the Persona encrypted vault, with enterprise-grade policy controls and biometric authentication.
 
-## 已实现功能
+## Features
 
-### 1. SSH Agent 协议支持
+### 1. SSH Agent Protocol Support
 
-- **SSH Agent Protocol**: 完整实现 SSH Agent 协议子集
-  - `SSH_AGENTC_REQUEST_IDENTITIES` (11): 列出所有可用的 SSH 密钥
-  - `SSH_AGENTC_SIGN_REQUEST` (13): 对数据进行签名
-  - `SSH_AGENT_IDENTITIES_ANSWER` (12): 返回密钥列表
-  - `SSH_AGENT_SIGN_RESPONSE` (14): 返回签名结果
-  - `SSH_AGENT_FAILURE` (5): 失败响应
+- **SSH Agent Protocol**: Full implementation of the core SSH Agent protocol subset
+  - `SSH_AGENTC_REQUEST_IDENTITIES` (11): lists all available SSH keys
+  - `SSH_AGENTC_SIGN_REQUEST` (13): sign data
+  - `SSH_AGENT_IDENTITIES_ANSWER` (12): return the key list
+  - `SSH_AGENT_SIGN_RESPONSE` (14): return the signature result
+  - `SSH_AGENT_FAILURE` (5): failure response
 
-- **加密算法支持**:
-  - ed25519 (签名/验证, `ed25519-dalek`)
-  - RSA `rsa-sha2-256`/`rsa-sha2-512` (RFC 8332, 按客户端 flags 分派)
-  - ECDSA P-256 (`ecdsa-sha2-nistp256`, RFC 6979 确定性签名)
+- **Signature algorithms**:
+  - ed25519 (sign/verify, `ed25519-dalek`)
+  - RSA `rsa-sha2-256`/`rsa-sha2-512` (RFC 8332, dispatched per client flags)
+  - ECDSA P-256 (`ecdsa-sha2-nistp256`, RFC 6979 deterministic signatures)
 
-### 2. 跨平台传输层
+### 2. Cross-Platform Transport
 
-- **UNIX 域套接字** (macOS/Linux):
-  - 默认路径: 系统临时目录下的 `persona-ssh-agent-<pid>.sock`
-  - Agent 会把实际监听地址写入 `PERSONA_AGENT_STATE_DIR/ssh-agent.sock`,
-    进程 PID 写入 `PERSONA_AGENT_STATE_DIR/ssh-agent.pid`
-  - 可通过环境变量 `PERSONA_AGENT_SOCKET_PATH` 自定义 Agent 监听地址
+- **UNIX domain socket** (macOS/Linux):
+  - Default path: `persona-ssh-agent-<pid>.sock` under the system temp directory
+  - The agent writes its actual listen address to `PERSONA_AGENT_STATE_DIR/ssh-agent.sock`
+    and the process PID to `PERSONA_AGENT_STATE_DIR/ssh-agent.pid`
+  - The listen address can be overridden via the `PERSONA_AGENT_SOCKET_PATH` environment variable
 
-- **Windows 命名管道** (Windows):
-  - 默认名称: `persona-ssh-agent-<pid>`
-  - 完整的跨平台抽象层 (`AgentStream`, `AgentListener`)
+- **Windows named pipe** (Windows):
+  - Default name: `persona-ssh-agent-<pid>`
+  - Full cross-platform abstraction layer (`AgentStream`, `AgentListener`)
 
-- **自动平台检测**: 根据目标操作系统自动选择合适的传输机制
+- **Automatic platform detection**: picks the right transport based on the target OS
 
-### 3. 密钥管理
+### 3. Key Management
 
-- **从 Persona Vault 加载密钥**:
-  - 自动从加密数据库加载所有 `CredentialType::SshKey` 类型的凭证
-  - 支持主密码解锁 (通过 `PERSONA_MASTER_PASSWORD` 环境变量)
-  - 优雅处理锁定状态
+- **Loading keys from the Persona vault**:
+  - Automatically loads all `CredentialType::SshKey` credentials from the encrypted database
+  - Unlock with the master password (via the `PERSONA_MASTER_PASSWORD` environment variable)
+  - Handles the locked state gracefully
 
-- **密钥格式**:
-  - 公钥: OpenSSH 格式 (`ssh-ed25519 AAAAC3... comment` 等)
-  - 私钥: 库内既有约定为 Base64 编码的 ed25519 seed (32 字节); 导入的
-    OpenSSH PEM 私钥 (ed25519/RSA/ECDSA) 在加载时解出原始组件
-  - 自动转换为 SSH Agent 协议所需的二进制格式
+- **Key formats**:
+  - Public key: OpenSSH format (`ssh-ed25519 AAAAC3... comment`, etc.)
+  - Private key: the vault convention is a Base64-encoded ed25519 seed (32 bytes); imported
+    OpenSSH PEM private keys (ed25519/RSA/ECDSA) have their raw components extracted at load time
+  - Automatically converted to the binary format required by the SSH Agent protocol
 
-- **密钥类型展示** (2026-10-07):
-  - 列表/详情按公钥元数据现算算法名、SHA256 指纹与位数/曲线标签
-    (`ssh-keygen -l` 风格): ED25519→`256`、RSA→模长位长、ECDSA→`P-256` 等
-    曲线名、DSA→素数位长; SK 硬件钥跟随内部算法, 证书等容器不显示
-  - 导入、生成、库内列表三条路径同源解析, 展示口径一致
+- **Key type display** (2026-10-07):
+  - List/detail views compute the algorithm name, SHA256 fingerprint, and bit-size/curve label
+    on the fly from the public key metadata (`ssh-keygen -l` style): ED25519→`256`, RSA→modulus
+    bit length, ECDSA→curve names such as `P-256`, DSA→prime bit length; SK hardware keys follow
+    their internal algorithm, and containers such as certificates are not shown
+  - Import, generation, and in-vault list all share one parsing path, so the display is consistent
 
-### 4. 综合策略系统
+### 4. Policy System
 
-#### 4.1 基于 TOML 的配置
+#### 4.1 TOML-Based Configuration
 
-配置文件位置:
+Config file location:
 
-- 默认: `~/.persona/agent-policy.toml`
-- 自定义: 通过 `PERSONA_AGENT_POLICY_FILE` 环境变量指定
+- Default: `~/.persona/agent-policy.toml`
+- Custom: point at another file via the `PERSONA_AGENT_POLICY_FILE` environment variable
 
-#### 4.2 全局策略 (GlobalPolicy)
+#### 4.2 Global Policy (GlobalPolicy)
 
 ```toml
 [global]
@@ -87,10 +88,11 @@ max_signatures_per_hour = 0
 deny_all = false
 ```
 
-#### 4.3 每密钥策略 (KeyPolicy)
+#### 4.3 Per-Key Policy (KeyPolicy)
 
-`key_policies` 是以 credential_id 为键的 map-of-table(**不是** `[[key_policies]]`
-数组表——数组格式不会被解析, 对应密钥会静默回退默认策略):
+`key_policies` is a map-of-table keyed by credential_id (**not** a `[[key_policies]]`
+array of tables — the array format is not parsed, and the affected keys silently fall
+back to the default policy):
 
 ```toml
 [key_policies."12345678-1234-5678-1234-567812345678"]
@@ -103,16 +105,16 @@ max_uses_per_day = 100
 allowed_time_range = "09:00-18:00"  # 仅在工作时间允许
 ```
 
-特性:
+Features:
 
-- **主机限制**: 允许/拒绝特定主机(支持 glob 模式)
-- **时间范围**: 限制密钥使用的时间窗口
-- **使用限制**: 每日最大使用次数
-- **认证要求**: 要求确认或生物识别认证
+- **Host restrictions**: allow/deny specific hosts (glob patterns supported)
+- **Time windows**: restrict the time window during which keys may be used
+- **Usage limits**: daily maximum uses
+- **Authentication requirements**: require confirmation or biometric authentication
 
-#### 4.4 每主机策略 (HostPolicy)
+#### 4.4 Per-Host Policy (HostPolicy)
 
-`host_policies` 同样是 map-of-table, 键 = 主机名(支持 glob 模式):
+`host_policies` is also a map-of-table, keyed by hostname (glob patterns supported):
 
 ```toml
 [host_policies."prod-*.company.com"]
@@ -122,13 +124,13 @@ require_confirm = true
 max_connections_per_hour = 20
 ```
 
-特性:
+Features:
 
-- **密钥白名单**: 限制特定主机只能使用指定的密钥
-- **连接限制**: 每小时最大连接次数
-- **Glob 模式**: 支持通配符匹配主机名
+- **Key whitelist**: restrict a given host to the designated keys
+- **Connection limits**: maximum connections per hour
+- **Glob patterns**: wildcard hostname matching
 
-#### 4.5 策略执行优先级
+#### 4.5 Policy Evaluation Order
 
 ```
 1. 全局 deny_all (最高优先级)
@@ -138,16 +140,16 @@ max_connections_per_hour = 20
 5. 认证要求判定: Biometric > Confirm > Allow
 ```
 
-### 5. 生物识别认证
+### 5. Biometric Authentication
 
-#### 5.1 平台支持
+#### 5.1 Platform Support
 
-- **macOS**: Touch ID (当前实现恒选 Touch ID; Face ID 检测是 stub, 未接入)
+- **macOS**: Touch ID (the current implementation always selects Touch ID; the Face ID check is a stub and not wired in)
 - **Windows**: Windows Hello
-- **Linux**: polkit 认证 (`auth_self` 门禁)
-- **平台映射**: 按编译目标平台选择对应的生物识别类型
+- **Linux**: polkit authentication (`auth_self` gate)
+- **Platform mapping**: picks the matching biometric type for the compile-time target platform
 
-#### 5.2 认证流程
+#### 5.2 Authentication Flow
 
 ```rust
 1. 策略检查 → require_biometric = true
@@ -160,99 +162,100 @@ max_connections_per_hour = 20
                └─ 用户拒绝 → 拒绝签名
 ```
 
-#### 5.3 集成方式
+#### 5.3 Integration
 
-- 使用 `BiometricProvider` trait 进行抽象
-- 内置 `MockBiometricProvider` 默认 `available=true` / `force_fail=false`（core/src/auth/biometric.rs:49-57）
-- 未注入真实平台实现时（provider 不可用）降级为手动确认，不直接拒绝签名（agents/ssh-agent/src/lib.rs:304-325，与 §5.2 流程一致）
-- 桌面/移动应用可注入真实的平台特定实现
+- Abstracted behind the `BiometricProvider` trait
+- Built-in `MockBiometricProvider` defaults to `available=true` / `force_fail=false` (core/src/auth/biometric.rs:49-57)
+- When no real platform implementation is injected (provider unavailable), it degrades to manual confirmation rather than refusing the signature outright (agents/ssh-agent/src/lib.rs:304-325, consistent with the §5.2 flow)
+- Desktop and mobile apps can inject real platform-specific implementations
 
-### 6. 速率限制
+### 6. Rate Limiting
 
-多层次的速率限制机制:
+A multi-layered rate limiting mechanism:
 
-1. **全局最小间隔** (`min_interval_ms`):
-   - 任意两次签名之间的最小时间间隔
-   - 防止暴力攻击
+1. **Global minimum interval** (`min_interval_ms`):
+   - Minimum time between any two signatures
+   - Thwarts brute-force attacks
 
-2. **全局每小时限制** (`max_signatures_per_hour`):
-   - 每小时最多允许的签名次数
-   - 自动清理超过1小时的时间戳
+2. **Global hourly cap** (`max_signatures_per_hour`):
+   - Maximum signatures allowed per hour
+   - Timestamps older than 1 hour are purged automatically
 
-3. **每密钥每日限制** (`max_uses_per_day`):
-   - 每个密钥每天最多使用次数
-   - 每24小时自动重置
+3. **Per-key daily cap** (`max_uses_per_day`):
+   - Maximum uses per key per day
+   - Resets automatically every 24 hours
 
-4. **每主机每小时限制** (`max_connections_per_hour`):
-   - 每个主机每小时最多连接次数
-   - 每小时自动重置
+4. **Per-host hourly cap** (`max_connections_per_hour`):
+   - Maximum connections per host per hour
+   - Resets automatically every hour
 
-### 7. 审计日志
+### 7. Audit Log
 
-- **签名操作审计**: 记录每次签名操作
-  - 操作类型: `ssh_sign` (自定义审计动作)
-  - 资源类型: `Credential`
-  - 元数据: 签名数据的 SHA-256 哈希
-  - 关联: identity_id, credential_id
-  - 时间戳: 自动记录
+- **Signature auditing**: records every signing operation
+  - Action type: `ssh_sign` (custom audit action)
+  - Resource type: `Credential`
+  - Metadata: SHA-256 hash of the signed data
+  - Linked to: identity_id, credential_id
+  - Timestamp: recorded automatically
 
-- **持久化**: 存储在 Persona 数据库的 `audit_log` 表中
+- **Persistence**: stored in the `audit_log` table of the Persona database
 
-### 8. 安全特性
+### 8. Security Features
 
-#### 8.1 确认提示
+#### 8.1 Confirmation Prompts
 
-- **交互式确认**:
-  - 优先使用 `/dev/tty` (Unix)
-  - 回退到 stdin/stdout
-  - 显示目标主机信息
+- **Interactive confirmation**:
+  - Prefers `/dev/tty` (Unix)
+  - Falls back to stdin/stdout
+  - Shows the target host information
 
-- **提示内容**:
+- **Prompt text**:
   ```
   Allow SSH signature for host 'github.com'? [y/N]
   ```
 
-#### 8.2 Known Hosts 检查
+#### 8.2 Known Hosts Verification
 
-- **支持环境变量**:
-  - `PERSONA_AGENT_ENFORCE_KNOWN_HOSTS`: 强制检查
-  - `PERSONA_AGENT_CONFIRM_ON_UNKNOWN`: 对未知主机提示确认
-  - `PERSONA_KNOWN_HOSTS_FILE`: 自定义 known_hosts 文件路径
+- **Environment variables**:
+  - `PERSONA_AGENT_ENFORCE_KNOWN_HOSTS`: enforce the check
+  - `PERSONA_AGENT_CONFIRM_ON_UNKNOWN`: prompt for confirmation on unknown hosts
+  - `PERSONA_KNOWN_HOSTS_FILE`: custom known_hosts file path
 
-- **默认路径**: `~/.ssh/known_hosts`
+- **Default path**: `~/.ssh/known_hosts`
 
-### 9. 测试覆盖
+### 9. Test Coverage
 
-#### 9.1 单元测试 (78 个)
+#### 9.1 Unit Tests (78)
 
-按模块分布: `policy.rs` 30、`lib.rs` 37、`transport.rs` 5、`daemon.rs` 3、
-`approval.rs` 3。覆盖默认策略放行、`deny_all` 紧急锁定、速率限制
-(间隔/每小时/每日/每主机)、每密钥与每主机策略、glob 匹配、时间窗限制、
-known_hosts 强制与未知主机确认、TOML/环境变量策略加载与回退等。
+Distribution by module: `policy.rs` 30, `lib.rs` 37, `transport.rs` 5, `daemon.rs` 3,
+`approval.rs` 3. Covers default-policy allow, `deny_all` emergency lock, rate limits
+(interval/hourly/daily/per-host), per-key and per-host policies, glob matching, time-window
+limits, known_hosts enforcement and unknown-host confirmation, TOML and environment-variable
+policy loading with fallback, and similar.
 
-#### 9.2 集成测试 (13 个)
+#### 9.2 Integration Tests (13)
 
-**协议/E2E** (`agents/ssh-agent/tests/e2e_test.rs`, 10 个):
+**Protocol/E2E** (`agents/ssh-agent/tests/e2e_test.rs`, 10 tests):
 
-- `test_ssh_protocol_format`: SSH 协议编码/解码
-- `test_ed25519_public_key_encoding`: ed25519 公钥编码
-- `test_ssh_agent_message_types`: SSH Agent 消息类型常量
-- `test_policy_config_format`: TOML 策略配置解析
-- `test_read_ssh_string_function`: SSH 字符串读取
-- `test_identities_answer_format`: SSH_AGENT_IDENTITIES_ANSWER 消息格式
-- 另有 agent 子进程回环、`sign_request` 编码等用例; 其中
-  `test_agent_request_identities` / `test_ssh_github_connection` 标记
-  `#[ignore]`(需 agent 运行中 / 外网, 默认跳过)
+- `test_ssh_protocol_format`: SSH protocol encoding/decoding
+- `test_ed25519_public_key_encoding`: ed25519 public key encoding
+- `test_ssh_agent_message_types`: SSH Agent message type constants
+- `test_policy_config_format`: TOML policy config parsing
+- `test_read_ssh_string_function`: SSH string reading
+- `test_identities_answer_format`: SSH_AGENT_IDENTITIES_ANSWER message format
+- Also covers agent subprocess round-trip and `sign_request` encoding; among them
+  `test_agent_request_identities` / `test_ssh_github_connection` are marked
+  `#[ignore]` (they need a running agent / external network and are skipped by default)
 
-**daemon** (`agents/ssh-agent/tests/daemon_test.rs`, 3 个): 守护进程启动与
-身份/签名处理
+**daemon** (`agents/ssh-agent/tests/daemon_test.rs`, 3 tests): daemon startup and
+identity/signature handling
 
-**总计**: 91 个测试(单元 78 + 集成 13), 除 2 个默认 `#[ignore]` 的联网
-用例外全部通过
+**Total**: 91 tests (78 unit + 13 integration), all passing except the 2 networked
+cases marked `#[ignore]` by default
 
-### 10. 环境变量配置
+### 10. Environment Variable Configuration
 
-Agent 支持以下环境变量:
+The agent supports the following environment variables:
 
 ```bash
 # 数据库路径
@@ -301,9 +304,9 @@ PERSONA_AGENT_CONFIRM_ON_UNKNOWN=true
 PERSONA_KNOWN_HOSTS_FILE=~/.ssh/my_known_hosts
 ```
 
-## 架构设计
+## Architecture
 
-### 模块结构
+### Module Layout
 
 ```
 agents/ssh-agent/
@@ -321,9 +324,9 @@ agents/ssh-agent/
 └── agent-policy.example.toml  # 策略配置示例
 ```
 
-### 核心组件
+### Core Components
 
-#### Agent 结构
+#### Agent Struct
 
 ```rust
 struct Agent {
@@ -334,7 +337,7 @@ struct Agent {
 }
 ```
 
-#### AgentKey 结构
+#### AgentKey Struct
 
 ```rust
 struct AgentKey {
@@ -352,7 +355,7 @@ enum SigningKeyMaterial {
 }
 ```
 
-#### 签名决策
+#### Signature Decision
 
 ```rust
 enum SignatureDecision {
@@ -363,9 +366,9 @@ enum SignatureDecision {
 }
 ```
 
-## 使用示例
+## Usage Examples
 
-### 1. 启动 Agent
+### 1. Starting the Agent
 
 ```bash
 # 设置环境变量
@@ -381,7 +384,7 @@ cargo run -p persona-ssh-agent
 # SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
 ```
 
-### 2. 配置 SSH 客户端
+### 2. Configuring the SSH Client
 
 ```bash
 # 设置 SSH_AUTH_SOCK
@@ -391,23 +394,27 @@ export SSH_AUTH_SOCK=/tmp/persona-ssh-agent-12345.sock
 ssh -T git@github.com
 ```
 
-#### 桌面端：一键「SSH 走 persona agent」（已实现，2026-10-05）
+#### Desktop: One-Click "SSH via the persona agent" (implemented, 2026-10-05)
 
-桌面「设置 → 通用」提供 **SSH 走 persona agent** 区块：检测 `~/.ssh/config`
-的 IdentityAgent 配置并一键启用/停用。
+The desktop **Settings → General** page provides an **SSH via persona agent** panel: it
+detects the `IdentityAgent` configuration in `~/.ssh/config` and enables or disables it with
+one click.
 
-- **原理**：OpenSSH 8.3+ 的 `IdentityAgent` 指令为连接指定 agent socket，
-  等效于对单个 host 单独设置 `SSH_AUTH_SOCK`；锚点块内带 `Host *`，对所有
-  连接生效（写在文件更前面的手写 `IdentityAgent` 按 OpenSSH「先出现先生效」
-  语义仍优先）。Windows 10/11 自带的 OpenSSH 客户端同样支持（socket 用
-  命名管道 `\\.\pipe\persona-ssh-agent`）。
-- **稳定 socket**：桌面壳启动 agent 时经 `PERSONA_AGENT_SOCKET_PATH` 注入
-  稳定路径（Linux `$XDG_RUNTIME_DIR/persona/ssh-agent.sock`，缺省回退
-  `~/.persona/run/ssh-agent.sock`；Windows 命名管道 `persona-ssh-agent`），
-  与 CLI 每次 pid 化路径不同——写入 config 的值跨重启不变。
-- **锚点块**：启用即幂等写入下面四行（损坏块自动收敛重写），停用整块移除；
-  块外配置一律只读不动。块内 `Host *` 不可省：块追加在文件末尾，若无它会
-  落入用户**最后一个 Host 块**的作用域，其余 host 静默拿不到 persona agent：
+- **How it works**: the OpenSSH 8.3+ `IdentityAgent` directive pins an agent socket to a
+  connection, equivalent to setting `SSH_AUTH_SOCK` per host; the anchor block carries
+  `Host *`, so it applies to every connection (a hand-written `IdentityAgent` earlier in the
+  file still wins under OpenSSH's "first match wins" semantics). The OpenSSH client bundled
+  with Windows 10/11 supports it too (the socket is a named pipe,
+  `\\.\pipe\persona-ssh-agent`).
+- **Stable socket**: the desktop shell passes a stable path to the agent at startup via
+  `PERSONA_AGENT_SOCKET_PATH` (Linux `$XDG_RUNTIME_DIR/persona/ssh-agent.sock`, falling back
+  to `~/.persona/run/ssh-agent.sock`; Windows named pipe `persona-ssh-agent`). Unlike the
+  CLI's per-PID path, the value written into the config survives restarts.
+- **Anchor block**: enabling it writes the four lines below idempotently (a corrupted block
+  converges on rewrite), and disabling removes the block in one piece; configuration outside
+  the block is treated as read-only. The `Host *` line inside the block is not optional: the
+  block is appended at the end of the file, so without it the setting would fall into the scope
+  of the user's **last Host block** and every other host would silently get no persona agent:
 
   ```
   # persona managed begin
@@ -416,31 +423,35 @@ ssh -T git@github.com
   # persona managed end
   ```
 
-- **状态三态**：已启用（锚点块指向当前 socket）/ 未启用（无块）/
-  配置异常（块存在但指向别处——重新启用即修复）；查询失败时区块整体隐藏，
-  不谎报状态。
-- **Agent 配置分析面板**（已实现，2026-10-08）：设置页同一区块内的只读
-  分析——解析 `~/.ssh/config`（含 Include 递归展开：深度 ≤5、循环/缺文件/
-  超深度进告警黄条、相对路径相对 `~/.ssh`、段内 glob `*`/`?`），识别
-  `IdentityAgent`/`ForwardAgent`/`AddKeysToAgent`/`ProxyAgent` 条目并标注
-  作用域行与 `文件:行号`（persona 锚点块内不计入用户条目）；结合环境
-  `SSH_AUTH_SOCK` 与 Unix socket/命名管道连通探测，给出**生效
-  IdentityAgent**（首个顶层条目按「先出现先生效」优先，无则取锚点块值）
-  与**生效 socket 存活灯**（有进程在听=绿/无人听=红/无法判定=灰）及
-  persona agent 运行灯。config 读失败（权限/IO/非 UTF-8）红条如实显示
-  不崩，且此时一键启用拒绝写（防覆盖用户配置）。
-- **验收**：`ssh -G <host>` 输出 `identityagent <稳定 socket>`（模块测试
-  `ssh_g_resolves_identity_agent_from_managed_block` 以真实 OpenSSH 往返
-  验证，含块外无关 host；端到端走查 `ssh_agent_walkthrough` 覆盖命令层
-  启用/停用 + 用户配置逐字节还原 + 分析生效值随 config 开关双向翻转）。
+- **Three-state status**: enabled (anchor block points at the current socket) / disabled (no
+  block) / misconfigured (a block exists but points elsewhere — re-enabling fixes it); if the
+  lookup fails, the whole panel is hidden rather than reporting a wrong state.
+- **Agent config analysis panel** (implemented, 2026-10-08): a read-only analysis inside the
+  same panel on the settings page — parses `~/.ssh/config` (including recursive `Include`
+  expansion: depth <= 5, cycles/missing files/excessive depth surface as an amber warning bar,
+  relative paths resolve against `~/.ssh`, per-section glob `*`/`?`), identifies
+  `IdentityAgent`/`ForwardAgent`/`AddKeysToAgent`/`ProxyAgent` entries and annotates their scope
+  line and `file:line` (entries inside the persona anchor block are not counted as user entries);
+  combined with the `SSH_AUTH_SOCK` environment variable and a Unix socket / named pipe
+  reachability probe, it reports the **effective IdentityAgent** (the first top-level entry wins
+  by "first match wins"; otherwise the anchor block value) and an **effective socket liveness
+  light** (a process is listening = green / nobody listening = red / cannot tell = gray) plus a
+  persona agent running light. If reading the config fails (permissions/IO/non-UTF-8) the error
+  shows in a red bar and nothing crashes, and one-click enable refuses to write in that state
+  (so a user's config is not overwritten).
+- **Acceptance**: `ssh -G <host>` prints `identityagent <stable socket>` (the module test
+  `ssh_g_resolves_identity_agent_from_managed_block` verifies a real OpenSSH round-trip,
+  including hosts unrelated to the block; the end-to-end walkthrough `ssh_agent_walkthrough`
+  covers enabling and disabling at the command layer, byte-for-byte restoration of the user's
+  config, and the analyzed effective values flipping both ways as the config toggle changes).
 
-手动配置（不想用桌面开关）：把上面四行粘进 `~/.ssh/config` 文件末尾
-（`Host *` 让它对所有连接生效）；shell 环境变量方案
-`export SSH_AUTH_SOCK=<socket>` 等效。
+Manual setup (if you would rather not use the desktop switch): paste the four lines above at the
+end of `~/.ssh/config` (`Host *` makes it apply to every connection); setting the shell
+environment variable `export SSH_AUTH_SOCK=<socket>` is equivalent.
 
-### 3. 配置策略
+### 3. Configuring Policies
 
-创建 `~/.persona/agent-policy.toml`:
+Create `~/.persona/agent-policy.toml`:
 
 ```toml
 [global]
@@ -469,7 +480,7 @@ require_confirm = true
 max_connections_per_hour = 20
 ```
 
-### 4. 测试策略
+### 4. Testing Policies
 
 ```bash
 # 连接到生产环境(将触发生物识别)
@@ -481,11 +492,11 @@ export PERSONA_AGENT_TARGET_HOST=dev-server.company.com
 ssh user@dev-server.company.com
 ```
 
-### 5. git commit 签名（SSHSIG）
+### 5. git commit Signing (SSHSIG)
 
-Persona 的 vault SSH key 可以直接给 git commit 签名（`ssh-keygen -Y sign`
-兼容的 SSHSIG 格式）。把 CLI 的一份拷贝/软链命名为 `persona-ssh-sign`，
-git 会把它当作签名器调用：
+A vault SSH key in Persona can sign git commits directly (SSHSIG format, compatible with
+`ssh-keygen -Y sign`). Copy or symlink the CLI as `persona-ssh-sign` and git will invoke it
+as the signer:
 
 ```bash
 # ① 安装 shim（与 persona-bridge 同一 argv[0] 注入机制）
@@ -505,12 +516,13 @@ persona ssh gpg-sign -Y sign -n git -f <uuid|公钥行|文件> <文件> [-o 输�
 # 验证侧照常：gpg.ssh.allowedSignersFile + git log --show-signature
 ```
 
-说明：ed25519 是确定性签名，输出与 `ssh-keygen -Y sign` 逐字节一致；
-每次签名在审计日志落一条 `ssh_sign`（via=gpg-sign + namespace + sha256
-摘要）。加密保险库时 git 每次签名会走主密码解锁（非交互场景用
-`PERSONA_MASTER_PASSWORD`）。
+Notes: ed25519 is a deterministic signature, so the output is byte-for-byte identical to
+`ssh-keygen -Y sign`; every signature records an audit log entry `ssh_sign`
+(via=gpg-sign + namespace + sha256 digest). When the vault is encrypted, each git signature
+unlocks it with the master password (`PERSONA_MASTER_PASSWORD` for non-interactive
+scenarios).
 
-### 6. 公钥分发（authorized_keys 管理）
+### 6. Public Key Distribution (authorized_keys Management)
 
 ```bash
 # 把身份名下的公钥加到目标机（幂等，重复执行不会写重复行）
@@ -528,52 +540,54 @@ persona ssh authorize --identity work --host deploy@prod-1 --port 2222 \
   --remote-path /etc/ssh/authorized_keys/work
 ```
 
-信任模型：传输与认证使用你自己的 `ssh` 二进制（可用 `PERSONA_SSH_BINARY`
-覆盖），会话期间 agent 的 host 策略照常生效；私钥不出库。add 幂等、
-remove 只删除本工具写入的行（按 key blob 字段匹配）、`--list` 只读。
-每次操作落审计 `ssh_authorize`（host + action）。
+Trust model: transport and authentication use your own `ssh` binary (overridable via
+`PERSONA_SSH_BINARY`), and the agent's host policies apply as usual for the duration of the
+session; private keys never leave the vault. `add` is idempotent, `remove` only deletes lines
+written by this tool (matched by the key blob field), and `--list` is read-only. Every
+operation records an audit entry `ssh_authorize` (host + action).
 
-## 性能特性
+## Performance Characteristics
 
-- **异步处理**: 基于 Tokio 的完全异步 I/O
-- **并发连接**: 每个连接独立的 tokio task
-- **零拷贝**: 高效的二进制协议处理
-- **低延迟**: 策略检查在微秒级完成
-- **内存安全**: Rust 保证的内存安全和线程安全
+- **Async processing**: fully asynchronous I/O built on Tokio
+- **Concurrent connections**: each connection gets its own tokio task
+- **Zero-copy**: efficient binary protocol handling
+- **Low latency**: policy checks complete in microseconds
+- **Memory safety**: Rust-guaranteed memory and thread safety
 
-## 安全考虑
+## Security Considerations
 
-1. **私钥常驻内存**: 私钥在 agent 启动时从加密保险库解密加载,进程生命周期
-   内常驻,无 zeroize 清除(已知限制); 数据库中仍为加密存储
-2. **加密存储**: 所有密钥在数据库中加密存储
-3. **审计完整**: 所有签名操作都有审计日志
-4. **策略优先**: 策略拒绝优先于任何其他决策
-5. **生物识别回退**: 不可用时 fail-closed(默认拒绝签名)或按策略降级
-6. **速率限制**: 多层次防护防止滥用
-7. **known_hosts 检查**: 可选的主机验证
+1. **Private keys live in memory**: private keys are decrypted from the encrypted vault at
+   agent start and stay resident for the process lifetime with no zeroize wipe (known
+   limitation); they remain encrypted in the database
+2. **Encrypted storage**: all keys are stored encrypted in the database
+3. **Full audit trail**: every signing operation is logged
+4. **Policy first**: a policy denial overrides every other decision
+5. **Biometric fallback**: fails closed when unavailable (signature refused by default) or
+   degrades per policy
+6. **Rate limiting**: layered protection against abuse
+7. **known_hosts verification**: optional host validation
 
-## 已知限制与未来工作
+## Known Limitations and Future Work
 
-### 当前限制
+### Current Limitations
 
-1. **密钥类型**: ed25519、RSA (RFC 8332, rsa-sha2-256/512)、ECDSA P-256
-   三档均已支持
-2. **协议**: 仅实现核心 SSH Agent 协议子集
-3. **平台**: 生物识别集成需要平台特定的实现
+1. **Key types**: ed25519, RSA (RFC 8332, rsa-sha2-256/512), and ECDSA P-256 are all supported
+2. **Protocol**: only the core SSH Agent protocol subset is implemented
+3. **Platforms**: biometric integration requires platform-specific implementations
 
-### 未来增强
+### Planned Enhancements
 
-1. **更多曲线**: ECDSA P-384/P-521 等
-2. **完整协议**: 支持 `SSH_AGENTC_ADD_IDENTITY`, `SSH_AGENTC_REMOVE_IDENTITY`
-3. **智能卡集成**: 支持 YubiKey 等硬件安全模块
-4. **桌面 UI**: 图形化签名确认和策略配置
-5. **Cloud KMS**: 集成 AWS KMS、Google Cloud KMS
-6. **Session Recording**: 录制 SSH 会话以供审计
-7. **Conditional Access**: 基于位置、时间、设备的条件访问
+1. **More curves**: ECDSA P-384/P-521 and others
+2. **Full protocol**: support `SSH_AGENTC_ADD_IDENTITY`, `SSH_AGENTC_REMOVE_IDENTITY`
+3. **Smart card integration**: support hardware security modules such as YubiKey
+4. **Desktop UI**: graphical signature confirmation and policy configuration
+5. **Cloud KMS**: integrate AWS KMS and Google Cloud KMS
+6. **Session Recording**: record SSH sessions for auditing
+7. **Conditional Access**: location-, time-, and device-based conditional access
 
-## 贡献者指南
+## Contributor Guide
 
-### 运行测试
+### Running Tests
 
 ```bash
 # 运行所有测试
@@ -589,7 +603,7 @@ cargo test -p persona-ssh-agent --test e2e_test
 cargo test -p persona-ssh-agent test_key_policy_host_restrictions
 ```
 
-### 代码检查
+### Code Quality Checks
 
 ```bash
 # 格式化
@@ -602,47 +616,47 @@ cargo clippy -p persona-ssh-agent
 cargo check -p persona-ssh-agent
 ```
 
-## 参考资料
+## References
 
 - [SSH Agent Protocol](https://datatracker.ietf.org/doc/html/draft-miller-ssh-agent-14)
 - [OpenSSH Agent Source](https://github.com/openssh/openssh-portable/blob/master/authfd.c)
 - [ed25519-dalek Documentation](https://docs.rs/ed25519-dalek/)
-- [Persona Core Documentation](../core/README.md)
+- [Persona Project README](../README.md)
 
-## 更新日志
+## Changelog
 
-### 2025-11-21 - v0.1.0 初始实现
+### 2025-11-21 - v0.1.0 Initial Implementation
 
-**完成功能**:
+**Completed features**:
 
-- SSH Agent 协议子集(request_identities, sign_request)
-- ed25519 密钥支持
-- 跨平台传输层(Unix sockets + Windows named pipes)
-- 综合策略系统(全局/每密钥/每主机)
-- 生物识别认证集成
-- 速率限制和审计日志
-- 13个单元测试和E2E测试
+- SSH Agent protocol subset (request_identities, sign_request)
+- ed25519 key support
+- Cross-platform transport layer (Unix sockets + Windows named pipes)
+- Policy system (global/per-key/per-host)
+- Biometric authentication integration
+- Rate limiting and audit log
+- 13 unit and E2E tests
 
-**技术栈**:
+**Tech stack**:
 
 - Rust 2021
-- Tokio (异步运行时)
-- ed25519-dalek (加密)
-- TOML (配置)
-- SQLx (数据库)
+- Tokio (async runtime)
+- ed25519-dalek (cryptography)
+- TOML (configuration)
+- SQLx (database)
 
-**依赖**:
+**Dependencies**:
 
-- `persona-core`: 核心库
-- `tokio`: 异步运行时
-- `ed25519-dalek`: ed25519 签名
-- `byteorder`: 二进制序列化
-- `toml`: 配置文件解析
-- `glob-match`: Glob 模式匹配
-- `chrono`: 时间处理
+- `persona-core`: core library
+- `tokio`: async runtime
+- `ed25519-dalek`: ed25519 signatures
+- `byteorder`: binary serialization
+- `toml`: configuration file parsing
+- `glob-match`: Glob pattern matching
+- `chrono`: time handling
 
 ---
 
-**维护者**: Persona Team
-**许可证**: MIT
-**仓库**: https://github.com/your-org/persona
+**Maintainers**: Persona Team
+**License**: MIT
+**Repository**: https://github.com/your-org/persona

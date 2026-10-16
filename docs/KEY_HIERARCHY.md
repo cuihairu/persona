@@ -30,9 +30,9 @@ Note: the wallet keystore row (last) is a **separate** path from PERSENC1 above 
 
 The PBKDF2 iteration count and the Argon2 parameters must be re-reviewed quarterly (see `THREAT_MODEL.md`). When raising parameters, apply the change with a re-wrap/re-encrypt migration rather than in place, so existing rows stay readable and legacy rows get upgraded on next write. The master-key iteration count is persisted per vault for exactly this reason: the iteration count is an input to derivation, so it must travel with the vault it wrapped.
 
-> **最近评审：2026-10-12**（`docs/review/2026-10-12-kdf-parameter-review.md`）：各 Argon2id 路径恰在 OWASP 下限、PERSENC1 在下限以上——均维持；**PBKDF2-HMAC-SHA256 100k 低于 OWASP 现行建议（600k）**，升级走 re-wrap 迁移的提案已登记、等用户拍板，拍板前参数不动。
+> **Latest review: 2026-10-12** (`docs/review/2026-10-12-kdf-parameter-review.md`): every Argon2id path sits exactly at the OWASP floor and PERSENC1 sits above it — all kept; **PBKDF2-HMAC-SHA256 100k is below the current OWASP recommendation (600k)**, and the proposal to raise it via a re-wrap migration is registered and awaiting a decision; parameters stay unchanged until then.
 >
-> **最近决策：2026-10-16（已代决）**（`docs/review/2026-10-16-kdf-decision.md`）：① PBKDF2 升 600k；② 惰性升级——下次解锁在同一次事务里 re-wrap 并把 `user_auth.kdf_iterations` 推进到 600k，不做显式迁移命令（旅行模式下暂缓而非拒绝）；③ Argon2id 维持 OWASP 下限、2027-01 季度复核。用户对任一项事后均可推翻。
+> **Latest decision: 2026-10-16 (decided on the user's behalf)** (`docs/review/2026-10-16-kdf-decision.md`): ① PBKDF2 raised to 600k; ② lazy upgrade — the next unlock re-wraps inside the same transaction and advances `user_auth.kdf_iterations` to 600k, with no explicit migration command (deferred, not refused, while travel mode is active); ③ Argon2id stays at the OWASP floor, quarterly re-check in 2027-01. The user may overturn any of the three afterwards.
 
 ## Legacy compatibility
 

@@ -2,7 +2,7 @@
 
 > [English](DOC_SOURCE_CONSISTENCY_AUDIT.md) | [中文](审计-文档一致性.md)
 
-> Criteria: `~/workspaces/standards/文档与源码一致性审计规范.md` (three discrepancy buckets + six steps).
+> Criteria: `~/workspaces/standards/文档与源码一致性审计规范.md` (the docs-vs-source consistency audit standard: three discrepancy buckets + six steps).
 > Audit date: 2026-10-13. Source-of-truth is main @ b1efd2f.
 > Three buckets: **Ahead** = docs say it, code does not (dangerous) | **Behind** = code has it, docs do not | **Mismatch** = both exist but the wording disagrees.
 > Note: fixes from the four audit groups (A server/API, B feature design, C root-level status, D build/site) have landed;

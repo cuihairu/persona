@@ -607,7 +607,7 @@ cargo check -p persona-ssh-agent
 - [SSH Agent Protocol](https://datatracker.ietf.org/doc/html/draft-miller-ssh-agent-14)
 - [OpenSSH Agent Source](https://github.com/openssh/openssh-portable/blob/master/authfd.c)
 - [ed25519-dalek Documentation](https://docs.rs/ed25519-dalek/)
-- [Persona Core Documentation](../core/README.md)
+- [Persona Project README](../README.md)
 
 ## 更新日志
 

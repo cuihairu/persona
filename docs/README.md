@@ -16,7 +16,7 @@ This directory is the entry point for Persona's design and security documentatio
 
 - [ONEPASSWORD_FEATURES](./ONEPASSWORD_FEATURES.md) – Full 1Password feature list (benchmark checklist)
 - [FEATURE_GAP_ANALYSIS](./FEATURE_GAP_ANALYSIS.md) – Persona vs 1Password, current state
-- [DOC_SOURCE_CONSISTENCY_AUDIT](./DOC_SOURCE_CONSISTENCY_AUDIT.md) – Docs-vs-source consistency audit table (three discrepancy buckets, 67 items, 2026-10-13; twin: [审计-文档一致性](./审计-文档一致性.md))
+- [DOC_SOURCE_CONSISTENCY_AUDIT](./DOC_SOURCE_CONSISTENCY_AUDIT.md) – Docs-vs-source consistency audit table (three discrepancy buckets, 67 items, 2026-10-13; [Chinese version](./审计-文档一致性.md))
 
 ## Architecture
 

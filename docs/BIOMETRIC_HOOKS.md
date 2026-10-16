@@ -26,48 +26,60 @@ The default `MockBiometricProvider` is used by the CLI/core for offline developm
 
 This separation keeps the cryptographic unlock path in Rust while letting UI layers show native dialogs and map their callbacks to the shared prompt/result types.
 
-## Desktop wiring（已落地）
+## Desktop wiring (implemented)
 
-桌面端（Tauri）提供 `OsBiometricProvider`（`desktop/src-tauri/src/biometric/`），
-按平台分发到三个 cfg 模块，同步 trait 由专用 ceremony 线程 + 120s 超时桥接：
+The desktop side (Tauri) provides `OsBiometricProvider` (`desktop/src-tauri/src/biometric/`),
+which dispatches to three cfg modules per platform; the synchronous trait is bridged
+by a dedicated ceremony thread with a 120s timeout:
 
-| 平台    | 模块                         | 后端                                                                                                        | 语义                                   |
-| ------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| Linux   | `biometric/polkit.rs`        | 手写 zbus `CheckAuthorization`（action `com.persona.desktop.biometric-unlock`，subject 用 system-bus-name） | `auth_self`：指纹（fprintd）或密码回退 |
-| macOS   | `biometric/macos.rs`         | objc2-local-authentication `LAPolicy::DeviceOwnerAuthentication`                                            | Touch ID + 系统密码回退                |
-| Windows | `biometric/windows_hello.rs` | `UserConsentVerifier::RequestVerificationAsync`                                                             | Windows Hello（PIN/生物）              |
+| Platform | Module                       | Backend                                                                                                     | Semantics                              |
+| -------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Linux    | `biometric/polkit.rs`        | Hand-written zbus `CheckAuthorization` (action `com.persona.desktop.biometric-unlock`, subject via system-bus-name) | `auth_self`: fingerprint (fprintd) or password fallback |
+| macOS    | `biometric/macos.rs`         | objc2-local-authentication `LAPolicy::DeviceOwnerAuthentication`                                            | Touch ID + system password fallback    |
+| Windows  | `biometric/windows_hello.rs` | `UserConsentVerifier::RequestVerificationAsync`                                                             | Windows Hello (PIN/biometric)          |
 
-不依赖 zbus_polkit（CVE-2026-78422）；mac/win 仅经 nightly CI 编译验证。
+It does not depend on zbus_polkit (CVE-2026-78422); mac/win are compile-verified only, via nightly CI.
 
-### 四命令（`commands.rs`）
+### The four commands (`commands.rs`)
 
-- `biometric_status(db_path)`：免解锁只读。`enabled` = keyring 条目存在这一位
-  元数据；`available` 计入 keyring 可达性，探测错误 fail-closed 为
-  `enabled=false`。解锁屏 mount / 自定义路径变更时查询驱动指纹按钮显隐。
-- `biometric_enable(master_password)`：解锁门禁（同 `set_locale`）；先验主
-  密码再弹 OS 认证框，绝不把未验证密码写进 keyring。
-- `biometric_disable()`：幂等删条目；收紧操作不设密码门禁。
-- `biometric_unlock(db_path)`：先查条目（没有就干净报错不弹框）→ ceremony →
-  keyring 取回主密码走 `init_service` 本尊（密码不出进程）；
-  `InvalidCredentials` 当场自删条目 + 返回 `BIOMETRIC_RESET` 码（防反复点
-  指纹吃满 5 次失败锁户）。
+- `biometric_status(db_path)`: read-only, no unlock required. `enabled` is exactly
+  the one bit of metadata saying a keyring entry exists; `available` also factors
+  in keyring reachability, and probe errors fail closed to `enabled=false`. The
+  unlock screen queries it on mount / custom-path changes to drive the fingerprint
+  button's visibility.
+- `biometric_enable(master_password)`: gated behind unlock (same as `set_locale`);
+  the master password is verified first and only then is the OS authentication
+  prompt shown — an unverified password is never written to the keyring.
+- `biometric_disable()`: idempotent entry deletion; a hardening operation, so no
+  password gate.
+- `biometric_unlock(db_path)`: look up the entry first (a missing entry is a clean
+  error, no prompt) → ceremony → retrieve the master password from the keyring and
+  feed it through `init_service` proper (the password never leaves the process);
+  on `InvalidCredentials` the entry is deleted immediately and the `BIOMETRIC_RESET`
+  code is returned (so repeated fingerprint taps can't burn through the 5-failure
+  lockout).
 
-主密码托管：`persona-biometric` keyring service、键 = vault db_path（与
-persona-sync token 同款 per-vault 模式）；改密成功联动更新条目，写失败即删
-（fail-closed）。前端见 `UnlockScreen.tsx`（指纹按钮）与
-`SettingsModal` SecurityPane（开关，开启走 ReauthModal 验密）。
+Master password custody: `persona-biometric` keyring service, keyed by the vault
+db_path (the same per-vault pattern as the persona-sync token); a successful
+password change updates the entry in lockstep, and a write failure deletes it
+(fail-closed). On the frontend see `UnlockScreen.tsx` (fingerprint button) and
+the `SettingsModal` SecurityPane (toggle; enabling goes through ReauthModal for
+password verification).
 
-威胁模型登记：`docs/THREAT_MODEL.md`「Biometric Unlock」章节——同用户恶意
-进程可读 OS 钥匙串（Windows Credential Manager 无 ACL）是直存设计的固有
-暴露，白纸黑字。
+Threat-model registration: the "Biometric Unlock" section of
+`docs/THREAT_MODEL.md` spells out in black and white that a malicious same-user
+process can read the OS keychain (Windows Credential Manager has no ACL) — an
+inherent exposure of the direct-storage design.
 
-### 打包与实机注意事项
+### Packaging and on-device notes
 
-- **deb**：`tauri.conf.json` 的 `bundle.linux.deb.files` 把
-  `polkit/com.persona.desktop.biometric-unlock.policy` 装到
-  `/usr/share/polkit-1/actions/`。
-- **rpm / AppImage / `pnpm tauri dev`**：不带 action 文件 →
-  `CheckAuthorization` 报 ActionUnknown → biometric fail-closed 降级为不可用
-  （按钮不渲染，设置页提示）。dev 手工装：
+- **deb**: `bundle.linux.deb.files` in `tauri.conf.json` installs
+  `polkit/com.persona.desktop.biometric-unlock.policy` to
+  `/usr/share/polkit-1/actions/`.
+- **rpm / AppImage / `pnpm tauri dev`**: no action file shipped →
+  `CheckAuthorization` returns ActionUnknown → biometric fails closed and degrades
+  to unavailable (the button is not rendered; the settings page shows a hint).
+  For dev, install manually:
   `sudo install -Dm644 polkit/com.persona.desktop.biometric-unlock.policy /usr/share/polkit-1/actions/`
-- Linux 实机验证脚本（含负路径）：`scripts/verify-biometric-linux.md`。
+- Linux on-device verification script (negative paths included):
+  `scripts/verify-biometric-linux.md`.

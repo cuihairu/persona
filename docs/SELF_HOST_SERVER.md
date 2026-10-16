@@ -1,85 +1,110 @@
-# 自托管 persona-server（一键起）
+# Self-hosting persona-server (one-command startup)
 
 > [English](SELF_HOST_SERVER.md) | [中文](SELF_HOST_SERVER.zh.md)
 
-`persona-server` 是可选的同步/备份中继。默认不用：桌面与 CLI 在不配置服务器时全功能本地可用（隐私红线：账号/同步默认关闭、显式开启）。
+`persona-server` is an optional sync/backup relay. It is off by default: the
+desktop app and CLI are fully functional locally without configuring a server
+(the privacy red line: accounts/sync default to off and are enabled explicitly).
 
-定位：**纯中继 + 密文保管**。服务器只见密文与最小元数据（备份是 PERSENC1 整库密文，同步 oplog 是密文载荷 + item UUID/kind/lamport/时间戳/设备公钥/信封——完整可见面清单见 `E2EE_SYNC_DESIGN.md` §10）。主密码不出设备。
+Positioning: **pure relay + ciphertext custody**. The server only ever sees
+ciphertext and minimal metadata (backups are whole-database PERSENC1 ciphertext,
+sync oplog is ciphertext payload + item UUID/kind/lamport/timestamp/device public
+key/envelope — for the full visible-surface list see `E2EE_SYNC_DESIGN.md` §10).
+The master password never leaves the device.
 
-## 三种形态（S3）
+## Three deployment forms (S3)
 
-同一个 `persona-server` 二进制就是同步中转的全部服务端实现，三种
-部署形态对应 S3 口径：①官方托管=persona 官方跑同一镜像；②自建
-relay=本页 compose/cargo；③局域网直传=同一二进制绑到现场设备的局域网
-地址（`PERSONA_SERVER_HOST=192.168.x.x` 或默认 `0.0.0.0`）。客户端只
-改 `base_url`，协议逐字节一致——三形态一致性由「同一 router、同一测试
-套件」构成，无需三份实现；差异仅在部署与传输错误形状。
+A single `persona-server` binary is the entire server-side implementation of the
+sync relay, and the three deployment forms map to the S3 model: ① official
+hosting = persona officially runs the same image; ② self-hosted relay = the
+compose/cargo path on this page; ③ LAN direct = the same binary bound to the
+on-site device's LAN address (`PERSONA_SERVER_HOST=192.168.x.x` or the default
+`0.0.0.0`). Clients only change `base_url`; the protocol is byte-for-byte
+identical — consistency across the three forms comes from "one router, one test
+suite", with no need for three implementations; the only differences are
+deployment and transport error shapes.
 
-## 前置
+## Prerequisites
 
-- Docker（compose v2）或本机 cargo（workspace 内 `cargo run -p persona-server`）。
-- 一个强随机令牌（多设备推荐按设备拆分）。
+- Docker (compose v2) or local cargo (inside the workspace, `cargo run -p persona-server`).
+- One strong random token (for multiple devices, splitting per device is recommended).
 
-## 一键起（compose，推荐）
+## One-command startup (compose, recommended)
 
 ```bash
-export PERSONA_SERVER_TOKEN="换成强随机串"   # 单设备；多设备见下
-# export PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"  # 多设备令牌（可选叠加）
+export PERSONA_SERVER_TOKEN="replace-with-a-strong-random-string"   # single device; for multiple devices see below
+# export PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"  # multi-device tokens (optional, additive)
 docker compose -f docker/docker-compose.deploy.yml up -d
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/health  # 200
 ```
 
-说明：
+Notes:
 
-- `PERSONA_SERVER_TOKEN` 未设置时 compose 拒绝启动（`:?` fail-closed：服务器不会以 API 禁用状态悄悄上线）。
-- 多设备令牌 `PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"`：设备名由令牌推导、客户端不可自报，备份版本按设备归属；legacy 单令牌兼容为 `default` 设备。
-- 数据落命名卷 `persona-server-data`（`/data/persona-server.db` + `/data/backups`），容器重启保留。
-- 健康检查：`GET /health`（免认证）；`/metrics` 免认证（Prometheus 文本）。
+- When `PERSONA_SERVER_TOKEN` is unset, compose refuses to start (`:?` fail-closed: the server never comes up quietly with the API disabled).
+- Multi-device tokens `PERSONA_SERVER_TOKENS="laptop:tok1,phone:tok2"`: device names are derived from the tokens and cannot be self-reported by clients; backup versions are attributed per device; the legacy single token is compatible as a `default` device.
+- Data lands in the named volume `persona-server-data` (`/data/persona-server.db` + `/data/backups`), preserved across container restarts.
+- Health checks: `GET /health` (unauthenticated); `/metrics` is unauthenticated (Prometheus text).
 
-## 本地构建镜像
+## Building the image locally
 
-compose 默认拉 `ghcr.io/<owner>/persona-server:<tag>`。自建镜像：
+compose pulls `ghcr.io/<owner>/persona-server:<tag>` by default. To build your
+own image:
 
 ```bash
 docker build -f docker/Dockerfile.server -t persona-server:local .
-# 把 compose 的 image 改成 persona-server:local 后同样 up -d
+# point compose's image at persona-server:local, then up -d as before
 ```
 
-## 环境变量全表
+## Environment variable reference
 
-| 变量                                          | 默认                  | 说明                                                                                    |
+| Variable                                      | Default               | Description                                                                             |
 | --------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
-| `PERSONA_SERVER_TOKEN`                        | —（必填其一）         | legacy 单令牌；未配且 TOKENS 未配 → `/api/v1` 整体 503（fail-closed），`/health` 仍 200 |
-| `PERSONA_SERVER_TOKENS`                       | —                     | 多设备 `name:token,…`；非法格式启动即错                                                 |
-| `PERSONA_SERVER_HOST` / `PERSONA_SERVER_PORT` | `0.0.0.0` / `3000`    | 监听面；只放内网/127.0.0.1 时按需改 HOST                                                |
-| `PERSONA_SERVER_DB`                           | `./persona-server.db` | 事件库（WAL，与 core 身份库分离）                                                       |
-| `PERSONA_SERVER_BACKUP_DIR`                   | `./backups`           | 加密备份落盘目录（`{uuid}.persenc`）                                                    |
-| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0`（不限）           | 超出删最旧（全局跨设备）                                                                |
-| `PERSONA_SERVER_OPS_RETENTION_DAYS`           | `0`（不清理）         | 同步 oplog 窗口：开窗 = 放弃向离线超窗设备补发历史；窗口须 ≥ 最慢设备的离线周期         |
-| `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0`（不清理）         | 审计事件副本保留，按 SIEM 摘取周期定                                                    |
+| `PERSONA_SERVER_TOKEN`                        | — (one required)       | Legacy single token; if neither it nor TOKENS is configured → all of `/api/v1` returns 503 (fail-closed), `/health` still 200 |
+| `PERSONA_SERVER_TOKENS`                       | —                     | Multi-device `name:token,…`; an invalid format fails at startup                         |
+| `PERSONA_SERVER_HOST` / `PERSONA_SERVER_PORT` | `0.0.0.0` / `3000`    | Listen surface; change HOST as needed when exposing only to the LAN/127.0.0.1            |
+| `PERSONA_SERVER_DB`                           | `./persona-server.db` | Event database (WAL, separate from the core identity store)                             |
+| `PERSONA_SERVER_BACKUP_DIR`                   | `./backups`           | Directory for encrypted backups on disk (`{uuid}.persenc`)                              |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0` (unlimited)       | Deletes the oldest once exceeded (global, across devices)                               |
+| `PERSONA_SERVER_OPS_RETENTION_DAYS`           | `0` (no cleanup)      | Sync oplog window: opening one means giving up replaying history to devices that were offline past the window; the window must be ≥ the slowest device's offline period |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0` (no cleanup)      | Retention for the audit event copy, sized to your SIEM ingestion cadence                |
 
-## 客户端接线
+## Client wiring
 
-备份链（CLI）：`PERSONA_SERVER_URL` + `PERSONA_SERVER_TOKEN` 都非空才启用（fail-closed）；`persona backup push/list/pull/restore/delete`。push 不要求解锁；restore 先确认后输口令、staged 复验成功才换库、旧库留 `.bak`。
+Backup chain (CLI): enabled only when both `PERSONA_SERVER_URL` and
+`PERSONA_SERVER_TOKEN` are non-empty (fail-closed);
+`persona backup push/list/pull/restore/delete`. push does not require unlocking;
+restore confirms first, then takes the passphrase, swaps the database only after
+the staged re-verification succeeds, and keeps the old database as `.bak`.
 
-同步（桌面）：设置页同步 pane 填 URL + token（token 真值进 OS keyring，库里只留占位）→ 设备管理区 join/authorize/revoke → `sync_now` 推拉。第一台设备 join 时空组自动建组（`bootstrap_group_if_empty`）；被吊销设备的短期令牌即刻失效（等 TTL 之外），历史密文前向安全靠手动「轮换组密钥」。
+Sync (desktop): fill in URL + token on the Settings page's sync pane (the real
+token goes into the OS keyring, only a placeholder is kept in the database) →
+join/authorize/revoke in the device management area → `sync_now` push/pull. When
+the first device joins, an empty group is created automatically
+(`bootstrap_group_if_empty`); a revoked device's short-lived token becomes
+invalid immediately (beyond waiting out the TTL), and forward secrecy for
+historical ciphertext relies on manually "rotating the group key".
 
-设备认证（SRP，DR-2）：`POST /api/v1/auth/register` 需既有 Bearer 作引导链（客户端本地生成 salt/verifier 上传，密码永不出机）→ `challenge` → `verify` 换 15 分钟短期 token；连续 5 次失败锁 15 分钟。静态令牌路径保留共存（备份链与事件上报不打断）。
+Device authentication (SRP, DR-2): `POST /api/v1/auth/register` requires an
+existing Bearer as the bootstrap chain (the client generates salt/verifier
+locally and uploads them; the password never leaves the machine) → `challenge` →
+`verify` exchanges it for a 15-minute short-lived token; five consecutive failures
+lock for 15 minutes. The static-token path is kept coexisting (the backup chain
+and event reporting are not interrupted).
 
-## 端点速查（认证 = Bearer，静态或 SRP 短期）
+## Endpoint quick reference (auth = Bearer, static or SRP short-lived)
 
-- `/api/v1/events`（POST/GET）：审计事件批量 ≤500/body ≤1MiB，`client_event_id` 部分去重，游标分页。
-- `/api/v1/backups`（POST/GET/DELETE）：流式落盘 256 MiB 上限、同设备最新版本 sha256 去重、下载 ETag=sha256。
-- `/api/v1/sync/devices`（POST/GET/DELETE）：设备注册（公钥+设备名）/列出/吊销；`/api/v1/sync/devices/remark`（PUT）：组内设备备注互见（S4）。
-- `/api/v1/sync/snapshot`（PUT/GET）：组快照水位锚点。
-- `/api/v1/sync/status`（GET）：同步状态。
-- `/api/v1/sync/group-keys`（GET/PUT）：设备信封取/传；`/api/v1/sync/group-key/rotate-begin` 以 epoch 乐观锁抢写信封窗口（409 = 后到者重读重试）。
-- `/api/v1/sync/oplog`（POST/GET）：push ≤500 条/批幂等（`op_id`），pull 游标增量。服务器不排序不合并（DR-4，裁决在客户端 LWW + 冲突双版本）。
-- `/api/v1/accounts/*`：账号体系（M2）。`register`、`{id}/srp/register|challenge|verify`（SRP 密码认证，见上文 DR-2 之外的第二套账号域）、`{id}/passkeys/create-options|register|login-options`（WebAuthn 仪式）、`{id}/recovery-codes`（生成/验证一次性恢复码）、`{id}/devices`（POST/GET/DELETE 设备授权与吊销）、`{id}/sessions`（POST 建/DELETE 吊销账号会话）。带 Bearer 门禁的写路径：srp/register、recovery-codes 生成、devices、sessions。
-- `/api/v1/pairing/*`：同步组动态密码配对的无账号信箱（S1，`docs/sync-group-mode.md`；**不要求 Bearer**）。`POST sessions`（建会话，TTL 600s）、`GET|DELETE sessions/{id}`（回读 salt/队列水位/删会话）、`POST|GET messages/to-host`、`POST|GET messages/to-guest`（GET 即消费；单方向队列 ≤4、payload ≤4KiB、404 合并存在性）。中转不解释 payload。
+- `/api/v1/events` (POST/GET): audit event batches ≤500/body ≤1MiB, partially deduplicated by `client_event_id`, cursor pagination.
+- `/api/v1/backups` (POST/GET/DELETE): streaming to disk with a 256 MiB cap, dedup by sha256 of the newest version from the same device, download ETag=sha256.
+- `/api/v1/sync/devices` (POST/GET/DELETE): device registration (public key + device name)/list/revoke; `/api/v1/sync/devices/remark` (PUT): device remarks visible to each other within the group (S4).
+- `/api/v1/sync/snapshot` (PUT/GET): group snapshot watermark anchor.
+- `/api/v1/sync/status` (GET): sync status.
+- `/api/v1/sync/group-keys` (GET/PUT): device envelope fetch/store; `/api/v1/sync/group-key/rotate-begin` grabs the envelope write window with an epoch optimistic lock (409 = the latecomer re-reads and retries).
+- `/api/v1/sync/oplog` (POST/GET): push ≤500 entries/batch idempotent (`op_id`), pull cursor-based incremental. The server neither sorts nor merges (DR-4; adjudication happens client-side with LWW + conflicting dual versions).
+- `/api/v1/accounts/*`: account system (M2). `register`, `{id}/srp/register|challenge|verify` (SRP password authentication, the second account domain beyond DR-2 above), `{id}/passkeys/create-options|register|login-options` (WebAuthn ceremonies), `{id}/recovery-codes` (generate/verify one-time recovery codes), `{id}/devices` (POST/GET/DELETE device authorization and revocation), `{id}/sessions` (POST to create/DELETE to revoke account sessions). Write paths behind a Bearer gate: srp/register, recovery-codes generation, devices, sessions.
+- `/api/v1/pairing/*`: accountless mailbox for sync-group dynamic password pairing (S1, `docs/sync-group-mode.md`; **Bearer not required**). `POST sessions` (create a session, TTL 600s), `GET|DELETE sessions/{id}` (read back salt/queue watermark/delete a session), `POST|GET messages/to-host`, `POST|GET messages/to-guest` (GET consumes; per-direction queue ≤4, payload ≤4KiB, 404 merges existence). The relay does not interpret payloads.
 
-## 运维注意
+## Operational notes
 
-- 备份去重是密文级 sha256：PERSENC1 随机 salt+nonce 使每次 fresh push 密文不同，去重仅防同密文重试；版本数由 `BACKUP_MAX_VERSIONS` 封顶。
-- oplog/事件保留窗口一旦开，离线超窗设备靠本地事实源 + 重推幂等补齐（INSERT OR IGNORE 原样回填），视图仍收敛。
-- 服务器不防篡改/回滚/扣留（与备份保管同款边界，THREAT_MODEL 已登记）；设备被攻破的爆炸半径 = 该设备可见的全部同步数据（与本机被攻破同级）。
+- Backup dedup is ciphertext-level sha256: PERSENC1's random salt+nonce makes each fresh push produce different ciphertext, so dedup only prevents retrying identical ciphertext; the version count is capped by `BACKUP_MAX_VERSIONS`.
+- Once an oplog/event retention window is opened, devices that were offline past the window are filled in from their local source of truth plus idempotent re-push (backfilled verbatim with INSERT OR IGNORE), and views still converge.
+- The server does not guard against tampering/rollback/withholding (the same boundary as backup custody, registered in THREAT_MODEL); the blast radius of a compromised device = all sync data visible to that device (equivalent to the local machine being compromised).

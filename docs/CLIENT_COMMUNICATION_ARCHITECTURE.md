@@ -1,56 +1,63 @@
-# 客户端通信架构
+# Client Communication Architecture
 
 > [English](CLIENT_COMMUNICATION_ARCHITECTURE.md) | [中文](CLIENT_COMMUNICATION_ARCHITECTURE.zh.md)
 
 > **Status: target architecture / protocol design — NOT the current state.**
-> 本文描述的统一 IPC 层（`IpcMessage` 消息结构、`identity.*`/`credential.*` RPC
-> 方法表、`~/.persona/persona.sock`、JWT SessionToken、MessagePack+LZ4、
-> `PersonaPlugin`/`PluginManager` 插件系统、`persona-debug` 调试二进制、
-> systemd/launchd 单元、`~/.persona/service.toml`、连接池/批量请求/缓存层、
-> trace_id 等）**在代码中均不存在，属于目标设计**。当前真实的客户端通信面是：
+> The unified IPC layer described here (the `IpcMessage` message structure, the
+> `identity.*`/`credential.*` RPC method table, `~/.persona/persona.sock`, JWT
+> SessionToken, MessagePack+LZ4, the `PersonaPlugin`/`PluginManager` plugin system,
+> the `persona-debug` debug binary, systemd/launchd units, `~/.persona/service.toml`,
+> the connection pool / batch request / caching layer, trace_id, and so on)
+> **does not exist in the code — it is the target design**. The actual client
+> communication surface today is:
 >
-> - **桌面端（Tauri）**：进程内持有 `PersonaService`，前端经 Tauri invoke 调用，无独立 IPC 守护进程；
-> - **浏览器扩展**：Native Messaging host（`persona bridge`）直接打开同一个 SQLite 工作区；另有 passkey 审批专用 Unix socket（`passkey-approval.sock`）；
-> - **SSH Agent**：独立 `persona-ssh-agent` 进程 + 专用 Unix socket / Windows Named Pipe；
-> - **Connect 自动化**：`connect-server` 内嵌桌面宿主进程，绑定 `127.0.0.1`；
-> - **可选服务器**：persona-server（axum HTTP + 手写 Prometheus 文本指标）。
+> - **Desktop (Tauri)**: holds `PersonaService` in-process; the frontend calls it via Tauri invoke, with no separate IPC daemon;
+> - **Browser extension**: a Native Messaging host (`persona bridge`) opens the same SQLite workspace directly; there is also a dedicated Unix socket for passkey approval (`passkey-approval.sock`);
+> - **SSH Agent**: a standalone `persona-ssh-agent` process plus a dedicated Unix socket / Windows Named Pipe;
+> - **Connect automation**: `connect-server` embeds a desktop host process bound to `127.0.0.1`;
+> - **Optional server**: persona-server (axum HTTP + hand-written Prometheus text metrics).
 >
-> 现状说明见 [`LOCAL_SERVICE.md`](./LOCAL_SERVICE.md) 与
-> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md)。本文其余内容按设计稿阅读，
-> 供未来实现对照。
+> For the current state, see [`LOCAL_SERVICE.md`](./LOCAL_SERVICE.md) and
+> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md). Read the rest of this document
+> as a design draft, for comparison with future implementations.
 
-Persona 数字身份管理系统的**目标架构**是统一的客户端通信设计：设想所有客户端（CLI、桌面应用、浏览器扩展、SSH Agent）通过一套标准化的 IPC 协议与本地服务进行通信。该设计当前**未实现**（现状见上方 Status 块与 `LOCAL_SERVICE.md`）；下文以设计态措辞描述目标形态。
+The **target architecture** of the Persona digital identity management system is a
+unified client communication design: all clients (CLI, desktop app, browser
+extension, SSH Agent) are envisioned to communicate with a local service through
+one standardized IPC protocol. This design is **not implemented today** (for the
+current state, see the Status block above and `LOCAL_SERVICE.md`); the remainder
+describes the target shape in design-mode terms.
 
-## 架构概览
+## Architecture Overview
 
 ```mermaid
 graph TB
-    subgraph "客户端层"
-        CLI[CLI 客户端]
-        Desktop[桌面应用]
-        Browser[浏览器扩展]
+    subgraph "Client layer"
+        CLI[CLI client]
+        Desktop[Desktop app]
+        Browser[Browser extension]
         Agent[SSH Agent]
-        Mobile[移动应用]
+        Mobile[Mobile app]
     end
 
-    subgraph "通信层"
-        IPC[IPC 协议层]
+    subgraph "Communication layer"
+        IPC[IPC protocol layer]
         Unix[Unix Socket]
         Pipe[Named Pipe]
         HTTP[HTTP API]
     end
 
-    subgraph "服务层"
-        Core[Core 服务]
-        Auth[认证服务]
-        Crypto[加密服务]
-        Storage[存储服务]
+    subgraph "Service layer"
+        Core[Core service]
+        Auth[Auth service]
+        Crypto[Crypto service]
+        Storage[Storage service]
     end
 
-    subgraph "数据层"
-        DB[(SQLite 数据库)]
-        Files[加密文件]
-        Vault[密钥保险库]
+    subgraph "Data layer"
+        DB[(SQLite database)]
+        Files[Encrypted files]
+        Vault[Key vault]
     end
 
     CLI --> IPC
@@ -77,131 +84,131 @@ graph TB
     Storage --> DB
 ```
 
-## 设计原则
+## Design Principles
 
-### 1. 本地优先 (Local-First)
+### 1. Local-First
 
-- **主要通信方式**: Unix Socket (macOS/Linux) / Named Pipe (Windows)
-- **备用方案**: HTTP API (跨网络或移动设备)
-- **数据主权**: 所有敏感数据本地存储和加密
-- **离线能力**: 完整功能无需网络连接
+- **Primary transport**: Unix Socket (macOS/Linux) / Named Pipe (Windows)
+- **Fallback**: HTTP API (cross-network or mobile devices)
+- **Data sovereignty**: all sensitive data is stored and encrypted locally
+- **Offline capability**: full functionality without a network connection
 
-### 2. 统一接口 (Unified Interface)
+### 2. Unified Interface
 
-- **标准协议**: 所有客户端使用相同的IPC协议
-- **类型安全**: 基于Rust类型的序列化/反序列化
-- **版本兼容**: 协议版本化，向后兼容
-- **错误处理**: 统一的错误响应格式
+- **Standard protocol**: all clients use the same IPC protocol
+- **Type safety**: Rust-type-based serialization/deserialization
+- **Version compatibility**: versioned protocol, backward compatible
+- **Error handling**: a unified error response format
 
-### 3. 安全优先 (Security-First)
+### 3. Security-First
 
-- **端到端加密**: 客户端到服务端的加密通信
-- **权限验证**: 基于会话的权限管理
-- **审计日志**: 所有操作的完整审计记录
-- **隔离**: 不同客户端的权限隔离
+- **End-to-end encryption**: encrypted communication from client to service
+- **Permission checks**: session-based permission management
+- **Audit logging**: a complete audit trail of all operations
+- **Isolation**: permission isolation between different clients
 
-### 4. 性能优化 (Performance)
+### 4. Performance
 
-- **异步通信**: 非阻塞的异步操作
-- **连接池**: 复用连接减少延迟
-- **批量操作**: 支持批量请求和响应
-- **缓存**: 智能缓存减少重复查询
+- **Asynchronous communication**: non-blocking async operations
+- **Connection pooling**: reuse connections to reduce latency
+- **Batch operations**: support for batched requests and responses
+- **Caching**: smart caching to reduce duplicate queries
 
-## 通信协议层次
+## Communication Protocol Layers
 
-### 第1层：传输层 (Transport Layer)
+### Layer 1: Transport Layer
 
-#### Unix Domain Sockets (主要)
+#### Unix Domain Sockets (primary)
 
-- **路径**: `~/.persona/persona.sock`
-- **权限**: `0600` (仅所有者可访问)
-- **特点**:
-  - 零拷贝，最佳性能
-  - 操作系统级别的安全隔离
-  - 自动清理（进程终止时）
+- **Path**: `~/.persona/persona.sock`
+- **Permissions**: `0600` (owner-only access)
+- **Characteristics**:
+  - Zero copy, best performance
+  - OS-level security isolation
+  - Automatic cleanup (on process exit)
 
 #### Named Pipes (Windows)
 
-- **路径**: `\\.\pipe\persona-{user-id}`
-- **权限**: 用户专有访问
-- **特点**:
-  - Windows原生IPC机制
-  - 与Unix Socket API兼容
-  - 支持异步操作
+- **Path**: `\\.\pipe\persona-{user-id}`
+- **Permissions**: user-specific access
+- **Characteristics**:
+  - Native Windows IPC mechanism
+  - API-compatible with Unix Sockets
+  - Supports asynchronous operations
 
-#### HTTP/WebSocket (备用)
+#### HTTP/WebSocket (fallback)
 
-- **端口**: `127.0.0.1:8080` (默认)
-- **协议**: HTTP/1.1 + WebSocket
-- **特点**:
-  - 跨网络访问
-  - 移动应用支持
-  - 标准Web技术栈
+- **Port**: `127.0.0.1:8080` (default)
+- **Protocol**: HTTP/1.1 + WebSocket
+- **Characteristics**:
+  - Cross-network access
+  - Mobile app support
+  - Standard web technology stack
 
-### 第2层：序列化层 (Serialization Layer)
+### Layer 2: Serialization Layer
 
-#### 消息格式
+#### Message format
 
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct IpcMessage {
-    pub id: String,           // 请求ID
-    pub version: String,      // 协议版本
-    pub method: String,       // 方法名
-    pub params: Value,        // 参数
-    pub timestamp: i64,       // 时间戳
+    pub id: String,           // request ID
+    pub version: String,      // protocol version
+    pub method: String,       // method name
+    pub params: Value,        // parameters
+    pub timestamp: i64,       // timestamp
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct IpcResponse {
-    pub id: String,           // 对应请求ID
-    pub result: Option<Value>,// 成功结果
-    pub error: Option<IpcError>, // 错误信息
-    pub timestamp: i64,       // 时间戳
+    pub id: String,           // ID of the request this responds to
+    pub result: Option<Value>,// success result
+    pub error: Option<IpcError>, // error information
+    pub timestamp: i64,       // timestamp
 }
 ```
 
-#### 序列化协议
+#### Serialization protocol
 
-- **主要格式**: MessagePack (二进制，紧凑)
-- **备用格式**: JSON (文本，调试友好)
-- **压缩**: 可选的LZ4压缩
+- **Primary format**: MessagePack (binary, compact)
+- **Fallback format**: JSON (text, debug-friendly)
+- **Compression**: optional LZ4 compression
 
-### 第3层：RPC层 (RPC Layer)
+### Layer 3: RPC Layer
 
-#### 方法调用模式
+#### Method invocation patterns
 
 ```rust
-// 同步调用
+// synchronous call
 let identity = client.call("identity.get", params).await?;
 
-// 异步通知
+// asynchronous notification
 client.notify("auth.logout", params).await?;
 
-// 订阅事件
+// event subscription
 let stream = client.subscribe("events.audit_log").await?;
 ```
 
-#### 标准方法命名
+#### Standard method naming
 
-- **身份管理**: `identity.{create|read|update|delete|list|switch}`
-- **凭证管理**: `credential.{create|read|update|delete|list|search}`
-- **认证操作**: `auth.{login|logout|verify|refresh}`
-- **配置管理**: `config.{get|set|reset}`
-- **审计日志**: `audit.{query|stream}`
-- **系统操作**: `system.{status|version|shutdown}`
+- **Identity management**: `identity.{create|read|update|delete|list|switch}`
+- **Credential management**: `credential.{create|read|update|delete|list|search}`
+- **Authentication operations**: `auth.{login|logout|verify|refresh}`
+- **Configuration management**: `config.{get|set|reset}`
+- **Audit logs**: `audit.{query|stream}`
+- **System operations**: `system.{status|version|shutdown}`
 
-## 客户端实现
+## Client Implementations
 
-### CLI 客户端
+### CLI Client
 
-#### 特点
+#### Characteristics
 
-- **同步接口**: 阻塞调用，适合脚本使用
-- **批量模式**: 支持批量操作
-- **输出格式**: 多种输出格式 (JSON, YAML, Table)
+- **Synchronous interface**: blocking calls, suitable for scripting
+- **Batch mode**: supports batch operations
+- **Output formats**: multiple output formats (JSON, YAML, Table)
 
-#### 实现示例
+#### Implementation example
 
 ```rust
 pub struct CliClient {
@@ -226,18 +233,18 @@ impl CliClient {
 }
 ```
 
-### 桌面应用 (Tauri)
+### Desktop App (Tauri)
 
-#### 特点
+#### Characteristics
 
-- **事件驱动**: 基于事件的响应式界面
-- **实时更新**: WebSocket订阅实时数据
-- **富界面**: 完整的图形用户界面
+- **Event-driven**: event-based reactive UI
+- **Real-time updates**: real-time data via WebSocket subscription
+- **Rich UI**: a full graphical user interface
 
-#### 实现示例
+#### Implementation example
 
 ```rust
-// Tauri 命令
+// Tauri command
 #[tauri::command]
 async fn get_identities() -> Result<Vec<Identity>, String> {
     let client = get_client().await?;
@@ -246,33 +253,33 @@ async fn get_identities() -> Result<Vec<Identity>, String> {
         .map_err(|e| e.to_string())
 }
 
-// 前端 (React/TypeScript)
+// Frontend (React/TypeScript)
 import { invoke } from '@tauri-apps/api/tauri';
 
 const identities = await invoke('get_identities');
 ```
 
-### 浏览器扩展
+### Browser Extension
 
-#### 特点
+#### Characteristics
 
-- **跨域通信**: 通过Native Messaging与本地服务通信
-- **安全隔离**: 扩展沙箱环境
-- **自动填充**: DOM操作和表单填充
+- **Cross-origin communication**: communicates with the local service via Native Messaging
+- **Secure isolation**: extension sandbox environment
+- **Auto-fill**: DOM manipulation and form filling
 
-#### 通信流程
+#### Communication flow
 
 ```
-浏览器扩展 -> Native Host -> Unix Socket -> Core Service
-     |              |              |            |
-   Content      Background      IPC Client   Business
-   Script        Script         Proxy         Logic
+Browser extension -> Native Host -> Unix Socket -> Core Service
+       |                 |              |            |
+   Content           Background      IPC Client   Business
+   Script             Script         Proxy         Logic
 ```
 
-#### 实现示例
+#### Implementation example
 
 ```javascript
-// 扩展侧
+// extension side
 chrome.runtime.sendNativeMessage(
   "com.persona.native",
   {
@@ -289,26 +296,26 @@ chrome.runtime.sendNativeMessage(
 
 ### SSH Agent
 
-#### 特点
+#### Characteristics
 
-- **标准协议**: 实现OpenSSH Agent协议
-- **双向通信**: SSH Agent Protocol + Persona IPC
-- **策略控制**: 基于策略的签名控制
+- **Standard protocol**: implements the OpenSSH Agent protocol
+- **Bidirectional communication**: SSH Agent Protocol + Persona IPC
+- **Policy control**: policy-based signature control
 
-#### 通信模式
+#### Communication pattern
 
 ```
 SSH Client -> SSH Agent -> Core Service
      |           |             |
    SSH Protocol  Persona IPC  Database
-   (标准)        (自定义)      (SQLite)
+   (standard)    (custom)      (SQLite)
 ```
 
-## 服务端架构
+## Server Architecture
 
 ### Core Service
 
-#### 主要组件
+#### Main components
 
 ```rust
 pub struct PersonaService {
@@ -320,23 +327,23 @@ pub struct PersonaService {
 }
 ```
 
-#### 启动流程
+#### Startup flow
 
 ```rust
 #[tokio::main]
 async fn main() -> Result<()> {
-    // 1. 初始化服务
+    // 1. initialize the service
     let service = PersonaService::new().await?;
 
-    // 2. 启动IPC服务器
+    // 2. start the IPC server
     let ipc_server = IpcServer::new(service.clone());
     let unix_listener = UnixListener::bind("~/.persona/persona.sock")?;
 
-    // 3. 启动HTTP服务器 (可选)
+    // 3. start the HTTP server (optional)
     let http_server = HttpServer::new(service.clone());
     let http_listener = TcpListener::bind("127.0.0.1:8080")?;
 
-    // 4. 并发处理连接
+    // 4. serve connections concurrently
     tokio::try_join!(
         ipc_server.serve(unix_listener),
         http_server.serve(http_listener),
@@ -346,9 +353,9 @@ async fn main() -> Result<()> {
 }
 ```
 
-### 会话管理
+### Session Management
 
-#### 会话生命周期
+#### Session lifecycle
 
 ```rust
 pub struct Session {
@@ -361,7 +368,7 @@ pub struct Session {
 }
 
 impl Session {
-    // 认证检查
+    // authentication check
     pub fn requires_auth(&self, operation: &Operation) -> bool {
         match operation {
             Operation::IdentityList => self.has_permission(Permission::IdentityRead),
@@ -372,11 +379,11 @@ impl Session {
 }
 ```
 
-## 错误处理
+## Error Handling
 
-### 统一错误格式
+### Unified error format
 
-#### 错误类型
+#### Error types
 
 ```rust
 #[derive(Serialize, Deserialize, Debug)]
@@ -389,28 +396,28 @@ pub struct IpcError {
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ErrorCode {
-    // 认证错误
+    // authentication errors
     AuthenticationRequired,
     AuthenticationFailed,
     SessionExpired,
 
-    // 授权错误
+    // authorization errors
     PermissionDenied,
     InsufficientPrivileges,
 
-    // 业务逻辑错误
+    // business logic errors
     ResourceNotFound,
     InvalidInput,
     ConflictingOperation,
 
-    // 系统错误
+    // system errors
     InternalError,
     ServiceUnavailable,
     DatabaseError,
 }
 ```
 
-#### 错误响应示例
+#### Error response example
 
 ```json
 {
@@ -428,11 +435,11 @@ pub enum ErrorCode {
 }
 ```
 
-## 性能优化策略
+## Performance Optimization Strategies
 
-### 1. 连接管理
+### 1. Connection Management
 
-#### 连接池
+#### Connection pool
 
 ```rust
 pub struct ConnectionPool {
@@ -443,24 +450,24 @@ pub struct ConnectionPool {
 
 impl ConnectionPool {
     pub async fn get_connection(&self) -> Result<Connection> {
-        // 复用空闲连接或创建新连接
+        // reuse an idle connection or create a new one
     }
 
     pub async fn return_connection(&self, conn: Connection) {
-        // 返回连接到池中
+        // return the connection to the pool
     }
 }
 ```
 
-### 2. 批量操作
+### 2. Batch Operations
 
-#### 批量请求格式
+#### Batch request format
 
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct BatchRequest {
     pub requests: Vec<IpcMessage>,
-    pub atomic: bool,  // 是否原子操作
+    pub atomic: bool,  // whether the batch is atomic
 }
 
 #[derive(Serialize, Deserialize)]
@@ -471,38 +478,38 @@ pub struct BatchResponse {
 }
 ```
 
-### 3. 缓存策略
+### 3. Caching Strategy
 
-#### 多级缓存
+#### Multi-level cache
 
 ```rust
 pub struct CacheLayer {
-    // L1: 内存缓存 (最快)
+    // L1: in-memory cache (fastest)
     memory_cache: Arc<RwLock<LruCache<String, Value>>>,
 
-    // L2: 本地存储 (中等)
+    // L2: local storage (medium)
     disk_cache: Arc<DiskCache>,
 
-    // L3: 数据库 (最慢但权威)
+    // L3: database (slowest but authoritative)
     database: Arc<Database>,
 }
 ```
 
-## 安全考虑
+## Security Considerations
 
-### 1. 传输安全
+### 1. Transport Security
 
-#### Unix Socket权限
+#### Unix Socket permissions
 
 ```bash
-# socket文件权限
+# socket file permissions
 chmod 600 ~/.persona/persona.sock
 
-# 目录权限
+# directory permissions
 chmod 700 ~/.persona
 ```
 
-#### Named Pipe安全 (Windows)
+#### Named Pipe security (Windows)
 
 ```rust
 use windows::Win32::Storage::FileSystem::*;
@@ -515,33 +522,33 @@ let pipe = CreateNamedPipeW(
     BUFFER_SIZE,
     BUFFER_SIZE,
     0,
-    &security_attributes, // 限制为当前用户
+    &security_attributes, // restrict to the current user
 )?;
 ```
 
-### 2. 认证和授权
+### 2. Authentication and Authorization
 
-#### JWT会话令牌
+#### JWT session token
 
 ```rust
 #[derive(Serialize, Deserialize)]
 pub struct SessionToken {
-    pub sub: UserId,      // 用户ID
-    pub iat: i64,         // 签发时间
-    pub exp: i64,         // 过期时间
+    pub sub: UserId,      // user ID
+    pub iat: i64,         // issued-at time
+    pub exp: i64,         // expiration time
     pub permissions: Vec<Permission>,
 }
 
 impl SessionToken {
     pub fn verify(&self, secret: &[u8]) -> Result<bool> {
-        // 验证签名和有效期
+        // verify the signature and validity period
     }
 }
 ```
 
-### 3. 审计日志
+### 3. Audit Logging
 
-#### 通信审计
+#### Communication audit
 
 ```rust
 pub struct CommunicationAudit {
@@ -554,11 +561,11 @@ pub struct CommunicationAudit {
 }
 ```
 
-## 开发和调试
+## Development and Debugging
 
-### 1. 协议测试
+### 1. Protocol Testing
 
-#### 单元测试
+#### Unit tests
 
 ```rust
 #[tokio::test]
@@ -574,56 +581,56 @@ async fn test_identity_create() {
 }
 ```
 
-#### 集成测试
+#### Integration tests
 
 ```rust
 #[tokio::test]
 async fn test_end_to_end_flow() {
-    // 启动测试服务
+    // start the test service
     let service = TestService::start().await;
 
-    // 测试完整流程
+    // exercise the full flow
     let client = CliClient::connect().await?;
     client.login("test-password").await?;
 
     let identity = client.create_identity("Test", "test@example.com").await?;
     let credential = client.create_credential(&identity.id, "password", "secret").await?;
 
-    // 验证结果
+    // verify the results
     assert_eq!(identity.name, "Test");
     assert_eq!(credential.type_, "password");
 }
 ```
 
-### 2. 调试工具
+### 2. Debugging Tools
 
-#### IPC监控器
+#### IPC monitor
 
 ```bash
-# 监控所有IPC通信
+# monitor all IPC traffic
 persona-debug monitor --socket ~/.persona/persona.sock
 
-# 输出格式
+# output format
 # [2024-01-01T12:00:00Z] CLIENT->SERVER: identity.list {}
 # [2024-01-01T12:00:01Z] SERVER->CLIENT: {result: [{id: "...", name: "..."}]}
 ```
 
-#### 协议分析器
+#### Protocol analyzer
 
 ```bash
-# 分析协议消息
+# analyze protocol messages
 persona-debug analyze --file ipc-trace.log
 
-# 统计信息
+# statistics
 # Total requests: 1234
 # Success rate: 98.5%
 # Average latency: 12ms
 # Top methods: identity.list (45%), credential.search (32%)
 ```
 
-## 部署配置
+## Deployment Configuration
 
-### 1. 系统服务配置
+### 1. System Service Configuration
 
 #### systemd (Linux)
 
@@ -666,67 +673,67 @@ WantedBy=multi-user.target
 </plist>
 ```
 
-### 2. 配置文件
+### 2. Configuration Files
 
-#### 服务配置 (`service.toml`)
+#### Service configuration (`service.toml`)
 
 ```toml
 [server]
-# Unix socket路径
+# Unix socket path
 unix_socket_path = "~/.persona/persona.sock"
-# Named pipe名称 (Windows)
+# Named pipe name (Windows)
 named_pipe_name = "persona-{user-id}"
-# HTTP绑定地址 (可选)
+# HTTP bind address (optional)
 http_bind = "127.0.0.1:8080"
 
 [security]
-# 会话超时时间 (秒)
+# session timeout (seconds)
 session_timeout = 3600
-# 最大并发连接数
+# maximum concurrent connections
 max_connections = 100
-# 启用TLS (HTTP模式)
+# enable TLS (HTTP mode)
 enable_tls = false
 
 [performance]
-# 连接池大小
+# connection pool size
 connection_pool_size = 10
-# 批量操作最大大小
+# maximum batch size
 max_batch_size = 100
-# 缓存大小 (MB)
+# cache size (MB)
 cache_size_mb = 128
 
 [logging]
-# 日志级别
+# log level
 level = "info"
-# 启用IPC通信日志
+# enable IPC communication logging
 log_ipc = false
-# 日志文件路径
+# log file path
 file_path = "~/.persona/logs/service.log"
 ```
 
-## 扩展性
+## Extensibility
 
-### 1. 插件系统
+### 1. Plugin System
 
-#### 插件接口
+#### Plugin interface
 
 ```rust
 pub trait PersonaPlugin: Send + Sync {
     fn name(&self) -> &str;
     fn version(&self) -> &str;
 
-    // 注册RPC方法
+    // register RPC methods
     fn register_methods(&self, registry: &mut MethodRegistry);
 
-    // 插件初始化
+    // plugin initialization
     async fn initialize(&self, context: &PluginContext) -> Result<()>;
 
-    // 插件清理
+    // plugin cleanup
     async fn cleanup(&self) -> Result<()>;
 }
 ```
 
-#### 动态加载
+#### Dynamic loading
 
 ```rust
 pub struct PluginManager {
@@ -736,7 +743,7 @@ pub struct PluginManager {
 
 impl PluginManager {
     pub async fn load_plugin(&mut self, path: &Path) -> Result<()> {
-        // 动态加载插件库
+        // dynamically load the plugin library
         let lib = unsafe { libloading::Library::new(path)? };
         let constructor: Symbol<fn() -> Box<dyn PersonaPlugin>> =
             unsafe { lib.get(b"create_plugin")? };
@@ -751,9 +758,9 @@ impl PluginManager {
 }
 ```
 
-### 2. 第三方集成
+### 2. Third-Party Integration
 
-#### 外部服务连接器
+#### External service connectors
 
 ```rust
 pub trait ExternalConnector: Send + Sync {
@@ -762,7 +769,7 @@ pub trait ExternalConnector: Send + Sync {
     async fn import_credentials(&self) -> Result<Vec<Credential>>;
 }
 
-// 示例：1Password连接器
+// Example: 1Password connector
 pub struct OnePasswordConnector {
     api_token: String,
     vault_id: String,
@@ -770,25 +777,25 @@ pub struct OnePasswordConnector {
 
 impl ExternalConnector for OnePasswordConnector {
     async fn import_credentials(&self) -> Result<Vec<Credential>> {
-        // 从1Password导入凭证
+        // import credentials from 1Password
     }
 }
 ```
 
-## 监控和指标
+## Monitoring and Metrics
 
-### 1. 性能指标
+### 1. Performance Metrics
 
-#### 关键指标
+#### Key metrics
 
-- **连接数**: 当前活跃连接数
-- **请求延迟**: 95th/99th百分位延迟
-- **吞吐量**: 每秒请求数 (RPS)
-- **错误率**: 错误请求百分比
-- **内存使用**: 服务内存占用
-- **数据库性能**: 查询执行时间
+- **Connection count**: current active connections
+- **Request latency**: 95th/99th percentile latency
+- **Throughput**: requests per second (RPS)
+- **Error rate**: percentage of failed requests
+- **Memory usage**: service memory consumption
+- **Database performance**: query execution time
 
-#### 指标采集
+#### Metrics collection
 
 ```rust
 use prometheus::{Histogram, Counter, Gauge};
@@ -808,9 +815,9 @@ lazy_static! {
 }
 ```
 
-### 2. 健康检查
+### 2. Health Checks
 
-#### 健康检查端点
+#### Health check endpoint
 
 ```rust
 pub struct HealthChecker {
@@ -822,13 +829,13 @@ impl HealthChecker {
     pub async fn check_health(&self) -> HealthStatus {
         let mut status = HealthStatus::new();
 
-        // 数据库连接检查
+        // database connectivity check
         status.database = self.check_database().await;
 
-        // 服务状态检查
+        // service status check
         status.service = self.check_service().await;
 
-        // 磁盘空间检查
+        // disk space check
         status.disk_space = self.check_disk_space().await;
 
         status
@@ -836,28 +843,28 @@ impl HealthChecker {
 }
 ```
 
-## 总结
+## Summary
 
-Persona的客户端通信架构采用了现代化的设计模式：
+Persona's client communication architecture uses modern design patterns:
 
-1. **统一的IPC协议** - 所有客户端使用相同的通信标准
-2. **多层传输支持** - Unix Socket/Named Pipe为主，HTTP为辅
-3. **安全优先设计** - 端到端加密，权限隔离，完整审计
-4. **高性能优化** - 异步处理，连接池，智能缓存
-5. **开发友好** - 类型安全，错误处理，调试工具
-6. **可扩展架构** - 插件系统，第三方集成，监控指标
+1. **Unified IPC protocol** - all clients share the same communication standard
+2. **Multi-layer transport support** - Unix Socket/Named Pipe as the primary means, HTTP as a fallback
+3. **Security-first design** - end-to-end encryption, permission isolation, complete auditing
+4. **High-performance optimization** - async processing, connection pooling, smart caching
+5. **Developer-friendly** - type safety, error handling, debugging tools
+6. **Extensible architecture** - plugin system, third-party integrations, monitoring metrics
 
-这个架构为Persona提供了坚实的通信基础，支持从简单的CLI操作到复杂的桌面应用的各种使用场景，同时确保了安全性、性能和可维护性。
+This architecture gives Persona a solid communication foundation, supporting everything from simple CLI operations to complex desktop applications, while ensuring security, performance, and maintainability.
 
-## 参考资料
+## References
 
-- [Unix Domain Sockets编程指南](https://man7.org/linux/man-pages/man7/unix.7.html)
-- [Windows Named Pipes文档](https://docs.microsoft.com/en-us/windows/win32/ipc/named-pipes)
-- [MessagePack序列化格式](https://msgpack.org/)
-- [Tauri IPC文档](https://tauri.app/v1/guides/features/command)
+- [Unix Domain Sockets programming guide](https://man7.org/linux/man-pages/man7/unix.7.html)
+- [Windows Named Pipes documentation](https://docs.microsoft.com/en-us/windows/win32/ipc/named-pipes)
+- [MessagePack serialization format](https://msgpack.org/)
+- [Tauri IPC documentation](https://tauri.app/v1/guides/features/command)
 
 ---
 
-**维护者**: Persona 架构团队
-**最后更新**: 2026-09-25（本文首次入库；现状边界见文首 Status 块）
-**版本**: v1.0（设计稿）
+**Maintainer**: Persona architecture team
+**Last updated**: 2026-09-25 (first commit of this document; see the Status block at the top for the current-state boundary)
+**Version**: v1.0 (design draft)

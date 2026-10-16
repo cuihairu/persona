@@ -156,10 +156,10 @@ Sync phase one: custody of whole-database encrypted backups. The client gzips a 
 
 ## SRP Device Authentication Endpoint (`/api/v1/auth/*`, 2026-09, E2EE sync track phase 1)
 
-SRP-6a (RFC 5054 4096-bit group + SHA-256) device login: the client pre-hashes the master password locally with Argon2id to derive the SRP private key, and the server stores only the verifier (`auth_devices` table: device name, salt, verifier — the password and the Argon2-derived value never leave the device). Design in
-预 hash 主密码派生 SRP 私钥，服务器只存 verifier（`auth_devices` 表：设备名、
+SRP-6a (RFC 5054 4096-bit group + SHA-256) device login: the client pre-hashes the master password locally with Argon2id
+to derive the SRP private key, and the server stores only the verifier (`auth_devices` table: device name, salt,
+verifier — the password and the Argon2-derived value never leave the device). Design in
 `docs/E2EE_SYNC_DESIGN.md` DR-2.
-`docs/E2EE_SYNC_DESIGN.md` DR-2。
 
 - **Data scope**: persisted data is only device name + salt + verifier (uploaded at registration via the existing Bearer — the bootstrap chain); pending handshakes (session_id, server ephemeral private key, client public value, TTL 120s), issued short-term tokens (TTL 15 minutes), and failure counts are **all in-memory and deliberately not persisted** — a server restart invalidates all of them (fail-closed, re-login required).
 - **Authentication**: `/register` requires an existing Bearer (a static token or an already-logged-in SRP token); `/challenge` and `/verify` are Bearer-free (they are the login steps that exchange for a token) and pass on the SRP proof alone; issued tokens are random ≥256-bit base64url, and `require_bearer` prefers the static token, falling back to the SRP token table on a miss — **the TOKENS Bearer path is preserved in coexistence so the backup chain is not interrupted**. With the auth system unconfigured (no TOKENS), all three endpoints return 503 (same fail-closed as events/backups).
@@ -167,209 +167,209 @@ SRP-6a (RFC 5054 4096-bit group + SHA-256) device login: the client pre-hashes t
 - **Explicitly not claimed**: does not protect against a server operator **offline brute-forcing the verifier in the `auth_devices` table** (the verifier is in the server's hands; cost = Argon2 + master password strength — same class as the local vault being dragged off, and master password strength remains the core risk); does not protect against **unauthenticated challenge flooding** (the in-memory session cache has no rate limit — a known DoS surface, mitigated by a deployment-side reverse proxy); does not protect against the server **refusing service / deleting registration records** (a device has no second copy; simply re-register, but this is an availability loss); the SRP math is implemented inline in `core/src/auth/srp.rs` (the RustCrypto `srp` crate was not adopted due to digest-ecosystem drift and is no longer a dependency) — the implementation is pinned by RFC 5054 official test vectors, with a seam isolated so it can be swapped.
 - **Known limitations**: device revocation/removal has landed (2026-09 revocation closed loop): revoking a synced device (`DELETE /sync/devices/:id`) cascade-deletes the same-named `auth_devices` row (SRP registration is keyed by device name) and immediately revokes its in-memory short-term token and pending handshake (`SrpAuthState::revoke_device` — a revoked device's existing credentials no longer work, pinned by real TCP tests); but the revocation granularity is the **device** — there is no independent "revoke the token only, not the device" operation, and a token leaving the device still expires naturally by TTL (15 minutes); no audit beyond the change threshold — registration/login appear only in server logs (`tracing`), not in the event store.
 
-## E2EE 同步中继（`/api/v1/sync/*`，2026-09，E2EE 同步轨道阶段 2）
+## E2EE Sync Relay (`/api/v1/sync/*`, 2026-09, E2EE sync track phase 2)
 
-设备间端到端加密同步的密文中继：oplog（逐条 `SyncOp`：item UUID、kind、
-`(lamport, device_id)` 排序键、密文载荷）按到达顺序追加、按游标转发；
-group key 以「设备信封」形态保管（X25519 静态公钥密封 + AES-256-GCM，
-`persona-dev-env-1`）。服务器是**纯中继**：盲存、追加、转发，不做任何
-胜负判定或合并。设计见 `docs/E2EE_SYNC_DESIGN.md`（DR-1/3/4），服务端
-可见面清单见其 §9。
+Ciphertext relay for end-to-end encrypted sync between devices: the oplog (per-entry `SyncOp`: item UUID, kind,
+`(lamport, device_id)` ordering key, ciphertext payload) is appended in arrival order and forwarded by cursor;
+the group key is kept in "device envelope" form (sealed with an X25519 static public key + AES-256-GCM,
+`persona-dev-env-1`). The server is a **pure relay**: blind store, append, forward — it makes no
+win/lose decisions and performs no merging. Design in `docs/E2EE_SYNC_DESIGN.md` (DR-1/3/4); the server-side
+visibility inventory is in its §9.
 
-- **信任根**：主密码（仅本地，从不外发）+ 每设备 X25519 私钥（DR-1，持久化由宿主负责——OS keyring / 0600 文件，core 不依赖 keyring）。服务器没有任何解密路径：不见 group key 明文、不见 per-item key，只有密文与元数据（集成测试 `server_stores_only_ciphertext` 锁定）。
-- **数据处理范围**：oplog 行（op_id/item_id/kind/op/lamport/device_id/timestamp + 密文两列，单批 ≤500 条、载荷 ≤512 KiB、body ≤1 MiB）、设备登记（设备名 + 32 字节 X25519 公钥，重名 409——公钥不可被静默替换）、信封（80 字节，**只能挂已登记设备**——信封不能挂幽灵设备，服务器侧 fail-closed 的一半）。**诚实登记的元数据侧信道**：服务器可观察条目数量、尺寸、到达时间与设备拓扑——不缓解（by design，密文长度不可避免）。
-- **冲突由客户端裁决**（DR-4）：胜负以 `(lamport, device_id)` 全序由各客户端独立计算（同 item 同 lamport 异 device = 真冲突，保双版本等用户裁决）；服务器按到达顺序存储转发，`server_does_not_arbitrate_conflicts` 与双端收敛测试 `two_devices_converge_over_real_tcp_conflict_keeps_both_versions`（真 TCP，双端离线编辑真冲突 → 两端收敛同一主位 + 双版本密文都在）锁定该语义。
-- **认证与授权**：整个子路由挂 `require_bearer`（静态令牌与 SRP 短期令牌共存，同 events/backups）。授权语义 = **「有信封 = 已授权」，由密码学而非服务器 ACL 承担**：未授权设备 GET 拿得到别人的信封，但无对应私钥则 GCM tag 校验必失败——拿不到 group key 也解不开任何条目（`group_key_envelope_round_trip_and_fail_closed` 锁定）。
-- **明确不宣称**：不防服务器篡改/回滚/选择性扣留 oplog（「设备私钥签名 oplog」是设计稿 §11 开放问题 6，远期）；不防恶意服务器/客户端无限灌 oplog（批内上限只缓解量级，不根除）；**本阶段不校验 op.device_id 与认证身份的对应**（静态 token 与 SRP token 混用，无统一映射）——恶意客户端可向 oplog 写任意密文垃圾或伪造更高 lamport 的假版本，但解不开任何条目，也删不掉其他设备的本地库（本地优先：服务器永远不是事实源，伪造版本在正常设备上同样进 LWW、不覆盖其本地明文库）。设备被攻破的爆炸半径 = 该设备私钥 → group key → 全部同步数据，与「本机被攻破 = 本库全失」同级，不因同步而放大额外资产。
-- **已知限制**：附件不经 oplog（512 KiB 载荷上限；v2 议题）；travel 激活期间 push/pull 双停是**客户端引擎闸**（`SyncEngine` 构造注入，服务器无感知）——闸失效的后果是 travel 语义被同步破坏，属阶段 3 接线时的走查项；group key 轮换已实现（2026-09 阶段 3d，桌面「轮换组密钥」）但**吊销 ≠ 轮换**：只吊销不轮换时历史密文仍可被被移除设备移除前的密钥解开（**无前向安全**，DR-3 诚实边界；轮换后新密文对该设备不可读，窗口内未推送的旧密文除外——用户文档与确认弹窗均如实提示）。**并发轮换以 epoch 乐观锁互斥**（2026-09-24，`rotate-begin` CAS）：只防诚实客户端的意外并发——后到者 409 中止、未写信封未重包；**不防恶意客户端**绕过 begin 直接写信封/重包 op（写入真实性属「设备私钥签名 oplog」远期边界，本阶段登记的「不校验 op.device_id 与认证身份」同族）。oplog 无限增长已由保留策略缓解（2026-09-24：客户端 GC + `PERSONA_SERVER_OPS_RETENTION_DAYS`，§11 开放问题 3 两端收口；默认 0 = 不清理，开窗即放弃向离线超窗设备补发历史的责任）。
+- **Trust root**: the master password (local only, never transmitted) + per-device X25519 private key (DR-1; persistence is the host's responsibility — OS keyring / 0600 file, core has no keyring dependency). The server has no decryption path: it never sees the group key plaintext or any per-item key, only ciphertext and metadata (pinned by the integration test `server_stores_only_ciphertext`).
+- **Data scope**: oplog rows (op_id/item_id/kind/op/lamport/device_id/timestamp + two ciphertext columns; ≤500 entries per batch, payload ≤512 KiB, body ≤1 MiB), device registration (device name + 32-byte X25519 public key; a duplicate name returns 409 — a public key cannot be silently replaced), and envelopes (80 bytes, **attachable only to a registered device** — an envelope cannot attach to a phantom device, half of the server-side fail-closed guarantee). **Metadata side channel from honest registration**: the server can observe entry counts, sizes, arrival times, and device topology — not mitigated (by design; ciphertext length is unavoidable).
+- **Conflicts are adjudicated by clients** (DR-4): win/lose is computed independently by each client as a total order over `(lamport, device_id)` (same item, same lamport, different device = a real conflict, and both versions are kept pending user adjudication); the server stores and forwards in arrival order, and the semantics are pinned by `server_does_not_arbitrate_conflicts` and the two-device convergence test `two_devices_converge_over_real_tcp_conflict_keeps_both_versions` (real TCP; both ends edit offline into a real conflict → both converge on the same primary position with both ciphertext versions present).
+- **Authentication and authorization**: the whole sub-route is gated by `require_bearer` (static tokens and SRP short-term tokens coexist, as with events/backups). The authorization semantic is **"having an envelope = being authorized", borne by cryptography rather than a server ACL**: an unauthorized device can GET someone else's envelope, but without the matching private key the GCM tag verification always fails — it cannot obtain the group key and cannot open any entry (`group_key_envelope_round_trip_and_fail_closed` pins this).
+- **Explicitly not claimed**: does not protect against the server tampering with / rolling back / selectively withholding the oplog ("device-private-key-signed oplog" is design doc §11 open question 6, long-term); does not protect against a malicious server/client flooding the oplog indefinitely (per-batch limits only mitigate the magnitude, not eliminate it); **this phase does not verify that op.device_id corresponds to the authenticated identity** (static and SRP tokens are mixed, with no unified mapping) — a malicious client can write arbitrary ciphertext garbage to the oplog or forge a higher-lamport fake version, but it cannot open any entry and cannot delete other devices' local vaults (local-first: the server is never the source of truth; a forged version enters LWW on a normal device just like any other and does not overwrite its local plaintext vault). The blast radius of a compromised device = that device's private key → group key → all synced data, the same class as "this machine compromised = this vault lost", and does not enlarge the asset exposure through sync.
+- **Known limitations**: attachments do not go through the oplog (512 KiB payload limit; a v2 topic); during an active travel the push/pull double-stop is a **client engine gate** (`SyncEngine` constructor injection, invisible to the server) — a gate failure would break travel semantics through sync, a walkthrough item for the phase-3 wiring; group key rotation is implemented (2026-09 phase 3d, desktop "Rotate Group Key") but **revocation ≠ rotation**: revoking without rotating still lets ciphertext from before the removal be opened by the removed device's old key (**no forward secrecy**, the DR-3 honest boundary; after rotation new ciphertext is unreadable to that device, except for old ciphertext pushed within the window — the user docs and confirmation dialog both state this accurately). **Concurrent rotation is mutually excluded by an epoch optimistic lock** (2026-09-24, `rotate-begin` CAS): it prevents only honest clients from accidentally racing — the later arrival gets 409 and aborts without writing an envelope or rewrapping; it **does not prevent a malicious client** from bypassing begin and writing envelopes/rewrap ops directly (write authenticity is the long-term boundary of "device-private-key-signed oplog", same family as this phase's registered "does not verify op.device_id against the authenticated identity"). Oplog unbounded growth is mitigated by a retention policy (2026-09-24: client GC + `PERSONA_SERVER_OPS_RETENTION_DAYS`, closing design §11 open question 3 on both ends; default 0 = no cleanup, and opening the window means giving up responsibility for backfilling history to devices offline beyond the window).
 
-## Travel Mode（travel.persenc sidecar，2026-09）
+## Travel Mode (travel.persenc sidecar, 2026-09)
 
-按 identity 粒度的"从本设备移除"：enter 把被标记身份的全部数据（含附件密文
-文件字节）打包 gzip 后按 PERSENC1（独立 travel 口令，Argon2id 64 MiB 默认
-参数）加密为 `<db dir>/travel.persenc`，再在单事务内从主库删除——主库零痕迹，
-**主密码打不开 sidecar（by design，非缺陷）**；exit 输 travel 口令原样恢复。
-该设计引入新的单点资产与新的丢失面：
+Per-identity "remove from this device": enter packs all data of the marked identities (including attachment ciphertext
+file bytes), gzips it, and encrypts it as `<db dir>/travel.persenc` with PERSENC1 (an independent travel passphrase,
+Argon2id 64 MiB default parameters), then deletes it from the main vault in a single transaction — leaving zero trace in
+the main vault, **and the master password cannot open the sidecar (by design, not a defect)**; exit enters the travel passphrase to restore as-is.
+This design introduces a new single-point asset and a new loss surface:
 
-- **口令强度自担**：sidecar 只有一个口令保护，强度完全由用户承担；口令丢失
-  = 被移除身份永久不可恢复（无托管、无重置、无主密码回退）。UI/CLI 在
-  enter 时明示"no master-password fallback"。
-- **sidecar 删除 = 数据丢失**：travel 激活期间（`travel_mode=true`）手删或
-  介质损坏丢失 sidecar 即数据永久丢失。status 命令与桌面设置页以
-  `inconsistent` 红色警告诚实呈现（不假装可恢复），不做任何自动清理。
-- **本机攻击者可删 sidecar（拒绝服务，接受）**：同 OS 用户进程对
-  sidecar 文件有写权限即可销毁被移除身份的唯一副本。不宣称防本机攻击者
-  破坏数据（与"恶意进程可读 keyring"同一信任边界）；恶意进程同样可删主库，
-  travel mode 未新增该边界，只是把丢失面集中到一个文件。
-- **加密面**：sidecar 密文对持有设备者、云同步目录、USB 拷贝均不泄露明文
-  （与整库备份同一 PERSENC1 格式）；崩溃窗口语义——sidecar 写成功后才动库，
-  4→5 之间崩 = sidecar 在但旗标 false（enter 拒绝，提示 exit 或删残留），
-  5→6 之间崩 = exit 自愈覆写。
-- **改密互斥**：travel 激活期间拒绝改主密码（sidecar 无主密码绑定，改密
-  本身不破坏 sidecar，但为避免"激活期间密钥材料语义漂移"的全部组合证明，
-  直接拒绝并返回 `TRAVEL_MODE_ACTIVE`，exit 后可改）。
-- **运行态清理**：desktop enter 成功后停 SSH agent（agent 内存可能持有被
-  移除身份的密钥）；audit_logs 只保留 id 引用（明文元数据随 change_history
-  一并搬入 sidecar，主库不留可读残留）。
+- **Passphrase strength is self-borne**: the sidecar has only one passphrase protecting it, and its strength rests entirely on the user; losing the passphrase
+  = the removed identities are permanently unrecoverable (no escrow, no reset, no master-password fallback). The UI/CLI states "no master-password fallback"
+  explicitly at enter time.
+- **Deleting the sidecar = data loss**: while travel is active (`travel_mode=true`), manually deleting the sidecar or losing it through media damage means permanent data loss.
+  The status command and the desktop settings page present this honestly with an `inconsistent` red warning (without pretending it is recoverable),
+  and perform no automatic cleanup.
+- **A local attacker can delete the sidecar (denial of service, accepted)**: a process of the same OS user can destroy the only copy of a removed identity by
+  writing the sidecar file. We do not claim to protect against a local attacker destroying data (the same trust boundary as
+  "a malicious process can read the keyring"); a malicious process could equally delete the main vault, so travel mode adds no new boundary —
+  it only concentrates the loss surface onto one file.
+- **Encryption surface**: the sidecar ciphertext leaks no plaintext to the device holder, a cloud sync folder, or a USB copy
+  (the same PERSENC1 format as the whole-database backup); crash-window semantics — the main vault is only touched after the sidecar is written successfully,
+  a crash between 4→5 = the sidecar exists but the flag is false (enter refuses, suggesting exit or deleting the leftover),
+  a crash between 5→6 = exit self-heals by overwriting.
+- **Password-change exclusion**: changing the master password is refused while travel is active (the sidecar has no master-password binding, and a password change
+  would not itself break the sidecar, but to avoid proving every combination of "key material semantics drifting while active",
+  the request is refused outright and returns `TRAVEL_MODE_ACTIVE`; the change is allowed after exit).
+- **Running-state cleanup**: a successful desktop enter stops the SSH agent (the agent memory may hold keys of the removed
+  identities); audit_logs keep only id references (plaintext metadata moves into the sidecar along with change_history,
+  leaving no readable residue in the main vault).
 
-## Biometric Unlock（桌面指纹/生物识别解锁）
+## Biometric Unlock (desktop fingerprint/biometric unlock)
 
-桌面端把主密码托管进 OS 钥匙串，用系统认证框（Linux polkit `auth_self` /
-macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
-免输主密码解锁。**该设计把"知道主密码"降级为"能通过 OS 用户认证"**，
-新增资产与威胁面在此白纸黑字：
+The desktop app escrows the master password in the OS keyring and exchanges it for unlock-without-typing via a system authentication prompt (Linux polkit `auth_self` /
+macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello) —
+**this design downgrades "knowing the master password" to "passing OS user authentication"** —
+the new assets and threat surface are recorded here in black and white:
+- **Asset**: the master password plaintext stored in the keyring (Linux secret-service `persona-biometric` service /
+- **Asset**: the master password plaintext, stored in the keyring —
+  Linux secret-service `persona-biometric` service / macOS Keychain /
+  Windows Credential Manager — keyed by vault db_path.
+- **Inherent exposure (accepted)**: **any process of the same OS user can read the OS keyring** —
+  Linux secret-service offers essentially no defense against same-session processes; **Windows Credential
+  Manager has no per-entry ACL, so any same-user user-mode process can read it directly**. This is the inherent
+  cost of the same direct-storage design 1Password uses: once the local user boundary is breached (malware
+  running as the current user), the escrowed master password is exposed. The only mitigation is a "user-level front-line defense"
+  (OS user authentication, app-provenance control); countering this scenario needs dedicated hardware (TPM/SEP
+  binding + AT-CK-class process isolation), beyond this design's scope.
+- **Biometric-path brute force**: biometric_unlock fetches the password and then goes through the real `authenticate_user`,
+  **consuming the failure counter shared with the password path** (5 failures locks the account). Controls: a missing entry returns a clean error
+  without prompting; InvalidCredentials deletes the entry on the spot and returns
+  `BIOMETRIC_RESET` (preventing repeated fingerprint taps from locking the account).
+- **Stale entries**: a password change outside the desktop (CLI) cannot reach the keyring linkage — the InvalidCredentials
+  self-deletion (above) is the backstop; a successful in-desktop password change updates the entry synchronously, and a write failure deletes it
+  (fail-closed: rather have the user retype the password than leave an old password that cannot open the vault).
+- **System-prompt impersonation**: any process can request the OS authentication prompt, and the user cannot tell from the
+  prompt itself who initiated it. Mitigations: the action id/message are fixed to Persona-exclusive
+  (`com.persona.desktop.biometric-unlock`); the polkit subject uses
+  system-bus-name (the bus daemon resolves the peer's credentials, immune to PID-reuse-class defects,
+  avoiding the zbus_polkit <5.1.0 CVE-2026-78422).
+- **Availability fail-closed**: no fprintd/polkit agent, no secret service,
+  rpm/AppImage/dev builds without the action file installed → an availability probe failure degrades to
+  unavailable as a whole (the button is not rendered), never a half-open/half-closed state.
+- **Timeout**: the ceremony runs on a dedicated thread with a 120s timeout + a macOS inner reply wait of 110s,
+  so a hung prompt does not drag down the UI thread.
+- **enable gate**: the master password is verified before the OS authentication prompt — an unverified password is
+  never written to the keyring; enable goes through the unlock gate (like set_locale), while disable idempotently deletes without a gate
+  (tightening operations are kept permissive).
+- **SSH agent linkage**: the agent's require_biometric policy denies by default + explicit OS provider injection
+  (removing the silent-passthrough surface of a built-in Mock).
+- **Hardware-bound wrapping layer (2026-09-26, `docs/biometric-unlock-design.md`)**:
+  an upgrade tier above the gate layer — the keyring gains a `persona-biometric-wrap` service
+  storing a **ciphertext blob** wrapped by platform hardware keys (a BIOWRAP1 envelope), mutually exclusive with
+  the gate-layer password entry. Under this tier T1 (a same-user malicious process reading the keyring) can only obtain
+  ciphertext it cannot open: decryption must pass hardware authentication (SE/TPM/Keystore) and the private key is never exported.
+  Residual threat surface: enrollment drift (a changed fingerprint) → an unwrap failure automatically deletes the blob and falls back to the master password
+  (a second comparison of the core envelope fingerprint as defense in depth); after a password change the old blob wraps a stale key,
+  and the desktop password-change linkage deletes it on the spot; `BIOMETRIC_CANCELLED` does not delete the blob (cancel ≠ failure).
+  Linux is pinned to the gate tier (no hardware wrapping); the macOS/Windows hardware tiers stay disabled by default until a real-device spike
+  verifies them — an unverified path does not sit on the production unlock chain. CI-side measurement
+  (2026-09-26, desktop-build macos runner): the VM has no Secure Enclave and
+  spike probe 1 fails immediately (`os_status=-25293` `errSecAuthFailed`, no signing
+  entitlement) — confirming "runner output is not evidence of SE behavior"; a real-device spike
+  remains separately outstanding.
+- **Windows enrollment-set drift has no platform semantic (2026-09-26, accepted)**: macOS
+  `biometryCurrentSet` makes old SE keys permanently invalid after a fingerprint change; **Windows has
+  no equivalent mechanism** — `NCRYPT_UI_PROTECT_KEY_FLAG` only enforces "every private-key use requires
+  user verification", so verifying with a newly enrolled fingerprint still unwraps the old blob. Therefore
+  `enrollment_fingerprint()` can only return a placeholder on Windows, and core's second
+  comparison is empty as well. Residual risk: once the local login state is compromised, an attacker who
+  completes **one** Windows Hello verification (having enrolled any fingerprint or PIN at some point)
+  can unwrap the old blob — the "change the fingerprint to invalidate" anti-duress property does not hold on Windows.
+  Mitigations: the master password as backstop + only unopenable ciphertext in the keyring. The full register is in
+  the design doc `docs/biometric-unlock-design.md` §6.2.
 
-- **资产**：keyring（Linux secret-service `persona-biometric` service /
-  macOS Keychain / Windows Credential Manager）中按 vault db_path 为键存的
-  主密码明文。
-- **固有暴露（接受）**：**同 OS 用户的任意进程可读 OS 钥匙串**——
-  Linux secret-service 对同会话进程基本不设防；**Windows Credential
-  Manager 无 per-entry ACL，同用户任意用户态进程可直接读取**。这是
-  1Password 同款直存设计的固有代价：本机用户边界一旦被攻破（恶意软件
-  以当前用户运行），托管的主密码即泄露。缓解只有"用户级前置防线"
-  （OS 用户认证、应用来源管控）；对抗该场景需要专用硬件（TPM/SEP
-  绑定 + ATTCK 级进程隔离），超出本设计范围。
-- **生物路径爆破**：biometric_unlock 取回密码后走 `authenticate_user`
-  本尊，**吃与密码路径共享的失败计数**（5 次锁户）。控制：条目不存在
-  时干净报错不弹框；InvalidCredentials 当场自删条目并返回
-  `BIOMETRIC_RESET`（防反复点指纹把账户锁死）。
-- **陈旧条目**：桌面外改密（CLI）覆盖不到 keyring 联动——InvalidCredentials
-  自删（上一条）即兜底；桌面内改密成功则同步更新条目，写失败即删
-  （fail-closed：宁可让用户重输密码，不留打不开库的旧密码）。
-- **系统弹窗仿冒**：任何进程都能请求 OS 认证框，用户无法从框本身分辨
-  是谁发起。缓解：action id/message 固定为 Persona 专属
-  （`com.persona.desktop.biometric-unlock`）；polkit subject 用
-  system-bus-name（bus daemon 解析对端凭据，免疫 PID 复用类缺陷，
-  规避 zbus_polkit <5.1.0 的 CVE-2026-78422）。
-- **可用性 fail-closed**：无 fprintd/polkit agent、无 secret service、
-  rpm/AppImage/dev 构建未装 action 文件 → availability 探测失败即整体
-  降级为不可用（按钮不渲染），不做半开半关。
-- **超时**：ceremony 专用线程 120s 超时 + macOS 内层 reply 等待 110s，
-  弹框卡死不拖死 UI 线程。
-- **enable 门禁**：先验主密码后弹 OS 认证框——绝不把未验证的密码写进
-  keyring；enable 走解锁门禁（同 set_locale），disable 幂等删且不设门禁
-  （收紧操作从宽）。
-- **SSH agent 联动**：agent 的 require_biometric 策略默认拒绝 + 显式注入
-  OS provider（消除内置 Mock 静默放行面）。
-- **硬件绑定包裹层（2026-09-26，`docs/biometric-unlock-design.md`）**：
-  门禁层之上的升级档——keyring 新增 `persona-biometric-wrap` service，
-  存的是被平台硬件密钥包裹的**密文 blob**（BIOWRAP1 信封），与门禁层
-  密码条目互斥。T1（同用户恶意进程读 keyring）在此档下只能拿到打不开
-  的密文：解密必须过硬件认证（SE/TPM/Keystore），私钥永不导出。
-  剩余威胁面：enrollment 漂移（换指纹）→ 解包失败即自动删 blob 回主密码
-  （core 信封指纹二次比对纵深防御）；改密后旧 blob 包的是 stale key，
-  桌面改密联动当场删除；`BIOMETRIC_CANCELLED` 不删 blob（取消≠失败）。
-  Linux 定格门禁档（无硬件封装），macOS/Windows 硬件档待真机 spike 验证前
-  默认不启用——未验证的路径不在生产 unlock 链上。CI 侧实测
-  （2026-09-26，desktop-build macos runner）：VM 无 Secure Enclave，
-  spike 探针 1 即失败（`os_status=-25293` `errSecAuthFailed`，无签名
-  entitlement）——坐实「runner 输出不构成 SE 行为证据」，真机 spike
-  仍另行待办。
-- **Windows 注册集漂移无平台语义（2026-09-26，接受）**：macOS 的
-  `biometryCurrentSet` 会在换指纹后让旧 SE 密钥永久失效；**Windows 没有
-  对应机制**——`NCRYPT_UI_PROTECT_KEY_FLAG` 只强制"每次私钥使用都要用户
-  验证"，换一枚已注册的新指纹验证，旧包裹照样解开。因此
-  `enrollment_fingerprint()` 在 Windows 只能返回占位值，core 的第二道
-  比对也是空的。残余风险：本机登录态被攻破后，攻击者若能完成**一次**
-  Windows Hello 验证（已注册过任一指纹或 PIN）即可解开旧包裹——
-  "换指纹即失效"的反胁迫性质在 Windows 上不成立。缓解：主密码兜底 +
-  keyring 里只有打不开的密文。设计稿 `docs/biometric-unlock-design.md`
-  §6.2 有完整登记。
+## Quick Access (OS-level global hotkey + search floating window, 2026-09, benchmark #22)
 
-## Quick Access（OS 级全局热键 + 检索浮窗，2026-09，对标 #22）
+Registers a global hotkey at the process level, summoning a borderless always-on-top floating window from any app for
+cross-identity search and retrieval (copy primary secret / username / TOTP, or send the entry back to the main window
+to open). In **exposure terms it is equivalent to "moving already-unlocked search and copy capability to a place that
+does not require clicking the Persona icon first"**, adding a threat surface:
+- **Larger visibility surface (inherent, accepted)**: the hotkey summon no longer requires focusing the Persona window,
+- **Larger visibility surface (inherent, accepted)**: the hotkey summon no longer requires focusing the Persona window,
+  and entry-name/username search results appear directly in the floating window for any bystander (shoulder-surfing surface).
+  Mitigation: the floating window self-dismisses on focus loss (does not linger), Esc dismisses, it hides immediately on account lock,
+  and in the locked state it does not search at all. Same boundary as 1Password Quick Access.
+- **Unlocked-state gates unchanged**: all search/copy in the floating window goes through the unlocked `PersonaService`,
+  with the same gate set as the main window at the command layer (`SERVICE_LOCKED` refuses outright, sensitive fields go
+  through the `reveal_credential_secret` reauth gate + audit). **Nothing is copied in the locked state** — the floating window only
+  prompts to unlock in the main window (deliberately not replicating the unlock flow in the 620×460 small window;
+  rationale in the `quick_access.rs` module comment).
+- **Clipboard**: reuses the existing `copyWithAutoClear` (30s auto-clear), the same path as the credential list /
+  generator, adding no clipboard exposure duration.
+- **Hotkey grab is not a privilege-escalation surface**: the binding string lives in workspace settings (plaintext, no key),
+  so a grab failure / being occupied affects only availability. The settings page displays "configured" and "actually in effect" separately,
+  and **failures are not silent** (including the backend's verbatim reason).
+- **Plugin load fail-open degrades to "unavailable" rather than crashing**: the global-shortcut plugin is
+  loaded at runtime inside `setup` (not on the `Builder::plugin` chain) — its setup fails on
+  headless Linux / Wayland without XWayland, and running it on the Builder chain would fail the whole
+  app build. The absence of an optional enhancement must never prevent a password manager from starting; the failure reason
+  is recorded in running state and shown on the settings page.
+- **Not claimed**: the hotkey cannot distinguish "the user pressed it" from "a same-user malicious process simulating an input event",
+  the same boundary as OS shortcuts; the floating window does no browser autofill (fill belongs to the browser extension),
+  so it introduces no "press-to-deliver credentials to an arbitrary page" path.
 
-进程级抢注一个全局热键，任意应用中唤出无边框置顶浮窗做跨身份检索与
-取件（复制主密文 / 用户名 / TOTP，或把条目送回主窗口打开）。它在
-**暴露面上等价于「把已解锁的检索与复制能力搬到一个不用先点 Persona 图标
-的位置」**，新增威胁面：
+## Connect Local Automation Endpoint (`127.0.0.1` HTTP, 2026-09, secrets automation)
 
-- **可见面扩大（固有，接受）**：热键唤起不再需要先聚焦 Persona 窗口，
-  条目名/用户名的检索结果会在浮窗里直接呈现给任何旁观者（肩窥面）。
-  缓解：浮窗失焦即自收尾（不驻留）、Esc 即收、锁户时立刻隐藏、锁定态
-  根本不检索。与 1Password Quick Access 同边界。
-- **解锁态门禁不变**：浮窗的检索/复制全部经已解锁的 `PersonaService`，
-  命令层与主窗口同一套门禁（`SERVICE_LOCKED` 直接拒、敏感字段走
-  `reveal_credential_secret` 的 reauth 门禁 + 审计）。**锁定态不复制任何
-  东西**——浮窗只提示去主窗口解锁（刻意不在 620×460 的小窗里复刻解锁
-  流，理由见 `quick_access.rs` 模块注释）。
-- **剪贴板**：复用既有 `copyWithAutoClear`（30s 自动清空），与凭据列表/
-  生成器同一条路径，不新增剪贴板暴露时长。
-- **热键抢注不是提权面**：绑定串存在 workspace settings（明文，无密钥），
-  抢注失败/被占用只影响可用性。设置页把「配置」与「实际生效」分开显示，
-  **失败不静默**（含后端原文原因）。
-- **插件装载 fail-open 到「不可用」而非崩溃**：global-shortcut 插件在
-  `setup` 里运行时装载（不进 `Builder::plugin` 链）——它的 setup 在
-  headless Linux / 无 XWayland 的 Wayland 上会失败，走 Builder 链会让整个
-  app 构建失败。一个可选增强项的缺失绝不能让密码管理器起不来；失败原因
-  记入运行态并在设置页显示。
-- **不宣称**：热键无法区分「用户按的」与「同用户恶意进程模拟的输入事件」，
-  这与 OS 快捷键同边界；浮窗不做浏览器自动填充（填充归浏览器扩展），
-  故不引入「按键即向任意页面交付凭据」的路径。
+The desktop host embeds an in-process axum listener (DR-1) so local scripts/tools can pull credentials read-only
+within a token scope. **The switch is off by default**: no listener created means no port surface; when enabled the bind is
+hardcoded to loopback and the port is OS-assigned (no configuration surface, cannot be coaxed into listening on 0.0.0.0). New threat surface:
+- **Trust root and visibility**: an unlocked-state + token two-way gate (either missing refuses). The token decides
+- **Trust root and visibility**: an unlocked-state + token two-way gate (either missing refuses). The token decides
+  "which types under which identity"; entries outside the scope return 404 identically to 403 (they do not exist to the consumer,
+  preventing probing). health is unauthenticated but zero-information (does not report unlock state, does not report vault existence).
+- **Not claimed**: defense against a local malicious process — at the moment the token lands in its hands (environment variable /
+  argument / config file) it is visible to it, the same boundary as 1Password CLI; defense against the host process being
+  compromised — automation neither widens nor narrows that boundary; multi-user OS isolation (same existing posture).
+- **Three defenses against malicious web pages** (DR-4): the browser is the only "foreign caller" on 127.0.0.1, and
+  the three independent defenses each fail-closed — ① Host header allowlist (only
+  `127.0.0.1`/`localhost`/`[::1]`); after DNS rebinding the Host is the attacker domain, and 421 refuses;
+  ② a request carrying an `Origin` header (the marker of a browser fetch) gets 403, with CORS
+  fully off (no `Access-Control-Allow-*` returned, preflight fails outright); ③ a Bearer
+  token is required, and missing/unknown/revoked all return an identical 401. A malicious page must bypass all three
+  simultaneously to reach data, and the token itself is not reachable from a page.
+- **Known residual (this usage is prohibited in the docs)**: if a user puts a plaintext token into **browser
+  extension-reachable storage** (localStorage, extension settings), the three defenses above are meaningless to a page holding that
+  token — the defenses target "pages without a token". The warning at the plaintext display spot on the settings page is one-shot only
+  and does not change this boundary.
+- **Token-leak blast radius**: a **read-only** surface bounded by the three-dimensional scope (verbs always read,
+  no write path = no tampering radius) + immediate revocation (no cache, the next request gets 401) + audit
+  visibility (Used goes through per-token per-minute throttled aggregation). Tokens are stored only as SHA-256 hashes,
+  so a vault/backup leak does not equal a token leak; plaintext `pconn_` prefix + 32B random, not offline brute-forceable.
+  The passkey/wallet/ssh/custom types are never authorizable (they do not exist at the vocabulary level).
+- **Management surface**: create/revoke go through the reauth gate (core `ensure_sensitive_operation_allowed`
+  is authoritative); plaintext appears only once, in the create response; management actions in the locked state are first refused by the sensitive gate.
+- **DoS / resource surface**: a hardcoded 120-requests-per-minute 429 limit per token, protecting the host
+  from being dragged down by an automation consumer; during lock 503 `vault_locked` is returned and **the quota is not decremented**;
+  health does not consume quota. The listener footprint is minimal (a single loopback port), returning
+  data only in the unlocked state, and 503 while locked.
+- **Revocation and audit**: revocation is immediate and idempotent; the three
+  audit actions `ConnectTokenCreated/Revoked/Used` enter the audit log; create/revoke records carry resource_id, with no token plaintext at rest.
 
-## Connect 本机自动化端点（`127.0.0.1` HTTP，2026-09，secrets automation）
+## Wallet (Experimental Track) (M5, 2026-10-13, wallet graduation)
 
-桌面宿主进程内嵌 axum listener（DR-1），让本机脚本/工具按 token 范围只读
-拉取凭据。**开关默认关闭**：不创建 listener 即无端口面；启用时 bind 硬编码
-loopback、端口由 OS 分配（无配置面，不可被诱导监听 0.0.0.0）。新增威胁面：
+BTC (BIP-143 P2WPKH) / ETH (EIP-155/1559) / Solana derivation and signing have landed (official
+vectors regressed), and the CLI and desktop wallet flows are usable. But wallet keys (the BIP39 mnemonic and the
+private keys/xprv derived from it) are the **highest-tier asset**: loss is irreversible (no private key = permanently lost funds), with no dispute/rollback
+mechanism. **Experimental-track declaration: this section carries none of the mainline security commitments and must not be used for production-grade fund safety** —
+the same posture as "Non-Goals" item 4 and the final item of "Currently Accepted Limitations"; graduation (graduation criteria and
+open questions such as hardware wallets) is in [WALLET_DESIGN.md](WALLET_DESIGN.md).
 
-- **信任根与可见面**：解锁态 + token 二元门禁（缺一即拒）。token 决定
-  「哪个身份下的哪些类型」；scope 外条目 404 与 403 同形（对消费者不存在，
-  防探测）。health 免认证但零信息（不报解锁态、不报库存在性）。
-- **不宣称**：防本机恶意进程——token 交到它手里的那一刻（环境变量/参数/
-  配置文件）就对它可见，与 1Password CLI 同边界；防宿主进程被攻破——
-  automation 不扩大也不缩小该边界；多用户 OS 隔离（同既有口径）。
-- **恶意网页三防线**（DR-4）：浏览器是 127.0.0.1 上唯一"陌生调用方"，
-  三道独立防线各自 fail-closed——① Host 头白名单（仅
-  `127.0.0.1`/`localhost`/`[::1]`），DNS rebinding 后 Host 是攻击域，
-  421 拒绝；② 请求带 `Origin` 头（浏览器 fetch 的标记）即 403，CORS
-  全关（不回 `Access-Control-Allow-*`，preflight 直接失败）；③ Bearer
-  token 必需，缺失/未知/已吊销同形 401。恶意网页同时需要绕过全部三道
-  才能触达数据，而 token 本身不在网页可及处。
-- **已知残面（文档禁止此用法）**：若用户把明文 token 配置进**浏览器
-  扩展可及的存储**（localStorage、扩展 settings），上述三防线对持有该
-  token 的网页形同虚设——防线防的是"无 token 的网页"。设置页明文展示
-  处的警示只说明一次性，不改变此边界。
-- **token 泄露爆炸半径**：三维 scope 圈定的**只读**面（verbs 恒 read，
-  无写路径 = 无篡改半径）+ 即时吊销（无缓存，下一请求即 401）+ audit
-  可见（Used 走每 token 每分钟节流聚合）。token 只存 SHA-256 哈希，
-  库/备份泄露不等于 token 泄露；明文 `pconn_` 前缀 + 32B 随机，离线
-  不可爆破。passkey/wallet/ssh/custom 类型恒不可授权（词汇表层面不存在）。
-- **管理面**：创建/吊销走 reauth 门禁（core `ensure_sensitive_operation_allowed`
-  权威）；明文只在创建响应出现一次；锁定态管理动作先被敏感门禁拒绝。
-- **DoS / 资源面**：每 token 每分钟 120 请求 429 上限（写死），保护宿主
-  不被自动化消费者拖垮；锁定期间 503 `vault_locked` 且**不扣限额**；
-  health 不占限额。listener 占用面极小（loopback 单口），仅解锁态返回
-  数据，锁定 503。
-- **吊销与审计**：吊销即时幂等；`ConnectTokenCreated/Revoked/Used` 三
-  audit 动作入审计日志；创建/吊销记录 resource_id，不落 token 明文。
+**Key hierarchy and passphrase isolation** (see WALLET_DESIGN.md §2/§3): the mnemonic and xprv are **doubly
+wrapped** (Argon2id + AES-256-GCM, the same wallet passphrase, each with independent salt/nonce, both independently
+unlockable), so either surviving copy recovers all addresses. The wallet passphrase is **independent of the master
+password**, and a master-password rotation **does not touch** `crypto_wallets` — a master-password leak is not a
+fund-material leak (blast-radius isolation). Existing exposure before `persona wallet passwd`: `change_wallet_password`
+exists but has no production caller; the docs have settled on adding the command and an `EncryptedMnemonic` rewrap path.
 
-## 钱包（实验轨道）（M5，2026-10-13，wallet graduation）
-
-BTC（BIP-143 P2WPKH）/ ETH（EIP-155/1559）/ Solana 派生与签名已落地（官方
-向量回归），CLI 与桌面端钱包流程可用。但钱包密钥（BIP39 助记词与由其派生的
-私钥/xprv）是**最高级资产**：丢失不可逆（无私钥即永久失款）、无争议/回滚
-机制。**实验轨道声明：本节不享受主线安全承诺，不能用于生产级资金安全**——
-与「非目标」第 4 条、「当前接受的限制」最后一条同口径；毕业（毕业条件与
-硬件钱包等开放问题）见 [WALLET_DESIGN.md](WALLET_DESIGN.md)。
-
-**密钥层级与口令隔离**（详见 WALLET_DESIGN.md §2/§3）：助记词与 xprv **双
-包装**（Argon2id + AES-256-GCM，同一钱包口令、各自独立 salt/nonce，都能独
-立解锁），任一损坏另一份可恢复全部地址。钱包口令**独立于主密码**，主密码
-轮换**不动** `crypto_wallets`——主密码泄露不等于资金材料泄露（爆炸半径隔
-离）。现有 `persona wallet passwd` 前的暴露面：`change_wallet_password` 已
-存在但无生产调用方，文档已定案补命令与 `EncryptedMnemonic` 重包路径。
-
-| 威胁面                           | 威胁                | 已落地控制                                                                                                                                                                                                                                                                                                               | 仍需关注                                                                           |
+| Threat surface                              | Threat                       | Landed controls                                                                                                                                                                                                                                                                                          | Still needs attention                                                                            |
 | -------------------------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| 导出面（keystore/WIF/明文 JSON） | 导出文件被复制/外泄 | 导出需钱包口令；keystore v3 = geth 标准（scrypt/pbkdf2 + AES-128-CTR + keccak MAC，导入 256MiB 内存上限 + 常数时间 MAC 比较，规范向量钉版）；CLI 与桌面端 import/export 均支持 keystore（2026-10-13）；导出经审计                                                                                                        | 助记词/mnemonic 导出是最强面，审计只记动作不记内容                                 |
-| 存储面                           | 钱包密文离线破解    | 与凭据同参数（Argon2id 默认参数不落盘；version=1，参数升级走 version=2 + 惰性重包，禁止原地改默认）                                                                                                                                                                                                                      | 参数复审节奏同主线；重包迁移未落代码                                               |
-| 签名面                           | 伪造/投毒交易被签   | 签名先验证后持久化（ETH/Solana 本地验签，失败不落库；BTC 组装失败降级仅审计，绝不产出可广播假象）；后端防投毒强制（2026-10-13）：core 启发式（首 6 + 末 6 字符）在 CLI 与桌面签名入口强制，命中未确认即拒签（CLI `--confirm-poisoning-check` / 桌面二次确认 ack）；口令不落日志；确认面板必列 from/to/金额/费用/chain id | 已知地址集合目前 = 钱包全部地址，「+ 用户标记」开放；无硬件钱包，签名口令=钱包口令 |
+| Export surface (keystore/WIF/plaintext JSON) | Export file copied/exfiltrated | Export requires the wallet passphrase; keystore v3 = geth standard (scrypt/pbkdf2 + AES-128-CTR + keccak MAC, a 256MiB import memory limit + constant-time MAC comparison, pinned to spec vectors); CLI and desktop import/export both support keystore (2026-10-13); exports are audited | Mnemonic export is the strongest surface; the audit records the action only, not the content |
+| Storage surface                           | Wallet ciphertext cracked offline | Same parameters as credentials (Argon2id defaults not persisted; version=1, a parameter upgrade goes via version=2 + lazy rewrap, no in-place default change) | The parameter review cadence matches the mainline; the rewrap migration is not yet in code |
+| Signing surface                           | Forged/poisoned transaction signed | Verify before persist (ETH/Solana verify locally; a failure does not land in the store; BTC assembly failure degrades to audit only and never produces a broadcastable illusion); mandatory backend anti-poisoning (2026-10-13): the core heuristic (first 6 + last 6 characters) is enforced at the CLI and desktop signing entry points, an unconfirmed hit refuses to sign (CLI `--confirm-poisoning-check` / desktop second-confirmation ack); the passphrase is never logged; the confirmation panel must list from/to/amount/fee/chain id | The known-address set is currently = all wallet addresses; " + user-marked" is open; no hardware wallet, and the signing passphrase = the wallet passphrase |
 
-**签名确认 UX 不变量**（后端强制、UI 只是展示层；WALLET_DESIGN.md §5）：
-先验证后持久化、确认面板必列字段（缺项不允许提交）、口令在面板内输入且
-不落日志、审计记 digest 级摘要。Context 建议轨道**不作用于钱包**——
-suggest 候选是分身不是钱包，钱包选择永远显式。
+**Signing-confirmation UX invariants** (backend-enforced, the UI is only a presentation layer; WALLET_DESIGN.md §5):
+verify before persist, mandatory confirmation-panel fields (missing fields block submission), the passphrase is typed inside the panel and
+never logged, and the audit records a digest-level summary. The Context suggestion track does **not apply to the wallet** —
+a suggest candidate is an avatar, not a wallet, and wallet selection is always explicit.
 
-**变更门槛**：钱包密钥类型、导出格式、签名算法、确认字段的任何变更，都
-按「变更门槛」第 1/2/5 条显式更新本节与 WALLET_DESIGN.md，并在 PR 中说
-明对爆炸半径与恢复路径的影响。
+**Change threshold**: any change to wallet key types, export formats, signing algorithms, or confirmation fields
+must explicitly update this section and WALLET_DESIGN.md per "Change Thresholds" items 1/2/5, and state in the PR
+the impact on the blast radius and the recovery path.

@@ -2,7 +2,7 @@
 
 # 外部项目接入 Persona（External Integration）
 
-> **状态：当前现状（2026-10-12 实测）**。本文每一处 JSON / 输出均来自真实冒烟运行（隔离 workspace + `persona connect serve` + curl），非手写示意。设计背景见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)，简版速查见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#本机自动化connect-api)。
+> **状态：当前现状（2026-10-12 实测）**。本文每一处 JSON / 输出均来自真实冒烟运行（隔离 workspace + `persona connect serve` + curl），非手写示意。设计背景见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)，简版速查见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#local-automation-connect-api)。
 
 外部项目（CI 脚本、deploy 工具、其他本地服务）读取 Persona 保险库的**正式接口形态二选一**：
 
@@ -200,7 +200,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 
 ## 边界之外的形态
 
-- **`persona secrets`（CLI 直读）**：同机 shell/CI 不想起 HTTP 时用。引用语法 `IDENTITY/ITEM/FIELD`，四个子命令（run / resolve / k8s / terraform-external）见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#secrets-自动化cli-直读)。
+- **`persona secrets`（CLI 直读）**：同机 shell/CI 不想起 HTTP 时用。引用语法 `IDENTITY/ITEM/FIELD`，四个子命令（run / resolve / k8s / terraform-external）见 [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#secrets-automation-direct-cli-read)。
 - **远程 persona-server**：跨机器读取是 **E2EE 同步客户端**领域（[`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md) / [`REMOTE_AUTH.md`](./REMOTE_AUTH.md)），不是普通 REST——Connect API 的 token/端点模型**不适用**于远程，勿混用。
 - **浏览器扩展**：走 Native Messaging Host 桥（[`BRIDGE_PROTOCOL.md`](./BRIDGE_PROTOCOL.md)），**不经** Connect API。
 

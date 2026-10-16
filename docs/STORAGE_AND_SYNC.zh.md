@@ -308,7 +308,7 @@ Mode」激活期间同步整体暂停（推拉双停），被移出的身份不�
   手动）、网盘冷备（密文成品手动拷贝）。
 - 把一台设备的库恢复成另一台的备份 = **整库替换**（含现有数据被
   `.bak` 换下），不是合并；要增量保持一致请用凭据同步。
-- [`Travel Mode`](./THREAT_MODEL.md#travel-mode-travelpersenc-sidecar2026-09)
+- [`Travel Mode`](./THREAT_MODEL.md#travel-mode-travelpersenc-sidecar-2026-09)
   （`persona travel …` / 桌面设置通用页 → 安全区）用于暂时把若干身份**整包移出**
   一台设备（加密 sidecar 随身带走），回来时口令恢复——多设备场景下
   控制单台设备数据暴露面的工具。Travel 激活期间凭据同步整体暂停
@@ -320,7 +320,7 @@ Mode」激活期间同步整体暂停（推拉双停），被移出的身份不�
 让本机的脚本 / CI / 命令行工具**只读**读取 vault 条目的 HTTP 接口。默认
 关闭；开启后只监听 `127.0.0.1`（端口由系统分配），请求永不离开本机。
 详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)、
-[THREAT_MODEL](./THREAT_MODEL.md#connect-本机自动化端点127001-http2026-09-secrets-automation)。
+[THREAT_MODEL](./THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)。
 **外部项目接入指南（三步 + 实测响应样例 + 令牌到期/吊销语义 + 权限边界）
 见 [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)。**
 

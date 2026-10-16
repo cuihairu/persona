@@ -8,7 +8,7 @@
 > background see
 > [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md); for a short
 > quick-reference see
-> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#本机自动化connect-api).
+> [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#local-automation-connect-api).
 
 External projects (CI scripts, deploy tools, other local services) read the
 Persona vault through exactly one of **two supported interface forms**:
@@ -198,66 +198,76 @@ consumers parsing it should take the key matching the item's type.
 
 ---
 
-## 权限边界（token 能拿到的与永远拿不到的）
+## Authorization boundaries (what a token can and can never get)
 
-**三维 scope**：identities × item_types × verbs。`create` 时「缺省 =
-全部合法集，给了限定就收窄」。scope 外的条目与不存在的条目返回**同一
-404 形**（实测：password-only token 读 totp 条目 → `not_found`，与编造
-id 无差别），不泄露存在性。
+**Three-dimensional scope**: identities × item_types × verbs. At `create` time
+the rule is "omitted = the full legal set; providing a restriction narrows it".
+Items outside the scope and nonexistent items return the **same 404 shape**
+(verified: a password-only token reading a totp item → `not_found`,
+indistinguishable from a fabricated id), so existence is never leaked.
 
-| 边界       | 语义                                                                                                                                 |
+| Boundary     | Semantics                                                                                                                                 |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| verbs      | 仅 `read` 可授予且 HTTP 仅暴露 `read`；`use` 已入授权模型但**暂无消费端点**（预留，勿依赖）；`export` / `sign` 对 token 主体不可授予 |
-| 类型排除   | ssh-key / crypto-wallet / custom **永不可授权**（不在可授权类型集）；passkey 不走此端点（独立 Unix socket 审批通道）                 |
-| 可授权类型 | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license              |
-| 网络面     | 只监听 `127.0.0.1`；`Host` 头非 `127.0.0.1`/`localhost` → 421；带 `Origin` 头（浏览器侧请求）→ 403                                   |
-| 速率       | 每 token 120 请求/分钟（固定窗），超限 429                                                                                           |
-| 锁定       | vault 锁定 → 503 `vault_locked`，不消耗限额                                                                                          |
-| 审计       | 每次 token 校验/拒绝留审计记录；解密路径与桌面/CLI 展示相同                                                                          |
+| verbs      | Only `read` can be granted and HTTP exposes only `read`; `use` is already in the authorization model but **has no consumer endpoint yet** (reserved, do not rely on it); `export` / `sign` can never be granted to a token principal |
+| Excluded types | ssh-key / crypto-wallet / custom can **never be authorized** (they are not in the authorizable type set); passkeys do not go through this endpoint (they use a separate Unix socket approval channel)                 |
+| Authorizable types | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license              |
+| Network surface | Listens only on `127.0.0.1`; a `Host` header other than `127.0.0.1`/`localhost` → 421; a request carrying an `Origin` header (browser-originated) → 403                                   |
+| Rate       | 120 requests/minute per token (fixed window); exceeding it → 429                                                                                           |
+| Locking    | Locked vault → 503 `vault_locked`, does not consume the rate limit                                                                                          |
+| Auditing   | Every token validation/rejection leaves an audit record; the decryption path is the same one the desktop/CLI display uses                                                                          |
 
-## 错误码表（实测形状）
+## Error code table (verified shapes)
 
-| HTTP | code               | 实测 message                                  | 触发                                     |
+| HTTP | code               | Verified message                              | Trigger                                    |
 | ---- | ------------------ | --------------------------------------------- | ---------------------------------------- |
-| 401  | `unauthorized`     | `missing or malformed bearer token`           | 无/格式错 Authorization 头               |
-| 401  | `unauthorized`     | `invalid token`                               | 未知、已吊销、已过期的 token（三者同形） |
-| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | 请求带 `Origin` 头                       |
-| 404  | `not_found`        | `item not found`                              | 条目不存在 / 已归档 / scope 外（同形）   |
-| 421  | `bad_host`         | `host not allowed`                            | `Host` 头非 `127.0.0.1`/`localhost`      |
-| 429  | `rate_limited`     | —                                             | 超过 120 req/min                         |
-| 503  | `vault_locked`     | —                                             | vault 锁定（不耗限额）                   |
+| 401  | `unauthorized`     | `missing or malformed bearer token`           | Missing or malformed Authorization header |
+| 401  | `unauthorized`     | `invalid token`                               | Unknown, revoked, or expired token (all three indistinguishable) |
+| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | Request carries an `Origin` header       |
+| 404  | `not_found`        | `item not found`                              | Item does not exist / is archived / out of scope (same shape) |
+| 421  | `bad_host`         | `host not allowed`                            | `Host` header other than `127.0.0.1`/`localhost`      |
+| 429  | `rate_limited`     | —                                             | More than 120 req/min                    |
+| 503  | `vault_locked`     | —                                             | Vault locked (does not consume the rate limit) |
 
-重试纪律：401 不要重试（确定性拒绝，去查吊销/到期）；503 可退避重试
-（等属主解锁）；429 按分钟窗退避。
+Retry discipline: never retry a 401 (deterministic rejection — go check
+revocation/expiry); 503 can be retried with backoff (waiting for the owner to
+unlock); 429 backs off per minute window.
 
-## 消费者侧建议（Do / Don't）
+## Consumer-side guidance (Do / Don't)
 
-- **必做**：token 视同密码——环境变量或 secret 管理器注入，不进 git、
-  不进日志、不进任何浏览器/网页可达存储（`Origin` 403 防的是恶意网页，
-  不是交钥匙许可）。
-- **必做**：给 `--expires-in`，按轮换周期取值；到期后重新发放。
-- **建议**：scope 最小化——只给需要的身份与类型（例：deploy 只需要
-  `--type password`）。
-- **不要**：把 token 交给扩展或远程机器转发（接口只服务本机）。
-- **不要**：用 HTTP 形态之外的「库引用」方式接入——core crate 无稳定
-  API 承诺，且进程内解锁等于把整个 vault 交给消费者进程。
+- **Must do**: treat the token like a password — inject it via environment
+  variables or a secret manager; never commit it to git, never log it, and never
+  put it in any browser/web-reachable storage (the `Origin` 403 guards against
+  malicious web pages, it is not a turnkey license).
+- **Must do**: set `--expires-in` to your rotation period; re-issue once it
+  expires.
+- **Recommended**: minimize scope — grant only the identities and types you
+  need (e.g. deploy only needs `--type password`).
+- **Don't**: hand the token to a browser extension or forward it to a remote
+  machine (the interface only serves this machine).
+- **Don't**: integrate via "library linkage" outside the HTTP form — the core
+  crate makes no stable API promise, and in-process unlocking is equivalent to
+  handing the entire vault to the consumer process.
 
-## 边界之外的形态
+## Forms outside these boundaries
 
-- **`persona secrets`（CLI 直读）**：同机 shell/CI 不想起 HTTP 时用。
-  引用语法 `IDENTITY/ITEM/FIELD`，四个子命令（run / resolve / k8s /
-  terraform-external）见
-  [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#secrets-自动化cli-直读)。
-- **远程 persona-server**：跨机器读取是 **E2EE 同步客户端**领域
-  （[`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md) /
-  [`REMOTE_AUTH.md`](./REMOTE_AUTH.md)），不是普通 REST——Connect API
-  的 token/端点模型**不适用**于远程，勿混用。
-- **浏览器扩展**：走 Native Messaging Host 桥（
-  [`BRIDGE_PROTOCOL.md`](./BRIDGE_PROTOCOL.md)），**不经** Connect API。
+- **`persona secrets` (direct CLI reads)**: use this when same-machine shell/CI
+  would rather not stand up HTTP. The reference syntax is
+  `IDENTITY/ITEM/FIELD`; for the four subcommands (run / resolve / k8s /
+  terraform-external) see
+  [`STORAGE_AND_SYNC.md`](./STORAGE_AND_SYNC.md#secrets-automation-direct-cli-read).
+- **Remote persona-server**: cross-machine reads belong to the **E2EE sync
+  client** world ([`E2EE_SYNC_DESIGN.md`](./E2EE_SYNC_DESIGN.md) /
+  [`REMOTE_AUTH.md`](./REMOTE_AUTH.md)), not plain REST — the Connect API's
+  token/endpoint model does **not** apply remotely; do not mix the two.
+- **Browser extensions**: they go through the Native Messaging Host bridge
+  ([`BRIDGE_PROTOCOL.md`](./BRIDGE_PROTOCOL.md)) and do **not** pass through the
+  Connect API.
 
-## 开放问题（诚实版）
+## Open questions (honest version)
 
-- `use` 动词的 HTTP 消费端点未实现（授权模型已预留）；写入路径未拍板，
-  当前接口**只读**。
-- 桌面端创建 token 的入口尚未传 `--expires-in` 等价物（恒永不过期）；
-  外部项目请走 CLI 发 token。
+- No HTTP consumer endpoint for the `use` verb is implemented (the
+  authorization model reserves it); the write path is not decided, so the
+  current interface is **read-only**.
+- The desktop app's token-creation entry point does not yet pass an
+  `--expires-in` equivalent (tokens never expire); external projects should
+  issue tokens via the CLI.

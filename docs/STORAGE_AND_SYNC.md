@@ -1,349 +1,458 @@
-# 存储与同步模式（用户指南）
+# Storage and Sync Modes (User Guide)
 
 > [English](STORAGE_AND_SYNC.md) | [中文](STORAGE_AND_SYNC.zh.md)
 
-Persona 是**本地优先**的：你的密码库永远是一台设备上的一个加密 SQLite 文件，
-联网能力全部是**可选附件**。本文说明数据实际放在哪、有哪些同步/备份选项、
-各自的配置方法与安全边界。
+Persona is **local-first**: your vault is always a single encrypted SQLite file on
+one device, and every network capability is an **optional add-on**. This guide
+explains where your data actually lives, what sync/backup options exist, and
+how to configure each one together with its security boundaries.
 
-> 工程视角的架构设计见 [`CLIENT_COMMUNICATION_ARCHITECTURE.md`](./CLIENT_COMMUNICATION_ARCHITECTURE.md)
-> （愿景设计稿）与 [`THREAT_MODEL.md`](./THREAT_MODEL.md)（威胁与不宣称事项）。
+> For the engineering-oriented architecture design, see
+> [`CLIENT_COMMUNICATION_ARCHITECTURE.md`](./CLIENT_COMMUNICATION_ARCHITECTURE.md)
+> (vision design draft) and [`THREAT_MODEL.md`](./THREAT_MODEL.md) (threats and
+> non-claims).
 
-## 总览：存储与同步模式
+## Overview: Storage and Sync Modes
 
-| 模式                             | 状态     | 你得到什么                           | 需要什么                   |
-| -------------------------------- | -------- | ------------------------------------ | -------------------------- |
-| **纯本地**（默认）               | 完整可用 | 零网络、全部功能                     | 什么都不配                 |
-| **自托管 Persona Server**        | 已实现   | 审计事件异地副本 + 整库加密备份保管  | 一台自己控制的服务器       |
-| **端到端加密凭据同步**（桌面版） | 已实现   | 多设备凭据保持一致（服务器只见密文） | 模式二的服务器 + ≥2 台设备 |
-| **网盘目录（iCloud/Dropbox/…）** | 仅限冷备 | 把加密备份文件放进云盘               | 手动拷贝（见下文警告）     |
+| Mode                               | Status     | What you get                        | What you need                     |
+| ---------------------------------- | ---------- | ----------------------------------- | --------------------------------- |
+| **Pure local** (default)           | Fully usable | Zero network, full feature set    | Nothing to configure              |
+| **Self-hosted Persona Server**     | Implemented | Off-site copy of audit events + encrypted whole-vault backup custody | One server you control |
+| **E2EE credential sync** (desktop) | Implemented | Credential consistency across devices (server sees only ciphertext) | Mode-2 server + ≥2 devices |
+| **Cloud drive folder (iCloud/Dropbox/…)** | Cold backup only | Put encrypted backup files in your cloud drive | Manual copy (see the warning below) |
 
-**凭据级同步已实现**（2026-09，桌面版）：两台及以上设备通过自托管服务器
-中继密文操作日志，凭据的增删改在设备间收敛；离线并发修改同一凭据时保留
-双版本、由你在界面上裁决。服务器全程只见密文。细节与边界见下文
-「[端到端加密凭据同步](#端到端加密凭据同步多设备)」一节。
+**Credential-level sync is implemented** (2026-09, desktop): two or more devices
+relay ciphertext oplogs through a self-hosted server so that credential
+additions, edits, and deletions converge across devices; concurrent offline
+edits to the same credential keep both versions, with you adjudicating in the
+UI. The server only ever sees ciphertext. For details and boundaries, see the
+"[End-to-End Encrypted Credential Sync](#end-to-end-encrypted-credential-sync-multi-device)" section
+below.
 
-## 你的数据放在哪
+## Where Your Data Lives
 
-初始化后的 workspace 目录（默认 `~/.persona`，可经 `--path` 或
-`PERSONA_WORKSPACE_PATH` 指定）：
+The initialized workspace directory (default `~/.persona`, overridable via
+`--path` or `PERSONA_WORKSPACE_PATH`):
 
-| 路径                                     | 内容                                    | 加密与否                                                                     |
-| ---------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------- |
-| `identities.db`                          | 主库：身份/凭据/审计/设置等全部表       | 凭据载荷 per-item key 加密；**元数据列（名称、URL、用户名等）是明文 SQLite** |
-| `attachments/`                           | 附件文件体                              | 密文（复用所属凭据的 item key）                                              |
-| `backups/`、`exports/`、`temp/`、`logs/` | 工作目录（导出文件路径由 `--out` 自定） | 混合（导出可选加密）                                                         |
-| `config.toml`                            | CLI 配置                                | **明文，不含密钥**                                                           |
+| Path                                     | Contents                                | Encrypted?                                                                  |
+| ---------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
+| `identities.db`                          | Main database: all tables for identities, credentials, audit, settings, etc. | Credential payloads encrypted per-item key; **metadata columns (name, URL, username, etc.) are plaintext SQLite** |
+| `attachments/`                           | Attachment file bodies                  | Ciphertext (reuses the owning credential's item key)                       |
+| `backups/`, `exports/`, `temp/`, `logs/` | Working directories (export file path chosen via `--out`) | Mixed (export is optionally encrypted)                  |
+| `config.toml`                            | CLI configuration                       | **Plaintext, contains no keys**                                             |
 
-密钥层级：每条凭据一个随机 item key（AES-256-GCM 加密载荷），item key 由
-主密码派生的 master key 包裹——见 [`KEY_HIERARCHY.md`](./KEY_HIERARCHY.md)。
-主密码不在任何文件里（验证用 Argon2 哈希）；启用指纹解锁后主密码托管进
-OS 钥匙串（service 名 `persona-biometric`，详见 THREAT_MODEL「Biometric
-Unlock」一节的固有暴露说明）。
+Key hierarchy: each credential has one random item key (AES-256-GCM encrypts the
+payload), and the item key is wrapped by the master key derived from your
+master password — see [`KEY_HIERARCHY.md`](./KEY_HIERARCHY.md). The master
+password is stored in no file (verification uses an Argon2 hash); once
+fingerprint unlock is enabled the master password is held in the OS keychain
+(service name `persona-biometric`; see the THREAT_MODEL "Biometric Unlock"
+section for the inherent-exposure discussion).
 
-> **注意**：主库的元数据列是明文。对元数据也保密的场景（共用机器、被
-> 扣押设备），考虑 Travel Mode（见下文）或整盘加密。
+> **Note**: the main database's metadata columns are plaintext. For scenarios
+> where even the metadata must stay confidential (shared machines, seized
+> devices), consider Travel Mode (see below) or full-disk encryption.
 
-## 模式一：纯本地（默认）
+## Mode One: Pure Local (Default)
 
-不配置任何服务器时 Persona **零外联**——没有遥测、没有更新检查、没有
-任何网络调用。
+With no server configured Persona makes **zero external calls** — no telemetry,
+no update checks, no network traffic of any kind.
 
-冷备建议（按优先序）：
+Cold backup recommendations, in order of preference:
 
-1. **加密导出**：`persona export --encrypt --out vault-backup.persenc`
-   （Argon2id + AES-256-GCM，导出时设独立口令）。文件可随意拷贝到
-   U 盘/云盘。
-2. **整库加密备份**：需要模式二的服务器（`persona backup push` 没有
-   "备份到本地文件"的路径；离线恢复可用 `persona backup restore --file`
-   吃任何 `.persenc` 密文）。
-3. OS 级快照：直接拷 `identities.db` 前请先锁定/退出 Persona（热拷贝
-   活跃 SQLite 有损坏风险）。
+1. **Encrypted export**: `persona export --encrypt --out vault-backup.persenc`
+   (Argon2id + AES-256-GCM, with an independent passphrase set at export time).
+   The file can be copied freely to a USB stick or cloud drive.
+2. **Whole-database encrypted backup**: requires the Mode Two server
+   (`persona backup push` has no "back up to a local file" path; offline
+   recovery can use `persona backup restore --file` to consume any `.persenc`
+   ciphertext).
+3. OS-level snapshots: before copying `identities.db` directly, lock or quit
+   Persona first (hot-copying a live SQLite database risks corruption).
 
-## 模式二：自托管 Persona Server
+## Mode Two: Self-Hosted Persona Server
 
-### 你得到什么
+### What You Get
 
-1. **审计事件异地副本**：设备把操作审计（动作/资源类型/成败/时间戳等
-   **元数据**，不含凭据名称、不含任何密文或明文密钥）批量上报，服务器
-   存一份副本供事后查询。本地审计库仍是第一存证源，上报是尽力而为的
-   复制（断网不丢本地记录，只丢异地副本的连续性）。
-2. **整库加密备份保管**：`persona backup push` 把整库快照
-   （VACUUM INTO → gzip → PERSENC1 加密）上传，服务器只见密文；
-   `list/pull/restore/delete` 管理版本。桌面端同一能力在设置 → 备份 →
-   「服务器密文仓」（推送/版本列表/恢复/删除；快照在本地加密后才出网，
-   备份口令与主密码不出本机；未配置服务器时入口不可用——默认关闭、
-   显式开启）。
+1. **Off-site copy of audit events**: devices report operation audit records
+   (**metadata** such as action/resource type/success or failure/timestamps —
+   no credential names, no ciphertext, no plaintext keys) in batches, and the
+   server keeps a copy for later querying. The local audit database remains the
+   source of record; reporting is best-effort replication (losing connectivity
+   loses no local records, only the continuity of the off-site copy).
+2. **Whole-database encrypted backup custody**: `persona backup push` uploads
+   a full-database snapshot (VACUUM INTO → gzip → PERSENC1 encryption); the
+   server sees only ciphertext, and `list/pull/restore/delete` manage the
+   versions. The desktop app exposes the same capability under Settings →
+   Backup → "Server ciphertext store" (push/version list/restore/delete; the
+   snapshot is encrypted locally before it ever leaves the machine; the backup
+   passphrase and master password never leave the machine; the entry point is
+   unavailable when no server is configured — off by default, enabled
+   explicitly).
 
-### 你得不到什么
+### What You Don't Get
 
-- **服务器侧合并/裁决**：凭据同步的合并（LWW）与冲突裁决全部在客户端
-  完成，服务器只中继密文操作日志（见下节）。触发仍是手动的——设置页
-  「立即同步」，不是毫秒级推送。
-- **服务器侧防篡改**：服务器操作者（也就是你自己，或攻破它的人）可以
-  扣留、删除或回滚备份与同步日志，客户端不做新鲜度校验（THREAT_MODEL
-  「备份保管端点」「E2EE 同步中继」明确不宣称）。
+- **Server-side merge/adjudication**: merging (LWW) and conflict adjudication
+  for credential sync happen entirely on the client; the server only relays
+  ciphertext oplogs (see the next section). Triggering remains manual — the
+  Settings page's "Sync now", not millisecond-level push.
+- **Server-side tamper protection**: the server operator (that is, you, or
+  whoever compromises it) can withhold, delete, or roll back backups and sync
+  logs, and clients perform no freshness checks (THREAT_MODEL explicitly
+  makes no claims for "backup custody endpoint" or "E2EE sync relay").
 
-### 部署服务器
+### Deploying the Server
 
-`persona-server` crate（axum），全部配置走环境变量：
+The `persona-server` crate (axum); all configuration goes through environment
+variables:
 
-| 变量                                   | 默认                  | 说明                                                                                                 |
+| Variable                               | Default               | Description                                                                                          |
 | -------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
-| `PERSONA_SERVER_HOST`                  | `0.0.0.0`             | 监听地址（本机试玩用 `127.0.0.1`）                                                                   |
-| `PERSONA_SERVER_PORT`                  | `3000`                | 监听端口                                                                                             |
-| `PERSONA_SERVER_DB`                    | `./persona-server.db` | 服务器自己的元数据库                                                                                 |
-| `PERSONA_SERVER_TOKENS`                | —                     | **多设备令牌**：`"laptop:tok1,phone:tok2"`；非法格式启动即错                                         |
-| `PERSONA_SERVER_TOKEN`                 | —                     | legacy 单令牌（视为 "default" 设备）；建议迁移到 TOKENS                                              |
-| `PERSONA_SERVER_BACKUP_DIR`            | `<DB 目录>/backups`   | 备份密文存放目录                                                                                     |
-| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0`（不限）           | 每设备保留版本数上限，超限删最旧                                                                     |
-| `PERSONA_SERVER_OPS_RETENTION_DAYS`    | `0`（不清理）         | 同步中继日志保留天数。开窗 = 放弃向「离线超过窗口」的设备补发历史的责任，**须 ≥ 最慢设备的离线周期** |
-| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0`（不清理）         | 审计事件副本保留天数，按你的 SIEM 摘取周期定                                                         |
+| `PERSONA_SERVER_HOST`                  | `0.0.0.0`             | Listen address (use `127.0.0.1` for local experiments)                                               |
+| `PERSONA_SERVER_PORT`                  | `3000`                | Listen port                                                                                           |
+| `PERSONA_SERVER_DB`                    | `./persona-server.db` | The server's own metadata database                                                                   |
+| `PERSONA_SERVER_TOKENS`                | —                     | **Multi-device tokens**: `"laptop:tok1,phone:tok2"`; an invalid format fails at startup                |
+| `PERSONA_SERVER_TOKEN`                 | —                     | Legacy single token (treated as the "default" device); migrating to TOKENS is recommended             |
+| `PERSONA_SERVER_BACKUP_DIR`            | `<DB dir>/backups`    | Directory where backup ciphertext is stored                                                           |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0` (no limit)        | Per-device cap on retained versions; oldest deleted beyond the cap                                    |
+| `PERSONA_SERVER_OPS_RETENTION_DAYS`    | `0` (no cleanup)      | Retention days for sync relay logs. Opening a window = giving up the responsibility to replay history to devices offline longer than the window; **must be ≥ the offline period of your slowest device** |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0` (no cleanup)      | Retention days for the audit-event copy; set per your SIEM ingestion cycle                            |
 
-**fail-closed**：`TOKENS`/`TOKEN` 都没配时 `/api/v1` 整体禁用（不是裸奔）。
+**Fail-closed**: when neither `TOKENS` nor `TOKEN` is configured, `/api/v1` is
+disabled as a whole (not left wide open).
 
-HTTP 端点（除 health/metrics 外全部要求 Bearer 令牌）：
+HTTP endpoints (all except health/metrics require a Bearer token):
 
-| 端点                  | 方法                | 用途                                                                      | 请求上限                          |
+| Endpoint              | Method              | Purpose                                                                  | Request limit                      |
 | --------------------- | ------------------- | ------------------------------------------------------------------------- | --------------------------------- |
-| `/api/v1/events`      | POST                | 上报审计事件批（单批 ≤500 条）                                            | 线上 1 MiB（gzip）/ 解压后 10 MiB |
-| `/api/v1/events`      | GET                 | 查询已存事件（按动作/成败/时间过滤 + 游标分页）                           | —                                 |
-| `/api/v1/backups`     | POST / GET          | 上传备份 / 列版本                                                         | 256 MiB                           |
-| `/api/v1/backups/:id` | GET / DELETE        | 下载 / 删除某版本                                                         | —                                 |
-| `/api/v1/sync/*`      | POST / GET / DELETE | 设备注册、组密钥信封取/传、oplog 推拉（本文端到端同步一节的承载面）       | —                                 |
-| `/api/v1/auth/*`      | POST                | 设备 SRP 认证（register/challenge/verify 换短期 token）                   | —                                 |
-| `/api/v1/accounts/*`  | POST / GET / DELETE | 账号域（SRP 密码、passkey 仪式、恢复码、账号设备/会话）                   | 线上 1 MiB                        |
-| `/api/v1/pairing/*`   | POST / GET / DELETE | 同步组动态密码配对信箱（**免 Bearer**，TTL 600s、队列 ≤4、payload ≤4KiB） | 4 KiB                             |
-| `/health`、`/metrics` | GET                 | 存活与指标                                                                | 公开                              |
+| `/api/v1/events`      | POST                | Report a batch of audit events (≤500 entries per batch)                   | 1 MiB on the wire (gzip) / 10 MiB decompressed |
+| `/api/v1/events`      | GET                 | Query stored events (filter by action/success or failure/time + cursor pagination) | —                                 |
+| `/api/v1/backups`     | POST / GET          | Upload a backup / list versions                                          | 256 MiB                           |
+| `/api/v1/backups/:id` | GET / DELETE        | Download / delete a specific version                                     | —                                 |
+| `/api/v1/sync/*`      | POST / GET / DELETE | Device registration, group-key envelope fetch/upload, oplog push/pull (the transport surface for the E2EE sync section in this document) | —                                 |
+| `/api/v1/auth/*`      | POST                | Device SRP authentication (register/challenge/verify exchanged for a short-lived token) | —                                 |
+| `/api/v1/accounts/*`  | POST / GET / DELETE | Account domain (SRP password, passkey ceremonies, recovery codes, account devices/sessions) | 1 MiB on the wire                 |
+| `/api/v1/pairing/*`   | POST / GET / DELETE | Sync-group one-time-passcode pairing mailbox (**no Bearer required**, TTL 600s, queue ≤4, payload ≤4KiB) | 4 KiB                             |
+| `/health`, `/metrics` | GET                 | Liveness and metrics                                                     | Public                            |
 
-设备名由命中的令牌推导（客户端不可自报）；同设备与最新版本 sha256 相同
-的 push 幂等去重。端点细节见 `SELF_HOST_SERVER.md` 端点速查。
+Device names are derived from the matched token (clients cannot self-report
+them); a push from the same device with the same sha256 as the latest version
+is deduplicated idempotently. For endpoint details see the endpoint quick
+reference in `SELF_HOST_SERVER.md`.
 
-### 配置客户端
+### Configuring the Client
 
-**桌面应用**（设置 → 同步）：填 server URL + 设备令牌，开关启用。令牌
-真值存 OS 钥匙串（service `persona-sync`），数据库里只留空占位——把
-`identities.db` 拷到别的机器不会带走令牌，需重新输入。禁用即清钥匙串。
+**Desktop app** (Settings → Sync): enter the server URL + device token and
+flip the switch on. The token's real value lives in the OS keychain (service
+`persona-sync`); the database only holds an empty placeholder — copying
+`identities.db` to another machine does not carry the token with it, so it
+must be re-entered. Disabling sync clears the keychain entry.
 
-**CLI**：只认环境变量、**故意不落盘**——
+**CLI**: honors environment variables only and **deliberately persists
+nothing** —
 
 ```bash
 export PERSONA_SERVER_URL="https://your-server:8443"
-export PERSONA_SERVER_TOKEN="tok1"          # 与服务器 TOKENS 中某条匹配
-export PERSONA_PAYLOAD_PASSPHRASE="..."     # 备份口令（交互输入也行）
+export PERSONA_SERVER_TOKEN="tok1"          # matches one entry in the server's TOKENS
+export PERSONA_PAYLOAD_PASSPHRASE="..."     # backup passphrase (interactive input works too)
 persona backup push
 ```
 
-两个通道**相互独立**：桌面设置页的同步配置同时驱动事件上报与端到端
-同步（设置 → 同步的 `sync_now` 与同步管理命令共用这一个 URL+令牌）；
-CLI 的 backup 命令只认自己的 env。想在桌面和 CLI 共用一台服务器，
-两处各配一次。
+The two channels are **independent of each other**: the desktop Settings page's
+sync configuration drives both event reporting and E2EE sync (the
+Settings → Sync `sync_now` and the sync management commands share this one
+URL + token), while the CLI's backup commands only read their own env. To use
+one server from both the desktop app and the CLI, configure each side once.
 
-## 端到端加密凭据同步（多设备）
+## End-to-End Encrypted Credential Sync (Multi-Device)
 
-桌面版在模式二之上提供**凭据级的端到端加密同步**：每台设备生成自己的
-密钥对（私钥存 OS 钥匙串，service `persona-device`），第一台设备创建
-组密钥后，其余设备由已授权设备「授权」加入。组密钥只以「仅目标设备
-私钥能拆开」的信封形式经服务器流转——**服务器永远见不到组密钥与任何
-明文**，它只中继密文操作日志。
+On top of Mode Two, the desktop app provides **credential-level end-to-end
+encrypted sync**: each device generates its own key pair (private key in the OS
+keychain, service `persona-device`); after the first device creates the group
+key, the remaining devices join when an already-authorized device "authorizes"
+them. The group key only ever transits the server in envelope form that "only
+the target device's private key can open" — **the server never sees the group
+key or any plaintext**; it only relays ciphertext oplogs.
 
-### 它同步什么
+### What It Syncs
 
-- **凭据**（元数据 + 载荷整体）：增、改、删在设备间收敛，删除以墓碑
-  记录传播。加入同步**之前**就存在的凭据也会在下一次同步时自动灌入。
-- 同步是**手动触发**的：设置 → 端到端加密同步 → 「立即同步」，跑一轮
-  「拉取 → 应用 → 推送」。两台设备都联网时一轮即收敛；本地改动先记账、
-  联网后自动补推。
+- **Credentials** (metadata plus the payload as a whole): additions, edits,
+  and deletions converge across devices, and deletions propagate as
+  tombstone records. Credentials that already existed **before** you joined
+  sync are pushed in automatically on the next sync run.
+- Sync is **triggered manually**: Settings → End-to-End Encrypted Sync →
+  "Sync Now" runs one pass of "pull → apply → push". With both devices
+  online, a single pass is enough to converge; local changes are journaled
+  first and pushed automatically once the device is back online.
 
-### 入组方式（当前与规划中）
+### How Devices Join (Current and Planned)
 
-- **当前（已实现）**：第一台设备自举建组 → 第二台「加入同步」显示待
-  授权 → 已授权设备点「授权」。见下文双设备演示走查。
-- **已实现（S1 桌面接线）**：同步组动态密码配对——
-  一端出示 9 位短时效动态密码，另一端输入后经 PAKE 换出组密钥入组，
-  双端比对 6 位短指纹防中间人，全程零账号（`docs/sync-group-mode.md`）。
-  协议核心、无账号中转信箱与中转客户端已落（`core/src/sync/pairing.rs`、
-  服务器 `/api/v1/pairing/*`），桌面设置页出码/输码/指纹比对/入组界面已接线（`desktop/src/components/SyncGroupSection.tsx` + `desktop/src-tauri/src/commands.rs` 七个 `sync_group_*` 命令）。
+- **Current (implemented)**: the first device bootstraps the group → the
+  second device taps "Join Sync" and shows a pending-authorization badge →
+  an already-authorized device taps "Authorize". See the two-device
+  walkthrough below.
+- **Implemented (S1 desktop wiring)**: dynamic-password pairing for a sync
+  group — one side displays a 9-digit short-lived dynamic password, the
+  other side types it in, and the two exchange the group key over PAKE to
+  complete the join, then compare a 6-digit short fingerprint on both sides
+  to guard against man-in-the-middle, with no account anywhere in the flow
+  (`docs/sync-group-mode.md`). The protocol core, the account-free relay
+  mailbox, and the relaying client are implemented (`core/src/sync/pairing.rs`,
+  server `/api/v1/pairing/*`); the desktop settings page wires up the
+  display-code, enter-code, fingerprint-comparison, and join UI
+  (`desktop/src/components/SyncGroupSection.tsx` plus seven `sync_group_*`
+  commands in `desktop/src-tauri/src/commands.rs`).
 
-### 它不同步什么（诚实边界）
+### What It Does Not Sync (Honest Boundaries)
 
-- **身份（Identity）不同步**——凭据与 Passkey 已同步；身份行仍由各设备
-  自建，物化遇到缺失身份先挂起（pending_identity）等补齐。
-- **Passkey 的设备本地使用态不同步**——`sign_count`/`last_used_at` 在各
-  设备独立推进（跨设备复制计数会伪造 WebAuthn 克隆检测基线）；同步的是
-  注册语义字段（rp、credential id、私钥信封、COSE 公钥、算法、UV/导出
-  标记、标签），私钥信封原样搬运（item key 经组信封流转并重包到本机
-  主密钥，字节不变故照常可解）。
-- **附件文件体不同步**。
-- **本地审计、应用设置、主密码体系不参与同步**——每台设备的主密码相互
-  独立（可以不同），改主密码只影响本机，对同步零影响。
-- 冲突裁决是**整体取舍**：采纳哪个版本就整个用哪个，不做字段级合并。
+- **Identity rows are not synced** — credentials and passkeys are; identity
+  rows are still created locally on each device, and when materialization
+  hits a missing identity it parks the work as `pending_identity` until the
+  row is filled in.
+- **A passkey's device-local usage state is not synced** — `sign_count` /
+  `last_used_at` advance independently on each device (copying counters
+  across devices would forge the baseline that WebAuthn clone detection
+  depends on); what syncs is the registration-semantic fields (rp,
+  credential id, private key envelope, COSE public key, algorithm, UV /
+  exportable flags, label), with the private key envelope carried over
+  as-is (the item key travels inside the group envelope and is re-wrapped
+  under the local master key, byte-for-byte identical, so it still decrypts
+  as usual).
+- **Attachment file bodies are not synced.**
+- **Local audit, app settings, and the master password hierarchy stay out
+  of sync** — each device's master password is independent of the others
+  (they may differ), changing the master password affects only that device,
+  and it has zero effect on sync.
+- Conflict adjudication is an **all-or-nothing choice**: whichever version
+  you adopt is adopted whole; there is no field-level merge.
 
-### 冲突怎么裁决
+### How Conflicts Are Adjudicated
 
-多数情况没有冲突：并发改动按操作版本号（Lamport 时钟）自动排出先后，
-新者胜。真冲突只出现在「两台设备离线各自改了**同一条**凭据、且改动
-轮次相同」——此时两个版本都保留（数据不丢、不静默覆盖），同步完成后
-设置页出现琥珀色横幅；「查看冲突」打开裁决弹窗，左右对照两版，采纳
-其中一个即可（其余版本不再出现）。
+Most of the time there is no conflict: concurrent edits are ordered
+automatically by operation version number (Lamport clock), and the newer one
+wins. Real conflicts only show up when "two devices both offline edited the
+**same** credential at the same edit round" — at that point both versions
+are kept (no data loss, no silent overwrite), and once the sync finishes an
+amber banner appears in settings; "View Conflicts" opens an adjudication
+dialog with the two versions side by side, and adopting one is all it takes
+(the other versions stop appearing).
 
-本机操作日志**自动瘦身**：每次同步结束时，已被新版本取代的旧操作、
-以及超过 30 天保留期的删除记录会被清理——未推送的改动、未裁决的冲突
-版本与当前生效版本永远保留。append-only 指不覆写、不静默改动，不承诺
-永久保留每一版历史。
+The local oplog **prunes itself automatically**: at the end of every sync,
+old operations already superseded by a newer version, and deletion records
+past their 30-day retention window, are cleaned up — unpushed changes,
+unadjudicated conflict versions, and the currently effective version are
+kept forever. Append-only means nothing is overwritten and nothing is
+silently modified; it does not promise to retain every historical version
+forever.
 
-### 服务器能看到什么
+### What the Server Can See
 
-密文、条目 UUID、操作类型、版本号、时间戳、设备公钥与信封。**条目
-大小可被观察**（尺寸侧信道，THREAT_MODEL 有诚实登记）。服务器可以
-扣留、删除或回滚日志（不宣称防篡改），但读不出任何内容；「Travel
-Mode」激活期间同步整体暂停（推拉双停），被移出的身份不会被写回。
+Ciphertext, item UUIDs, operation types, version numbers, timestamps, device
+public keys, and envelopes. **Item sizes are observable** (a size side
+channel, honestly registered in THREAT_MODEL). The server can withhold,
+delete, or roll back the log (no tamper-resistance is claimed), but it
+cannot read any of the content; while "Travel Mode" is active, sync pauses
+outright (both push and pull stop), and identities that were moved out are
+never written back.
 
-### 上手：加入与授权
+### Getting Started: Joining and Authorizing
 
-1. 部署服务器（同模式二；`/api/v1/sync/*` 无需额外配置，复用同一份
-   设备令牌）。
-2. 桌面应用 → 设置 → 端到端加密同步：填设备名称 → 「加入同步」。
-   **全新服务器上第一台设备自动建组**（自举），即加入即授权。
-3. 第二台设备同样「加入同步」→ 显示「待授权」徽标；回到已授权设备的
-   设备列表，对它点「授权」。
-4. 各点一次「立即同步」，凭据开始收敛。
+1. Deploy a server (same as Mode Two; `/api/v1/sync/*` needs no extra
+   configuration and reuses the same device token).
+2. Desktop app → Settings → End-to-End Encrypted Sync: enter a device name →
+   "Join Sync". **On a brand-new server the first device creates the group**
+   (bootstrap), so joining is also authorizing.
+3. The second device taps "Join Sync" the same way → a "Pending
+   Authorization" badge appears; go back to an authorized device's device
+   list and tap "Authorize" on it.
+4. Tap "Sync Now" once on each; credentials start converging.
 
-### 双设备演示脚本
+### Two-Device Walkthrough
 
-拿来即可走一遍（两台设备 = 两个装了 Persona 桌面版的环境，共用同一台
-服务器与令牌）：
+Ready to run as-is (two devices = two environments with the Persona desktop
+app installed, sharing one server and token):
 
-1. **设备 A 加入**：设置 → 端到端加密同步 → 设备名称 `laptop` → 加入。
-   全新服务器上 A 自举建组，状态行「已加入：laptop」，无待授权徽标。
-2. **设备 B 加入**：同样加入，名称 `phone` → 提示「已登记——请在另一台
-   已授权设备上授权本机」；设备列表中 phone 带「待授权」徽标。
-3. **A 授权 B**：A 的设备列表 → `phone` 行 → 「授权」→ 提示已授权，
-   phone 行的待授权徽标消失。
-4. **A 新建一条凭据 → A「立即同步」**：提示同步完成（推送若干条——
-   存量凭据首次会一并灌入）。
-5. **B「立即同步」**（拉取同批条数）→ B 的凭据列表出现同一条。
-6. **离线冲突**：断开两台设备与服务器的连接（或直接停掉服务器），
-   A 与 B 各自修改**同一条**凭据（如 A 改用户名、B 改 URL）→ 恢复
-   服务器 → 两台各点「立即同步」→ 至少一端出现琥珀色横幅「N 个条目
-   存在并发修改的冲突版本」→ 点「查看冲突」打开裁决弹窗：一版标
-   「当前版本」，另一版标「内容不同」。
-7. **裁决**：点其中一版「采纳此版本」→ 提示「已采纳所选版本」，弹窗
-   内该条目消失；另一台设备再「立即同步」后收敛到同一版本。
-8. **（可选）吊销**：A 的设备列表 → `phone` → 「吊销」→ phone 即刻
-   失去同步资格（后续同步被服务器拒绝）；phone 上的本库数据不受影响
-   （主库密文归主密码体系）。吊销后如需 phone 也读不到同步历史，见
-   下节「轮换组密钥」。
+1. **Device A joins**: Settings → End-to-End Encrypted Sync → device name
+   `laptop` → Join. On a brand-new server A bootstraps the group, the status
+   line reads "Joined: laptop", and there is no pending-authorization badge.
+2. **Device B joins**: join the same way with the name `phone` → a prompt
+   says "Registered — authorize this device on another already-authorized
+   device"; in the device list, `phone` carries a "Pending Authorization"
+   badge.
+3. **A authorizes B**: A's device list → the `phone` row → "Authorize" → a
+   confirmation appears, and the pending-authorization badge on the `phone`
+   row disappears.
+4. **A creates a credential → A taps "Sync Now"**: a sync-complete message
+   appears (several entries are pushed — the pre-existing credentials are
+   pushed in on the first run).
+5. **B taps "Sync Now"** (pulling the same number of entries) → the same
+   credential shows up in B's credential list.
+6. **Offline conflict**: disconnect both devices from the server (or simply
+   stop the server), have A and B each edit the **same** credential (say A
+   changes the username and B changes the URL) → bring the server back →
+   tap "Sync Now" on both → at least one device shows an amber banner
+   saying "N entries have conflict versions from concurrent edits" → tap
+   "View Conflicts" to open the adjudication dialog: one version is labeled
+   "Current version", the other "Content differs".
+7. **Adjudication**: tap "Adopt this version" on one of them → a message says
+   "Selected version adopted", and that entry disappears from the dialog;
+   after the other device taps "Sync Now" again, both converge on the same
+   version.
+8. **(Optional) Revoke**: A's device list → `phone` → "Revoke" → `phone`
+   immediately loses its sync eligibility (later sync attempts are refused
+   by the server); the data in `phone`'s own vault is unaffected (the main
+   database's ciphertext belongs to the master password hierarchy). If after
+   revoking you also need `phone` to be unable to read the sync history,
+   see the next section, "Rotating the Group Key".
 
-> 已知边界：两台设备在「彼此都尚未加入」的极短窗口内先后对空组加入，
-> 可能各自建组（并发自举）——表现为互相看不到对方的条目。在其中一侧
-> 「离开同步」后重新加入即可回到正常流程。
+> Known boundary: if two devices join an empty group one after the other
+> within the very short window where "neither has joined yet", each may
+> create its own group (concurrent bootstrap) — this shows up as neither
+> device seeing the other's entries. Have one side "Leave Sync" and join
+> again, and the normal flow is back.
 
-### 轮换组密钥
+### Rotating the Group Key
 
-吊销设备后，它移除前已知的组密钥仍能解开同步历史（组密钥不可追溯
-撤销）——**轮换**是真正的闭环：设置 → 端到端加密同步 →
-「轮换组密钥」。轮换 = 生成新组密钥，为全部**仍授权**的设备重封信封，
-并把全部凭据以新密钥重新加密入账；此后被吊销设备的旧密钥拆不开任何
-新密文。以下情形也建议轮换：怀疑某台设备密钥泄露，或想把某个已离开
-的成员彻底请出历史。
+After you revoke a device, the group key it knew before removal can still
+open the sync history (a group key cannot be retroactively revoked) —
+**rotation** is what actually closes the loop: Settings → End-to-End
+Encrypted Sync → "Rotate Group Key". Rotation = generate a new group key,
+re-envelope it for every device that is **still authorized**, and re-encrypt
+and re-record every credential under the new key; from then on the old key
+held by a revoked device opens none of the new ciphertext. Rotation is also
+recommended when you suspect a device's key has leaked, or when you want to
+expel a member who has left from the history entirely.
 
-三条诚实边界（确认弹窗同样提示）：
+Three honest boundaries (the confirmation dialog says the same):
 
-- **轮换前先各点一次「立即同步」**：轮换只重包当下已推送的条目；其他
-  设备停在本地、尚未推送的改动仍以旧密钥入账，只有新信封的设备将解不
-  开它们（本地数据本身不受影响）。
-- **未裁决的冲突副本**会被轮换清出裁决视图（主库当前态为准；操作日志
-  append-only，原始记录仍在）。
-- **两台设备同时轮换有乐观锁互斥**（2026-09-24）：轮换开始前先在服务器
-  以 epoch 乐观锁抢占互斥（`rotate-begin`），后到的一侧收到
-  `CONCURRENT_CONFLICT` 错误干净中止——未写信封、未重包，重读状态后
-  重试即可。这只防诚实客户端的意外并发，不防恶意客户端绕过（写入
-  真实性边界见 THREAT_MODEL）。
+- **Tap "Sync Now" on every device first**: rotation only re-wraps the
+  entries that have been pushed at that moment; changes still sitting
+  unpushed on other devices were recorded under the old key, and only
+  devices holding the new envelope will fail to open them (the local data
+  itself is unaffected).
+- **Unadjudicated conflict copies** are cleared out of the adjudication
+  view by a rotation (the main database's current state wins; the oplog is
+  append-only, so the original records remain).
+- **Two devices rotating at the same time are mutually excluded by an
+  optimistic lock** (2026-09-24): before rotation begins, the mutex is
+  claimed on the server with an epoch optimistic lock (`rotate-begin`), and
+  whichever side arrives second aborts cleanly with a `CONCURRENT_CONFLICT`
+  error — no envelopes written, nothing re-wrapped; re-read the state and
+  retry and you are fine. This only guards against accidental concurrency
+  from honest clients, not against a malicious client routing around it
+  (see THREAT_MODEL for the write-authenticity boundary).
 
-## 备份与恢复实操
+## Backup and Restore in Practice
 
-> 备份/恢复两条通道并行——CLI（下表的 `persona backup` 五命令）与桌面设置页
-> 的 BackupSection（`desktop/src/components/BackupSection.tsx`，`desktop/src-tauri/src/commands.rs` 六个 `backup_*` 命令）。桌面设置里的"同步"开关驱动事件上报与端到端同步。
+> The backup and restore channels run in parallel — the CLI (the five
+> `persona backup` commands in the table below) and the desktop settings
+> page's BackupSection (`desktop/src/components/BackupSection.tsx`, six
+> `backup_*` commands in `desktop/src-tauri/src/commands.rs`). The "Sync"
+> switch in desktop settings drives both event reporting and end-to-end
+> sync.
 
-| 命令                                    | 作用                                       |
-| --------------------------------------- | ------------------------------------------ |
-| `persona backup push`                   | 快照当前库 → 加密 → 上传（无需解锁主密码） |
-| `persona backup list`                   | 列出版本（新→旧，分页）                    |
-| `persona backup pull <id> --out f`      | 下载密文到文件（不解密）                   |
-| `persona backup restore <id>\|--file f` | 解密复验 → 留 `.bak` → 换库                |
-| `persona backup delete <id>`            | 删除服务器上的版本                         |
+| Command                                    | What it does                                          |
+| ------------------------------------------ | ----------------------------------------------------- |
+| `persona backup push`                      | Snapshot the current vault → encrypt → upload (no need to unlock the master password) |
+| `persona backup list`                      | List versions (newest → oldest, paginated)            |
+| `persona backup pull <id> --out f`         | Download the ciphertext to a file (does not decrypt)  |
+| `persona backup restore <id>\|--file f`    | Decrypt and verify → keep a `.bak` → swap in the database |
+| `persona backup delete <id>`               | Delete the version on the server                      |
 
-要点：
+Key points:
 
-- **备份口令与主密码相互独立**。恢复 = 下载密文 + 备份口令解密 + 主密码
-  解锁。备份口令丢失 = 该备份永久不可恢复（无托管、无重置）。
-- push 设双录确认、restore 不设（口令是既有的）；restore 前自动把现库
-  拷为 `identities.bak`。
-- **附件文件体不在 v1 备份内**：恢复后附件元数据在、文件体缺失（CLI 与
-  桌面均明示此限制）。
-- 备份是快照不是增量：恢复把库整体回到备份时刻。
+- **The backup passphrase and the master password are independent of each
+  other**. Restore = download the ciphertext + decrypt it with the backup
+  passphrase + unlock with the master password. Lose the backup passphrase
+  and that backup is permanently unrecoverable (no escrow, no reset).
+- push sets up a double-entry confirmation, restore does not (the passphrase
+  already exists); restore automatically copies the current vault to
+  `identities.bak` first.
+- **Attachment file bodies are not in a v1 backup**: after a restore the
+  attachment metadata is there but the file bodies are missing (the CLI
+  and the desktop app both state this limitation explicitly).
+- A backup is a snapshot, not an increment: a restore takes the whole vault
+  back to the moment of the backup.
 
-## 网盘目录（iCloud / Dropbox / WebDAV…）
+## Cloud Drive Folders (iCloud / Dropbox / WebDAV…)
 
-⚠️ **不要把活跃的 `identities.db` 放进云盘同步目录**。SQLite 假定独占
-写文件，网盘的双向同步会产生冲突副本与损坏风险——这是最常见的踩坑。
+⚠️ **Do not put a live `identities.db` in a cloud drive's sync folder**.
+SQLite assumes it has exclusive write access to the file, and a cloud
+drive's bidirectional sync produces conflict copies and a real risk of
+corruption — this is the most common way people shoot themselves in the
+foot here.
 
-正确姿势：云盘只放**密文成品**——
+The right way: the cloud drive holds **encrypted artifacts only** —
 
-- `persona export --encrypt` 的导出文件，或
-- `persona backup pull` 下载的 `.persenc` 备份密文。
+- the export file from `persona export --encrypt`, or
+- the `.persenc` backup ciphertext downloaded by `persona backup pull`.
 
-两者都带独立口令，云盘供应商只见密文。代价是手动（或用脚本定时）执行，
-以及恢复是整库级的。
+Both carry an independent passphrase, so the cloud provider only ever sees
+ciphertext. The price is having to run this yourself by hand (or on a
+timer, via a script), and that a restore is whole-vault.
 
-（"文件系统同步 adapter"——本地服务监听变更、自动推拉加密 blob——是
-[设计稿](./CLIENT_COMMUNICATION_ARCHITECTURE.md)中的未来项，当前未实现。）
+(A "file-system sync adapter" — a local service that watches for changes and
+pushes/pulls encrypted blobs automatically — is a future item in
+[the design draft](./CLIENT_COMMUNICATION_ARCHITECTURE.md); it is not
+implemented today.)
 
-## 多设备与 Travel Mode
+## Multiple Devices and Travel Mode
 
-- 多台设备各自 init、各自独立成库。多设备协作现在有三条路：
-  **凭据级 E2EE 同步**（见上文专节，增量、自动收敛）、**备份版本池 +
-  整库恢复**（每台设备用自己的令牌 push，版本按设备归组；整库快照、
-  手动）、网盘冷备（密文成品手动拷贝）。
-- 把一台设备的库恢复成另一台的备份 = **整库替换**（含现有数据被
-  `.bak` 换下），不是合并；要增量保持一致请用凭据同步。
-- [`Travel Mode`](./THREAT_MODEL.md#travel-mode-travelpersenc-sidecar2026-09)
-  （`persona travel …` / 桌面设置通用页 → 安全区）用于暂时把若干身份**整包移出**
-  一台设备（加密 sidecar 随身带走），回来时口令恢复——多设备场景下
-  控制单台设备数据暴露面的工具。Travel 激活期间凭据同步整体暂停
-  （推拉双停），防止把移出身份的墓碑推给其他设备、或把已移出身份拉回
-  本库。
+- Each device runs its own `init` and forms its own independent vault. There
+  are now three ways to collaborate across devices: **credential-level E2EE
+  sync** (see the dedicated section above; incremental, converges
+  automatically), a **backup version pool + whole-vault restore** (each
+  device pushes with its own token and versions are grouped by device;
+  whole-vault snapshots, manual), and **cold backup via a cloud drive**
+  (manually copying encrypted artifacts).
+- Restoring one device's vault from another device's backup is a **whole-vault
+  replacement** (the existing data is swapped out to `.bak`), not a merge;
+  if you need incremental consistency, use credential sync.
+- [`Travel Mode`](./THREAT_MODEL.md#travel-mode-travelpersenc-sidecar-2026-09)
+  (`persona travel …` / desktop settings general page → Safe Zone) exists to
+  temporarily move whole identities **out of** one device (an encrypted
+  sidecar travels with you), and a passphrase restores them when you come
+  back — in a multi-device setup it is the tool for bounding how much one
+  device can expose. While Travel is active, credential sync pauses
+  outright (both push and pull stop), which prevents pushing the tombstones
+  of moved-out identities to other devices, or pulling already-moved-out
+  identities back into this vault.
 
-## 本机自动化（Connect API）
+## Local Automation (Connect API)
 
-让本机的脚本 / CI / 命令行工具**只读**读取 vault 条目的 HTTP 接口。默认
-关闭；开启后只监听 `127.0.0.1`（端口由系统分配），请求永不离开本机。
-详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)、
-[THREAT_MODEL](./THREAT_MODEL.md#connect-本机自动化端点127001-http2026-09-secrets-automation)。
-**外部项目接入指南（三步 + 实测响应样例 + 令牌到期/吊销语义 + 权限边界）
-见 [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)。**
+An HTTP interface that lets local scripts / CI / command-line tools read
+vault entries **read-only**. Off by default; once enabled it listens only on
+`127.0.0.1` (on a system-assigned port), and requests never leave the
+machine. See
+[`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md) and
+[THREAT_MODEL](./THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)
+for details. **The guide for integrating an external project (three steps +
+measured response samples + token expiry/revocation semantics + permission
+boundaries) is in
+[`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md).**
 
-**两步用起来：**
+**Two steps to start using it:**
 
-1. 创建 token（明文只展示一次，丢了只能吊销重建）：
+1. Create a token (the plaintext is shown only once; if you lose it you can
+   only revoke and recreate it):
 
    ```bash
-   # 桌面：设置通用页 → Connect 本机自动化 → 创建 Token
-   # CLI（默认授权全部身份的全部可授权类型，只读）：
-   persona connect token create --label "我的 CI 脚本"
-   # 收窄 scope（给了限定就收窄，缺省 = 全部）：
+   # Desktop: settings general page → Connect local automation → Create Token
+   # CLI (by default authorizes every authorizable type on every identity, read-only):
+   persona connect token create --label "my CI script"
+   # Narrow the scope (a restricted set narrows it; the default = everything):
    persona connect token create --label "deploy" --identity work --type password --type api_key
    ```
 
-2. 启动监听（前台进程，Ctrl-C 退出；桌面版在设置里开关）：
+2. Start the listener (foreground process, Ctrl-C to exit; the desktop app
+   toggles it in settings):
 
    ```bash
-   persona connect serve            # 或 --port 8737 固定端口
+   persona connect serve            # or --port 8737 for a fixed port
    ```
 
-**curl 快速上手**（`$TOKEN` 为创建时保存的 `pconn_…` 明文，`$PORT` 见
-serve 启动输出）：
+**curl quick start** (`$TOKEN` is the `pconn_…` plaintext you saved at
+creation time; see the serve startup output for `$PORT`):
 
 ```bash
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/health
@@ -352,53 +461,65 @@ curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/
 curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:$PORT/api/v1/connect/items/<id>/totp
 ```
 
-边界（诚实版）：
+Boundaries (honest version):
 
-- **只读**。写路径不存在；scope 只能收窄不能提权；passkey / wallet /
-  SSH 密钥 / 自定义类型**永远不可**经此接口授权。
-- token 只存 SHA-256 哈希，列表只见指纹；`persona connect token revoke`
-  （id 或指纹均可）即时生效、幂等。
-- 限速 120 请求/分钟；vault 锁定时返回 503（锁定不消耗限额）。
-- 防线只对本机浏览器侧攻击（恶意网页）有效——**不要**把 token 交给浏览
-  器扩展或任何网页可达的存储；本机恶意进程本来就在信任边界之外。
+- **Read-only**. There is no write path; scope can only be narrowed, never
+  elevated; passkey / wallet / SSH key / custom types can **never** be
+  authorized through this interface.
+- Tokens are stored only as SHA-256 hashes, so listings show just a
+  fingerprint; `persona connect token revoke` (accepts an id or a
+  fingerprint) takes effect immediately and is idempotent.
+- Rate limit 120 requests/minute; a locked vault returns 503 (locking does
+  not consume your quota).
+- This defense line only covers local browser-side attacks (a malicious web
+  page) — **do not** hand the token to a browser extension or to any
+  web-reachable store; a malicious local process was already outside the
+  trust boundary to begin with.
 
-## Secrets 自动化（CLI 直读）
+## Secrets Automation (Direct CLI Read)
 
-Connect API 面向**跨进程**消费者（HTTP 客户端）；`persona secrets` 是
-**同进程** CLI 直读路径，给脚本 / CI / 声明式工具提供明文，覆盖三件套：
-shell plugins（env 注入 + 子进程执行）、Kubernetes Secret 清单渲染、
-Terraform `external` provider 协议。
+The Connect API serves **cross-process** consumers (HTTP clients), while
+`persona secrets` is the **same-process** direct CLI read path, handing
+plaintext to scripts / CI / declarative tools across three bundles: shell
+plugins (env injection + subprocess execution), Kubernetes Secret manifest
+rendering, and the Terraform `external` provider protocol.
 
-**引用语法**统一为 `IDENTITY/ITEM/FIELD`（身份按名称、条目按凭据名，
-精确匹配；重名即报错，不猜）：
+The **reference syntax** is uniformly `IDENTITY/ITEM/FIELD` (identities
+matched by name, items by credential name, exact match; a duplicate name is
+an error, never a guess):
 
-- `name` / `username` / `url` / `notes` 取元数据，**不解密**；
-- 其余字段按条目类型的字段词汇表取值（`persona secrets` 会把合法字段
-  列在报错里），可选字段未设置即报错——**不静默给空串**；
-- `secret` 是各类型主秘密的别名（Password→`password`、API Key→
-  `api_key`、TOTP→`secret_key`、SSH Key→`private_key`、Server→
-  `password`、Secure Note→`note`、钱包→`private_key`、License→
-  `license_key`）。
+- `name` / `username` / `url` / `notes` read metadata and **do not
+  decrypt**;
+- every other field is read per the field vocabulary of its item type
+  (`persona secrets` lists the legal fields in the error message), and an
+  unset optional field is an error — it **never silently returns an empty
+  string**;
+- `secret` is an alias for each type's primary secret (Password→`password`,
+  API Key→`api_key`, TOTP→`secret_key`, SSH Key→`private_key`,
+  Server→`password`, Secure Note→`note`, wallet→`private_key`,
+  License→`license_key`).
 
-每次解密都走与桌面/CLI 展示相同的审计路径（`CredentialDecrypted`），
-触碰自动锁计时。
+Every decryption goes through the same audit path as desktop and CLI
+display (`CredentialDecrypted`), which trips the auto-lock timer.
 
-**四个子命令：**
+**The four subcommands:**
 
 ```bash
-# 1. resolve：脚本基元，一行一值（顺序与参数一致）
+# 1. resolve: scripting primitive, one value per line (same order as the arguments)
 export API_KEY="$(persona secrets resolve work/deploy/api_key)"
 
-# 2. run：把明文注入子进程环境后执行（不进 shell 历史，不落盘）
+# 2. run: inject plaintext into the subprocess environment, then execute
+#    (never enters shell history, never touches disk)
 persona secrets run --env GITHUB_TOKEN=work/ci/api_key -- gh repo view
 
-# 3. k8s：渲染 Secret 清单（data 走 base64）到 stdout，kubectl apply 消费
+# 3. k8s: render a Secret manifest (data base64-encoded) to stdout for kubectl apply to consume
 persona secrets k8s --name deploy-secrets --namespace prod \
   --key password=work/deploy/password --key token=work/ci/api_key \
   --label app.kubernetes.io/managed-by=persona | kubectl apply -f -
 
-# 4. external：Terraform external provider 协议助手（stdin JSON 查询 →
-#    stdout JSON 明文；native gRPC provider 需 Go SDK，刻意不做）
+# 4. external: helper for the Terraform external provider protocol
+#    (stdin JSON query → stdout JSON plaintext; the native gRPC provider
+#    would need the Go SDK, deliberately not done)
 ```
 
 ```hcl
@@ -408,26 +529,32 @@ data "external" "persona" {
 }
 ```
 
-边界（诚实版）：
+Boundaries (honest version):
 
-- **只读**；与 Connect 共用解锁链（无已解锁会话时提示主密码）。CI 里配
-  `PERSONA_WORKSPACE_PATH` + `PERSONA_MASTER_PASSWORD` 即全程非交互（见
-  [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md)）。
-- 明文经 stdout / 环境变量交付——`resolve` 的重定向落盘、CI 日志回显
-  属使用方责任；`run` 的注入只存在于子进程环境。
-- 银行卡类型没有 `secret` 别名（卡号/CVV 无单一"主秘密"），按具体字段
-  引用。
+- **Read-only**; it shares the unlock chain with Connect (it prompts for the
+  master password when there is no unlocked session). Setting
+  `PERSONA_WORKSPACE_PATH` + `PERSONA_MASTER_PASSWORD` makes the whole flow
+  non-interactive in CI (see
+  [NON_INTERACTIVE_MODE](./NON_INTERACTIVE_MODE.md)).
+- Plaintext is delivered via stdout / environment variables — redirecting
+  `resolve` output to disk or echoing it into CI logs is the caller's
+  responsibility; `run`'s injection exists only in the subprocess
+  environment.
+- Card types have no `secret` alias (a card number and a CVV have no single
+  "primary secret"); reference them by their specific fields.
 
-## 故障后果速查
+## Failure Consequences at a Glance
 
-| 场景                 | 后果                                                                       | 能否补救                                          |
-| -------------------- | -------------------------------------------------------------------------- | ------------------------------------------------- |
-| 主密码丢失           | 库内所有凭据不可解密                                                       | 否（无托管、无重置）                              |
-| 备份口令丢失         | 该备份不可恢复                                                             | 否（其他版本不受影响）                            |
-| 误删身份/凭据        | 本地即删                                                                   | 可——整库 restore 到旧备份（快照点之后的数据全丢） |
-| `identities.db` 损坏 | 本地库不可用                                                               | 可——restore；但**最后一次 push 之后的变更丢失**   |
-| 服务器数据被删/回滚  | 备份版本池受损；同步日志被回滚会丢「已推未拉」的传播（各端本地库不受影响） | 否——不宣称防服务器操作者；本地库仍是第一事实源    |
-| Travel sidecar 丢失  | 被移出身份永久丢失                                                         | 否（THREAT_MODEL「Travel Mode」红色警告场景）     |
+| Scenario                       | Consequence                                                                                     | Recoverable                                        |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| Master password lost           | Every credential in the vault becomes undecryptable                                          | No (no escrow, no reset)                           |
+| Backup passphrase lost         | That backup cannot be restored                                                                  | No (other versions are unaffected)                 |
+| Identity/credential deleted by mistake | Deleted locally                                                                          | Yes — restore the whole vault to an older backup (everything after that snapshot point is lost) |
+| `identities.db` corrupted      | The local vault is unusable                                                                     | Yes — restore, but **all changes after the last push are lost** |
+| Server data deleted/rolled back | The backup version pool is damaged; a rolled-back sync log loses "pushed but not yet pulled" propagation (each side's local vault is unaffected) | No — no protection against the server operator is claimed; the local vault remains the first source of truth |
+| Travel sidecar lost            | The moved-out identities are lost permanently                                                  | No (the red-warning scenario in THREAT_MODEL's "Travel Mode") |
 
-原则一句话：**本地库是第一事实源，一切备份手段都只是在别处多放一份
-密文**——把"定期 push/export"纳入习惯，其他交给威胁模型里的诚实边界。
+The principle in one sentence: **the local vault is the first source of
+truth, and every backup mechanism is just one more copy of the ciphertext
+kept elsewhere** — make "push/export regularly" a habit and leave the rest to
+the honest boundaries in the threat model.

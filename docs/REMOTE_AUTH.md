@@ -30,7 +30,7 @@ Server-side SRP is live:
 
 - `core/src/auth/srp.rs` — production SRP-6a math (RFC 5054 4096-bit group, SHA-256, Argon2id pre-hash), shared by client and server; correctness locked by the RFC 5054 Appendix B interop vectors.
 - `server/src/api/auth.rs` — `POST /api/v1/auth/register` (requires an existing bearer token), `/challenge`, `/verify` (issues a 15-minute bearer token; lockout after 5 failures). The static `PERSONA_SERVER_TOKENS` bearer path stays in place alongside it.
-- Threat-model registration: `docs/THREAT_MODEL.md`, section "SRP 设备认证端点"; design decisions in `docs/E2EE_SYNC_DESIGN.md` (DR-2).
+- Threat-model registration: `docs/THREAT_MODEL.md`, section "SRP Device Authentication Endpoint"; design decisions in `docs/E2EE_SYNC_DESIGN.md` (DR-2).
 
 Client-side HTTP wiring is live too (2026-09-22):
 
@@ -42,4 +42,4 @@ Client-side HTTP wiring is live too (2026-09-22):
 The same SRP math backs two more remote-auth surfaces:
 
 - **Account domain** — `POST /api/v1/accounts/{id}/srp/register|challenge|verify` (server: `server/src/api/accounts.rs`): password auth for the persona-account track, with passkey (WebAuthn) ceremonies, one-time recovery codes, and account-scoped device/session management alongside it. Bearer-gated write paths: srp/register, recovery-code generation, devices, sessions. Red-line verification script: `scripts/verify-account-redline.sh` (10 live assertions: public register, fail-closed 401s, one-time recovery codes, session-evidence 422, device/session family 401).
-- **Sync-group pairing relay client** — `core/src/sync/pairing.rs::relay` (same `remote-auth` feature): `PairingRelayClient` drives the zero-account pairing mailbox (`/api/v1/pairing/*`, no bearer) for the dynamic-password PAKE handshake; see `docs/sync-group-mode.md` §四 for status. Verification script: `scripts/verify-sync-group-pairing.sh`.
+- **Sync-group pairing relay client** — `core/src/sync/pairing.rs::relay` (same `remote-auth` feature): `PairingRelayClient` drives the zero-account pairing mailbox (`/api/v1/pairing/*`, no bearer) for the dynamic-password PAKE handshake; see `docs/sync-group-mode.md` §4 for status. Verification script: `scripts/verify-sync-group-pairing.sh`.

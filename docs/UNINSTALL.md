@@ -1,101 +1,111 @@
-# 卸载与数据保留（卸载不删数据，重装接续）
+# Uninstall and Data Retention (Uninstall Keeps Data; Reinstall Picks Up Where You Left Off)
 
 > [English](UNINSTALL.md) | [中文](UNINSTALL.zh.md)
 
-状态：2026-09-28 核验收口。承诺一句话：**任何平台的卸载/升级都不会删除
-vault 数据；重新安装后用原主密码解锁即接续使用**。彻底清除数据永远是
-用户的显式动作（下文"彻底清除"一节），卸载器不会替你做。
+Status: verified and closed 2026-09-28. The promise in one sentence: **uninstalling or
+upgrading on any platform never deletes vault data; after reinstalling, unlock with the
+original master password and pick up right where you left off**. A complete wipe of the data is
+always an explicit user action (see the "Complete Purge" section below) — the uninstaller will
+never do it for you.
 
-## 1. 数据都在哪
+## 1. Where All the Data Lives
 
-| 内容                | 位置                                                                                                                               | 谁写入                                                 |
+| Content             | Location                                                                                                                           | Written by                                             |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| **vault 库**        | Windows `%APPDATA%\persona\persona.db`；Linux `~/.local/share/persona/`；macOS `~/Library/Application Support/persona/`            | 桌面端 `default_db_path`（`dirs::data_dir()/persona`） |
-| **CLI 工作区**      | `~/.persona/`（`identities.db`、`bridge/`、SSH agent 状态）                                                                        | CLI（`PERSONA_DB_PATH` 等环境变量可覆盖）              |
-| **OS keyring 条目** | 系统凭据管理器（Windows Credential Manager / Secret Service / Keychain）                                                           | 生物识别解锁、同步令牌（`token_store.rs`）             |
-| **缓存与日志**      | `<bundle 目录>`：Windows `%APPDATA%\com.persona.desktop` 与 `%LOCALAPPDATA%\com.persona.desktop`；Linux/macOS 对应 XDG/Bundle 路径 | WebView 缓存、运行日志 —— **不含任何机密**             |
+| **vault database**   | Windows `%APPDATA%\persona\persona.db`; Linux `~/.local/share/persona/`; macOS `~/Library/Application Support/persona/` | Desktop `default_db_path` (`dirs::data_dir()/persona`) |
+| **CLI workspace**    | `~/.persona/` (`identities.db`, `bridge/`, SSH agent state) | CLI (overridable via `PERSONA_DB_PATH` and other environment variables) |
+| **OS keyring entries** | system credential manager (Windows Credential Manager / Secret Service / Keychain) | biometric unlock, sync tokens (`token_store.rs`) |
+| **Cache and logs**   | `<bundle directory>`: Windows `%APPDATA%\com.persona.desktop` and `%LOCALAPPDATA%\com.persona.desktop`; corresponding XDG/Bundle paths on Linux/macOS | WebView cache, run logs — **contains no secrets** |
 
-vault 库与缓存目录是两个互不相干的路径：库在 `persona/`，缓存在
-`com.persona.desktop/`。卸载器就算清缓存也碰不到库。
+The vault database and the cache directory are two entirely unrelated paths: the
+database lives in `persona/`, the cache in `com.persona.desktop/`. Even if the
+uninstaller clears the cache, it cannot touch the database.
 
-## 2. 各平台卸载行为（默认全保留）
+## 2. Uninstall Behavior Per Platform (Everything Kept by Default)
 
-| 平台/安装方式       | 卸载动作                                                       | vault 库 | CLI 工作区 | keyring | 缓存/日志                                                                                         |
-| ------------------- | -------------------------------------------------------------- | -------- | ---------- | ------- | ------------------------------------------------------------------------------------------------- |
-| Windows NSIS        | "应用和功能"卸载（确认页有"删除应用数据"勾选框，**默认未勾**） | **保留** | 保留       | 保留    | 默认保留；**显式勾选**才清 `com.persona.desktop`                                                  |
-| Windows 升级        | 新安装器自动静默卸载旧版（`/S`，无 UI）                        | **保留** | 保留       | 保留    | 保留（静默路径无勾选框）                                                                          |
-| Linux deb / rpm     | `apt remove` / `dnf remove`                                    | **保留** | 保留       | 保留    | 保留（包内无任何维护删除脚本，`postrm` 不存在——tauri bundler 只拷贝用户提供的脚本，本仓库未提供） |
-| Linux AppImage      | 删除 .AppImage 文件                                            | **保留** | 保留       | 保留    | 保留                                                                                              |
-| macOS dmg           | 拖入废纸篓                                                     | **保留** | 保留       | 保留    | 保留                                                                                              |
-| CLI（cargo/二进制） | 删除二进制                                                     | 保留     | **保留**   | 保留    | 保留                                                                                              |
+| Platform / installer | Uninstall action                                                                 | vault database | CLI workspace | keyring | Cache / logs                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------- | -------------- | ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Windows NSIS         | "Apps & features" uninstall (confirm page has a "delete app data" checkbox, **unchecked by default**) | **kept**       | kept          | kept    | kept by default; `com.persona.desktop` is cleared only when **explicitly checked**                                                                   |
+| Windows upgrade      | the new installer silently uninstalls the old one automatically (`/S`, no UI)    | **kept**       | kept          | kept    | kept (the silent path has no checkbox)                                                                                                              |
+| Linux deb / rpm      | `apt remove` / `dnf remove`                                                      | **kept**       | kept          | kept    | kept (the package contains no maintainer-removal scripts at all — `postrm` does not exist; the tauri bundler only copies user-supplied scripts, and this repo supplies none) |
+| Linux AppImage       | delete the .AppImage file                                                        | **kept**       | kept          | kept    | kept                                                                                                                                                |
+| macOS dmg            | drag into the Trash                                                              | **kept**       | kept          | kept    | kept                                                                                                                                                |
+| CLI (cargo/binary)   | delete the binary                                                                | kept           | **kept**      | kept    | kept                                                                                                                                                |
 
-Windows 行为由 `desktop/src-tauri/nsis/installer.nsi` 保证，并有回归断言
-钉住（`desktop/src-tauri/src/packaging_tests.rs`）：
+Windows behavior is guaranteed by `desktop/src-tauri/nsis/installer.nsi` and pinned
+by regression assertions (`desktop/src-tauri/src/packaging_tests.rs`):
 
-- 升级/静默卸载给旧卸载器追加 `/S` —— 确认页不出现，"删除应用数据"
-  恒为默认未勾（`nsis_bundle_config_pins_install_mode_and_custom_template`
-  与 `custom_nsis_template_keeps_persona_upgrade_diffs`）；
-- `nsis_uninstall_never_targets_vault_data_dir`：模板中**所有**递归删除
-  指令（`RmDir /r`）必须只指向 `${BUNDLEID}` 缓存目录，且任何删除指令
-  不得以 vault 目录（`\persona"`）为目标 —— 模板被改动时测试会红。
+- upgrade / silent uninstall appends `/S` to the previous uninstaller — the confirm
+  page never appears, and "delete app data" stays unchecked by default
+  (`nsis_bundle_config_pins_install_mode_and_custom_template` and
+  `custom_nsis_template_keeps_persona_upgrade_diffs`);
+- `nsis_uninstall_never_targets_vault_data_dir`: **every** recursive-delete
+  instruction in the template (`RmDir /r`) must point only at the `${BUNDLEID}`
+  cache directory, and no delete instruction may target the vault directory
+  (`\persona"`) — the test goes red if the template is changed.
 
-## 3. 重装接续
+## 3. Reinstall Continuity
 
-重装/升级后数据无需迁移：安装器不创建也不删除 vault；首次启动仍解析
-`default_db_path`，用原主密码解锁即恢复全部条目、身份与设置。Linux/macOS
-同理（路径见上表）。**卸载 → 重装 = 无损**；只有走到下一节的"彻底清除"
-才会丢数据。
+After reinstalling or upgrading, no data migration is needed: the installer neither
+creates nor deletes the vault; first launch still resolves `default_db_path`, and
+unlocking with the original master password restores every item, identity, and
+setting. Linux/macOS behave the same way (see the paths in the table above).
+**Uninstall → reinstall = lossless**; data is only lost if you go through the
+"Complete Purge" in the next section.
 
-## 4. 彻底清除（显式 purge）
+## 4. Complete Purge (Explicit Purge)
 
-想真正删干净，有两种方式：
+If you want a truly clean slate, there are two ways:
 
-### 方式一：手动命令（所有平台通用）
+### Option 1: Manual Commands (Works on All Platforms)
 
-按平台手动执行（**删前确认已有备份**；vault 删除后无法恢复）：
+Run these per platform (**confirm you have a backup before deleting**; once the
+vault is deleted it cannot be recovered):
 
-**Windows（PowerShell）**
+**Windows (PowerShell)**
 
 ```powershell
-Remove-Item -Recurse -Force "$env:APPDATA\persona"          # vault 库
-Remove-Item -Recurse -Force "$env:APPDATA\com.persona.desktop"    # 缓存
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\com.persona.desktop" # 缓存/日志
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:USERPROFILE\.persona"  # CLI 工作区
+Remove-Item -Recurse -Force "$env:APPDATA\persona"          # vault database
+Remove-Item -Recurse -Force "$env:APPDATA\com.persona.desktop"    # cache
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\com.persona.desktop" # cache/logs
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:USERPROFILE\.persona"  # CLI workspace
 ```
 
 **Linux**
 
 ```bash
-rm -rf ~/.local/share/persona   # vault 库
-rm -rf ~/.persona               # CLI 工作区 + SSH agent 状态
+rm -rf ~/.local/share/persona   # vault database
+rm -rf ~/.persona               # CLI workspace + SSH agent state
 ```
 
 **macOS**
 
 ```bash
-rm -rf "$HOME/Library/Application Support/persona"  # vault 库
-rm -rf ~/.persona                                   # CLI 工作区
+rm -rf "$HOME/Library/Application Support/persona"  # vault database
+rm -rf ~/.persona                                   # CLI workspace
 ```
 
-### 方式二：NSIS 卸载器 /PURGE 参数（Windows 专用）
+### Option 2: NSIS Uninstaller /PURGE Flag (Windows Only)
 
-运行**卸载器**（安装目录下的 `uninstall.exe`，不是安装包）时附加 `/PURGE`
-参数，卸载器将清空所有用户数据（vault + 缓存 + CLI 工作区），无需勾选
-"删除应用数据"复选框：
+Run the **uninstaller** (`uninstall.exe` in the install directory — not the
+installer) with the `/PURGE` flag, and it will wipe all user data (vault + cache +
+CLI workspace) without the "delete app data" checkbox needing to be checked:
 
 ```powershell
-# 卸载器位于安装目录（per-user 默认 %LOCALAPPDATA%\Persona\uninstall.exe）
-# 交互式卸载 + 彻底清除
+# The uninstaller lives in the install directory (per-user default %LOCALAPPDATA%\Persona\uninstall.exe)
+# Interactive uninstall + complete purge
 & "$env:LOCALAPPDATA\Persona\uninstall.exe" /PURGE
-# 静默卸载 + 彻底清除
+# Silent uninstall + complete purge
 & "$env:LOCALAPPDATA\Persona\uninstall.exe" /S /PURGE
 ```
 
-`/PURGE` 与 `/S` 可组合使用；升级模式（`/UPDATE`）下跳过数据清除（更新
-永不删数据，`/PURGE` 仅在非更新卸载时生效）。
+`/PURGE` and `/S` can be combined; in upgrade mode (`/UPDATE`) the data purge is
+skipped (updates never delete data — `/PURGE` only takes effect on non-upgrade
+uninstalls).
 
-## 5. 变更清单核对
+## 5. Change Inventory Checklist
 
-涉及"卸载保数据"的文件：`desktop/src-tauri/nsis/installer.nsi`（升级
-静默卸载定制）、`desktop/src-tauri/src/packaging_tests.rs`（回归断言）、
-本文档、`docs/WINDOWS_INSTALLER.md` §3（Windows 细节）、README（链接）。
+Files involved in "uninstall keeps data": `desktop/src-tauri/nsis/installer.nsi`
+(custom silent uninstall for upgrades), `desktop/src-tauri/src/packaging_tests.rs`
+(regression assertions), this document, `docs/WINDOWS_INSTALLER.md` §3 (Windows
+details), README (links).

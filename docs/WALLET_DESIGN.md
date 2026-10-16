@@ -2,179 +2,213 @@
 
 > [English](WALLET_DESIGN.md) | [中文](WALLET_DESIGN.zh.md)
 
-状态：**现状盘点 + 定案**（2026-10-13，M5 钱包毕业轨道）。本文回答四件事：
-密钥层级（seed ↔ master key 包装）、口令变更的 re-wrap 语义、分身与钱包的
-绑定模型、签名确认的 UX 与后端策略；威胁模型扩展见
-[THREAT_MODEL.md「钱包（实验轨道）」节](THREAT_MODEL.md)。关联：
-[ROADMAP M5](ROADMAP.md#milestone-5--wallet-graduation-deferred-until-milestone-4-experimental-today)、
-[KEY_HIERARCHY.md](KEY_HIERARCHY.md)（身份保险库层级——钱包是其中注明的
-独立第六条 KDF 路径）。
+Status: **current-state inventory + decisions** (2026-10-13, M5 wallet graduation
+track). This doc answers four things: the key hierarchy (seed ↔ master key
+wrapping), re-wrap semantics on passphrase change, the persona-to-wallet binding
+model, and the signing-confirmation UX plus backend policy; the threat-model
+extension is in [the THREAT_MODEL.md "Wallet (experimental track)" section](THREAT_MODEL.md).
+Related: [ROADMAP M5](ROADMAP.md#milestone-5--wallet-graduation-deferred-until-milestone-4-experimental-today),
+[KEY_HIERARCHY.md](KEY_HIERARCHY.md) (the identity-vault hierarchy — the wallet is the
+documented sixth, independent KDF path within it).
 
-**本文与代码的边界**：§1/§2 是现状盘点（已在库中实现）；§2.1/§3/§4/§5 是
-**定案**——其中 §3 的 `persona wallet passwd` 与 `EncryptedMnemonic` 重包
-**已落地（2026-10-13）**，§5 第 3 条（后端防投毒强制）与桌面 keystore 臂
-也已落地（2026-10-13）；§2.1 的 version=2 惰性重包迁移仍待做。定案不
-代表已实现，读法以本节标记为准。
+**The line between this doc and the code**: §1/§2 are a current-state inventory
+(already implemented in the vault); §2.1/§3/§4/§5 are **decisions** — of those, §3's
+`persona wallet passwd` and the `EncryptedMnemonic` re-wrap **have landed (2026-10-13)**,
+as have §5's item 3 (backend address-poisoning enforcement) and the desktop keystore
+arm (2026-10-13); §2.1's version=2 lazy re-wrap migration is still to do. "Decision"
+does not mean "implemented" — read according to the markers in this section.
 
-## 1. 现状代码地图（盘点，2026-10-13）
+## 1. Current-Code Map (inventory, 2026-10-13)
 
-| 层             | 位置                                                                                                        | 要点                                                                                                                 |
-| -------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| BIP39 助记词   | `core/src/crypto/wallet_crypto.rs` `SecureMnemonic`（bip39 3.0）                                            | 12–24 词，`to_seed(passphrase)` = BIP39 64 字节 seed                                                                 |
-| secp256k1 主钥 | `MasterKey`（bip32 0.6 `XPrv`）                                                                             | `from_seed` → `derive_path` → `to_xpub`；**序列化即 base58 xprv/xpub 字符串**                                        |
-| Solana 主钥    | `Ed25519Key`（SLIP-0010 ed25519，自研，仅硬化派生）                                                         | HMAC-SHA512 链；持久化 `(secret, chain_code)` 64 字节；drop 时 zeroize                                               |
-| 单钥包装       | `EncryptedWalletKey {version:1, encrypted_data, salt, nonce}`                                               | Argon2id（argon2 crate 默认 m≈19MiB/t=2/p=1，参数不落盘）+ AES-256-GCM（`crypto/encryption.rs`）                     |
-| 助记词包装     | `EncryptedMnemonic {version:1, encrypted_phrase, salt, nonce}`                                              | 同上                                                                                                                 |
-| keystore v3    | `crypto/wallet_encryption.rs`                                                                               | scrypt(n=2^18,r=8,p=1)/pbkdf2 + AES-128-CTR + keccak MAC；导入 256MiB 内存上限、常数时间 MAC 比较；geth 规范向量锁定 |
-| 派生路径       | `recommended_derivation_path`（BTC `m/44'/0'/{a}'/0`、ETH `m/44'/60'/{a}'/0`、Solana `m/44'/501'/{a}'/0'`） | BIP-84/86 目前只是 `BipVersion` 类型与 path builder（测试向量覆盖），**未进默认流程**；BTC 地址生成现仅 P2WPKH       |
-| 签名           | `crypto/transaction_signing.rs`                                                                             | ETH EIP-155/1559（alloy）、BTC BIP-143 P2WPKH（rust-bitcoin）、Solana ed25519（调用方供序列化消息）                  |
-| PSBT           | `crypto/transaction_psbt.rs`                                                                                | BIP-174 单签 P2WPKH export/sign/finalize（finalize 自写）；CLI `wallet export-psbt/sign-psbt/finalize-psbt`          |
+| Layer             | Location                                                                                                        | Key points                                                                                                                 |
+| ----------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| BIP39 mnemonic    | `core/src/crypto/wallet_crypto.rs` `SecureMnemonic` (bip39 3.0)                                                 | 12–24 words, `to_seed(passphrase)` = BIP39 64-byte seed                                                                     |
+| secp256k1 master key | `MasterKey` (bip32 0.6 `XPrv`)                                                                                | `from_seed` → `derive_path` → `to_xpub`; **serialization is the base58 xprv/xpub string**                                   |
+| Solana master key | `Ed25519Key` (SLIP-0010 ed25519, homegrown, hardened derivation only)                                          | HMAC-SHA512 chain; persisted as `(secret, chain_code)` 64 bytes; zeroized on drop                                          |
+| Single-key wrap   | `EncryptedWalletKey {version:1, encrypted_data, salt, nonce}`                                                  | Argon2id (argon2 crate defaults m≈19MiB/t=2/p=1, parameters not persisted) + AES-256-GCM (`crypto/encryption.rs`)          |
+| Mnemonic wrap     | `EncryptedMnemonic {version:1, encrypted_phrase, salt, nonce}`                                                 | Same as above                                                                                                              |
+| keystore v3       | `crypto/wallet_encryption.rs`                                                                                   | scrypt(n=2^18,r=8,p=1)/pbkdf2 + AES-128-CTR + keccak MAC; 256MiB import memory cap, constant-time MAC comparison; locked to geth spec vectors |
+| Derivation path   | `recommended_derivation_path` (BTC `m/44'/0'/{a}'/0`, ETH `m/44'/60'/{a}'/0`, Solana `m/44'/501'/{a}'/0'`)     | BIP-84/86 is currently only the `BipVersion` type and path builder (test vectors covered), **not in the default flow**; BTC address generation is P2WPKH only today |
+| Signing           | `crypto/transaction_signing.rs`                                                                                 | ETH EIP-155/1559 (alloy), BTC BIP-143 P2WPKH (rust-bitcoin), Solana ed25519 (the caller supplies the serialized message)  |
+| PSBT              | `crypto/transaction_psbt.rs`                                                                                    | BIP-174 single-sig P2WPKH export/sign/finalize (finalize homegrown); CLI `wallet export-psbt/sign-psbt/finalize-psbt`      |
 
-## 2. 密钥层级（定案）
+## 2. Key Hierarchy (decision)
 
 ```
-BIP39 助记词 ──(BIP39 seed, 可选 passphrase)──▶ 64 字节 seed
-      │                                            │
-      │ wrap: EncryptedMnemonic                    │ wrap: EncryptedWalletKey
-      │ （Argon2id + AES-256-GCM，钱包口令）        │ （同上；HD 钱包容纳 xprv 串）
-      ▼                                            ▼
-  恢复/迁移面                                MasterKey (bip32 XPrv)
+BIP39 mnemonic ──(BIP39 seed, optional passphrase)──▶ 64-byte seed
+      │                                                 │
+      │ wrap: EncryptedMnemonic                         │ wrap: EncryptedWalletKey
+      │ (Argon2id + AES-256-GCM, wallet password)       │ (same; an HD wallet holds the xprv string)
+      ▼                                                 ▼
+  recovery / migration surface                MasterKey (bip32 XPrv)
                                                    │ derive_path
                                                    ▼
-                                        DerivedKey → 地址 / 签名钥
+                                        DerivedKey → address / signing key
 ```
 
-- **seed ↔ master key 的关系是派生而非包装**：master key 从 seed 派生
-  （BIP32），存储面包装的是「xprv 序列化串」（HD）或「单钥」（single），
-  助记词单独包装一份用于恢复/导出。两个包装用同一钱包口令、同一
-  Argon2id+AES-256-GCM 管线（fresh salt/nonce 各自独立）。
-- **理由**：不把助记词当作唯一事实源重新派生每一次签名（解锁成本），
-  也不把 xprv 当唯一事实源（丢助记词无法恢复）——两者都存、都能独立
-  解锁使用，任一损坏另一份仍可恢复全部地址。
-- **keystore v3 是互操作出口/入口**，不是存储格式：导出时从解密后的
-  私钥再包一层 scrypt/pbkdf2（geth 生态标准），导入时解出私钥后立刻
-  走 `import_from_private_key` 的存储包装。两套 KDF 语义不同（生态互操作
-  vs 本机存储），刻意不统一。
+- **seed ↔ master key is derivation, not wrapping**: the master key is derived from
+  the seed (BIP32); what the storage plane wraps is the "xprv serialized string"
+  (HD) or the "single key" (single); the mnemonic is wrapped separately for
+  recovery/export. Both wraps use the same wallet passphrase and the same
+  Argon2id+AES-256-GCM pipeline (independent fresh salt/nonce each).
+- **Rationale**: the mnemonic is not treated as the single source of truth and
+  re-derived on every signature (the unlock cost), and the xprv is not treated as
+  the single source of truth (losing the mnemonic would make recovery impossible) —
+  both are stored, both can be unlocked and used independently, and if either is
+  damaged the other can still recover all addresses.
+- **keystore v3 is an interop exit/entry, not a storage format**: on export the
+  decrypted private key is wrapped one further level with scrypt/pbkdf2 (the geth
+  ecosystem standard); on import, once the private key is decrypted it immediately
+  goes through `import_from_private_key`'s storage wrapping. The two KDF sets have
+  different semantics (ecosystem interop vs local storage) and are deliberately
+  not unified.
 
-### 2.1 存储参数的演进约束
+### 2.1 Evolution constraints on stored parameters
 
-`EncryptedWalletKey.version = 1`，KDF 参数取 crate 默认且不落盘——参数
-升级（如对齐 OWASP Argon2 推荐值）必须：新增 `version = 2` + 落盘参数 +
-惰性重包（读到 v1 就用旧参数解、新参数重包回写），与 KEY_HIERARCHY.md
-的 re-wrap 迁移规则同构。禁止原地改默认参数（会让旧数据解不开）。
+`EncryptedWalletKey.version = 1`, with KDF parameters taking the crate defaults
+and not persisted — a parameter upgrade (e.g. aligning with the OWASP Argon2
+recommended values) must: add `version = 2` + persist the parameters + lazy
+re-wrap (on reading v1, decrypt with the old parameters and re-wrap/write back with
+the new ones), isomorphic to KEY_HIERARCHY.md's re-wrap migration rule. Changing
+the default parameters in place is forbidden (it would leave old data undecryptable).
 
-## 3. 口令变更与 re-wrap（定案）
+## 3. Password Change and Re-wrap (decision)
 
-现状（2026-10-13 盘点）：
+Current state (2026-10-13 inventory):
 
-- `change_wallet_password(encrypted_key, old, new)` 存在（解旧密→新
-  salt/nonce 重包）；对称的 `change_mnemonic_password` 已补（2026-10-13），
-  两者由 CLI `persona wallet passwd` 作为生产调用方串起。
-- 主密码轮换 `change_master_password → rewrap_all_item_keys` 只覆盖
-  credentials/passkeys 的 item key；`crypto_wallets` 表的包装物
-  **刻意不动**：钱包口令是独立于主密码的第二要素，主密码泄露不应
-  直接等于资金材料泄露（爆炸半径隔离，与 1Password 的 wallet password
-  独立语义一致）。这是设计决定，不是缺口。
+- `change_wallet_password(encrypted_key, old, new)` exists (decrypt with the old one →
+  re-wrap with a new salt/nonce); the symmetric `change_mnemonic_password` was added
+  (2026-10-13), with the two wired together by the CLI `persona wallet passwd` as
+  their production caller.
+- Master-password rotation `change_master_password → rewrap_all_item_keys` only covers
+  credentials/passkeys item keys; the wrapped material in the `crypto_wallets` table is
+  **deliberately left alone**: the wallet password is a second factor independent of
+  the master password, so a master password leak should not directly equal a leak of
+  fund material (blast-radius isolation, consistent with 1Password's independent
+  wallet-password semantics). This is a design decision, not a gap.
 
-定案：
+Decisions:
 
-1. **钱包口令保持独立于主密码**（签名/导出时输入；`validate_wallet_password`
-   试解密校验）。
-2. **新增 `persona wallet passwd`**（**已实现 2026-10-13**）：一个操作里
-   同时 re-wrap `encrypted_private_key` 与 `encrypted_mnemonic`——复用
-   `change_wallet_password` 并为 `EncryptedMnemonic` 补对称的
-   `change_mnemonic_password`（均 fresh salt/nonce）。写回顺序：先解旧密
-   重包两份材料（任一步失败即中止，原行不动，不产生半写），成功后才
-   `repo.update` 写回。旧口令与签名同源（交互走 prompt，非交互
-   `PERSONA_WALLET_PASSWORD`）；新口令仅交互输入（与 `persona passwd`
-   同规：无环境变量覆盖，陈旧环境变量不能静默轮换口令），带确认
-   prompt、须异于旧口令且 ≥8 字符；watch-only 钱包拒绝（无材料可重包）。
-3. **不随主密码轮换**：`change_master_password` 对 `crypto_wallets`
-   不动作继续成立；文档在此与 THREAT_MODEL 钱包节同时声明。
+1. **The wallet password stays independent of the master password** (entered at
+   signing/export; verified by a trial decrypt in `validate_wallet_password`).
+2. **New `persona wallet passwd` command** (**implemented 2026-10-13**): in a single
+   operation, re-wrap both `encrypted_private_key` and `encrypted_mnemonic` — reusing
+   `change_wallet_password` and adding a symmetric `change_mnemonic_password` for
+   `EncryptedMnemonic` (both with fresh salt/nonce). Write-back order: first decrypt
+   with the old password and re-wrap both materials (any step failing aborts with the
+   original row untouched — no half-write), and only on success does `repo.update` write
+   back. The old password comes from the same source as signing (prompt interactively,
+   `PERSONA_WALLET_PASSWORD` non-interactively); the new password is interactive-only
+   (same rule as `persona passwd`: no environment-variable override, so a stale
+   environment variable cannot silently rotate the password), comes with a
+   confirmation prompt, and must differ from the old password and be ≥8 characters;
+   watch-only wallets are refused (nothing to re-wrap).
+3. **Not rotated with the master password**: `change_master_password` continuing to
+   leave `crypto_wallets` untouched still holds; this is stated in the docs here and
+   in the THREAT_MODEL wallet section at the same time.
 
-## 4. 分身绑定模型（定案）
+## 4. Persona Binding Model (decision)
 
-- `CryptoWallet.identity_id` 外键指向 `identities` 行：钱包属于一个分身，
-  不属于工作区；列钱包按分身过滤，`watch_only` 钱包同样落在此模型
-  （无 `encrypted_private_key`，仅 xpub）。
-- **激活语义沿用现状**：`persona switch` 只切分身指针，不解锁钱包、
-  不改钱包可见性；签名始终需要钱包口令（或桌面 item password 二要素
-  `wallet_set_item_password`）。
-- **Context 建议轨道不作用于钱包**（v1）：suggest 的候选是分身，不是
-  钱包；钱包选择永远是显式动作（`--wallet` / 桌面下拉）。
-- 同一分身可挂多链多钱包；删除分身时钱包行级联（现状
-  `wallet_repository` 语义保持）。
+- `CryptoWallet.identity_id` is a foreign key to an `identities` row: a wallet
+  belongs to a persona, not to a workspace; listing wallets filters by persona,
+  and `watch_only` wallets fall under this same model (no
+  `encrypted_private_key`, xpub only).
+- **Activation semantics unchanged**: `persona switch` only moves the persona
+  pointer; it does not unlock a wallet and does not change wallet visibility;
+  signing always requires the wallet password (or the desktop item-password
+  second factor `wallet_set_item_password`).
+- **The Context suggestion track does not apply to wallets** (v1): the candidates
+  offered by suggest are personas, not wallets; wallet selection is always an
+  explicit action (`--wallet` / desktop dropdown).
+- A single persona can hold multiple wallets across multiple chains; deleting a
+  persona cascades to its wallet rows (the current `wallet_repository` semantics
+  are preserved).
 
-## 5. 签名确认 UX 与后端策略（定案）
+## 5. Signing-Confirmation UX and Backend Policy (decision)
 
-不变量（后端强制，UI 只是展示层）：
+Invariants (enforced by the backend; the UI is only a presentation layer):
 
-1. **先验证后持久化**：ETH/Solana 签名后本地验证
-   （`verify_ethereum_transaction` / `verify_solana_transaction`，含
-   recover-to-address 比对），失败一律不落库；BTC 组装失败降级为
-   仅审计记录（`audit:<sha256>`），绝不产出可广播假象。
-2. **确认面板必列**：from（签名地址全文）、to（全文 + EIP-55 校验和）、
-   金额 + 精度、费用（gas × price 或 fee rate）、chain id（EVM）、
-   网络。缺任何一项不允许提交签名。
-3. **防投毒启发式后端化**（**已实现 2026-10-13**）：core
-   `crypto/address_poisoning.rs` 的 `detect_address_poisoning`（首 6 + 末 6
-   字符相同、中段不同，大小写不敏感，按字符切分永不 panic）+
-   `enforce_poisoning_check`（命中且未确认即拒签）在后端签名入口强制：
-   CLI `create-transaction --sign` 检查在口令 prompt 之前，命中需显式
-   `--confirm-poisoning-check`；桌面 `wallet_sign_transaction` 同样强制，
-   确认弹窗展示告警后用户二次确认才带 `confirm_poisoning_check` ack
-   （serde default false，旧前端缺字段按未确认拒绝）。已知地址集合 =
-   钱包全部地址（本实现口径）；「+ 用户标记」仍开放。
-4. **口令不离面板**：桌面口令在 modal 内输入、`finally` 清理；CLI 走
-   标准口令 prompt；两者都不落日志（脱敏策略已有测试）。
-5. **审计**：每次签名记录 digest 级摘要（to/amount/fee/chain id hash），
-   与 SSH 签名同粒度。
+1. **Verify before persist**: ETH/Solana signatures are verified locally after
+   signing (`verify_ethereum_transaction` / `verify_solana_transaction`, including a
+   recover-to-address comparison); on failure nothing is ever persisted; a BTC
+   assembly failure degrades to an audit record only (`audit:<sha256>`) and never
+   produces a broadcastable artifact.
+2. **Mandatory fields on the confirmation panel**: from (the full signing address),
+   to (full address + EIP-55 checksum), amount + precision, fees (gas × price or fee
+   rate), chain id (EVM), network. Missing any one of them does not allow a signature
+   to be submitted.
+3. **Address-poisoning heuristics moved to the backend** (**implemented 2026-10-13**):
+   core `crypto/address_poisoning.rs`'s `detect_address_poisoning` (first 6 + last 6
+   characters identical, middle different, case-insensitive, never panics on
+   character-wise slicing) + `enforce_poisoning_check` (a hit without confirmation
+   refuses to sign) is enforced at the backend signing entry points: the CLI
+   `create-transaction --sign` check runs before the password prompt, and a hit
+   requires an explicit `--confirm-poisoning-check`; the desktop
+   `wallet_sign_transaction` is enforced the same way — only after the warning dialog
+   is shown and the user confirms a second time does the request carry the
+   `confirm_poisoning_check` ack (serde default false; an old frontend missing the
+   field is treated as unconfirmed and refused). The known-address set = all wallet
+   addresses (this implementation's standard); "+ user flagging" remains open.
+4. **The password never leaves the panel**: the desktop password is entered inside
+   the modal and cleared in `finally`; the CLI uses the standard password prompt;
+   neither is written to logs (the redaction policy has tests).
+5. **Audit**: each signature records a digest-level summary (to/amount/fee/chain id
+   hash), at the same granularity as SSH signing.
 
-CLI 与桌面共用 `signing_key_for_address → sign_transaction → verify →
-persist` 链；策略差异只在确认形式（桌面 modal vs CLI 提示），验证与
-审计不变量两端一致。
+The CLI and the desktop share the `signing_key_for_address → sign_transaction → verify →
+persist` chain; the only policy difference is the form of confirmation (desktop modal
+vs CLI prompt), while the verification and audit invariants are identical on both ends.
 
-## 6. 威胁模型扩展
+## 6. Threat-Model Extension
 
-见 [THREAT_MODEL.md](THREAT_MODEL.md)「钱包（实验轨道）」节：钱包密钥
-列为最高级资产、导出面（keystore/WIF/明文 JSON）单独列边界、实验性
-声明与升级路径。本文 §2.1/§3 与该节互相引用。
+See the [THREAT_MODEL.md](THREAT_MODEL.md) "Wallet (experimental track)" section:
+wallet keys are classified as the top-tier asset, the export surface
+(keystore/WIF/plaintext JSON) has its own boundaries, plus the experimental
+declaration and the upgrade path. §2.1/§3 of this doc cross-reference that section.
 
-## 7. 开放问题（需拍板，不在本轮做）
+## 7. Open Questions (need a call, not in this round)
 
-- **硬件钱包**（Ledger/Trezor）：`WalletType::Hardware` 类型已预留；
-  是否进主线待用户裁定（ROADMAP M5 open question）。
-- **PSBT 工作流**：**单签切片已落地（2026-10-13）**——`export-psbt` /
-  `sign-psbt` / `finalize-psbt`（BIP-174，单签 P2WPKH，core
-  `crypto/transaction_psbt.rs`；finalize 自写，rust-bitcoin 无 finalizer；
-  直签与 PSBT 路径产物字节级一致由回归锚锁定）。仍开放：多方
-  `Psbt::combine` 合签、桌面 UI 臂。
-- **桌面端 keystore 臂**：~~`import_wallet_from_request`/`export_wallet_from_request`
-  尚无 keystore 分支~~ **已补齐（2026-10-13）**：桌面 `wallet import/export`
-  均支持 `keystore`（导出 geth 默认参数；导入解出私钥后走存储包装），
-  WalletPanel 表单与格式下拉同步。
-- BIP-84/86 地址形态进默认流程（现仅 P2WPKH）。
+- **Hardware wallets** (Ledger/Trezor): the `WalletType::Hardware` type is reserved;
+  whether it enters the mainline awaits the user's call (ROADMAP M5 open question).
+- **PSBT workflow**: **the single-sig slice has landed (2026-10-13)** —
+  `export-psbt` / `sign-psbt` / `finalize-psbt` (BIP-174, single-sig P2WPKH, core
+  `crypto/transaction_psbt.rs`; finalize is homegrown because rust-bitcoin has no
+  finalizer; byte-level equality between the direct-sign and PSBT paths is locked by
+  a regression anchor). Still open: multi-party `Psbt::combine` co-signing and the
+  desktop UI arm.
+- **Desktop keystore arm**: ~~`import_wallet_from_request`/`export_wallet_from_request`
+  had no keystore branch~~ **completed (2026-10-13)**: desktop `wallet import/export`
+  both support `keystore` (export with geth defaults; import decrypts the private key
+  then goes through the storage wrapping), with the WalletPanel form and the format
+  dropdown kept in sync.
+- BIP-84/86 address formats into the default flow (P2WPKH only today).
 
-## 8. 测试盘点（回归锚点）
+## 8. Test Inventory (regression anchors)
 
-- geth keystore 规范向量（scrypt n=2^18/r=1/p=8 官方测试向量，密文/
-  MAC/地址三重断言）+ OpenSSL 跨语言 KDF 钉版（scrypt/pbkdf2 各一）。
-- EIP-155 签名规范向量、BIP-143 P2WPKH 逐字节向量、SLIP-0010 ed25519
-  官方向量、BIP-84/86 path builder 向量（builder 层）。
-- 口令变更：`test_password_change`（旧密失效、新密可用、密文独立）；
-  `mnemonic_password_change_rewraps_with_fresh_salt`（对称语义 + fresh
-  salt/nonce + 错旧口令拒绝）；CLI `persona wallet passwd` 集成 4 例
-  （双 blob 轮换后新口令可解/旧口令失效且 salt/nonce 已换、错旧口令
-  报错且原行不动、watch_only 拒绝、同口令/弱口令拒绝）。
-- PSBT：`psbt_roundtrip_matches_direct_signing`（直签 vs
-  export→sign→finalize 字节级一致，RFC-6979 确定性锚）；export 确定性/
-  可反序列化/字段完备 + txid 不变量；signed 逐输入 partial_sigs 形状 +
-  幂等重签；异钥拒绝（sign）；未签/异钥签名集拒绝（finalize）；magic
-  校验 + inputs metadata 契约复用；CLI 集成 3 例（roundtrip wiring、
-  防投毒/网络门、watch-only·异钥·坏 base64 拒绝）。
-- 篡改路径：keystore 密文篡改 MAC 拒绝、超大 scrypt work factor 拒绝、
-  不支持 KDF/cipher/prf 拒绝。
-- 防投毒：core 启发式 7 例（命中/同址豁免/部分匹配拒绝/base58 保守/
-  大小写不敏感/非 ASCII 不 panic/确认放行）+ CLI 集成（未确认拒绝、
-  确认后放行）+ 桌面命令层（缺 ack 拒签不落库、带 ack 正常签名落库）
-  - 弹窗 jest（干净地址 ack=false、仿冒地址 ack=true）。
+- geth keystore spec vectors (the official scrypt n=2^18/r=1/p=8 test vector, with a
+  triple assertion on ciphertext / MAC / address) + OpenSSL cross-language KDF
+  pinning (one each for scrypt/pbkdf2).
+- EIP-155 signing spec vectors, BIP-143 P2WPKH byte-by-byte vectors, SLIP-0010
+  ed25519 official vectors, BIP-84/86 path-builder vectors (builder layer).
+- Password change: `test_password_change` (old ciphertext invalid, new ciphertext
+  usable, ciphertexts independent); `mnemonic_password_change_rewraps_with_fresh_salt`
+  (symmetric semantics + fresh salt/nonce + wrong old password refused); CLI
+  `persona wallet passwd` integration, 4 cases (after both blobs rotate, the new
+  password decrypts / the old password fails and salt/nonce have changed; wrong old
+  password errors with the original row untouched; watch_only refused;
+  same-password / weak-password refused).
+- PSBT: `psbt_roundtrip_matches_direct_signing` (direct sign vs export→sign→finalize
+  byte-level equality, the RFC-6979 determinism anchor); export determinism /
+  deserializability / field completeness + txid invariant; signed per-input
+  partial_sigs shape + idempotent re-sign; foreign-key refusal (sign); unsigned /
+  foreign-key signature sets refused (finalize); magic check + inputs metadata
+  contract reuse; CLI integration, 3 cases (roundtrip wiring, poison-check /
+  network gate, watch-only · foreign key · bad base64 refused).
+- Tampering paths: keystore ciphertext tampering refused by the MAC, oversized
+  scrypt work factor refused, unsupported KDF/cipher/prf refused.
+- Address poisoning: 7 core heuristics cases (hit / same-address exemption /
+  partial match refused / base58 conservative / case-insensitive / non-ASCII no panic
+  / confirmation passes) + CLI integration (unconfirmed refused, passes after
+  confirmation) + desktop command layer (missing ack refuses and does not persist,
+  ack present signs and persists normally)
+  - modal jest (clean address ack=false, spoofed address ack=true).
