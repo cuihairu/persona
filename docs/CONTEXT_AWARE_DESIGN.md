@@ -19,7 +19,7 @@ corrupt mappings degrade silently); same day, browser half: the popup consumes `
 follows the bridge-side order (the suggested identity is already ranked first), each entry is labeled with its identity name, and one line at the top reads "Context suggests X"
 (`autofillUx.ts` pure-function test, 5 cases). Remaining: the desktop tray candidate.
 Related: [Core concept: context](src/concepts/context.md),
-[ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows).
+[ROADMAP M7](ROADMAP.md#milestone-7-identity-runtime-positioning-concepts-feature-track-follows).
 
 ## 1. Goals and positioning
 

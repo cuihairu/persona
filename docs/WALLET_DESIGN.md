@@ -7,7 +7,7 @@ track). This doc answers four things: the key hierarchy (seed ↔ master key
 wrapping), re-wrap semantics on passphrase change, the persona-to-wallet binding
 model, and the signing-confirmation UX plus backend policy; the threat-model
 extension is in [the THREAT_MODEL.md "Wallet (experimental track)" section](THREAT_MODEL.md).
-Related: [ROADMAP M5](ROADMAP.md#milestone-5--wallet-graduation-deferred-until-milestone-4-experimental-today),
+Related: [ROADMAP M5](ROADMAP.md#milestone-5-wallet-graduation-deferred-until-milestone-4-experimental-today),
 [KEY_HIERARCHY.md](KEY_HIERARCHY.md) (the identity-vault hierarchy — the wallet is the
 documented sixth, independent KDF path within it).
 

@@ -19,7 +19,7 @@
 > 沿用桥端序（建议分身已排最前），逐条标分身名，顶部一行 "Context suggests X"
 > （`autofillUx.ts` 纯函数 5 例测试）。剩余：桌面托盘候选。
 > 关联：[核心概念：上下文](src/concepts/context.md)、
-> [ROADMAP M7](ROADMAP.md#milestone-7--identity-runtime-positioning--concepts-feature-track-follows)。
+> [ROADMAP M7](ROADMAP.md#milestone-7-identity-runtime-positioning-concepts-feature-track-follows)。
 
 ## 1. 目标与定位
 

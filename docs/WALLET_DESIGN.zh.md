@@ -6,7 +6,7 @@
 > 密钥层级（seed ↔ master key 包装）、口令变更的 re-wrap 语义、分身与钱包的
 > 绑定模型、签名确认的 UX 与后端策略；威胁模型扩展见
 > [THREAT_MODEL.md「钱包（实验轨道）」节](THREAT_MODEL.md)。关联：
-> [ROADMAP M5](ROADMAP.md#milestone-5--wallet-graduation-deferred-until-milestone-4-experimental-today)、
+> [ROADMAP M5](ROADMAP.md#milestone-5-wallet-graduation-deferred-until-milestone-4-experimental-today)、
 > [KEY_HIERARCHY.md](KEY_HIERARCHY.md)（分身保险库层级——钱包是其中注明的
 > 独立第六条 KDF 路径）。
 
