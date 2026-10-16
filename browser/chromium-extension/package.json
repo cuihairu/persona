@@ -10,9 +10,9 @@
     "test": "jest"
   },
   "devDependencies": {
-    "@types/chrome": "^0.3.4",
+    "@types/chrome": "^0.3.5",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.6.4",
+    "@types/node": "^26.6.5",
     "@typescript/native": "npm:typescript@^7.0.2",
     "jest": "^30.5.2",
     "jest-environment-jsdom": "^30.5.2",
