@@ -11,10 +11,10 @@
     "clean": "rimraf .vitepress/dist .vitepress/cache"
   },
   "devDependencies": {
-    "mermaid": "^12.1.0",
+    "mermaid": "^12.2.0",
     "rimraf": "^6.0.1",
     "vitepress": "^1.6.4",
-    "vue": "^3.5.38"
+    "vue": "^3.5.44"
   },
   "overrides": {
     "katex": "^0.18.2",
