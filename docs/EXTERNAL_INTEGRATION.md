@@ -206,27 +206,27 @@ Items outside the scope and nonexistent items return the **same 404 shape**
 (verified: a password-only token reading a totp item → `not_found`,
 indistinguishable from a fabricated id), so existence is never leaked.
 
-| Boundary     | Semantics                                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| verbs      | Only `read` can be granted and HTTP exposes only `read`; `use` is already in the authorization model but **has no consumer endpoint yet** (reserved, do not rely on it); `export` / `sign` can never be granted to a token principal |
-| Excluded types | ssh-key / crypto-wallet / custom can **never be authorized** (they are not in the authorizable type set); passkeys do not go through this endpoint (they use a separate Unix socket approval channel)                 |
-| Authorizable types | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license              |
-| Network surface | Listens only on `127.0.0.1`; a `Host` header other than `127.0.0.1`/`localhost` → 421; a request carrying an `Origin` header (browser-originated) → 403                                   |
-| Rate       | 120 requests/minute per token (fixed window); exceeding it → 429                                                                                           |
-| Locking    | Locked vault → 503 `vault_locked`, does not consume the rate limit                                                                                          |
-| Auditing   | Every token validation/rejection leaves an audit record; the decryption path is the same one the desktop/CLI display uses                                                                          |
+| Boundary           | Semantics                                                                                                                                                                                                                            |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| verbs              | Only `read` can be granted and HTTP exposes only `read`; `use` is already in the authorization model but **has no consumer endpoint yet** (reserved, do not rely on it); `export` / `sign` can never be granted to a token principal |
+| Excluded types     | ssh-key / crypto-wallet / custom can **never be authorized** (they are not in the authorizable type set); passkeys do not go through this endpoint (they use a separate Unix socket approval channel)                                |
+| Authorizable types | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license                                                                                                              |
+| Network surface    | Listens only on `127.0.0.1`; a `Host` header other than `127.0.0.1`/`localhost` → 421; a request carrying an `Origin` header (browser-originated) → 403                                                                              |
+| Rate               | 120 requests/minute per token (fixed window); exceeding it → 429                                                                                                                                                                     |
+| Locking            | Locked vault → 503 `vault_locked`, does not consume the rate limit                                                                                                                                                                   |
+| Auditing           | Every token validation/rejection leaves an audit record; the decryption path is the same one the desktop/CLI display uses                                                                                                            |
 
 ## Error code table (verified shapes)
 
-| HTTP | code               | Verified message                              | Trigger                                    |
-| ---- | ------------------ | --------------------------------------------- | ---------------------------------------- |
-| 401  | `unauthorized`     | `missing or malformed bearer token`           | Missing or malformed Authorization header |
+| HTTP | code               | Verified message                              | Trigger                                                          |
+| ---- | ------------------ | --------------------------------------------- | ---------------------------------------------------------------- |
+| 401  | `unauthorized`     | `missing or malformed bearer token`           | Missing or malformed Authorization header                        |
 | 401  | `unauthorized`     | `invalid token`                               | Unknown, revoked, or expired token (all three indistinguishable) |
-| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | Request carries an `Origin` header       |
-| 404  | `not_found`        | `item not found`                              | Item does not exist / is archived / out of scope (same shape) |
-| 421  | `bad_host`         | `host not allowed`                            | `Host` header other than `127.0.0.1`/`localhost`      |
-| 429  | `rate_limited`     | —                                             | More than 120 req/min                    |
-| 503  | `vault_locked`     | —                                             | Vault locked (does not consume the rate limit) |
+| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | Request carries an `Origin` header                               |
+| 404  | `not_found`        | `item not found`                              | Item does not exist / is archived / out of scope (same shape)    |
+| 421  | `bad_host`         | `host not allowed`                            | `Host` header other than `127.0.0.1`/`localhost`                 |
+| 429  | `rate_limited`     | —                                             | More than 120 req/min                                            |
+| 503  | `vault_locked`     | —                                             | Vault locked (does not consume the rate limit)                   |
 
 Retry discipline: never retry a 401 (deterministic rejection — go check
 revocation/expiry); 503 can be retried with backoff (waiting for the owner to

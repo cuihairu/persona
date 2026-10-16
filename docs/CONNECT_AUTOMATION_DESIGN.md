@@ -100,13 +100,13 @@ The HTTP service is embedded in the **already-unlocked host process**; core ship
 
 `/api/v1/connect/*`, all of which require `Authorization: Bearer pconn_…` (except health):
 
-| Endpoint                       | Method | Semantics                                                                                              |
-| -------------------------- | ---- | ------------------------------------------------------------------------------------------------- |
-| `/connect/health`          | GET  | `{ "service": "persona-connect", "version": … }`, zero vault info, no auth                                |
-| `/connect/identities`      | GET  | identity list within scope (id + name)                                                                     |
-| `/connect/items`           | GET  | item metadata within scope (id, title, type, urls, updated_at); `?identity=`/`?type=`/`?title=` exact filters |
-| `/connect/items/{id}`      | GET  | one item, all fields (decrypted JSON; 404 if outside scope)                                                       |
-| `/connect/items/{id}/totp` | POST | current TOTP code + remaining seconds (reuses the CLI/desktop TOTP parsing path)                                        |
+| Endpoint                   | Method | Semantics                                                                                                     |
+| -------------------------- | ------ | ------------------------------------------------------------------------------------------------------------- |
+| `/connect/health`          | GET    | `{ "service": "persona-connect", "version": … }`, zero vault info, no auth                                    |
+| `/connect/identities`      | GET    | identity list within scope (id + name)                                                                        |
+| `/connect/items`           | GET    | item metadata within scope (id, title, type, urls, updated_at); `?identity=`/`?type=`/`?title=` exact filters |
+| `/connect/items/{id}`      | GET    | one item, all fields (decrypted JSON; 404 if outside scope)                                                   |
+| `/connect/items/{id}/totp` | POST   | current TOTP code + remaining seconds (reuses the CLI/desktop TOTP parsing path)                              |
 
 - **Response envelope**: follows the server convention `{"ok":true,"data":…}` / `{"ok":false,
 "error":{…}}`; error codes align with the desktop `ApiResponse`, so consumers learn one error-handling shape.
@@ -163,15 +163,15 @@ Plaintext fields exist only in host-process memory and the response body; the se
 
 ## 5. Boundaries against existing systems
 
-| Existing asset                        | Relationship                                                                                                                               |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `PersonaService` unlocked state         | the only data surface; the endpoint keeps no cache of its own (the DR-3 rate-limit counter excepted — not data)                                                                        |
-| desktop settings/feature flags      | toggles persist in the same pattern; the automation switch is the Nth feature flag plus the token table                                                                 |
-| passkey desktop approval (Unix socket) | precedent reference (local IPC + GUI approval); connect does not reuse the socket (HTTP serves consumers in any language), and the approval chain is **not** wired to the token endpoint                       |
-| audit log                       | new `AuditAction::ConnectTokenCreated/Revoked/Used` (names finalized at implementation); Used is throttled to prevent log spam (e.g. one aggregate entry per token per minute)                   |
-| backup chain                          | the `connect_tokens` table travels with VACUUM INTO snapshots (scope/hash is database data); restoring a backup = the token set returns to the backup's point in time, and plaintext tokens were never in any backup to begin with |
-| server / sync track               | no coupling; connect is a pure local surface. The server's Bearer/SRP system is not reused (different trust domains: remote device vs local consumer)                                  |
-| Travel Mode                     | while travel is active the endpoint is naturally 503 through the lock gate; token requests whose scope includes a travel-excluded identity return 404 (item does not exist), without exposing travel state                |
+| Existing asset                         | Relationship                                                                                                                                                                                                                       |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PersonaService` unlocked state        | the only data surface; the endpoint keeps no cache of its own (the DR-3 rate-limit counter excepted — not data)                                                                                                                    |
+| desktop settings/feature flags         | toggles persist in the same pattern; the automation switch is the Nth feature flag plus the token table                                                                                                                            |
+| passkey desktop approval (Unix socket) | precedent reference (local IPC + GUI approval); connect does not reuse the socket (HTTP serves consumers in any language), and the approval chain is **not** wired to the token endpoint                                           |
+| audit log                              | new `AuditAction::ConnectTokenCreated/Revoked/Used` (names finalized at implementation); Used is throttled to prevent log spam (e.g. one aggregate entry per token per minute)                                                     |
+| backup chain                           | the `connect_tokens` table travels with VACUUM INTO snapshots (scope/hash is database data); restoring a backup = the token set returns to the backup's point in time, and plaintext tokens were never in any backup to begin with |
+| server / sync track                    | no coupling; connect is a pure local surface. The server's Bearer/SRP system is not reused (different trust domains: remote device vs local consumer)                                                                              |
+| Travel Mode                            | while travel is active the endpoint is naturally 503 through the lock gate; token requests whose scope includes a travel-excluded identity return 404 (item does not exist), without exposing travel state                         |
 
 ## 6. Threat-model registration skeleton (fleshed out in THREAT_MODEL.md at implementation time)
 
@@ -196,13 +196,13 @@ Plaintext fields exist only in host-process memory and the response body; the se
 
 ## 8. Implementation stage mapping
 
-| Stage     | Scope                                                                                            | Acceptance essentials                                        | Threat-model registration                                                                                                      |
-| --------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| 0 (this doc) | Design draft                                                                                     | Decisions settled + user confirmation                        | Skeleton (§6)                                                                                                                  |
-| 1         | core `connect` service layer: token table migration + management API + scope filtering + lock-gate orchestration (framework-agnostic, purely functional) | core tests: token lifecycle / scope filtering / 404 same shape | **Landed 2026-09**: `core/src/connect/` (token table + scope filtering + lock orchestration)                                    |
-| 2         | desktop embedded axum (DR-1 A1) + three defenses + rate limit + settings-page token management UI | DR-4 full rejection-path tests; `cargo test -p persona-desktop` + jest | **Landed 2026-09**: `desktop/src-tauri` embedded listener (`connect_server_start/stop/status`) + `ConnectAutomationSection` settings page |
-| 3         | CLI `persona connect token …` + `serve` (DR-1 A2)                                                | CLI integration tests (ScriptedUi seam); cross-host shared token store interoperability | **Landed 2026-09**: `cli/src/commands/connect.rs` (token create/list/revoke + serve)                                           |
-| 4         | Docs wrap-up: STORAGE_AND_SYNC gains an automation section + README quick start (curl examples)  | Docs consistent with the implementation                       | **Landed 2026-09-22** (TODO stage 4 docs wrap-up)                                                                               |
+| Stage        | Scope                                                                                                                                                    | Acceptance essentials                                                                   | Threat-model registration                                                                                                                 |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 (this doc) | Design draft                                                                                                                                             | Decisions settled + user confirmation                                                   | Skeleton (§6)                                                                                                                             |
+| 1            | core `connect` service layer: token table migration + management API + scope filtering + lock-gate orchestration (framework-agnostic, purely functional) | core tests: token lifecycle / scope filtering / 404 same shape                          | **Landed 2026-09**: `core/src/connect/` (token table + scope filtering + lock orchestration)                                              |
+| 2            | desktop embedded axum (DR-1 A1) + three defenses + rate limit + settings-page token management UI                                                        | DR-4 full rejection-path tests; `cargo test -p persona-desktop` + jest                  | **Landed 2026-09**: `desktop/src-tauri` embedded listener (`connect_server_start/stop/status`) + `ConnectAutomationSection` settings page |
+| 3            | CLI `persona connect token …` + `serve` (DR-1 A2)                                                                                                        | CLI integration tests (ScriptedUi seam); cross-host shared token store interoperability | **Landed 2026-09**: `cli/src/commands/connect.rs` (token create/list/revoke + serve)                                                      |
+| 4            | Docs wrap-up: STORAGE_AND_SYNC gains an automation section + README quick start (curl examples)                                                          | Docs consistent with the implementation                                                 | **Landed 2026-09-22** (TODO stage 4 docs wrap-up)                                                                                         |
 
 Size estimate: on the order of 3–4 sessions; stages 1–2 are the main surface.
 

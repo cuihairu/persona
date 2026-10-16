@@ -19,14 +19,14 @@ measurement method, the measured data, and the re-verification commands.
 
 Method: two consecutive `tauri build --bundles deb` runs on the same source tree (before the second, `touch src-tauri/src/main.rs` to force recompiling the main crate + relinking), comparing artifacts layer by layer.
 
-| Layer                                      | Result                                                                                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| Frontend `dist/` (tsc + vite build)        | **Byte-identical across both runs** (4 files, content-hash named, no timestamps)                                               |
-| Binary `target/release/persona-desktop`    | **Byte-identical across both runs** (46,447,992 bytes; proven transitively by the normalized deb hash matching, see below)    |
-| `debian-binary` ar member inside the deb   | Identical across both runs (fixed `2.0`)                                                                                       |
+| Layer                                           | Result                                                                                                                                                                                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Frontend `dist/` (tsc + vite build)             | **Byte-identical across both runs** (4 files, content-hash named, no timestamps)                                                                                                                       |
+| Binary `target/release/persona-desktop`         | **Byte-identical across both runs** (46,447,992 bytes; proven transitively by the normalized deb hash matching, see below)                                                                             |
+| `debian-binary` ar member inside the deb        | Identical across both runs (fixed `2.0`)                                                                                                                                                               |
 | `control.tar.gz` / `data.tar.gz` inside the deb | **Differ across the two runs** — the only differences are two: tar entry **mtime = build time** and tar entry **owner = build user**; entry order, paths, sizes, and permission bits are all identical |
-| gzip headers (both tar.gz layers)          | Identical across both runs: the bundler already zeroes the gzip mtime and sets the OS byte to 0xff (tauri-bundler 2.x uses flate2, no time traces) |
-| Raw deb as a whole                         | `d777883b…` vs `3fd1d15f…` (**not reproducible**; the only source is the tar-layer differences above)                          |
+| gzip headers (both tar.gz layers)               | Identical across both runs: the bundler already zeroes the gzip mtime and sets the OS byte to 0xff (tauri-bundler 2.x uses flate2, no time traces)                                                     |
+| Raw deb as a whole                              | `d777883b…` vs `3fd1d15f…` (**not reproducible**; the only source is the tar-layer differences above)                                                                                                  |
 
 Conclusion: **all irreproducibility is concentrated in the tar mtime and owner at the deb packaging layer**; compilation and frontend artifacts are already deterministic.
 
@@ -94,10 +94,10 @@ PERSONA_REPRO_RUNTIME=podman scripts/build-repro.sh --docker   # podman 亦可
 ```
 
 - Container contents: `debian:bookworm-slim` (digest-pinned, same base as Dockerfile.server)
-  + tauri v2 official Linux dependencies + node 24 (via `COPY --from` of an official image,
-  same major version as CI setup-node) + corepack with pnpm pinned to 10.22.0
-  (`COREPACK_HOME` inside the image layer, so the container runs offline) + rustup 1.97.0
-  (same version as `rust-toolchain.toml`; an upgrade means changing the toolchain file + rebuilding the image).
+  - tauri v2 official Linux dependencies + node 24 (via `COPY --from` of an official image,
+    same major version as CI setup-node) + corepack with pnpm pinned to 10.22.0
+    (`COREPACK_HOME` inside the image layer, so the container runs offline) + rustup 1.97.0
+    (same version as `rust-toolchain.toml`; an upgrade means changing the toolchain file + rebuilding the image).
 - **A separate `CARGO_TARGET_DIR=/tmp/repro-target` is a correctness prerequisite**: the container
   and host have different glibc, and cargo's incremental fingerprints do not distinguish toolchain
   environments, so accidentally reusing the host `target/` would bake a heterogeneous cache into
@@ -112,11 +112,11 @@ PERSONA_REPRO_RUNTIME=podman scripts/build-repro.sh --docker   # podman 亦可
 
 Three full builds (`--docker` mode; in-container cargo full build 9m40s–12m12s per round):
 
-| Round | Configuration                        | Normalized artifact sha256 (first 8 chars) |
-| ----- | ------------------------------------ | ------------------------------------------ |
-| R1    | Initial image (no git)               | `211cc36a…`                                |
-| R2    | Image + git (final verification)     | `000a5265…`                                |
-| R3    | Same as R2 (re-verification, independent cargo cache) | `000a5265…` (**byte-identical to R2**) |
+| Round | Configuration                                         | Normalized artifact sha256 (first 8 chars) |
+| ----- | ----------------------------------------------------- | ------------------------------------------ |
+| R1    | Initial image (no git)                                | `211cc36a…`                                |
+| R2    | Image + git (final verification)                      | `000a5265…`                                |
+| R3    | Same as R2 (re-verification, independent cargo cache) | `000a5265…` (**byte-identical to R2**)     |
 
 - Defect exposed and fixed by R1: debian slim has no git, so `build-repro.sh`'s
   `SOURCE_DATE_EPOCH` HEAD anchoring silently degraded to 0 — git is now in the
@@ -161,11 +161,11 @@ Three full builds (`--docker` mode; in-container cargo full build 9m40s–12m12s
    two pure-packaging rounds of `tauri build --bundles rpm`; the whole-package comparison
    shows only **64 bytes of difference, all concentrated in the header area** —
 
-   | Difference source                  | Location (tag)             | Measured                                                        |
-   | ---------------------------------- | -------------------------- | --------------------------------------------------------------- |
+   | Difference source                         | Location (tag)               | Measured                                                                                                          |
+   | ----------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
    | SHA256 hex string in the signature header | sig tag 273 (64 chars ASCII) | 56/64 characters differ (the hashed object is the main header, which varies chain-wise with the timestamps below) |
-   | Main header `BUILDTIME`            | tag 1006 (INT32)           | 403s apart across the two rounds, 2 bytes differ                |
-   | Main header `FILEMTIMES`           | tag 1034 (INT32×5)         | the first 2 entries = packaging time (varies per round); the last 3 entries = static resource mtimes, unchanged |
+   | Main header `BUILDTIME`                   | tag 1006 (INT32)             | 403s apart across the two rounds, 2 bytes differ                                                                  |
+   | Main header `FILEMTIMES`                  | tag 1034 (INT32×5)           | the first 2 entries = packaging time (varies per round); the last 3 entries = static resource mtimes, unchanged   |
 
    **The payload is byte-identical** (the whole-package cmp matches apart from the 64 bytes
    above). Same story as AppImage: every difference derives from build time, and normalization
@@ -173,11 +173,11 @@ Three full builds (`--docker` mode; in-container cargo full build 9m40s–12m12s
    hack was done on the repo side. dmg cannot be built on Linux; untested.
 
 5. **True cross-machine verification not done (only this half-step remains)**: remapping + pinning
-   + build container are all in place, and **same-machine reproduction inside the container is
-   measured passing** (2026-09-24; R2/R3 are two independent full builds with byte-identical
-   hash `000a5265…`, see "In-Container Measurement"). The closing action = run
-   `scripts/build-repro.sh --docker` once on each of two machines and compare `sha256sum`
-   (with the same HEAD it should match `000a5265…` — SOURCE_DATE_EPOCH is git-anchored to the same commit).
+   - build container are all in place, and **same-machine reproduction inside the container is
+     measured passing** (2026-09-24; R2/R3 are two independent full builds with byte-identical
+     hash `000a5265…`, see "In-Container Measurement"). The closing action = run
+     `scripts/build-repro.sh --docker` once on each of two machines and compare `sha256sum`
+     (with the same HEAD it should match `000a5265…` — SOURCE_DATE_EPOCH is git-anchored to the same commit).
 
 ## Dependency Input Pinning Status
 

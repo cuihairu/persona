@@ -42,11 +42,11 @@ Follows the Chrome Native Messaging standard:
 }
 ```
 
-| Field         | Type   | Required | Description                             |
-| ------------ | ------ | ---- | -------------------------------- |
-| `request_id` | string | No       | Unique ID used to correlate request/response |
-| `type`       | string | Yes      | Message type                            |
-| `payload`    | object | No       | Type-specific payload data              |
+| Field        | Type   | Required | Description                                                            |
+| ------------ | ------ | -------- | ---------------------------------------------------------------------- |
+| `request_id` | string | No       | Unique ID used to correlate request/response                           |
+| `type`       | string | Yes      | Message type                                                           |
+| `payload`    | object | No       | Type-specific payload data                                             |
 | `auth`       | object | No       | Message authentication (required for sensitive operations once paired) |
 
 #### auth field (HMAC)
@@ -60,12 +60,12 @@ Follows the Chrome Native Messaging standard:
 }
 ```
 
-| Field         | Type   | Required | Description                                         |
-| ------------ | ------ | ---- | -------------------------------------------- |
-| `session_id` | string | Yes  | Short-lived session ID issued by `hello_response`   |
-| `ts_ms`      | number | Yes  | Client timestamp (milliseconds); bounds the server-side replay window |
-| `nonce`      | string | Yes  | Per-request random value                          |
-| `signature`  | string | Yes  | `HMAC-SHA256` signature (base64url, no padding) |
+| Field        | Type   | Required | Description                                                           |
+| ------------ | ------ | -------- | --------------------------------------------------------------------- |
+| `session_id` | string | Yes      | Short-lived session ID issued by `hello_response`                     |
+| `ts_ms`      | number | Yes      | Client timestamp (milliseconds); bounds the server-side replay window |
+| `nonce`      | string | Yes      | Per-request random value                                              |
+| `signature`  | string | Yes      | `HMAC-SHA256` signature (base64url, no padding)                       |
 
 ### Response format
 
@@ -79,13 +79,13 @@ Follows the Chrome Native Messaging standard:
 }
 ```
 
-| Field         | Type    | Required | Description                      |
-| ------------ | ------- | ---- | ------------------------- |
-| `request_id` | string  | No       | ID of the request being answered       |
-| `type`       | string  | Yes      | Response type                  |
-| `ok`         | boolean | Yes      | Whether the operation succeeded |
+| Field        | Type    | Required | Description                              |
+| ------------ | ------- | -------- | ---------------------------------------- |
+| `request_id` | string  | No       | ID of the request being answered         |
+| `type`       | string  | Yes      | Response type                            |
+| `ok`         | boolean | Yes      | Whether the operation succeeded          |
 | `error`      | string  | No       | Error description (only when `ok=false`) |
-| `payload`    | object  | No       | Response data                  |
+| `payload`    | object  | No       | Response data                            |
 
 ## Message Types
 
@@ -261,12 +261,12 @@ Returns credential suggestions matching the current page origin.
 }
 ```
 
-| Field        | Required | Description                                                                   |
-| ----------- | ---- | ---------------------------------------------------------------------- |
-| `origin`    | Yes  | Page origin; the host is parsed from it for URL matching and host-mapping signals |
-| `form_type` | No   | `"login"` (default) or `"card"`                                        |
-| `host`      | No   | Explicit host signal (e.g. when the page fills a form on a different domain); falls back to the origin's host when omitted |
-| `cwd`       | No   | Current terminal directory (desktop bridge scenario), used for repo discovery and in-repo mapping; the browser extension never sends it |
+| Field       | Required | Description                                                                                                                             |
+| ----------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `origin`    | Yes      | Page origin; the host is parsed from it for URL matching and host-mapping signals                                                       |
+| `form_type` | No       | `"login"` (default) or `"card"`                                                                                                         |
+| `host`      | No       | Explicit host signal (e.g. when the page fills a form on a different domain); falls back to the origin's host when omitted              |
+| `cwd`       | No       | Current terminal directory (desktop bridge scenario), used for repo discovery and in-repo mapping; the browser extension never sends it |
 
 `host`/`cwd` are both optional extensions: when omitted, behavior is identical to older versions (backwards compatible).
 
@@ -297,9 +297,9 @@ Returns credential suggestions matching the current page origin.
 }
 ```
 
-| Field              | Description                                                                                                 |
-| ------------------ | ---------------------------------------------------------------------------------------------------- |
-| `items[].identity` | Name of the identity the credential belongs to (always present since 2026-10; the popup can use it to label entries) |
+| Field              | Description                                                                                                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `items[].identity` | Name of the identity the credential belongs to (always present since 2026-10; the popup can use it to label entries)                                                              |
 | `context`          | Identity-level suggestion from the context layer; the whole field is omitted when there are no candidates or `PERSONA_NO_CONTEXT` is set (older consumers still see the v7 shape) |
 
 **Context awareness (since 2026-10, phase 4 bridge-half):**
@@ -312,11 +312,11 @@ Returns credential suggestions matching the current page origin.
   no fill authorization gate is relaxed.
 - Any mapping load failure silently degrades to no suggestion (design §10).
 
-| match_strength | Meaning            |
-| -------------- | ------------------ |
-| 100            | Exact domain match |
-| 90             | Subdomain match    |
-| 80             | Domain-contains match |
+| match_strength | Meaning                |
+| -------------- | ---------------------- |
+| 100            | Exact domain match     |
+| 90             | Subdomain match        |
+| 80             | Domain-contains match  |
 | 60             | Top-level domain match |
 
 **`form_type` parameter (since 2026-09):**
@@ -789,14 +789,14 @@ the same entries the desktop uses) and the server URL from the workspace setting
 
 **Error codes (new in v6):**
 
-| Error code                 | Trigger                                                          |
-| ------------------------- | ----------------------------------------------------------------- |
-| `sync_not_configured`     | No sync token in the keyring / no workspace / empty server URL / invalid configuration |
-| `sync_not_joined`         | No device identity in the keyring (this vault has not joined sync) |
+| Error code                | Trigger                                                                                       |
+| ------------------------- | --------------------------------------------------------------------------------------------- |
+| `sync_not_configured`     | No sync token in the keyring / no workspace / empty server URL / invalid configuration        |
+| `sync_not_joined`         | No device identity in the keyring (this vault has not joined sync)                            |
 | `sync_not_authorized`     | No envelope for this device in the envelope table (awaiting admin authorization, fail-closed) |
-| `sync_group_key_failed`   | Unwrapping this device's group key envelope failed                |
-| `sync_identity_corrupted` | The stored device identity is unreadable                          |
-| `sync_server_unreachable` | The remote `group_keys()` call failed                             |
+| `sync_group_key_failed`   | Unwrapping this device's group key envelope failed                                            |
+| `sync_identity_corrupted` | The stored device identity is unreadable                                                      |
+| `sync_server_unreachable` | The remote `group_keys()` call failed                                                         |
 
 ### 18. account_login / account_status / account_logout - Account-domain trio (protocol v7)
 
@@ -972,11 +972,11 @@ Response (desktop → bridge):
 
 **Switch** `PERSONA_BRIDGE_DESKTOP_APPROVAL` (default `auto`):
 
-| Value        | Behavior                                                                           |
-| --------- | ------------------------------------------------------------------------------ |
+| Value     | Behavior                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `auto`    | Socket present → desktop approval is mandatory; desktop not running / connection failed → existing behavior (the gesture gate applies as before) |
-| `require` | Policy-enforced: reject the passkey request even when the socket is absent (fail closed) |
-| `off`     | Never ask                                                                       |
+| `require` | Policy-enforced: reject the passkey request even when the socket is absent (fail closed)                                                         |
+| `off`     | Never ask                                                                                                                                        |
 
 On denial or unreachability the bridge returns an error for that request, with an error-code prefix that varies by op:
 `passkey_desktop_denied: <op> rejected by desktop approval (<reason>)`,
@@ -1059,56 +1059,56 @@ log events, not rows in the database `audit_log` table.
 
 ### Error code list
 
-| Error code                          | Description                                      |
-| ----------------------------------- | ---------------------------------------------- |
-| `invalid_json`                      | JSON parsing failed                            |
-| `unknown_type`                      | Unknown message type                           |
-| `locked`                            | The vault is locked and needs unlocking        |
-| `not_found`                         | The requested resource does not exist          |
-| `origin_mismatch`                   | Origin does not match                          |
-| `origin_binding_required`           | The entry has no URL set, so origin binding cannot apply |
-| `authentication_failed`             | Authentication failed                          |
-| `wrong_identity`                    | The current active identity does not match     |
-| `user_confirmation_required`        | User confirmation is required                  |
-| `session_expired`                   | The session has expired                        |
-| `user_gesture_required`             | Missing user gesture (v2)                      |
-| `no_active_identity`                | No active identity is set (v2)                 |
-| `passkey_rp_mismatch`               | Origin does not match the passkey's rp_id (v2) |
-| `passkey_alg_unsupported`           | pubKeyCredParams does not include ES256 (v2)   |
-| `passkey_item_not_found`            | The specified passkey does not exist (v2)      |
-| `passkey_origin_mismatch`           | Passkey origin check failed (reserved) (v2)    |
-| `passkey_desktop_denied`            | Passkey create/assertion denied by desktop approval |
-| `passkey_desktop_approval_required` | Desktop approval unreachable in `require` mode |
-| `save_desktop_denied`               | Save/update denied by desktop approval (v4)    |
-| `unsupported_credential_type`       | The entry type does not support this operation |
-| `invalid_payload`                   | Payload validation failed (e.g. empty password)|
-| `invalid_request`                   | Parameter validation failed (bridge.rs:1297/1300) |
-| `passkey_assert_failed`             | Passkey assertion orchestration failed (bridge.rs:1336) |
-| `sync_not_configured`               | Sync not configured (token/URL/workspace missing) (v6) |
-| `sync_not_joined`                   | The vault has not joined sync (v6)             |
+| Error code                          | Description                                                            |
+| ----------------------------------- | ---------------------------------------------------------------------- |
+| `invalid_json`                      | JSON parsing failed                                                    |
+| `unknown_type`                      | Unknown message type                                                   |
+| `locked`                            | The vault is locked and needs unlocking                                |
+| `not_found`                         | The requested resource does not exist                                  |
+| `origin_mismatch`                   | Origin does not match                                                  |
+| `origin_binding_required`           | The entry has no URL set, so origin binding cannot apply               |
+| `authentication_failed`             | Authentication failed                                                  |
+| `wrong_identity`                    | The current active identity does not match                             |
+| `user_confirmation_required`        | User confirmation is required                                          |
+| `session_expired`                   | The session has expired                                                |
+| `user_gesture_required`             | Missing user gesture (v2)                                              |
+| `no_active_identity`                | No active identity is set (v2)                                         |
+| `passkey_rp_mismatch`               | Origin does not match the passkey's rp_id (v2)                         |
+| `passkey_alg_unsupported`           | pubKeyCredParams does not include ES256 (v2)                           |
+| `passkey_item_not_found`            | The specified passkey does not exist (v2)                              |
+| `passkey_origin_mismatch`           | Passkey origin check failed (reserved) (v2)                            |
+| `passkey_desktop_denied`            | Passkey create/assertion denied by desktop approval                    |
+| `passkey_desktop_approval_required` | Desktop approval unreachable in `require` mode                         |
+| `save_desktop_denied`               | Save/update denied by desktop approval (v4)                            |
+| `unsupported_credential_type`       | The entry type does not support this operation                         |
+| `invalid_payload`                   | Payload validation failed (e.g. empty password)                        |
+| `invalid_request`                   | Parameter validation failed (bridge.rs:1297/1300)                      |
+| `passkey_assert_failed`             | Passkey assertion orchestration failed (bridge.rs:1336)                |
+| `sync_not_configured`               | Sync not configured (token/URL/workspace missing) (v6)                 |
+| `sync_not_joined`                   | The vault has not joined sync (v6)                                     |
 | `sync_not_authorized`               | The device has no group key envelope yet (awaiting authorization) (v6) |
-| `sync_group_key_failed`             | Group key envelope unwrap failed (v6)          |
-| `sync_identity_corrupted`           | The device identity is unreadable (v6)         |
-| `sync_server_unreachable`           | The sync server is unreachable (v6)            |
-| `account_not_configured`            | Invalid account server URL (v7)                |
-| `account_login_failed`              | SRP login orchestration failed (including server rejection) (v7) |
-| `account_keyring_unavailable`       | Account token keyring read/write failed (v7)   |
-| `sync_session_failed`               | Sync session assembly failed (envelope/authorization) (v7) |
-| `sync_cycle_failed`                 | Sync cycle failed (backfill/cycle) (v7)        |
-| `sync_resolve_failed`               | Conflict resolution failed (copy missing / not a Credential) (v7) |
+| `sync_group_key_failed`             | Group key envelope unwrap failed (v6)                                  |
+| `sync_identity_corrupted`           | The device identity is unreadable (v6)                                 |
+| `sync_server_unreachable`           | The sync server is unreachable (v6)                                    |
+| `account_not_configured`            | Invalid account server URL (v7)                                        |
+| `account_login_failed`              | SRP login orchestration failed (including server rejection) (v7)       |
+| `account_keyring_unavailable`       | Account token keyring read/write failed (v7)                           |
+| `sync_session_failed`               | Sync session assembly failed (envelope/authorization) (v7)             |
+| `sync_cycle_failed`                 | Sync cycle failed (backfill/cycle) (v7)                                |
+| `sync_resolve_failed`               | Conflict resolution failed (copy missing / not a Credential) (v7)      |
 
 ## Configuration
 
 ### Environment variables
 
-| Variable                          | Description                            | Default                  |
-| --------------------------------- | --------------------------------------- | -------------------------- |
-| `PERSONA_MASTER_PASSWORD`         | Master password (automation scenarios) | -                          |
-| `PERSONA_DB_PATH`                 | Database path                          | `~/.persona/identities.db` |
-| `PERSONA_BRIDGE_STATE_DIR`        | Bridge state directory (pairing/session) | `~/.persona/bridge`      |
-| `PERSONA_BRIDGE_REQUIRE_PAIRING`  | Whether to enforce pairing + HMAC      | `true`                     |
-| `PERSONA_BRIDGE_REQUIRE_GESTURE`  | Whether to enforce user_gesture (fill/totp/copy) | `true`              |
-| `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | Maximum HMAC timestamp skew (replay protection) | `300000`            |
+| Variable                          | Description                                      | Default                    |
+| --------------------------------- | ------------------------------------------------ | -------------------------- |
+| `PERSONA_MASTER_PASSWORD`         | Master password (automation scenarios)           | -                          |
+| `PERSONA_DB_PATH`                 | Database path                                    | `~/.persona/identities.db` |
+| `PERSONA_BRIDGE_STATE_DIR`        | Bridge state directory (pairing/session)         | `~/.persona/bridge`        |
+| `PERSONA_BRIDGE_REQUIRE_PAIRING`  | Whether to enforce pairing + HMAC                | `true`                     |
+| `PERSONA_BRIDGE_REQUIRE_GESTURE`  | Whether to enforce user_gesture (fill/totp/copy) | `true`                     |
+| `PERSONA_BRIDGE_AUTH_MAX_SKEW_MS` | Maximum HMAC timestamp skew (replay protection)  | `300000`                   |
 
 ### CLI parameters
 
@@ -1177,15 +1177,15 @@ Example manifest file contents:
 
 ## Protocol Version Compatibility
 
-| Protocol Version | CLI Version | Features |
-| ---------------- | ----------- | -------- |
-| 1 | 0.1.0+ | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy |
-| 2 | 0.1.0+ | everything in v1 + passkey_list/passkey_create/passkey_assert (software passkey track) |
-| 3 | 0.1.0+ | everything in v2 + passkey_credential_provider_list/assert (OS provider data source / delegated assertion, P4.1/P4.4) |
-| 4 | 0.1.0+ | everything in v3 + find_for_save/save_credential (vault write path: save or update a login, §14/§15) |
-| 5 | 0.1.0+ | everything in v4 + generate_password (password generation, §16) + the hello response carries connect_available/connect_port |
-| 6 | 0.1.0+ | everything in v5 + sync_connect (cloud sync bootstrap, §17): the extension fetches the connection parameters through the bridge and then talks to the data plane over HTTP directly |
-| 7 | 0.1.0+ | everything in v6 + account_login/status/logout (the account-domain trio, §18) + sync_push_now (sync now, §19) + sync_resolve_conflict (conflict adjudication, §20): tokens land only in the keyring and never cross the bridge |
+| Protocol Version | CLI Version | Features                                                                                                                                                                                                                       |
+| ---------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1                | 0.1.0+      | hello/status/pairing_request/pairing_finalize + HMAC auth + get_suggestions/request_fill/get_totp/copy                                                                                                                         |
+| 2                | 0.1.0+      | everything in v1 + passkey_list/passkey_create/passkey_assert (software passkey track)                                                                                                                                         |
+| 3                | 0.1.0+      | everything in v2 + passkey_credential_provider_list/assert (OS provider data source / delegated assertion, P4.1/P4.4)                                                                                                          |
+| 4                | 0.1.0+      | everything in v3 + find_for_save/save_credential (vault write path: save or update a login, §14/§15)                                                                                                                           |
+| 5                | 0.1.0+      | everything in v4 + generate_password (password generation, §16) + the hello response carries connect_available/connect_port                                                                                                    |
+| 6                | 0.1.0+      | everything in v5 + sync_connect (cloud sync bootstrap, §17): the extension fetches the connection parameters through the bridge and then talks to the data plane over HTTP directly                                            |
+| 7                | 0.1.0+      | everything in v6 + account_login/status/logout (the account-domain trio, §18) + sync_push_now (sync now, §19) + sync_resolve_conflict (conflict adjudication, §20): tokens land only in the keyring and never cross the bridge |
 
 > From v2 onward the frame format and the HMAC signing rules are unchanged; only new message types were added and `protocol_version` was bumped. Older extensions still get `unknown_type` for messages the bridge does not know, so compatibility is preserved.
 

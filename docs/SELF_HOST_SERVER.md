@@ -57,16 +57,16 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 
 ## Environment variable reference
 
-| Variable                                      | Default               | Description                                                                             |
-| --------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------- |
-| `PERSONA_SERVER_TOKEN`                        | — (one required)       | Legacy single token; if neither it nor TOKENS is configured → all of `/api/v1` returns 503 (fail-closed), `/health` still 200 |
-| `PERSONA_SERVER_TOKENS`                       | —                     | Multi-device `name:token,…`; an invalid format fails at startup                         |
-| `PERSONA_SERVER_HOST` / `PERSONA_SERVER_PORT` | `0.0.0.0` / `3000`    | Listen surface; change HOST as needed when exposing only to the LAN/127.0.0.1            |
-| `PERSONA_SERVER_DB`                           | `./persona-server.db` | Event database (WAL, separate from the core identity store)                             |
-| `PERSONA_SERVER_BACKUP_DIR`                   | `./backups`           | Directory for encrypted backups on disk (`{uuid}.persenc`)                              |
-| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0` (unlimited)       | Deletes the oldest once exceeded (global, across devices)                               |
+| Variable                                      | Default               | Description                                                                                                                                                             |
+| --------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERSONA_SERVER_TOKEN`                        | — (one required)      | Legacy single token; if neither it nor TOKENS is configured → all of `/api/v1` returns 503 (fail-closed), `/health` still 200                                           |
+| `PERSONA_SERVER_TOKENS`                       | —                     | Multi-device `name:token,…`; an invalid format fails at startup                                                                                                         |
+| `PERSONA_SERVER_HOST` / `PERSONA_SERVER_PORT` | `0.0.0.0` / `3000`    | Listen surface; change HOST as needed when exposing only to the LAN/127.0.0.1                                                                                           |
+| `PERSONA_SERVER_DB`                           | `./persona-server.db` | Event database (WAL, separate from the core identity store)                                                                                                             |
+| `PERSONA_SERVER_BACKUP_DIR`                   | `./backups`           | Directory for encrypted backups on disk (`{uuid}.persenc`)                                                                                                              |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`          | `0` (unlimited)       | Deletes the oldest once exceeded (global, across devices)                                                                                                               |
 | `PERSONA_SERVER_OPS_RETENTION_DAYS`           | `0` (no cleanup)      | Sync oplog window: opening one means giving up replaying history to devices that were offline past the window; the window must be ≥ the slowest device's offline period |
-| `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0` (no cleanup)      | Retention for the audit event copy, sized to your SIEM ingestion cadence                |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS`        | `0` (no cleanup)      | Retention for the audit event copy, sized to your SIEM ingestion cadence                                                                                                |
 
 ## Client wiring
 

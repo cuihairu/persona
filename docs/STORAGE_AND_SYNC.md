@@ -14,12 +14,12 @@ how to configure each one together with its security boundaries.
 
 ## Overview: Storage and Sync Modes
 
-| Mode                               | Status     | What you get                        | What you need                     |
-| ---------------------------------- | ---------- | ----------------------------------- | --------------------------------- |
-| **Pure local** (default)           | Fully usable | Zero network, full feature set    | Nothing to configure              |
-| **Self-hosted Persona Server**     | Implemented | Off-site copy of audit events + encrypted whole-vault backup custody | One server you control |
-| **E2EE credential sync** (desktop) | Implemented | Credential consistency across devices (server sees only ciphertext) | Mode-2 server + ≥2 devices |
-| **Cloud drive folder (iCloud/Dropbox/…)** | Cold backup only | Put encrypted backup files in your cloud drive | Manual copy (see the warning below) |
+| Mode                                      | Status           | What you get                                                         | What you need                       |
+| ----------------------------------------- | ---------------- | -------------------------------------------------------------------- | ----------------------------------- |
+| **Pure local** (default)                  | Fully usable     | Zero network, full feature set                                       | Nothing to configure                |
+| **Self-hosted Persona Server**            | Implemented      | Off-site copy of audit events + encrypted whole-vault backup custody | One server you control              |
+| **E2EE credential sync** (desktop)        | Implemented      | Credential consistency across devices (server sees only ciphertext)  | Mode-2 server + ≥2 devices          |
+| **Cloud drive folder (iCloud/Dropbox/…)** | Cold backup only | Put encrypted backup files in your cloud drive                       | Manual copy (see the warning below) |
 
 **Credential-level sync is implemented** (2026-09, desktop): two or more devices
 relay ciphertext oplogs through a self-hosted server so that credential
@@ -34,12 +34,12 @@ below.
 The initialized workspace directory (default `~/.persona`, overridable via
 `--path` or `PERSONA_WORKSPACE_PATH`):
 
-| Path                                     | Contents                                | Encrypted?                                                                  |
-| ---------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
+| Path                                     | Contents                                                                     | Encrypted?                                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `identities.db`                          | Main database: all tables for identities, credentials, audit, settings, etc. | Credential payloads encrypted per-item key; **metadata columns (name, URL, username, etc.) are plaintext SQLite** |
-| `attachments/`                           | Attachment file bodies                  | Ciphertext (reuses the owning credential's item key)                       |
-| `backups/`, `exports/`, `temp/`, `logs/` | Working directories (export file path chosen via `--out`) | Mixed (export is optionally encrypted)                  |
-| `config.toml`                            | CLI configuration                       | **Plaintext, contains no keys**                                             |
+| `attachments/`                           | Attachment file bodies                                                       | Ciphertext (reuses the owning credential's item key)                                                              |
+| `backups/`, `exports/`, `temp/`, `logs/` | Working directories (export file path chosen via `--out`)                    | Mixed (export is optionally encrypted)                                                                            |
+| `config.toml`                            | CLI configuration                                                            | **Plaintext, contains no keys**                                                                                   |
 
 Key hierarchy: each credential has one random item key (AES-256-GCM encrypts the
 payload), and the item key is wrapped by the master key derived from your
@@ -106,34 +106,34 @@ Cold backup recommendations, in order of preference:
 The `persona-server` crate (axum); all configuration goes through environment
 variables:
 
-| Variable                               | Default               | Description                                                                                          |
-| -------------------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------- |
-| `PERSONA_SERVER_HOST`                  | `0.0.0.0`             | Listen address (use `127.0.0.1` for local experiments)                                               |
-| `PERSONA_SERVER_PORT`                  | `3000`                | Listen port                                                                                           |
-| `PERSONA_SERVER_DB`                    | `./persona-server.db` | The server's own metadata database                                                                   |
-| `PERSONA_SERVER_TOKENS`                | —                     | **Multi-device tokens**: `"laptop:tok1,phone:tok2"`; an invalid format fails at startup                |
-| `PERSONA_SERVER_TOKEN`                 | —                     | Legacy single token (treated as the "default" device); migrating to TOKENS is recommended             |
-| `PERSONA_SERVER_BACKUP_DIR`            | `<DB dir>/backups`    | Directory where backup ciphertext is stored                                                           |
-| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0` (no limit)        | Per-device cap on retained versions; oldest deleted beyond the cap                                    |
+| Variable                               | Default               | Description                                                                                                                                                                                              |
+| -------------------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PERSONA_SERVER_HOST`                  | `0.0.0.0`             | Listen address (use `127.0.0.1` for local experiments)                                                                                                                                                   |
+| `PERSONA_SERVER_PORT`                  | `3000`                | Listen port                                                                                                                                                                                              |
+| `PERSONA_SERVER_DB`                    | `./persona-server.db` | The server's own metadata database                                                                                                                                                                       |
+| `PERSONA_SERVER_TOKENS`                | —                     | **Multi-device tokens**: `"laptop:tok1,phone:tok2"`; an invalid format fails at startup                                                                                                                  |
+| `PERSONA_SERVER_TOKEN`                 | —                     | Legacy single token (treated as the "default" device); migrating to TOKENS is recommended                                                                                                                |
+| `PERSONA_SERVER_BACKUP_DIR`            | `<DB dir>/backups`    | Directory where backup ciphertext is stored                                                                                                                                                              |
+| `PERSONA_SERVER_BACKUP_MAX_VERSIONS`   | `0` (no limit)        | Per-device cap on retained versions; oldest deleted beyond the cap                                                                                                                                       |
 | `PERSONA_SERVER_OPS_RETENTION_DAYS`    | `0` (no cleanup)      | Retention days for sync relay logs. Opening a window = giving up the responsibility to replay history to devices offline longer than the window; **must be ≥ the offline period of your slowest device** |
-| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0` (no cleanup)      | Retention days for the audit-event copy; set per your SIEM ingestion cycle                            |
+| `PERSONA_SERVER_EVENTS_RETENTION_DAYS` | `0` (no cleanup)      | Retention days for the audit-event copy; set per your SIEM ingestion cycle                                                                                                                               |
 
 **Fail-closed**: when neither `TOKENS` nor `TOKEN` is configured, `/api/v1` is
 disabled as a whole (not left wide open).
 
 HTTP endpoints (all except health/metrics require a Bearer token):
 
-| Endpoint              | Method              | Purpose                                                                  | Request limit                      |
-| --------------------- | ------------------- | ------------------------------------------------------------------------- | --------------------------------- |
-| `/api/v1/events`      | POST                | Report a batch of audit events (≤500 entries per batch)                   | 1 MiB on the wire (gzip) / 10 MiB decompressed |
-| `/api/v1/events`      | GET                 | Query stored events (filter by action/success or failure/time + cursor pagination) | —                                 |
-| `/api/v1/backups`     | POST / GET          | Upload a backup / list versions                                          | 256 MiB                           |
-| `/api/v1/backups/:id` | GET / DELETE        | Download / delete a specific version                                     | —                                 |
-| `/api/v1/sync/*`      | POST / GET / DELETE | Device registration, group-key envelope fetch/upload, oplog push/pull (the transport surface for the E2EE sync section in this document) | —                                 |
-| `/api/v1/auth/*`      | POST                | Device SRP authentication (register/challenge/verify exchanged for a short-lived token) | —                                 |
-| `/api/v1/accounts/*`  | POST / GET / DELETE | Account domain (SRP password, passkey ceremonies, recovery codes, account devices/sessions) | 1 MiB on the wire                 |
-| `/api/v1/pairing/*`   | POST / GET / DELETE | Sync-group one-time-passcode pairing mailbox (**no Bearer required**, TTL 600s, queue ≤4, payload ≤4KiB) | 4 KiB                             |
-| `/health`, `/metrics` | GET                 | Liveness and metrics                                                     | Public                            |
+| Endpoint              | Method              | Purpose                                                                                                                                  | Request limit                                  |
+| --------------------- | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| `/api/v1/events`      | POST                | Report a batch of audit events (≤500 entries per batch)                                                                                  | 1 MiB on the wire (gzip) / 10 MiB decompressed |
+| `/api/v1/events`      | GET                 | Query stored events (filter by action/success or failure/time + cursor pagination)                                                       | —                                              |
+| `/api/v1/backups`     | POST / GET          | Upload a backup / list versions                                                                                                          | 256 MiB                                        |
+| `/api/v1/backups/:id` | GET / DELETE        | Download / delete a specific version                                                                                                     | —                                              |
+| `/api/v1/sync/*`      | POST / GET / DELETE | Device registration, group-key envelope fetch/upload, oplog push/pull (the transport surface for the E2EE sync section in this document) | —                                              |
+| `/api/v1/auth/*`      | POST                | Device SRP authentication (register/challenge/verify exchanged for a short-lived token)                                                  | —                                              |
+| `/api/v1/accounts/*`  | POST / GET / DELETE | Account domain (SRP password, passkey ceremonies, recovery codes, account devices/sessions)                                              | 1 MiB on the wire                              |
+| `/api/v1/pairing/*`   | POST / GET / DELETE | Sync-group one-time-passcode pairing mailbox (**no Bearer required**, TTL 600s, queue ≤4, payload ≤4KiB)                                 | 4 KiB                                          |
+| `/health`, `/metrics` | GET                 | Liveness and metrics                                                                                                                     | Public                                         |
 
 Device names are derived from the matched token (clients cannot self-report
 them); a push from the same device with the same sha256 as the latest version
@@ -351,13 +351,13 @@ Three honest boundaries (the confirmation dialog says the same):
 > switch in desktop settings drives both event reporting and end-to-end
 > sync.
 
-| Command                                    | What it does                                          |
-| ------------------------------------------ | ----------------------------------------------------- |
-| `persona backup push`                      | Snapshot the current vault → encrypt → upload (no need to unlock the master password) |
-| `persona backup list`                      | List versions (newest → oldest, paginated)            |
-| `persona backup pull <id> --out f`         | Download the ciphertext to a file (does not decrypt)  |
-| `persona backup restore <id>\|--file f`    | Decrypt and verify → keep a `.bak` → swap in the database |
-| `persona backup delete <id>`               | Delete the version on the server                      |
+| Command                                 | What it does                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| `persona backup push`                   | Snapshot the current vault → encrypt → upload (no need to unlock the master password) |
+| `persona backup list`                   | List versions (newest → oldest, paginated)                                            |
+| `persona backup pull <id> --out f`      | Download the ciphertext to a file (does not decrypt)                                  |
+| `persona backup restore <id>\|--file f` | Decrypt and verify → keep a `.bak` → swap in the database                             |
+| `persona backup delete <id>`            | Delete the version on the server                                                      |
 
 Key points:
 
@@ -545,14 +545,14 @@ Boundaries (honest version):
 
 ## Failure Consequences at a Glance
 
-| Scenario                       | Consequence                                                                                     | Recoverable                                        |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| Master password lost           | Every credential in the vault becomes undecryptable                                          | No (no escrow, no reset)                           |
-| Backup passphrase lost         | That backup cannot be restored                                                                  | No (other versions are unaffected)                 |
-| Identity/credential deleted by mistake | Deleted locally                                                                          | Yes — restore the whole vault to an older backup (everything after that snapshot point is lost) |
-| `identities.db` corrupted      | The local vault is unusable                                                                     | Yes — restore, but **all changes after the last push are lost** |
-| Server data deleted/rolled back | The backup version pool is damaged; a rolled-back sync log loses "pushed but not yet pulled" propagation (each side's local vault is unaffected) | No — no protection against the server operator is claimed; the local vault remains the first source of truth |
-| Travel sidecar lost            | The moved-out identities are lost permanently                                                  | No (the red-warning scenario in THREAT_MODEL's "Travel Mode") |
+| Scenario                               | Consequence                                                                                                                                      | Recoverable                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Master password lost                   | Every credential in the vault becomes undecryptable                                                                                              | No (no escrow, no reset)                                                                                     |
+| Backup passphrase lost                 | That backup cannot be restored                                                                                                                   | No (other versions are unaffected)                                                                           |
+| Identity/credential deleted by mistake | Deleted locally                                                                                                                                  | Yes — restore the whole vault to an older backup (everything after that snapshot point is lost)              |
+| `identities.db` corrupted              | The local vault is unusable                                                                                                                      | Yes — restore, but **all changes after the last push are lost**                                              |
+| Server data deleted/rolled back        | The backup version pool is damaged; a rolled-back sync log loses "pushed but not yet pulled" propagation (each side's local vault is unaffected) | No — no protection against the server operator is claimed; the local vault remains the first source of truth |
+| Travel sidecar lost                    | The moved-out identities are lost permanently                                                                                                    | No (the red-warning scenario in THREAT_MODEL's "Travel Mode")                                                |
 
 The principle in one sentence: **the local vault is the first source of
 truth, and every backup mechanism is just one more copy of the ciphertext

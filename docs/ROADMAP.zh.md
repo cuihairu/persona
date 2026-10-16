@@ -40,7 +40,6 @@
 
 ## 里程碑 5 —— 钱包毕业（押后至里程碑 4 之后；今天为实验性）
 
-
 现有实验基础：BTC（BIP-143 P2WPKH）/ ETH（EIP-155/1559）/ Solana 在审计过的
 crates（rust-bitcoin、alloy、bech32）上的派生与签名，CLI 钱包流，官方测试向量
 作为回归基准。

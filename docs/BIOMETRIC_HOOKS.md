@@ -32,11 +32,11 @@ The desktop side (Tauri) provides `OsBiometricProvider` (`desktop/src-tauri/src/
 which dispatches to three cfg modules per platform; the synchronous trait is bridged
 by a dedicated ceremony thread with a 120s timeout:
 
-| Platform | Module                       | Backend                                                                                                     | Semantics                              |
-| -------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Platform | Module                       | Backend                                                                                                             | Semantics                                               |
+| -------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | Linux    | `biometric/polkit.rs`        | Hand-written zbus `CheckAuthorization` (action `com.persona.desktop.biometric-unlock`, subject via system-bus-name) | `auth_self`: fingerprint (fprintd) or password fallback |
-| macOS    | `biometric/macos.rs`         | objc2-local-authentication `LAPolicy::DeviceOwnerAuthentication`                                            | Touch ID + system password fallback    |
-| Windows  | `biometric/windows_hello.rs` | `UserConsentVerifier::RequestVerificationAsync`                                                             | Windows Hello (PIN/biometric)          |
+| macOS    | `biometric/macos.rs`         | objc2-local-authentication `LAPolicy::DeviceOwnerAuthentication`                                                    | Touch ID + system password fallback                     |
+| Windows  | `biometric/windows_hello.rs` | `UserConsentVerifier::RequestVerificationAsync`                                                                     | Windows Hello (PIN/biometric)                           |
 
 It does not depend on zbus_polkit (CVE-2026-78422); mac/win are compile-verified only, via nightly CI.
 

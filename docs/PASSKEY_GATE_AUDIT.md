@@ -11,11 +11,11 @@ residuals**.
 
 ## Verdict at a Glance
 
-| Item                                      | Verdict                  | Evidence |
-| ----------------------------------------- | ------------------------ | -------- |
-| E1 Extension-side passkey create/assert dual-gate regression | ✅ Covered      | See §1 |
-| E2 OS passkey provider (v3) on-device acceptance               | ⏸ Deferred (on-device prerequisite) | See §2 |
-| E3 Cross-origin iframe passkey hook behavior                   | ✅ Design ruling: no injection | See §3 |
+| Item                                                         | Verdict                              | Evidence |
+| ------------------------------------------------------------ | ------------------------------------ | -------- |
+| E1 Extension-side passkey create/assert dual-gate regression | ✅ Covered                           | See §1   |
+| E2 OS passkey provider (v3) on-device acceptance             | ⏸ Deferred (on-device prerequisite) | See §2   |
+| E3 Cross-origin iframe passkey hook behavior                 | ✅ Design ruling: no injection       | See §3   |
 
 Net verdict: the v2/v3 protocol, core validation, dual gates, and audit metadata have no
 unexpected gaps; the residuals are all on-device/platform prerequisites (E2, P4.2/P4.3) or
@@ -78,14 +78,14 @@ README.
 
 ## 4. Remaining Gaps (All Logged, Out of Scope for This Batch)
 
-| Item                                                             | Status                                                                                    | Owner                      |
-| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | -------------------------- |
-| P4.2 macOS provider / P4.3 Windows Hello plugin                 | On-device prerequisite                                                                     | Deferred (same as E2)      |
-| Open question 1: selection-UI filtering when multiple identities match the same rp_id | Leaning toward active-identity filtering + a "show other identities" expansion      | PASSKEYS_DESIGN §14, pending |
-| Open question 2: private-key backup format (custom JSON vs PKCS#12-class) | Stay on v1 custom + schema docs until the standard (CXF) is finalized            | Same as above              |
-| Open question 3: a dedicated policy key `confirm_on_passkey_assert` | The policy key is not persisted; today it effectively goes through the separate desktop approval gate `PERSONA_BRIDGE_DESKTOP_APPROVAL`, to be revisited after P3 | Same as above |
-| P4.5 CXF field reservation                                       | Planned: `foreign_key_ref` is not persisted and will not be implemented before the standard is finalized | Tracking item |
-| Extension passkey interoperability with real sites (webauthn.io/GitHub) | No browser E2E harness yet; the on-device cross-check with batch B is still owed | Reactivate together with E2 |
+| Item                                                                                  | Status                                                                                                                                                            | Owner                        |
+| ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| P4.2 macOS provider / P4.3 Windows Hello plugin                                       | On-device prerequisite                                                                                                                                            | Deferred (same as E2)        |
+| Open question 1: selection-UI filtering when multiple identities match the same rp_id | Leaning toward active-identity filtering + a "show other identities" expansion                                                                                    | PASSKEYS_DESIGN §14, pending |
+| Open question 2: private-key backup format (custom JSON vs PKCS#12-class)             | Stay on v1 custom + schema docs until the standard (CXF) is finalized                                                                                             | Same as above                |
+| Open question 3: a dedicated policy key `confirm_on_passkey_assert`                   | The policy key is not persisted; today it effectively goes through the separate desktop approval gate `PERSONA_BRIDGE_DESKTOP_APPROVAL`, to be revisited after P3 | Same as above                |
+| P4.5 CXF field reservation                                                            | Planned: `foreign_key_ref` is not persisted and will not be implemented before the standard is finalized                                                          | Tracking item                |
+| Extension passkey interoperability with real sites (webauthn.io/GitHub)               | No browser E2E harness yet; the on-device cross-check with batch B is still owed                                                                                  | Reactivate together with E2  |
 
 ## 5. Suggested Follow-Up Actions (Not Blocking Closure)
 

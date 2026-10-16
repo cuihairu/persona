@@ -20,14 +20,14 @@ and it fills in the mobile roadmap.
 
 ## 1. Platform support matrix
 
-| Platform  | API                                                                                                                    | Binding strength       | Status this round                                                               |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------- |
-| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                      | Hardware-bound         | Not wired up (three-platform native apps are in `mobile/`, biometric layer pending, §7.2) |
-| Android   | androidx BiometricPrompt + Android Keystore (`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`)   | Hardware-bound         | Not wired up (three-platform native apps are in `mobile/`, biometric layer pending, §7.2) |
-| HarmonyOS | ArkTS `@ohos.userIAM.userAuth` + HUKS universal keystore (key properties bound to user authentication)                | Hardware-bound         | Not wired up (three-platform native apps are in `mobile/`, biometric layer pending, §7.2; API semantics to be verified on-device) |
-| macOS     | Secure Enclave P-256 + ECIES (route B', §5.2)                                                                          | Hardware-bound         | **spike tooling ready, pending on-device**; currently stays on the gate layer   |
-| Windows   | First choice NCrypt/TPM "Passport key"; second choice WebAuthn platform authenticator reusing the ES256 primitives in `core/src/crypto/passkey.rs` | Hardware-bound (TPM)   | **spike tooling ready, pending on-device** (§6); currently stays on the Windows Hello gate layer |
-| Linux     | polkit `auth_self` (current) or direct fprintd D-Bus calls                                                             | **Gate only, no hardware wrapping** | Stays as-is (§7.1, honest limitation)                                |
+| Platform  | API                                                                                                                                                | Binding strength                    | Status this round                                                                                                                 |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| iOS       | LocalAuthentication (LAContext) + Secure Enclave (CryptoKit `dataRepresentation`)                                                                  | Hardware-bound                      | Not wired up (three-platform native apps are in `mobile/`, biometric layer pending, §7.2)                                         |
+| Android   | androidx BiometricPrompt + Android Keystore (`setUserAuthenticationRequired` + `setInvalidatedByBiometricEnrollment`)                              | Hardware-bound                      | Not wired up (three-platform native apps are in `mobile/`, biometric layer pending, §7.2)                                         |
+| HarmonyOS | ArkTS `@ohos.userIAM.userAuth` + HUKS universal keystore (key properties bound to user authentication)                                             | Hardware-bound                      | Not wired up (three-platform native apps are in `mobile/`, biometric layer pending, §7.2; API semantics to be verified on-device) |
+| macOS     | Secure Enclave P-256 + ECIES (route B', §5.2)                                                                                                      | Hardware-bound                      | **spike tooling ready, pending on-device**; currently stays on the gate layer                                                     |
+| Windows   | First choice NCrypt/TPM "Passport key"; second choice WebAuthn platform authenticator reusing the ES256 primitives in `core/src/crypto/passkey.rs` | Hardware-bound (TPM)                | **spike tooling ready, pending on-device** (§6); currently stays on the Windows Hello gate layer                                  |
+| Linux     | polkit `auth_self` (current) or direct fprintd D-Bus calls                                                                                         | **Gate only, no hardware wrapping** | Stays as-is (§7.1, honest limitation)                                                                                             |
 
 Three tiers of binding strength (`BiometricWrapCapability`, defined in core, shared by all platforms):
 
@@ -137,11 +137,11 @@ biometrics → system password/PIN (built into the platform prompt, e.g. LAPolic
 
 Automatic degradation on the core side when invalidated:
 
-| Unwrap error                                    | Desktop behavior                                                                                        |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `UserCancelled`                                 | Silently return to the unlock screen; the fingerprint button is kept                                    |
-| `EnrollmentChanged` / `WrapInvalid` / `Platform`| **Automatically delete the wrapped blob** + return the `BIOMETRIC_RESET` code → the frontend shows "biometric unlock has been reset; unlock with your master password and re-enable" |
-| Lockout (5 failures)                            | Same semantics as the password path: `AccountLocked`; biometrics does not get through either            |
+| Unwrap error                                     | Desktop behavior                                                                                                                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `UserCancelled`                                  | Silently return to the unlock screen; the fingerprint button is kept                                                                                                                 |
+| `EnrollmentChanged` / `WrapInvalid` / `Platform` | **Automatically delete the wrapped blob** + return the `BIOMETRIC_RESET` code → the frontend shows "biometric unlock has been reset; unlock with your master password and re-enable" |
+| Lockout (5 failures)                             | Same semantics as the password path: `AccountLocked`; biometrics does not get through either                                                                                         |
 
 Semantic alignment of `authenticate_with_master_key` with `authenticate_user`:
 failure-count reset, session creation, `touch_sensitive`, audit Login — only
@@ -187,11 +187,11 @@ ship Developer ID signing + entitlements; we have no certificate.
 
 ### 5.2 Three candidate routes
 
-| Route | Mechanism                                                                                                             | Persistence                     | Certificate requirement     | Risk                           |
-| ----- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ---------------------------- | ------------------------------ |
-| A     | DP keychain generic password + SecAccessControl(biometryCurrentSet)                                                    | Survives reboot                 | Developer ID + entitlement  | -34018 under ad-hoc (known)    |
-| B     | **Non-permanent** SE key (`SecKeyCreateRandomKey` + `kSecAttrTokenIDSecureEnclave` + `kSecAttrIsPermanent: false`) + ECIES | ⚠️ Private key destroyed when the process exits | None                        | Key cannot be recreated; the blob bricks after reboot |
-| B'    | **Permanent** SE key (same as above but `IsPermanent: true` + AccessControl)                                            | Survives reboot (keychain stores the SE reference) | Pending spike     | Unknown whether creation also hits -34018 |
+| Route | Mechanism                                                                                                                  | Persistence                                        | Certificate requirement    | Risk                                                  |
+| ----- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | -------------------------- | ----------------------------------------------------- |
+| A     | DP keychain generic password + SecAccessControl(biometryCurrentSet)                                                        | Survives reboot                                    | Developer ID + entitlement | -34018 under ad-hoc (known)                           |
+| B     | **Non-permanent** SE key (`SecKeyCreateRandomKey` + `kSecAttrTokenIDSecureEnclave` + `kSecAttrIsPermanent: false`) + ECIES | ⚠️ Private key destroyed when the process exits    | None                       | Key cannot be recreated; the blob bricks after reboot |
+| B'    | **Permanent** SE key (same as above but `IsPermanent: true` + AccessControl)                                               | Survives reboot (keychain stores the SE reference) | Pending spike              | Unknown whether creation also hits -34018             |
 
 **Research conclusion (2026-09-26, no local Mac so no on-device verification)**:
 the literal route B (non-permanent key) keeps its private key **alive only
@@ -208,15 +208,15 @@ Security.framework C interface (the reachable surface for Rust objc2-security)
 command, which reports OSStatus item by item). Mapping of probes to design
 items (the probe name is the `name` the command returns):
 
-| Design item           | Probe name                                                         | Notes                                                                                                                                                                                                                        |
-| --------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. B' key creation    | `1. SecKeyCreateRandomKey (SE, permanent, biometryCurrentSet)`     | Permanent SE key + `.privateKeyUsage \| .biometryCurrentSet` AccessControl → record the OSStatus (if it is -34018, B' is blocked by signing too)                                                                          |
-| 1b. Findable after creation | `1b. find_key after create`                                | The keychain reference is immediately visible within the same process                                                                                                                                                        |
-| 2. ECIES roundtrip    | `2a. SecKeyCreateEncryptedData` / `2b. SecKeyCreateDecryptedData`  | B'/B: public-key wrapping (no prompt) → private-key unwrapping (biometric prompt); the algorithm is `kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM` (objc2-security 0.3 only exports the AESGCM family; the older `...AEAD` is no longer exported — both are SE-internal ECDH+HKDF+AES-GCM) |
-| 3. Persistence        | `3. find_key (persistence probe)`                                 | **Restart the process and run the spike again**; still found at this step = the keychain reference survives restart                                                                                                                                 |
-| 4. Fingerprint-deletion control (manual) | (no automatic probe) | Run a spike → delete a fingerprint in System Settings → run again: step 2b must fail for `biometryCurrentSet` to count as effective                                             |
-| 5. Baseline           | `4. access control create (baseline, no keychain write)`          | Construct the AccessControl only (construction itself does not need the entitlement; a real -34018, if it exists, shows up at step 1's key creation)                                                                        |
-| 6. Idempotent delete  | `5. SecItemDelete (wrap key, idempotent)`                         | The delete path shared by disable / invalidation self-healing (idempotent, including `errSecItemNotFound`)                                                                                                                  |
+| Design item                              | Probe name                                                        | Notes                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. B' key creation                       | `1. SecKeyCreateRandomKey (SE, permanent, biometryCurrentSet)`    | Permanent SE key + `.privateKeyUsage \| .biometryCurrentSet` AccessControl → record the OSStatus (if it is -34018, B' is blocked by signing too)                                                                                                                                                                |
+| 1b. Findable after creation              | `1b. find_key after create`                                       | The keychain reference is immediately visible within the same process                                                                                                                                                                                                                                           |
+| 2. ECIES roundtrip                       | `2a. SecKeyCreateEncryptedData` / `2b. SecKeyCreateDecryptedData` | B'/B: public-key wrapping (no prompt) → private-key unwrapping (biometric prompt); the algorithm is `kSecKeyAlgorithmECIESEncryptionCofactorVariableIVX963SHA256AESGCM` (objc2-security 0.3 only exports the AESGCM family; the older `...AEAD` is no longer exported — both are SE-internal ECDH+HKDF+AES-GCM) |
+| 3. Persistence                           | `3. find_key (persistence probe)`                                 | **Restart the process and run the spike again**; still found at this step = the keychain reference survives restart                                                                                                                                                                                             |
+| 4. Fingerprint-deletion control (manual) | (no automatic probe)                                              | Run a spike → delete a fingerprint in System Settings → run again: step 2b must fail for `biometryCurrentSet` to count as effective                                                                                                                                                                             |
+| 5. Baseline                              | `4. access control create (baseline, no keychain write)`          | Construct the AccessControl only (construction itself does not need the entitlement; a real -34018, if it exists, shows up at step 1's key creation)                                                                                                                                                            |
+| 6. Idempotent delete                     | `5. SecItemDelete (wrap key, idempotent)`                         | The delete path shared by disable / invalidation self-healing (idempotent, including `errSecItemNotFound`)                                                                                                                                                                                                      |
 
 Control group A (DP keychain generic password + SecAccessControl) has no
 automatic probe: -34018 under ad-hoc is a known baseline (§5.1), and this
@@ -278,12 +278,12 @@ on-device behavior is verified.
 Open `MS_KEY_STORAGE_PROVIDER`, create a 2048-bit RSA user key under it, and
 pin three attributes:
 
-| Property                    | Value                        | Why                                                                                        |
-| --------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ |
-| `NCRYPT_KEY_USAGE_PROPERTY` | `NCRYPT_ALLOW_DECRYPT_FLAG`  | Open only the private key's "decrypt" direction (= wrap/unwrap); signing is not granted     |
-| `NCRYPT_UI_POLICY_PROPERTY` | `NCRYPT_UI_PROTECT_KEY_FLAG` | Every use of the private key must pass Windows Hello user verification before the TPM lets it through |
+| Property                    | Value                        | Why                                                                                                                                                                         |
+| --------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NCRYPT_KEY_USAGE_PROPERTY` | `NCRYPT_ALLOW_DECRYPT_FLAG`  | Open only the private key's "decrypt" direction (= wrap/unwrap); signing is not granted                                                                                     |
+| `NCRYPT_UI_POLICY_PROPERTY` | `NCRYPT_UI_PROTECT_KEY_FLAG` | Every use of the private key must pass Windows Hello user verification before the TPM lets it through                                                                       |
 | the `dwFlags` for ↑         | **`NCRYPT_PERSIST_FLAG`**    | The policy must be persisted with the key, otherwise it applies only within the process — after restart unwrapping **no longer prompts Hello**, a silent security downgrade |
-| `NCRYPT_LENGTH_PROPERTY`    | 2048                         | Unwrapping is a user-perceived path; key length trades latency                           |
+| `NCRYPT_LENGTH_PROPERTY`    | 2048                         | Unwrapping is a user-perceived path; key length trades latency                                                                                                              |
 
 Wrapping = `NCryptEncrypt` (RSA public-key direction, **no prompt**);
 unwrapping = `NCryptDecrypt` (private-key direction, **Hello prompts at this
@@ -314,9 +314,9 @@ placeholder (all zeros) — there is no real value for core's second comparison 
 check against. It is shaped like the macOS placeholder, but it is a different
 beast:
 
-| Platform | Placeholder returned | Real guarantee behind the placeholder          |
-| -------- | -------------------- | ----------------------------------------------- |
-| macOS    | `[0u8; 32]`          | Platform-level `biometryCurrentSet` is already enforced; the placeholder is only a second line of defense |
+| Platform | Placeholder returned | Real guarantee behind the placeholder                                                                                |
+| -------- | -------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| macOS    | `[0u8; 32]`          | Platform-level `biometryCurrentSet` is already enforced; the placeholder is only a second line of defense            |
 | Windows  | `[0u8; 32]`          | **The platform does nothing**; there is no guarantee behind the placeholder, and the second line of defense is empty |
 
 Residual risk (written honestly): an attacker who has the local login session
@@ -333,16 +333,16 @@ appears on the Windows side (the WebAuthn route has no such semantics either).
 
 `biometric_tpm_spike` command, which reports HRESULT item by item)
 
-| Design item             | Probe name                                                    | Notes                                                                                     |
-| ----------------------- | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| 1. KSP openable         | `1. NCryptOpenStorageProvider (Microsoft Passport KSP)`       | Cannot open = this machine has no Passport KSP; everything below is meaningless           |
-| 2. Algorithm capability | `2. NCryptIsAlgSupported (RSA, NCRYPT_ALLOW_DECRYPT_FLAG)`    | Whether the provider supports the private-key decrypt direction                          |
-| 3. Prerequisite         | `3. Windows Hello availability (UserConsentVerifier)`         | Whether the subsequent `NCRYPT_UI_PROTECT_KEY_FLAG` can be persisted is doubtful when no PIN/fingerprint is enrolled |
-| 4. Key creation + policy persistence | `4. NCryptCreatePersistedKey (RSA-2048, UI policy persisted)` | Record the HRESULT (only a real device tells whether the `NCRYPT_PERSIST_FLAG` combination is accepted) |
-| 4b. Findable after creation | `4b. NCryptOpenKey after create`                          | The keychain reference is immediately visible within the same process                    |
-| 5. roundtrip            | `5a. NCryptEncrypt` / `5b. NCryptDecrypt`                     | 5a goes the public-key direction and **must not prompt**; 5b goes the private-key direction and **must prompt Hello** (this step is the premise the whole route stands on) |
-| 6. Persistence          | `6. NCryptOpenKey (persistence probe)`                        | **Restart the process and run the spike again**; still found at this step = the key survives restart and the policy takes effect across restart |
-| 7. Idempotent delete    | `7. NCryptDeleteKey (idempotent, called twice)`               | The delete path shared by disable / invalidation self-healing; deleting twice in a row must both succeed (absent = success) |
+| Design item                          | Probe name                                                    | Notes                                                                                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. KSP openable                      | `1. NCryptOpenStorageProvider (Microsoft Passport KSP)`       | Cannot open = this machine has no Passport KSP; everything below is meaningless                                                                                            |
+| 2. Algorithm capability              | `2. NCryptIsAlgSupported (RSA, NCRYPT_ALLOW_DECRYPT_FLAG)`    | Whether the provider supports the private-key decrypt direction                                                                                                            |
+| 3. Prerequisite                      | `3. Windows Hello availability (UserConsentVerifier)`         | Whether the subsequent `NCRYPT_UI_PROTECT_KEY_FLAG` can be persisted is doubtful when no PIN/fingerprint is enrolled                                                       |
+| 4. Key creation + policy persistence | `4. NCryptCreatePersistedKey (RSA-2048, UI policy persisted)` | Record the HRESULT (only a real device tells whether the `NCRYPT_PERSIST_FLAG` combination is accepted)                                                                    |
+| 4b. Findable after creation          | `4b. NCryptOpenKey after create`                              | The keychain reference is immediately visible within the same process                                                                                                      |
+| 5. roundtrip                         | `5a. NCryptEncrypt` / `5b. NCryptDecrypt`                     | 5a goes the public-key direction and **must not prompt**; 5b goes the private-key direction and **must prompt Hello** (this step is the premise the whole route stands on) |
+| 6. Persistence                       | `6. NCryptOpenKey (persistence probe)`                        | **Restart the process and run the spike again**; still found at this step = the key survives restart and the policy takes effect across restart                            |
+| 7. Idempotent delete                 | `7. NCryptDeleteKey (idempotent, called twice)`               | The delete path shared by disable / invalidation self-healing; deleting twice in a row must both succeed (absent = success)                                                |
 
 **Manual control** (no automatic probe): run a spike → **delete a fingerprint**
 in System Settings → run again: step 5b must still succeed (Windows, unlike
@@ -470,8 +470,7 @@ dependency:
       passed** — Linux cross check/clippy, see §5.3) + `biometric_wrap_spike`
       command
 - [x] desktop: windows_tpm.rs (Passport KSP first-choice route, spike-gated;
-      **compile verification passed** — Linux cross check, see the end of §6.3)
-      + `biometric_tpm_spike` command (probes 1/2/3/4/4b/5a/5b/6/7)
+      **compile verification passed** — Linux cross check, see the end of §6.3) + `biometric_tpm_spike` command (probes 1/2/3/4/4b/5a/5b/6/7)
 - [x] desktop: the status surface exposes the wrap tier (hardware-bound /
       os-gate), EnrollmentChanged auto-degradation + frontend branching for
       `BIOMETRIC_RESET` / `BIOMETRIC_CANCELLED` (unlock screen: RESET hides the
