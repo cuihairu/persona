@@ -37,7 +37,7 @@ zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
 num-bigint = "0.5"
 flate2 = "1.0"
-zip = { version = "8", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 # 密码学 - BIP/加密货币相关
 bip39 = "3.0"
