@@ -41,6 +41,12 @@ updates:
         dependency-type: "development"
     commit-message:
       prefix: "build"
+    # bincode 不走 dependabot：3.0.0 起上游停维护并发布「墓碑」版本，
+    # lib 无条件 compile_error!(https://xkcd.com/2347/) 拒绝编译，且 3.x
+    # API 不兼容我们的调用点。它的升级已三次把 main 打红（#46/#59/#88），
+    # 钉在 1.3；要迁 3.x 得等上游出可用版本 + 全量改 API，届时再放开。
+    ignore:
+      - dependency-name: "bincode"
 
   # GitHub Actions（无开发/生产依赖之分，不分组）
   - package-ecosystem: "github-actions"
