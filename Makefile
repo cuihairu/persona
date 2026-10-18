@@ -159,7 +159,7 @@ security-check: ## 运行完整安全检查（audit + deny）
 	cargo audit
 	@echo ""
 	@echo "=== 运行 npm audit ==="
-	pnpm --filter persona-desktop audit || true
+	pnpm --filter persona-desktop audit
 	@echo ""
 	@echo "安全检查完成!"
 

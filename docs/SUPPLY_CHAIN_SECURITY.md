@@ -116,8 +116,7 @@ The CI/CD pipeline runs the security checks automatically:
 ```yaml
 # .github/workflows/ci.yml — Security Audit job（两个独立 step）
 - run: cargo deny check
-- run: cargo audit
-  continue-on-error: true # Don't fail CI on advisories, just warn
+- run: cargo audit   # 审计失败即失败 job，不再 continue-on-error 静默放行
 ```
 
 ### 2. Vulnerability Analysis
@@ -216,8 +215,8 @@ The security checks are integrated into the CI pipeline:
 
 - Rust side (`cargo deny check advisories`, v2 advisories): any level of
   RustSec vulnerability fails CI ("Vulnerable" is denied by default; an exemption requires explicit registration);
-- JS/TS side (pnpm audit): `--audit-level=moderate` with `continue-on-error`
-  — vulnerabilities of high and above are reported but do not block merges;
+- JS/TS side (pnpm audit): `--audit-level=moderate`，审计失败即失败 job（不再 `continue-on-error` 静默放行）——
+  moderate 及以上漏洞会阻断合并；是否下调阻断等级属维护者策略决定（AUDIT-010）。
 - License violations → CI failure (allowlist mechanism)
 - Unknown dependency sources → warning
 
