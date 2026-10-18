@@ -98,6 +98,6 @@ If you want, I can:
 - [x] 核对上表六条，填证据（2026-10-18，六条全属实，无「审核有误」项）
 - [ ] 按核对结果分阶段实施（每阶段过测试后勾掉，填 commit hash）
   - [x] a) 基线类（P1）：文件命名冲突、Rust 工具链版本统一（以实际生产版本为准）——旧 `TODO.md`（完整路线图 130 行）迁移为 `TODO_BACKLOG.md`、`todo.md`（整改清单 30 行）保留，索引零大小写冲突（awk 扫描）、18 处引用更新、原内容完整保留；工具链统一到 `1.97.0`（`rust-toolchain.toml` 是目录级 override 永远压过 dtolnay action，实际编译走 1.97.0，CI 七处 `@1.99.0`→`@1.97.0`，同时修 android target 装错工具链的 E0463 根因）（071793d）。注：本机无 cargo/rustc，未能跑 `cargo test`；.rs 改动全为注释、工具链改动仅版本串，均不涉编译语义，最终以 CI 验证。
-  - [ ] b) CI 安全门禁（P1）：审计失败不应静默继续（改门禁前确认当前是否真会放行——已确认 ci.yml:157/214 与 Makefile:162 三处确会放行）
+  - [x] b) CI 安全门禁（P1）：审计失败不应静默继续——确认三处确会放行后去除静默：`ci.yml` cargo audit 与 pnpm audit 两处删 `continue-on-error: true`、`Makefile` security-check 删 `pnpm audit || true`；severity 阈值 `--audit-level=moderate` 保持不变（是否下调阻断等级属维护者策略，AUDIT-010，不擅改）；同步更新 `SUPPLY_CHAIN_SECURITY.md` 两处旧现状描述（0911993）。**注：本机未能实跑审计**——cargo 不可用；`pnpm audit` 被仓内既有 `pnpm-lock.yaml` 重复键（`@types/node@26.6.5`，2605/2608/2611/2614 行，HEAD 即存在，非本次引入）挡住（ERR_PNPM_BROKEN_LOCKFILE）。审计是否通过需 CI 侧验证；本改动只保证失败会阻断、不静默。
   - [ ] c) 浏览器桥策略缺口、SSH Agent Windows 验收（能闭环的闭环，需实机的标 BLOCKED 并写明缺什么）
   - [ ] d) 发布签名、仓库卫生（P2：签名设计 + 移除被跟踪日志 + .gitignore 补 .log）
