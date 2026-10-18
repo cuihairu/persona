@@ -278,20 +278,20 @@ impl Credential {
 }
 
 /// Specific credential data structures for different types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PasswordCredentialData {
     pub password: String,
     pub email: Option<String>,
     pub security_questions: Vec<SecurityQuestion>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SecurityQuestion {
     pub question: String,
     pub answer: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct CryptoWalletData {
     pub wallet_type: String,
     pub mnemonic_phrase: Option<String>,
@@ -312,7 +312,7 @@ pub struct CryptoWalletData {
     pub item_password_hint: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SshKeyData {
     pub private_key: String,
     pub public_key: String,
@@ -320,7 +320,7 @@ pub struct SshKeyData {
     pub passphrase: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ApiKeyData {
     pub api_key: String,
     pub api_secret: Option<String>,
@@ -329,7 +329,7 @@ pub struct ApiKeyData {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BankCardData {
     pub card_number: String,
     pub cardholder_name: String,
@@ -339,7 +339,7 @@ pub struct BankCardData {
     pub card_type: String, // visa, mastercard, etc.
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ServerConfigData {
     pub hostname: String,
     pub ip_address: Option<String>,
@@ -351,7 +351,7 @@ pub struct ServerConfigData {
     pub additional_config: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TwoFactorData {
     pub secret_key: String,
     pub issuer: String,
@@ -377,7 +377,7 @@ pub struct TwoFactorData {
 ///
 /// 字段追加规则与枚举变体同理：新字段只能以 `#[serde(default)] Option`
 /// 追加在末尾，旧负载经 `CredentialData::from_bytes` 的 legacy 容忍读回迁。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct GameTokenData {
     /// Vendor identifier (`core::crypto::game_token::PROVIDER_*`, e.g. "steam_guard")
     pub provider: String,
@@ -402,7 +402,7 @@ pub struct GameTokenData {
 /// 私有镜像结构，仅供 `CredentialData::from_bytes` 的 legacy 容忍读使用：
 /// bincode 不支持缺省字段，旧密文反序列化新结构会在尾部 EOF 失败，需要按
 /// 旧形状手动解析后再映射（见 `from_bytes`）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct LegacyGameTokenData {
     provider: String,
     secret_key: String,
@@ -413,7 +413,7 @@ struct LegacyGameTokenData {
 
 /// TwoFactorData 追加 hotp/initial_counter 之前的旧六字段形状。私有镜像
 /// 结构，仅供 legacy 容忍读使用（口径同 LegacyGameTokenData）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct LegacyTwoFactorData {
     secret_key: String,
     issuer: String,
@@ -421,6 +421,153 @@ struct LegacyTwoFactorData {
     algorithm: String,
     digits: u8,
     period: u32,
+}
+
+// AUDIT-021：以下含密 data 结构一律**手写 Debug 并脱敏**——不派生 Debug，
+// 防止任何 `{:?}`/dbg!/错误链把主密码、SSH 私钥、TOTP/HOTP seed、API key、
+// 卡号/CVV、钱包助记词/私钥/xprv、同步/Bearer token 等秘密打进日志、toast、
+// 崩溃报告或测试快照。非密字段保留以便诊断。顶层 Credential 只存
+// `encrypted_data: Vec<u8>`（不落明文），此处保护的是「解密后在内存里被
+// 格式化」的瞬间。合成 canary 回归测试见 core/tests/secret_canary.rs。
+
+impl std::fmt::Debug for PasswordCredentialData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordCredentialData")
+            .field("password", &"[redacted]")
+            .field("email", &self.email)
+            .field("security_questions", &self.security_questions)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SecurityQuestion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecurityQuestion")
+            .field("question", &self.question)
+            .field("answer", &"[redacted]")
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CryptoWalletData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CryptoWalletData")
+            .field("wallet_type", &self.wallet_type)
+            .field("mnemonic_phrase", &"[redacted]")
+            .field("private_key", &"[redacted]")
+            .field("public_key", &self.public_key)
+            .field("address", &self.address)
+            .field("network", &self.network)
+            .field("bip39_passphrase", &"[redacted]")
+            .field("item_password_hash", &self.item_password_hash.as_ref().map(|_| "[set]"))
+            .field("item_password_hint", &self.item_password_hint)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SshKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshKeyData")
+            .field("private_key", &"[redacted]")
+            .field("public_key", &self.public_key)
+            .field("key_type", &self.key_type)
+            .field("passphrase", &self.passphrase.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ApiKeyData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApiKeyData")
+            .field("api_key", &"[redacted]")
+            .field("api_secret", &self.api_secret.as_ref().map(|_| "[redacted]"))
+            .field("token", &self.token.as_ref().map(|_| "[redacted]"))
+            .field("permissions", &self.permissions)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for BankCardData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BankCardData")
+            .field("card_number", &"[redacted]")
+            .field("cardholder_name", &self.cardholder_name)
+            .field("expiry_date", &self.expiry_date)
+            .field("cvv", &"[redacted]")
+            .field("bank_name", &self.bank_name)
+            .field("card_type", &self.card_type)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ServerConfigData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ServerConfigData")
+            .field("hostname", &self.hostname)
+            .field("ip_address", &self.ip_address)
+            .field("port", &self.port)
+            .field("protocol", &self.protocol)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "[redacted]"))
+            .field("ssh_key_id", &self.ssh_key_id)
+            .field("additional_config", &self.additional_config)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for TwoFactorData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TwoFactorData")
+            .field("secret_key", &"[redacted]")
+            .field("issuer", &self.issuer)
+            .field("account_name", &self.account_name)
+            .field("algorithm", &self.algorithm)
+            .field("digits", &self.digits)
+            .field("period", &self.period)
+            .field("hotp", &self.hotp)
+            .field("initial_counter", &self.initial_counter)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LegacyTwoFactorData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LegacyTwoFactorData")
+            .field("secret_key", &"[redacted]")
+            .field("issuer", &self.issuer)
+            .field("account_name", &self.account_name)
+            .field("algorithm", &self.algorithm)
+            .field("digits", &self.digits)
+            .field("period", &self.period)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for GameTokenData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GameTokenData")
+            .field("provider", &self.provider)
+            .field("secret_key", &"[redacted]")
+            .field("issuer", &self.issuer)
+            .field("account_name", &self.account_name)
+            .field("url", &self.url)
+            .field("identity_secret", &self.identity_secret.as_ref().map(|_| "[redacted]"))
+            .field("device_id", &self.device_id)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LegacyGameTokenData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LegacyGameTokenData")
+            .field("provider", &self.provider)
+            .field("secret_key", &"[redacted]")
+            .field("issuer", &self.issuer)
+            .field("account_name", &self.account_name)
+            .field("url", &self.url)
+            .finish()
+    }
 }
 
 /// 1Password「Secure Note」对齐：全文加密的笔记条目。
@@ -437,7 +584,7 @@ pub struct SecureNoteData {
 ///
 /// 证件号等敏感字段随 `encrypted_data` 走 per-item key 加密；
 /// 日期类字段沿用自由格式文本（与 1Password 的文本字段一致，不做解析）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct IdentityData {
     pub first_name: String,
     pub last_name: String,
@@ -460,7 +607,7 @@ pub struct IdentityData {
 /// 1Password「Software License」对齐：软件许可证条目。
 ///
 /// `license_key` 是核心敏感字段，随 `encrypted_data` 走 per-item key 加密。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SoftwareLicenseData {
     pub license_key: String,
     pub version: Option<String>,
@@ -474,6 +621,42 @@ pub struct SoftwareLicenseData {
     pub seats: Option<u32>,
     /// 许可有效期（自由格式）
     pub valid_until: Option<String>,
+}
+
+impl std::fmt::Debug for IdentityData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IdentityData")
+            .field("first_name", &self.first_name)
+            .field("last_name", &self.last_name)
+            .field("username", &self.username)
+            .field("email", &self.email)
+            .field("phone", &self.phone)
+            .field("birthday", &self.birthday)
+            .field("address", &self.address)
+            .field("id_number", &self.id_number.as_ref().map(|_| "[redacted]"))
+            .field("passport_number", &self.passport_number.as_ref().map(|_| "[redacted]"))
+            .field("driver_license", &self.driver_license.as_ref().map(|_| "[redacted]"))
+            .field("tax_id", &self.tax_id.as_ref().map(|_| "[redacted]"))
+            .field("organization", &self.organization)
+            .field("job_title", &self.job_title)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for SoftwareLicenseData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SoftwareLicenseData")
+            .field("license_key", &"[redacted]")
+            .field("version", &self.version)
+            .field("publisher", &self.publisher)
+            .field("purchase_date", &self.purchase_date)
+            .field("order_number", &self.order_number)
+            .field("support_email", &self.support_email)
+            .field("download_url", &self.download_url)
+            .field("seats", &self.seats)
+            .field("valid_until", &self.valid_until)
+            .finish()
+    }
 }
 
 /// Helper enum for strongly-typed credential data
