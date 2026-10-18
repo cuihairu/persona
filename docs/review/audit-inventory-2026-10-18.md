@@ -30,6 +30,6 @@
 
 ## 未修 + 原因
 
-- AUDIT-021（P0）：主泄漏向量（--reveal 确认门、PERSONA_MASTER_PASSWORD 不落日志、Debug finish_non_exhaustive）初核无实锤；需全量扫描 + 合成 canary 回归，且 Rust 侧无法本机编译验证 → 标 NEEDS-VERIFICATION，见后续 commit。
+- AUDIT-021（P0）→ **已修待 CI 编译/测试验证**（`876369c`）：全仓排查后，主泄漏向量（CLI `--reveal` 有确认门 credential.rs:590；`PERSONA_MASTER_PASSWORD` 只传 authenticate_user/子进程 env，不落日志/stdout/argv；`CachedAutoLockManager` Debug 用 finish_non_exhaustive 不泄）**无活跃明文泄漏**。但发现 13 个含密 data struct 派生 Debug（`core/src/models/credential.rs`：PasswordCredentialData/SshKeyData/TwoFactorData/GameTokenData/ApiKeyData/BankCardData/CryptoWalletData/ServerConfigData/IdentityData/SoftwareLicenseData/SecurityQuestion + 2 Legacy 镜像），一旦上层 `{:?}` 即泄 SSH 私钥/TOTP seed/密码/API key/CVV/助记词。已全部改为手写脱敏 Debug（secret 字段输出 `[redacted]`，非密字段保留），只强化不弱化边界。**注：本机无 cargo/rustc/rustup，未能编译/跑测试；13 个手写 impl 需 CI 编译+测试验证，且 AUDIT-021 要求的合成 canary 回归测试本轮未加（同样需 Rust 工具链）→ 待 CI/有工具链后补。**
 - AUDIT-032：BLOCKED —— 缺 Rust 工具链 + 真实 Windows 桌面会话。
 - 其余 P1/P2：未核对或需产品决策，逐项见 task-list。
