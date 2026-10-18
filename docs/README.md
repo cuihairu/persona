@@ -4,7 +4,7 @@
 
 **Master your digital identity. Switch freely with one click.**
 
-This directory is the entry point for Persona's design and security documentation. Milestones: [ROADMAP](./ROADMAP.md). Daily tasks: [TODO](../TODO.md) at the repo root.
+This directory is the entry point for Persona's design and security documentation. Milestones: [ROADMAP](./ROADMAP.md). Daily tasks: [TODO](../todo.md) at the repo root; full backlog: [TODO_BACKLOG](../TODO_BACKLOG.md).
 
 ## Product & Boundaries
 

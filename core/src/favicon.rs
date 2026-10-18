@@ -1,6 +1,6 @@
 //! Favicon fetching for entry icons (`favicon` feature).
 //!
-//! 隐私红线（TODO.md）：不常驻外联、不默认抓取——本模块唯一的网络入口
+//! 隐私红线（TODO_BACKLOG.md）：不常驻外联、不默认抓取——本模块唯一的网络入口
 //! [`FaviconFetcher::fetch`] 只在用户于详情面板点击 "Fetch icon" 时被
 //! service 调用，抓取源直连 `https://{host}/favicon.ico`，不经任何第三方
 //! 图标服务。这是仓库首个"用户可控 URL 外联"，host 提取按 SSRF 从紧校验：
@@ -26,7 +26,7 @@ pub struct FaviconBlob {
 /// 从用户提供的 URL / 裸域名中提取可用于抓取 favicon 的 host。
 ///
 /// 规则按序执行，任一失败即 Err。校验只覆盖 URL 字面 host
-/// （DNS rebinding 不在此防线内，见 TODO.md 已知限制）：
+/// （DNS rebinding 不在此防线内，见 TODO_BACKLOG.md 已知限制）：
 ///
 /// ① `Url::parse` 失败时借道 `https://{raw}` 再试（补全裸域名）
 /// ② 仅接受 https scheme

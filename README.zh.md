@@ -431,7 +431,7 @@ persona wallet passwd "Main"
 - [MONOREPO](./docs/MONOREPO.md) – 单仓（monorepo）的取舍与工具链
 - [UNINSTALL](./docs/UNINSTALL.md) – 卸载与数据保留（卸载不删数据，重装接续；显式 purge 步骤）
 - [ROADMAP](./docs/ROADMAP.md) – 路线图与细化的 TODO 条目
-- [TODO](./TODO.md) – 每日维护的任务清单
+- [TODO](./todo.md) – 每日维护的任务清单（完整待办见 [TODO_BACKLOG](./TODO_BACKLOG.md)）
 - [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – 浏览器扩展 native messaging 协议
 - [品牌素材](./docs/branding/README.md) – logo、字标、配色与使用规范
 

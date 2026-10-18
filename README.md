@@ -440,7 +440,7 @@ address-poisoning heuristic; see
 - [MONOREPO](./docs/MONOREPO.md) – monorepo rationale and tooling
 - [UNINSTALL](./docs/UNINSTALL.md) – uninstall and data retention (uninstall keeps data; reinstall picks up where you left off; explicit purge steps)
 - [ROADMAP](./docs/ROADMAP.md) – roadmap and detailed TODO items
-- [TODO](./TODO.md) – daily-maintained task list
+- [TODO](./todo.md) – daily-maintained task list (full backlog: [TODO_BACKLOG](./TODO_BACKLOG.md))
 - [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – browser extension native messaging protocol
 - [Brand assets](./docs/branding/README.md) – logos, wordmarks, colors, and guidelines
 

@@ -175,7 +175,7 @@ cargo test --workspace
 
 ## Roadmap
 
-The authoritative current status lives in the repo's `TODO.md` (each item
+The authoritative current status lives in the repo's `TODO_BACKLOG.md` (each item
 carries a completion date and how it was verified); only the phase split is
 kept here:
 
