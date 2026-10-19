@@ -23,19 +23,8 @@ yanked = "deny"
 ignore = [
     # Bincode author marked it unmaintained; wait for ecosystem migration
     "RUSTSEC-2025-0141",
-    # number_prefix (via indicatif -> persona-cli); unmaintained, no replacement release yet
-    "RUSTSEC-2025-0119",
     # paste (via alloy-consensus/alloy-eips -> persona-core); upstream alloy still depends on it
     "RUSTSEC-2024-0436",
-    # proc-macro-error (via tabled 0.15 -> persona-cli); tabled >= 0.16 drops it
-    "RUSTSEC-2024-0370",
-    # rust-unic crates (via urlpattern -> tauri-utils -> tauri) are unmaintained
-    # with no released replacement; blocked on tauri's urlpattern upgrade.
-    "RUSTSEC-2025-0081",
-    "RUSTSEC-2025-0075",
-    "RUSTSEC-2025-0080",
-    "RUSTSEC-2025-0100",
-    "RUSTSEC-2025-0098",
     # unsafe-libyaml (via serde_yaml -> persona-cli): repository archived
     # 2024-03, advisory re-published 2026-10-12. serde_yaml itself is archived
     # with no maintained successor (the serde_yml fork carries its own unsound
@@ -47,6 +36,16 @@ ignore = [
     # signing); upstream has published no patched release (Solution: none), so
     # there is nothing to upgrade to. Revisit when RustCrypto/RSA ships a fix.
     "RUSTSEC-2023-0071",
+    # zbus 5.19.0 经 keyring -> zbus-secret-service-keyring-store 引入；
+    # zbus_names 只有维护状态告警且 advisory 明确无安全升级路径。待
+    # keyring 或其 secret-service 后端迁移到 zbus 6 后删除此 ignore。
+    "RUSTSEC-2026-0371",
+    # zvariant 5.15.0 同属上述 zbus 5.19.0 依赖链；此项是维护状态告警，
+    # 上游已将实现并入 zbus 6，当前依赖尚未迁移。升级 keyring 后复查并删除。
+    "RUSTSEC-2026-0370",
+    # zvariant_derive 5.15.0 随 zvariant 5.15.0 被引入；advisory 无安全补丁，
+    # 宏已并入 zbus 6。待 keyring 后端升级到 zbus 6 时一并移除并复查。
+    "RUSTSEC-2026-0372",
 ]
 
 [licenses]
