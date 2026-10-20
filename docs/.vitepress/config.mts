@@ -1,3 +1,4 @@
+import { withMermaid } from "vitepress-plugin-mermaid";
 import { defineConfig } from "vitepress";
 
 const base = process.env.VITEPRESS_BASE ?? "/persona/";
@@ -155,7 +156,8 @@ const sidebarEn = [
   },
 ];
 
-export default defineConfig({
+export default withMermaid(defineConfig({
+  vite: { build: { target: 'esnext' } },
   base,
   srcDir: "src",
   cleanUrls: true,
@@ -307,4 +309,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
