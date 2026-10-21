@@ -31,7 +31,7 @@ Persona Server 的设备认证轨道：基于 SRP（Secure Remote Password）的
 - 请求体上限 64 KiB（盐 / verifier / SRP 公开值都远小于此，防异常载荷）。
 - 服务器只保存 verifier，永远不接触主密码或库密钥。
 - 认证成功只证明「这台设备登记过」，不等于已加入同步组——同步组授权
-  见[同步 API](/api/sync)。
+  见同步 API。
 
 ## 与客户端的衔接
 

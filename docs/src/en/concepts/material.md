@@ -17,7 +17,7 @@ In the core data model, materials live in three tables (all owned by an identity
 | `crypto_wallets` | Crypto wallets (BTC/ETH/Solana; BIP-143 / EIP-155 / EIP-1559 derivation and signing)                                                                                       |
 | `passkeys`       | WebAuthn passkeys (RP binding, attestation retained)                                                                                                                       |
 
-Security properties (see [Security Design](/en/design/security) and
+Security properties (see Security Design and
 [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)):
 
 - Every credential is encrypted with its **own item key** (AES-GCM), and the master

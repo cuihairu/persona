@@ -7,7 +7,7 @@ protocol, see
 [E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md).
 
 Every endpoint requires a Bearer token (obtained via the
-[Authentication API](/en/api/authentication)).
+Authentication API).
 
 ## Endpoints
 

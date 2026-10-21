@@ -55,7 +55,7 @@ flowchart TB
 
 | Concept   | State                                                   | Where it lives                                                                       |
 | --------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Identity  | ✅ Implemented                                          | `identities` table + active pointer (see [User Guide: Identity](/en/user/identity))  |
+| Identity | ✅ Implemented | `identities` table + active pointer (see User Guide: Identity) |
 | Material  | ✅ Implemented                                          | credentials / crypto_wallets / passkeys tables (see [Identity Material](./material)) |
 | Policy    | 🟡 Hard security gates implemented, partly configurable | origin binding, user gesture, SSH policy, approval gates (see [Policy](./policy))    |
 | Action    | 🟡 Separated at the protocol layer                      | bridge request types + authorization gates (see [Action](./action))                  |

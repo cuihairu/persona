@@ -3,11 +3,11 @@
 > This page describes the current code's technical layering and module
 > interactions. For product positioning, vision, capability boundaries, and the
 > overall conceptual design, see
-> [Product Positioning and Overall Architecture](/en/design/product). After the
+> Product Positioning and Overall Architecture. After the
 > 2026-10-12 audit and once batches 1/2 landed, this page is aligned with the
 > code; for concept-level implementation status labels
 > (Implemented/Partial/Planned/Unverified), see
-> [Overall Architecture (Overview)](/en/overview/architecture) and the
+> Overall Architecture (Overview) and the
 > [architecture implementation status audit report](https://github.com/cuihairu/persona/blob/main/docs/review/2026-10-12-audit-report.md).
 
 ## Layered Design

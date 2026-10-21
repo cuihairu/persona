@@ -419,4 +419,3 @@ fn test_new_feature() {
 
 - [SSH Agent Protocol Spec](https://datatracker.ietf.org/doc/html/draft-miller-ssh-agent-14)
 - [OpenSSH Source](https://github.com/openssh/openssh-portable)
-- [Persona Core Tests](../../core/tests/)

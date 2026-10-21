@@ -8,4 +8,4 @@
 > and
 > [THREAT_MODEL.md](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)
 > — this page is kept for the record only. The full Chinese original lives at
-> [场景分析](/analysis/scenarios).
+> 场景分析.

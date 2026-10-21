@@ -7,7 +7,7 @@ encryption key, and a lost key means the vault stays closed forever. That is the
 price of end-to-end encryption: the master password is derived only on your
 machine, no party can bypass it, and that is exactly why it does not need to
 trust anyone. Make
-[backups](/en/user/quick-start#backups-do-this-right-now) a habit.
+backups a habit.
 
 ## Where is my data stored?
 
@@ -52,7 +52,7 @@ exports also exclude attachments.
 
 Persona is **local-first + self-hosted**: no vendor cloud, no account system,
 and the server (if any) is a relay you run yourself. For positioning
-differences, see [Project Introduction](/en/overview/introduction).
+differences, see Project Introduction.
 
 ## Does it lock automatically?
 
@@ -65,4 +65,4 @@ keyring).
 ## Is it open source?
 
 Yes, MIT license. For build instructions, see
-[Environment Setup](/en/development/setup).
+Environment Setup.

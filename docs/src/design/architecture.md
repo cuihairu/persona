@@ -1,9 +1,9 @@
 # 整体架构
 
 > 本文描述当前代码的技术分层与模块交互。产品定位、愿景、能力边界与
-> 概念模型层面的总体设计见[产品定位与总体架构](/design/product)。
+> 概念模型层面的总体设计见产品定位与总体架构。
 > 2026-10-12 审计后、批1/批2 落地后本页已与代码对齐；概念级的实现状态标签
-> （Implemented/Partial/Planned/Unverified）见[整体架构（概览）](/overview/architecture)
+> （Implemented/Partial/Planned/Unverified）见整体架构（概览）
 > 与[架构实现状态审计报告](https://github.com/cuihairu/persona/blob/main/docs/review/2026-10-12-audit-report.md)。
 
 ## 分层设计

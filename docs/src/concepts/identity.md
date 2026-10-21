@@ -30,7 +30,7 @@ identities ──┬── credentials        （密码 / TOTP / API key / SSH k
              └── workspaces.active_identity_id (唯一的"当前身份"指针)
 ```
 
-完整字段、迁移表名与常见误解见 [用户手册：身份](/user/identity)。
+完整字段、迁移表名与常见误解见 用户手册：身份。
 
 ## 它在授权链里的位置
 

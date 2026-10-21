@@ -97,6 +97,6 @@ persona import vault-backup.persenc --decrypt --mode merge --backup   # 恢复
 
 ## 下一步
 
-- [项目简介](/overview/introduction)——问题边界与设计理念
-- [安全特性](/overview/security)——密钥层级与加密体系
+- 项目简介——问题边界与设计理念
+- 安全特性——密钥层级与加密体系
 - [工程文档](https://github.com/cuihairu/persona/tree/main/docs)——威胁模型、E2EE 同步设计等深度材料

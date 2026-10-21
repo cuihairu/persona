@@ -40,7 +40,7 @@ login steps that obtain the token; `register` sits behind Bearer protection
   the vault keys.
 - A successful authentication only proves "this device has registered" — it
   does not mean membership in a sync group; for sync-group authorization see
-  the [Sync API](/en/api/sync).
+  the Sync API.
 
 ## How It Hooks Into the Clients
 

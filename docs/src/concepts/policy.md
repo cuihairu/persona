@@ -33,7 +33,7 @@ Policy Engine（core 内）
 三条原则：
 
 1. **策略在 core，不在客户端 UI**——CLI/桌面/扩展/Agent 都不能绕过
-   core 直接读写敏感明文（[安全设计](/design/security) 的顶层约束）；
+   core 直接读写敏感明文（安全设计 的顶层约束）；
 2. **硬门槛不能配置掉**——origin binding、user gesture、审计这类
    安全不变量没有开关；
 3. **可配置的只是体验**——哪些自动、哪些要确认、哪些按站点记忆。

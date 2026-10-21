@@ -47,7 +47,7 @@ pnpm --filter persona-desktop run dev
 ```
 
 The CLI and the desktop app share the same vault format and can be mixed
-freely (see [Quick Start](/en/user/quick-start)).
+freely (see Quick Start).
 
 ## Quality Gates (Same Bar as CI)
 
@@ -76,7 +76,7 @@ cargo clippy --all-targets -- -D warnings   # run again inside desktop/src-tauri
 
 ## Next Steps
 
-- [Project Structure](/en/development/structure) — the monorepo layout and
+- Project Structure — the monorepo layout and
   crate responsibilities
 - [Engineering docs](https://github.com/cuihairu/persona/tree/main/docs) — the
   full set of design documents

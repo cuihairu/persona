@@ -2,32 +2,32 @@
 
 桌面应用（Tauri + React）是 Persona 的主交付入口：凭据管理、身份切换、
 同步裁决、SSH 审批等都在这里完成。本页是功能域导览；安装与首次使用见
-[快速开始](/user/quick-start)。
+快速开始。
 
 ## 界面预览
 
 1Password 风格侧栏重设计后的桌面形态（与仓库 README 的 UI Preview
 同一批素材，源文件在 `docs/branding/ui/`）。
 
-![亮色主题全窗](/ui/light-full.png)
+
 
 亮色主题全窗：左侧栏（身份切换器 + 搜索 + 分组导航）、中间凭据列表、
 右侧详情面板的三栏布局。
 
-![暗色主题全窗](/ui/dark-full.png)
+
 
 暗色主题全窗：同一布局的深色形态，语义色 token 随主题自动翻转。
 
-![亮色侧栏特写](/ui/light-sidebar.png)
+
 
 亮色侧栏特写：全部条目 / 收藏 / 最近使用、中文本地化的类别分组、
 保险库、标签与工具区，底部为设置与锁定会话。
 
-![暗色侧栏特写](/ui/dark-sidebar.png)
+
 
 暗色侧栏特写：同结构的深色形态。
 
-![侧栏重设计前](/ui/sidebar-before-redesign.png)
+
 
 侧栏重设计前的形态（与上方侧栏特写构成前后对比）：平铺面板菜单、
 类型显示英文枚举原名、无搜索与最近使用分组。
@@ -93,5 +93,5 @@
 - **Passkeys**：本机 passkey 提供者面板与请求审批。
 - **钱包**：加密资产面板（已落地，M5 毕业轨道；密钥层级与定案见 [WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)）。
 
-安全语义与威胁边界统一见[安全特性](/overview/security)与
+安全语义与威胁边界统一见安全特性与
 [THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。

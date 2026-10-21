@@ -32,7 +32,7 @@ feature list; 1Password-grade capability is the functional baseline, not the pro
 narrative.**
 
 For the full positioning, product boundaries, tiered security, and authorization model,
-see [Product Positioning and Overall Architecture](/en/design/product).
+see Product Positioning and Overall Architecture.
 
 ### Multi-Persona Management
 
@@ -66,7 +66,7 @@ and metadata.
 
 Persona's entire design rests on six first-class concepts: **persona (Identity), context
 (Context), material (Material), policy (Policy), and action (Action)**, plus the reserved
-principal (Principal). See [Core Concepts](/en/concepts/index) — that set of documents is
+principal (Principal). See Core Concepts — that set of documents is
 Persona's theoretical foundation: how the concepts are separated, where each lands in the
 code, and what remains planned.
 
@@ -79,7 +79,7 @@ code, and what remains planned.
 - Unlock methods: the master password is the foundation; biometric unlock on desktop is
   implemented, with providers dispatched per OS (e.g., the Linux Secret Service).
 - Action adjudication: reveal / fill / sign are controlled policy-by-policy on every
-  invocation (see [Action](/en/concepts/action) and [Policy](/en/concepts/policy)), with
+  invocation (see Action and Policy), with
   context-based persona suggestions.
 
 ## Terminology: Why "End-to-End Encrypted" and Not "Zero-Knowledge"
@@ -93,7 +93,7 @@ settles on the following terminology:
 - **Zero-knowledge, scoped to credential storage**: no party — neither the local software
   nor the server — can read plaintext without the master password. That a lost master
   password is unrecoverable is a direct consequence of this property (see
-  [FAQ](/en/user/faq)).
+  FAQ).
 
 Across this site, the wording is uniformly "local-first + end-to-end encrypted";
 "zero-knowledge" appears only as a qualifier of storage semantics.
@@ -118,7 +118,7 @@ One identity boundary across desktop, browser, CLI, and SSH: each persona's keys
 credentials are stored encrypted locally; switching personas never changes the material;
 actions (reveal / fill / sign) are adjudicated policy-by-policy. Agents (Claude Code / Codex
 / CI) entering the same model as controlled principals is a
-[reserved direction](/en/concepts/principal), with no implementation commitment.
+reserved direction, with no implementation commitment.
 
 First organize, protect, and authorize "multiple personas of one person and their identity
 material" — then talk about bigger platforms. The model can grow upward into an identity

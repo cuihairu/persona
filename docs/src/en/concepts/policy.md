@@ -36,7 +36,7 @@ Three principles:
 
 1. **Policy lives in core, not in client UI** — CLI, desktop, extension, and Agent
    alike cannot bypass core to read or write sensitive plaintext directly (the
-   top-level constraint of [Security Design](/en/design/security));
+   top-level constraint of Security Design);
 2. **Hard gates cannot be configured away** — security invariants like origin binding,
    user gesture, and auditing have no switches;
 3. **What is configurable is only the experience** — what runs automatically, what

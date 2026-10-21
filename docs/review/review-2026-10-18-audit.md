@@ -43,7 +43,7 @@ Markdown · 374 行 · 中文任务清单
 
 适用于 Claude Code、Codex 等代码 Agent
 
-[下载 todo.md](sandbox:/mnt/data/todo.md)
+下载 todo.md
 
 ---
 

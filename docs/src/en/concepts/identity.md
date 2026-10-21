@@ -34,7 +34,7 @@ identities ──┬── credentials        (password / TOTP / API key / SSH k
 ```
 
 For full field lists, migration table names, and common misconceptions, see
-[User Guide: Identity](/en/user/identity).
+User Guide: Identity.
 
 ## Where it sits in the authorization chain
 

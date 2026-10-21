@@ -22,7 +22,7 @@ claims about unimplemented features; planned work lives in the
 - **Built-in SSH Agent**: SSH keys are hosted and signed by Persona, and signing events go
   into the audit log.
 - **CLI**: scriptable credential CRUD, import/export, and workspace management (see
-  [Get Started](/en/user/quick-start)).
+  Get Started).
 - **Connect automation API**: a local HTTP service that lets scripts and tools read
   credentials, with passphrase protection and one-time plaintext display.
 

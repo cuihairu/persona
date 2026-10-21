@@ -282,7 +282,7 @@ persona init
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see CONTRIBUTING.md for guidelines.
 
 ## License
 

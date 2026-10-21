@@ -7,4 +7,4 @@
 > (the current mainline threat model) and the security reviews under
 > `docs/review/`. It is kept for the record only and is not a normative
 > reference for current security semantics. The full Chinese original lives at
-> [安全需求](/analysis/security-requirements).
+> 安全需求.

@@ -31,7 +31,7 @@
 
 ::: tip 素材规范
 新增 PNG/JPG 素材：放进 `docs/branding/ui/`，同步副本到
-`docs/src/public/ui/`，然后在[界面一览](/previews/ui)与本页各加一行图注。
+`docs/src/public/ui/`，然后在界面一览与本页各加一行图注。
 站点通过 `/ui/*.png` 引用（`base: /persona/` 自动加前缀）。
 :::
 

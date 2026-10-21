@@ -15,7 +15,7 @@ core 数据模型里，材料落在三张表里（全部通过 `identity_id` 归
 | `crypto_wallets` | 加密钱包（BTC/ETH/Solana，BIP-143 / EIP-155 / EIP-1559 派生与签名）                                                                                                        |
 | `passkeys`       | WebAuthn 通行密钥（RP 绑定、attestation 留存）                                                                                                                             |
 
-安全属性（详见 [安全设计](/design/security) 与
+安全属性（详见 安全设计 与
 [Key Hierarchy](https://github.com/cuihairu/persona/blob/main/docs/KEY_HIERARCHY.md)）：
 
 - 每条凭据用**独立 item key** 加密（AES-GCM），master key 只包裹 item key——

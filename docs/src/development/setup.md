@@ -45,7 +45,7 @@ cargo run -p persona-cli -- init --path ~/Persona --yes --encrypted \
 pnpm --filter persona-desktop run dev
 ```
 
-CLI 与桌面应用共用同一套密码库格式，可混用（见[快速开始](/user/quick-start)）。
+CLI 与桌面应用共用同一套密码库格式，可混用（见快速开始）。
 
 ## 质量门（与 CI 同口径）
 
@@ -73,5 +73,5 @@ cargo clippy --all-targets -- -D warnings   # 在 desktop/src-tauri/ 下再跑�
 
 ## 下一步
 
-- [项目结构](/development/structure)——monorepo 布局与 crate 职责
+- 项目结构——monorepo 布局与 crate 职责
 - [工程文档](https://github.com/cuihairu/persona/tree/main/docs)——设计文档全集

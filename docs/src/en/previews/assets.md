@@ -37,7 +37,7 @@ Two spots are easy to misread when reading the history:
 ::: tip Asset conventions
 For new PNG/JPG assets: put them in `docs/branding/ui/`, sync a copy to
 `docs/src/public/ui/`, then add a caption row in both
-[UI previews](/en/previews/ui) and this page. The site references them via
+UI previews and this page. The site references them via
 `/ui/*.png` (`base: /persona/` adds the prefix automatically).
 :::
 

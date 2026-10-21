@@ -5,9 +5,9 @@ boundaries, the core concept model, the overall architecture and module
 relations, the tiered security and authorization system, the key hierarchy,
 the scope of the first version, and the evolution principles. For technical
 layering and module interactions, see the
-[overall architecture](/en/design/architecture); for security invariants, see
-the [security design](/en/design/security); for the item-by-item expansion of
-the concept model, see the [core concepts](/en/concepts/index).
+overall architecture; for security invariants, see
+the security design; for the item-by-item expansion of
+the concept model, see the core concepts.
 
 ## 1. Product Positioning
 
@@ -136,13 +136,13 @@ operations are not Persona's responsibility.
 ## 4. Core Concept Model
 
 Persona needs to clearly distinguish the following objects (corresponding to
-the [core concepts](/en/concepts/index) chapter).
+the core concepts chapter).
 
 ### 4.1 Identity
 
 Identity describes the role and context the user is currently working under,
 for example Personal, Work, Developer, or a specific organization/project
-identity (see [Identity](/en/concepts/identity)).
+identity (see Identity).
 
 Switching identity changes the current operating context, but it must not
 automatically grant new permissions, nor automatically unlock all secrets.
@@ -150,7 +150,7 @@ automatically grant new permissions, nor automatically unlock all secrets.
 ### 4.2 Principal
 
 The Principal is the subject that actually issues a request (see
-[Principal](/en/concepts/principal)). It can be:
+Principal). It can be:
 
 - The current user.
 - A registered device.
@@ -180,7 +180,7 @@ rules.
 ### 4.4 Action
 
 Different operations on the same resource should be authorized separately (see
-[Action](/en/concepts/action)), for example:
+Action), for example:
 
 - `read_metadata`: read non-sensitive metadata.
 - `reveal_secret`: display the secret's plaintext.
@@ -402,7 +402,7 @@ Additional requirements:
   recovery and backup strategy.
 
 How each security level is concretely protected should be decided by policy (see
-[Policy](/en/concepts/policy)). The level itself cannot replace authorization
+Policy). The level itself cannot replace authorization
 decisions, nor can it be treated as an already-implemented security guarantee.
 
 ## 8. Identity Isolation and the Authorization System

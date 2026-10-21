@@ -1,61 +1,61 @@
 # 界面预览
 
 桌面应用的设计原型与界面截图，明暗双主题。素材与仓库 README 的
-UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
+UI Preview、桌面应用页共用同一批源文件
 （`docs/branding/ui/`，站点副本在 `docs/src/public/ui/`）。
 
 ## 主视图（明暗主题）
 
-![亮色主题全窗](/ui/light-full.png)
+
 
 **亮色主题全窗**：三栏布局——左侧栏（身份切换器、搜索、分组导航、
 保险库 / 标签 / 工具）、中间凭据列表（收藏、安全级别徽标、一键复制）、
 右侧详情面板（URL、用户名、标签、附件、条目历史；敏感字段默认掩显）。
 
-![暗色主题全窗](/ui/dark-full.png)
+
 
 **暗色主题全窗**：同一布局的深色形态，语义色 token 随主题整体翻转，
 不做简单反色。
 
 ## 侧栏特写
 
-![亮色侧栏特写](/ui/light-sidebar.png)
+
 
 **亮色侧栏特写**：1Password 风格分组导航——全部条目 / 收藏 / 最近使用、
 中文类别（密码、通行密钥、安全备忘、API 密钥、SSH 密钥、软件许可、
 身份证件、加密钱包、游戏令牌）、保险库、标签与工具区
 （统计、SSH Agent、钱包、安全瞭望、生成器），底部为设置与锁定会话。
 
-![暗色侧栏特写](/ui/dark-sidebar.png)
+
 
 **暗色侧栏特写**：同结构的深色形态。
 
 ## 重设计前后对比
 
-![侧栏重设计前](/ui/sidebar-before-redesign.png)
+
 
 **侧栏重设计前**：平铺面板菜单、类别显示英文枚举原名、无搜索与
 最近使用分组——与上方特写构成重设计前后对照。
 
 ## 移动端（Android）
 
-![Android 移动端主界面](/ui/mobile-android-home.png)
+
 
 **Android 主界面（空库状态）**：原生 Kotlin + JNI 桥（`mobile/rust`）真实
 构建在模拟器运行的截图——主密码输入与初始化 / 解锁按钮。
 
 以下三张为解锁后业务区的三 tab（2026-10-11 实机走查，种子库 4 条凭据）：
 
-![Android 数据 tab](/ui/mobile-android-data.png)
+
 
 **数据 tab**：经业务 FFI（`persona_credential_search`）取回的凭据列表，
 只展示元数据（名称 + 用户名 / 类型）、不解密负载。
 
-![Android 工具 tab](/ui/mobile-android-tools.png)
+
 
 **工具 tab**：重新加载凭据列表、锁定会话。
 
-![Android 设置 tab](/ui/mobile-android-settings.png)
+
 
 **设置 tab**：桥状态、桥版本、保险库路径、凭据数。
 
@@ -63,25 +63,25 @@ UI Preview、[桌面应用](/user/desktop)页共用同一批源文件
 
 `persona` CLI 的真实终端输出（2026-10-12 录制，演示工作区与演示数据）。
 
-![persona 命令总览](/ui/cli-help.png)
+
 
 **命令总览**：`persona --help`——工作区初始化、身份/凭据管理、SSH、
 TOTP、钱包、通行密钥、密码生成、备份、旅行模式、Connect 自动化、
 Secrets 注入等子命令一屏可览。
 
-![凭据列表](/ui/cli-credentials.png)
+
 
 **凭据列表**：`persona credential list`——按身份归属列出凭据元数据
 （名称、类型、用户名、收藏标记）；明文不出库，读取需显式 `show` 并解锁。
 
-![密码生成](/ui/cli-password-generate.png)
+
 
 **密码生成**：`persona password generate`——随机模式与词组模式
 （Diceware passphrase，EFF 大词表）两种输出。
 
 ## 浏览器扩展（Chromium）
 
-![Chromium 扩展 popup](/ui/extension-chromium-popup.png)
+
 
 **Persona Autofill 扩展 popup**：经 Native Messaging 桥与本地 `persona`
 进程连通后的真实状态（顶栏 "Connected • Unlocked"）。popup 提供
@@ -104,4 +104,4 @@ Secrets 注入等子命令一屏可览。
 | 浏览器扩展 · 填充建议弹层      | 页面内填充建议弹层与身份切换（popup 主视图已入，见上）                                                    |
 | 移动端（Android / iOS / 鸿蒙） | Android 空库主界面与数据 / 工具 / 设置三 tab 已入（上方）；iOS 与鸿蒙原生界面均暂缺（本机无对应构建环境） |
 
-素材的入库出处、变更史与交付规范见[素材盘点](/previews/assets)。
+素材的入库出处、变更史与交付规范见素材盘点。

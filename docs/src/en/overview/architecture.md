@@ -9,7 +9,7 @@ relay.
 Conceptually, Persona is a **digital identity runtime**: clients are UI/adapters, and the
 core is the model and adjudicator. The six first-class concepts — persona, context,
 material, policy, action, principal — are covered in
-[Core Concepts](/en/concepts/index).
+Core Concepts.
 
 > **Implementation status annotations (2026-10-12 audit, updated after batches 1 and 2
 > landed)**: this document describes both the target architecture and the current state.
@@ -301,4 +301,4 @@ This architecture keeps Persona highly modular while holding to "local-first + e
 encryption (the server sees only ciphertext)": new client features only need to call the
 core services; server extensions never touch plaintext; the SSH Agent and the desktop share
 the crypto and storage implementations, cutting maintenance cost. (For terminology, see the
-[Introduction](/en/overview/introduction#terminology-why-end-to-end-encrypted-and-not-zero-knowledge).)
+Introduction.)

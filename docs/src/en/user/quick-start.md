@@ -113,6 +113,6 @@ adjudication, see
 
 ## Next Steps
 
-- [Project introduction](/en/overview/introduction) — problem boundaries and design philosophy
-- [Security features](/en/overview/security) — key hierarchy and encryption stack
+- Project introduction — problem boundaries and design philosophy
+- Security features — key hierarchy and encryption stack
 - [Engineering docs](https://github.com/cuihairu/persona/tree/main/docs) — threat model, E2EE sync design, and other deep-dive material

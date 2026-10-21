@@ -4,7 +4,7 @@ Persona Server 的端到端加密同步轨道：服务器**只中继密文**—�
 日志（oplog）、设备信封与组密钥信封，永远不持有解密能力。协议全貌见
 [E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md)。
 
-全部端点需 Bearer 令牌（[认证 API](/api/authentication) 换取）。
+全部端点需 Bearer 令牌（认证 API 换取）。
 
 ## 端点
 
