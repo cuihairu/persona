@@ -126,6 +126,8 @@ Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rus
 
 ```bash
 # Clone the repository
+
+[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/persona/releases)
 git clone git@github.com:cuihairu/persona.git
 cd persona
 

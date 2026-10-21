@@ -127,6 +127,8 @@ Persona builds on established open-source foundations — Tauri, React, Axum, sq
 
 ```bash
 # Clone the repository
+
+[![Status](https://img.shields.io/badge/status-in%20development-orange)](https://github.com/cuihairu/persona/releases)
 git clone git@github.com:cuihairu/persona.git
 cd persona
 
