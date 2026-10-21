@@ -11,28 +11,18 @@ The desktop form after the 1Password-style sidebar redesign (same asset batch
 as the UI Preview section of the repo README; source files in
 `docs/branding/ui/`).
 
-
-
 Light theme full window: a three-column layout with the sidebar (identity
 switcher + search + group navigation) on the left, the credential list in the
 middle, and the detail panel on the right.
 
-
-
 Dark theme full window: the same layout in dark form; semantic color tokens flip
 automatically with the theme.
-
-
 
 Light theme sidebar close-up: All Items / Favorites / Recently Used, category
 groups with Chinese localization, the vault, tags and tools areas, with settings
 and session lock at the bottom.
 
-
-
 Dark theme sidebar close-up: the same structure in dark form.
-
-
 
 The form before the sidebar redesign (forming a before/after comparison with
 the close-ups above): flat panel menu, type labels showing the raw English

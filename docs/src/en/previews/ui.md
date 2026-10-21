@@ -7,22 +7,16 @@ the repository README and the desktop app page
 
 ## Main View (Light and Dark Themes)
 
-
-
 **Light theme, full window**: three-pane layout — left sidebar (identity
 switcher, search, group navigation, vault / tags / tools), center credential
 list (favorites, security-level badges, one-click copy), right detail panel
 (URL, username, tags, attachments, item history; sensitive fields masked by
 default).
 
-
-
 **Dark theme, full window**: the same layout in dark form. Semantic color tokens
 flip as a whole with the theme — it is not a simple inversion.
 
 ## Sidebar Close-ups
-
-
 
 **Light sidebar close-up**: 1Password-style group navigation — All Items /
 Favorites / Recently Used, categories shown in Chinese (passwords, passkeys,
@@ -31,21 +25,15 @@ wallets, game tokens), vaults, tags and a tools area (statistics, SSH Agent,
 wallet, security watchtower, generator), with settings and session lock at the
 bottom.
 
-
-
 **Dark sidebar close-up**: the same structure in dark form.
 
 ## Before and After the Redesign
-
-
 
 **Sidebar before the redesign**: flat panel menu, categories shown under their
 raw English enum names, no search or Recently Used group — a before/after
 contrast to the close-ups above.
 
 ## Mobile (Android)
-
-
 
 **Android home screen (empty vault state)**: a real build of the native Kotlin +
 JNI bridge (`mobile/rust`) running in an emulator — master password entry with
@@ -55,17 +43,11 @@ The three screenshots below show the three tabs of the main area after
 unlocking (in-device walkthrough on 2026-10-11, seeded vault with 4
 credentials):
 
-
-
 **Data tab**: the credential list fetched through the business FFI
 (`persona_credential_search`), showing metadata only (name + username / type);
 payloads are not decrypted.
 
-
-
 **Tools tab**: reload the credential list, lock the session.
-
-
 
 **Settings tab**: bridge status, bridge version, vault path, credential count.
 
@@ -74,27 +56,19 @@ payloads are not decrypted.
 Real terminal output from the `persona` CLI (recorded 2026-10-12, demo
 workspace and demo data).
 
-
-
 **Command overview**: `persona --help` — workspace initialization,
 identity/credential management, SSH, TOTP, wallet, passkeys, password
 generation, backup, travel mode, Connect automation, secrets injection, and
 other subcommands visible in a single screen.
 
-
-
 **Credential list**: `persona credential list` — credential metadata listed by
 owning identity (name, type, username, favorite flag); plaintext never leaves
 the vault, and reading it requires an explicit `show` plus an unlocked session.
-
-
 
 **Password generation**: `persona password generate` — two output modes, random
 and passphrase (Diceware passphrase, EFF large word list).
 
 ## Browser Extension (Chromium)
-
-
 
 **Persona Autofill extension popup**: its real state once connected to the
 local `persona` process through the Native Messaging bridge (top bar shows

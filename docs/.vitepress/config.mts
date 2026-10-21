@@ -156,157 +156,159 @@ const sidebarEn = [
   },
 ];
 
-export default withMermaid(defineConfig({
-  vite: { build: { target: 'esnext' } },
-  base,
-  srcDir: "src",
-  cleanUrls: true,
-  lastUpdated: true,
-  head: [
-    ["link", { rel: "icon", href: `${base}persona-logo.svg` }],
-    ["meta", { name: "theme-color", content: "#FE7336" }],
-  ],
-  markdown: {
-    theme: {
-      light: "github-light",
-      dark: "github-dark",
+export default withMermaid(
+  defineConfig({
+    vite: { build: { target: "esnext" } },
+    base,
+    srcDir: "src",
+    cleanUrls: true,
+    lastUpdated: true,
+    head: [
+      ["link", { rel: "icon", href: `${base}persona-logo.svg` }],
+      ["meta", { name: "theme-color", content: "#FE7336" }],
+    ],
+    markdown: {
+      theme: {
+        light: "github-light",
+        dark: "github-dark",
+      },
     },
-  },
-  locales: {
-    root: {
-      lang: "zh-CN",
-      label: "简体中文",
-      themeConfig: {
-        logo: "/persona-logo.svg",
-        siteTitle: "Persona 数钥",
-        nav: [
-          { text: "指南", link: "/overview/introduction" },
-          { text: "界面", link: "/previews/ui" },
-          { text: "开发", link: "/development/structure" },
-          { text: "API", link: "/api/sync" },
-          { text: "English", link: "/en/" },
-          {
-            text: "工程文档",
-            link: "https://github.com/cuihairu/persona/tree/main/docs",
+    locales: {
+      root: {
+        lang: "zh-CN",
+        label: "简体中文",
+        themeConfig: {
+          logo: "/persona-logo.svg",
+          siteTitle: "Persona 数钥",
+          nav: [
+            { text: "指南", link: "/overview/introduction" },
+            { text: "界面", link: "/previews/ui" },
+            { text: "开发", link: "/development/structure" },
+            { text: "API", link: "/api/sync" },
+            { text: "English", link: "/en/" },
+            {
+              text: "工程文档",
+              link: "https://github.com/cuihairu/persona/tree/main/docs",
+            },
+            {
+              text: "路线图",
+              link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",
+            },
+          ],
+          sidebar,
+          outline: {
+            level: [2, 3],
+            label: "本页目录",
           },
-          {
-            text: "路线图",
-            link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",
-          },
-        ],
-        sidebar,
-        outline: {
-          level: [2, 3],
-          label: "本页目录",
-        },
-        search: {
-          provider: "local",
-          options: {
-            translations: {
-              button: {
-                buttonText: "搜索文档",
-                buttonAriaLabel: "搜索文档",
-              },
-              modal: {
-                displayDetails: "显示详情",
-                resetButtonTitle: "清除搜索条件",
-                backButtonTitle: "关闭搜索",
-                noResultsText: "未找到结果",
-                footer: {
-                  selectText: "选择",
-                  selectKeyAriaLabel: "回车",
-                  navigateText: "切换",
-                  navigateUpKeyAriaLabel: "上箭头",
-                  navigateDownKeyAriaLabel: "下箭头",
-                  closeText: "关闭",
-                  closeKeyAriaLabel: "Esc",
+          search: {
+            provider: "local",
+            options: {
+              translations: {
+                button: {
+                  buttonText: "搜索文档",
+                  buttonAriaLabel: "搜索文档",
+                },
+                modal: {
+                  displayDetails: "显示详情",
+                  resetButtonTitle: "清除搜索条件",
+                  backButtonTitle: "关闭搜索",
+                  noResultsText: "未找到结果",
+                  footer: {
+                    selectText: "选择",
+                    selectKeyAriaLabel: "回车",
+                    navigateText: "切换",
+                    navigateUpKeyAriaLabel: "上箭头",
+                    navigateDownKeyAriaLabel: "下箭头",
+                    closeText: "关闭",
+                    closeKeyAriaLabel: "Esc",
+                  },
                 },
               },
             },
           },
-        },
-        socialLinks: [
-          { icon: "github", link: "https://github.com/cuihairu/persona" },
-        ],
-        editLink: {
-          pattern:
-            "https://github.com/cuihairu/persona/edit/main/docs/src/:path",
-          text: "在 GitHub 上编辑此页",
-        },
-        lastUpdated: {
-          text: "最后更新",
-          formatOptions: {
-            dateStyle: "medium",
-            timeStyle: "short",
+          socialLinks: [
+            { icon: "github", link: "https://github.com/cuihairu/persona" },
+          ],
+          editLink: {
+            pattern:
+              "https://github.com/cuihairu/persona/edit/main/docs/src/:path",
+            text: "在 GitHub 上编辑此页",
           },
+          lastUpdated: {
+            text: "最后更新",
+            formatOptions: {
+              dateStyle: "medium",
+              timeStyle: "short",
+            },
+          },
+          docFooter: {
+            prev: "上一页",
+            next: "下一页",
+          },
+          footer: {
+            message: "Released under the MIT License.",
+            copyright: "Copyright © 2026 Persona Team",
+          },
+          returnToTopLabel: "返回顶部",
+          sidebarMenuLabel: "菜单",
+          darkModeSwitchLabel: "外观",
+          lightModeSwitchTitle: "切换到浅色模式",
+          darkModeSwitchTitle: "切换到深色模式",
         },
-        docFooter: {
-          prev: "上一页",
-          next: "下一页",
+      },
+      en: {
+        lang: "en-US",
+        label: "English",
+        link: "/en/",
+        title: "Persona",
+        description:
+          "Master your digital identity. Switch freely with one click.",
+        themeConfig: {
+          logo: "/persona-logo.svg",
+          siteTitle: "Persona",
+          nav: [
+            { text: "Guide", link: "/en/overview/introduction" },
+            { text: "UI", link: "/en/previews/ui" },
+            { text: "Develop", link: "/en/development/structure" },
+            { text: "API", link: "/en/api/sync" },
+            { text: "中文", link: "/" },
+            {
+              text: "Engineering Docs",
+              link: "https://github.com/cuihairu/persona/tree/main/docs",
+            },
+            {
+              text: "Roadmap",
+              link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",
+            },
+          ],
+          sidebar: sidebarEn,
+          editLink: {
+            pattern:
+              "https://github.com/cuihairu/persona/edit/main/docs/src/:path",
+            text: "Edit this page on GitHub",
+          },
+          lastUpdated: {
+            text: "Last updated",
+            formatOptions: {
+              dateStyle: "medium",
+              timeStyle: "short",
+            },
+          },
+          docFooter: {
+            prev: "Previous page",
+            next: "Next page",
+          },
+          footer: {
+            message: "Released under the MIT License.",
+            copyright: "Copyright © 2026 Persona Team",
+          },
+          returnToTopLabel: "Back to top",
+          sidebarMenuLabel: "Menu",
+          darkModeSwitchLabel: "Appearance",
+          lightModeSwitchTitle: "Switch to light mode",
+          darkModeSwitchTitle: "Switch to dark mode",
         },
-        footer: {
-          message: "Released under the MIT License.",
-          copyright: "Copyright © 2026 Persona Team",
-        },
-        returnToTopLabel: "返回顶部",
-        sidebarMenuLabel: "菜单",
-        darkModeSwitchLabel: "外观",
-        lightModeSwitchTitle: "切换到浅色模式",
-        darkModeSwitchTitle: "切换到深色模式",
       },
     },
-    en: {
-      lang: "en-US",
-      label: "English",
-      link: "/en/",
-      title: "Persona",
-      description:
-        "Master your digital identity. Switch freely with one click.",
-      themeConfig: {
-        logo: "/persona-logo.svg",
-        siteTitle: "Persona",
-        nav: [
-          { text: "Guide", link: "/en/overview/introduction" },
-          { text: "UI", link: "/en/previews/ui" },
-          { text: "Develop", link: "/en/development/structure" },
-          { text: "API", link: "/en/api/sync" },
-          { text: "中文", link: "/" },
-          {
-            text: "Engineering Docs",
-            link: "https://github.com/cuihairu/persona/tree/main/docs",
-          },
-          {
-            text: "Roadmap",
-            link: "https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md",
-          },
-        ],
-        sidebar: sidebarEn,
-        editLink: {
-          pattern:
-            "https://github.com/cuihairu/persona/edit/main/docs/src/:path",
-          text: "Edit this page on GitHub",
-        },
-        lastUpdated: {
-          text: "Last updated",
-          formatOptions: {
-            dateStyle: "medium",
-            timeStyle: "short",
-          },
-        },
-        docFooter: {
-          prev: "Previous page",
-          next: "Next page",
-        },
-        footer: {
-          message: "Released under the MIT License.",
-          copyright: "Copyright © 2026 Persona Team",
-        },
-        returnToTopLabel: "Back to top",
-        sidebarMenuLabel: "Menu",
-        darkModeSwitchLabel: "Appearance",
-        lightModeSwitchTitle: "Switch to light mode",
-        darkModeSwitchTitle: "Switch to dark mode",
-      },
-    },
-  },
-}));
+  }),
+);

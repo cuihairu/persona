@@ -38,7 +38,7 @@ flowchart TB
 
 | 概念      | 现状                              | 主要落点                                                               |
 | --------- | --------------------------------- | ---------------------------------------------------------------------- |
-| Identity | ✅ 已实现 | `identities` 表 + active 指针（见用户手册：身份） |
+| Identity  | ✅ 已实现                         | `identities` 表 + active 指针（见用户手册：身份）                      |
 | Material  | ✅ 已实现                         | credentials / crypto_wallets / passkeys 表（见[身份材料](./material)） |
 | Policy    | 🟡 已实现为安全硬门槛，部分可配置 | origin binding、user gesture、SSH 策略、审批闸门（见[策略](./policy)） |
 | Action    | 🟡 协议层已分离                   | bridge 请求类型 + 授权闸门（见[动作](./action)）                       |
