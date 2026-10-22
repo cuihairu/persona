@@ -1,81 +1,97 @@
-# 界面预览
+# UI Previews
 
-桌面应用的设计原型与界面截图，明暗双主题。素材与仓库 README 的
-UI Preview、桌面应用页共用同一批源文件
-（`docs/branding/ui/`，站点副本在 `docs/src/public/ui/`）。
+Design prototypes and UI screenshots of the desktop app, in both light and dark
+themes. These assets share the same source files as the UI Preview section of
+the repository README and the desktop app page
+(`docs/branding/ui/`, with site copies under `docs/src/public/ui/`).
 
-## 主视图（明暗主题）
+## Main View (Light and Dark Themes)
 
-**亮色主题全窗**：三栏布局——左侧栏（身份切换器、搜索、分组导航、
-保险库 / 标签 / 工具）、中间凭据列表（收藏、安全级别徽标、一键复制）、
-右侧详情面板（URL、用户名、标签、附件、条目历史；敏感字段默认掩显）。
+**Light theme, full window**: three-pane layout — left sidebar (identity
+switcher, search, group navigation, vault / tags / tools), center credential
+list (favorites, security-level badges, one-click copy), right detail panel
+(URL, username, tags, attachments, item history; sensitive fields masked by
+default).
 
-**暗色主题全窗**：同一布局的深色形态，语义色 token 随主题整体翻转，
-不做简单反色。
+**Dark theme, full window**: the same layout in dark form. Semantic color tokens
+flip as a whole with the theme — it is not a simple inversion.
 
-## 侧栏特写
+## Sidebar Close-ups
 
-**亮色侧栏特写**：1Password 风格分组导航——全部条目 / 收藏 / 最近使用、
-中文类别（密码、通行密钥、安全备忘、API 密钥、SSH 密钥、软件许可、
-身份证件、加密钱包、游戏令牌）、保险库、标签与工具区
-（统计、SSH Agent、钱包、安全瞭望、生成器），底部为设置与锁定会话。
+**Light sidebar close-up**: 1Password-style group navigation — All Items /
+Favorites / Recently Used, categories shown in Chinese (passwords, passkeys,
+secure notes, API keys, SSH keys, software licenses, ID documents, crypto
+wallets, game tokens), vaults, tags and a tools area (statistics, SSH Agent,
+wallet, security watchtower, generator), with settings and session lock at the
+bottom.
 
-**暗色侧栏特写**：同结构的深色形态。
+**Dark sidebar close-up**: the same structure in dark form.
 
-## 重设计前后对比
+## Before and After the Redesign
 
-**侧栏重设计前**：平铺面板菜单、类别显示英文枚举原名、无搜索与
-最近使用分组——与上方特写构成重设计前后对照。
+**Sidebar before the redesign**: flat panel menu, categories shown under their
+raw English enum names, no search or Recently Used group — a before/after
+contrast to the close-ups above.
 
-## 移动端（Android）
+## Mobile (Android)
 
-**Android 主界面（空库状态）**：原生 Kotlin + JNI 桥（`mobile/rust`）真实
-构建在模拟器运行的截图——主密码输入与初始化 / 解锁按钮。
+**Android home screen (empty vault state)**: a real build of the native Kotlin +
+JNI bridge (`mobile/rust`) running in an emulator — master password entry with
+initialize / unlock buttons.
 
-以下三张为解锁后业务区的三 tab（2026-10-11 实机走查，种子库 4 条凭据）：
+The three screenshots below show the three tabs of the main area after
+unlocking (in-device walkthrough on 2026-10-11, seeded vault with 4
+credentials):
 
-**数据 tab**：经业务 FFI（`persona_credential_search`）取回的凭据列表，
-只展示元数据（名称 + 用户名 / 类型）、不解密负载。
+**Data tab**: the credential list fetched through the business FFI
+(`persona_credential_search`), showing metadata only (name + username / type);
+payloads are not decrypted.
 
-**工具 tab**：重新加载凭据列表、锁定会话。
+**Tools tab**: reload the credential list, lock the session.
 
-**设置 tab**：桥状态、桥版本、保险库路径、凭据数。
+**Settings tab**: bridge status, bridge version, vault path, credential count.
 
-## CLI 终端会话
+## CLI Terminal Sessions
 
-`persona` CLI 的真实终端输出（2026-10-12 录制，演示工作区与演示数据）。
+Real terminal output from the `persona` CLI (recorded 2026-10-12, demo
+workspace and demo data).
 
-**命令总览**：`persona --help`——工作区初始化、身份/凭据管理、SSH、
-TOTP、钱包、通行密钥、密码生成、备份、旅行模式、Connect 自动化、
-Secrets 注入等子命令一屏可览。
+**Command overview**: `persona --help` — workspace initialization,
+identity/credential management, SSH, TOTP, wallet, passkeys, password
+generation, backup, travel mode, Connect automation, secrets injection, and
+other subcommands visible in a single screen.
 
-**凭据列表**：`persona credential list`——按身份归属列出凭据元数据
-（名称、类型、用户名、收藏标记）；明文不出库，读取需显式 `show` 并解锁。
+**Credential list**: `persona credential list` — credential metadata listed by
+owning identity (name, type, username, favorite flag); plaintext never leaves
+the vault, and reading it requires an explicit `show` plus an unlocked session.
 
-**密码生成**：`persona password generate`——随机模式与词组模式
-（Diceware passphrase，EFF 大词表）两种输出。
+**Password generation**: `persona password generate` — two output modes, random
+and passphrase (Diceware passphrase, EFF large word list).
 
-## 浏览器扩展（Chromium）
+## Browser Extension (Chromium)
 
-**Persona Autofill 扩展 popup**：经 Native Messaging 桥与本地 `persona`
-进程连通后的真实状态（顶栏 "Connected • Unlocked"）。popup 提供
-配对、填充策略、云端保险库推送/拉取与账号登录入口；页面内的填充
-建议弹层素材后续补入。
+**Persona Autofill extension popup**: its real state once connected to the
+local `persona` process through the Native Messaging bridge (top bar shows
+"Connected • Unlocked"). The popup offers pairing, fill policies, cloud vault
+push/pull, and account login entry points; in-page autofill suggestion popover
+assets will be added later.
 
-## 原型缺口清单
+## Prototype Gap List
 
-以下关键视图还没有对应原型 / 截图素材（暂缺，等素材到位后补入本页）：
+The following key views do not yet have matching prototypes / screenshot assets
+(pending; they will be added to this page once assets land):
 
-| 视图                           | 说明                                                                                                      |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| SSH Agent 面板                 | 托管密钥列表、agent 启停、签名审批弹窗                                                                    |
-| 设置 · 安全中心                | 修改主密码、生物识别解锁、自动锁定、旅行模式                                                              |
-| 设置 · 同步设备                | 设备登记 / 授权 / 吊销、冲突裁决队列                                                                      |
-| 条目详情 · 密文揭示            | 敏感字段再认证揭示流程（掩显 → 明文）                                                                     |
-| 新建 / 编辑凭据弹窗            | 分类字段、密码生成器、表单校验                                                                            |
-| 统计 / 安全瞭望                | 库内元数据报告、弱口令 / 重用检测                                                                         |
-| 快速访问                       | 全局热键唤起的速查面板                                                                                    |
-| 浏览器扩展 · 填充建议弹层      | 页面内填充建议弹层与身份切换（popup 主视图已入，见上）                                                    |
-| 移动端（Android / iOS / 鸿蒙） | Android 空库主界面与数据 / 工具 / 设置三 tab 已入（上方）；iOS 与鸿蒙原生界面均暂缺（本机无对应构建环境） |
+| View                                        | Description                                                                                                                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SSH Agent panel                             | Managed key list, agent start/stop, signing approval dialog                                                                                                                                       |
+| Settings · Security Center                  | Change master password, biometric unlock, auto-lock, travel mode                                                                                                                                  |
+| Settings · Sync Devices                     | Device enrollment / authorization / revocation, conflict resolution queue                                                                                                                         |
+| Item Detail · Reveal Secret                 | Re-authentication flow for revealing sensitive fields (masked → plaintext)                                                                                                                        |
+| New / Edit Credential Dialog                | Categorized fields, password generator, form validation                                                                                                                                           |
+| Statistics / Security Watch                 | In-vault metadata reports, weak / reused password detection                                                                                                                                       |
+| Quick Access                                | Quick-lookup panel summoned by a global hotkey                                                                                                                                                    |
+| Browser Extension · Fill Suggestion Popover | In-page fill suggestion popover and identity switching (popup main view already included, see above)                                                                                              |
+| Mobile (Android / iOS / HarmonyOS)          | Android empty-vault home screen and the data / tools / settings tabs are already included (above); iOS and HarmonyOS native UIs are still missing (no matching build environment on this machine) |
 
-素材的入库出处、变更史与交付规范见素材盘点。
+See Asset Inventory for where the assets come from,
+their change history, and delivery conventions.

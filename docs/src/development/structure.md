@@ -1,188 +1,197 @@
-# Persona 项目结构说明
+# Project Structure
 
-## Monorepo 架构
+## Monorepo Architecture
 
-本项目采用 **Monorepo** 架构，将所有相关代码统一管理在一个仓库中，便于代码共享、依赖管理和版本控制。
+The project uses a **monorepo**: all related code lives in a single
+repository, which makes code sharing, dependency management, and version
+control straightforward.
 
 ```
 persona/
-├── docs/                  # 项目文档站（VitePress）与设计文档
-├── core/                  # Rust 核心库（加密、存储、认证、同步协议）
-├── cli/                   # 命令行客户端（复用 core）
-├── desktop/               # 桌面应用（Tauri + React，独立 cargo workspace）
-├── server/                # 可选同步服务器（Rust + Axum）
-├── connect-server/        # Connect 本机自动化端点（secrets automation）
-├── agents/                # 代理进程（ssh-agent 等）
-├── browser/              # 浏览器扩展与 wasm 组件
-├── mobile/                # 移动端（iOS/Android/HarmonyOS 原生工程，已入仓 + CI）
-├── website/               # 项目官网
-├── scripts/               # 构建/开发脚本
-├── docker/                # 容器化部署
-├── Cargo.toml             # Rust workspace 配置
-└── README.md              # 项目说明
+├── docs/                  # Documentation site (VitePress) and design docs
+├── core/                  # Rust core library (crypto, storage, auth, sync protocol)
+├── cli/                   # Command-line client (reuses core)
+├── desktop/               # Desktop app (Tauri + React, its own cargo workspace)
+├── server/                # Optional sync server (Rust + Axum)
+├── connect-server/        # Connect local automation endpoint (secrets automation)
+├── agents/                # Agent processes (ssh-agent etc.)
+├── browser/               # Browser extension and wasm components
+├── mobile/                # Mobile (native iOS/Android/HarmonyOS projects, in-tree + CI)
+├── website/               # Project website
+├── scripts/               # Build and dev scripts
+├── docker/                # Containerized deployment
+├── Cargo.toml             # Rust workspace configuration
+└── README.md              # Project README
 ```
 
-## 架构设计
+## Architecture Design
 
-### 分层架构
+### Layered Architecture
 
 ```
 ┌─────────────────────────────────────┐
-│           用户界面层                 │
+│           User Interface            │
 │  Desktop (Tauri+React) / CLI        │
-│  Mobile (原生 Swift / Kotlin)       │
+│  Mobile (native Swift / Kotlin)     │
 ├─────────────────────────────────────┤
-│           业务逻辑层                 │
+│           Business Logic            │
 │         Core Library (Rust)         │
 │  ┌─────────┬─────────┬─────────┐    │
 │  │ Crypto  │ Storage │  Auth   │    │
 │  └─────────┴─────────┴─────────┘    │
 ├─────────────────────────────────────┤
-│           数据存储层                 │
-│    SQLCipher + 文件系统加密         │
+│           Data Storage              │
+│  SQLCipher + filesystem encryption  │
 ├─────────────────────────────────────┤
-│           系统接口层                 │
-│   操作系统API + 硬件安全模块        │
+│           System Interface          │
+│  OS APIs + hardware security module │
 └─────────────────────────────────────┘
 ```
 
-### 技术栈组合
+### Tech Stack
 
 #### Core Library (Rust)
 
-- **职责**: 核心加密、存储、认证逻辑
-- **优势**: 内存安全、高性能、跨平台
-- **依赖**: ring, argon2, aes-gcm, sqlx（SQLite 走 sqlx，无 rusqlite）
+- **Responsibilities**: core crypto, storage, and authentication logic
+- **Strengths**: memory safety, high performance, cross-platform
+- **Dependencies**: ring, argon2, aes-gcm, sqlx (SQLite goes through sqlx, no rusqlite)
 
 #### Desktop App (Tauri + React)
 
-- **职责**: 桌面端用户界面
-- **优势**: 轻量级、安全、现代 UI
-- **依赖**: React, TypeScript, Tailwind CSS
+- **Responsibilities**: desktop user interface
+- **Strengths**: lightweight, secure, modern UI
+- **Dependencies**: React, TypeScript, Tailwind CSS
 
-#### Mobile App（原生，规划中）
+#### Mobile App (native, planned)
 
-- **职责**: 移动端用户界面
-- **技术决策**: iOS、Android、HarmonyOS 各自用**平台原生技术**
-  开发——iOS Swift/SwiftUI（LocalAuthentication + CryptoKit Secure
-  Enclave）、Android Kotlin/Jetpack Compose（BiometricPrompt +
-  Android Keystore）、HarmonyOS ArkTS/ArkUI（userIAM userAuth +
-  HUKS）。不经 Flutter/Rust FFI 中转：生物识别与密钥存储是深度平台
-  特性，原生 API 才能拿到完整语义，中转层只会损耗语义并增加攻击面。
-  详见 `docs/biometric-unlock-design.md` §7.2。
+- **Responsibilities**: mobile user interface
+- **Technical decision**: iOS, Android, and HarmonyOS are each developed with
+  **platform-native technology** — iOS Swift/SwiftUI (LocalAuthentication +
+  CryptoKit Secure Enclave), Android Kotlin/Jetpack Compose (BiometricPrompt +
+  Android Keystore), HarmonyOS ArkTS/ArkUI (userIAM userAuth + HUKS). No
+  Flutter/Rust FFI middle layer: biometric unlock and key storage are deep
+  platform features where only native APIs expose the full semantics, while a
+  bridging layer just loses semantics and widens the attack surface. See
+  `docs/biometric-unlock-design.md` §7.2.
 
 #### Sync Server (Rust + Axum)
 
-- **职责**: 可选的端到端加密同步
-- **优势**: 端到端加密（服务器仅接触密文）、高性能
-- **依赖**: axum, sqlx, tokio
+- **Responsibilities**: optional end-to-end encrypted sync
+- **Strengths**: end-to-end encryption (the server only ever sees ciphertext),
+  high performance
+- **Dependencies**: axum, sqlx, tokio
 
-## 数据流设计
+## Data Flow Design
 
-### 本地数据流
-
-```
-用户输入 → UI层 → Core库 → 加密存储 → 本地数据库
-```
-
-### 跨设备同步流
+### Local Data Flow
 
 ```
-设备A → 端到端加密 → 同步服务器 → 端到端解密 → 设备B
+User input → UI layer → Core library → Encrypted storage → Local database
 ```
 
-### 安全边界
+### Cross-Device Sync Flow
 
-- **UI层**: 用户交互，不处理敏感数据
-- **Core层**: 所有加密操作，敏感数据处理
-- **存储层**: 加密数据持久化
-- **网络层**: 仅传输加密数据
+```
+Device A → end-to-end encryption → sync server → end-to-end decryption → Device B
+```
 
-## 开发工作流
+### Security Boundaries
 
-### 构建命令
+- **UI layer**: user interaction; never handles sensitive data
+- **Core layer**: all cryptographic operations and sensitive-data handling
+- **Storage layer**: persists encrypted data
+- **Network layer**: transports encrypted data only
+
+## Development Workflow
+
+### Build Commands
 
 ```bash
-# 构建核心库
+# Build the core library
 cargo build -p persona-core
 
-# 开发桌面应用
+# Desktop app in dev mode
 pnpm --filter persona-desktop run tauri:dev
 
-# 运行服务器
+# Run the server
 cargo run -p persona-server
 
-# 运行所有测试
+# Run the full test suite
 cargo test --workspace
 ```
 
-### 依赖管理
+### Dependency Management
 
-- **Rust**: Cargo workspace 统一管理
-- **Node.js**: pnpm workspace（根 package.json + pnpm-workspace.yaml）
+- **Rust**: managed centrally as a Cargo workspace
+- **Node.js**: pnpm workspace (root package.json + pnpm-workspace.yaml)
 
-### 代码共享策略
+### Code Sharing Strategy
 
-- **核心逻辑**: Rust core 库
-- **数据模型**: core models（同步信封协议跨端一致）
-- **UI 组件**: 各平台独立实现（桌面 React / 移动端原生）
+- **Core logic**: the Rust core library
+- **Data models**: core models (the sync envelope protocol stays identical
+  across platforms)
+- **UI components**: implemented separately per platform (React on desktop,
+  native on mobile)
 
-## 安全考虑
+## Security Considerations
 
-### 代码隔离
+### Code Isolation
 
-- **敏感操作**: 仅在 core 库中实现
-- **UI层**: 不直接处理密钥和敏感数据
-- **网络层**: 仅传输加密数据
+- **Sensitive operations**: implemented in the core library only
+- **UI layer**: never handles keys or sensitive data directly
+- **Network layer**: transports encrypted data only
 
-### 构建安全
+### Build Security
 
-- **依赖锁定**: Cargo.lock, pnpm-lock.yaml
-- **安全审计**: cargo audit, pnpm audit
-- **代码签名**: 发布版本数字签名
+- **Dependency locking**: Cargo.lock, pnpm-lock.yaml
+- **Security audits**: cargo audit, pnpm audit
+- **Code signing**: release builds are digitally signed
 
-### 运行时安全
+### Runtime Security
 
-- **内存保护**: zeroize 清理敏感数据
-- **进程隔离**: 各组件独立进程
-- **权限最小化**: 仅申请必要权限
+- **Memory protection**: zeroize wipes sensitive data
+- **Process isolation**: each component runs in its own process
+- **Least privilege**: only the necessary permissions are requested
 
-## 部署策略
+## Deployment Strategy
 
-### 桌面应用
+### Desktop App
 
-- **打包**: Tauri bundle
-- **分发**: GitHub Releases + 应用商店
-- **更新**: 内置自动更新
+- **Packaging**: Tauri bundle
+- **Distribution**: GitHub Releases + app stores
+- **Updates**: built-in auto-update
 
-### 移动应用
+### Mobile App
 
-- **打包**: Xcode / Android Studio 原生构建
-- **分发**: App Store + Google Play
-- **更新**: 应用商店机制
+- **Packaging**: native builds via Xcode / Android Studio
+- **Distribution**: App Store + Google Play
+- **Updates**: store-driven update mechanism
 
-### 服务器
+### Server
 
-- **容器化**: Docker 部署
-- **云平台**: 支持主流云服务
-- **监控**: 日志和性能监控
+- **Containerization**: Docker deployment
+- **Cloud platforms**: runs on the major clouds
+- **Monitoring**: logging and performance monitoring
 
-## 开发路线图
+## Roadmap
 
-当前状态以仓库 `TODO.md` 为准（逐项含完成日期与验证方式），此处只保留
-阶段划分：
+The authoritative current status lives in the repo's `TODO.md` (each item
+carries a completion date and how it was verified); only the phase split is
+kept here:
 
-1. **桌面版**（已完成并持续迭代）：vault、加密存储、同步、SSH agent、
-   passkey、生物识别门禁与硬件绑定包裹层等
-2. **服务器与自动化**：自托管同步服务器、Connect secrets automation
-3. **移动端**：iOS / Android 原生应用（含平台生物识别解锁，见上文
-   技术决策）
-4. **企业功能**：团队共享、企业策略、审计报表
+1. **Desktop** (shipped and under continuous iteration): vault, encrypted
+   storage, sync, SSH agent, passkey, biometric gating with hardware binding,
+   the wrapper layer around them, and more
+2. **Server and automation**: self-hosted sync server, Connect secrets
+   automation
+3. **Mobile**: native iOS / Android apps (including platform biometric unlock,
+   see the technical decision above)
+4. **Enterprise features**: team sharing, enterprise policy, audit reports
 
-这种 Monorepo 结构的优势：
+What this monorepo structure buys us:
 
-1. **统一管理**: 所有代码在一个仓库中
-2. **代码共享**: Core 库被多个客户端复用
-3. **版本同步**: 避免版本不一致问题
-4. **简化 CI/CD**: 统一的构建和部署流程
-5. **便于重构**: 跨项目重构更容易
+1. **Unified management**: all code in one repository
+2. **Code sharing**: the core library is reused by multiple clients
+3. **Version alignment**: no version-skew problems across components
+4. **Simpler CI/CD**: one unified build-and-deploy pipeline
+5. **Easier refactoring**: cross-project refactors become practical

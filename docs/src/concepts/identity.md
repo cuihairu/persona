@@ -1,60 +1,72 @@
-# 分身（Identity）
+# Identity
 
-**一句话**：分身是同一个人的一个数字身份——是身份材料的**组织、切换与打包单位**。
-它不是账号、不是密钥、不是加密边界。
+**In one sentence**: an identity — "分身" (persona) in the product's Chinese — is one
+digital identity of a single person; it is the **unit that organizes, switches, and
+packs** identity material. It is not an account, not a key, and not an encryption
+boundary.
 
 ```text
 Person
  └─ Identity: Work
-      ├─ GitHub（密码）
-      ├─ AWS（API key）
-      └─ 工作 SSH
+      ├─ GitHub (password)
+      ├─ AWS (API key)
+      └─ Work SSH
  └─ Identity: OpenSource
-      ├─ GitHub（密码，另一套）
-      └─ 开源 GPG
+      ├─ GitHub (password, a different set)
+      └─ Open-source GPG
 ```
 
-同一个 GitHub 在不同分身下是**不同的凭据条目**——分身的隔离发生在数据层，
-而不是让你记住「两套浏览资料」。
+The same GitHub under different identities is a **different credential entry** —
+identity isolation happens at the data layer, not by asking you to remember "two
+browsing profiles."
 
-## 数据模型
+## Data model
 
-身份是 SQLite `identities` 表的一行，其它身份材料表通过 `identity_id` 外键
-挂到它下面（`ON DELETE CASCADE`）：
+An identity is a row in the SQLite `identities` table; the other identity material
+tables attach beneath it via the `identity_id` foreign key (`ON DELETE CASCADE`):
 
 ```
-identities ──┬── credentials        （密码 / TOTP / API key / SSH key / 钱包条目）
+identities ──┬── credentials        (password / TOTP / API key / SSH key / wallet entry)
              ├── crypto_wallets
              ├── passkeys
-             ├── workspace_members  （工作区成员：身份是"分享单位"）
-             └── workspaces.active_identity_id (唯一的"当前身份"指针)
+             ├── workspace_members  (workspace membership: identity is the "sharing unit")
+             └── workspaces.active_identity_id (the single "current identity" pointer)
 ```
 
-完整字段、迁移表名与常见误解见 用户手册：身份。
+For full field lists, migration table names, and common misconceptions, see
+User Guide: Identity.
 
-## 它在授权链里的位置
+## Where it sits in the authorization chain
 
-在 [核心概念](./index) 的模型里，Identity 承接 Principal、向下挂载 Material：
+In the model from [Core Concepts](./index), Identity receives from Principal and
+carries Material below it:
 
 ```text
 Principal → Identity → Material
-    （谁）    （哪个分身）   （哪些材料）
+   (who)   (which identity)  (which materials)
 ```
 
-一条关键性质：**身份不参与密钥派生**。每条凭据用独立 item key 加密，再由
-主密码派生的 master key 包裹——切换身份不会解锁、不会重新解密、不改变加密
-边界。所以「分身」是逻辑分组，不是另起炉灶的保险柜。
+One key property: **identity does not participate in key derivation**. Each credential
+is encrypted with its own item key, which is in turn wrapped by the master key derived
+from the master password — switching identities never unlocks anything, never
+re-decrypts anything, and never changes the encryption boundary. So an identity is a
+logical grouping, not a separate safe.
 
-## 分身的两条隐藏语义
+## Two hidden semantics of an identity
 
-1. **全局切换指针**：`workspaces.active_identity_id` 存在库里，CLI、桌面端、
-   浏览器扩展、SSH Agent 共享同一个「当前身份」——任何一处 `persona switch`，
-   其它入口下次读到就是新的。
-2. **旅行模式的打包单位**：`travel_marked` 的身份会被整体打进加密 sidecar
-   移出本机 (core/src/travel.rs)——「整套带走/整套留下」的最小单位。
+1. **Global switch pointer**: `workspaces.active_identity_id` lives in the database;
+   the CLI, desktop, browser extension, and SSH Agent all share the same "current
+   identity" — a `persona switch` in any one place is what every other entry point
+   reads next time.
+2. **The packing unit for travel mode**: identities marked `travel_marked` are packed
+   whole into an encrypted sidecar and moved off the machine (core/src/travel.rs) — the
+   minimal unit for "take the whole set / leave the whole set."
 
-## 边界
+## Boundaries
 
-- 分身之间**不共享任何授权**：一个分身的凭据不会出现在另一个分身的建议里；
-- `identity_type`（Personal/Work/…）只驱动界面表现，**没有权限或安全含义**；
-- 身份的远程能力（同步、服务端）由 `persona connect` 单独配置，与分身无关。
+- Identities **share no authorization** with each other: one identity's credentials
+  never appear in another identity's suggestions.
+- `identity_type` (Personal/Work/…) only drives presentation; **it carries no
+  permission or security meaning**.
+- Remote capabilities (sync, server-side) are configured separately through
+  `persona connect` and are independent of identities.

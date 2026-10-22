@@ -1,57 +1,68 @@
-# 常见问题
+# FAQ
 
-## 主密码丢了能找回吗？
+## Can I recover a lost master password?
 
-**不能。** 没有托管、没有重置后门——主密码派生加密密钥，丢了密钥就永久
-解不开。这是端到端加密的代价：主密码只在你本地派生、任何一方都无法绕过，
-也是它不需要信任任何人的原因。请把
-备份纳入习惯。
+**No.** There is no escrow, no reset back door — the master password derives the
+encryption key, and a lost key means the vault stays closed forever. That is the
+price of end-to-end encryption: the master password is derived only on your
+machine, no party can bypass it, and that is exactly why it does not need to
+trust anyone. Make
+backups a habit.
 
-## 我的数据存在哪？
+## Where is my data stored?
 
-默认 `~/.persona/`（可经 `--path` 或 `PERSONA_WORKSPACE_PATH` 指定）：
-`identities.db` 主库（SQLite）、`attachments/` 附件密文、`backups/` 等工作
-目录。注意：**凭据载荷是密文，但元数据列（名称、URL、用户名）是明文
-SQLite**——对元数据也保密的场景请用 Travel Mode 或整盘加密。
+By default `~/.persona/` (overridable via `--path` or
+`PERSONA_WORKSPACE_PATH`): the `identities.db` main vault (SQLite),
+`attachments/` for attachment ciphertext, `backups/` and other working
+directories. Note: **credential payloads are ciphertext, but metadata columns
+(name, URL, username) are plaintext SQLite** — for scenarios where even metadata
+must stay secret, use Travel Mode or full-disk encryption.
 
-## 必须要服务器、要联网吗？
+## Do I need a server, or a network connection?
 
-**不需要。** 默认纯本地、零联网，全部功能可用。同步、审计副本、备份
-保管都是可选附件，需要时再自托管一台 Persona Server。
+**No.** Purely local, zero network by default, with every feature usable. Sync,
+audit copies, and backup escrow are all optional add-ons; self-host a Persona
+Server when you need them.
 
-## 服务器能看到我的密码吗？
+## Can the server see my passwords?
 
-**不能。** 同步中继只见密文操作日志、设备信封与时间戳；凭据内容
-（URL、用户名、密码、TOTP）全部在客户端加解密。服务器操作者能做的
-只有 DoS（拒绝转发），做不到窃取——详细边界见
-[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
+**No.** The sync relay only ever sees ciphertext oplog entries, device
+envelopes, and timestamps; credential content (URL, username, password, TOTP) is
+all encrypted and decrypted on the client. A server operator can only DoS
+(refuse to forward) — theft is impossible. For the detailed boundaries, see
+[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).
 
-## 支持哪些平台？
+## Which platforms are supported?
 
-| 平台            | 状态                                            |
-| --------------- | ----------------------------------------------- |
-| Linux 桌面应用  | 主交付（deb，可复现构建）                       |
-| CLI / SSH Agent | 支持（cargo build，跨平台）                     |
-| 浏览器扩展      | Chromium 系                                     |
-| macOS / Windows | 未在真机验证，不宣称支持                        |
-| 移动端          | 原生工程已入仓（iOS/Android/HarmonyOS，未发布） |
+| Platform          | Status                                                      |
+| ----------------- | ----------------------------------------------------------- |
+| Linux desktop app | Primary delivery (deb, reproducible build)                  |
+| CLI / SSH Agent   | Supported (cargo build, cross-platform)                     |
+| Browser extension | Chromium family                                             |
+| macOS / Windows   | Not verified on real hardware; support not claimed          |
+| Mobile            | Native projects in repo (iOS/Android/HarmonyOS, unreleased) |
 
-## 附件会同步吗？
+## Do attachments sync?
 
-**不会。** 附件密文本地落盘（复用所属凭据的 item key 加密），不参与
-同步；v1 备份导出也不含附件。
+**No.** Attachment ciphertext is written to local disk (encrypted reusing the
+owning credential's item key) and does not participate in sync; v1 backup
+exports also exclude attachments.
 
-## 和 1Password / Bitwarden 有什么不同？
+## How is this different from 1Password / Bitwarden?
 
-Persona 是**本地优先 + 自托管**：没有厂商云、没有账号体系，服务器
-（如果有）是你自己跑的中继。定位差异见项目简介。
+Persona is **local-first + self-hosted**: no vendor cloud, no account system,
+and the server (if any) is a relay you run yourself. For positioning
+differences, see Project Introduction.
 
-## 会自动锁定吗？
+## Does it lock automatically?
 
-会。锁屏即断密钥（主密钥不驻留内存）；查看密文、修改主密码等敏感操作
-还会要求**再次认证**。桌面端可开启生物识别解锁（Linux 走 OS 钥匙串/
-Secret Service，主密码托管进系统密钥串）。
+Yes. Locking drops the key (the master key does not stay in memory); sensitive
+operations like viewing ciphertext or changing the master password also require
+**re-authentication**. The desktop app can enable biometric unlock (on Linux via
+the OS keychain / Secret Service, with the master password kept in the system
+keyring).
 
-## 是开源的吗？
+## Is it open source?
 
-是，MIT 协议。构建方式见环境搭建。
+Yes, MIT license. For build instructions, see
+Environment Setup.

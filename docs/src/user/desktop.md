@@ -1,87 +1,117 @@
-# 桌面应用
+# Desktop App
 
-桌面应用（Tauri + React）是 Persona 的主交付入口：凭据管理、身份切换、
-同步裁决、SSH 审批等都在这里完成。本页是功能域导览；安装与首次使用见
-快速开始。
+The desktop app (Tauri + React) is Persona's main delivery surface: credential
+management, identity switching, sync adjudication, SSH approval — it all happens
+here. This page is a tour of the feature areas; for installation and first run,
+see Quick Start.
 
-## 界面预览
+## UI Preview
 
-1Password 风格侧栏重设计后的桌面形态（与仓库 README 的 UI Preview
-同一批素材，源文件在 `docs/branding/ui/`）。
+The desktop form after the 1Password-style sidebar redesign (same asset batch
+as the UI Preview section of the repo README; source files in
+`docs/branding/ui/`).
 
-亮色主题全窗：左侧栏（身份切换器 + 搜索 + 分组导航）、中间凭据列表、
-右侧详情面板的三栏布局。
+Light theme full window: a three-column layout with the sidebar (identity
+switcher + search + group navigation) on the left, the credential list in the
+middle, and the detail panel on the right.
 
-暗色主题全窗：同一布局的深色形态，语义色 token 随主题自动翻转。
+Dark theme full window: the same layout in dark form; semantic color tokens flip
+automatically with the theme.
 
-亮色侧栏特写：全部条目 / 收藏 / 最近使用、中文本地化的类别分组、
-保险库、标签与工具区，底部为设置与锁定会话。
+Light theme sidebar close-up: All Items / Favorites / Recently Used, category
+groups with Chinese localization, the vault, tags and tools areas, with settings
+and session lock at the bottom.
 
-暗色侧栏特写：同结构的深色形态。
+Dark theme sidebar close-up: the same structure in dark form.
 
-侧栏重设计前的形态（与上方侧栏特写构成前后对比）：平铺面板菜单、
-类型显示英文枚举原名、无搜索与最近使用分组。
+The form before the sidebar redesign (forming a before/after comparison with
+the close-ups above): flat panel menu, type labels showing the raw English
+enum names, no search or recently-used grouping.
 
-## 主界面
+## Main Window
 
-- **侧边栏与身份切换器**：按身份（工作 / 个人 / 开发…）隔离的凭据视图，
-  一键切换活跃分身——所有列表、建议与填充默认值都跟随当前身份。
-- **凭据列表与详情**：名称 / URL / 用户名 / TOTP / 附件，敏感字段默认
-  掩显，点击展示需**再次认证**（防肩窥 + 防后台静默读取）。
-- **快速搜索**：跨当前身份凭据的即时过滤。
-- **新建凭据**：支持密码、API key、TOTP、SSH key、附件上传。
+- **Sidebar and identity switcher**: credential views isolated by identity
+  (work / personal / dev…), one-click switching of the active persona — every
+  list, suggestion, and fill default follows the current identity.
+- **Credential list and details**: name / URL / username / TOTP / attachments;
+  sensitive fields are masked by default, and clicking to reveal requires
+  **re-authentication** (shoulder-surfing protection + prevention of silent
+  background reads).
+- **Quick search**: instant filtering across the current identity's credentials.
+- **New credential**: supports password, API key, TOTP, SSH key, attachment
+  upload.
 
-## 安全中心（设置内）
+## Security Center (in Settings)
 
-- **修改主密码**：全库重包裹；旅行模式进行中会被拒绝（先退出旅行模式）。
-- **生物识别解锁**：开启后主密码托管进 OS 钥匙串，锁屏后可用平台生物
-  识别解锁（Linux 走 Secret Service）。
-- **自动锁定**：锁屏即断密钥——主密钥不驻留内存，解锁需重新认证。
-- **旅行模式**：长离线场景主动剥离本机密钥材料，凭口令恢复。
+- **Change master password**: re-wraps the whole vault; rejected while travel
+  mode is active (leave travel mode first).
+- **Biometric unlock**: once enabled, the master password is kept in the OS
+  keychain and you can unlock with platform biometrics after lockout (on Linux
+  via Secret Service).
+- **Auto-lock**: locking drops the key — the master key does not stay in
+  memory, and unlocking requires re-authentication.
+- **Travel mode**: for long offline stretches, actively strip local key
+  material, restore on passphrase.
 
-## 同步设备（设置内）
+## Sync Devices (in Settings)
 
-- **加入 / 授权**：新设备在此登记并等待已授权设备放行；**有信封 =
-  已授权**，未授权设备不会收到任何数据。
-- **吊销**：丢失设备即时踢出（信封与登录态级联清除）。
-- **轮换组密钥**：一键为全组重封；若另一台设备刚刚轮换完会收到针对性
-  提示，重试即可，数据不受影响。
-- **冲突裁决**：离线并发修改同一凭据时，双版本进入裁决队列，由你选择
-  保留哪版（Lamport 时钟定主位，不静默覆盖）。
+- **Join / authorize**: a new device registers here and waits for an authorized
+  device to let it in; **an envelope icon = authorized**; unauthorized devices
+  receive no data at all.
+- **Revoke**: a lost device is kicked out immediately (envelope and session
+  state cleared in cascade).
+- **Rotate group key**: one click re-seals for the whole group; if another device
+  just finished rotating you get a targeted hint — retry, and your data is
+  unaffected.
+- **Conflict adjudication**: when the same credential is edited concurrently
+  offline, both versions enter the adjudication queue and you choose which to
+  keep (Lamport clocks determine primary position; nothing is silently
+  overwritten).
 
-## Quick Access 与外观（设置内）
+## Quick Access and Appearance (in Settings)
 
-- **Quick Access 检索浮窗**：OS 级全局热键唤出的无边框置顶小窗，跨当前
-  身份即时检索凭据并复制；再按热键收起并把焦点还给原应用。设置页开启并
-  绑定加速键（默认关闭——全局热键属显式开启项）。
-- **生成器浮窗**：第二个独立热键直接唤出密码生成器面板，与检索浮窗互不
-  影响（改绑只注销自己的旧键）。
-- **抢注状态如实上报**：热键被其他应用/窗口管理器占用、或平台不支持时，
-  注册失败原因直接显示在设置页，不静默吞掉；绑定持久化在工作区设置，
-  解锁成功后自动重新下发。
-- **主题**：跟随系统 / 浅色 / 深色三选。
+- **Quick Access search overlay**: a borderless always-on-top panel summoned by
+  an OS-level global hotkey; searches credentials across the current identity
+  instantly and copies; pressing the hotkey again collapses it and returns focus
+  to the original app. Enable it and bind an accelerator on the settings page
+  (off by default — global hotkeys are an explicit opt-in).
+- **Generator overlay**: a second, independent hotkey summons the password
+  generator panel directly, with no effect on the search overlay (rebinding one
+  only unregisters its own old key).
+- **Squatting status reported honestly**: if the hotkey is already taken by
+  another app/window manager, or the platform does not support it, the
+  registration failure reason is shown directly on the settings page instead of
+  being silently swallowed; bindings persist in workspace settings and are
+  re-delivered automatically after a successful unlock.
+- **Theme**: follow system / light / dark.
 
-边界（诚实记录）：
+Boundaries (recorded honestly):
 
-- Linux 下全局热键只走 X11；Wayland 会话需 XWayland，否则抢注失败并如实
-  上报，不影响主程序启动。
-- 保险库锁定时唤起浮窗，只会提示"需先解锁"并把主窗口拉到前台——浮窗内
-  不复刻解锁流程（见 THREAT_MODEL 登记）。
+- On Linux, global hotkeys only work on X11; Wayland sessions need XWayland,
+  otherwise registration fails with the reason reported honestly, without
+  affecting main app startup.
+- Summoning the overlay while the vault is locked only shows a "unlock first"
+  notice and brings the main window to the foreground — the overlay does not
+  replicate the unlock flow (registered in THREAT_MODEL).
 
-## SSH Agent 与自动化
+## SSH Agent and Automation
 
-- **SSH Agent 面板**：查看托管密钥与签名策略；签名请求弹**审批弹窗**
-  （known_hosts 校验、确认、速率限制命中时主动拒绝并留审计）。
-- **Connect 自动化**（设置内）：本机 HTTP API 供脚本读取凭据，
-  口令保护 + 明文一次性展示，见
-  [CONNECT_AUTOMATION_DESIGN.md](https://github.com/cuihairu/persona/blob/main/docs/CONNECT_AUTOMATION_DESIGN.md)。
+- **SSH Agent panel**: view hosted keys and signing policies; signature requests
+  raise an **approval dialog** (known_hosts verification, confirmation, active
+  refusal with an audit trail when rate limits are hit).
+- **Connect automation** (in Settings): a local HTTP API for scripts to read
+  credentials, passphrase-protected + shown in cleartext exactly once, see
+  [CONNECT_AUTOMATION_DESIGN.md](https://github.com/cuihairu/persona/blob/main/docs/CONNECT_AUTOMATION_DESIGN.md).
 
-## 其他面板
+## Other Panels
 
-- **健康扫描（Watchtower）**：弱 / 重用 / 过期凭据的本地元数据报告；
-  可选泄露检查（HIBP k-匿名，仅 5 字符哈希前缀出机）。
-- **Passkeys**：本机 passkey 提供者面板与请求审批。
-- **钱包**：加密资产面板（已落地，M5 毕业轨道；密钥层级与定案见 [WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)）。
+- **Health scan (Watchtower)**: a local metadata report on weak / reused /
+  expired credentials; optional breach check (HIBP k-anonymity, only a
+  5-character hash prefix leaves the machine).
+- **Passkeys**: local passkey provider panel and request approval.
+- **Wallets**: crypto-asset panel (shipped, M5 graduation track; key hierarchy
+  and decisions in [WALLET_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/WALLET_DESIGN.md)).
 
-安全语义与威胁边界统一见安全特性与
-[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
+For unified security semantics and threat boundaries, see
+Security Features and
+[THREAT_MODEL](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).

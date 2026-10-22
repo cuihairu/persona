@@ -1,17 +1,21 @@
-# 核心概念
+# Core Concepts
 
-Persona 围绕六个一级概念组织：**Identity（分身）、Context（上下文）、Material（身份材料）、Policy（策略）、Action（动作）**，以及预留的 **Principal（主体）**。它们共同回答一个问题：
+Persona is organized around six first-class concepts: **Identity, Context, Material
+(identity material), Policy, and Action**, plus a reserved **Principal**. Together they
+answer a single question:
 
-> 一个人（或一个 Agent、一台设备）在某个数字环境中，以哪个身份、持有哪些身份材料、通过什么策略、执行什么动作？
+> In a given digital environment, which identity does a person (or an agent, or a
+> device) act under, which identity materials does it hold, through which policies, and
+> which actions does it perform?
 
 ```mermaid
 flowchart TB
-    P["Principal 主体<br/>（预留：人 / Agent / 设备）"]
-    I["Identity 分身"]
-    M["Material 身份材料"]
-    C["Context 上下文"]
-    POL["Policy 策略"]
-    A["Action 动作"]
+    P["Principal<br/>(reserved: human / Agent / device)"]
+    I["Identity"]
+    M["Material"]
+    C["Context"]
+    POL["Policy"]
+    A["Action"]
 
     P --> I
     I --> M
@@ -20,42 +24,60 @@ flowchart TB
     POL --> A
 ```
 
-- [**Principal（主体）**](./principal)：发起者——人、AI Agent 或设备的抽象（预留方向，尚未实现）。
-- [**Identity（分身）**](./identity)：同一个人的不同数字身份，是身份材料的**组织与切换单位**。
-- [**Context（上下文）**](./context)：客户端**可观察到**的环境事实（域名、主机、目录、设备…），用于建议与策略判断。
-- [**Material（身份材料）**](./material)：密码、SSH 密钥、API key、TOTP、钱包、通行密钥。
-- [**Policy（策略）**](./policy)：决定「谁、在什么上下文、对哪个材料的哪个动作」被放行的规则集合。
-- [**Action（动作）**](./action)：作用于某个材料的具体操作——reveal、copy、fill、TOTP、generate、sign、save。
+- [**Principal**](./principal): the initiator — an abstraction over humans, AI agents,
+  and devices (a reserved direction, not yet implemented).
+- [**Identity**](./identity): the distinct digital identities of one person; the
+  **unit for organizing and switching** identity material.
+- [**Context**](./context): environmental facts the client **can observe** (domain,
+  host, directory, device…), used for suggestions and policy decisions.
+- [**Material**](./material): passwords, SSH keys, API keys, TOTP, wallets, passkeys.
+- [**Policy**](./policy): the rule set that decides "who, in which context, may perform
+  which action on which material."
+- [**Action**](./action): the concrete operation applied to a material — reveal, copy,
+  fill, TOTP, generate, sign, save.
 
-## 为什么必须把这六个概念分开
+## Why these six concepts must stay separate
 
-- **Identity ≠ Material**：工作分身的 GitHub 密码、GitHub SSH key、GitHub API key 是三份独立材料，归属同一个分身。迁移、轮换、分享的是材料，不是分身。
-- **Material ≠ Action**：SSH key 本身没有权限，「sign」才是权限动作。客户端/浏览器扩展不直接持有明文，只请求一个经过策略检查的 Action。
-- **Context ≠ 用户声明**：上下文是观察得到的事实（页面域名、本机 host、目录），不是用户拍脑袋选的模式——所以它能做**建议**，而不是**声明**。
-- **Policy 不是安全细节**：它是所有敏感 Action 的统一裁决入口，与材料模型平级，而不是加密文档里的一个章节。
+- **Identity ≠ Material**: your work identity's GitHub password, GitHub SSH key, and
+  GitHub API key are three independent materials belonging to the same identity. What
+  gets migrated, rotated, or shared is material — never the identity.
+- **Material ≠ Action**: an SSH key carries no permission of its own; `sign` is the
+  privileged action. Clients and browser extensions never hold plaintext directly —
+  they request an Action that has passed policy checks.
+- **Context ≠ user declaration**: context is observable fact (page origin, local host,
+  directory), not a mode the user picks on a whim — which is why it can power
+  **suggestions**, not **assertions**.
+- **Policy is not a security detail**: it is the single adjudication entry point for
+  every sensitive Action, a peer of the material model rather than a chapter in the
+  encryption docs.
 
-## 现状与规划（诚实边界）
+## Current state and roadmap (honest boundaries)
 
-| 概念      | 现状                              | 主要落点                                                               |
-| --------- | --------------------------------- | ---------------------------------------------------------------------- |
-| Identity  | ✅ 已实现                         | `identities` 表 + active 指针（见用户手册：身份）                      |
-| Material  | ✅ 已实现                         | credentials / crypto_wallets / passkeys 表（见[身份材料](./material)） |
-| Policy    | 🟡 已实现为安全硬门槛，部分可配置 | origin binding、user gesture、SSH 策略、审批闸门（见[策略](./policy)） |
-| Action    | 🟡 协议层已分离                   | bridge 请求类型 + 授权闸门（见[动作](./action)）                       |
-| Context   | 🟡 部分机制已落地                 | origin binding、按身份过滤、站点默认值（见[上下文](./context)）        |
-| Principal | ⬜ 预留，未实现                   | 方向见[主体](./principal)                                              |
+| Concept   | State                                                   | Where it lives                                                                       |
+| --------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Identity  | ✅ Implemented                                          | `identities` table + active pointer (see User Guide: Identity)                       |
+| Material  | ✅ Implemented                                          | credentials / crypto_wallets / passkeys tables (see [Identity Material](./material)) |
+| Policy    | 🟡 Hard security gates implemented, partly configurable | origin binding, user gesture, SSH policy, approval gates (see [Policy](./policy))    |
+| Action    | 🟡 Separated at the protocol layer                      | bridge request types + authorization gates (see [Action](./action))                  |
+| Context   | 🟡 Some mechanisms landed                               | origin binding, per-identity filtering, site defaults (see [Context](./context))     |
+| Principal | ⬜ Reserved, not implemented                            | direction outlined in [Principal](./principal)                                       |
 
-> 「已实现」指代码里存在并可测试；「部分落地」指机制存在但未抽象成一级模型，
-> 或只有部分入口使用；「预留」指设计方向，不含实现承诺。
+> "Implemented" means it exists in code and is testable; "partially landed" means the
+> mechanism exists but has not been abstracted into a first-class model, or only some
+> entry points use it; "reserved" means a design direction, with no implementation
+> commitment.
 
-## 为什么这不是又一个密码管理器
+## Why this is not just another password manager
 
-密码管理器把世界建模成「一个 Vault，里面是条目」。Persona 把世界建模成：
+Password managers model the world as "one vault full of entries." Persona models the
+world as:
 
-- 谁（Principal，含未来的 Agent）持有哪个**分身**（Identity）；
-- 分身下有哪些**材料**（Material）——密码只是其中一种；
-- 什么**上下文**（Context）下、按什么**策略**（Policy）、允许哪些**动作**（Action）。
+- who (a Principal, including future Agents) holds which **identity**;
+- which **materials** that identity owns — passwords are just one kind;
+- in which **context**, under which **policy**, which **actions** are allowed.
 
-因此 Password、SSH、TOTP、Wallet、Passkey、浏览器填充都不是功能清单，而是
-同一个模型下的材料与动作。1Password/Bitwarden 的能力是**功能基准**
-（Persona 的开发者特性以此为对标），但产品的身份叙事不是「又一个密码管理器」。
+So Password, SSH, TOTP, Wallet, Passkey, and browser autofill are not a feature
+checklist — they are materials and actions under a single model. 1Password/Bitwarden
+capabilities serve as a **feature baseline** (Persona's developer-facing features are
+benchmarked against them), but the product's identity narrative is not "yet another
+password manager."

@@ -1,210 +1,246 @@
-# 产品定位与总体架构
+# Product Positioning & Overall Architecture
 
-本文是 Persona 的产品总纲：定位、愿景、能力边界、核心概念模型、总体
-架构与各模块关系、分级安全与授权体系、密钥层级、第一版范围与演进原则。
-技术分层与模块交互见整体架构，安全不变量见
-安全设计，概念模型的分项展开见
-核心概念。
+This document is Persona's product charter: positioning, vision, capability
+boundaries, the core concept model, the overall architecture and module
+relations, the tiered security and authorization system, the key hierarchy,
+the scope of the first version, and the evolution principles. For technical
+layering and module interactions, see the
+overall architecture; for security invariants, see
+the security design; for the item-by-item expansion of
+the concept model, see the core concepts.
 
-## 1. 产品定位
+## 1. Product Positioning
 
-### 1.1 一句话定义
+### 1.1 One-Sentence Definition
 
-Persona 是一个以身份为中心、以秘密资产为保护对象、以分级安全和授权
-机制为核心的个人数字身份与凭证管理系统。
+Persona is a personal digital identity and credential management system that is
+identity-centric, treats secret assets as the object of protection, and takes
+tiered security and authorization mechanisms as its core.
 
-它帮助用户统一管理个人、组织和开发者等不同身份下的密码、密钥、Token、
-恢复材料及其他敏感信息，并通过统一的安全策略控制这些信息如何被访问、
-使用、共享和导出。
+It helps users centrally manage passwords, keys, tokens, recovery materials,
+and other sensitive information across personal, organizational, and developer
+identities, and controls how that information is accessed, used, shared, and
+exported through unified security policies.
 
-Persona 不只是存储秘密，还负责决定：
+Persona does not merely store secrets; it is also responsible for deciding:
 
-- 当前使用哪个身份。
-- 当前身份能够访问哪些秘密。
-- 哪些应用可以使用指定凭证。
-- 哪些操作需要额外验证。
-- 不同安全等级的秘密应该如何存储、解锁和使用。
-- 在什么条件下允许读取明文、执行签名或导出秘密。
+- Which identity is currently in use.
+- Which secrets the current identity can access.
+- Which applications may use a given credential.
+- Which operations require additional verification.
+- How secrets of different security tiers should be stored, unlocked, and used.
+- Under what conditions reading plaintext, performing a signature, or exporting
+  a secret is permitted.
 
-### 1.2 Persona 解决什么问题？
+### 1.2 What Problems Does Persona Solve?
 
-随着个人开发环境、云服务和 AI 工具的发展，一个人通常需要同时管理多种
-身份和大量敏感凭证。例如：
+As personal development environments, cloud services, and AI tools evolve, a
+person typically has to manage many identities and a large number of sensitive
+credentials at the same time. For example:
 
-- 个人身份：个人邮箱、个人 GitHub、个人云服务、个人密码。
-- 公司身份：公司邮箱、内部 Git 服务、公司 API、生产环境凭证。
-- 开发者身份：SSH 私钥、Git Token、开发环境密钥、云平台凭证。
-- 高安全级别秘密：助记词、恢复短语、根密钥、重要账户恢复材料。
+- Personal identity: personal email, personal GitHub, personal cloud services,
+  personal passwords.
+- Company identity: company email, internal Git services, company APIs,
+  production environment credentials.
+- Developer identity: SSH private keys, Git tokens, development environment
+  keys, cloud platform credentials.
+- High-security secrets: mnemonics, recovery phrases, root keys, and recovery
+  materials for important accounts.
 
-这些秘密并不具有相同的风险，也不应该采用相同的访问方式。
+These secrets do not carry the same risk and should not be accessed in the same
+way.
 
-传统密码管理器主要解决秘密的存储和填充问题；操作系统凭证库主要解决
-特定环境下的凭证存取问题；身份与访问管理系统则通常面向组织、账号目录
-和企业权限管理。
+Traditional password managers mainly solve the storage and autofill of secrets;
+operating system credential stores mainly solve credential storage and retrieval
+in specific environments; identity and access management systems are usually
+oriented toward organizations, account directories, and enterprise permission
+management.
 
-Persona 希望将这些需求中与个人身份和秘密保护直接相关的部分统一起来，
-同时保持产品足够轻量。它不仅要回答"秘密存在哪里"，还要回答"谁可以在
-什么条件下使用它"。
+Persona wants to unify the parts of these needs that are directly related to
+personal identity and secret protection, while keeping the product light
+enough. It must answer not only "where are the secrets stored" but also "who
+may use them under what conditions".
 
-## 2. 产品愿景
+## 2. Product Vision
 
-### 2.1 愿景
+### 2.1 Vision
 
-让每个人都拥有一个属于自己的、安全的数字身份与秘密管理中心。
+Give everyone a digital identity and secret management center of their own,
+one that is secure.
 
-用户不必把所有密码、密钥和恢复材料混在一个可以随意访问的保险库中，也
-不必将秘密原文交给每个需要使用凭证的应用。
+Users should not have to mix all their passwords, keys, and recovery materials
+in a single vault that can be accessed at will, nor should they have to hand
+the plaintext of secrets to every application that needs credentials.
 
-Persona 通过身份隔离、分级保护和细粒度授权，让秘密资产在需要时可用，
-在不应该使用时受到保护。
+Through identity isolation, tiered protection, and fine-grained authorization,
+Persona makes secret assets available when needed and protected when they
+should not be used.
 
-### 2.2 核心理念
+### 2.2 Core Philosophy
 
-**身份决定使用语境，授权决定使用资格，安全等级决定保护要求，密钥体系
-决定秘密如何受到保护。**
+**Identity determines the context of use, authorization determines eligibility
+for use, the security level determines protection requirements, and the key
+hierarchy determines how secrets are protected.**
 
-四者共同构成 Persona 的安全基础。
+Together, these four form the security foundation of Persona.
 
-### 2.3 长期目标
+### 2.3 Long-Term Goals
 
-1. **个人数字身份中心：** 统一管理不同个人身份、组织身份和开发者身份。
-2. **分级秘密保险库：** 根据秘密的重要程度采用不同的保护与解锁机制。
-3. **统一授权中心：** 为本地应用和可信客户端提供统一、可审计的凭证
-   访问控制。
-4. **安全凭证使用接口：** 允许应用调用受控的签名、认证和凭证获取
-   能力，而不必直接持有全部秘密。
-5. **可扩展的客户端生态：** 通过稳定的本地接口支持桌面应用、CLI、
-   浏览器扩展和 SSH Agent 等集成。
+1. **Personal digital identity hub:** uniformly manage personal,
+   organizational, and developer identities.
+2. **Tiered secret vault:** apply different protection and unlocking mechanisms
+   depending on the importance of each secret.
+3. **Unified authorization center:** provide unified, auditable credential
+   access control for local applications and trusted clients.
+4. **Secure credential usage interface:** allow applications to invoke
+   controlled signing, authentication, and credential retrieval capabilities
+   without directly holding all the secrets.
+5. **Extensible client ecosystem:** support desktop applications, CLI, browser
+   extensions, and SSH Agent integrations through a stable local interface.
 
-这些目标应建立在同一个小型安全核心上，而不是拆成多个独立平台。
+These goals should be built on one small security core rather than split into
+multiple independent platforms.
 
-## 3. 产品边界
+## 3. Product Boundaries
 
-### 3.1 Persona 负责什么
+### 3.1 What Persona Is Responsible For
 
-| 能力       | 职责                                         |
-| ---------- | -------------------------------------------- |
-| 身份管理   | 个人、组织、开发者等身份及其上下文           |
-| 凭证管理   | 密码、Token、API Key、SSH 私钥及其他秘密     |
-| 分级安全   | 不同秘密对应的保护等级、解锁和验证要求       |
-| 授权管理   | 主体、资源、操作和上下文之间的权限判断       |
-| 密钥管理   | 加密密钥层级、密钥派生、包装、轮换及安全存储 |
-| 秘密使用   | 受控读取、显示、复制、签名、填充、导出和共享 |
-| 安全审计   | 记录重要授权决策与敏感操作事件               |
-| 客户端接口 | 为可信应用提供统一的安全能力入口             |
+| Capability               | Responsibility                                                            |
+| ------------------------ | ------------------------------------------------------------------------- |
+| Identity management      | Personal, organizational, and developer identities and their contexts     |
+| Credential management    | Passwords, tokens, API keys, SSH private keys, and other secrets          |
+| Tiered security          | Protection levels, unlock, and verification requirements per secret       |
+| Authorization management | Permission decisions across subjects, resources, operations, and contexts |
+| Key management           | Key hierarchy, derivation, wrapping, rotation, and secure storage         |
+| Secret usage             | Controlled read, display, copy, signing, autofill, export, and sharing    |
+| Security auditing        | Recording key authorization decisions and sensitive operation events      |
+| Client interface         | A unified, secure entry point for trusted applications                    |
 
-### 3.2 Persona 不负责什么
+### 3.2 What Persona Is Not Responsible For
 
-- 通用企业 IAM、员工目录和复杂组织管理。
-- 远程连接、远程桌面和服务器会话管理。
-- 任务调度、自动化执行和远程执行代理。
-- CI/CD 工作流管理和部署编排。
-- 通用的运维控制台。
-- 复杂的分布式策略引擎。
-- 独立的业务数据管理平台。
+- General-purpose enterprise IAM, employee directories, and complex
+  organizational management.
+- Remote connections, remote desktop, and server session management.
+- Task scheduling, automated execution, and remote execution agents.
+- CI/CD workflow management and deployment orchestration.
+- A general-purpose operations console.
+- Complex distributed policy engines.
+- A standalone business data management platform.
 
-外部应用可以使用 Persona 的凭证能力，但具体的业务流程仍由外部应用
-负责。例如，外部 SSH 客户端可以请求 Persona 使用某个 SSH 私钥进行
-认证，但服务器连接、会话展示和远程操作不属于 Persona 的职责。
+External applications can use Persona's credential capabilities, but the
+concrete business flows remain the responsibility of the external application.
+For example, an external SSH client can ask Persona to authenticate with a
+certain SSH private key, but server connections, session display, and remote
+operations are not Persona's responsibility.
 
-## 4. 核心概念模型
+## 4. Core Concept Model
 
-Persona 需要明确区分以下对象（与核心概念章对应）。
+Persona needs to clearly distinguish the following objects (corresponding to
+the core concepts chapter).
 
-### 4.1 Identity：身份
+### 4.1 Identity
 
-身份描述用户当前以什么角色和语境工作，例如 Personal、Work、Developer
-或某个具体组织 / 项目身份（见分身（Identity））。
+Identity describes the role and context the user is currently working under,
+for example Personal, Work, Developer, or a specific organization/project
+identity (see Identity).
 
-身份切换用于改变当前操作语境，但不应自动授予新权限，也不应自动解锁
-所有秘密。
+Switching identity changes the current operating context, but it must not
+automatically grant new permissions, nor automatically unlock all secrets.
 
-### 4.2 Principal：操作主体
+### 4.2 Principal
 
-Principal 是实际发起请求的主体（见主体（Principal）），
-可以是：
+The Principal is the subject that actually issues a request (see
+Principal). It can be:
 
-- 当前用户。
-- 已注册的设备。
-- 已授权的桌面应用。
-- CLI 客户端。
-- 浏览器扩展。
-- SSH Agent 或其他受信任客户端。
+- The current user.
+- A registered device.
+- An authorized desktop application.
+- A CLI client.
+- A browser extension.
+- The SSH Agent or another trusted client.
 
-Identity 与 Principal 不是同一概念。用户当前的身份和实际发起操作的
-应用，都需要参与授权判断。
+Identity and Principal are not the same concept. Both the user's current
+identity and the application actually issuing the operation take part in
+authorization decisions.
 
-### 4.3 Resource：受保护资源
+### 4.3 Resource
 
-Resource 是被 Persona 管理或保护的对象，例如：
+A Resource is an object managed or protected by Persona, for example:
 
-- 一个保险库。
-- 一条密码记录。
-- 一个 SSH 私钥。
-- 一个 API Token。
-- 一个助记词。
-- 一个受保护的密钥操作接口。
+- A vault.
+- A password entry.
+- An SSH private key.
+- An API token.
+- A mnemonic.
+- A protected key operation interface.
 
-资源可以具有所属身份、安全等级和独立的访问规则。
+A resource can have an owning identity, a security level, and its own access
+rules.
 
-### 4.4 Action：操作
+### 4.4 Action
 
-同一资源的不同操作应当分别授权（见动作（Action）），
-例如：
+Different operations on the same resource should be authorized separately (see
+Action), for example:
 
-- `read_metadata`：读取非敏感元数据。
-- `reveal_secret`：显示秘密明文。
-- `copy_secret`：复制秘密。
-- `use_credential`：使用凭证完成认证。
-- `sign`：调用私钥执行签名。
-- `export`：导出秘密原文。
-- `share`：共享或授权其他主体使用。
+- `read_metadata`: read non-sensitive metadata.
+- `reveal_secret`: display the secret's plaintext.
+- `copy_secret`: copy the secret.
+- `use_credential`: use the credential to complete authentication.
+- `sign`: invoke the private key to perform a signature.
+- `export`: export the secret's plaintext.
+- `share`: share the secret or authorize another subject to use it.
 
-允许使用凭证，不等于允许读取或导出凭证原文。
+Being allowed to use a credential does not mean being allowed to read or export
+its plaintext.
 
-### 4.5 Security Level：安全等级
+### 4.5 Security Level
 
-安全等级表达资源所需的保护强度。它不等于权限，也不直接代表当前解锁
-状态。
+The security level expresses the strength of protection a resource requires. It
+is not the same as a permission, and it does not directly represent the current
+unlock state.
 
-安全等级应影响密钥保护、解锁要求、验证强度、操作限制和恢复策略。
+The security level should influence key protection, unlock requirements,
+verification strength, operation restrictions, and recovery policy.
 
-### 4.6 Unlock State：解锁状态
+### 4.6 Unlock State
 
-解锁状态描述当前会话或资源是否已经具备执行操作所需的解锁条件。
+The unlock state describes whether the current session or resource already meets
+the unlock conditions required to perform an operation.
 
-整个 Persona 可以处于可用状态，但某个高安全级别保险库仍然保持锁定。
-解锁范围应尽量局部化，避免一个全局解锁状态让所有秘密同时暴露。
+Persona as a whole can be in a usable state while a high-security vault remains
+locked. The unlock scope should be kept as local as possible, so that a single
+global unlock state does not expose all secrets at once.
 
-## 5. 总体架构
+## 5. Overall Architecture
 
-Persona 采用分层架构。客户端不直接访问底层秘密存储，也不自行决定
-权限，而是通过统一的安全执行入口完成操作。
+Persona uses a layered architecture. Clients do not access the underlying secret
+storage directly, nor do they decide permissions themselves; instead, they
+complete operations through a unified secure execution entry point.
 
 ```mermaid
 flowchart TB
-    subgraph Clients["客户端与集成层"]
+    subgraph Clients["Clients & Integrations"]
         Desktop["Desktop"]
         CLI["CLI"]
         Browser["Browser Extension"]
         Agent["SSH Agent / Other Clients"]
     end
 
-    subgraph Product["Persona 产品能力层"]
+    subgraph Product["Persona Product Capability Layer"]
         Identity["Identity & Context"]
         Credential["Credential Management"]
         Vault["Vault & Resource Management"]
         Integration["Client Integration API"]
     end
 
-    subgraph Security["安全核心层"]
+    subgraph Security["Security Core Layer"]
         Authz["Authorization Engine"]
         SecurityPolicy["Security Policy & Unlock"]
         SecureOps["Secure Operation Gateway"]
         Audit["Security Audit"]
     end
 
-    subgraph Protection["密钥与存储层"]
+    subgraph Protection["Key & Storage Layer"]
         KeyHierarchy["Key Hierarchy & Key Protection"]
         Crypto["Cryptographic Services"]
         SecureStore["Encrypted Secret Storage"]
@@ -232,180 +268,206 @@ flowchart TB
     SecureOps --> Audit
 ```
 
-### 5.1 客户端与集成层
+### 5.1 Clients and Integration Layer
 
-负责将 Persona 的能力提供给用户和外部应用，包括桌面端、CLI、浏览器
-扩展以及 SSH Agent 等集成。
+This layer exposes Persona's capabilities to users and external applications,
+including the desktop app, CLI, browser extension, and SSH Agent integrations.
 
-这一层负责交互和协议适配，不负责实现独立的安全策略。
+It is responsible for interaction and protocol adaptation, not for implementing
+independent security policies.
 
-### 5.2 产品能力层
+### 5.2 Product Capability Layer
 
-负责身份、凭证、保险库、资源元数据和客户端接口等业务能力。它描述系统
-管理哪些对象，以及这些对象之间的关系。
+This layer provides the business capabilities around identity, credentials,
+vaults, resource metadata, and the client interface. It describes which
+objects the system manages and how they relate to each other.
 
-### 5.3 安全核心层
+### 5.3 Security Core Layer
 
-这是 Persona 最重要的部分，负责所有敏感操作的安全决策。它至少包括：
+This is the most important part of Persona; it is responsible for the security
+decisions of every sensitive operation. It includes at least:
 
-- 身份和操作上下文解析。
-- 授权引擎。
-- 安全等级与解锁策略。
-- 统一的安全操作入口。
-- 安全审计。
+- Identity and operation context resolution.
+- The authorization engine.
+- Security level and unlock policies.
+- The unified secure operation entry point.
+- Security auditing.
 
-所有客户端都必须通过这一层执行受保护操作。
+All clients must perform protected operations through this layer.
 
-### 5.4 密钥与存储层
+### 5.4 Key and Storage Layer
 
-负责秘密的加密、密钥派生与包装、密钥使用，以及加密数据和元数据的
-持久化。
+This layer is responsible for secret encryption, key derivation and wrapping,
+key usage, and the persistence of encrypted data and metadata.
 
-业务模块不应绕过安全核心，直接获取底层明文或解密密钥。具体使用系统
-密钥库、硬件安全能力或独立加密保险库，应根据平台能力和安全等级选择，
-而不是假定所有平台都提供相同的保护能力。
+Business modules must not bypass the security core to obtain underlying
+plaintext or decryption keys directly. Whether to use a system key store,
+hardware security capabilities, or a dedicated encrypted vault should be chosen
+according to platform capabilities and security levels, rather than assuming
+that every platform offers the same protection capabilities.
 
-## 6. 安全核心的内部关系
+## 6. Inside the Security Core
 
-总体架构还需要明确一次敏感操作实际如何执行。
+The overall architecture also needs to make clear how a sensitive operation is
+actually executed.
 
 ```mermaid
 flowchart TD
-    Request["收到敏感操作请求"]
-    Principal["识别 Principal"]
-    Identity["解析当前 Identity 与 Context"]
-    Resource["定位 Resource 与 Action"]
+    Request["Sensitive operation request"]
+    Principal["Identify Principal"]
+    Identity["Resolve current Identity & Context"]
+    Resource["Locate Resource & Action"]
     Authz["Authorization Engine"]
-    Level["检查 Security Level"]
-    Unlock["检查 Unlock State"]
-    Verify["必要时重新验证"]
-    Key["取得受限的密钥使用能力"]
-    Execute["执行受控操作"]
-    Audit["记录安全事件"]
-    Deny["拒绝请求"]
+    Level["Check Security Level"]
+    Unlock["Check Unlock State"]
+    Verify["Re-verify if needed"]
+    Key["Obtain restricted key usage capability"]
+    Execute["Execute controlled operation"]
+    Audit["Record security events"]
+    Deny["Deny request"]
 
     Request --> Principal
     Principal --> Identity
     Identity --> Resource
     Resource --> Authz
 
-    Authz -->|拒绝| Deny
-    Authz -->|允许| Level
+    Authz -->|deny| Deny
+    Authz -->|allow| Level
 
-    Level -->|要求未满足| Deny
-    Level -->|要求满足| Unlock
+    Level -->|requirements unmet| Deny
+    Level -->|requirements met| Unlock
 
-    Unlock -->|未解锁| Verify
-    Unlock -->|已解锁| Key
+    Unlock -->|locked| Verify
+    Unlock -->|unlocked| Key
 
-    Verify -->|验证失败或取消| Deny
-    Verify -->|验证成功| Key
+    Verify -->|verification failed or canceled| Deny
+    Verify -->|verification succeeded| Key
 
     Key --> Execute
     Execute --> Audit
 ```
 
-上述流程是逻辑示意，实际实现可以根据操作类型调整检查顺序。例如，读取
-普通元数据不一定需要解锁秘密，而导出高安全级别秘密可能需要重新认证甚至
-额外的硬件验证。
+The flow above is a logical illustration; the actual implementation can adjust
+the order of checks depending on the operation type. For example, reading
+ordinary metadata does not necessarily require unlocking secrets, while
+exporting a high-security secret may require re-authentication or even
+additional hardware verification.
 
-核心规则是：**授权、解锁和安全要求必须全部满足，操作才能执行。**
+The core rule is: **the operation may execute only when authorization, unlock,
+and security requirements are all satisfied.**
 
-## 7. 分级安全体系
+## 7. Tiered Security System
 
-Persona 不应只为每条凭证增加一个简单的等级数字，而应定义可执行的
-保护配置。建议初期使用三个默认安全等级。
+Rather than just attaching a simple numeric level to each credential, Persona
+should define enforceable protection profiles. Three default security levels are
+recommended for the initial phase.
 
-### Level 1：普通凭证
+### Level 1: Ordinary Credentials
 
-适用于一般网站密码、普通开发 Token 和低风险 API Key。
+For ordinary website passwords, routine development tokens, and low-risk API
+keys.
 
-基本要求：
+Basic requirements:
 
-- 加密存储。
-- 在规定的会话条件下访问。
-- 根据身份和资源策略授权。
-- 对明文显示、复制和导出分别实施权限控制。
+- Encrypted storage.
+- Access under defined session conditions.
+- Authorization according to identity and resource policies.
+- Separate permission control over plaintext display, copying, and export.
 
-### Level 2：敏感凭证
+### Level 2: Sensitive Credentials
 
-适用于生产环境 SSH 私钥、重要云服务密钥和高权限 API Token。
+For production SSH private keys, important cloud service keys, and
+high-privilege API tokens.
 
-额外要求：
+Additional requirements:
 
-- 更严格的解锁条件。
-- 支持操作级重新认证。
-- 限制明文导出。
-- 对签名、复制、导出等重要操作进行审计。
-- 可以限制允许使用的客户端。
+- Stricter unlock conditions.
+- Support for per-operation re-authentication.
+- Restrict plaintext export.
+- Audit important operations such as signing, copying, and export.
+- Optionally restrict which clients are allowed to use them.
 
-### Level 3：根秘密
+### Level 3: Root Secrets
 
-适用于助记词、主恢复材料、根密钥及其他高价值秘密。
+For mnemonics, master recovery materials, root keys, and other high-value
+secrets.
 
-额外要求：
+Additional requirements:
 
-- 独立的密钥保护和解锁边界。
-- 尽可能减少秘密明文暴露。
-- 严格限制应用访问和自动化操作。
-- 默认禁止普通客户端直接读取或导出。
-- 重要操作要求额外验证，并提供明确的恢复和备份策略。
+- Independent key protection and unlock boundary.
+- Minimize exposure of the secret's plaintext.
+- Strictly restrict application access and automated operations.
+- Deny direct reading or export by ordinary clients by default.
+- Require additional verification for important operations, and provide a clear
+  recovery and backup strategy.
 
-安全等级的具体保护方式应由策略决定（见策略（Policy））。
-等级本身不能替代授权判断，也不能被当成已经实现的安全保证。
+How each security level is concretely protected should be decided by policy (see
+Policy). The level itself cannot replace authorization
+decisions, nor can it be treated as an already-implemented security guarantee.
 
-## 8. 身份隔离与授权体系
+## 8. Identity Isolation and the Authorization System
 
-### 8.1 身份与资源的关系
+### 8.1 The Relationship Between Identity and Resources
 
-每条凭证都应具有明确的所属范围，例如个人、公司或指定组织。
+Every credential must have a clear owning scope, such as personal, company, or
+a designated organization.
 
-切换身份时，Persona 更新当前操作上下文，但不自动把其他身份的资源开放
-给当前主体。
+When switching identity, Persona updates the current operating context, but
+does not automatically open another identity's resources to the current
+subject.
 
-### 8.2 授权模型
+### 8.2 Authorization Model
 
-建议第一版采用轻量的基于属性的访问控制模型（ABAC），结合显式授权规则
-和默认拒绝。判断因素包括：
+The first version is recommended to adopt a lightweight attribute-based access
+control (ABAC) model, combined with explicit authorization rules and default
+deny. The factors considered include:
 
-- Principal：谁在请求。
-- Identity：当前使用哪个身份。
-- Resource：访问什么资源。
-- Action：执行什么操作。
-- Context：设备、会话、来源应用及其他安全条件。
-- Security Requirements：该操作需要满足的保护要求。
+- Principal: who is making the request.
+- Identity: which identity is in use.
+- Resource: which resource is accessed.
+- Action: which operation is performed.
+- Context: device, session, source application, and other security conditions.
+- Security requirements: the protection requirements the operation must meet.
 
-不需要第一版就实现复杂的企业角色继承系统或通用策略语言。
+The first version does not need to implement complex enterprise role inheritance
+systems or a general-purpose policy language.
 
-### 8.3 授权与密钥使用分离
+### 8.3 Separation of Authorization and Key Usage
 
-Persona 应当区分：
+Persona should distinguish:
 
-- 获准读取秘密。
-- 获准使用秘密。
-- 获准导出秘密。
-- 获准向其他主体授予使用权限。
+- Being authorized to read a secret.
+- Being authorized to use a secret.
+- Being authorized to export a secret.
+- Being authorized to grant usage rights to other subjects.
 
-例如，外部 SSH 客户端获得某把 SSH 私钥的 `sign` 权限后，可以通过
-Persona 提供的受控接口完成签名，但不能据此读取私钥原文。
+For example, once an external SSH client has obtained the `sign` permission
+for a given SSH private key, it can complete the signature through the
+controlled interface provided by Persona, but it cannot read the private key's
+plaintext on that basis.
 
-这是 Persona 与单纯加密密码存储工具之间的重要区别。
+This is an important difference between Persona and a mere encrypted password
+storage tool.
 
-### 8.4 授权与安全等级独立
+### 8.4 Authorization Is Independent of the Security Level
 
-假设当前用户已经切换到公司开发者身份：
+Assume the current user has switched to the company developer identity:
 
-- 普通 GitHub Token：当前身份有权限、保险库已解锁，可以使用。
-- 生产环境 SSH 私钥：当前身份有权限，但尚未满足额外验证要求，暂时
-  不能使用。
-- 个人钱包助记词：公司身份没有权限，即使其他保险库已经解锁，也不能
-  访问。
+- An ordinary GitHub token: the current identity is authorized and the vault is
+  unlocked, so it can be used.
+- A production SSH private key: the current identity is authorized, but the
+  additional verification requirements have not been met, so it cannot be used
+  for now.
+- A personal wallet mnemonic: the company identity is not authorized, so it
+  cannot be accessed even if other vaults are already unlocked.
 
-三种结果分别由授权、解锁和身份隔离共同决定。
+These three outcomes are each determined jointly by authorization, unlock, and
+identity isolation.
 
-## 9. 密钥层级与存储设计
+## 9. Key Hierarchy and Storage Design
 
-Persona 的密钥体系应与业务授权分离。建议采用以下逻辑结构：
+Persona's key system should be separated from business authorization. The
+following logical structure is recommended:
 
 ```text
 User Authentication / Unlock Factors
@@ -424,24 +486,31 @@ User Authentication / Unlock Factors
        Credential Secret Data
 ```
 
-对于高安全级别秘密，可以使用独立的密钥层级和更严格的解锁机制。
+For high-security secrets, a separate key hierarchy and stricter unlock
+mechanisms can be used.
 
-关键原则：
+Key principles:
 
-1. 不以普通业务数据库中的明文字段保存秘密。
-2. 将密钥材料与加密后的秘密数据分离。
-3. 尽可能利用操作系统密钥库、硬件安全能力或平台支持的保护机制。
-4. 避免将所有保险库都依赖于同一个长期处于明文状态的主密钥。
-5. 对内存中的秘密、临时缓冲区、剪贴板和日志进行明确管理。
-6. 设计密码变更、密钥轮换、备份与恢复机制。
-7. 根秘密的恢复能力与日常解锁能力应区别设计。
+1. Never store secrets as plaintext fields in ordinary business databases.
+2. Keep key material separate from the encrypted secret data.
+3. Make the best possible use of the operating system key store, hardware
+   security capabilities, or platform-provided protection mechanisms.
+4. Avoid making every vault depend on a single long-lived master key held in
+   plaintext.
+5. Manage in-memory secrets, temporary buffers, the clipboard, and logs
+   explicitly.
+6. Design password change, key rotation, backup, and recovery mechanisms.
+7. Root-secret recovery should be designed differently from everyday unlocking.
 
-具体的密钥派生、加密算法、随机数、认证加密模式和密钥轮换协议需要在
-独立的安全设计阶段明确，不能只凭架构图认定实现安全。
+The concrete key derivation, encryption algorithms, randomness, authenticated
+encryption modes, and key rotation protocols must be spelled out in a dedicated
+security design phase; an architecture diagram alone does not make an
+implementation secure.
 
-## 10. 安全操作与外部集成
+## 10. Secure Operations and External Integration
 
-所有涉及秘密的操作都应通过统一的 Secure Operation API，例如：
+All operations involving secrets should go through the unified Secure Operation
+API, for example:
 
 - `get_metadata`
 - `reveal_secret`
@@ -452,126 +521,146 @@ User Authentication / Unlock Factors
 - `grant_access`
 - `revoke_access`
 
-这些接口应采用不同的权限语义，避免用一个通用的 `get_secret` 接口覆盖
-所有操作。
+These interfaces should use distinct permission semantics, avoiding a single
+generic `get_secret` interface that covers every operation.
 
-对于外部客户端：
+For external clients:
 
-- 客户端需要具有可识别的主体身份。
-- 授权必须绑定具体资源和操作。
-- 可以对授权设置有效期、撤销状态和适用范围。
-- 敏感授权应有明确的用户确认或重新验证机制。
-- 客户端不得通过另一个接口绕过相同的安全检查。
-- 客户端崩溃或断开连接时，不应留下不必要的长期解锁状态。
+- A client must have an identifiable subject identity.
+- Authorization must be bound to specific resources and operations.
+- Authorization can carry an expiry, a revocation status, and a scope of
+  application.
+- Sensitive authorizations should have an explicit user-confirmation or
+  re-verification mechanism.
+- A client must not bypass the same security checks through another interface.
+- When a client crashes or disconnects, it must not leave unnecessary long-lived
+  unlock state behind.
 
-第一版可以先提供本地 IPC 和 CLI 接口，再逐步增加浏览器扩展、SSH Agent
-等集成。
+The first version can start with local IPC and a CLI interface, then gradually
+add browser extension, SSH Agent, and other integrations.
 
-## 11. 安全审计
+## 11. Security Auditing
 
-审计的目标是帮助用户理解敏感操作发生了什么，而不是建设庞大的企业
-日志平台。建议记录：
+The goal of auditing is to help users understand what happened with sensitive
+operations, not to build a huge enterprise logging platform. The following
+should be recorded:
 
-- 授权请求及结果。
-- 资源和操作类型。
-- 发起请求的主体。
-- 使用的身份上下文。
-- 是否触发额外验证。
-- 授权授予、修改和撤销事件。
-- 敏感操作的执行结果。
+- Authorization requests and their outcomes.
+- Resource and operation types.
+- The subject that issued the request.
+- The identity context used.
+- Whether additional verification was triggered.
+- Authorization grant, modification, and revocation events.
+- The outcome of sensitive operations.
 
-日志应避免包含秘密明文、密码、Token、助记词和其他敏感材料。
+Logs must avoid containing secret plaintext, passwords, tokens, mnemonics, and
+other sensitive material.
 
-对于高价值操作，应该优先保证审计信息的完整性与可追溯性。
+For high-value operations, the integrity and traceability of audit information
+should take priority.
 
-## 12. 第一版产品范围
+## 12. First Version Product Scope
 
-第一版的目标是形成完整、可信且可用的本地安全核心，而不是一次性覆盖
-所有客户端和企业需求。
+The goal of the first version is to form a complete, trustworthy, and usable
+local security core, not to cover every client and enterprise need in one go.
 
-### P0：必须完成
+### P0: Must Complete
 
-- 身份和资源模型。
-- 凭证与保险库管理。
-- 分级安全与解锁状态。
-- 默认拒绝的授权引擎。
-- 统一的安全操作入口。
-- 加密存储与密钥层级。
-- 敏感操作审计。
-- 本地桌面端或 CLI 的基本使用流程。
-- 安全测试、备份与恢复验证。
+- Identity and resource models.
+- Credential and vault management.
+- Tiered security and unlock state.
+- A default-deny authorization engine.
+- The unified secure operation entry point.
+- Encrypted storage and the key hierarchy.
+- Auditing of sensitive operations.
+- Basic usage flows for the local desktop app or CLI.
+- Security testing, backup, and recovery validation.
 
-### P1：逐步增加
+### P1: Added Incrementally
 
-- 外部应用授权管理。
-- SSH Agent 集成。
-- 浏览器扩展。
-- 操作级重新认证。
-- 更精细的密钥使用与导出限制。
-- 跨设备同步与加密备份。
+- External application authorization management.
+- SSH Agent integration.
+- Browser extension.
+- Per-operation re-authentication.
+- Finer-grained key usage and export restrictions.
+- Cross-device sync and encrypted backup.
 
-### 暂不实现
+### Not Yet
 
-- 通用企业 IAM。
-- 复杂角色继承和策略编程语言。
-- 分布式授权服务。
-- 远程执行与运维代理。
-- CI/CD 编排。
-- 复杂的组织管理后台。
+- General-purpose enterprise IAM.
+- Complex role inheritance and policy programming languages.
+- Distributed authorization services.
+- Remote execution and operations agents.
+- CI/CD orchestration.
+- Complex organizational management backends.
 
-这些功能只有在明确的产品需求出现时才考虑扩展。
+These features are only considered for expansion once clear product needs arise.
 
-## 13. 架构演进原则
+## 13. Architecture Evolution Principles
 
-Persona 的演进必须围绕同一个核心问题：
+Persona's evolution must revolve around one core question:
 
-**如何在不扩大秘密暴露面的前提下，让正确的身份和应用在正确的条件下
-使用正确的凭证？**
+**How can the right identity and the right applications use the right
+credentials under the right conditions without enlarging the secret exposure
+surface?**
 
-因此：
+Therefore:
 
-- 身份管理不应变成企业目录平台。
-- 授权引擎不应变成通用 IAM 产品。
-- 安全等级不应退化成简单的数字标签。
-- 解锁机制不应只有一个全局开关。
-- 密钥存储不应被普通业务代码绕过。
-- 客户端扩展不应复制或削弱核心安全逻辑。
+- Identity management must not turn into an enterprise directory platform.
+- The authorization engine must not turn into a general-purpose IAM product.
+- Security levels must not degenerate into simple numeric labels.
+- The unlock mechanism must not be a single global switch.
+- Key storage must not be bypassed by ordinary business code.
+- Client extensions must not duplicate or weaken the core security logic.
 
-## 14. 最终产品定义
+## 14. Final Product Definition
 
-Persona 是一个以本地安全核心为基础的个人数字身份与秘密资产管理系统。
+Persona is a personal digital identity and secret asset management system built
+on a local security core.
 
-它通过身份隔离管理不同使用语境，通过授权引擎控制资源和操作，通过
-分级安全及解锁机制约束秘密的可用条件，再通过密钥层级与加密存储保护
-底层秘密。
+It manages different usage contexts through identity isolation, controls
+resources and operations through the authorization engine, constrains the
+conditions under which secrets are available through tiered security and unlock
+mechanisms, and protects the underlying secrets through the key hierarchy and
+encrypted storage.
 
-其最重要的能力不是保存多少种凭证，而是让秘密能够被安全地管理、受控地
-使用，并且不会因为用户切换身份或某个应用获得授权，就意外暴露给其他
-身份和应用。
+Its most important capability is not how many kinds of credentials it can hold,
+but making secrets safely managed and used in a controlled way, without being
+accidentally exposed to other identities and applications just because the user
+switched identity or some application was granted authorization.
 
-**Persona 的核心竞争力：身份隔离 + 分级安全 + 细粒度授权 + 受控凭证
-使用。**
+**Persona's core competitiveness: identity isolation + tiered security +
+fine-grained authorization + controlled credential usage.**
 
-这四项能力共同组成产品的安全核心。桌面端、CLI 和其他集成都是这个核心
-的使用入口，而不是彼此独立的安全系统。
+Together, these four capabilities form the product's security core. The desktop
+app, CLI, and other integrations are entry points into this core, not
+independent security systems.
 
-## 15. 设计要点
+## 15. Design Points
 
-牢牢抓住三个关键点：
+Hold on to three key points:
 
-1. **Persona 不应该只是一个密码管理器。** 如果它只有加密存储、密码
-   生成和自动填充，那么它与现有密码管理产品的差异不够明显。它真正值得
-   建设的地方是身份隔离、不同等级的秘密保护，以及向应用提供受控的凭证
-   使用能力。
-2. **授权必须是核心安全架构，而不是一个权限管理页面。** 每一个读取、
-   签名、导出、共享等敏感操作都应经过统一安全入口。否则，桌面端实现
-   一套授权、CLI 实现另一套授权，最后就会出现绕过安全策略的路径。
-3. **分级安全必须体现在实际保护机制中。** 不能只给密码、Token、助记词
-   标注 L1、L2、L3。不同等级必须实际影响密钥保护、解锁、重新认证、应用
-   访问和导出限制。
+1. **Persona should not be just a password manager.** If it only offers
+   encrypted storage, password generation, and autofill, its difference from
+   existing password manager products is not obvious enough. What is truly
+   worth building is identity isolation, tiered secret protection, and the
+   ability to give applications controlled credential usage.
+2. **Authorization must be part of the core security architecture, not a
+   permission management page.** Every sensitive operation — read, sign,
+   export, share, and so on — should go through the unified security entry
+   point. Otherwise the desktop app implements one authorization scheme and the
+   CLI another, and paths that bypass the security policy will eventually
+   appear.
+3. **Tiered security must be reflected in the actual protection mechanisms.**
+   Do not just label passwords, tokens, and mnemonics as L1, L2, L3. Different
+   levels must actually influence key protection, unlocking, re-authentication,
+   application access, and export restrictions.
 
-另一个需要提前明确的设计决策：**身份、保险库和安全等级三者不要设计成
-同一层级的概念。** 身份表达使用语境，保险库负责资源组织与保护边界，
-安全等级表达保护要求。它们应该组合工作，但不能相互替代。
+One design decision to settle early: **identity, vault, and security level must
+not be designed as concepts at the same layer.** Identity expresses the usage
+context, the vault is responsible for resource organization and the protection
+boundary, and the security level expresses protection requirements. They should
+work in combination, but cannot replace one another.
 
-这样 Persona 才能保持产品小巧，同时具备清晰、可扩展的安全架构。
+Only then can Persona stay a small product while carrying a clear, extensible
+security architecture.

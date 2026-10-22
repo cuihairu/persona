@@ -1,53 +1,67 @@
-# 核心功能
+# Core Features
 
-Persona 的功能面围绕一个原则：**敏感数据只在你的设备上解密**。以下是当前
-已实现的能力清单（不宣称未实现的功能；规划中的见
-[路线图](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md)）。
+Persona's feature surface revolves around one principle: **sensitive data is decrypted only
+on your devices**. Below is the list of currently implemented capabilities — we make no
+claims about unimplemented features; planned work lives in the
+[roadmap](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md).
 
-## 凭据与身份库
+## Credentials and Identity Vaults
 
-- **按身份隔离的密码库**：密码、TOTP、API key、SSH key、标签与安全元数据，
-  每个身份一套独立视图。
-- **条目历史**（1Password 风格）：每次创建/修改/删除都带时间戳记录，可回溯。
-- **冲突双版本保留**：多设备离线并发修改同一凭据时不覆盖、不丢数据，
-  由你在裁决界面选择保留哪版。
-- **导入/导出**：JSON / YAML / CSV，可选 gzip 压缩与口令加密
-  （Argon2id + AES-GCM）。
+- **Vaults isolated per identity**: passwords, TOTP, API keys, SSH keys, tags, and security
+  metadata, with an independent view per identity.
+- **Item history** (1Password-style): every create/modify/delete is timestamped and
+  traceable.
+- **Dual-version conflict retention**: concurrent offline edits to the same credential from
+  multiple devices are never overwritten or lost; you pick which version to keep in the
+  resolution UI.
+- **Import/export**: JSON / YAML / CSV with optional gzip compression and passphrase
+  encryption (Argon2id + AES-GCM).
 
-## 开发者工具
+## Developer Tools
 
-- **内置 SSH Agent**：SSH 密钥由 Persona 托管签名，签名事件进审计日志。
-- **CLI**：脚本化的凭据增删改查、导出导入、工作区管理
-  （见快速开始）。
-- **Connect 自动化 API**：本机 HTTP 服务供脚本与工具读取凭据，
-  口令保护 + 明文一次性展示。
+- **Built-in SSH Agent**: SSH keys are hosted and signed by Persona, and signing events go
+  into the audit log.
+- **CLI**: scriptable credential CRUD, import/export, and workspace management (see
+  Get Started).
+- **Connect automation API**: a local HTTP service that lets scripts and tools read
+  credentials, with passphrase protection and one-time plaintext display.
 
-## 浏览器扩展
+## Browser Extension
 
-- 自动填充与建议：表单识别、按站点身份默认值。
-- 钓鱼防护与域策略：站点域名不匹配即拒绝填充。
+- Autofill and suggestions: form detection and per-site identity defaults.
+- Phishing protection and domain policies: fill is refused when the site domain does not
+  match.
 
-## 安全基座
+## Security Foundation
 
-- **本地加密存储（零知识存储语义）**：主密码派生密钥（Argon2id）
-  加密整个 SQLite 库，主密码丢失无任何找回途径。
-- **自动锁定与敏感操作再认证**：锁屏即断密钥；查看密文、改密等操作
-  要求重新认证。
-- **旅行模式**：长离线场景下主动剥离本机密钥材料。
-- **审计日志**：关键操作与签名事件（含摘要）本地留痕。
-- **可复现构建**：deb 产物同机逐字节可复现，构建容器钉死
-  （见 [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)）。
+- **Local encrypted storage (zero-knowledge storage semantics)**: a key derived from the
+  master password (Argon2id) encrypts the whole SQLite database; a lost master password
+  cannot be recovered by any means.
+- **Auto-lock and re-authentication for sensitive actions**: locking drops the keys;
+  actions like revealing stored credentials or changing the master password require
+  re-authentication.
+- **Travel mode**: proactively strips local key material for extended offline periods.
+- **Audit log**: critical operations and signing events (with digests) are recorded
+  locally.
+- **Reproducible builds**: deb artifacts are byte-for-byte reproducible on the same
+  machine, with the build container pinned (see
+  [REPRODUCIBLE_BUILDS.md](https://github.com/cuihairu/persona/blob/main/docs/REPRODUCIBLE_BUILDS.md)).
 
-## 同步与备份（全部可选）
+## Sync and Backup (All Optional)
 
-- **默认纯本地、零联网**——不配置任何服务器时没有网络外联。
-- **同步组配对**（默认同步路径）：动态密码 + PAKE 配对入组，零账号零注册，
-  双端核对 6 位数字指纹防中间人；组密钥永不出端，协议层已落地（桌面设置页
-  可发起出码/输码配对）。
-- **端到端加密同步**（账号式，显式开启）：自托管 Persona Server 中继密文
-  操作日志，服务器只见密文与元数据；组密钥可轮换（并发轮换以乐观锁互斥）。
-- **备份**：加密导出文件（口令独立于主密码）；自托管用户可整库快照异地
-  保管。
+- **Fully local by default, zero network** — with no server configured, nothing phones
+  home.
+- **Sync group pairing** (the default sync path): dynamic passwords + PAKE pairing into a
+  group, with zero accounts and zero registration; both ends verify a 6-digit numeric
+  fingerprint to prevent man-in-the-middle attacks; the group key never leaves the device.
+  Implemented at the protocol level (show-code/enter-code pairing can be started from the
+  desktop settings page).
+- **End-to-end encrypted sync** (account-based, explicitly enabled): a self-hosted Persona
+  Server relays an encrypted operation log, so the server sees only ciphertext and
+  metadata; group keys are rotatable (concurrent rotations are mutually excluded with an
+  optimistic lock).
+- **Backup**: encrypted export files (with a passphrase independent of the master
+  password); self-hosted users can keep full-vault snapshots off-site.
 
-边界与威胁模型详见
-[THREAT_MODEL.md](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md)。
+For boundaries and the threat model, see
+[THREAT_MODEL.md](https://github.com/cuihairu/persona/blob/main/docs/THREAT_MODEL.md).

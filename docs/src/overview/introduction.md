@@ -1,83 +1,125 @@
-# 项目简介
+# Introduction
 
-## 项目背景
+## Background
 
-在当今数字化社会中，同一个人往往要在多个数字场景中使用不同的密钥和凭据：工作环境、个人环境、服务器访问、浏览器登录、自动化脚本，甚至未来的钱包场景。这些场景并不是"不同的人"，而是同一个人的不同分身。
+In today's digital world, one person routinely uses different keys and credentials across
+many contexts: work, personal, server access, browser logins, automation scripts, and even
+wallet scenarios on the horizon. These are not "different people" — they are different
+personas ("分身") of the same person.
 
-然而，现有的身份管理方案存在诸多问题：
+Existing identity-management approaches, however, come with plenty of problems:
 
-- **分散管理**：不同场景的密钥和凭据散落在浏览器、终端、文件和工具中
-- **隐私泄露**：中心化存储导致数据泄露风险
-- **切换困难**：在不同分身间切换繁琐且容易用错密钥
-- **边界模糊**：同一个人的不同用途材料容易相互污染
-- **安全隐患**：密码重用、弱认证、错误签名和误填充风险并存
+- **Fragmented management**: keys and credentials for different contexts are scattered
+  across browsers, terminals, files, and tools
+- **Privacy leaks**: centralized storage creates data-breach risk
+- **Painful switching**: switching between personas is cumbersome and error-prone — easy to
+  grab the wrong key
+- **Blurred boundaries**: material for different purposes of the same person easily
+  cross-contaminates
+- **Security hazards**: password reuse, weak authentication, wrong-key signing, and
+  mistaken autofill all coexist
 
-## 解决方案
+## The Solution
 
-Persona 旨在解决上述问题——定位是**本地优先、端到端加密的多分身数字身份运行时（Digital Identity Runtime）**：同一个人的每个分身（Identity）持有独立的身份材料（Material），材料的 reveal / fill / sign 等动作（Action）统一由策略（Policy）裁决，并在上下文（Context）中建议与切换。
+Persona exists to solve these problems. It is a **local-first, end-to-end encrypted
+multi-persona digital identity runtime**: each persona (Identity) of the same person holds
+its own identity material (Material); actions (Action) on that material — reveal / fill /
+sign — are uniformly adjudicated by policies (Policy), and suggested and switched within
+contexts (Context).
 
-一句话：**Password、SSH、TOTP、Wallet、Passkey 都是身份材料，不是功能列表；1Password 级别的能力是功能基准，不是产品叙事。**
+In one sentence: **Password, SSH, TOTP, Wallet, and Passkey are identity material, not a
+feature list; 1Password-grade capability is the functional baseline, not the product
+narrative.**
 
-完整的定位阐述、产品边界、分级安全与授权体系见产品定位与总体架构。
+For the full positioning, product boundaries, tiered security, and authorization model,
+see Product Positioning and Overall Architecture.
 
-### 多分身管理
+### Multi-Persona Management
 
-- 支持创建和管理同一个人的多个身份分身
-- 每个分身对应一组独立的身份材料
-- 按场景进行建议、切换和默认选择
+- Create and manage multiple identity personas for the same person
+- Each persona owns an independent set of identity material
+- Per-context suggestions, switching, and default selection
 
-### 本地优先与端到端加密
+### Local-First and End-to-End Encryption
 
-- 加密与密钥派生全部发生在本地，默认纯本地、零联网
-- 端到端加密同步已实现：服务器只中继密文，无法解密凭据内容
-- 服务器仍可见元数据（事件、时间戳、资源 ID、同步信息）——严谨表述见下方[术语说明](#术语说明为什么说端到端加密而不是零知识)
+- Encryption and key derivation happen entirely locally; the default is fully offline
+- End-to-end encrypted sync is already implemented: the server only relays ciphertext and
+  cannot decrypt credential contents
+- The server still sees metadata (events, timestamps, resource IDs, sync information) —
+  for the precise wording see
+  [Terminology](#terminology-why-end-to-end-encrypted-and-not-zero-knowledge) below
 
-### 一键切换体验
+### One-Click Switching
 
-- 快速在不同分身间切换
-- 自动填充相应凭据
-- 在浏览器、CLI、桌面端和 SSH 场景中保持统一上下文
+- Switch quickly between personas
+- Autofill the matching credentials
+- Keep a unified context across browser, CLI, desktop, and SSH scenarios
 
-## 核心理念
+## Core Philosophy
 
-身份材料归用户所有：本地加密存储，存储、使用、切换、签名都由用户与策略控制。敏感数据只在设备上解密；开启同步后，服务器只中继密文与元数据。
+Identity material belongs to the user: it is stored encrypted locally, and storage, use,
+switching, and signing are all governed by the user and by policies. Sensitive data is
+decrypted only on the device; with sync enabled, the server relays nothing but ciphertext
+and metadata.
 
-## 核心概念
+## Core Concepts
 
-Persona 的整个设计建立在六个一级概念上：**分身（Identity）、上下文（Context）、身份材料（Material）、策略（Policy）、动作（Action）**，以及预留的主体（Principal）。详见核心概念——那一组文档是 Persona 的理论基础：概念之间如何分离、各自在代码里的落点、以及哪些仍属规划。
+Persona's entire design rests on six first-class concepts: **persona (Identity), context
+(Context), material (Material), policy (Policy), and action (Action)**, plus the reserved
+principal (Principal). See Core Concepts — that set of documents is
+Persona's theoretical foundation: how the concepts are separated, where each lands in the
+code, and what remains planned.
 
-## 加密与解锁
+## Encryption and Unlocking
 
-- 全库加密：主密码经 Argon2id 派生密钥，AES-256-GCM 加密整个数据库，主密码丢失无任何找回途径。
-- 同步链路：服务器只中继密文与元数据，不参与解密；即使服务器被攻破，攻击者得到的也是密文。
-- 解锁方式：主密码为基座；桌面端生物识别解锁已落地，按 OS 分发提供者（如 Linux Secret Service）。
-- 动作裁决：reveal / fill / sign 由策略逐次控制（见动作、策略），并有基于上下文的分身建议。
+- Whole-vault encryption: the master password derives a key via Argon2id, and AES-256-GCM
+  encrypts the entire database. A lost master password cannot be recovered by any means.
+- Sync channel: the server relays only ciphertext and metadata and takes no part in
+  decryption; even if the server is compromised, all an attacker gets is ciphertext.
+- Unlock methods: the master password is the foundation; biometric unlock on desktop is
+  implemented, with providers dispatched per OS (e.g., the Linux Secret Service).
+- Action adjudication: reveal / fill / sign are controlled policy-by-policy on every
+  invocation (see Action and Policy), with
+  context-based persona suggestions.
 
-## 术语说明：为什么说「端到端加密」而不是「零知识」
+## Terminology: Why "End-to-End Encrypted" and Not "Zero-Knowledge"
 
-「零知识」很容易被读成「服务器什么都不知道」，但服务器事实上可以得到：事件、时间戳、设备信息、资源 ID 与同步元数据。本站在此统一术语：
+"Zero-knowledge" is easily read as "the server knows nothing," but in fact the server can
+see events, timestamps, device information, resource IDs, and sync metadata. This site
+settles on the following terminology:
 
-- **本地优先 + 端到端加密（Local-first + E2EE）**：全部加解密在用户设备完成，服务器只接触密文或事件摘要，无法解密凭据内容；
-- **零知识仅限定于凭据存储（Zero-knowledge credential storage）**：任何一方——包括本机软件与服务器——都无法绕过主密码读取明文。主密码丢失不可找回，正是这条属性的直接结果（见常见问题）。
+- **Local-first + E2EE**: all encryption and decryption happens on the user's devices; the
+  server touches only ciphertext or event digests and cannot decrypt credential contents.
+- **Zero-knowledge, scoped to credential storage**: no party — neither the local software
+  nor the server — can read plaintext without the master password. That a lost master
+  password is unrecoverable is a direct consequence of this property (see
+  FAQ).
 
-全站文档统一使用「本地优先 + 端到端加密」的表述；「零知识」只在存储语义的限定语内出现。
+Across this site, the wording is uniformly "local-first + end-to-end encrypted";
+"zero-knowledge" appears only as a qualifier of storage semantics.
 
-## 应用场景
+## Use Cases
 
-### 个人用户
+### Individual Users
 
-- 工作与生活分身隔离
-- 浏览器账户与 TOTP 管理
-- 在线服务安全登录和密钥隔离
+- Isolate work and personal personas
+- Manage browser accounts and TOTP
+- Secure logins and key isolation for online services
 
-### 开发者
+### Developers
 
-- SSH key、API key、TOTP 和网页登录统一管理
-- 在不同项目、客户、环境之间切换分身
-- 在自动化和终端场景中安全使用身份材料
+- Manage SSH keys, API keys, TOTP, and web logins in one place
+- Switch personas across projects, clients, and environments
+- Use identity material safely in automation and terminal scenarios
 
-## 发展愿景
+## Vision
 
-同一套身份边界覆盖桌面、浏览器、CLI 和 SSH：每个分身的密钥与凭据本地加密存储，切换分身不改材料，动作（reveal / fill / sign）由策略逐次裁决。Agent（Claude Code / Codex / CI）以受控主体身份进入同一套模型是预留方向，不含实现承诺。
+One identity boundary across desktop, browser, CLI, and SSH: each persona's keys and
+credentials are stored encrypted locally; switching personas never changes the material;
+actions (reveal / fill / sign) are adjudicated policy-by-policy. Agents (Claude Code / Codex
+/ CI) entering the same model as controlled principals is a
+reserved direction, with no implementation commitment.
 
-先把"同一个人的多个分身及其身份材料"组织、保护并授权清楚，再谈更大的平台——模型向上能长成身份运行时，向下始终是本地优先、端到端加密。
+First organize, protect, and authorize "multiple personas of one person and their identity
+material" — then talk about bigger platforms. The model can grow upward into an identity
+runtime; downward it stays local-first and end-to-end encrypted.

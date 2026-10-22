@@ -1,39 +1,50 @@
-# 认证 API
+# Authentication API
 
-Persona Server 的设备认证轨道：基于 SRP（Secure Remote Password）的设备
-登录，换取短期 Bearer 令牌。协议设计见
-[E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md)。
+Persona Server's device authentication track: device login based on SRP
+(Secure Remote Password), trading the proof for a short-lived Bearer token.
+For the protocol design, see
+[E2EE_SYNC_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/E2EE_SYNC_DESIGN.md).
 
-## 认证模型
+## Authentication Model
 
-- **设备即身份**：每台设备以设备名在服务器登记 SRP 盐与 verifier；同名
-  视为同一设备（重装重登记即覆盖）。
-- **令牌**：`/auth/verify` 成功后发放短期令牌（约 15 分钟 TTL），后续
-  `/api/v1/*` 请求以 `Authorization: Bearer <token>` 携带。
-- **fail-closed**：服务器未配置令牌轨道时，受保护端点一律 503，不降级
-  放行。
-- **吊销即时生效**：删除设备会立即吊销其内存中的短期令牌与未决握手，
-  不等 TTL 过期。
+- **The device is the identity**: each device registers an SRP salt and
+  verifier on the server under its device name; the same name counts as the
+  same device (a reinstall simply re-registers over the old entry).
+- **Tokens**: a successful `/auth/verify` issues a short-lived token (about a
+  15-minute TTL), carried on subsequent `/api/v1/*` requests as
+  `Authorization: Bearer <token>`.
+- **Fail-closed**: when the token track is not configured on the server,
+  protected endpoints return 503 across the board — there is no degraded,
+  open-access fallback.
+- **Revocation is immediate**: deleting a device instantly revokes its
+  in-memory short-lived tokens and pending handshakes, without waiting out
+  the TTL.
 
-## 端点
+## Endpoints
 
-| 方法 | 路径                     | 认证          | 用途                                          |
-| ---- | ------------------------ | ------------- | --------------------------------------------- |
-| POST | `/api/v1/auth/register`  | 需既有 Bearer | 登记/覆盖本设备的 SRP 盐与 verifier（引导链） |
-| POST | `/api/v1/auth/challenge` | 免            | 发起 SRP 挑战                                 |
-| POST | `/api/v1/auth/verify`    | 免            | 提交 SRP 证明，换取短期 Bearer 令牌           |
+| Method | Path                     | Auth            | Purpose                                                                  |
+| ------ | ------------------------ | --------------- | ------------------------------------------------------------------------ |
+| POST   | `/api/v1/auth/register`  | existing Bearer | Register/overwrite this device's SRP salt and verifier (bootstrap chain) |
+| POST   | `/api/v1/auth/challenge` | none            | Start an SRP challenge                                                   |
+| POST   | `/api/v1/auth/verify`    | none            | Submit SRP proof, receive a short-lived Bearer token                     |
 
-`challenge` / `verify` 免认证——它们本身就是换取令牌的登录步骤；
-`register` 走 Bearer 保护（新设备由已认证会话引导接入）。
+`challenge` / `verify` require no authentication — they are themselves the
+login steps that obtain the token; `register` sits behind Bearer protection
+(a new device is bootstrapped in by an already authenticated session).
 
-## 边界
+## Boundaries
 
-- 请求体上限 64 KiB（盐 / verifier / SRP 公开值都远小于此，防异常载荷）。
-- 服务器只保存 verifier，永远不接触主密码或库密钥。
-- 认证成功只证明「这台设备登记过」，不等于已加入同步组——同步组授权
-  见同步 API。
+- Request bodies are capped at 64 KiB (the salt / verifier / SRP public values
+  are all far smaller than that; the cap guards against anomalous payloads).
+- The server stores only the verifier and never touches the master password or
+  the vault keys.
+- A successful authentication only proves "this device has registered" — it
+  does not mean membership in a sync group; for sync-group authorization see
+  the Sync API.
 
-## 与客户端的衔接
+## How It Hooks Into the Clients
 
-桌面端「设置 → 同步设备」完成上述握手；CLI 走环境变量配置
-（见 [STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md) 的客户端配置节）。
+The desktop app completes this handshake under "Settings → Sync Devices"; the
+CLI is configured through environment variables (see the client configuration
+section of
+[STORAGE_AND_SYNC.md](https://github.com/cuihairu/persona/blob/main/docs/STORAGE_AND_SYNC.md)).

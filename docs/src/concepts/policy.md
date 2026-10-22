@@ -1,53 +1,58 @@
-# 策略（Policy）
+# Policy
 
-**一句话**：策略决定「谁、在什么[上下文](./context)里、对哪个
-[材料](./material)的哪个[动作](./action)」被放行、被确认、还是被拒绝。
+**In one sentence**: policy decides whether "who, in which [context](./context),
+performing which [action](./action) on which [material](./material)" is allowed,
+requires confirmation, or is denied.
 
-**Policy 不是安全的实现细节，而是与 Identity/Material 平级的一级模型。**
-Persona 的全部敏感路径都从属于同一个裁决语义:
+**Policy is not an implementation detail of security — it is a first-class model on
+par with Identity/Material.** Every sensitive path in Persona answers to the same
+adjudication semantic:
 
 ```text
-Action（请求动作）
+Action (requested action)
    │
    ▼
-Policy Engine（core 内）
+Policy Engine (inside core)
    │
- ├─ allow        → 执行并审计
- ├─ confirm      → 桌面/CLI 确认后执行
- └─ deny         → 拒绝并审计
+ ├─ allow        → execute and audit
+ ├─ confirm      → execute after desktop/CLI confirmation
+ └─ deny         → deny and audit
 ```
 
-## 已落地的策略（硬门槛 + 可配置）
+## Policies that have landed (hard gates + configurable)
 
-| 域        | 规则                                                                                        | 配置方式                                                             |
-| --------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 浏览器    | fill/copy/TOTP 必须 user gesture                                                            | 自动 fill 开关（按站点默认值）                                       |
-| 浏览器    | TLD+1 **origin binding**（`validate_origin_binding`，match ≥ 60）                           | 不可关闭——硬门槛                                                     |
-| 浏览器    | 阻塞/可疑域拒绝填充与保存（钓鱼防护）                                                       | 域策略表可维护                                                       |
-| 写路径    | `save_credential` 需 user gesture + 桌面审批闸门（auto/require/off）+ origin binding + 审计 | 桌面设置里的审批模式                                                 |
-| SSH Agent | known_hosts、deny-all、速率限制、每密钥/每主机规则、确认/生物识别优先级                     | `~/.persona/agent-policy.toml`（或 `PERSONA_AGENT_POLICY_FILE`）可配 |
-| 解锁层    | 自动锁、敏感操作再认证                                                                      | 客户端可配                                                           |
-| 自动化    | 非交互模式需显式环境变量启用（CI 场景）                                                     | `PERSONA_NON_INTERACTIVE` 等                                         |
-| 全域      | 所有敏感动作进审计日志（脱敏）                                                              | 不开                                                                 |
+| Domain      | Rule                                                                                                        | How to configure                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Browser     | fill/copy/TOTP require user gesture                                                                         | Auto-fill switch (per-site default)                                              |
+| Browser     | TLD+1 **origin binding** (`validate_origin_binding`, match ≥ 60)                                            | Cannot be turned off — hard gate                                                 |
+| Browser     | blocked/suspicious domains refuse fill and save (phishing protection)                                       | Maintained through the domain policy table                                       |
+| Write path  | `save_credential` requires user gesture + desktop approval gate (auto/require/off) + origin binding + audit | Approval mode in desktop settings                                                |
+| SSH Agent   | known_hosts, deny-all, rate limits, per-key/per-host rules, confirmation/biometric precedence               | Configurable via `~/.persona/agent-policy.toml` (or `PERSONA_AGENT_POLICY_FILE`) |
+| Lock layer  | auto-lock, re-authentication for sensitive operations                                                       | Client-configurable                                                              |
+| Automation  | non-interactive mode requires explicit env vars to enable (CI scenarios)                                    | `PERSONA_NON_INTERACTIVE` etc.                                                   |
+| All domains | every sensitive action goes to the (redacted) audit log                                                     | Cannot be turned off                                                             |
 
-三条原则：
+Three principles:
 
-1. **策略在 core，不在客户端 UI**——CLI/桌面/扩展/Agent 都不能绕过
-   core 直接读写敏感明文（安全设计 的顶层约束）；
-2. **硬门槛不能配置掉**——origin binding、user gesture、审计这类
-   安全不变量没有开关；
-3. **可配置的只是体验**——哪些自动、哪些要确认、哪些按站点记忆。
+1. **Policy lives in core, not in client UI** — CLI, desktop, extension, and Agent
+   alike cannot bypass core to read or write sensitive plaintext directly (the
+   top-level constraint of Security Design);
+2. **Hard gates cannot be configured away** — security invariants like origin binding,
+   user gesture, and auditing have no switches;
+3. **What is configurable is only the experience** — what runs automatically, what
+   needs confirmation, and what is remembered per site.
 
-## 愿景：规则层（规划，未实现）
+## Vision: the rule layer (planned, not implemented)
 
-未来提供用户可配置的规则（YAML 愿景示例，非现状）：
+In the future, user-configurable rules will be provided (the following is a YAML
+vision example, not current reality):
 
 ```yaml
 identity: work
 rules:
   aws:
     access_key:
-      allow: false # 工作分身的 AWS key 禁止从浏览器使用
+      allow: false # the work identity's AWS key is forbidden from browser use
   ssh:
     hosts: ["*.company.com"]
     require_confirmation: true
@@ -55,6 +60,8 @@ rules:
     domains: [github.com, company.com]
 ```
 
-该规则层落地后，上面那张「已落地」表里的可配置项会成为规则引擎的
-**内建默认集**，规则引擎本身依然是 core 内、不绕过硬门槛的那一层。
-实现节奏见[路线图](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md)。
+Once the rule layer lands, the configurable items in the "landed" table above become
+the rule engine's **built-in default set**, and the rule engine itself stays inside
+core, on the side that cannot bypass hard gates.
+For the implementation cadence, see the
+[roadmap](https://github.com/cuihairu/persona/blob/main/docs/ROADMAP.md).
