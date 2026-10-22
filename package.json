@@ -74,7 +74,8 @@
       "send@<0.19.0": "0.19.0",
       "sprintf-js": "file:./vendor/sprintf-js-patched",
       "svgo@2": "2.8.4",
-      "yaml@1": "1.10.3"
+      "yaml@1": "1.10.3",
+      "vite@<7.3.7": "7.3.7"
     }
   }
 }
