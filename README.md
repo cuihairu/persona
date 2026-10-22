@@ -3,6 +3,7 @@
   <h1>Persona</h1>
   <p><strong>Local-First Identity Material Manager</strong></p>
   <p>
+    <a href="https://github.com/cuihairu/persona/releases"><img src="https://img.shields.io/badge/status-in%20development-orange" alt="Status: in development" /></a>
     <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /></a>
     <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a>
     <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
