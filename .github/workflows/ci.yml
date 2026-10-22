@@ -25,15 +25,15 @@ jobs:
     name: Rust (core/cli/server/agents)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: '3.x'
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@v1
         with:
           components: rustfmt, clippy, llvm-tools-preview
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -41,7 +41,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@v2.87.30
         with:
           tool: cargo-llvm-cov
       - name: fmt
@@ -57,7 +57,7 @@ jobs:
           cargo llvm-cov --workspace --all-features --lcov --output-path coverage/rust-lcov.info \
             --ignore-filename-regex '(cli/src/main\.rs|cli/src/commands/tui_runtime\.rs|cli/src/utils/terminal_ui\.rs|server/src/main\.rs|agents/ssh-agent/src/daemon\.rs|agents/ssh-agent/src/main\.rs)'
       - name: Upload coverage (rust) to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@v7.1.1
         with:
           # token 必须显式传：tokenless 上传对默认分支被 codecov 拒绝
           # （"Token required because branch is protected"，2026-10-03 实锤，
@@ -72,12 +72,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
         with:
           components: clippy
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -108,7 +108,7 @@ jobs:
       # 续 crate）一起陪葬。nextest 每个测试独立进程 + 慢测试强杀
       # （.config/nextest.toml：60s 标记、240s 终止），挂死测试会带名字
       # 报出来，其余测试照常完成。
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@v2.87.30
         with:
           tool: cargo-nextest
       - name: test (nextest, per-test timeout)
@@ -127,10 +127,10 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
       - name: Cache cargo
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -144,8 +144,8 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@v1
       - name: Install cargo-deny
         run: cargo install --locked cargo-deny
       - name: Install cargo-audit
@@ -160,20 +160,20 @@ jobs:
     name: Desktop (Tauri + React)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 10.22.0
       - name: Use Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
           cache: 'pnpm'
           cache-dependency-path: pnpm-lock.yaml
       # --- Desktop Rust (src-tauri is its own workspace, invisible to the
       # `rust` job's --workspace runs) ---
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@v1
         with:
           components: rustfmt, clippy
       - name: Install Tauri system dependencies
@@ -182,7 +182,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev patchelf
       - name: Cache desktop cargo
-        uses: actions/cache@v6
+        uses: actions/cache@v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -202,7 +202,7 @@ jobs:
       - name: Tests
         run: pnpm --filter persona-desktop run test:ci:coverage
       - name: Upload coverage (desktop) to Codecov
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@v7.1.1
         with:
           # 同上：默认分支上传必须带 token，否则徽章 unknown
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -217,13 +217,13 @@ jobs:
     name: Web (extension + website)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.1.0
         with:
           version: 10.22.0
       - name: Use Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
           cache: 'pnpm'

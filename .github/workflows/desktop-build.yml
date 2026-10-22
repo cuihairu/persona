@@ -53,7 +53,7 @@ jobs:
     outputs:
       should_build: ${{ steps.gate.outputs.should_build }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       - name: Skip daily build when main has no fresh commits (<= 48h)
         id: gate
@@ -99,19 +99,19 @@ jobs:
     # spike 探针在无硬件的 VM 上按设计会"如实失败"，但绝不允许它挂死 job
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@v1
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: desktop/src-tauri
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@v6.1.0
         # Version comes from the root package.json `packageManager` field
         # (pnpm@10.22.0); specifying `version` here conflicts with it.
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7.1.0
         with:
           node-version: 24
           cache: pnpm
@@ -151,7 +151,7 @@ jobs:
         run: pnpm exec tauri build --bundles ${{ matrix.bundles }}
 
       - name: Upload bundle artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: desktop-${{ matrix.name }}
           path: |
@@ -191,18 +191,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@v1
         with:
           targets: aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: .
           key: android-aarch64
 
-      - uses: nttld/setup-ndk@v1
+      - uses: nttld/setup-ndk@v1.6.0
         id: ndk
         with:
           ndk-version: r27
@@ -220,7 +220,7 @@ jobs:
         run: cargo ndk -t arm64-v8a build -p persona-mobile --profile mobile-ffi
 
       - name: Upload android jniLib artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: android-jni-arm64
           path: target/aarch64-linux-android/mobile-ffi/libpersona_mobile.so
@@ -241,7 +241,7 @@ jobs:
         run: ./gradlew --no-daemon :app:assembleRelease
 
       - name: Upload android APK artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: android-apk-arm64
           path: mobile/android/app/build/outputs/apk/release/app-release.apk
@@ -257,11 +257,11 @@ jobs:
       inputs.upload)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # nightly/dispatch 带 APK；tag 正式版只发桌面包（见文件头口径）。
       # needs 已含 android，此处 android artifact 必然已就绪。
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@v8.0.2
         with:
           pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64}' }}
           path: dist
@@ -312,7 +312,7 @@ jobs:
         run: gh release delete nightly --cleanup-tag --yes || true
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v3.0.3
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: ${{ steps.rel.outputs.name }}
