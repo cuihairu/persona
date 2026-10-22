@@ -66,7 +66,7 @@ jobs:
       # [skip ci] 防递归（GITHUB_TOKEN 推送本就不触发，双保险）。
       - name: Commit formatted docs
         if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
-        uses: stefanzweifel/git-auto-commit-action@v7.2.0
+        uses: stefanzweifel/git-auto-commit-action@v7.2.1
         with:
           commit_message: 'docs: 自动修复 markdown 格式 [skip ci]'
           file_pattern: 'docs/**'
