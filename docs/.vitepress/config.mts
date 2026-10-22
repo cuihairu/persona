@@ -160,6 +160,8 @@ export default withMermaid(
   defineConfig({
     vite: { build: { target: "esnext" } },
     base,
+    title: "Persona 数钥",
+    description: "掌控你的数字身份。一键自由切换。",
     srcDir: "src",
     cleanUrls: true,
     lastUpdated: true,
@@ -177,6 +179,8 @@ export default withMermaid(
       root: {
         lang: "zh-CN",
         label: "简体中文",
+        title: "Persona 数钥",
+        description: "掌控你的数字身份。一键自由切换。",
         themeConfig: {
           logo: "/persona-logo.svg",
           siteTitle: "Persona 数钥",
