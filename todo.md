@@ -37,5 +37,6 @@
   - 落地(commit `5fec32d`):排查清单表落 docs/review/2026-10-24-persona-external-architecture-review.md「R-P2 排查清单」(已修 5 处 + 判定无需修 9 类,含范围说明)。已修:`createIdentity` 激活失败(不再误报创建成功)、`useQuickAccessBridge` 跨窗跳转落库失败、`usePasskeyApprovals` / `useSshApprovals` 的 `respond`(改为服务端确认后才移出队列,失败留队列可重试 + toast,否则 Allow 静默丢失会让浏览器/agent 请求挂到 120s 超时),加 R-P1 的 switchIdentity。新增文案 `svc.activateIdentityFailed` / `svc.approvalRespondFailed`。desktop 56 套件 736 例全绿、eslint 0 warning、tsc 0 error、vite build 通过。
 - [ ] R-P3 Principal/Action 体系化设计文档,基于已有 principal/policy 代码(service.rs/connect/token.rs),不重做身份 CRUD。验收:文档落 docs/design/ 并过构建
 - [ ] R-P4 跨进程统一会话/授权中心调研与方案(解锁状态/活动身份通知/权限撤销/用户确认)。验收:方案文档含现状调研
-- [ ] R-P5 同步「局域网直传」命名与实现核对,名实不符则纠偏。验收:结论+改名 commit 或「名实相符」结论记录
+- [x] R-P5 同步「局域网直传」命名与实现核对,名实不符则纠偏。验收:结论+改名 commit 或「名实相符」结论记录
+  - 落地(核对属实,改名 commit `b100345`):**名实不符**。全仓无 P2P/mDNS/广播/多播,也无客户端侧同步 TCP 监听;同步只有客户端→persona-server 的 HTTP REST(`core/src/sync/remote.rs` `HttpSyncRemote` → `server/src/api/sync.rs` `/api/v1/sync/*`),目标地址就是设置里的 `SyncConfig.server_url`(`core/src/models/workspace.rs:54`)。「局域网直传」=同一 `persona-server` 绑定 `PERSONA_SERVER_HOST=192.168.x.x`,没有任何「直传」机制。已更名「局域网自建中转 / LAN self-hosted relay」(6 处文档)。误称只在文档里——UI 文案、CLI 子命令(本就无 sync 子命令)、配置键均无 LAN/direct,故零破坏、无需迁移;`sync.server_url` 键名保持不动(改名会静默丢用户已配服务器)
 - [ ] R-P6 端到端验收场景清单 + 跨平台能力矩阵(编译/模拟/真实交互/长期运行分层)。验收:文档落 docs/

@@ -6,14 +6,14 @@
 
 ## 核验结论(落地前必读)
 
-| # | 审查论断 | 核验结果 | 证据 |
-|---|---|---|---|
-| 1 | switchIdentity 前后端状态分叉(先更UI、吞异常、无条件成功toast) | **属实,已定位** | desktop/src/hooks/usePersonaService.ts:322-334 |
-| 2 | 应体系化 Principal/Action 层 | **部分已存在,非从零补** | core/src/service.rs、core/src/connect/token.rs、core/src/storage/connect_repository.rs 已有 principal;storage/auto_lock_policy_repository.rs 有 policy |
-| 3 | 跨进程缺统一本地会话/授权中心 | 待核(方向性判断,与架构现状相符) | — |
-| 4 | 「局域网直传」名不副实,实为 persona-server 换 base_url | 待核 | — |
-| 5 | 同步冲突:保留「冲突保留+人工裁决」,不追零冲突 | 设计取向建议,无需核 | — |
-| 6 | 第一阶段未达"放心承担全部凭据"标准;第二阶段统一Runtime/Agent授权未完成 | 定性评估,与 todo 现状不矛盾 | — |
+| #   | 审查论断                                                               | 核验结果                               | 证据                                                                                                                                                                                                                                                                                                                                   |
+| --- | ---------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | switchIdentity 前后端状态分叉(先更UI、吞异常、无条件成功toast)         | **属实,已定位**                        | desktop/src/hooks/usePersonaService.ts:322-334                                                                                                                                                                                                                                                                                         |
+| 2   | 应体系化 Principal/Action 层                                           | **部分已存在,非从零补**                | core/src/service.rs、core/src/connect/token.rs、core/src/storage/connect_repository.rs 已有 principal;storage/auto_lock_policy_repository.rs 有 policy                                                                                                                                                                                 |
+| 3   | 跨进程缺统一本地会话/授权中心                                          | 待核(方向性判断,与架构现状相符)        | —                                                                                                                                                                                                                                                                                                                                      |
+| 4   | 「局域网直传」名不副实,实为 persona-server 换 base_url                 | **属实(已核,已改名)**                  | 全仓无任何 P2P/mDNS/直连 TCP;同步=客户端 `reqwest` → persona-server axum(`/api/v1/sync/*`,core/src/sync/remote.rs、server/src/api/sync.rs),目标地址即 `SyncConfig.server_url`(core/src/models/workspace.rs:54);「直传」字样仅存在于文档,UI/CLI/配置键均无 LAN/direct。已更名「局域网自建中转 / LAN self-hosted relay」(commit b100345) |
+| 5   | 同步冲突:保留「冲突保留+人工裁决」,不追零冲突                          | 设计取向建议,与现状一致(已实现,无需改) | LWW 按 `(lamport, device_id)` 定序,真冲突(同 lamport 异设备)双版本保留、败者降级进 conflict 区不丢弃(core/src/sync/oplog.rs:140-175 `StepOutcome::ConflictCopy`);字段级合并被明确否决(DR-4),采纳走 `resolve.rs` 重放更大 lamport;UI 有 `syncConflicts` 面板(「暂不处理」)                                                              |
+| 6   | 第一阶段未达"放心承担全部凭据"标准;第二阶段统一Runtime/Agent授权未完成 | 定性评估,与 todo 现状不矛盾            | —                                                                                                                                                                                                                                                                                                                                      |
 
 ## 一、整体判断
 
@@ -22,6 +22,7 @@
 ## 二、已核实的缺陷:身份切换前后端状态分叉
 
 `switchIdentity`(usePersonaService.ts:322)三连:
+
 1. `setCurrentIdentity(identity)` 先更 UI(乐观更新);
 2. `await personaAPI.setActiveIdentity()` 失败进 `catch { // ignore }`,异常被吞;
 3. 无论成败弹 `toast.success('已切换到 B')`。
@@ -44,7 +45,7 @@
 - [x] R-P2 同类乐观更新模式全仓排查(desktop/src/hooks/ 下同款"先 setState 后 await"模式) — commit 5fec32d,排查清单见下表
 - [ ] R-P3 Principal/Action 体系化设计文档(基于已有 principal/policy 代码,不重做 CRUD)
 - [ ] R-P4 跨进程统一会话/授权中心方案(先调研现状再定方案)
-- [ ] R-P5 同步「局域网直传」命名与实现核对,名实不符则纠偏
+- [x] R-P5 同步「局域网直传」命名与实现核对,名实不符则纠偏 — 属实,commit b100345(仅文档改名「局域网自建中转 / LAN self-hosted relay」,6 处;无代码/UI/配置键需改,零破坏性。TODO.md:66 是已交付里程碑的历史记录,保留原称;形态 2/3 实为同一二进制两种暴露面,如需进一步收口可并为两形态)
 - [ ] R-P6 端到端验收场景清单 + 跨平台能力矩阵(区分编译/模拟/真实交互/长期运行)
 
 ## R-P2 排查清单(同款"先 setState 后 await 且吞异常",2026-10-24)
@@ -55,27 +56,27 @@
 
 ### 已修(同款)
 
-| 位置 | 落下状态 → await 的调用 | 原吞法 | 修法 |
-|---|---|---|---|
-| hooks/usePersonaService.ts:327 `switchIdentity` | `setCurrentIdentity` → `setActiveIdentity` | catch 只留 `// ignore`,不查 `.success`,且无条件 `toast.success` | R-P1:先 await 并查 `.success`,成功才落身份/拉凭据/弹成功;失败保留原身份 + `setError` + `toast.error`;`silent` 只抑制成功提示不抑制失败 |
-| hooks/usePersonaService.ts:233 `createIdentity` | `setCurrentIdentity(response.data)` → `setActiveIdentity` | catch 只留 `// ignore`,随后照弹 `toast.success('身份创建成功')` | 创建已成功不撤销,但激活失败改为 `toast.error('身份已创建，但设为当前身份失败')`——不再让用户以为已全局切换 |
-| hooks/useQuickAccessBridge.ts:42 `apply` | `setPendingCredentialSelection` + `setCurrentIdentity` → `setActiveIdentity` | catch 只留注释,不查 `.success` | 跳转不阻断,但失败改为 `setError` + `toast.error`(同 `svc.switchFailed` 口径),不再静默 |
-| hooks/usePasskeyApprovals.ts:76 `respond` | `setQueue(filter)` 移出审批项 → `passkeyApprovalRespond` | catch 只留注释,不查 `.success` | 改为以服务端确认为准才移出队列;失败留在队列可重试 + `toast.error`。否则 Allow 静默丢失,浏览器请求挂到后端 120s 超时 |
-| hooks/useSshApprovals.ts:72 `respond` | 同上(`sshApprovalRespond`) | 同上 | 同上,agent 连接同样挂 120s |
+| 位置                                            | 落下状态 → await 的调用                                                      | 原吞法                                                          | 修法                                                                                                                                   |
+| ----------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| hooks/usePersonaService.ts:327 `switchIdentity` | `setCurrentIdentity` → `setActiveIdentity`                                   | catch 只留 `// ignore`,不查 `.success`,且无条件 `toast.success` | R-P1:先 await 并查 `.success`,成功才落身份/拉凭据/弹成功;失败保留原身份 + `setError` + `toast.error`;`silent` 只抑制成功提示不抑制失败 |
+| hooks/usePersonaService.ts:233 `createIdentity` | `setCurrentIdentity(response.data)` → `setActiveIdentity`                    | catch 只留 `// ignore`,随后照弹 `toast.success('身份创建成功')` | 创建已成功不撤销,但激活失败改为 `toast.error('身份已创建，但设为当前身份失败')`——不再让用户以为已全局切换                              |
+| hooks/useQuickAccessBridge.ts:42 `apply`        | `setPendingCredentialSelection` + `setCurrentIdentity` → `setActiveIdentity` | catch 只留注释,不查 `.success`                                  | 跳转不阻断,但失败改为 `setError` + `toast.error`(同 `svc.switchFailed` 口径),不再静默                                                  |
+| hooks/usePasskeyApprovals.ts:76 `respond`       | `setQueue(filter)` 移出审批项 → `passkeyApprovalRespond`                     | catch 只留注释,不查 `.success`                                  | 改为以服务端确认为准才移出队列;失败留在队列可重试 + `toast.error`。否则 Allow 静默丢失,浏览器请求挂到后端 120s 超时                    |
+| hooks/useSshApprovals.ts:72 `respond`           | 同上(`sshApprovalRespond`)                                                   | 同上                                                            | 同上,agent 连接同样挂 120s                                                                                                             |
 
 ### 已排查、判定无需修
 
-| 位置 | 结论 |
-|---|---|
-| hooks/usePersonaService.ts:199 `loadIdentities` 的 `setActiveIdentity` catch | 有回滚(`setCurrentIdentity(response.data[0])`)且回滚目标就是当前已落下的值(`selected` 在无 match 分支恒等于 `data[0]`);不宣称成功、下次 `loadIdentities` 自愈,故不加 error 提示(启动期闪错误条无动作价值) |
-| `switchIdentity` / `toggleCredentialFavorite` / `fetchFavicon` / `deleteCredential` / ssh agent 四动作 | 先 await 再查 `.success` 才落状态,失败走 `setError`/`toast.error`——本仓正确范本 |
-| `createIdentity`/`deleteIdentity` 里"删除已确认后才清 session"、`lockService` 的一串清空 | 清空属复位而非乐观提交(await 在前、只在 `response.success` 分支内落) |
-| hooks/useReauth.ts `setIsVerifying(true)` → `reauthVerify` | 查 `.success`,catch `setError`,`finally` 复位 loading flag——局部加载态,属排除项 |
-| hooks/useFavicons.ts `setFaviconEntries` / `setFaviconMisses` | await 在前,setter 在 `resp.success` 分支内;catch 只留注释但前面无状态可回滚(纯预取,注释说明故意不记 miss 以便重试) |
-| hooks/useDataLossRisk.ts `setState` | await 在前,catch 落的是安全侧默认值(`{loading:false, level:'none'}`),非未回滚的乐观提交 |
-| hooks/useTheme.ts `setTheme` 的空 `.catch` | 无 await、无前置 setter(只读 theme、改 DOM class) |
-| hooks/useAutoLockEvents.ts 一串清空 | 事件驱动(后端已锁),`touch_activity` 是 fire-and-forget,`lastTouchRef` 是 ref 不是 state |
-| useEscapeToClose / useGlobalShortcut / components/ErrorHandling.tsx 的 error handler | 全同步,无 await |
+| 位置                                                                                                   | 结论                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| hooks/usePersonaService.ts:199 `loadIdentities` 的 `setActiveIdentity` catch                           | 有回滚(`setCurrentIdentity(response.data[0])`)且回滚目标就是当前已落下的值(`selected` 在无 match 分支恒等于 `data[0]`);不宣称成功、下次 `loadIdentities` 自愈,故不加 error 提示(启动期闪错误条无动作价值) |
+| `switchIdentity` / `toggleCredentialFavorite` / `fetchFavicon` / `deleteCredential` / ssh agent 四动作 | 先 await 再查 `.success` 才落状态,失败走 `setError`/`toast.error`——本仓正确范本                                                                                                                           |
+| `createIdentity`/`deleteIdentity` 里"删除已确认后才清 session"、`lockService` 的一串清空               | 清空属复位而非乐观提交(await 在前、只在 `response.success` 分支内落)                                                                                                                                      |
+| hooks/useReauth.ts `setIsVerifying(true)` → `reauthVerify`                                             | 查 `.success`,catch `setError`,`finally` 复位 loading flag——局部加载态,属排除项                                                                                                                           |
+| hooks/useFavicons.ts `setFaviconEntries` / `setFaviconMisses`                                          | await 在前,setter 在 `resp.success` 分支内;catch 只留注释但前面无状态可回滚(纯预取,注释说明故意不记 miss 以便重试)                                                                                        |
+| hooks/useDataLossRisk.ts `setState`                                                                    | await 在前,catch 落的是安全侧默认值(`{loading:false, level:'none'}`),非未回滚的乐观提交                                                                                                                   |
+| hooks/useTheme.ts `setTheme` 的空 `.catch`                                                             | 无 await、无前置 setter(只读 theme、改 DOM class)                                                                                                                                                         |
+| hooks/useAutoLockEvents.ts 一串清空                                                                    | 事件驱动(后端已锁),`touch_activity` 是 fire-and-forget,`lastTouchRef` 是 ref 不是 state                                                                                                                   |
+| useEscapeToClose / useGlobalShortcut / components/ErrorHandling.tsx 的 error handler                   | 全同步,无 await                                                                                                                                                                                           |
 
 范围:desktop 全仓 `hooks/`(11 个文件)+ `components/ErrorHandling.tsx` 的导出 hook 已逐个读完;
 mobile / browser / cli / server / website 下无 `hooks/` 目录,browser 扩展是纯 TS 无 React hook,无同类面。
