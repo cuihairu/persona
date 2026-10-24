@@ -458,17 +458,17 @@ There is one and only one sync semantic — §5's oplog push/pull + vault-level
 snapshot compaction; from the client's perspective there is no distinction of
 "which server"; the form only decides **who runs the same protocol and where**:
 
-| Form              | Runner                                                                     | Client base_url                           | Positioning           |
-| ----------------- | -------------------------------------------------------------------------- | ----------------------------------------- | --------------------- |
-| Officially hosted | persona's officially deployed `persona-server` (same binary/image)         | something like `https://sync.persona.app` | Default path          |
-| Self-hosted relay | user-self-deployed `persona-server` (compose/cargo, `SELF_HOST_SERVER.md`) | user's own host                           | Privacy first         |
-| LAN direct        | the same `persona-server` bound to the on-site device's LAN address        | `http://<LAN IP>:port`                    | Zero external network |
+| Form                  | Runner                                                                     | Client base_url                           | Positioning           |
+| --------------------- | -------------------------------------------------------------------------- | ----------------------------------------- | --------------------- |
+| Officially hosted     | persona's officially deployed `persona-server` (same binary/image)         | something like `https://sync.persona.app` | Default path          |
+| Self-hosted relay     | user-self-deployed `persona-server` (compose/cargo, `SELF_HOST_SERVER.md`) | user's own host                           | Privacy first         |
+| LAN self-hosted relay | the same `persona-server` bound to the on-site device's LAN address        | `http://<LAN IP>:port`                    | Zero external network |
 
 All three forms share **the same client protocol** (the wire semantics of core
 `SyncRemote`: `PUT/GET /sync/snapshot`, `POST /sync/push`, `GET /sync/pull`,
 `GET /sync/head`, device-envelope distribution endpoints); the three forms are
 **three deployments of the same `persona-server` binary** — no three separate
-implementations; LAN direct is just it bound to the on-site device.
+implementations; LAN self-hosted relay is just it bound to the on-site device.
 
 **Acceptance criteria**: three-form consistency tests — the same core
 integration scenarios (push/pull/convergence/snapshot bootstrap) run once per
