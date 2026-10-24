@@ -36,23 +36,30 @@ the "initiator" a first-class citizen of the model.
 
 ## Current state (honest boundaries)
 
-- **Not implemented** as a standalone principal model: as of 2026-10 the code contains
-  no `principals` table and no authorization rules that differentiate by principal;
-- Existing precursors: non-interactive CLI mode (CI scenarios), bridge pairing/session
-  authentication, the request-origin field in audits, and the SSH Agent's key/host
-  policy dimensions;
-- The API semantics do not hard-code "user" as the only subject — `cmds`/service are
-  both centered on identity + action and never depend on "which account owns the
-  vault."
+- **Partially implemented, not yet a standalone model**: `core/src/authz.rs` is now the single
+  adjudication point with three principal kinds — `LocalSession`,
+  `ConnectToken { scope }`, and `AgentKey { credential_id, identity_id }` — and adjudication
+  already differs by principal. There is still no `principals` table, and the
+  `connect_tokens.principal` column exists only as an opaque label that `authorize()` never reads.
+- The gap list and phasing live in
+  [Principal & Action Authorization Design](/design/principal-action.md): write verbs are still
+  undecided, decisions do not feed the audit log, and agent delegation is not there yet.
+- Precursors that are why this direction was reserved in the first place: non-interactive CLI
+  mode (CI scenarios), bridge pairing/session authentication, the request-origin field in audits,
+  and the SSH Agent's key/host policy dimensions;
+- The API semantics still do not hard-code "user" as the only subject — service and commands are
+  centered on identity + action and never depend on "which account owns the vault."
+- Terminology: the vault `Identity` is a **credential grouping** (a resource), not a principal.
+  Switching identity switches the resource, not the authorizing subject.
 
 ## Planned direction (no timeline promised)
 
-1. Add a topic to actions in the audit trail first (human/agent/device + process
-   identifier);
-2. Add an optional `principal_id` field to the bridge protocol/CLI (required becomes
-   optional, backwards-compatibly);
-3. At the rule layer, allow trimming the [Action](./action) allowlist per principal —
-   an Agent can only ever obtain whitelisted actions, never the materials themselves.
+The sequence is worked out in the design doc:
 
-Until (1), (2), and (3) land, everything above is a **direction**, not a feature
-commitment.
+1. The audit trail gains the principal dimension first — `principal_kind` + `decision_reason`,
+   so granted actions are attributable, not just scope denials (P0 in the design doc);
+2. The bridge protocol / CLI gains an optional `principal_id` field (backwards-compatible);
+3. Per-principal trimming of the [Action](./action) allowlist — an Agent can only ever obtain
+   whitelisted actions, never the materials themselves (P3 in the design doc).
+
+Until (1), (2), and (3) land, everything above is a **direction**, not a feature commitment.

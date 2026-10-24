@@ -31,18 +31,27 @@ Denied:   AWS production、personal GitHub、wallet signing
 
 ## 现状（诚实边界）
 
-- **未实现**独立的主体模型：2026-10 的代码里没有 `principals` 表、
-  没有按主体区分的授权规则；
-- 已有雏形：CLI 非交互模式（CI 场景）、桥配对/session 认证、
+- **部分已实现，尚不是独立模型**：`core/src/authz.rs` 已是统一裁决点，主体有三种——
+  `LocalSession`、`ConnectToken { scope }`、`AgentKey { credential_id, identity_id }`——裁决已经
+  按主体区分。但依然没有 `principals` 表，`connect_tokens.principal` 列只是个不透明标签，
+  `authorize()` 从不读它。
+- 缺口清单与分期落在 [Principal 与 Action 授权体系设计](/zh/design/principal-action.md)：
+  写动词未拍板、裁决不进审计、Agent 委托还没做。
+- 当初为这个方向铺路的雏形：CLI 非交互模式（CI 场景）、桥配对/session 认证、
   审计的请求来源字段、SSH Agent 的 key/host 策略维度；
-- API 语义上没有把「用户」写死成唯一主语——`cmds`/service 都以
+- API 语义上没有把「用户」写死成唯一主语——service 与命令层都以
   identity + action 为核心，不依赖「Vault 属于哪个账号」。
+- 术语提醒：vault 里的 `Identity` 是**凭据分组**（资源），不是主体。切换分身切的是
+  资源，不是授权主体。
 
 ## 规划方向（不承诺时间线）
 
-1. 审计里先给动作补上 topic（human/agent/device + 进程标识）；
+顺序已在设计文档里排好：
+
+1. 审计先补上主体维度——`principal_kind` + `decision_reason`，让放行类动作也可归因，
+   而不只是 scope 拒绝有记录（设计文档 P0）；
 2. 桥协议/CLI 增加可选的 `principal_id` 字段（向后兼容必填变可选）；
 3. 规则层面允许按 principal 裁剪 [动作](./action) 白名单——Agent 只能
-   拿到被白名单的动作，永远拿不到材料本身。
+   拿到被白名单的动作，永远拿不到材料本身（设计文档 P3）。
 
 在 (1)(2)(3) 落地前，以上所有描述都是**方向**，不是功能承诺。
