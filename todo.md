@@ -28,3 +28,12 @@
   - 验收：zh 行数与 en 相当；逐节覆盖；顶部切换器两份都有
   - 落地：README 对（`012c466`，375/379 行，切换器 ：17 首屏）之外，docs/ 下 30 个英文工程文档全部补 `*.zh.md`（7582 行新增），每个 en 文件标题后插入 `> English | 中文` 切换器、每个 zh 文件首行 `> English | **中文**`（与 README 同款）；术语表统一（保险库/凭据/分身/桥/主密码等），代码块/命令/路径/URL/内联代码原样保留；`审计-文档一致性.md` 本就是中文，不重复。逐对核验标题数一致、首行格式正确、无 AI 痕迹字样；docs 门禁全绿（prettier 3.6.2 --write 后 diff 干净 + VitePress build 死链检查通过）。
 
+
+## 原型外部审查落地(2026-10-24,来源:用户「先保存到todo.md 然后开始执行」令,审查文件 docs/review/2026-10-24-persona-external-architecture-review.md)
+
+- [ ] R-P1 switchIdentity 改为服务端成功后才更新 UI,失败保留原身份并显示错误。验收:切换后端失败时 UI 身份不变且有错误提示,不再弹成功 toast。证据:desktop/src/hooks/usePersonaService.ts:322
+- [ ] R-P2 desktop/src/hooks/ 全目录排查同款乐观更新模式(先 setState 后 await 且吞异常),逐个修复。验收:列出排查清单与每处结论
+- [ ] R-P3 Principal/Action 体系化设计文档,基于已有 principal/policy 代码(service.rs/connect/token.rs),不重做身份 CRUD。验收:文档落 docs/design/ 并过构建
+- [ ] R-P4 跨进程统一会话/授权中心调研与方案(解锁状态/活动身份通知/权限撤销/用户确认)。验收:方案文档含现状调研
+- [ ] R-P5 同步「局域网直传」命名与实现核对,名实不符则纠偏。验收:结论+改名 commit 或「名实相符」结论记录
+- [ ] R-P6 端到端验收场景清单 + 跨平台能力矩阵(编译/模拟/真实交互/长期运行分层)。验收:文档落 docs/
