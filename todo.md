@@ -31,8 +31,10 @@
 
 ## 原型外部审查落地(2026-10-24,来源:用户「先保存到todo.md 然后开始执行」令,审查文件 docs/review/2026-10-24-persona-external-architecture-review.md)
 
-- [ ] R-P1 switchIdentity 改为服务端成功后才更新 UI,失败保留原身份并显示错误。验收:切换后端失败时 UI 身份不变且有错误提示,不再弹成功 toast。证据:desktop/src/hooks/usePersonaService.ts:322
-- [ ] R-P2 desktop/src/hooks/ 全目录排查同款乐观更新模式(先 setState 后 await 且吞异常),逐个修复。验收:列出排查清单与每处结论
+- [x] R-P1 switchIdentity 改为服务端成功后才更新 UI,失败保留原身份并显示错误。验收:切换后端失败时 UI 身份不变且有错误提示,不再弹成功 toast。证据:desktop/src/hooks/usePersonaService.ts:322
+  - 落地(commit `5883ec2`):switchIdentity 改为先 await `setActiveIdentity` 并查 `response.success`,成功才 `setCurrentIdentity` + `loadCredentialsForIdentity` + 成功 toast;失败保留原身份、`setError` + `toast.error`、返回 `false`;`silent` 只抑制成功提示,不抑制失败反馈。新增文案 `svc.switchFailed`(zh 切换身份失败 / en Failed to switch identity)。测试新增 success:false / 抛异常 / silent 失败三臂(失败时断言原身份不变、不拉目标身份凭据、不弹成功)。
+- [x] R-P2 desktop/src/hooks/ 全目录排查同款乐观更新模式(先 setState 后 await 且吞异常),逐个修复。验收:列出排查清单与每处结论
+  - 落地(commit `5fec32d`):排查清单表落 docs/review/2026-10-24-persona-external-architecture-review.md「R-P2 排查清单」(已修 5 处 + 判定无需修 9 类,含范围说明)。已修:`createIdentity` 激活失败(不再误报创建成功)、`useQuickAccessBridge` 跨窗跳转落库失败、`usePasskeyApprovals` / `useSshApprovals` 的 `respond`(改为服务端确认后才移出队列,失败留队列可重试 + toast,否则 Allow 静默丢失会让浏览器/agent 请求挂到 120s 超时),加 R-P1 的 switchIdentity。新增文案 `svc.activateIdentityFailed` / `svc.approvalRespondFailed`。desktop 56 套件 736 例全绿、eslint 0 warning、tsc 0 error、vite build 通过。
 - [ ] R-P3 Principal/Action 体系化设计文档,基于已有 principal/policy 代码(service.rs/connect/token.rs),不重做身份 CRUD。验收:文档落 docs/design/ 并过构建
 - [ ] R-P4 跨进程统一会话/授权中心调研与方案(解锁状态/活动身份通知/权限撤销/用户确认)。验收:方案文档含现状调研
 - [ ] R-P5 同步「局域网直传」命名与实现核对,名实不符则纠偏。验收:结论+改名 commit 或「名实相符」结论记录
