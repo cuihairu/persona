@@ -251,6 +251,61 @@ describe('hooks/usePersonaService', () => {
     expect(toastSuccess).toHaveBeenCalledWith(`已切换到 ${identity.name}`);
   });
 
+  it('switchIdentity keeps the original identity and reports errors when the active write fails', async () => {
+    mockUnlockedOnMount();
+    // 原身份不得被成功的切换覆盖：后端拒绝时界面必须停在原地
+    useAppStore.setState({ currentIdentity: makeIdentity('i-keep') });
+
+    const setActive = jest.spyOn(personaAPI, 'setActiveIdentity');
+    const loadCreds = jest.spyOn(personaAPI, 'getCredentialsForIdentity');
+
+    // success:false 臂：置错 + 报错 + 不弹成功，且不拉取目标身份凭据
+    setActive.mockResolvedValueOnce({ success: false, data: undefined, error: 'db busy' });
+    const { result } = renderHook(() => usePersonaService());
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.switchIdentity(makeIdentity('i-new', 'New'));
+    });
+    expect(ok).toBe(false);
+    expect(useAppStore.getState().currentIdentity?.id).toBe('i-keep');
+    expect(useAppStore.getState().error).toBe('db busy');
+    expect(toastError).toHaveBeenCalledWith('db busy');
+    expect(toastSuccess).not.toHaveBeenCalled();
+    expect(loadCreds).not.toHaveBeenCalled();
+
+    // 抛异常臂：同样保留原身份并透出底层错误
+    setActive.mockRejectedValueOnce(new Error('ipc down'));
+    await act(async () => {
+      ok = await result.current.switchIdentity(makeIdentity('i-new', 'New'));
+    });
+    expect(ok).toBe(false);
+    expect(useAppStore.getState().currentIdentity?.id).toBe('i-keep');
+    expect(useAppStore.getState().error).toBe('ipc down');
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
+  it('switchIdentity silent still surfaces the failure (silent only mutes the success toast)', async () => {
+    mockUnlockedOnMount();
+    useAppStore.setState({ currentIdentity: makeIdentity('i-keep') });
+    // 无后端消息：走本地化兜底，静默成功在此是身份上下文可信性问题
+    jest.spyOn(personaAPI, 'setActiveIdentity').mockResolvedValueOnce({
+      success: false,
+      data: undefined,
+      error: undefined,
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.switchIdentity(makeIdentity('i-new', 'New'), { silent: true });
+    });
+    expect(ok).toBe(false);
+    expect(useAppStore.getState().currentIdentity?.id).toBe('i-keep');
+    expect(useAppStore.getState().error).toBe('切换身份失败');
+    expect(toastError).toHaveBeenCalledWith('切换身份失败');
+    expect(toastSuccess).not.toHaveBeenCalled();
+  });
+
   it('lockService toasts error on failure and on thrown exception', async () => {
     mockUnlockedOnMount();
     jest.spyOn(personaAPI, 'lockService').mockResolvedValueOnce({

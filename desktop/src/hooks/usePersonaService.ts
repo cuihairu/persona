@@ -319,17 +319,34 @@ export const usePersonaService = () => {
     }
   };
 
-  const switchIdentity = async (identity: Identity, options?: { silent?: boolean }) => {
-    setCurrentIdentity(identity);
+  /** 切换活动身份。以服务端提交成功为准才更新 UI 身份与凭据；
+   * 失败保留原身份并走 setError，不弹成功提示（silent 只抑制成功
+   * toast，不抑制失败反馈——失败静默会让用户以为已在目标身份工作）。 */
+  const switchIdentity = async (
+    identity: Identity,
+    options?: { silent?: boolean },
+  ): Promise<boolean> => {
+    clearError();
     try {
-      await personaAPI.setActiveIdentity(identity.id);
-    } catch {
-      // ignore
-    }
-    await loadCredentialsForIdentity(identity.id);
-    // 搜索跳转等场景传 silent：切换是手段不是用户动作，toast 属噪声
-    if (!options?.silent) {
-      toast.success(t('svc.switchedTo', { name: identity.name }));
+      const response = await personaAPI.setActiveIdentity(identity.id);
+      if (!response.success) {
+        const errorMessage = response.error || t('svc.switchFailed');
+        setError(errorMessage);
+        toast.error(errorMessage);
+        return false;
+      }
+      setCurrentIdentity(identity);
+      await loadCredentialsForIdentity(identity.id);
+      // 搜索跳转等场景传 silent：切换是手段不是用户动作，成功 toast 属噪声
+      if (!options?.silent) {
+        toast.success(t('svc.switchedTo', { name: identity.name }));
+      }
+      return true;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : t('svc.switchFailed');
+      setError(errorMessage);
+      toast.error(errorMessage);
+      return false;
     }
   };
 
