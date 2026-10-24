@@ -247,7 +247,9 @@ export const usePersonaService = () => {
         try {
           await personaAPI.setActiveIdentity(response.data.id);
         } catch {
-          // ignore
+          // 创建已服务端确认，不撤销；但激活失败必须可见——workspace 活动
+          // 身份仍指旧身份，CLI/浏览器会按旧身份工作，不得静默成功
+          toast.error(t('svc.activateIdentityFailed'));
         }
         toast.success(t('svc.identityCreated'));
         return response.data;

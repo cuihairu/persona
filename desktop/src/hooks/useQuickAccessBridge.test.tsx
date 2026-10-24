@@ -1,8 +1,17 @@
 import { render, waitFor } from '@testing-library/react';
+import toast from 'react-hot-toast';
 import { useQuickAccessBridge } from './useQuickAccessBridge';
 import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
 import type { Identity, QuickAccessOpenCredential } from '@/types';
+
+jest.mock('react-hot-toast', () => ({
+  __esModule: true,
+  default: {
+    success: jest.fn(),
+    error: jest.fn(),
+  },
+}));
 
 jest.mock('@tauri-apps/api/event', () => ({
   listen: jest.fn(),
@@ -14,6 +23,7 @@ jest.mock('@/utils/api', () => ({
 
 const mockListen = jest.requireMock('@tauri-apps/api/event').listen as jest.Mock;
 const mockSetActive = personaAPI.setActiveIdentity as jest.Mock;
+const toastError = toast.error as jest.Mock;
 
 const identity = (id: string, name: string): Identity =>
   ({
@@ -48,6 +58,7 @@ beforeEach(() => {
     currentIdentity: identity('i1', 'Personal'),
     // 上一个用例写入的跳转目标必须复位，否则"忽略未知身份"会读到残留
     pendingCredentialSelection: null,
+    error: null,
   });
 });
 
@@ -93,6 +104,20 @@ describe('hooks/useQuickAccessBridge', () => {
     });
     expect(useAppStore.getState().currentIdentity?.id).toBe('i2');
     expect(mockSetActive).toHaveBeenCalledWith('i2');
+  });
+
+  it('does not block the jump when the active write fails, but makes the failure visible', async () => {
+    mockSetActive.mockRejectedValueOnce(new Error('db busy'));
+    const handler = await mount();
+    await handler({ payload: { identity_id: 'i2', credential_id: 'c9' } });
+
+    // 落库失败不阻断跳转（主界面按内存态继续切）
+    await waitFor(() => {
+      expect(useAppStore.getState().currentIdentity?.id).toBe('i2');
+    });
+    // 但失败必须可见：workspace 活动身份仍指旧身份，静默成功会误导调用方
+    expect(toastError).toHaveBeenCalledWith('db busy');
+    expect(useAppStore.getState().error).toBe('db busy');
   });
 
   it('ignores an unknown identity instead of jumping into an empty state', async () => {

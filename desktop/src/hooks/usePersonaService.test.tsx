@@ -446,7 +446,8 @@ describe('hooks/usePersonaService', () => {
       data: [created],
       error: undefined,
     });
-    // setActiveIdentity 抛异常 → 静默吞掉，创建流程不受影响
+    // setActiveIdentity 抛异常 → 创建流程不受影响，但激活失败必须可见
+    // （workspace 活动身份仍指旧身份，静默成功会误导用户已全局切换）
     jest.spyOn(personaAPI, 'setActiveIdentity').mockRejectedValueOnce(new Error('busy'));
 
     const { result } = renderHook(() => usePersonaService());
@@ -454,6 +455,7 @@ describe('hooks/usePersonaService', () => {
       await result.current.createIdentity('New', 'Personal');
     });
     expect(toastSuccess).toHaveBeenCalledWith('身份创建成功');
+    expect(toastError).toHaveBeenCalledWith('身份已创建，但设为当前身份失败');
 
     // 失败臂
     jest.spyOn(personaAPI, 'createIdentity').mockResolvedValueOnce({

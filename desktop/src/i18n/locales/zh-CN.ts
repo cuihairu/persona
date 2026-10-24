@@ -1019,6 +1019,8 @@ export default {
     identityDeleteFailed: '删除身份失败',
     switchedTo: '已切换到 {{name}}',
     switchFailed: '切换身份失败',
+    activateIdentityFailed: '身份已创建，但设为当前身份失败',
+    approvalRespondFailed: '审批响应发送失败',
     loadCredentialsFailed: '加载凭据失败',
     credentialCreated: '凭据创建成功',
     credentialCreateFailed: '创建凭据失败',

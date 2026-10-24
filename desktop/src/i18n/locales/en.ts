@@ -1042,6 +1042,8 @@ export default {
     identityDeleteFailed: 'Failed to delete identity',
     switchedTo: 'Switched to {{name}}',
     switchFailed: 'Failed to switch identity',
+    activateIdentityFailed: 'Identity created, but activating it failed',
+    approvalRespondFailed: 'Failed to send approval response',
     loadCredentialsFailed: 'Failed to load credentials',
     credentialCreated: 'Credential created successfully',
     credentialCreateFailed: 'Failed to create credential',
