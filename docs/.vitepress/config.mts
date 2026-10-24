@@ -78,6 +78,7 @@ const sidebarZh = [
     items: [
       { text: "环境搭建", link: "/zh/development/setup" },
       { text: "项目结构", link: "/zh/development/structure" },
+      { text: "验收场景与能力矩阵", link: "/zh/development/acceptance-matrix" },
     ],
   },
 ];
@@ -159,6 +160,10 @@ const sidebar = [
     items: [
       { text: "Setup", link: "/development/setup" },
       { text: "Project Structure", link: "/development/structure" },
+      {
+        text: "Acceptance Scenarios & Capability Matrix",
+        link: "/development/acceptance-matrix",
+      },
     ],
   },
 ];
