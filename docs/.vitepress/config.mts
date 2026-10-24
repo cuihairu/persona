@@ -69,6 +69,8 @@ const sidebarZh = [
       { text: "产品定位与总体架构", link: "/zh/design/product" },
       { text: "整体架构", link: "/zh/design/architecture" },
       { text: "安全设计", link: "/zh/design/security" },
+      { text: "Principal 与 Action 授权", link: "/zh/design/principal-action" },
+      { text: "跨进程会话与授权中心", link: "/zh/design/session-center" },
     ],
   },
   {
@@ -145,6 +147,11 @@ const sidebar = [
       },
       { text: "Architecture", link: "/design/architecture" },
       { text: "Security Design", link: "/design/security" },
+      {
+        text: "Principal & Action Authorization",
+        link: "/design/principal-action",
+      },
+      { text: "Cross-Process Session Center", link: "/design/session-center" },
     ],
   },
   {
