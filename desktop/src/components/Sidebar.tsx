@@ -69,7 +69,7 @@ const NavRow: React.FC<RowProps> = ({ label, icon: Icon, active, onClick, count,
     {count !== undefined && (
       <span
         aria-hidden="true"
-        className="ml-auto text-[11px] tabular-nums text-secondary-400 dark:text-secondary-500"
+        className="ml-auto text-[11px] tabular-nums text-secondary-600 dark:text-secondary-400"
       >
         {count}
       </span>
@@ -84,7 +84,7 @@ const GroupTitle: React.FC<{ children: React.ReactNode; first?: boolean }> = ({
 }) => (
   <p
     className={clsx(
-      'px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-secondary-400 dark:text-secondary-500',
+      'px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-secondary-600 dark:text-secondary-400',
       first ? 'pt-1' : 'pt-4',
     )}
   >
