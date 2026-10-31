@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1140" viewBox="0 0 1280 1140" role="img" aria-labelledby="title desc" xml:lang="zh-CN">
+<title id="title">Persona · 系统架构</title>
+<desc id="desc">本地优先的零知识身份材料管理器。五个使用面（Tauri 桌面、移动端、CLI、浏览器扩展、SSH Agent）全部落到 Rust core 引擎；core 提供密钥层级加密、认证与生物识别、SQLite 与 blob 本地存储、模型、上下文感知建议与事件。端到端加密同步引擎经 Persona Server（Axum）做多设备同步，服务端仅见密文。图示基于仓库代码与文档事实。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10Z" fill="context-stroke"/></marker></defs>
+<style>text{font-family:Arial,'Noto Sans CJK SC','Microsoft YaHei',sans-serif;fill:#172b4d}.title{font-size:30px;font-weight:700}.name{font-size:22px;font-weight:700}.body{font-size:16px;fill:#435570}.small{font-size:14px;fill:#52647b}.label{font-size:14px;fill:#435570;paint-order:stroke;stroke:#f8fafc;stroke-width:5px;stroke-linejoin:round}.edge{fill:none;stroke-linejoin:round}.dash{stroke-dasharray:7 5}</style>
+<rect width="1280" height="1140" rx="20" fill="#f8fafc"/>
+<text x="40" y="48" class="title" text-anchor="start">Persona · 系统架构</text>
+<text x="40" y="80" class="body" text-anchor="start">本地优先 · 零知识 · 单人多身份 · core 引擎 ＋ 多使用面 ＋ 可选自托管同步</text>
+
+<path d="M150 220 V280" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="surf-desktop" data-from="desktop" data-to="core" d="M150 220 V280" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M395 220 V280" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="surf-mobile" data-from="mobile" data-to="core" d="M395 220 V280" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M640 220 V280" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="surf-cli" data-from="cli" data-to="core" d="M640 220 V280" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M885 220 V280" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="surf-browser" data-from="browser" data-to="core" d="M885 220 V280" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M1130 220 V280" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="surf-agent" data-from="ssh-agent" data-to="core" d="M1130 220 V280" class="edge" style="stroke:#475569;stroke-width:2" marker-end="url(#arrow)"/>
+<path d="M400 580 V640" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="core-sync" data-from="core" data-to="sync" d="M400 580 V640" class="edge" style="stroke:#087f5b;stroke-width:2.5" marker-end="url(#arrow)"/>
+<path d="M600 740 H680" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="sync-server" data-from="sync" data-to="server" d="M600 740 H680" class="edge" style="stroke:#087f5b;stroke-width:2.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<path d="M400 840 V900" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="sync-local" data-from="sync" data-to="local-store" d="M400 840 V900" class="edge" style="stroke:#7c3aed;stroke-width:2.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<path d="M100 580 V900" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="core-local" data-from="core" data-to="local-store" d="M100 580 V900" class="edge" style="stroke:#7c3aed;stroke-width:2.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+<path d="M960 840 V900" fill="none" stroke="#f8fafc" stroke-width="9"/>
+<path id="server-store" data-from="server" data-to="server-store" d="M960 840 V900" class="edge" style="stroke:#7c3aed;stroke-width:2.5" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+
+<g id="desktop" data-node="desktop"><rect x="40" y="130" width="220" height="90" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="60" y="168" class="name" text-anchor="start">Desktop</text>
+<text x="60" y="196" class="body" text-anchor="start">Tauri（Windows/macOS/Linux）</text>
+</g>
+<g id="mobile" data-node="mobile"><rect x="285" y="130" width="220" height="90" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="305" y="168" class="name" text-anchor="start">Mobile</text>
+<text x="305" y="196" class="body" text-anchor="start">Android / iOS / HarmonyOS</text>
+</g>
+<g id="cli" data-node="cli"><rect x="530" y="130" width="220" height="90" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="550" y="168" class="name" text-anchor="start">CLI</text>
+<text x="550" y="196" class="body" text-anchor="start">commands · config · 自动化</text>
+</g>
+<g id="browser" data-node="browser"><rect x="775" y="130" width="220" height="90" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="795" y="168" class="name" text-anchor="start">Browser Extensions</text>
+<text x="795" y="196" class="body" text-anchor="start">Chromium / Safari · 自动填充</text>
+</g>
+<g id="ssh-agent" data-node="ssh-agent"><rect x="1020" y="130" width="220" height="90" rx="12" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+<text x="1040" y="168" class="name" text-anchor="start">SSH Agent</text>
+<text x="1040" y="196" class="body" text-anchor="start">agents/ssh-agent · 审批策略</text>
+</g>
+
+<g id="core" data-node="core"><rect x="40" y="280" width="1200" height="300" rx="14" fill="#eef2ff" stroke="#a5b4fc" stroke-width="1.5"/>
+<text x="60" y="318" class="name" text-anchor="start">core 引擎 · Rust（core/）</text>
+<rect x="60" y="330" width="380" height="105" rx="10" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="80" y="364" class="body" text-anchor="start">crypto</text>
+<text x="80" y="392" class="small" text-anchor="start">密钥层级 · AES-GCM 加密</text>
+<text x="80" y="416" class="small" text-anchor="start">Passkey(WebAuthn) · SSH 生成/导入</text>
+<rect x="455" y="330" width="380" height="105" rx="10" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="475" y="364" class="body" text-anchor="start">auth</text>
+<text x="475" y="392" class="small" text-anchor="start">认证 · 生物识别 · 自动锁定</text>
+<text x="475" y="416" class="small" text-anchor="start">权限 · 安全策略 · 会话</text>
+<rect x="850" y="330" width="380" height="105" rx="10" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="870" y="364" class="body" text-anchor="start">storage</text>
+<text x="870" y="392" class="small" text-anchor="start">SQLite（sqlx）· repository</text>
+<text x="870" y="416" class="small" text-anchor="start">blob / filesystem 附件</text>
+<rect x="60" y="455" width="380" height="105" rx="10" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="80" y="489" class="body" text-anchor="start">models</text>
+<text x="80" y="517" class="small" text-anchor="start">credential · identity · wallet</text>
+<text x="80" y="541" class="small" text-anchor="start">passkey · workspace · audit_log</text>
+<rect x="455" y="455" width="380" height="105" rx="10" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="475" y="489" class="body" text-anchor="start">context · events</text>
+<text x="475" y="517" class="small" text-anchor="start">上下文感知建议（cwd/repo/host）</text>
+<text x="475" y="541" class="small" text-anchor="start">事件发射 · wire · server_sink</text>
+<rect x="850" y="455" width="380" height="105" rx="10" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+<text x="870" y="489" class="body" text-anchor="start">import · backup · travel</text>
+<text x="870" y="517" class="small" text-anchor="start">JSON/YAML/CSV · gzip · Argon2id</text>
+<text x="870" y="541" class="small" text-anchor="start">备份 · 一键切换身份</text>
+<text x="60" y="570" class="small" text-anchor="start">建议仅提示、绝不静默授权；关键操作与签名事件入审计日志（含摘要）。</text>
+</g>
+
+<g id="sync" data-node="sync"><rect x="200" y="640" width="400" height="200" rx="14" fill="#eef8f5" stroke="#86c9b3" stroke-width="1.5"/>
+<text x="220" y="678" class="name" text-anchor="start">sync 引擎（E2EE）</text>
+<text x="220" y="712" class="body" text-anchor="start">oplog · capture · resolve</text>
+<text x="220" y="740" class="body" text-anchor="start">pairing · materialize · cursor</text>
+<text x="220" y="780" class="small" text-anchor="start">端到端加密 · 冲突裁决 UI</text>
+<text x="220" y="806" class="small" text-anchor="start">组密钥轮换 · 多设备</text>
+</g>
+<g id="server" data-node="server"><rect x="680" y="640" width="560" height="200" rx="14" fill="#eef8f5" stroke="#86c9b3" stroke-width="1.5"/>
+<text x="700" y="678" class="name" text-anchor="start">Persona Server · Rust + Axum（server/）</text>
+<text x="700" y="712" class="body" text-anchor="start">同步中继 · 账号 · 备份</text>
+<text x="700" y="740" class="body" text-anchor="start">零知识配对中继（connect-server）</text>
+<text x="700" y="780" class="small" text-anchor="start">服务端仅见密文（ciphertext-only）</text>
+<text x="700" y="806" class="small" text-anchor="start">自托管可选 · api / auth / metrics / state</text>
+</g>
+
+<g id="local-store" data-node="local-store"><rect x="40" y="900" width="560" height="100" rx="14" fill="#edf5ff" stroke="#93b9e3" stroke-width="1.5"/>
+<text x="60" y="938" class="name" text-anchor="start">本地存储</text>
+<text x="60" y="968" class="body" text-anchor="start">SQLite（本地库）＋ blob / filesystem 附件</text>
+</g>
+<g id="server-store" data-node="server-store"><rect x="680" y="900" width="560" height="100" rx="14" fill="#edf5ff" stroke="#93b9e3" stroke-width="1.5"/>
+<text x="700" y="938" class="name" text-anchor="start">服务端存储</text>
+<text x="700" y="968" class="body" text-anchor="start">密文同步对象 · 无明文材料</text>
+</g>
+
+<text x="100" y="760" class="label" text-anchor="middle" style="fill:#7c3aed" transform="rotate(-90 100 760)">本地库读写</text>
+<text x="415" y="622" class="label" text-anchor="middle" style="fill:#087f5b">变更捕获 →</text>
+<text x="640" y="732" class="label" text-anchor="middle" style="fill:#087f5b">E2EE 同步（密文）</text>
+<text x="960" y="862" class="label" text-anchor="middle" style="fill:#7c3aed">密文读写</text>
+<text x="60" y="1060" class="small" text-anchor="start">本地优先、零知识：材料仅在本地解密使用；同步上行的只有密文。服务端不持有任何密钥或明文。</text>
+<text x="60" y="1086" class="small" text-anchor="start">钱包材料沿用同一概念模型，属延后优先级；桌面全局热键唤起搜索层为可选（默认关闭）。</text>
+<text x="60" y="1112" class="small" text-anchor="start">实线：数据流 · 无圆点交叉不表示连通</text>
+</svg>

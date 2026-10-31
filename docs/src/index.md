@@ -34,6 +34,12 @@ features:
       service and policies.
 ---
 
+## System Architecture
+
+![Persona system architecture diagram](/images/architecture-en.svg)
+
+---
+
 ## Interface Previews
 
 <UiCarousel />
