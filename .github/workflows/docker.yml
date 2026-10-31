@@ -47,7 +47,7 @@ jobs:
       - name: Login to GHCR
         if: github.event_name != 'pull_request'
         timeout-minutes: 3
-        uses: docker/login-action@v4.6.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
