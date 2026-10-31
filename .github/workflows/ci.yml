@@ -41,7 +41,7 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2.87.30
+        uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-llvm-cov
       - name: fmt
@@ -108,7 +108,7 @@ jobs:
       # 续 crate）一起陪葬。nextest 每个测试独立进程 + 慢测试强杀
       # （.config/nextest.toml：60s 标记、240s 终止），挂死测试会带名字
       # 报出来，其余测试照常完成。
-      - uses: taiki-e/install-action@v2.87.30
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-nextest
       - name: test (nextest, per-test timeout)
