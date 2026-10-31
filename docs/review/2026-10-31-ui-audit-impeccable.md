@@ -8,10 +8,10 @@
 
 ## 1. 审核范围与方法
 
-| 界面 | 方法 | 是否渲染核验 |
-|------|------|:---:|
-| `persona/desktop`（Tauri 2 + React 19） | 构建 `dist` 静态伺服 + `__TAURI_INTERNALS__.invoke` fixture 注入 + Playwright（chromium）走查 | ✅ 是，36 张截图 |
-| `persona/website`（umi 4 + antd 6） | 静态源码审核 | ❌ 否（见 3.1 说明） |
+| 界面                                    | 方法                                                                                          |     是否渲染核验     |
+| --------------------------------------- | --------------------------------------------------------------------------------------------- | :------------------: |
+| `persona/desktop`（Tauri 2 + React 19） | 构建 `dist` 静态伺服 + `__TAURI_INTERNALS__.invoke` fixture 注入 + Playwright（chromium）走查 |   ✅ 是，36 张截图   |
+| `persona/website`（umi 4 + antd 6）     | 静态源码审核                                                                                  | ❌ 否（见 3.1 说明） |
 
 **persona/desktop 走查矩阵**（截图目录 `/home/cui/.cache/persona-audit-desktop/`，deviceScaleFactor=2）：
 
@@ -49,10 +49,10 @@
 
 ### 2.4 审核工具产物（非应用缺陷，如实记录）
 
-| 现象 | 原因 | 处置 |
-|------|------|------|
-| 控制台 `Cannot read properties of undefined (reading 'unregisterListener')` | 应用 `@tauri-apps/api/event` 的 `listen()`（`QuickAccessPanel`、`useQuickAccessBridge`、`useAutoLockEvents`）在浏览器渲染下的清理逻辑依赖 `unregisterListener`，而 fixture 仅注入了 `invoke`/`transformCallback` | 属 fixture 缺口，非应用 bug |
-| 错误横幅「加载 SSH 密钥失败」「列出 demo 的通行密钥失败」「自定义字段读取失败」「加载安全评分失败」 | fixture 对未处理的 invoke 命令返回 `ok(null)`，部分视图期待非空数组 | 属 fixture 缺口，非应用 bug |
+| 现象                                                                                                | 原因                                                                                                                                                                                                             | 处置                        |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| 控制台 `Cannot read properties of undefined (reading 'unregisterListener')`                         | 应用 `@tauri-apps/api/event` 的 `listen()`（`QuickAccessPanel`、`useQuickAccessBridge`、`useAutoLockEvents`）在浏览器渲染下的清理逻辑依赖 `unregisterListener`，而 fixture 仅注入了 `invoke`/`transformCallback` | 属 fixture 缺口，非应用 bug |
+| 错误横幅「加载 SSH 密钥失败」「列出 demo 的通行密钥失败」「自定义字段读取失败」「加载安全评分失败」 | fixture 对未处理的 invoke 命令返回 `ok(null)`，部分视图期待非空数组                                                                                                                                              | 属 fixture 缺口，非应用 bug |
 
 ---
 
@@ -110,9 +110,9 @@ website **未执行真实渲染核验**，原因：
 
 ## 4. 汇总
 
-| 界面 | 问题数 | 已修复 | 待办 | 修复提交 |
-|------|:---:|:---:|:---:|----------|
-| persona/desktop | 2 | 1（P1 对比度） | 1（P3 受控警告） | `96ce9f6` |
-| persona/website | 6 | 2（P1 按钮渐变、P2 文案对比度） | 2（P2 嵌套交互、P2 死链）+ 4 观察项 | `e124733`、`6081531` |
+| 界面            | 问题数 |             已修复              |                待办                 | 修复提交             |
+| --------------- | :----: | :-----------------------------: | :---------------------------------: | -------------------- |
+| persona/desktop |   2    |         1（P1 对比度）          |          1（P3 受控警告）           | `96ce9f6`            |
+| persona/website |   6    | 2（P1 按钮渐变、P2 文案对比度） | 2（P2 嵌套交互、P2 死链）+ 4 观察项 | `e124733`、`6081531` |
 
 **总评**：desktop 已是可发布级界面；website 的核心 CTA 对比度与页脚信息架构需在对外之前修正——尤其嵌套 `Button>Link` 与死链这两项是真实用户会碰到的（读屏错乱、点击 404）。website 渲染核验缺失是本报告最大局限，依赖安装后务必先跑 `npm run dev` 复核本报告 3.2 的对比度修复。
