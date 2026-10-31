@@ -28,6 +28,12 @@ features:
     details: CLI、桌面端、浏览器扩展和 SSH Agent 共用同一套本地服务与策略。
 ---
 
+## 系统架构
+
+![Persona 系统架构图](/images/architecture-zh.svg)
+
+---
+
 ## 界面预览
 
 <UiCarousel />
