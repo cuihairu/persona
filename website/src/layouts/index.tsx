@@ -41,9 +41,9 @@ const BasicLayout: React.FC = () => {
             >
               GitHub
             </Button>
-            <Button type="primary" icon={<DownloadOutlined />}>
-              <Link to="/download" style={{ color: 'inherit' }}>下载</Link>
-            </Button>
+            <Link to="/download" style={{ color: 'inherit' }}>
+              <Button type="primary" icon={<DownloadOutlined />}>下载</Button>
+            </Link>
           </Space>
         </div>
       </Header>
