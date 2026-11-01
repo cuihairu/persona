@@ -69,7 +69,9 @@ website **未执行真实渲染核验**，原因：
 2. 无构建产物 `dist`；
 3. 演示站点 `https://persona.cuihairu.site` 不可达（HTTP 000），且 README 无「演示站点」账号。
 
-因此 website 仅做**静态源码 + 样式表审核**。以下对比度数值基于样式表颜色与白/渐变背景的 WCAG 相对亮度计算，**未经验证**；建议依赖安装后运行 `npm run dev` 复核。所有色相族与视觉方向（indigo→violet 渐变体系）保持不变，仅按需加深。
+因此 website 仅做**静态源码 + 样式表审核**。以下对比度数值基于样式表颜色与白/渐变背景的 WCAG 相对亮度计算，**审核时未经验证**；建议依赖安装后运行 `npm run dev` 复核。所有色相族与视觉方向（indigo→violet 渐变体系）保持不变，仅按需加深。
+
+> **2026-11-01 更新**：该局限已消除——`node_modules` 齐备后发现 website 的 react 锁 19.3.0 与 react-dom 19.3.1 不匹配导致 React #527 渲染失败（`d603850` 对齐补漏）；`umi build` + 静态伺服后 SPA 正常渲染，已按 §5 四联表补齐 W1–W4 真实渲染 before/after 截图（before 为回退至修复前基线重建，after 为当前源码重建），实测主按钮渐变 `#4f46e5→#7c3aed` 与页脚「即将上线」标签均已在渲染中确认。
 
 ### 3.2 已修复（2 项）
 
@@ -122,4 +124,21 @@ website **未执行真实渲染核验**，原因：
 
 **复核（2026-11-01）**：desktop 2 项、website 4 项缺陷全部修复收口，待办清零（仅剩 4 项观察项，均为装饰性/大字号豁免，无需处理）。after 截图 31 张落 `docs/review/shots-after/`（与 `shots-before/` 同视图成对；before 为审核时 13:19 走查，after 为修复后重跑，像素差仅集中于侧栏对比度区）。报告引用的三处修复 hash（`96ce9f6`/`e124733`/`6081531`）与实际提交不符，已更正为 `c3f0510`/`26fe26f`/`090d8d2`。
 
-**总评**：desktop 已是可发布级界面；website 核心 CTA 对比度、嵌套 `Button>Link` 与页脚死链均已修正。website 渲染核验仍是本报告最大局限——`umi build`（CI 门禁）+ 源码级复核通过，但静态伺服下 SPA 不渲染，建议依赖安装后跑 `npm run dev` 实测复核 3.2 对比度与 3.3 导航。
+**复核（2026-11-01 收口，见 §5 四联表）**：补齐全部 6 项修复的 before/after 截图对（`shots-after/`，文件名对齐问题编号 D1/D2/W1–W4）。其中 website 四项补上了真实渲染截图——此前 3.1 的「未渲染核验」局限已消除：仓库 `node_modules` 齐备后，发现 website 的 react 仍锁 19.3.0 而 react-dom 19.3.1（`d603850` 对齐，补 7ecb0b7 对 desktop 的对齐漏项），`umi build` + 静态伺服后 SPA 正常渲染；before 由回退 website/src 至修复前基线（c3f0510）重建取得，after 为当前源码重建。截图验证：W1 主按钮渐变 `#6366f1→#8b5cf6`（before）→ `#4f46e5→#7c3aed`（after）；W4 页脚「安全性/隐私政策/使用条款」（before，404 死链）→「…（即将上线）」（after）。
+
+**总评**：desktop 已是可发布级界面；website 核心 CTA 对比度、嵌套 `Button>Link` 与页脚死链均已修正。website 渲染核验局限已消除（react 对齐 + `umi build` 通过 + 静态伺服渲染复核，见 §5）。
+
+---
+
+## 5. 修复对照（问题 / before / after / commit 四联格式）
+
+> 每项修复的同视图 before/after 截图对存 `docs/review/shots-after/`（文件名对齐问题编号）。D2（受控告警）与 W3（嵌套交互）为运行期/DOM 级修复，截图像素无变化，但同视图成对提交；差异体现在控制台与 a11y 树，见 §2.3/§3.3。
+
+| # | 问题 | before | after | commit |
+|---|------|--------|-------|--------|
+| D1 | 桌面端侧栏次级文字对比度：`Sidebar.tsx:72,87` 计数徽标 + 分组标题 `text-secondary-400`，亮 2.56:1 / 暗 3.72:1 < AA 4.5:1 → `text-secondary-600 dark:text-secondary-400`（亮 7.59:1 / 暗 6.92:1） | [before](shots-after/D1-sidebar-before.png) | [after](shots-after/D1-sidebar-after.png) | `c3f0510` |
+| D2 | 桌面端 React 受控/非受控告警：`IdentitySwitcher.tsx:44` `<Listbox value={currentIdentity ?? undefined}>` 首渲染 `value=undefined`（非受控）→ 身份加载后受控，触发 headlessui 告警 → `value={currentIdentity}` 恒受控 + `onChange` 空值守卫（运行期告警，截图像素无变化，见 §2.3） | [before](shots-after/D2-controlled-before.png) | [after](shots-after/D2-controlled-after.png) | `fff46d3` |
+| W1 | 网站主按钮渐变：`global.less .ant-btn-primary` `#6366f1→#8b5cf6` 白字 4.47→4.23:1 < 4.5:1（全站主 CTA）→ `#4f46e5→#7c3aed`（6.28→5.70:1，hover `#4338ca→#6d28d9` 7.89→7.10:1） | [before](shots-after/W1-btn-gradient-before.png) | [after](shots-after/W1-btn-gradient-after.png) | `26fe26f` |
+| W2 | 网站落地页文字对比度：`index.less` 平台文案 `#94a3b8` 2.56:1 → `#64748b` 4.76:1；Hero 徽章/统计标签/CTA 渐变白字加深 | [before](shots-after/W2-landing-before.png) | [after](shots-after/W2-landing-after.png) | `090d8d2` |
+| W3 | 网站嵌套交互 `Button>Link`（6 处：`layouts/index.tsx:44`，`pages/index.tsx:81,179,231,268,252`）→ `Link` 包裹 `Button`（DOM 级，截图像素无变化，见 §3.3） | [before](shots-after/W3-nesting-before.png) | [after](shots-after/W3-nesting-after.png) | `961449e` |
+| W4 | 网站页脚死链 3 条（`/security` `/privacy` `/terms` 均 404）→ 弱化 `comingSoon` 标签（不制造 404、不伪造法务文案） | [before](shots-after/W4-footer-before.png) | [after](shots-after/W4-footer-after.png) | `9a98af7` |
