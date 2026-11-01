@@ -38,14 +38,17 @@
 
 **P1（AA 不达标）— 侧栏次级文字对比度**：`src/components/Sidebar.tsx:72`（计数徽标）与 `:87`（分组标题）使用 `text-secondary-400 dark:text-secondary-500`，实测**亮色 2.56:1 / 暗色 3.72:1**，均低于 WCAG AA 正文 4.5:1。徽标与分组标题虽为辅助信息，但 11px 小字号 + 低对比在 264px 窄栏内可读性差。
 
-- 修复：改为 `text-secondary-600 dark:text-secondary-400` → **亮色 7.59:1 / 暗色 6.92:1**（`fix(ui): sidebar secondary text contrast`，`96ce9f6`）。
+- 修复：改为 `text-secondary-600 dark:text-secondary-400` → **亮色 7.59:1 / 暗色 6.92:1**（`fix(ui): sidebar secondary text contrast`，`c3f0510`）。
 - 位置：`src/components/Sidebar.tsx` `NavRow` 计数 `span`、`GroupTitle`。
+- 复核（2026-11-01）：源码确认 `text-secondary-600 dark:text-secondary-400` 已就位；重跑走查矩阵，before/after 截图 31 对全部成对（`docs/review/shots-before/`、`docs/review/shots-after/`），before→after 像素差仅集中于侧栏区（<528px 即 264px CSS × 2DPR），主内容区零差——修复已真实落地。
 
-### 2.3 待办（1 项）
+### 2.3 已修复（1 项，2026-11-01 复核收口）
 
 **P3 — React 受控/非受控警告**：所有状态下控制台均出现 `A component is changing from uncontrolled to controlled`（输入框 `value` 从 `undefined` 翻转为已定义值）。运行期未定位到具体组件（需二分），但该警告在 light/dark/empty/narrow 全矩阵复现，属真实应用问题而非审核工具产物。
 
-- 建议：排查 `SettingsModal` 的表单字段与 `sidebar-search`——`value={searchQuery}` 初始为 `undefined`，`onChange` 后才成为字符串；若某受控输入初始值为 `undefined` 而非 `''`，即为元凶。统一初始化为空串。
+- 根因（2026-11-01 二分定位）：**非 React DOM 输入，而是 `@headlessui/react` 的 `useControllableState`**（`IdentitySwitcher.tsx:44`）——`<Listbox value={currentIdentity ?? undefined}>`，`currentIdentity` 首渲染为 `null` → `value=undefined`（headlessui 判定为**非受控**），身份异步加载完成后翻转为已定义对象 → **受控**，触发 headlessui 的「非受控→受控」告警（headlessui 仅按 `value !== undefined` 判定受控）。该文案与 React DOM 的「changing an uncontrolled input to be controlled」不同，故审核时误判为输入框问题；隔离测试证实 headlessui 2.2.10 + react 19.3.1 对该转换必告警，属真实缺陷（依赖挂载时序，全矩阵复现）。
+- 修复：`value={currentIdentity}`（`Identity | null`，永不为 `undefined`）→ `null !== undefined` 恒受控，无转换；`onChange` 包空值守卫 `if (v) void switchIdentity(v)`。隔离测试证实受控 null 初始 + 翻转为身份对象**不告警、无崩溃、选中正确**。回归测试 `IdentitySwitcher.test.tsx`（身份加载后不产生该告警）对旧实现红、对新实现绿。
+- 提交：`fix(ui): keep identity switcher listbox controlled to silence react warning`，`fff46d3`。
 
 ### 2.4 审核工具产物（非应用缺陷，如实记录）
 
@@ -72,7 +75,7 @@ website **未执行真实渲染核验**，原因：
 
 **P1（AA 不达标）— 主按钮渐变对比度**：`.ant-btn-primary` 渐变 `#6366f1→#8b5cf6`，实测**白字 4.47→4.23:1**，低于 4.5:1。该渐变用于全站所有主 CTA（页头「下载」、Hero「免费下载」、各区块「了解更多」、CTA「立即下载」），是品牌站最关键的可交互元素。
 
-- 修复：`src/global.less` 基态渐变 → `#4f46e5→#7c3aed`（**6.28→5.70:1**，hover `#4338ca→#6d28d9` 达 7.89→7.10:1）（`fix(ui): primary button gradient contrast`，`e124733`）。
+- 修复：`src/global.less` 基态渐变 → `#4f46e5→#7c3aed`（**6.28→5.70:1**，hover `#4338ca→#6d28d9` 达 7.89→7.10:1）（`fix(ui): primary button gradient contrast`，`26fe26f`）。
 - 位置：`src/global.less` `.ant-btn-primary`。
 
 **P2（AA 不达标）— 落地页文字对比度**：
@@ -81,22 +84,24 @@ website **未执行真实渲染核验**，原因：
 - `.badge`（Hero 徽章）`#6366f1` 在 10% indigo 底上约 4.3:1 → 改 `#4f46e5`。
 - `.stats`/`.cta` 区块渐变背景 `#6366f1→#8b5cf6` 上白字 4.23:1 → 渐变改 `#4f46e5→#7c3aed`；`.statLabel`（14px）白字 alpha 0.8 → 0.95、`.ctaDesc` 0.9 → 0.95。
 
-修复：`fix(ui): landing page contrast`（`6081531`），位置 `src/pages/index.less`。
+修复：`fix(ui): landing page contrast`（`090d8d2`），位置 `src/pages/index.less`。
 
-### 3.3 待办（2 项）
+### 3.3 已修复（2 项，2026-11-01 收口）
 
-**P2 — 嵌套交互 `Button>Link`（5 处）**：主按钮内包裹 `<Link>` 而非用 `Button` 的 `href`/导航，产生「交互元素嵌套交互元素」：
+**P2 — 嵌套交互 `Button>Link`（6 处，审核清单 5 处 + 走查新发 1 处）**：主按钮内包裹 `<Link>` 而非用 `Button` 的 `href`/导航，产生「交互元素嵌套交互元素」：
 
 - `src/layouts/index.tsx:44`（页头「下载」）
-- `src/pages/index.tsx:81`（Hero「免费下载」）、`:179`、`:231`（「了解更多」×2）、`:268`（CTA「立即下载」）
+- `src/pages/index.tsx:81`（Hero「免费下载」）、`:179`、`:231`（「了解更多」×2）、`:268`（CTA「立即下载」）、`:252`（开源区「查看文档」，审核清单漏计）
 
 这既破坏可访问性树（读屏无法正确宣告嵌套交互），也违背 antd `Button` 的导航用法（应传 `href`，或外层用 `Link` 包整钮）。
 
-- 建议：对站内路由改用 `<Link to="/download">` 包裹 `<Button>`（Link 在外、Button 在内，单一路由语义），或给 `Button` 增加 `href` 支持站内导航。
+- 修复：全部改为 `<Link to="...">` 包裹 `<Button>`（Link 在外、Button 在内，单一路由语义，umi 客户端导航）。提交 `fix(ui): wrap website ctas in link instead of nesting link in button`，`961449e`。
+- 复核：`umi build` 通过；源码 grep 零残留 `<Button ...><Link`。
 
 **P2 — 页脚死链（3 条）**：`src/layouts/index.tsx:71-73` 页脚「安全性」`/security`、「隐私政策」`/privacy`、「使用条款」`/terms`，但 `.umirc.ts` 只有 5 条路由，**这 3 条路径不存在 → 404**。
 
-- 建议：要么补充对应页面，要么指向已存在内容（如 `/docs` 相应章节）；若暂无文案，先移除链接并标注「即将上线」。
+- 修复：仓内无对应正式文案（无 SECURITY/PRIVACY/TERMS 页，docs 站 `/docs/security/*` 也非 website 路由），按建议「先移除链接并标注即将上线」——替换为弱化 `comingSoon` 标签，不制造 404、不伪造法务文案。提交 `fix(ui): replace footer dead links with coming soon labels`，`9a98af7`。
+- 复核：`umi build` 通过；grep 确认页脚零 `/security|/privacy|/terms` 链接。
 
 ### 3.4 观察项（非缺陷，仅记录）
 
@@ -112,7 +117,9 @@ website **未执行真实渲染核验**，原因：
 
 | 界面            | 问题数 |             已修复              |                待办                 | 修复提交             |
 | --------------- | :----: | :-----------------------------: | :---------------------------------: | -------------------- |
-| persona/desktop |   2    |         1（P1 对比度）          |          1（P3 受控警告）           | `96ce9f6`            |
-| persona/website |   6    | 2（P1 按钮渐变、P2 文案对比度） | 2（P2 嵌套交互、P2 死链）+ 4 观察项 | `e124733`、`6081531` |
+| persona/desktop |   2    |     2（P1 对比度、P3 受控警告）     |                 0                  | `c3f0510`、`fff46d3` |
+| persona/website |   6    | 4（P1 按钮渐变、P2 文案对比度、P2 嵌套交互、P2 死链） | 4 观察项（豁免） | `26fe26f`、`090d8d2`、`961449e`、`9a98af7` |
 
-**总评**：desktop 已是可发布级界面；website 的核心 CTA 对比度与页脚信息架构需在对外之前修正——尤其嵌套 `Button>Link` 与死链这两项是真实用户会碰到的（读屏错乱、点击 404）。website 渲染核验缺失是本报告最大局限，依赖安装后务必先跑 `npm run dev` 复核本报告 3.2 的对比度修复。
+**复核（2026-11-01）**：desktop 2 项、website 4 项缺陷全部修复收口，待办清零（仅剩 4 项观察项，均为装饰性/大字号豁免，无需处理）。after 截图 31 张落 `docs/review/shots-after/`（与 `shots-before/` 同视图成对；before 为审核时 13:19 走查，after 为修复后重跑，像素差仅集中于侧栏对比度区）。报告引用的三处修复 hash（`96ce9f6`/`e124733`/`6081531`）与实际提交不符，已更正为 `c3f0510`/`26fe26f`/`090d8d2`。
+
+**总评**：desktop 已是可发布级界面；website 核心 CTA 对比度、嵌套 `Button>Link` 与页脚死链均已修正。website 渲染核验仍是本报告最大局限——`umi build`（CI 门禁）+ 源码级复核通过，但静态伺服下 SPA 不渲染，建议依赖安装后跑 `npm run dev` 实测复核 3.2 对比度与 3.3 导航。
