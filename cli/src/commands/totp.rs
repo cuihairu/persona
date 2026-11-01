@@ -453,7 +453,7 @@ async fn setup_steam_token(
 /// 录入游戏令牌记录：离线可算的 provider（当前仅 Steam）各有专用 setup
 /// 命令；厂商绑定型（腾讯安全中心/网易大神/米哈游安全令等，密钥在厂商
 /// 服务端配发进官方 App，无法离线出码）只做记录——不伪造动态码，出码
-/// 仍走厂商 App（TODO.md G2 调研结论）。
+/// 仍走厂商 App（todo.md G2 调研结论）。
 #[allow(clippy::too_many_arguments)]
 async fn setup_game_token(
     config: &CliConfig,

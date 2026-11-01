@@ -1,12 +1,12 @@
 <div align="center">
-    <img src="docs/branding/logo.svg" width="64" alt="Persona logo" />
+  <img src="docs/branding/logo.svg" width="64" alt="Persona logo" />
   <h1>Persona</h1>
   <p><strong>本地优先的身份材料管理器</strong></p>
   <p>
-<a href="https://github.com/cuihairu/persona/releases"></a> <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"></a> <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a> <a href="https://opensource.org/licenses/MIT"></a>     
-  </p> <a href="https://cuihairu.github.io/persona/zh//"></a>
-  <img src="https://img.shields.io/badge/status-in%20development-orange" alt="Status: in development" /> <img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /> <img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /> <img src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white" alt="Rust" /> <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /> <img src="https://img.shields.io/badge/Windows-0078D4?logo=windows11&logoColor=white" alt="Windows" /> <img src="https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white" alt="macOS" /> <img src="https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black" alt="Linux" /> <img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs">
+    <a href="https://github.com/cuihairu/persona/releases"><img src="https://img.shields.io/badge/status-in%20development-orange" alt="Status: in development" /></a> <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /></a> <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a> <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a> <img src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white" alt="Rust" /> <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /> <img src="https://img.shields.io/badge/Windows-0078D4?logo=windows11&logoColor=white" alt="Windows" /> <img src="https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white" alt="macOS" /> <img src="https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black" alt="Linux" /> <a href="https://cuihairu.github.io/persona/zh/"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs" /></a>
+  </p>
 </div>
+
 
 > [English](README.md) | **中文**
 
@@ -121,9 +121,6 @@ Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rus
 ```bash
 # Clone the repository
 
-<p align="center">
-<a href="https://github.com/cuihairu/persona/releases"><img alt="Status" src="https://img.shields.io/badge/status-in%20development-orange"></a>
-</p>
 git clone git@github.com:cuihairu/persona.git
 cd persona
 
@@ -429,7 +426,7 @@ persona wallet passwd "Main"
 - [MONOREPO](./docs/MONOREPO.md) – 单仓（monorepo）的取舍与工具链
 - [UNINSTALL](./docs/UNINSTALL.md) – 卸载与数据保留（卸载不删数据，重装接续；显式 purge 步骤）
 - [ROADMAP](./docs/ROADMAP.md) – 路线图与细化的 TODO 条目
-- [TODO](./TODO.md) – 每日维护的任务清单
+- [TODO](./todo.md) – 每日维护的任务清单
 - [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – 浏览器扩展 native messaging 协议
 - [品牌素材](./docs/branding/README.md) – logo、字标、配色与使用规范
 
