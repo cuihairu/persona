@@ -4,7 +4,7 @@
 
 **掌控你的数字身份。一键自由切换。**
 
-本目录是 Persona 的设计与安全文档入口。里程碑视图见 [ROADMAP](./ROADMAP.md)，每日任务见根目录 [TODO](../TODO.md)。
+本目录是 Persona 的设计与安全文档入口。里程碑视图见 [ROADMAP](./ROADMAP.md)，每日任务见根目录 [TODO](../todo.md)。
 
 ## 产品与边界
 

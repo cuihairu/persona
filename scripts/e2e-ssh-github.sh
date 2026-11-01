@@ -2,7 +2,7 @@
 # SSH agent 真机 E2E 引导：github.com 实连验收（TODO「Full E2E test」条目）。
 # 需要用户配合的点只有两处：① 把打印出的公钥贴到 GitHub；② TTY 确认签名。
 # 用法: PERSONA_E2E_IDENTITY=<身份名> scripts/e2e-ssh-github.sh
-# 步骤与预期输出对照 TODO.md 同条目；负向用例（拒绝确认/限速/审计行）见
+# 步骤与预期输出对照 todo.md 同条目；负向用例（拒绝确认/限速/审计行）见
 # TODO 手册 ④，不在本脚本内自动化。
 set -euo pipefail
 
@@ -62,4 +62,4 @@ if grep -q "successfully authenticated" /tmp/persona-github-e2e.out; then
 else
   fail "未看到 successfully authenticated——检查 /tmp/persona-github-e2e.out 与公钥是否已上 GitHub"
 fi
-echo "负向用例（拒绝确认 / PERSONA_AGENT_REQUIRE_CONFIRM / 限速 / audit ssh_sign 行）按 TODO.md 手册 ④ 手工过一遍"
+echo "负向用例（拒绝确认 / PERSONA_AGENT_REQUIRE_CONFIRM / 限速 / audit ssh_sign 行）按 todo.md 手册 ④ 手工过一遍"

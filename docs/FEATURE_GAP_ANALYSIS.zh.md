@@ -88,7 +88,7 @@
   - TOTP 自动填充：[x] 桥协议 + 打磨过的页内 UX（2026-09-22）：focus 自动填充、6 格数字分组填充、登录填充后链式填充（`autoFillTotpAfterLogin` 设置）、陈旧码窗口（≤3s）等满周期后重取一次、填充/复制提示携带剩余秒数、多候选自动填充改为打开内联选择器而非静默失败（per-origin 默认记忆不变）；注入控件的 Shadow-DOM 隔离于 2026-09-22 落地（单一 closed shadow root，keyframes 移出 `document.head`）；剩余跟进：内联码展示控件（刻意不做——页面脚本可读 content-script DOM）
 - Watchtower
   - 泄露/弱口令/重复/过期检测：[x] 规则引擎 + HIBP 泄露检查完成（core + `persona watchtower --check-breaches` CLI + 桌面 `health_scan` flag；k-匿名：仅发送 5 字符哈希前缀，网络故障降级为离线规则；仅元数据报告，zxcvbn 强度/复用/过期/陈旧）；桌面 `Watchtower` 面板完成（扫描 + 可选 HIBP 泄露检查，按严重度分组的报告）
-  - 域名泄露告警 / 暗网监测 / Sherlock 风格 OSINT 标识符查询：[−] 押后至 1Password 对齐之后（2026-09-22）——向第三方发送用户名/邮箱/电话与「无常驻外联」隐私红线冲突，跨站用户名枚举与 `BOUNDARY.md` 的「社交身份聚合」排除项相撞；日后把探针架在 persona-server 上也不改变本轮裁定。仅在里程碑 4 对齐完成后重议（见 `TODO.md` 押后条目）。
+  - 域名泄露告警 / 暗网监测 / Sherlock 风格 OSINT 标识符查询：[−] 押后至 1Password 对齐之后（2026-09-22）——向第三方发送用户名/邮箱/电话与「无常驻外联」隐私红线冲突，跨站用户名枚举与 `BOUNDARY.md` 的「社交身份聚合」排除项相撞；日后把探针架在 persona-server 上也不改变本轮裁定。仅在里程碑 4 对齐完成后重议（见 `todo.md` 押后条目）。
 - 共享与管理（Sharing/Admin）
   - 多用户保险库、RBAC、SCIM/SSO、账号恢复：[−] 单主体产品出界（`BOUNDARY.md`）
 - 应用与界面（Apps & Interfaces）

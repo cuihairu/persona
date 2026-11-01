@@ -89,6 +89,6 @@ This document explains how Persona’s clients (CLI, desktop/Tauri app, browser 
 
 ## References
 
-- [`TODO.md`](../TODO.md) – tracking tasks for this document and related implementation.
+- [`todo.md`](../todo.md) – tracking tasks for this document and related implementation.
 - [`docs/MONOREPO.md`](./MONOREPO.md) – overall repo layout where this service will live (likely under `core` + a new `service` crate).
 - [`docs/REMOTE_AUTH.md`](./REMOTE_AUTH.md) – complementary details for remote authentication flows that sit on top of this communication model.

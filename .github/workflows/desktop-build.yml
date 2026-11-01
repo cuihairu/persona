@@ -23,7 +23,7 @@
 # 暂不发 APK——移动端还是最小闭环，等稳定后随正式发版放开。
 #
 # Binaries are unsigned (SmartScreen/Gatekeeper will warn on install);
-# signing keys are tracked as a follow-up in TODO.md. Assets are
+# signing keys are tracked as a follow-up in todo.md. Assets are
 # architecture-pinned per runner: linux/windows x64, macos arm64.
 name: Desktop Build
 
