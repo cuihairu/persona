@@ -1595,6 +1595,17 @@ fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
 fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
     use std::process::Command;
 
+    // Windows 没有 /proc：用 tasklist 探测进程是否还在（输出含 PID 数字即
+    // 存活，判定不受系统语言影响）；不在则按陈旧 pidfile 处理，与 Unix
+    // 侧语义对齐，也让 AlreadyGone 分支在 Windows 上可达。
+    let listed = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output();
+    let alive = matches!(&listed, Ok(o) if String::from_utf8_lossy(&o.stdout).contains(pid));
+    if !alive {
+        return Ok(StopOutcome::AlreadyGone);
+    }
+
     let status = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
     if matches!(status, Ok(s) if s.success()) {
         return Ok(StopOutcome::Stopped);
@@ -1925,9 +1936,12 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn stop_agent_pid_nonexistent_is_refused() {
-        // Windows 未做进程身份校验（无 /proc），taskkill 失败按 Refused 处理。
-        assert_eq!(stop_agent_pid("99999999").unwrap(), StopOutcome::Refused);
+    fn stop_agent_pid_nonexistent_is_already_gone() {
+        // tasklist 探测不到进程 → 按"陈旧 pidfile"处理（与 Unix 一致）。
+        assert_eq!(
+            stop_agent_pid("99999999").unwrap(),
+            StopOutcome::AlreadyGone
+        );
     }
 
     // ------------------------------------------------------------------
