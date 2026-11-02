@@ -66,3 +66,6 @@ desktop/src-tauri/gen/schemas/
 # 可复现构建容器产物（scripts/build-repro.sh --docker 输出到仓库根）
 /Persona_*.deb
 /.pnpm-store/
+
+# 运行时日志（server 等进程的 stdout 重定向产物，不进仓）
+*.log
