@@ -196,7 +196,7 @@ impl BlobStore {
             let mut full_content = Vec::new();
 
             for chunk in chunks {
-                let chunk_path = self.storage_root.join(&chunk.storage_path);
+                let chunk_path = self.resolve_within_root(&chunk.storage_path)?;
                 let chunk_data = FileSystem::read(&chunk_path).await?;
 
                 // Verify chunk hash
@@ -211,7 +211,7 @@ impl BlobStore {
             full_content
         } else {
             // Read single file
-            let file_path = self.storage_root.join(&attachment.storage_path);
+            let file_path = self.resolve_within_root(&attachment.storage_path)?;
             FileSystem::read(&file_path).await?
         };
 
@@ -248,7 +248,7 @@ impl BlobStore {
         if attachment.chunk_count > 1 {
             // Delete all chunks
             for chunk in chunks {
-                let chunk_path = self.storage_root.join(&chunk.storage_path);
+                let chunk_path = self.resolve_within_root(&chunk.storage_path)?;
                 if FileSystem::exists(&chunk_path).await {
                     FileSystem::remove_file(&chunk_path).await?;
                 }
@@ -262,13 +262,32 @@ impl BlobStore {
             }
         } else {
             // Delete single file
-            let file_path = self.storage_root.join(&attachment.storage_path);
+            let file_path = self.resolve_within_root(&attachment.storage_path)?;
             if FileSystem::exists(&file_path).await {
                 FileSystem::remove_file(&file_path).await?;
             }
         }
 
         Ok(())
+    }
+
+    /// 把（理论上已相对根的）storage_path 安全拼到存储根下。
+    ///
+    /// 写入方生成的路径永远是 Normal 组件（uuid/uuid/filename），这里防的是
+    /// DB 脏数据 / 导入归档里的越权路径：绝对路径或含 `..`/`.` 等非常规组件
+    /// 一律拒绝（对齐 travel.rs:538-552 的逃逸检查口径，防御纵深）。
+    fn resolve_within_root(&self, storage_path: &str) -> Result<PathBuf> {
+        let relative = Path::new(storage_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+        {
+            return Err(anyhow::anyhow!(
+                "attachment storage_path escapes storage root: {storage_path}"
+            ));
+        }
+        Ok(self.storage_root.join(relative))
     }
 
     /// Calculate SHA-256 hash of data using ring
@@ -967,6 +986,94 @@ mod tests {
 
         // Deleting an already-missing single file is fine.
         store.delete_file(&attachment, &[]).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_storage_path_traversal_rejected() {
+        let temp_dir = tempdir().unwrap();
+        let store = BlobStore::new(temp_dir.path().join("storage"));
+        store.init().await.unwrap();
+        let credential_id = Uuid::new_v4();
+
+        // 根外放一个"诱饵"文件：若逃逸检查失效，retrieve/delete 会摸到它。
+        let outside = temp_dir.path().join("outside-secret.txt");
+        FileSystem::write(&outside, b"outside").await.unwrap();
+
+        let mut attachment = Attachment::new(
+            credential_id,
+            "evil.txt".to_string(),
+            "text/plain".to_string(),
+            7,
+            "../outside-secret.txt".to_string(),
+            store.calculate_hash(b"outside"),
+        );
+
+        // 单文件 retrieve：逃逸路径直接拒绝，不读根外文件。
+        let err = store
+            .retrieve_file(&attachment, &[], false, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("escapes storage root"), "{err}");
+
+        // 单文件 delete：同样拒绝，不删根外文件。
+        let err = store.delete_file(&attachment, &[]).await.unwrap_err();
+        assert!(err.to_string().contains("escapes storage root"), "{err}");
+        assert!(FileSystem::exists(&outside).await);
+
+        // 分块路径同样受检（chunk.storage_path 与 attachment.storage_path 各查各的）。
+        let chunk = AttachmentChunk::new(
+            attachment.id,
+            0,
+            7,
+            store.calculate_hash(b"outside"),
+            "../../outside-secret.txt".to_string(),
+        );
+        attachment.chunk_count = 2;
+        let err = store
+            .retrieve_file(&attachment, std::slice::from_ref(&chunk), false, None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("escapes storage root"), "{err}");
+        let err = store
+            .delete_file(&attachment, std::slice::from_ref(&chunk))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("escapes storage root"), "{err}");
+        assert!(FileSystem::exists(&outside).await);
+
+        // 绝对路径与深层嵌套 `..` 同样拒绝。
+        attachment.chunk_count = 1;
+        for evil in ["/etc/passwd", "a/../../b.txt", "./here.txt"] {
+            attachment.storage_path = evil.to_string();
+            assert!(
+                store
+                    .retrieve_file(&attachment, &[], false, None)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("escapes storage root"),
+                "evil={evil}"
+            );
+        }
+
+        // 合法的嵌套相对路径（uuid/uuid/filename 形态）不受影响。
+        let good = temp_dir.path().join("storage");
+        let nested = good
+            .join(credential_id.to_string())
+            .join("att")
+            .join("nested.txt");
+        FileSystem::create_dir_all(nested.parent().unwrap())
+            .await
+            .unwrap();
+        FileSystem::write(&nested, b"nested ok").await.unwrap();
+        attachment.chunk_count = 1;
+        attachment.storage_path = format!("{}/att/nested.txt", credential_id);
+        attachment.content_hash = store.calculate_hash(b"nested ok");
+        let content = store
+            .retrieve_file(&attachment, &[], false, None)
+            .await
+            .unwrap();
+        assert_eq!(content, b"nested ok");
     }
 
     #[tokio::test]
