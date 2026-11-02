@@ -473,9 +473,7 @@ pub fn export_to_keystore_with_params(
     let mem = 128u64
         .checked_mul(u64::from(params.r))
         .and_then(|v| v.checked_mul(1u64 << params.log_n))
-        .ok_or_else(|| {
-            PersonaError::InvalidInput("scrypt work factor too high".to_string())
-        })?;
+        .ok_or_else(|| PersonaError::InvalidInput("scrypt work factor too high".to_string()))?;
     if mem > SCRYPT_IMPORT_MAX_MEM {
         return Err(PersonaError::InvalidInput(format!(
             "scrypt work factor too high ({} bytes > {} cap)",

@@ -1911,7 +1911,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn stop_agent_pid_nonexistent_is_already_gone() {
-        assert_eq!(stop_agent_pid("99999999").unwrap(), StopOutcome::AlreadyGone);
+        assert_eq!(
+            stop_agent_pid("99999999").unwrap(),
+            StopOutcome::AlreadyGone
+        );
     }
 
     #[cfg(windows)]
