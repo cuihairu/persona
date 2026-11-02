@@ -1517,38 +1517,91 @@ fn stop_agent() -> Result<()> {
         println!("{}", "Empty PID file.".yellow());
         return Ok(());
     }
-    let stopped = stop_agent_pid(pid)?;
-    if stopped {
-        println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
-        // Cleanup sock/pid files
-        let _ = std::fs::remove_file(pid_file);
-        let sock_file = state_dir.join("ssh-agent.sock");
-        let _ = std::fs::remove_file(sock_file);
-    } else {
-        println!("{}", "Failed to stop agent".red());
+    match stop_agent_pid(pid)? {
+        StopOutcome::Stopped => {
+            println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
+            // Cleanup sock/pid files
+            let _ = std::fs::remove_file(pid_file);
+            let sock_file = state_dir.join("ssh-agent.sock");
+            let _ = std::fs::remove_file(sock_file);
+        }
+        // 进程已不在（陈旧 pidfile）：清掉文件，按"无需再停"处理。
+        StopOutcome::AlreadyGone => {
+            println!(
+                "{}",
+                format!("PID {pid} is not running (stale pidfile); removing.").yellow()
+            );
+            let _ = std::fs::remove_file(pid_file);
+            let sock_file = state_dir.join("ssh-agent.sock");
+            let _ = std::fs::remove_file(sock_file);
+        }
+        // PID 被别的进程复用（不是 agent）：拒绝杀，绝不误伤。
+        StopOutcome::Refused => {
+            println!(
+                "{}",
+                format!("PID {pid} is not persona-ssh-agent; refusing to kill.").red()
+            );
+        }
     }
     Ok(())
 }
 
+/// stop_agent 的三态结果：杀成功 / 进程早已不在（陈旧 pidfile）/ 拒绝杀。
+#[derive(PartialEq, Debug)]
+enum StopOutcome {
+    Stopped,
+    AlreadyGone,
+    Refused,
+}
+
+/// 读 /proc/<pid>/cmdline 判断该 PID 是否为 persona-ssh-agent。
+///
+/// `None` = 进程不存在；`Some(true)` = 是我们；`Some(false)` = 别的进程。
+/// 用来防"陈旧 pidfile + PID 被复用"时误杀无辜进程。
 #[cfg(unix)]
-fn stop_agent_pid(pid: &str) -> Result<bool> {
+fn is_persona_agent_process(pid: &str) -> Option<bool> {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let text = String::from_utf8_lossy(&cmdline);
+    let is_agent = text
+        .split('\0')
+        .any(|arg| arg.contains("persona-ssh-agent"));
+    Some(is_agent)
+}
+
+#[cfg(unix)]
+fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
     use std::process::Command;
-    Ok(matches!(Command::new("kill").arg(pid).status(), Ok(s) if s.success()))
+    match is_persona_agent_process(pid) {
+        None => Ok(StopOutcome::AlreadyGone),
+        Some(false) => Ok(StopOutcome::Refused),
+        Some(true) => {
+            let ok = matches!(Command::new("kill").arg(pid).status(), Ok(s) if s.success());
+            Ok(if ok {
+                StopOutcome::Stopped
+            } else {
+                StopOutcome::Refused
+            })
+        }
+    }
 }
 
 #[cfg(windows)]
-fn stop_agent_pid(pid: &str) -> Result<bool> {
+fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
     use std::process::Command;
 
     let status = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
     if matches!(status, Ok(s) if s.success()) {
-        return Ok(true);
+        return Ok(StopOutcome::Stopped);
     }
 
     let status_force = Command::new("taskkill")
         .args(["/PID", pid, "/T", "/F"])
         .status();
-    Ok(matches!(status_force, Ok(s) if s.success()))
+    Ok(if matches!(status_force, Ok(s) if s.success()) {
+        StopOutcome::Stopped
+    } else {
+        StopOutcome::Refused
+    })
 }
 
 #[cfg(test)]
@@ -1857,14 +1910,15 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stop_agent_pid_nonexistent_returns_false() {
-        assert!(!stop_agent_pid("99999999").unwrap());
+    fn stop_agent_pid_nonexistent_is_already_gone() {
+        assert_eq!(stop_agent_pid("99999999").unwrap(), StopOutcome::AlreadyGone);
     }
 
     #[cfg(windows)]
     #[test]
-    fn stop_agent_pid_nonexistent_returns_false() {
-        assert!(!stop_agent_pid("99999999").unwrap());
+    fn stop_agent_pid_nonexistent_is_refused() {
+        // Windows 未做进程身份校验（无 /proc），taskkill 失败按 Refused 处理。
+        assert_eq!(stop_agent_pid("99999999").unwrap(), StopOutcome::Refused);
     }
 
     // ------------------------------------------------------------------
@@ -2068,6 +2122,17 @@ mod tests {
             .expect_err("oversized length prefix must fail before allocation");
         assert!(err.to_string().contains("exceeds limit"), "{err}");
         server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_agent_pid_verification_distinguishes_stale_and_reused() {
+        // 一个必然不存在的 PID：/proc 下无此进程 → None（陈旧 pidfile 判据）。
+        assert_eq!(is_persona_agent_process("999999999"), None);
+        // 自己这个测试进程存在，但不是 persona-ssh-agent → Some(false)
+        // （PID 被复用时的拒绝判据）。
+        let me = std::process::id().to_string();
+        assert_eq!(is_persona_agent_process(&me), Some(false));
     }
 
     #[cfg(unix)]
@@ -3097,10 +3162,16 @@ mod tests {
         stop_agent().expect("stop with an empty pid file works");
 
         // A live process is stopped and the state files are cleaned up.
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
+        // 通过 sh 的 $0 位置传入 "persona-ssh-agent"，让 /proc/<pid>/cmdline
+        // 含 agent 名（否则会按"非 agent 进程"拒绝，无法走到杀进程分支）。
+        // 不用改名软链：本机 coreutils 是按 argv[0] 分发的单二进制，改 argv[0]
+        // 会直接拒绝运行（Security violation）。
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .arg("persona-ssh-agent")
             .spawn()
-            .expect("sleep spawns");
+            .expect("agent-named sh spawns");
         std::fs::write(dir.path().join("ssh-agent.pid"), child.id().to_string()).unwrap();
         std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/persona-stop.sock").unwrap();
         stop_agent().expect("stop with a live pid works");
@@ -3114,9 +3185,14 @@ mod tests {
             "sock file removed"
         );
 
-        // An unkillable pid reports failure without erroring.
+        // A stale pidfile (PID already gone) is treated as already-stopped and
+        // cleaned up, without erroring.
         std::fs::write(dir.path().join("ssh-agent.pid"), "99999999").unwrap();
-        stop_agent().expect("a failed stop reports but does not error");
+        stop_agent().expect("a stale pidfile reports and cleans without error");
+        assert!(
+            !dir.path().join("ssh-agent.pid").exists(),
+            "stale pid file removed"
+        );
     }
 
     #[test]
