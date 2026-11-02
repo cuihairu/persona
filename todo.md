@@ -10,6 +10,7 @@
 - [x] R-P4 跨进程统一会话/授权中心调研与方案（来源：2026-10-24 审查；修复 `4a0bb00`；docs/src/design/session-center.md + /zh/）
 - [x] R-P5 同步「局域网直传」命名与实现核对（来源：2026-10-24 审查；修复 `b100345`；名实不符，已更名「局域网自建中转 / LAN self-hosted relay」6 处）
 - [x] R-P6 端到端验收场景清单 + 跨平台能力矩阵（来源：2026-10-24 审查；修复 `25662c9`；docs/src/development/acceptance-matrix.md + /zh/）
+- [x] DOC-GIF 配置开关效果动态图（来源：用户令；修复 `cd902aa`；SettingsModal 4 开关 off/on 对比图 + GIF 入 `docs/branding/ui/config-switches/`，流水线 `scripts/doc-config-switch-gif.mjs` 可重跑，兼 17 条断言回归测试全绿）
 
 ## 未完成
 
@@ -21,7 +22,6 @@
 - [ ] SCIM/SSO bridging（future）。2026-10-16 巡检复核：无触发信号，维持 future
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
-- [x] DOC-GIF · P2 · 文档 · 配置开关效果动态图：每个开关 off→on 对比 + GIF（验收：清单内每开关有 off/on 对比 + GIF；流水线可重跑；兼作配置效果回归测试） · 修复 `cd902aa`；清单 = SettingsModal FEATURE_ROWS 4 开关（ssh_agent/wallet/passkeys/fetch_favicons），每开关全窗 off/on 单帧 + 效果区并排对比图（`-off-on.png`）+ 动态 GIF（off 停 1.2s → 0.4s 淡入 on 循环，ffmpeg palette）；流水线 `scripts/doc-config-switch-gif.mjs` 可重跑（playwright + `__TAURI_INTERNALS__` shim mock：features 全关起步、set_feature_flags 真改状态回传全量设置、get_favicons 出图；效果行经锚点居中滚动落视野）；兼作回归测试：每次跑 17 条断言（off 效果缺席 / on 效果出现 / toggle 状态），全绿，开关失效即非零退出；素材入 `docs/branding/ui/config-switches/`（站点副本 `docs/src/public/ui/config-switches/` 字节一致），挂进 README 双语 GIF 栅格 + docs previews ui.md / assets.md 双语
 
 ## 代码深审 2026-11-01（P2/P3 待办；来源 docs/review/2026-11-01-code-review.md）
 

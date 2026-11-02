@@ -1105,6 +1105,5 @@ async fn main() -> Result<()> {
 ---
 
 **报告完成时间**: 2025-01-14  
-**分析工具**: Claude Code + Manual Analysis  
 **报告版本**: 1.0
 

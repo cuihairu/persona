@@ -3,7 +3,7 @@
 Persona is a local-first identity material manager: your vault is a **SQLite
 file on your device with sensitive fields encrypted at rest (AES-256-GCM)**,
 and every networked capability (sync, audit copies) is an optional add-on.
-This page gets you from zero to running.
+This page covers the steps from install to first run.
 
 ## Two Ways to Use It
 

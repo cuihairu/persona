@@ -116,7 +116,7 @@ persona/
 - 服务端：Rust + Axum（可选）
 - 钱包：rust-bitcoin（BTC）与 alloy（EVM），用官方测试向量做回归验证
 
-Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rust-bitcoin、alloy——而不是替换它们；真正属于本仓库自研工作的是产品层（身份模型、策略引擎、配对协议、保险库层级）。
+Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rust-bitcoin、alloy——而不是替换它们；真正属于本仓库自写工作的是产品层（身份模型、策略引擎、配对协议、保险库层级）。
 
 ## 安全要点
 

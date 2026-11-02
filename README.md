@@ -470,7 +470,7 @@ address-poisoning heuristic; see
 
 - [SSH Agent Features](./docs/SSH_AGENT_FEATURES.md) – complete SSH agent documentation
 - [SSH Agent README](./agents/ssh-agent/README.md) – SSH agent quick start
-- [SSH Agent Testing](./agents/ssh-agent/TESTING.md) – comprehensive testing guide
+- [SSH Agent Testing](./agents/ssh-agent/TESTING.md) – testing guide
 - [Threat Model](./docs/THREAT_MODEL.md) – security boundary and periodic review checklist
 - [Supply Chain Security](./docs/SUPPLY_CHAIN_SECURITY.md) – dependency security checks
 

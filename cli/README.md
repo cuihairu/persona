@@ -5,7 +5,7 @@ A powerful command-line interface for managing digital identities in the Persona
 ## Features
 
 - **Identity Management**: Create, edit, and remove digital identities
-- **Quick Switching**: Switch between identities seamlessly
+- **Quick Switching**: Switch between identities
 - **Data Export/Import**: Backup and restore identity data
 - **Security**: Encrypted storage and secure operations
 - **Beautiful UI**: Colorful and intuitive command-line interface
@@ -208,7 +208,7 @@ The CLI supports various identity types:
 - **Encryption**: All sensitive data is encrypted at rest
 - **Access Control**: Role-based permissions and access control
 - **Secure Storage**: Protected configuration and data files
-- **Audit Trail**: Comprehensive logging of all operations
+- **Audit Trail**: All operations are logged
 - **Session Management**: Automatic session timeout and cleanup
 
 ## Output Formats
