@@ -25,10 +25,10 @@
 
 ## 代码深审 2026-11-01（P2/P3 待办；来源 docs/review/2026-11-01-code-review.md）
 
-- [ ] P2 · JS-1 · 安全 · 扩展 passkey 桥未绑定 origin：`handlePasskeyPageMessage` 校验 `payload.origin === location.origin`（content.ts:1685-1695,1740-1790），不符丢弃
-- [ ] P2 · JS-2 · 安全 · NMH 配对 HMAC 密钥持久化：`pairingKeyB64`/`sessionId` 移入 `chrome.storage.session`（nativeBridge.ts:576,376；违反 cloudSync.ts:16 纪律）
-- [ ] P2 · JS-3 · 健壮性 · sync pull 成功路径 JSON 解析加 try/catch（cloudSync.ts:396，对齐 :389 错误体）
-- [ ] P2 · JS-4 · 竞态 · QuickSearch/QuickAccessPanel 防抖竞态加请求序号守卫（QuickSearch.tsx:66-69、QuickAccessPanel.tsx:176-179）
+- [x] P2 · JS-1 · 安全 · 扩展 passkey 桥未绑定 origin：`handlePasskeyPageMessage` 校验 `payload.origin === location.origin`（content.ts:1685-1695,1740-1790），不符丢弃 · 修复 `0e569d1`；`isTrustedPasskeyOrigin`（passkeyOrigin.ts:12，`new URL(origin).origin === pageOrigin`，非字符串/畸形 URL 一律 false）覆盖 dialog/native 门与 assertion/list 路径两处；passkeyOrigin.test.ts 6 例回归全绿（同源 true / 攻击者 / undefined / null / 42 / 畸形字符串 false）
+- [x] P2 · JS-2 · 安全 · NMH 配对 HMAC 密钥持久化：`pairingKeyB64`/`sessionId` 移入 `chrome.storage.session`（nativeBridge.ts:576,376；违反 cloudSync.ts:16 纪律） · 修复 `f9c42ac`；配对状态只写 `chrome.storage.session`（内存区，退出即清），并做一次性迁移：legacy `storage.local` 副本迁入 session 后 `storageLocalRemove` 擦除盘区残留；nativeBridge 测试套件全绿
+- [x] P2 · JS-3 · 健壮性 · sync pull 成功路径 JSON 解析加 try/catch（cloudSync.ts:396，对齐 :389 错误体） · 修复 `64be325`；成功路径 `resp.json()` 包 try/catch，解析失败转 `oplog_pull_failed (HTTP <status>): malformed JSON response` 而非裸 SyntaxError 上抛（untrusted 输入，对齐 :389 错误体纪律）
+- [x] P2 · JS-4 · 竞态 · QuickSearch/QuickAccessPanel 防抖竞态加请求序号守卫（QuickSearch.tsx:66-69、QuickAccessPanel.tsx:176-179） · 修复 `3dadc71`；cleanup stale 守卫（clearTimeout 不能取消在途 await，慢响应不得覆盖新查询结果；`let stale=false` + cleanup 置 true）覆盖 QuickSearch 与 QuickAccessPanel 两处 + 回归测试（迟到的旧响应不覆盖新结果）；desktop 738 测试全绿
 - [x] P2 · JS-5 · 竞态 · 身份切换凭据串号：`loadCredentialsForIdentity` 加序号守卫/AbortController（usePersonaService.ts:340-341,359） · 修复 `b1ff8e6`；`switchSeq` + `credentialLoadSeq` 双序号守卫（switchIdentity 慢完成不覆盖 currentIdentity、慢凭据响应不覆盖新身份）；usePersonaService.test.tsx 36 例全绿（含 2 例新增竞态回归），desktop `npx tsc --noEmit` 干净
 - [x] P2 · 安全 · blob 附件 `storage_path` 路径穿越防御：retrieve_file/delete_file 加 travel.rs 同款逃逸检查（blob.rs:199,214,251,265；当前写入方安全，防御纵深） · 修复 `6a64c0e`；新增 `resolve_within_root`（拒绝对路径/`..`/`.` 组件，口径同 travel.rs:538）覆盖 retrieve/delete × 单文件/分块 4 处；blob 15 测试全绿（含新增 `test_storage_path_traversal_rejected` 根外诱饵文件不受读写），clippy -p persona-core 干净
 - [x] P2 · 可用性 · CLI 读 agent socket 无界长度分配：ssh.rs:785/824 加长度上限（与 BUG-1 同法） · 修复 `e37c372`；`MAX_AGENT_RESP_LEN`（16MiB）查前分配，覆盖 unix/windows 双路径 query_agent_identities；新增 `query_agent_identities_rejects_oversized_length`（u32::MAX 长度前缀分配前拒绝），cli 3 例全绿，clippy -p persona-cli 干净
