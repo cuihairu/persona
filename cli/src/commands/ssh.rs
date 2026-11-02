@@ -1570,13 +1570,19 @@ fn is_persona_agent_process(pid: &str) -> Option<bool> {
 
 #[cfg(unix)]
 fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
-    use std::process::Command;
+    let Ok(numeric) = pid.parse::<i32>() else {
+        // 非数字 pidfile 是损坏状态而非进程：按陈旧清理，不误判为"拒绝杀"。
+        return Ok(StopOutcome::AlreadyGone);
+    };
     match is_persona_agent_process(pid) {
         None => Ok(StopOutcome::AlreadyGone),
         Some(false) => Ok(StopOutcome::Refused),
         Some(true) => {
-            let ok = matches!(Command::new("kill").arg(pid).status(), Ok(s) if s.success());
-            Ok(if ok {
+            // 直接用 libc::kill 发 SIGTERM：fork 外部 `kill` 在内存吃紧时可能
+            // 因 fork 失败返回 Err，被误报为 Refused 而留下 pidfile；直接
+            // 系统调用无此窗口。EPERM 等仍按 Refused 处理（与旧语义一致）。
+            let rc = unsafe { libc::kill(numeric, libc::SIGTERM) };
+            Ok(if rc == 0 {
                 StopOutcome::Stopped
             } else {
                 StopOutcome::Refused

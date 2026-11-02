@@ -93,6 +93,11 @@ tabled = "0.22"
 # ssh generate：ed25519 公钥行解析出 SHA256 指纹（生成走 core，此处只读公钥行）
 ssh-key.workspace = true
 
+# stop_agent 的 unix 路径直接 libc::kill 发 SIGTERM（不 fork 外部 kill，
+# 避免内存吃紧时 fork 失败被误判为 Refused 而留下 pidfile）
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3.8"
 # 1PUX 测试 fixture 现场打包 ZIP 容器
