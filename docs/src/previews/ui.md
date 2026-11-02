@@ -40,12 +40,12 @@ one per switch. Each shows the switch's effect: the SSH Agent and Wallet tool
 nodes and the SSH keys / passkeys categories appear in the sidebar, or favicon
 images pop into the credential list rows for URL-bearing credentials.
 
-| Switch           | Effect                                                               |
-| ---------------- | -------------------------------------------------------------------- |
-| SSH Agent        | SSH keys category and SSH Agent tool node appear in the sidebar      |
-| Wallet           | Wallet tool node appears in the sidebar                              |
-| Passkeys         | Passkeys category appears in the sidebar                             |
-| Fetch Favicons   | Favicon images appear next to credentials that carry a URL           |
+| Switch         | Effect                                                          |
+| -------------- | --------------------------------------------------------------- |
+| SSH Agent      | SSH keys category and SSH Agent tool node appear in the sidebar |
+| Wallet         | Wallet tool node appears in the sidebar                         |
+| Passkeys       | Passkeys category appears in the sidebar                        |
+| Fetch Favicons | Favicon images appear next to credentials that carry a URL      |
 
 Each switch also has a static off/on side-by-side comparison
 (`<slug>-off-on.png`) plus full-window `off`/`on` frames. The GIFs are

@@ -10,20 +10,20 @@
 
 ## 已入库素材（出处）
 
-| 素材                        | 位置（均 tracked）                          | 首次入库              | 最近变更                                  | 尺寸      | 说明                            |
-| --------------------------- | ------------------------------------------- | --------------------- | ----------------------------------------- | --------- | ------------------------------- |
-| light-full.png              | `docs/branding/ui/` + `docs/src/public/ui/` | bae6a51（2026-09-30） | 同首次入库                                | 3200×2000 | 亮色主题全窗（三栏布局）        |
-| dark-full.png               | `docs/branding/ui/` + `docs/src/public/ui/` | bae6a51（2026-09-30） | 同首次入库                                | 3200×2000 | 暗色主题全窗                    |
-| light-sidebar.png           | `docs/branding/ui/` + `docs/src/public/ui/` | bae6a51（2026-09-30） | 同首次入库                                | 528×2000  | 亮色侧栏特写（分组导航）        |
-| dark-sidebar.png            | `docs/branding/ui/` + `docs/src/public/ui/` | bae6a51（2026-09-30） | 同首次入库                                | 528×2000  | 暗色侧栏特写                    |
-| sidebar-before-redesign.png | `docs/branding/ui/` + `docs/src/public/ui/` | bae6a51（2026-09-30） | 同首次入库                                | 512×2000  | 侧栏重设计前形态（对比用）      |
-| ssh-agent.gif               | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库 | 263×628 | SSH Agent 开关 off→on：SSH 密钥类别与 SSH Agent 工具出现；含 `<slug>-off-on.png` 与全窗 off/on 单帧 |
-| wallet.gif                  | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库 | 263×628 | 钱包开关 off→on：钱包工具出现；含 `<slug>-off-on.png` 与全窗 off/on 单帧 |
-| passkeys.gif                | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库 | 263×628 | 通行密钥开关 off→on：通行密钥类别出现；含 `<slug>-off-on.png` 与全窗 off/on 单帧 |
-| fetch-favicons.gif          | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库 | 622×718 | 抓取站点图标开关 off→on：带 URL 凭据旁出现站点图标；含 `<slug>-off-on.png` 与全窗 off/on 单帧 |
-| persona-logo.svg            | `docs/src/public/persona-logo.svg`          | 1c85352（2026-09-25） | 47e008a（2026-09-26）用户提供的取景框图标 | —         | 站点 favicon / 导航 / 首页 hero |
-| logo.svg                    | `docs/branding/logo.svg`                    | 1c85352（2026-09-25） | 47e008a（2026-09-26）同上                 | —         | 品牌目录 Logo 源                |
-| wordmark-horizontal.svg     | `docs/branding/wordmark-horizontal.svg`     | 1c85352（2026-09-25） | 未再变更                                  | —         | 横排字标（Persona 数钥）        |
+| 素材                        | 位置（均 tracked）                                                          | 首次入库                   | 最近变更                                  | 尺寸      | 说明                                                                                                |
+| --------------------------- | --------------------------------------------------------------------------- | -------------------------- | ----------------------------------------- | --------- | --------------------------------------------------------------------------------------------------- |
+| light-full.png              | `docs/branding/ui/` + `docs/src/public/ui/`                                 | bae6a51（2026-09-30）      | 同首次入库                                | 3200×2000 | 亮色主题全窗（三栏布局）                                                                            |
+| dark-full.png               | `docs/branding/ui/` + `docs/src/public/ui/`                                 | bae6a51（2026-09-30）      | 同首次入库                                | 3200×2000 | 暗色主题全窗                                                                                        |
+| light-sidebar.png           | `docs/branding/ui/` + `docs/src/public/ui/`                                 | bae6a51（2026-09-30）      | 同首次入库                                | 528×2000  | 亮色侧栏特写（分组导航）                                                                            |
+| dark-sidebar.png            | `docs/branding/ui/` + `docs/src/public/ui/`                                 | bae6a51（2026-09-30）      | 同首次入库                                | 528×2000  | 暗色侧栏特写                                                                                        |
+| sidebar-before-redesign.png | `docs/branding/ui/` + `docs/src/public/ui/`                                 | bae6a51（2026-09-30）      | 同首次入库                                | 512×2000  | 侧栏重设计前形态（对比用）                                                                          |
+| ssh-agent.gif               | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库                                | 263×628   | SSH Agent 开关 off→on：SSH 密钥类别与 SSH Agent 工具出现；含 `<slug>-off-on.png` 与全窗 off/on 单帧 |
+| wallet.gif                  | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库                                | 263×628   | 钱包开关 off→on：钱包工具出现；含 `<slug>-off-on.png` 与全窗 off/on 单帧                            |
+| passkeys.gif                | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库                                | 263×628   | 通行密钥开关 off→on：通行密钥类别出现；含 `<slug>-off-on.png` 与全窗 off/on 单帧                    |
+| fetch-favicons.gif          | `docs/branding/ui/config-switches/` + `docs/src/public/ui/config-switches/` | 本次变更新增（2026-11-02） | 同首次入库                                | 622×718   | 抓取站点图标开关 off→on：带 URL 凭据旁出现站点图标；含 `<slug>-off-on.png` 与全窗 off/on 单帧       |
+| persona-logo.svg            | `docs/src/public/persona-logo.svg`                                          | 1c85352（2026-09-25）      | 47e008a（2026-09-26）用户提供的取景框图标 | —         | 站点 favicon / 导航 / 首页 hero                                                                     |
+| logo.svg                    | `docs/branding/logo.svg`                                                    | 1c85352（2026-09-25）      | 47e008a（2026-09-26）同上                 | —         | 品牌目录 Logo 源                                                                                    |
+| wordmark-horizontal.svg     | `docs/branding/wordmark-horizontal.svg`                                     | 1c85352（2026-09-25）      | 未再变更                                  | —         | 横排字标（Persona 数钥）                                                                            |
 
 读历史时注意两处容易误判的地方：
 
