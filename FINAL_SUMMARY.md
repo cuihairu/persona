@@ -51,7 +51,7 @@
 - **关键坑**: docs/ 必须 `pnpm install --ignore-workspace` 独立安装，否则根 `pnpm.overrides` 的 `esbuild@<0.28.1 → ^0.28.1` 毒化 vitepress 1.6.4 依赖的 vite 5 → SSR 报错
 
 ### 4.2 桌面端版本更新检测 (8917498)
-- **双渠道**: `nightly` (每日构建比对 `desktop-build.yml` workflow runs) / `release` (GitHub releases/latest tag)
+- **渠道**: `nightly` (每日构建比对 `desktop-build.yml` workflow runs) 当前唯一启用；`release` 渠道预留，待发版流水线注入 `VITE_UPDATE_CHANNEL=release`（2026-10-01 口径：尚无正式版本）
 - **构建期注入**: `vite define { __PERSONA_BUILD__: { channel, sha, builtAt } }` —— 裸标识符替换，非成员表达式
 - **网络全容错**: 所有错误折算 `unavailable` 带 reason，不抛异常
 - **设置持久化**: localStorage `persona.updateCheck.enabled` / `.lastChecked`，默认开启，可关闭

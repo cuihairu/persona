@@ -31,7 +31,7 @@
 |-----|-----|
 | **项目名称** | Persona Core Library |
 | **主要语言** | Rust |
-| **数据库** | SQLite (sqlx + rusqlite) |
+| **数据库** | SQLite (sqlx，无 rusqlite) |
 | **异步运行时** | Tokio |
 | **代码规模** | 3,197 行 |
 | **文件数** | 24 个 |

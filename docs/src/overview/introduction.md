@@ -72,8 +72,9 @@ code, and what remains planned.
 
 ## Encryption and Unlocking
 
-- Whole-vault encryption: the master password derives a key via Argon2id, and AES-256-GCM
-  encrypts the entire database. A lost master password cannot be recovered by any means.
+- Field-level encryption: the master password derives a key via Argon2id, and AES-256-GCM
+  encrypts each sensitive field (the SQLite file itself is plaintext, but secret columns
+  are ciphertext). A lost master password cannot be recovered by any means.
 - Sync channel: the server relays only ciphertext and metadata and takes no part in
   decryption; even if the server is compromised, all an attacker gets is ciphertext.
 - Unlock methods: the master password is the foundation; biometric unlock on desktop is

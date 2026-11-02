@@ -1,8 +1,9 @@
 # Quick Start
 
-Persona is a local-first identity material manager: your vault is **an encrypted
-SQLite file on your device**, and every networked capability (sync, audit
-copies) is an optional add-on. This page gets you from zero to running.
+Persona is a local-first identity material manager: your vault is a **SQLite
+file on your device with sensitive fields encrypted at rest (AES-256-GCM)**,
+and every networked capability (sync, audit copies) is an optional add-on.
+This page gets you from zero to running.
 
 ## Two Ways to Use It
 

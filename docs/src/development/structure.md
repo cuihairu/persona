@@ -41,7 +41,8 @@ persona/
 │  └─────────┴─────────┴─────────┘    │
 ├─────────────────────────────────────┤
 │           Data Storage              │
-│  SQLCipher + filesystem encryption  │
+│  SQLite (sqlx) + field-level       │
+│  AES-256-GCM encryption            │
 ├─────────────────────────────────────┤
 │           System Interface          │
 │  OS APIs + hardware security module │
@@ -62,7 +63,7 @@ persona/
 - **Strengths**: lightweight, secure, modern UI
 - **Dependencies**: React, TypeScript, Tailwind CSS
 
-#### Mobile App (native, planned)
+#### Mobile App (native, in-tree)
 
 - **Responsibilities**: mobile user interface
 - **Technical decision**: iOS, Android, and HarmonyOS are each developed with

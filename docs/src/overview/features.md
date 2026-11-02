@@ -35,8 +35,8 @@ claims about unimplemented features; planned work lives in the
 ## Security Foundation
 
 - **Local encrypted storage (zero-knowledge storage semantics)**: a key derived from the
-  master password (Argon2id) encrypts the whole SQLite database; a lost master password
-  cannot be recovered by any means.
+  master password (Argon2id) encrypts each sensitive field with AES-256-GCM (the SQLite
+  file itself is plaintext); a lost master password cannot be recovered by any means.
 - **Auto-lock and re-authentication for sensitive actions**: locking drops the keys;
   actions like revealing stored credentials or changing the master password require
   re-authentication.

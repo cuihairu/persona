@@ -139,7 +139,7 @@ make ci
 pnpm install
 
 # Run the desktop client in dev mode
-pnpm --filter desktop run dev
+pnpm --filter persona-desktop run dev
 
 # Build the browser extension bundle
 pnpm --filter persona-chromium-extension run build

@@ -66,8 +66,8 @@
    不生效（目录级覆盖优先）。
 8. **`Makefile` 的 `release-*` 目标调用不存在的 `scripts/release.sh`**——悬空目标（与"版本号只能
    人工给出"的红线一致；`git tag` 里只有 `nightly`）。
-9. `agents/ssh-agent/TESTING.md` 说"7 passed; 2 ignored"，但 `e2e_test.rs` 现有 10 个 `#[test]`——
-   文档过期。
+9. `agents/ssh-agent/TESTING.md` 测试计数已与 `e2e_test.rs` 对齐（8 个 unit + 2 个 ignored；
+   原列表漏了 agent 进程测试）。
 10. **`docs/src/` 此前没有任何验收/门禁内容**；`.github/ISSUE_TEMPLATE` 也没有验收字段。本页是新的。
 
 ### 平台能力矩阵
@@ -183,7 +183,7 @@
 
 6. `agents/ssh-agent/TESTING.md` 与 `e2e_test.rs` 对齐（10 个测试，文档仍写 7）。
 7. `.github/ISSUE_TEMPLATE` 增加验收字段；把本页四层作为 PR 模板的勾选维度。
-8. 清理悬空的 `Makefile::release-*` 目标（或补上 `scripts/release.sh` 的人工触发说明）。
+8. 悬空的 `Makefile::release-*` 目标已删除（它们调用不存在的 `scripts/release.sh` 且违反版本号人工给出的红线）。
 
 ## 计数口径
 

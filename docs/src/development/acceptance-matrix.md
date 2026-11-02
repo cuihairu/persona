@@ -72,8 +72,8 @@ plus two more to describe the mobile side):
    workflows does not take effect (the directory-level override always wins).
 8. **The `Makefile` `release-*` targets call a nonexistent `scripts/release.sh`** — dangling targets
    (consistent with the manual-version-number redline; `git tag` contains only `nightly`).
-9. `agents/ssh-agent/TESTING.md` says "7 passed; 2 ignored", but `e2e_test.rs` now contains 10
-   `#[test]` — the doc is stale.
+9. `agents/ssh-agent/TESTING.md` test counts were updated to match `e2e_test.rs` (8 unit +
+   2 ignored; the agent-process test was missing from the list).
 10. **`docs/src/` previously had no acceptance/gate content at all**, and `.github/ISSUE_TEMPLATE`
     has no acceptance field. This page is net-new.
 
@@ -195,8 +195,8 @@ Status uses the labels above; the "evidence" column names the existing anchor or
 6. Realign `agents/ssh-agent/TESTING.md` with `e2e_test.rs` (10 tests; the doc still says 7).
 7. Add an acceptance field to `.github/ISSUE_TEMPLATE`; use the four layers here as PR-template
    checkbox dimensions.
-8. Clean up the dangling `Makefile::release-*` targets (or add a manual-trigger explanation for
-   `scripts/release.sh`).
+8. Dangling `Makefile::release-*` targets removed (they called a nonexistent `scripts/release.sh`
+   and violated the manual-version-number redline).
 
 ## Count method
 

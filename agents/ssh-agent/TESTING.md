@@ -9,12 +9,12 @@ Complete guide for testing the Persona SSH Agent.
 cargo test -p persona-ssh-agent --test e2e_test
 
 # Expected output:
-# test result: ok. 7 passed; 0 failed; 2 ignored
+# test result: ok. 8 passed; 0 failed; 2 ignored
 ```
 
 ## Test Coverage
 
-### Unit Tests (7 tests) 
+### Unit Tests (8 tests) 
 
 All passing:
 
@@ -25,6 +25,7 @@ All passing:
 5. **test_read_ssh_string_function** - SSH string reading utility
 6. **test_identities_answer_format** - SSH_AGENT_IDENTITIES_ANSWER format
 7. **test_sign_request_format** - SSH_AGENTC_SIGN_REQUEST format
+8. **test_agent_process_handles_identity_and_signing** - end-to-end agent process handling identity load and signing
 
 ### Integration Tests (2 tests, ignored by default)
 
