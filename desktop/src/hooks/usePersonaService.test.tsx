@@ -222,6 +222,98 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().pendingCredentialSelection).toBeNull();
   });
 
+  it('drops a stale credential load that resolves after a newer switch (JS-5)', async () => {
+    mockUnlockedOnMount();
+    const identityA = makeIdentity('id-a');
+    const identityB = makeIdentity('id-b');
+    jest.spyOn(personaAPI, 'setActiveIdentity').mockResolvedValue({
+      success: true,
+      data: true,
+      error: undefined,
+    } as any);
+
+    // A 的凭据加载慢（手动控制 resolve），B 的即时返回
+    let resolveA: (v: unknown) => void = () => {};
+    const slowA = new Promise((r) => {
+      resolveA = r;
+    });
+    const getCreds = jest.spyOn(personaAPI, 'getCredentialsForIdentity');
+    getCreds.mockImplementationOnce(() => slowA as any); // 第一次调用 = A（慢）
+    getCreds.mockResolvedValueOnce({
+      success: true,
+      data: [makeCredential('b-cred')],
+      error: undefined,
+    } as any); // B
+
+    const { result } = renderHook(() => usePersonaService());
+
+    let pA: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      pA = result.current.switchIdentity(identityA, { silent: true });
+    });
+    // 先让 A 完成 setActiveIdentity 并进入慢凭据加载（A 此刻是 currentIdentity）
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // B 切换完整落地（currentIdentity + credentials 都是 B）
+    await act(async () => {
+      await result.current.switchIdentity(identityB, { silent: true });
+    });
+    expect(useAppStore.getState().currentIdentity?.id).toBe('id-b');
+    expect(useAppStore.getState().credentials).toHaveLength(1);
+    expect(useAppStore.getState().credentials[0].id).toBe('b-cred');
+
+    // A 的慢凭据响应后到：序号守卫丢弃，不得覆盖 B 的凭据
+    await act(async () => {
+      resolveA({ success: true, data: [makeCredential('a-cred')], error: undefined });
+      await pA;
+    });
+    expect(useAppStore.getState().credentials).toHaveLength(1);
+    expect(useAppStore.getState().credentials[0].id).toBe('b-cred');
+    expect(useAppStore.getState().currentIdentity?.id).toBe('id-b');
+  });
+
+  it('drops a stale identity switch whose activate resolves after a newer one', async () => {
+    mockUnlockedOnMount();
+    const identityA = makeIdentity('id-a');
+    const identityB = makeIdentity('id-b');
+    let resolveActivateA: (v: unknown) => void = () => {};
+    const slowActivateA = new Promise((r) => {
+      resolveActivateA = r;
+    });
+    const setActive = jest.spyOn(personaAPI, 'setActiveIdentity');
+    setActive.mockImplementationOnce(() => slowActivateA as any); // A 慢
+    setActive.mockResolvedValueOnce({
+      success: true,
+      data: true,
+      error: undefined,
+    } as any); // B 快
+    jest.spyOn(personaAPI, 'getCredentialsForIdentity').mockResolvedValue({
+      success: true,
+      data: [],
+      error: undefined,
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    let pA: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      pA = result.current.switchIdentity(identityA, { silent: true });
+    });
+    await act(async () => {
+      await result.current.switchIdentity(identityB, { silent: true });
+    });
+    expect(useAppStore.getState().currentIdentity?.id).toBe('id-b');
+
+    // A 的 activate 后到：switchSeq 守卫丢弃，不得把 currentIdentity 拉回 A
+    await act(async () => {
+      resolveActivateA({ success: true, data: true, error: undefined });
+      await pA;
+    });
+    expect(useAppStore.getState().currentIdentity?.id).toBe('id-b');
+  });
+
   it('switchIdentity skips the toast when called with silent', async () => {
     mockUnlockedOnMount();
     const identity = makeIdentity('i-silent');
