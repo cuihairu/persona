@@ -59,6 +59,22 @@ Persona 是一个本地优先、零知识的管理器，服务于「一个人运
 
 </details>
 
+### 配置开关效果（动态图）
+
+每个高级开关（设置 → 通用 → 高级）的 off→on 动画：侧栏类别 / 工具节点
+出现，或凭据列表弹出站点图标。由 `scripts/doc-config-switch-gif.mjs` 重新
+生成，该脚本同时断言每个开关的效果（开关失效即脚本失败）。
+
+<p align="center">
+  <img src="docs/branding/ui/config-switches/ssh-agent.gif" height="400" alt="SSH Agent 开关：SSH 密钥类别与 SSH Agent 工具出现" />
+  <img src="docs/branding/ui/config-switches/wallet.gif" height="400" alt="Wallet 开关：钱包工具出现" />
+</p>
+
+<p align="center">
+  <img src="docs/branding/ui/config-switches/passkeys.gif" height="400" alt="Passkeys 开关：通行密钥类别出现" />
+  <img src="docs/branding/ui/config-switches/fetch-favicons.gif" height="400" alt="Fetch Favicons 开关：凭据列表出现站点图标" />
+</p>
+
 ### 手机版 — Android 手机，1080×2400 像素
 
 解锁页、凭据列表、工具与设置——Android 真机界面，默认（zh-CN）语言，深色主题。
