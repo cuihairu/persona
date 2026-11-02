@@ -7,8 +7,7 @@
     "dev": "umi dev",
     "build": "umi build",
     "preview": "umi preview",
-    "postinstall": "umi setup",
-    "lint": "eslint --ext .js,.jsx,.ts,.tsx ./src"
+    "postinstall": "umi setup"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.4",
