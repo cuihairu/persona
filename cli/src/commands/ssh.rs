@@ -10,6 +10,10 @@ use persona_core::{
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// 读 agent socket 响应的长度上限（与 ssh-agent 侧 BUG-1 同法）：恶意/损坏
+/// 的代理可能报一个超大长度导致无界内存分配，先查再分配。
+const MAX_AGENT_RESP_LEN: usize = 16 * 1024 * 1024;
+
 #[derive(Args, Debug)]
 pub struct SshArgs {
     #[command(subcommand)]
@@ -782,6 +786,9 @@ async fn query_agent_identities(sock_path: &str) -> Result<usize> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let resp_len = BigEndian::read_u32(&len_buf) as usize;
+    if resp_len > MAX_AGENT_RESP_LEN {
+        anyhow::bail!("Agent response length {} exceeds limit", resp_len);
+    }
     let mut resp = vec![0u8; resp_len];
     stream.read_exact(&mut resp).await?;
     if resp.is_empty() || resp[0] != 12 {
@@ -821,6 +828,9 @@ async fn query_agent_identities(sock_path: &str) -> Result<usize> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let resp_len = BigEndian::read_u32(&len_buf) as usize;
+    if resp_len > MAX_AGENT_RESP_LEN {
+        anyhow::bail!("Agent response length {} exceeds limit", resp_len);
+    }
     let mut resp = vec![0u8; resp_len];
     stream.read_exact(&mut resp).await?;
     if resp.is_empty() || resp[0] != 12 {
@@ -2022,6 +2032,42 @@ mod tests {
         out.extend_from_slice(&len_buf);
         out.extend_from_slice(&payload);
         stream.write_all(&out).await.unwrap();
+    }
+
+    /// Mock agent that lies about the response length (u32::MAX), then closes.
+    /// 客户端必须在分配前拒绝（BUG-1 同法长度上限），否则会尝试分配 4GiB。
+    #[cfg(unix)]
+    async fn serve_oversized_length(listener: tokio::net::UnixListener) {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await.unwrap();
+        let req_len = BigEndian::read_u32(&len_buf) as usize;
+        let mut req = vec![0u8; req_len];
+        stream.read_exact(&mut req).await.unwrap();
+        assert_eq!(req, vec![11u8]);
+
+        let mut out = [0u8; 4];
+        BigEndian::write_u32(&mut out, u32::MAX);
+        stream.write_all(&out).await.unwrap();
+        let _ = stream.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn query_agent_identities_rejects_oversized_length() {
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(dir.path().join("oversize.sock")).unwrap();
+        let server = tokio::spawn(serve_oversized_length(listener));
+        let err = query_agent_identities(dir.path().join("oversize.sock").to_str().unwrap())
+            .await
+            .expect_err("oversized length prefix must fail before allocation");
+        assert!(err.to_string().contains("exceeds limit"), "{err}");
+        server.await.unwrap();
     }
 
     #[cfg(unix)]
