@@ -42,7 +42,7 @@
 - 证据（修复前）: `let pkt_len = BigEndian::read_u32(&len_buf) as usize; let mut pkt = vec![0u8; pkt_len];`
 - 触发：任何能连上 agent socket 的对端发送 4 字节 `0xFF 0xFF 0xFF 0xFF`，`pkt_len = 4,294,967,295`，`vec![0u8; pkt_len]` 在 `read_exact` 之前即触发 ~4 GB 分配 → Rust 分配失败 abort，凭据代理崩溃（丢已载密钥、中断在途签名）。
 - 暴露：socket 经 `UnixListener::bind`（transport.rs:89）**无 `chmod 0600`**，模式纯由 umask 决定（默认 022 → 0755 同用户可连；umask 000 → 跨用户）。`read_ssh_string`（lib.rs:484-493）有界检查，此顶层长度却无上限——违反代码库自身约定。
-- **修复**：加 `MAX_AGENT_PKT_LEN = 16 MiB`，超限断开连接。**已修 + 回归测试**（`test_agent_drops_oversized_frame`，提交 a5edb80）。
+- **修复**：加 `MAX_AGENT_PKT_LEN = 16 MiB`，超限断开连接。**已修 + 回归测试**（`test_agent_drops_oversized_frame`，提交 cbdd24f）。
 
 **SEC-1/BUG-5（P2，安全/防御纵深）— blob 附件 `storage_path` 路径穿越（读取/删除）**
 
@@ -164,7 +164,7 @@
 | Commit    | 内容                                                                                 |
 | --------- | ------------------------------------------------------------------------------------ |
 | `f7757c8` | docs: fix round 3 doc-consistency drift（审计前置任务，含 Makefile release-\* 删除） |
-| `a5edb80` | fix(ssh-agent): cap frame length to prevent OOM crash（BUG-1/P1 + 回归测试）         |
+| `cbdd24f` | fix(ssh-agent): cap frame length to prevent OOM crash（BUG-1/P1 + 回归测试）         |
 
 ### 剩余待办（P2/P3，记入 todo.md）
 
