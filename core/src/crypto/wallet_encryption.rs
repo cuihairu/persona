@@ -303,7 +303,14 @@ fn derive_keystore_key(crypto: &KeystoreCrypto, password: &str) -> PersonaResult
                     "Invalid scrypt params: zero work factor".to_string(),
                 ));
             }
-            let mem = 128u64 * u64::from(*r) * u64::from(*n);
+            // 先校验参数：n/r 是文件里的 u32（不受信），128*r*n 可能溢出 u64 在
+            // debug 下 panic（DoS）或 release 下回绕误过上限；checked_mul 先查。
+            let mem = 128u64
+                .checked_mul(u64::from(*r))
+                .and_then(|v| v.checked_mul(u64::from(*n)))
+                .ok_or_else(|| {
+                    PersonaError::InvalidInput("scrypt work factor too high".to_string())
+                })?;
             if mem > SCRYPT_IMPORT_MAX_MEM {
                 return Err(PersonaError::InvalidInput(format!(
                     "scrypt work factor too high ({} bytes > {} cap)",
@@ -462,7 +469,13 @@ pub fn export_to_keystore_with_params(
             "Invalid scrypt params: log_n above 23".to_string(),
         ));
     }
-    let mem = 128u64 * u64::from(params.r) * (1u64 << params.log_n);
+    // 同 import 侧：128*r*n 用 checked_mul 防溢出（r 未受限，log_n≤23 已查）。
+    let mem = 128u64
+        .checked_mul(u64::from(params.r))
+        .and_then(|v| v.checked_mul(1u64 << params.log_n))
+        .ok_or_else(|| {
+            PersonaError::InvalidInput("scrypt work factor too high".to_string())
+        })?;
     if mem > SCRYPT_IMPORT_MAX_MEM {
         return Err(PersonaError::InvalidInput(format!(
             "scrypt work factor too high ({} bytes > {} cap)",
@@ -1003,6 +1016,41 @@ mod tests {
         let err = import_from_keystore(&json, "pw")
             .expect_err("oversized scrypt must be rejected before any work");
         assert!(err.to_string().contains("work factor too high"));
+    }
+
+    /// n/r 都取 u32::MAX：128*r*n 溢出 u64（debug 下 panic / release 下回绕）。
+    /// checked_mul 必须转为"work factor too high"而非崩溃。
+    #[test]
+    fn keystore_rejects_overflowing_scrypt_work_factor() {
+        let crypto = KeystoreCrypto {
+            cipher: "aes-128-ctr".to_string(),
+            ciphertext: "00".to_string(),
+            cipherparams: CipherParams {
+                iv: "00".repeat(16),
+            },
+            kdf: "scrypt".to_string(),
+            kdfparams: KdfParams::Scrypt {
+                dklen: 32,
+                n: u32::MAX,
+                r: u32::MAX,
+                p: 1,
+                salt: "aa".repeat(16),
+            },
+            mac: "00".to_string(),
+        };
+        let keystore = KeystoreV3 {
+            version: 3,
+            id: Uuid::new_v4().to_string(),
+            address: None,
+            crypto,
+        };
+        let json = serde_json::to_string(&keystore).unwrap();
+        let err = import_from_keystore(&json, "pw")
+            .expect_err("overflowing scrypt must be rejected before any work");
+        assert!(
+            err.to_string().contains("work factor too high"),
+            "unexpected error: {err}"
+        );
     }
 
     /// pbkdf2 迭代数无上界 = 恶意 keystore 可让导入挂死（c 是 u32，
