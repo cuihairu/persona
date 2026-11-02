@@ -33,6 +33,11 @@ use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 use transport::AgentStream;
 
+/// SSH agent wire-protocol maximum frame size (u32 length prefix is attacker-
+/// controlled from the socket; a 4-byte header must not drive an unbounded
+/// allocation. Mirrors the bounds-checking convention of `read_ssh_string`).
+const MAX_AGENT_PKT_LEN: usize = 16 * 1024 * 1024;
+
 pub async fn handle_connection(agent: &mut Agent, mut stream: AgentStream) -> Result<()> {
     use byteorder::{BigEndian, ByteOrder};
     loop {
@@ -41,6 +46,15 @@ pub async fn handle_connection(agent: &mut Agent, mut stream: AgentStream) -> Re
             break;
         }
         let pkt_len = BigEndian::read_u32(&len_buf) as usize;
+        if pkt_len > MAX_AGENT_PKT_LEN {
+            // Malformed/oversized frame from a peer: drop the connection rather
+            // than attempting a huge allocation from a 4-byte length prefix.
+            warn!(
+                pkt_len,
+                "agent frame exceeds MAX_AGENT_PKT_LEN, dropping connection"
+            );
+            break;
+        }
         let mut pkt = vec![0u8; pkt_len];
         stream.read_exact(&mut pkt).await?;
         if pkt.is_empty() {
