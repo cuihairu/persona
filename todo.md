@@ -22,3 +22,19 @@
 - [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
 - [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
 - [ ] DOC-GIF · P2 · 文档 · 配置开关效果动态图：每个开关 off→on 对比 + GIF（验收：清单内每开关有 off/on 对比 + GIF；流水线可重跑；兼作配置效果回归测试）
+
+## 代码深审 2026-11-01（P2/P3 待办；来源 docs/review/2026-11-01-code-review.md）
+
+- [ ] P2 · JS-1 · 安全 · 扩展 passkey 桥未绑定 origin：`handlePasskeyPageMessage` 校验 `payload.origin === location.origin`（content.ts:1685-1695,1740-1790），不符丢弃
+- [ ] P2 · JS-2 · 安全 · NMH 配对 HMAC 密钥持久化：`pairingKeyB64`/`sessionId` 移入 `chrome.storage.session`（nativeBridge.ts:576,376；违反 cloudSync.ts:16 纪律）
+- [ ] P2 · JS-3 · 健壮性 · sync pull 成功路径 JSON 解析加 try/catch（cloudSync.ts:396，对齐 :389 错误体）
+- [ ] P2 · JS-4 · 竞态 · QuickSearch/QuickAccessPanel 防抖竞态加请求序号守卫（QuickSearch.tsx:66-69、QuickAccessPanel.tsx:176-179）
+- [ ] P2 · JS-5 · 竞态 · 身份切换凭据串号：`loadCredentialsForIdentity` 加序号守卫/AbortController（usePersonaService.ts:340-341,359）
+- [ ] P2 · 安全 · blob 附件 `storage_path` 路径穿越防御：retrieve_file/delete_file 加 travel.rs 同款逃逸检查（blob.rs:199,214,251,265；当前写入方安全，防御纵深）
+- [ ] P2 · 可用性 · CLI 读 agent socket 无界长度分配：ssh.rs:785/824 加长度上限（与 BUG-1 同法）
+- [ ] P2 · 竞态 · agent socket bind TOCTOU + 无条件删除：transport.rs:82-90 改 bind 失败不先删/验证陈旧（passkey_bridge.rs:177 同）
+- [ ] P3 · 健壮性 · PERSENC1 头部长度溢出：file_crypto.rs:113-116 改 checked_add/界检查
+- [ ] P3 · 健壮性 · Web3 keystore scrypt 参数溢出：wallet_encryption.rs:306 改 checked_mul + 先校验参数
+- [ ] P3 · 健壮性 · stop_agent 陈旧 pidfile 误杀：ssh.rs:1508-1512 kill 前验证 /proc/<pid>/cmdline
+- [ ] P3 · 卫生 · server-18996.log 运行时日志被 git 跟踪：git rm --cached + .gitignore 加 `*.log`
+- [ ] P3 · 卫生 · website `lint` 死脚本：删脚本或装 eslint 依赖+配置（website/package.json；CI 不跑）
