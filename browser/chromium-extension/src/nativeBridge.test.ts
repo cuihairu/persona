@@ -30,9 +30,11 @@ interface NativeCall {
     message: Record<string, any>;
 }
 
-/** chrome.runtime（native messaging）+ chrome.storage.local 的最小内存实现 */
+/** chrome.runtime（native messaging）+ chrome.storage.local/session 的最小内存实现 */
 function installChromeBridgeMock() {
-    const data = new Map<string, unknown>();
+    // 配对材料只进 session（内存区）；local 用独立 Map 以便断言不落盘。
+    const sessionData = new Map<string, unknown>();
+    const localData = new Map<string, unknown>();
     const calls: NativeCall[] = [];
     let responder: ((call: NativeCall) => unknown) | null = null;
     let lastErrorMessage: string | null = null;
@@ -69,10 +71,24 @@ function installChromeBridgeMock() {
             local: {
                 get: (keys: unknown, cb: (items: Record<string, unknown>) => void) => {
                     const key = keys as string;
-                    setTimeout(() => cb(data.has(key) ? { [key]: data.get(key) } : {}), 0);
+                    setTimeout(() => cb(localData.has(key) ? { [key]: localData.get(key) } : {}), 0);
                 },
                 set: (items: Record<string, unknown>, cb?: () => void) => {
-                    for (const [key, value] of Object.entries(items)) data.set(key, value);
+                    for (const [key, value] of Object.entries(items)) localData.set(key, value);
+                    setTimeout(() => cb?.(), 0);
+                },
+                remove: (keys: string | string[], cb?: () => void) => {
+                    for (const key of Array.isArray(keys) ? keys : [keys]) localData.delete(key);
+                    setTimeout(() => cb?.(), 0);
+                }
+            },
+            session: {
+                get: (keys: unknown, cb: (items: Record<string, unknown>) => void) => {
+                    const key = keys as string;
+                    setTimeout(() => cb(sessionData.has(key) ? { [key]: sessionData.get(key) } : {}), 0);
+                },
+                set: (items: Record<string, unknown>, cb?: () => void) => {
+                    for (const [key, value] of Object.entries(items)) sessionData.set(key, value);
                     setTimeout(() => cb?.(), 0);
                 }
             }
@@ -91,14 +107,25 @@ function installChromeBridgeMock() {
             syncThrow = error;
         },
         seedPairing: async (sessionId: string, expiresAtMs: number) => {
-            data.set(PAIRING_STORAGE_KEY, {
+            sessionData.set(PAIRING_STORAGE_KEY, {
                 clientInstanceId: 'cid-1',
                 pairingKeyB64: PAIRING_KEY_B64,
                 sessionId,
                 sessionExpiresAtMs: expiresAtMs
             });
         },
-        stored: (key: string) => data.get(key),
+        /** 注入仅存在于持久盘区的旧版配对状态（模拟迁移前版本）。 */
+        seedLocalPairing: async () => {
+            localData.set(PAIRING_STORAGE_KEY, {
+                clientInstanceId: 'cid-1',
+                pairingKeyB64: PAIRING_KEY_B64,
+                sessionId: 'sess-legacy',
+                sessionExpiresAtMs: Date.now() + 3_600_000
+            });
+        },
+        /** 断言配对材料从不写入持久盘区。 */
+        localPairingStored: () => localData.get(PAIRING_STORAGE_KEY),
+        stored: (key: string) => sessionData.get(key),
         teardown: () => {
             delete (globalThis as any).chrome;
         }
@@ -443,5 +470,37 @@ describe('transport parity（chromium 与 Safari 同份，M5 批5a）', () => {
         const response = await sendNativeMessage({ type: 'status', request_id: 'r1', payload: {} });
         expect(response.ok).toBe(false);
         expect(response.error).toBe('native_messaging_unavailable');
+    });
+});
+
+describe('pairing storage safety (JS-2)', () => {
+    it('finalizePairing never writes the pairing key to the persistent local area', async () => {
+        mock.setResponder(() => ({
+            ok: true,
+            payload: {
+                paired: true,
+                pairing_key_b64: PAIRING_KEY_B64,
+                session_id: 'sess-safe',
+                session_expires_at_ms: 4242
+            }
+        }));
+
+        await finalizePairing('ABC-123');
+        const state = await getPairingState();
+        expect(state.pairingKeyB64).toBe(PAIRING_KEY_B64);
+        expect(state.sessionId).toBe('sess-safe');
+        // 配对材料必须在内存 session 区，持久盘区不得有残留。
+        expect(mock.localPairingStored()).toBeUndefined();
+    });
+
+    it('migrates a legacy on-disk pairing state into the session area and scrubs it', async () => {
+        await mock.seedLocalPairing();
+
+        const state = await getPairingState();
+
+        expect(state.pairingKeyB64).toBe(PAIRING_KEY_B64);
+        expect(state.sessionId).toBe('sess-legacy');
+        // 迁移后磁盘残留被清除。
+        expect(mock.localPairingStored()).toBeUndefined();
     });
 });
