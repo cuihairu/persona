@@ -129,6 +129,41 @@ describe('components/QuickSearch', () => {
     expect(searchCredentials).not.toHaveBeenCalled();
   });
 
+  it('drops a stale search response that resolves after the query changed', async () => {
+    const { searchCredentials } = setup();
+    fireEvent.click(screen.getByTestId('quick-search-trigger'));
+
+    // 第一次查询：慢响应（手动控制 resolve 时机）
+    let resolveSlow: (v: any[]) => void = () => {};
+    const slow = new Promise<any[]>((r) => {
+      resolveSlow = r;
+    });
+    searchCredentials.mockImplementationOnce(() => slow);
+    fireEvent.change(screen.getByTestId('quick-search-input'), { target: { value: 'git' } });
+    await act(async () => {
+      jest.advanceTimersByTime(250);
+    });
+
+    // 查询变化：新查询返回即时结果
+    searchCredentials.mockResolvedValueOnce([makeCred({ id: 'new', name: 'NewCred' })]);
+    fireEvent.change(screen.getByTestId('quick-search-input'), { target: { value: 'gith' } });
+    await act(async () => {
+      jest.advanceTimersByTime(250);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByText('NewCred')).toBeInTheDocument();
+
+    // 旧查询响应后到：不得覆盖新结果（cleanup stale 守卫）
+    await act(async () => {
+      resolveSlow([makeCred({ id: 'old', name: 'OldCred' })]);
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('OldCred')).toBeNull();
+    expect(screen.getByText('NewCred')).toBeInTheDocument();
+  });
+
   it('searches debounced and groups results under identity headings', async () => {
     const { searchCredentials } = setup();
     fireEvent.click(screen.getByTestId('quick-search-trigger'));

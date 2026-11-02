@@ -173,11 +173,18 @@ const QuickAccessPanel: React.FC = () => {
       return;
     }
     setIsSearching(true);
+    // 查询变更后旧响应可能后到覆盖新结果：cleanup 置 stale 丢弃过期结果。
+    let stale = false;
     const timer = window.setTimeout(async () => {
-      setResults(await searchRef.current(trimmed));
+      const res = await searchRef.current(trimmed);
+      if (stale) return;
+      setResults(res);
       setIsSearching(false);
     }, DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
   }, [query, isUnlocked]);
 
   /** 揭示 + 复制一个敏感字段；REAUTH_REQUIRED 走 ReauthModal 重试一次 */
