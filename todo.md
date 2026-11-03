@@ -38,3 +38,8 @@
 - [x] P3 · 健壮性 · stop_agent 陈旧 pidfile 误杀：ssh.rs:1508-1512 kill 前验证 /proc/<pid>/cmdline · 修复 `72a9839`；`stop_agent_pid` 改三态（Stopped/AlreadyGone/Refused）：kill 前读 /proc/<pid>/cmdline 确认是 persona-ssh-agent，PID 复用即拒绝不误杀，进程已不在则当陈旧 pidfile 清理；cli stop_agent 3 测试全绿（含验证分判 stale/reused），clippy -p persona-cli 干净。跟进加固 `85f60fa`（2026-11-03）：unix 杀进程从 fork 外部 `kill` 改为直接 `libc::kill` 发 SIGTERM——全量门禁跑 cli 套件时（2169s、swap 挤满）fork 失败被误判为 Refused 留下 pidfile，`stop_agent_handles_missing_empty_and_live_pid_files` 假红一次；另非数字 pidfile 按陈旧清理（原按 Refused 拒绝）；persona-cli 全套 517 过 0 失败，clippy --workspace --all-targets --all-features -D warnings 干净
 - [x] P3 · 卫生 · server-18996.log 运行时日志被 git 跟踪：git rm --cached + .gitignore 加 `*.log` · 修复 `317f0d5`；`git rm --cached server-18996.log`（文件留盘），.gitignore 加 `*.log`（`git check-ignore` 验证已忽略）
 - [x] P3 · 卫生 · website `lint` 死脚本：删脚本或装 eslint 依赖+配置（website/package.json；CI 不跑） · 修复 `cc1ea45`；删死 `lint` 脚本（无 eslint 依赖/配置，CI 从不跑，运行即 command not found）；website/package.json JSON 校验通过
+
+## 漏洞扫描遗留（2026-11-03 全舰队扫描，源 scratch/vuln-scan-*.md）
+
+- [ ] VULN-PERSONA-001 [中危·RUSTSEC-2026-0387] crypto-bigint 0.5.5→0.7.6+【跨大版本需改代码】：fuzz 与 desktop/src-tauri 两工作区均命中，由 elliptic-curve 0.13/p256 或 rsa 0.9 锁定；验收：cargo audit 该 ID 清零 + 两工作区 cargo test 绿（fuzz 为 --no-run 全量编译 + 4 目标 -runs=1000 冒烟）
+- [ ] VULN-PERSONA-002 [BLOCKED·上游无修复·中危 5.9·RUSTSEC-2023-0071] rsa 0.9.10（desktop）与 0.10.0-rc.18（fuzz/desktop）：patched 为空，等上游发布或换库；不勾，验收：上游出 patched 或换库后 cargo audit 该 ID 清零
