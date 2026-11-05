@@ -61,23 +61,23 @@
 - `cargo test --lib`（Linux）：272 passed / 0 failed；
 - `cargo clippy --workspace --all-targets`（Linux）：0 告警；
 - `cargo check --workspace --all-features --all-targets --target
-  x86_64-pc-windows-gnu` + 同参数 clippy：0 告警（Windows 侧编译面全干净）；
+x86_64-pc-windows-gnu` + 同参数 clippy：0 告警（Windows 侧编译面全干净）；
 - tsc `-p tsconfig.json`：干净；jest：56 套件 747 例全绿（较上轮 +4：
   确认绑定 2 例 + mock 口径调整）；
 - openclaw 真机（Windows Server 2022 交互式会话）：lib `cargo test --lib
-  desktop_fill` 12/12、跨进程 5/5，原始日志
+desktop_fill` 12/12、跨进程 5/5，原始日志
   `docs/review/evidence/openclaw-2026-11-06-desktop-fill/{filltest-lib.log,
-  filltest-xproc.log,filltest.done,run1-d601c14/}`。
+filltest-xproc.log,filltest.done,run1-d601c14/}`。
 
 ## 提交
 
-| commit | 内容 |
-| --- | --- |
-| `8a17cb1` | fix(desktop): bind fill confirmation to the captured snapshot via snapshot_id |
-| `2b67a63` | test(desktop): genuine in-flight destroy/rebuild race + observation notes |
-| `7d9519c` | docs: scope desktop-fill claims to the implementation proof |
-| `4915a10` | test(desktop): accept empty READBACK frames |
-| （本轮末） | docs/review: run1 原始日志补归档 + run3 重验日志 + README/报告/todo |
+| commit     | 内容                                                                          |
+| ---------- | ----------------------------------------------------------------------------- |
+| `8a17cb1`  | fix(desktop): bind fill confirmation to the captured snapshot via snapshot_id |
+| `2b67a63`  | test(desktop): genuine in-flight destroy/rebuild race + observation notes     |
+| `7d9519c`  | docs: scope desktop-fill claims to the implementation proof                   |
+| `4915a10`  | test(desktop): accept empty READBACK frames                                   |
+| （本轮末） | docs/review: run1 原始日志补归档 + run3 重验日志 + README/报告/todo           |
 
 ## 剩余风险（如实）
 

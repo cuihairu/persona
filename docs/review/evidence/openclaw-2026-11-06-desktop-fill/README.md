@@ -13,9 +13,9 @@
 
 ## 结果
 
-| 轮次 | 代码 | lib 套件 | 跨进程套件 | 退出码（filltest.done） |
-| --- | --- | --- | --- | --- |
-| run1 | `d601c14` | 6 passed / 0 failed | 4 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
+| 轮次 | 代码      | lib 套件             | 跨进程套件          | 退出码（filltest.done）   |
+| ---- | --------- | -------------------- | ------------------- | ------------------------- |
+| run1 | `d601c14` | 6 passed / 0 failed  | 4 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
 | run3 | `a283573` | 12 passed / 0 failed | 5 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
 
 run3 相比 run1 新增：`confirm_binding_tests` 5 例（确认绑定快照纯函数：确认 A→

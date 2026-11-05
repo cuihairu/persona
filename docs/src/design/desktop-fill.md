@@ -101,9 +101,9 @@ rather than silently fulfilled later.
   member, `cargo test --features fill-test-host -p persona-fill-test
 --test desktop_fill_cross_process`):
   a separate target process (`fill-test-host` bin) is injected into; covers
-  successful ES_PASSWORD injection (verified by same-process read-back
+  successful ES*PASSWORD injection (verified by same-process read-back
   inside the target), plain-edit-only rejection, same-title decoy-process
-  rejection, destroy/rebuild rejection completed _before_ the injection,
+  rejection, destroy/rebuild rejection completed \_before* the injection,
   and a genuine **in-flight** race (a race hook in the target destroys and
   rebuilds the window while the injection request is mid-flight — the fill
   must be rejected and no secret may land in the rebuilt window). A
