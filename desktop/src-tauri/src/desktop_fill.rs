@@ -588,8 +588,14 @@ pub mod win {
     ) -> Result<(T, Option<String>), String> {
         unsafe {
             open_clipboard_with_retry()?;
-            // 备份当前文本剪贴板（有就存；非文本内容最后覆写为空串）
+            // 备份当前文本剪贴板（有就存；非文本内容恢复不了原文——结束
+            // 时覆写为空串并**如实告警**，不许静默销毁用户剪贴板）
             let had_text = IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok();
+            let had_non_text = if had_text {
+                false
+            } else {
+                clipboard_has_any_format()
+            };
             let backup = if had_text {
                 GetClipboardData(CF_UNICODETEXT.0 as u32)
                     .ok()
@@ -628,13 +634,31 @@ pub mod win {
             });
 
             // 恢复：写回备份（无文本备份则写空串，把密文清掉）
-            let restore_warning = restore_clipboard(backup.as_deref().unwrap_or(""));
+            let mut restore_warning = restore_clipboard(backup.as_deref().unwrap_or(""));
+            // 非文本内容（文件/位图/自定义格式）恢复不了原文——覆写为空串
+            // 后必须返回告警（不能静默销毁用户剪贴板）
+            if restore_warning.is_none() && had_non_text {
+                let msg = "previous non-text clipboard content was cleared and could not be restored"
+                    .to_string();
+                tracing::warn!("clipboard paste: {msg}");
+                restore_warning = Some(msg);
+            }
 
             match paste_result {
-                // set_clipboard_text 失败（String）
-                Err(e) => Err(e),
-                // 闭包 panic：恢复已完成，原样重抛
-                Ok(Err(payload)) => std::panic::resume_unwind(payload),
+                // set_clipboard_text 失败（String）：恢复路径的告警不能被吞
+                Err(e) => {
+                    if let Some(w) = &restore_warning {
+                        tracing::warn!("clipboard restore warning swallowed by paste failure: {w}");
+                    }
+                    Err(e)
+                }
+                // 闭包 panic：恢复已完成，告警落日志后再原样重抛
+                Ok(Err(payload)) => {
+                    if let Some(w) = &restore_warning {
+                        tracing::warn!("clipboard restore warning on panic path: {w}");
+                    }
+                    std::panic::resume_unwind(payload)
+                }
                 Ok(Ok(v)) => match restore_warning {
                     None => Ok((v, None)),
                     Some(w) => Ok((v, Some(w))),
@@ -643,11 +667,58 @@ pub mod win {
         }
     }
 
+    /// 剪贴板是否装有任何格式（剪贴板处于打开状态时调用）。用于区分
+    /// 「空剪贴板」与「有非文本内容」——后者被覆写清空时必须告警。
+    fn clipboard_has_any_format() -> bool {
+        unsafe { windows::Win32::System::DataExchange::EnumClipboardFormats(0) != 0 }
+    }
+
     /// 测试专用：直接写入剪贴板文本（绕过备份/恢复语义，用于给
     /// [`with_clipboard_paste`] 的闭环测试造"原有内容"）。
     #[cfg(test)]
     pub(crate) fn seed_clipboard(value: &str) -> Result<(), String> {
         set_clipboard_text(value)
+    }
+
+    /// 测试专用：写入一个**非文本**剪贴板内容（自定义格式），用于验证
+    /// [`with_clipboard_paste`] 对"非文本内容被清空"的告警路径。
+    #[cfg(test)]
+    pub(crate) fn seed_clipboard_non_text() -> Result<(), String> {
+        use windows::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, SetClipboardData,
+        };
+        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        unsafe {
+            open_clipboard_with_retry()?;
+            let result = (|| {
+                let _ = EmptyClipboard();
+                let fmt = windows::Win32::System::DataExchange::RegisterClipboardFormatW(
+                    windows::core::PCWSTR(
+                        windows::core::HSTRING::from("PersonaTestNonTextFormat").as_ptr(),
+                    ),
+                );
+                let fmt = if fmt == 0 {
+                    return Err("RegisterClipboardFormatW failed".to_string());
+                } else {
+                    fmt
+                };
+                let h = GlobalAlloc(GMEM_MOVEABLE, 16).map_err(|e| format!("GlobalAlloc: {e}"))?;
+                let ptr = GlobalLock(h);
+                if ptr.is_null() {
+                    let _ = windows::Win32::Foundation::GlobalFree(Some(h));
+                    return Err("GlobalLock failed".to_string());
+                }
+                std::ptr::write_bytes(ptr as *mut u8, 0xAB, 16);
+                let _ = GlobalUnlock(h);
+                if SetClipboardData(fmt, Some(windows::Win32::Foundation::HANDLE(h.0))).is_err() {
+                    let _ = windows::Win32::Foundation::GlobalFree(Some(h));
+                    return Err("SetClipboardData(non-text) failed".to_string());
+                }
+                Ok(())
+            })();
+            let _ = CloseClipboard();
+            result
+        }
     }
 
     /// 打开剪贴板（带重试）。OpenClipboard 会因其他进程短暂持有剪贴板
@@ -761,11 +832,12 @@ pub mod win {
         }
     }
 
-    /// 供本模块测试创建目标窗口（跨进程套件在 ../fill-test 独立 crate）。
-    /// 测试窗口是真实顶层窗口：验证的就是"枚举子控件 → 分类 → 逐控件
-    /// 重验证 → WM_SETTEXT → 读回"整条链。
     #[cfg(test)]
     pub(crate) mod test_window {
+        //! 供本模块测试创建目标窗口（跨进程套件在 ../fill-test 独立 crate）。
+        //! 测试窗口是真实顶层窗口：验证的就是"枚举子控件 → 分类 → 逐控件
+        //! 重验证 → WM_SETTEXT → 读回"整条链。
+        //!
         //! 测试靶窗：一个真实顶层窗口 + username/password 两个 EDIT 控件。
         //! 在测试进程内创建（同一桌面会话），跑完销毁。
 
@@ -1068,6 +1140,7 @@ mod win_tests {
     /// 闭包 panic 不绕过恢复。
     #[test]
     fn clipboard_backup_restore_roundtrip() {
+        let _guard = clipboard_test_lock();
         use super::win::{seed_clipboard, with_clipboard_paste};
         // 预置"原有内容"（直接写，不走备份/恢复语义）
         seed_clipboard("PREV-VALUE").expect("seed clipboard");
@@ -1097,11 +1170,37 @@ mod win_tests {
         assert_eq!(read_clipboard_text(), "PREV-PANIC", "panic must not bypass clipboard restore");
     }
 
+    /// 原剪贴板是非文本内容（文件/位图/自定义格式）时：恢复不了原文、
+    /// 结束覆写为空串——必须返回告警，不许静默销毁用户剪贴板。
+    #[test]
+    fn clipboard_paste_warns_when_non_text_content_is_cleared() {
+        let _guard = clipboard_test_lock();
+        use super::win::{seed_clipboard_non_text, with_clipboard_paste};
+        seed_clipboard_non_text().expect("seed non-text clipboard");
+
+        let (_, warn) = with_clipboard_paste("GHOST-SECRET", || ()).expect("paste roundtrip");
+        let warn = warn.expect("wiping non-text clipboard content must surface a warning");
+        assert!(
+            warn.to_lowercase().contains("non-text"),
+            "warning must explain the non-text wipe: {warn}"
+        );
+        // 密文不残留（覆写为空串），并顺手把剪贴板清回空态
+        assert_eq!(read_clipboard_text(), "");
+        super::win::seed_clipboard("").ok();
+    }
+
+    /// 剪贴板是进程全局的：同二进制内多个剪贴板用例并行会互相踩——
+    /// 用进程内互斥串行化（Linux 侧不编译本模块，无此依赖）。
+    fn clipboard_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        use std::sync::Mutex;
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
     /// 本机常有剪贴板监听进程短暂持有剪贴板（OpenClipboard 瞬时失败时
     /// `read_clipboard_text_once` 静默返回空串）；读回断言先小间隔重试，
     /// 把瞬时竞争与真实空剪贴板区分开（重试耗尽仍为空按空处理）。
     fn read_clipboard_text() -> String {
-        let mut last = String::new();
         for _ in 0..20 {
             let text = read_clipboard_text_once();
             if !text.is_empty() {
@@ -1109,7 +1208,7 @@ mod win_tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        last
+        String::new()
     }
 
     fn read_clipboard_text_once() -> String {
