@@ -6,7 +6,8 @@
 //! 1. ES_PASSWORD 框注入成功（真目标进程）；
 //! 2. 两个普通 Edit 的进程被拒绝（不再猜"第二个框"）；
 //! 3. 同标题伪装进程拒绝（pid/进程指纹不换不放行）；
-//! 4. HWND 销毁重建竞态拒绝。
+//! 4. HWND 销毁重建（注入前完成）拒绝 + 同进程同指纹复用限制如实断言；
+//! 5. 注入请求**在途**时销毁重建（竞态钩子）整体拒绝，密文不落新窗口。
 //!
 //! 运行条件：Windows + `--features fill-test-host`（bin 挂 feature 门禁，
 //! 正常构建不产出）。真机验收（openclaw Windows Server 2022，需**交互式
@@ -107,6 +108,22 @@ impl HostProcess {
         let _ = self.child.wait();
     }
 
+    /// 在 username 框上挂竞态钩子：下一次 WM_SETTEXT（注入在途）完成写入
+    /// 后，宿主在同一消息处理内同步销毁重建顶层窗口（RACE_TRIGGERED）。
+    fn arm_race_hook(&mut self) {
+        writeln!(self.stdin, "arm-race-hook").expect("write arm-race-hook");
+        self.stdin.flush().expect("flush stdin");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self.stdout_lines.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(line) if line.starts_with("RACE_ARMED") => return,
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => panic!("host did not arm race hook in time"),
+                Err(RecvTimeoutError::Disconnected) => panic!("host died while arming race hook"),
+            }
+        }
+    }
+
     /// 靶进程**同进程**读回两个 Edit 的文本（UTF-16 hex → String）。
     /// 密码断言的唯一可靠通道：Windows 跨进程 WM_GETTEXT 读 ES_PASSWORD
     /// 控件恒返回空串（平台限制，见套件头注释）。
@@ -155,7 +172,8 @@ fn find_window_by_title(title: &str) -> isize {
 }
 
 /// 真实指纹快照（与产品 capture_foreground 同源：类名/进程路径用同一批
-/// helper 查询）
+/// helper 查询；snapshot_id 由测试侧现造——本套件直测注入引擎层，不经过
+/// 命令层的确认绑定，引擎只按指纹说话）
 fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
     FillTarget {
         hwnd,
@@ -163,6 +181,7 @@ fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
         pid,
         window_class: window_class_name(hwnd),
         exe_path: process_image_path(pid),
+        snapshot_id: format!("xproc-test-{hwnd}"),
     }
 }
 
@@ -224,19 +243,17 @@ fn cross_process_password_field_injection_succeeds() {
         "ES_PASSWORD edit must report a password char"
     );
 
-    // 平台限制实录（2026-11-06 openclaw Server 2022 实测）：跨进程
-    // WM_GETTEXT 读 ES_PASSWORD 控件恒返回空串（WM_GETTEXTLENGTH 同）——
-    // WM_SETTEXT 写入成功但读被系统隐藏，跨进程读回不能用于验证密码注入
-    //（这也正是密码框存在的安全意义）。这里断言观察值恒为空——既是平台
-    // 行为的回归守卫，也如实记录"跨进程读回不能用于验证密码注入"的原因。
+    // 平台行为实录（2026-11-06 openclaw Windows Server 2022 实测观察）：
+    // 跨进程 WM_GETTEXT 读 ES_PASSWORD 控件在该系统上返回空串
+    //（WM_GETTEXTLENGTH 同理返回 0）——WM_SETTEXT 写入成功但读被系统隐藏。
+    // **不作为通用断言**（未在其他 Windows 版本验证是否恒然），只记录本次
+    // 实测观察值；注入成功的判据不依赖跨进程读密码框，见下方靶进程
+    // 同进程读回断言。
     let cross_read = read_field_text(fields[1].hwnd);
-    assert_eq!(
-        cross_read, "",
-        "cross-process WM_GETTEXT on ES_PASSWORD must be hidden by the OS (measured on Server 2022)"
-    );
     eprintln!(
-        "cross-process WM_GETTEXT on ES_PASSWORD read {cross_read:?} \
-         (platform restriction confirmed: empty even after successful WM_SETTEXT)"
+        "observed: cross-process WM_GETTEXT on ES_PASSWORD read {cross_read:?} \
+         after successful WM_SETTEXT (measured empty on Windows Server 2022; \
+         recorded as observation, not asserted as a universal invariant)"
     );
 
     // 密码注入成功的决定性断言：靶进程**同进程**读回两个框——用户名与
@@ -291,14 +308,19 @@ fn cross_process_spoofed_title_process_rejected() {
     host_b.quit();
 }
 
-/// 恶意形态三：HWND 销毁重建竞态。快照后窗口被销毁重建（同进程同标题，
-/// 模拟 hwnd 复用/重建），随后另一进程顶上同标题——旧快照在任何一步都
-/// 不得把密码写进错误目标：
+/// 恶意形态三：HWND 销毁重建（注入**前**完成）。快照后窗口被销毁重建
+///（同进程同标题），随后另一进程顶上同标题——旧快照在任何一步都不得把
+/// 密码写进错误目标：
 /// - 进程内重建后旧快照若已失效 → 注入拒绝；
-/// - 若 hwnd 值被重建窗口复用（全指纹仍指向同一进程同一标题，平台无法
-///   区分），注入只会写入**同一靶进程的同一标题窗口**（语义上仍是快照
-///   声明的目标，非跨进程劫持）——此平台固有限制由确认面（目标应用名
-///   展示）兜底，测试如实断言两种结局且值只落在宿主进程内。
+/// - **同进程同指纹 HWND 值复用限制（如实描述，不声称拒绝）**：若 hwnd
+///   值被同进程同标题窗口复用（全指纹仍指向同一进程同一标题，平台层面
+///   无法区分），注入会写入**同一靶进程的同标题窗口**——语义上仍在快照
+///   声明的宿主进程内，非跨进程劫持；此平台固有限制由确认面（目标应用
+///   名展示）与 snapshot_id 确认绑定兜底，测试如实断言两种结局且值只落
+///   在宿主进程内。
+///
+/// 真正的**在途**竞态（注入请求跑到一半目标被销毁重建）由
+/// `cross_process_inflight_destroy_rebuild_rejected` 覆盖。
 #[test]
 fn cross_process_destroy_recreate_race_rejected() {
     let mut host = HostProcess::spawn("persona xproc race", true);
@@ -335,4 +357,49 @@ fn cross_process_destroy_recreate_race_rejected() {
     assert_eq!(err, "CAPTURED_TARGET_INVALID");
     assert!(!validate_target(&snapshot, std::process::id()));
     decoy.quit();
+}
+
+/// 恶意形态四（真竞态）：**注入请求在途时**目标被销毁重建。竞态钩子挂在
+/// username 框上：execute_fill 的第一条 WM_SETTEXT（username 写入）完成
+/// 后、密码写入前，宿主在同一消息处理内同步销毁并重建顶层窗口——测试
+/// 线程此刻还阻塞在 username 的 SendMessageW 上，属于真正的在途换目标。
+/// 注入必须整体拒绝（密码不得落进任何窗口）；重建出的同标题新窗口是
+/// 销毁后的新目标，不是快照声明的目标——密文一个字符都不能落进去。
+#[test]
+fn cross_process_inflight_destroy_rebuild_rejected() {
+    let mut host = HostProcess::spawn("persona xproc inflight race", true);
+    let hwnd_old = find_window_by_title("persona xproc inflight race");
+    let snapshot = snapshot_for(hwnd_old, "persona xproc inflight race", host.pid());
+    assert!(validate_target(&snapshot, std::process::id()));
+
+    // 挂钩：下一次 WM_SETTEXT 完成写入后，宿主就地销毁重建
+    host.arm_race_hook();
+
+    let err = execute_fill(&snapshot, "race@example.com", "hunter2", std::process::id())
+        .expect_err("in-flight destroy+rebuild must reject the fill");
+    // 拒绝点：username 写完后销毁重建，密码写入前的逐控件重验证失败
+    //（或旧 hwnd 彻底失效时的 CAPTURED_TARGET_INVALID——两种拒绝都算）
+    assert!(
+        err == "CAPTURED_TARGET_INVALID" || err.contains("gone") || err.contains("no longer"),
+        "rejection must come from target/field invalidation: {err}"
+    );
+
+    // 决定性断言：销毁后重建的同标题新窗口里，密文一个字符都不能落
+    let fields_new = enumerate_edit_fields(find_window_by_title("persona xproc inflight race"));
+    assert_eq!(fields_new.len(), 2, "recreated window must have both edits");
+    assert_eq!(
+        read_field_text(fields_new[0].hwnd),
+        "",
+        "recreated username field must be empty (no cross-target replay)"
+    );
+    assert_eq!(
+        read_field_text(fields_new[1].hwnd),
+        "",
+        "recreated password field must be empty — the password write must never happen after the in-flight destroy"
+    );
+    // 宿主进程同进程读回交叉确认（绕开跨进程读限制，直接问宿主）
+    let (host_user, host_pwd) = host.readback();
+    assert_ne!(host_user, "race@example.com", "recreated window must not carry the injected username");
+    assert_ne!(host_pwd, "hunter2", "recreated window must not carry the injected password");
+    host.quit();
 }

@@ -17,6 +17,10 @@
 //!   密码断言只能由宿主进程自己读回；
 //! - `destroy-recreate`：销毁当前顶层窗口并**同标题同样式**重建
 //!   （HWND 复用/重建竞态用例），完成后向 stdout 打 `RECREATED <hwnd>`；
+//! - `arm-race-hook`：在 username 框上挂竞态钩子（旧式子类化）：下一次
+//!   收到 `WM_SETTEXT`（即注入请求**在途**）时，先让原过程写入、随后在
+//!   同一消息处理内**同步销毁并重建**顶层窗口——注入请求跑到一半目标
+//!   就地换人，打回 `RACE_ARMED` / `RACE_TRIGGERED <hwnd>`；
 //! - `quit`：干净退出（销毁窗口，EXIT 0）。
 //!
 //! 非 Windows 平台：入口直接退出 0（不参与任何测试）。
@@ -37,10 +41,11 @@ fn main() {
     use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, ES_AUTOHSCROLL,
-        ES_PASSWORD, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_GETTEXT,
-        WM_GETTEXTLENGTH, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        CallWindowProcW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+        GetMessageW, PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW,
+        SetWindowLongPtrW, ES_AUTOHSCROLL, ES_PASSWORD, GWLP_WNDPROC, MSG, WINDOW_EX_STYLE,
+        WINDOW_STYLE, WM_APP, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH, WM_SETTEXT, WNDCLASSW,
+        WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     static TITLE: OnceLock<String> = OnceLock::new();
@@ -54,6 +59,13 @@ fn main() {
     /// 自定义消息：wndproc 线程内销毁并重建顶层窗口（DestroyWindow 必须在
     /// 创建线程调用，stdin 线程只能投递）
     const WM_DESTROY_RECREATE: u32 = WM_APP + 1;
+    /// 自定义消息：在 username 框上挂竞态钩子（同样必须在创建线程做）
+    const WM_ARM_RACE_HOOK: u32 = WM_APP + 2;
+    /// username 框的原 wndproc（竞态钩子子类化前的过程指针；0 = 未挂钩）
+    static ORIG_USERNAME_PROC: AtomicIsize = AtomicIsize::new(0);
+    /// 竞态钩子已触发（首次 WM_SETTEXT 后销毁重建）——只触发一次
+    static RACE_TRIGGERED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 
     fn pcw(s: &HSTRING) -> PCWSTR {
         PCWSTR(s.as_ptr())
@@ -152,7 +164,57 @@ fn main() {
             let _ = std::io::stdout().flush();
             return LRESULT(0);
         }
+        if msg == WM_ARM_RACE_HOOK {
+            let username = USERNAME_HWND.load(Ordering::Acquire);
+            if username == 0 {
+                println!("RACE_ARM_FAILED no-username");
+            } else {
+                unsafe {
+                    let hook_fn: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+                        race_proc;
+                    let proc_ptr = hook_fn as *const () as isize;
+                    let prev = SetWindowLongPtrW(HWND(username as *mut _), GWLP_WNDPROC, proc_ptr);
+                    ORIG_USERNAME_PROC.store(prev, Ordering::Release);
+                }
+                println!("RACE_ARMED");
+            }
+            let _ = std::io::stdout().flush();
+            return LRESULT(0);
+        }
         DefWindowProcW(hwnd, msg, wparam, lparam)
+    }
+
+    /// 竞态钩子过程（旧式子类化 username 框）：正常消息全部转交原过程；
+    /// 首次 `WM_SETTEXT`（注入请求在途）在原过程写入后，**同一消息处理内**
+    /// 同步销毁并重建顶层窗口——测试线程此刻仍阻塞在这条 SendMessageW 上，
+    /// 返回后它面对的已是「密码框销毁、窗口换新」的世界。
+    unsafe extern "system" fn race_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        let orig = ORIG_USERNAME_PROC.load(Ordering::Acquire);
+        let result = if orig != 0 {
+            let proc_fn: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+                std::mem::transmute(orig);
+            CallWindowProcW(Some(proc_fn), hwnd, msg, wparam, lparam)
+        } else {
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        };
+        if msg == WM_SETTEXT && !RACE_TRIGGERED.swap(true, Ordering::AcqRel) {
+            // 注入值已落进旧窗口（此刻它仍是快照声明的合法目标）；
+            // 紧接着在写入完成的消息处理内销毁重建——在途请求的后半段
+            // （密码写入）将面对已销毁的字段
+            let top = TOP_HWND.load(Ordering::Acquire);
+            if top != 0 {
+                let _ = DestroyWindow(HWND(top as *mut _));
+            }
+            let new_top = create_target_window();
+            println!("RACE_TRIGGERED {new_top}");
+            let _ = std::io::stdout().flush();
+        }
+        result
     }
 
     fn parse_args() {
@@ -209,6 +271,17 @@ fn main() {
                         let _ = PostMessageW(
                             Some(HWND(top as *mut _)),
                             WM_DESTROY_RECREATE,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                },
+                "arm-race-hook" => unsafe {
+                    let top = TOP_HWND.load(Ordering::Acquire);
+                    if top != 0 {
+                        let _ = PostMessageW(
+                            Some(HWND(top as *mut _)),
+                            WM_ARM_RACE_HOOK,
                             WPARAM(0),
                             LPARAM(0),
                         );
