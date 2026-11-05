@@ -650,6 +650,17 @@ pub mod win {
         value: &str,
         paste: impl FnOnce() -> T,
     ) -> Result<(T, Option<String>), String> {
+        with_clipboard_paste_with_writer(value, paste, set_clipboard_text)
+    }
+
+    /// [`with_clipboard_paste`] 的实现体，剪贴板写入函数（明文覆写与恢复
+    /// 复用同一支）可注入——测试用它确定性触发「覆写失败 → 恢复也失败」
+    /// 的告警分支，不必与真实剪贴板的打开/关闭时序赛跑。
+    pub(crate) fn with_clipboard_paste_with_writer<T>(
+        value: &str,
+        paste: impl FnOnce() -> T,
+        set_text: impl Fn(&str) -> Result<(), String>,
+    ) -> Result<(T, Option<String>), String> {
         unsafe {
             open_clipboard_with_retry()?;
             // 备份当前文本剪贴板（有就存；非文本内容恢复不了原文——结束
@@ -689,7 +700,7 @@ pub mod win {
             };
             let _ = EmptyClipboard();
             let closed = CloseClipboard().map_err(|e| format!("CloseClipboard failed: {e}"));
-            let set = closed.and_then(|()| set_clipboard_text(value));
+            let set = closed.and_then(|()| set_text(value));
 
             // catch_unwind：闭包 panic 不能绕过剪贴板恢复（panic 信息在
             // 恢复之后按 ResumeUnwind 语义重新抛出）
@@ -698,7 +709,7 @@ pub mod win {
             });
 
             // 恢复：写回备份（无文本备份则写空串，把密文清掉）
-            let mut restore_warning = restore_clipboard(backup.as_deref().unwrap_or(""));
+            let mut restore_warning = set_text(backup.as_deref().unwrap_or("")).err();
             // 非文本内容（文件/位图/自定义格式）恢复不了原文——覆写为空串
             // 后必须返回告警（不能静默销毁用户剪贴板）
             if restore_warning.is_none() && had_non_text {
@@ -826,10 +837,6 @@ pub mod win {
             let _ = CloseClipboard();
             result
         }
-    }
-
-    fn restore_clipboard(backup: &str) -> Option<String> {
-        set_clipboard_text(backup).err()
     }
 
     /// 聚焦目标输入框并模拟 Ctrl+V（配合 [`with_clipboard_paste`] 使用）。
@@ -1363,15 +1370,121 @@ mod win_tests {
         use super::win::{seed_clipboard_non_text, with_clipboard_paste};
         seed_clipboard_non_text().expect("seed non-text clipboard");
 
-        let (_, warn) = with_clipboard_paste("GHOST-SECRET", || ()).expect("paste roundtrip");
+        let ((_, warn), logged) =
+            capture_warns(|| with_clipboard_paste("GHOST-SECRET", || ()).unwrap());
         let warn = warn.expect("wiping non-text clipboard content must surface a warning");
         assert!(
             warn.to_lowercase().contains("non-text"),
             "warning must explain the non-text wipe: {warn}"
         );
+        // tracing::warn 必须真实落日志（不只返回值）
+        assert!(
+            logged
+                .iter()
+                .any(|w| w.contains("previous non-text clipboard content")),
+            "non-text wipe must be logged via tracing::warn: {logged:?}"
+        );
         // 密文不残留（覆写为空串），并顺手把剪贴板清回空态
         assert_eq!(read_clipboard_text(), "");
         super::win::seed_clipboard("").ok();
+    }
+
+    /// 覆写失败（set 失败）分支：恢复路径的告警不能被吞——Err 原样上抛，
+    /// 同时 `tracing::warn!("...swallowed by paste failure...")` 必须落日志。
+    /// 注入失败的写入函数确定性触发（不必与真实剪贴板时序赛跑）。
+    #[test]
+    fn clipboard_paste_warns_when_restore_warning_is_swallowed_by_paste_failure() {
+        let _guard = clipboard_test_lock();
+        use super::win::with_clipboard_paste_with_writer;
+        let (_, warns) = capture_warns(|| {
+            let err = with_clipboard_paste_with_writer(
+                "TOP-SECRET",
+                || panic!("paste closure must never run when the overwrite failed"),
+                |_| Err("injected clipboard writer failure".to_string()),
+            )
+            .expect_err("injected writer failure must surface as Err");
+            assert!(
+                err.contains("injected clipboard writer failure"),
+                "Err must carry the overwrite failure: {err}"
+            );
+        });
+        assert!(
+            warns.iter().any(|w| {
+                w.contains("swallowed by paste failure")
+                    && w.contains("injected clipboard writer failure")
+            }),
+            "swallowed restore warning must be logged via tracing::warn: {warns:?}"
+        );
+    }
+
+    /// 闭包 panic 分支：恢复完成后 `tracing::warn!("...on panic path...")`
+    /// 必须落日志，panic 在恢复之后原样重抛。注入失败的写入函数让恢复
+    /// 产生告警，确定性覆盖「panic + 恢复失败」的组合分支。
+    #[test]
+    fn clipboard_paste_warns_on_panic_path_when_restore_fails() {
+        let _guard = clipboard_test_lock();
+        use super::win::with_clipboard_paste_with_writer;
+        let (_, warns) = capture_warns(|| {
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = with_clipboard_paste_with_writer(
+                    "PANIC-SECRET",
+                    || panic!("boom in paste closure"),
+                    |_| Err("injected clipboard writer failure".to_string()),
+                );
+            }));
+            assert!(panicked.is_err(), "closure panic must propagate after restore");
+        });
+        assert!(
+            warns.iter().any(|w| {
+                w.contains("on panic path") && w.contains("injected clipboard writer failure")
+            }),
+            "panic-path restore warning must be logged via tracing::warn: {warns:?}"
+        );
+    }
+
+    /// tracing 告警捕获（thread-local dispatcher，测试体内落 warn）：
+    /// 返回 (测试体返回值, 捕获到的 warn 文案)——断言各失败分支的
+    /// `tracing::warn!` 真实输出，不只看返回值。
+    fn capture_warns<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+        use std::sync::{Arc, Mutex};
+        struct WarnCapture(Arc<Mutex<Vec<String>>>);
+        struct MessageVisitor(String);
+        impl tracing::field::Visit for MessageVisitor {
+            fn record_debug(
+                &mut self,
+                field: &tracing::field::Field,
+                value: &dyn std::fmt::Debug,
+            ) {
+                if field.name() == "message" {
+                    self.0 = format!("{value:?}");
+                }
+            }
+        }
+        impl tracing::Subscriber for WarnCapture {
+            fn enabled(&self, meta: &tracing::Metadata<'_>) -> bool {
+                meta.level() == &tracing::Level::WARN
+            }
+            fn new_span(&self, _attrs: &tracing::span::Attributes<'_>) -> tracing::Id {
+                tracing::Id::from_u64(1)
+            }
+            fn record(&self, _span: &tracing::Id, _values: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _span: &tracing::Id, _follows: &tracing::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                let mut visitor = MessageVisitor(String::new());
+                event.record(&mut visitor);
+                self.0
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(visitor.0);
+            }
+            fn enter(&self, _span: &tracing::Id) {}
+            fn exit(&self, _span: &tracing::Id) {}
+        }
+        let capture = Arc::new(WarnCapture(Arc::new(Mutex::new(Vec::new()))));
+        let sink = capture.0.clone();
+        let out = tracing::subscriber::with_default(capture, f);
+        let warns = sink.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        (out, warns)
     }
 
     /// 剪贴板是进程全局的：同二进制内多个剪贴板用例并行会互相踩——
