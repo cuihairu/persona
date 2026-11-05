@@ -5107,6 +5107,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "persona-fill-test"
+version = "0.1.0"
+dependencies = [
+ "persona-desktop",
+ "windows 0.61.3",
+]
+
+[[package]]
 name = "persona-ssh-agent"
 version = "0.1.0"
 dependencies = [

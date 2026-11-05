@@ -527,9 +527,7 @@ pub mod win {
         paste: impl FnOnce() -> T,
     ) -> Result<(T, Option<String>), String> {
         unsafe {
-            if OpenClipboard(None).is_err() {
-                return Err("cannot open clipboard".to_string());
-            }
+            open_clipboard_with_retry()?;
             // 备份当前文本剪贴板（有就存；非文本内容最后覆写为空串）
             let had_text = IsClipboardFormatAvailable(CF_UNICODETEXT.0 as u32).is_ok();
             let backup = if had_text {
@@ -592,13 +590,24 @@ pub mod win {
         set_clipboard_text(value)
     }
 
+    /// 打开剪贴板（带重试）。OpenClipboard 会因其他进程短暂持有剪贴板
+    /// 而失败（剪贴板监听器/rdpclip 场景很常见）；按 Win32 惯例小间隔
+    /// 重试若干次再放弃，避免把瞬时竞争当成硬错误。
+    fn open_clipboard_with_retry() -> Result<(), String> {
+        for attempt in 0u32..10 {
+            if unsafe { OpenClipboard(None) }.is_ok() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20 * u64::from(attempt + 1)));
+        }
+        Err("cannot open clipboard".to_string())
+    }
+
     /// 写入文本到剪贴板（内部 Open/Close，可独立调用）。返回 Err 的原文
     /// 可直接作为"恢复失败"警告使用。
     fn set_clipboard_text(value: &str) -> Result<(), String> {
         unsafe {
-            if OpenClipboard(None).is_err() {
-                return Err("cannot reopen clipboard".to_string());
-            }
+            open_clipboard_with_retry().map_err(|_| "cannot reopen clipboard".to_string())?;
             let result = (|| {
                 let _ = EmptyClipboard();
                 let mut wide: Vec<u16> = value.encode_utf16().collect();
@@ -692,9 +701,9 @@ pub mod win {
         }
     }
 
-    /// 供本模块与跨进程集成测试创建目标窗口（不对命令层暴露）。测试窗口
-    /// 是真实顶层窗口：验证的就是"枚举子控件 → 分类 → 逐控件重验证 →
-    /// WM_SETTEXT → 读回"整条链。
+    /// 供本模块测试创建目标窗口（跨进程套件在 ../fill-test 独立 crate）。
+    /// 测试窗口是真实顶层窗口：验证的就是"枚举子控件 → 分类 → 逐控件
+    /// 重验证 → WM_SETTEXT → 读回"整条链。
     #[cfg(test)]
     pub(crate) mod test_window {
         //! 测试靶窗：一个真实顶层窗口 + username/password 两个 EDIT 控件。

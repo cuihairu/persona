@@ -53,6 +53,14 @@ honest error.
 
 - `desktop/src-tauri/src/desktop_fill.rs` — engine + Windows integration tests
   (real windows with real EDIT controls, verified via WM_GETTEXT read-back).
+- `desktop/src-tauri/fill-test/` — cross-process suite (test-only workspace
+  member, `cargo test --features fill-test-host -p persona-fill-test
+  --test desktop_fill_cross_process`):
+  a separate target process (`fill-test-host` bin) is injected into; covers
+  successful ES_PASSWORD injection, plain-edit-only rejection, same-title
+  decoy-process rejection, and destroy/recreate race rejection. It must run
+  in an interactive desktop session (SSH sessions report no visible windows
+  and no foreground window).
 - `desktop/src-tauri/src/quick_access.rs` — target capture hook in the
   floating-window toggle.
 - `commands::fill_target_status` / `commands::desktop_fill_credential` — the

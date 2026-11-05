@@ -10,6 +10,9 @@ edition = "2021"
 [lib]
 name = "persona_desktop"
 
+# 跨进程注入测试套件不在本包：见 ../fill-test（独立 test-only crate，
+# 避免包内 tauri 主 bin 内嵌 manifest 与 RUSTFLAGS /MANIFEST:EMBED 冲突）
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -110,3 +113,4 @@ tempfile = "3"
 tauri = { version = "2", features = ["test"] }
 
 [workspace]
+members = ["fill-test"]
