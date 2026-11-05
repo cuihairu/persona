@@ -707,6 +707,11 @@ export default {
     hintUsername: '⌘U 用户名',
     hintTotp: '⌘T 验证码',
     hintOpen: '⌘O 打开',
+    hintFill: '⌘F 填充',
+    fillDone: '已填充到「{{target}}」',
+    fillPartial: '部分填充到「{{target}}」——请检查剩余字段',
+    fillFailed: '桌面填充失败',
+    fillPasswordOnly: '桌面填充仅支持密码类型凭据',
   },
   errorBoundary: {
     title: '出错了',

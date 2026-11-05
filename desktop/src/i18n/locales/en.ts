@@ -727,6 +727,11 @@ export default {
     hintUsername: '⌘U username',
     hintTotp: '⌘T code',
     hintOpen: '⌘O open',
+    hintFill: '⌘F fill',
+    fillDone: 'Filled into "{{target}}"',
+    fillPartial: 'Partially filled into "{{target}}" — check the remaining fields',
+    fillFailed: 'Desktop fill failed',
+    fillPasswordOnly: 'Desktop fill supports password credentials only',
   },
   errorBoundary: {
     title: 'Something went wrong',

@@ -116,6 +116,8 @@ import type {
   BackupVersionView,
   BackupServerDeleteOutcome,
   QuickAccessStatus,
+  FillTargetStatus,
+  DesktopFillResult,
   GeneratorStatus,
   SshAgentStatus,
   SshAgentKey,
@@ -892,6 +894,16 @@ class PersonaAPI {
     return invoke('quick_access_open_credential', {
       request: { identity_id: identityId, credential_id: credentialId },
     });
+  }
+
+  /** 桌面填充注入目标状态（#12：浮窗填充动作可用性探测） */
+  async fillTargetStatus(): Promise<ApiResponse<FillTargetStatus>> {
+    return invoke('fill_target_status');
+  }
+
+  /** 桌面应用内填充注入（#12：注入到浮窗唤起前的前台窗口） */
+  async desktopFillCredential(credentialId: string): Promise<ApiResponse<DesktopFillResult>> {
+    return invoke('desktop_fill_credential', { credential_id: credentialId });
   }
 
   /** 主窗口拉到前台（浮窗锁定态的"去解锁"出口） */

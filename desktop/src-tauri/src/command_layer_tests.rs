@@ -77,6 +77,9 @@ fn mock_app_with_wrap_parts(
         // Quick Access 运行态：测试里没有 OS 全局热键可抢注，默认空态
         // （quick_access_* 命令测试直接读写这个槽位断言语义）
         quick_access: std::sync::Mutex::new(crate::quick_access::QuickAccessRuntime::default()),
+        // 桌面填充注入目标（#12）：测试环境没有热键唤起路径，默认空态
+        //（fill_* 命令测试直接读写这个槽位断言语义）
+        fill_target: std::sync::Mutex::new(None),
         // 同步组配对会话槽：默认空表（pairing 命令族测试跨命令断言状态）
         pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
         // 同步组组密钥槽：默认内存 fake，配对命令族测试从 AppState 取同

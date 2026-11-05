@@ -305,6 +305,21 @@ export interface QuickAccessOpenCredential {
   credential_id: string;
 }
 
+/** 桌面填充注入目标状态（fill_target_status 命令响应；snake_case 逐字对齐） */
+export interface FillTargetStatus {
+  supported: boolean;
+  ready: boolean;
+  target_title: string | null;
+}
+
+/** 桌面填充注入结果（desktop_fill_credential 命令响应；snake_case 逐字对齐） */
+export interface DesktopFillResult {
+  username_filled: boolean;
+  password_filled: boolean;
+  target_title: string;
+  warning: string | null;
+}
+
 /** 已缓存的站点图标（对应 Rust SerializableFavicon；data 为 base64 图像字节） */
 export interface FaviconData {
   host: string;

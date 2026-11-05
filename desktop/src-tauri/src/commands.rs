@@ -1163,6 +1163,112 @@ pub async fn quick_access_open_credential<R: tauri::Runtime>(
     }
 }
 
+/// 查询桌面填充注入目标状态（#12）。前端据此决定浮窗填充动作是否可用
+///（未捕获/已失效时点了也只会报错，提前暴露状态更诚实）。
+#[command]
+pub async fn fill_target_status(
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<crate::desktop_fill::FillTargetStatus>, String> {
+    let supported = crate::desktop_fill::fill_supported();
+    // 平台能力只影响 ready 判定；目标槽位读写两条平台路径一致（Linux 上
+    // 槽位永远是 None——quick_access 的捕获 stub 不写任何东西）
+    let guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+    let ready = guard.as_ref().is_some();
+    let target_title = guard.as_ref().map(|t| t.title.clone());
+    drop(guard);
+    Ok(ApiResponse::success(crate::desktop_fill::FillTargetStatus {
+        supported,
+        ready,
+        target_title,
+    }))
+}
+
+/// 桌面应用内填充注入（#12）：把凭据的用户名/密码注入到检索浮窗唤起前
+/// 持有前台的目标窗口。范围（诚实边界，见 desktop_fill 模块注释）：
+/// - 仅 Windows（其余平台 `fill_supported()` = false，如实报错）；
+/// - 仅经典 Win32 EDIT 控件宿主（自绘/浏览器宿主不适用，浏览器归扩展）；
+/// - 仅 Password 类型凭据（用户名 + 密码两个字段）。
+/// 敏感面与 reveal_credential_secret 同级：走 `get_credential_data` 解密
+/// 路径（自带审计与 re-auth 门禁）。
+#[command]
+pub async fn desktop_fill_credential(
+    credential_id: String,
+    state: State<'_, AppState>,
+) -> std::result::Result<ApiResponse<crate::desktop_fill::DesktopFillResult>, String> {
+    // 平台诚实性：非 Windows 不假装有功能
+    if !crate::desktop_fill::fill_supported() {
+        return Ok(ApiResponse::error(
+            "Desktop fill injection is only implemented on Windows".to_string(),
+        ));
+    }
+    let uuid = match Uuid::from_str(&credential_id) {
+        Ok(u) => u,
+        Err(_) => return Ok(ApiResponse::error("Invalid UUID format".to_string())),
+    };
+    let service_guard = state.service.lock().await;
+    let Some(service) = service_guard.as_ref() else {
+        return Ok(ApiResponse::error("Service not initialized".to_string()));
+    };
+    // 用户名走元数据（低敏），密码走解密路径（与 reveal 同一审计面）
+    let credential = match service.get_credential(&uuid).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return Ok(ApiResponse::error("Credential not found".to_string())),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            return Ok(ApiResponse::error_maybe_coded(code, msg));
+        }
+    };
+    let data = match service.get_credential_data(&uuid).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return Ok(ApiResponse::error("Credential not found".to_string())),
+        Err(e) => {
+            let (code, msg) = map_persona_error(&e);
+            return Ok(ApiResponse::error_maybe_coded(code, msg));
+        }
+    };
+    let password = match extract_secret_field(&data, "password") {
+        Ok(p) => p,
+        Err(msg) => {
+            return Ok(ApiResponse::error(format!(
+                "Desktop fill supports password credentials only: {msg}"
+            )))
+        }
+    };
+    let username = credential.username.unwrap_or_default();
+
+    // 取出目标快照（锁内只拷贝，注入在锁外做——注入是慢 FFI 调用）
+    let target = {
+        let guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(t) = guard.as_ref() else {
+            return Ok(ApiResponse::error(
+                "No captured fill target (open the quick access window over the target app first)"
+                    .to_string(),
+            ));
+        };
+        t.clone()
+    };
+    let (username_filled, password_filled, target_title) =
+        match crate::desktop_fill::execute_fill(&target, &username, &password, std::process::id())
+        {
+            Ok(result) => result,
+            Err(msg) if msg == "CAPTURED_TARGET_INVALID" => {
+                // 失效目标即刻丢弃，避免下一次再撞同一堵墙
+                let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+                *guard = None;
+                return Ok(ApiResponse::error(
+                    "Captured fill target is no longer valid (window closed or reused)".to_string(),
+                ));
+            }
+            Err(msg) => return Ok(ApiResponse::error(msg)),
+        };
+    Ok(ApiResponse::success(crate::desktop_fill::DesktopFillResult {
+        username_filled,
+        password_filled,
+        target_title,
+        warning: None,
+    }))
+}
+
 /// 把主窗口拉到前台（浮窗锁定态的"去解锁"出口）
 #[command]
 pub async fn focus_main_window<R: tauri::Runtime>(

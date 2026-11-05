@@ -92,6 +92,16 @@ windows = { version = "0.61", features = [
   "Foundation",
   "Win32_Foundation",
   "Win32_Security_Cryptography",
+  # 桌面填充注入（desktop_fill.rs，#12）：EDIT 子控件枚举/WM_SETTEXT 直写
+  # = WindowsAndMessaging；Ctrl+V 键击与跨线程聚焦 = KeyboardAndMouse；
+  # 剪贴板中转备份/恢复 = DataExchange + Memory + Ole(CF_UNICODETEXT)；
+  # AttachThreadInput 的线程 id = Threading
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_System_DataExchange",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

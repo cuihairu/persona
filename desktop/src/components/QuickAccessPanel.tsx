@@ -13,7 +13,7 @@ import { credentialTypeLabel, getCredentialIcon } from './credentialDisplay';
 import FaviconImg from './FaviconImg';
 import Highlight from './Highlight';
 import ReauthModal from './ReauthModal';
-import type { Credential, Identity, SecretField } from '@/types';
+import type { ApiResponse, Credential, DesktopFillResult, Identity, SecretField } from '@/types';
 
 /** 后端唤醒事件（quick_access.rs OPENED_EVENT）：热键唤起时清查询 + 重新探解锁态 */
 const OPENED_EVENT = 'persona://quick-access-opened';
@@ -251,6 +251,43 @@ const QuickAccessPanel: React.FC = () => {
     [t],
   );
 
+  /**
+   * 桌面应用内填充注入（#12）：把用户名/密码注入浮窗唤起前持有前台的
+   * 目标窗口。仅 Windows + 经典 EDIT 控件宿主 + Password 凭据（后端
+   * desktop_fill 模块如实报错，不在前端预判平台）。成功后浮窗自动收起
+   * ——焦点回到目标窗口，用户直接看到填好的字段。
+   */
+  const fillInTarget = useCallback(
+    async (credential: Credential) => {
+      const doFill = async (): Promise<ApiResponse<DesktopFillResult> | null> => {
+        const res = await personaAPI.desktopFillCredential(credential.id);
+        if (res.success) return res;
+        if (res.error_code === 'REAUTH_REQUIRED') {
+          if (await reauth.requestReauth()) return doFill();
+          return null;
+        }
+        if (res.error_code === 'SERVICE_LOCKED') {
+          toast.error(t('common.serviceLocked'));
+          return null;
+        }
+        toast.error(res.error ?? t('quickAccess.fillFailed'));
+        return null;
+      };
+      const res = await doFill();
+      if (!res?.data) return;
+      const d = res.data;
+      if (d.username_filled && d.password_filled) {
+        toast.success(t('quickAccess.fillDone', { target: d.target_title }));
+      } else {
+        toast(t('quickAccess.fillPartial', { target: d.target_title }));
+      }
+      setCopied(`${credential.id}:fill`);
+      window.setTimeout(() => setCopied(null), 2000);
+      void hideSelf();
+    },
+    [reauth, t],
+  );
+
   /** Enter：优先复制主密文字段，没有则退回复制用户名（面板不猜别的密文字段） */
   const copyPrimary = useCallback(
     (credential: Credential) => {
@@ -294,6 +331,14 @@ const QuickAccessPanel: React.FC = () => {
     } else if (mod && event.key.toLowerCase() === 'o') {
       event.preventDefault();
       void openInPersona(active);
+    } else if (mod && event.key.toLowerCase() === 'f') {
+      // ⌘F 桌面填充：仅 Password 凭据（其余类型后端也填不了用户名/密码）
+      event.preventDefault();
+      if (active.credential_type === 'Password') {
+        void fillInTarget(active);
+      } else {
+        toast.error(t('quickAccess.fillPasswordOnly'));
+      }
     }
   };
 
@@ -432,6 +477,7 @@ const QuickAccessPanel: React.FC = () => {
         <span>{t('quickAccess.hintUsername')}</span>
         <span>{t('quickAccess.hintTotp')}</span>
         <span>{t('quickAccess.hintOpen')}</span>
+        <span data-testid="quick-access-hint-fill">{t('quickAccess.hintFill')}</span>
       </div>
 
       <ReauthModal

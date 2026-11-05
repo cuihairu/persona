@@ -10,6 +10,8 @@ jest.mock('@/utils/api', () => ({
     revealCredentialSecret: jest.fn(),
     getTotpCode: jest.fn(),
     quickAccessOpenCredential: jest.fn(),
+    desktopFillCredential: jest.fn(),
+    fillTargetStatus: jest.fn(),
     focusMainWindow: jest.fn(),
   },
 }));
@@ -52,6 +54,7 @@ const mockCopy = jest.requireMock('@/utils/clipboard').copyToClipboardWithToast 
 const mockReveal = personaAPI.revealCredentialSecret as jest.Mock;
 const mockTotp = personaAPI.getTotpCode as jest.Mock;
 const mockOpenCred = personaAPI.quickAccessOpenCredential as jest.Mock;
+const mockFill = personaAPI.desktopFillCredential as jest.Mock;
 const mockFocusMain = personaAPI.focusMainWindow as jest.Mock;
 
 /** 取组件挂载时注册的指定事件回调（mockListen.mock.calls 由 beforeEach 清空） */
@@ -343,6 +346,59 @@ describe('components/QuickAccessPanel', () => {
     fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'o', metaKey: true });
 
     await waitFor(() => expect(mockOpenCred).toHaveBeenCalled());
+  });
+
+  it('⌘F fills the active Password credential into the captured target and hides the window', async () => {
+    setup([credential({})]);
+    mockFill.mockResolvedValue({
+      success: true,
+      data: {
+        username_filled: true,
+        password_filled: true,
+        target_title: 'Login - Example App',
+        warning: null,
+      },
+    });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+
+    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1'));
+    // 成功后浮窗自动收起：焦点还给目标窗口
+    await waitFor(() => expect(mockHide).toHaveBeenCalled());
+  });
+
+  it('⌘F surfaces the backend fill failure instead of hiding', async () => {
+    setup([credential({})]);
+    mockFill.mockResolvedValue({
+      success: false,
+      error: 'Captured fill target is no longer valid (window closed or reused)',
+    });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+
+    await waitFor(() => expect(mockFill).toHaveBeenCalled());
+    expect(mockHide).not.toHaveBeenCalled();
+  });
+
+  it('⌘F on a non-Password credential rejects locally without calling the backend', async () => {
+    setup([credential({ credential_type: 'SecureNote' })]);
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+
+    expect(mockFill).not.toHaveBeenCalled();
+    expect(mockHide).not.toHaveBeenCalled();
   });
 
   it('ArrowUp wraps to the last row', async () => {

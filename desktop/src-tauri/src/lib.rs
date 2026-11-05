@@ -9,6 +9,7 @@
 
 pub mod approval;
 pub mod biometric;
+pub mod desktop_fill;
 #[cfg(test)]
 mod command_layer_tests;
 pub mod commands;
@@ -281,6 +282,7 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             )),
             connect_server: Mutex::new(None),
             quick_access: std::sync::Mutex::new(quick_access::QuickAccessRuntime::default()),
+            fill_target: std::sync::Mutex::new(None),
             pairing_sessions: Arc::new(std::sync::Mutex::new(HashMap::new())),
             sync_group_store: Arc::new(token_store::OsKeyringTokenStore::new(
                 token_store::SYNC_GROUP_SERVICE,
@@ -357,6 +359,8 @@ pub fn build<R: tauri::Runtime>(context: tauri::Context<R>) -> tauri::App<R> {
             commands::quick_access_set,
             commands::quick_access_open,
             commands::quick_access_open_credential,
+            commands::fill_target_status,
+            commands::desktop_fill_credential,
             commands::generator_status,
             commands::generator_set,
             commands::generator_open,

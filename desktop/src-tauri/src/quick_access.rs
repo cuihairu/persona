@@ -474,12 +474,43 @@ fn toggle_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, open
             let _ = window.hide();
         }
         _ => {
+            // 桌面填充目标捕获（#12）：此刻目标应用还持有前台，show 之前
+            // 拍快照，注入时按 hwnd+标题+pid 重验证。只有检索浮窗要捕获
+            //（生成器浮窗不消费注入目标）。失败不阻断浮窗——填充是浮窗
+            // 的增值动作，没有目标就如实报错。
+            if window_label == WINDOW_LABEL {
+                capture_fill_target(app);
+            }
             let _ = window.show();
             let _ = window.set_focus();
             // 唤醒事件：前端清查询 + 聚焦输入框（浮窗复用上次结果会很迷惑）
             let _ = window.emit(opened_event, ());
         }
     }
+}
+
+/// 捕获当前前台窗口为填充注入目标（#12）。失败静默：注入命令届时会
+/// 因目标缺失/失效如实报错，这里不刷日志噪音（每次热键都可能没目标）。
+#[cfg(target_os = "windows")]
+fn capture_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
+    use crate::AppState;
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let captured = crate::desktop_fill::win::capture_foreground(std::process::id());
+    let mut slot = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+    *slot = captured;
+}
+
+/// 非 Windows 平台：无捕获能力（`fill_supported()` = false），目标恒空。
+#[cfg(not(target_os = "windows"))]
+fn capture_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
+    use crate::AppState;
+    let Some(state) = app.try_state::<AppState>() else {
+        return;
+    };
+    let mut slot = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+    *slot = None;
 }
 
 /// 拉起浮窗（托盘菜单 / 设置页按钮用；已显示时只聚焦）
