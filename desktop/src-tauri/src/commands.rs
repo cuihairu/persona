@@ -1285,6 +1285,10 @@ pub async fn desktop_fill_credential(
     // 唤起捕获了别的目标，也可能已收起清槽。持锁按请求携带的 snapshot_id
     // 绑定后克隆（注入是慢 FFI 调用，锁外执行；注入目标因此就是被确认的
     // 那份快照，指纹重验证 + 逐控件重验证都锚定它，而非「此刻槽位里的目标」）。
+    // 绑定之后注入仍在锁外——第四轮取消边界收口：注入循环内每个字段写入
+    // 前经 `slot_recheck_for` 重查槽位（与绑定比较同一语义），清槽/换目标
+    // 即中止剩余写入并如实报部分完成（`FILL_TARGET_DISCARDED` /
+    // `FILL_TARGET_CHANGED`），不把凭据的任何字段写进非确认目标。
     let target = {
         let guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
         match crate::desktop_fill::bind_confirmed_snapshot(guard.as_ref(), snapshot_id.as_deref()) {
@@ -1312,26 +1316,73 @@ pub async fn desktop_fill_credential(
             }
         }
     };
-    let (username_filled, password_filled, target_title) =
-        match crate::desktop_fill::execute_fill(&target, &username, &password, std::process::id())
+    let slot_recheck =
+        crate::desktop_fill::slot_recheck_for(&state.fill_target, target.snapshot_id.clone());
+    let (username_filled, password_filled, target_title) = match crate::desktop_fill::execute_fill(
+        &target,
+        &username,
+        &password,
+        std::process::id(),
+        &slot_recheck,
+    ) {
+        Ok(result) => result,
+        Err(crate::desktop_fill::FillError::Rejected(msg))
+            if msg == "CAPTURED_TARGET_INVALID" =>
         {
-            Ok(result) => result,
-            Err(msg) if msg == "CAPTURED_TARGET_INVALID" => {
-                // 失效目标即刻丢弃，避免下一次再撞同一堵墙——但只丢弃仍是
-                // 本请求确认的那份快照：槽位若已被新一轮捕获（别的目标），
-                // 不能替用户清掉它
-                let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
-                if guard.as_ref().map(|t| t.snapshot_id.as_str())
-                    == Some(target.snapshot_id.as_str())
-                {
-                    *guard = None;
-                }
-                return Ok(ApiResponse::error(
-                    "Captured fill target is no longer valid (window closed or reused)".to_string(),
-                ));
+            // 失效目标即刻丢弃，避免下一次再撞同一堵墙——但只丢弃仍是
+            // 本请求确认的那份快照：槽位若已被新一轮捕获（别的目标），
+            // 不能替用户清掉它
+            let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+            if guard.as_ref().map(|t| t.snapshot_id.as_str())
+                == Some(target.snapshot_id.as_str())
+            {
+                *guard = None;
             }
-            Err(msg) => return Ok(ApiResponse::error(msg)),
-        };
+            return Ok(ApiResponse::error(
+                "Captured fill target is no longer valid (window closed or reused)".to_string(),
+            ));
+        }
+        Err(crate::desktop_fill::FillError::Rejected(msg)) => {
+            return Ok(ApiResponse::error(msg))
+        }
+        Err(crate::desktop_fill::FillError::Aborted {
+            reason,
+            username_filled,
+            password_filled,
+            title: _,
+        }) => {
+            let partial = format!(
+                "partial completion reported honestly: username_filled={} password_filled={}",
+                username_filled, password_filled
+            );
+            match reason {
+                crate::desktop_fill::ConfirmBindRejection::TargetDiscarded => {
+                    return Ok(ApiResponse::error_maybe_coded(
+                        Some("FILL_TARGET_DISCARDED".to_string()),
+                        format!(
+                            "Confirmed fill target was discarded mid-fill ({partial}); no remaining field was written"
+                        ),
+                    ));
+                }
+                crate::desktop_fill::ConfirmBindRejection::TargetChanged => {
+                    return Ok(ApiResponse::error_maybe_coded(
+                        Some("FILL_TARGET_CHANGED".to_string()),
+                        format!(
+                            "Fill target changed mid-fill ({partial}); refusing to write remaining fields into the new target"
+                        ),
+                    ));
+                }
+                crate::desktop_fill::ConfirmBindRejection::SnapshotRequired => {
+                    // 不可达：重查闭包恒携带快照 id；防御性按协议错处理
+                    return Ok(ApiResponse::error_maybe_coded(
+                        Some("FILL_TARGET_SNAPSHOT_REQUIRED".to_string()),
+                        "Desktop fill confirmation must carry the snapshot id it confirmed"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+    };
     Ok(ApiResponse::success(crate::desktop_fill::DesktopFillResult {
         username_filled,
         password_filled,

@@ -25,13 +25,29 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use persona_desktop::desktop_fill::execute_fill;
+use persona_desktop::desktop_fill::{execute_fill, FillError};
 use persona_desktop::desktop_fill::win::{
     enumerate_edit_fields, process_image_path, read_field_text, validate_target, window_class_name,
 };
 use persona_desktop::desktop_fill::FillTarget;
 
 const HOST_EXE: &str = env!("CARGO_BIN_EXE_fill-test-host");
+
+/// 本套件直测注入引擎层（不经过命令层的确认绑定），槽位重查恒放行；
+/// 取消边界（清槽/换目标的在途中止）由 desktop_fill.rs win_tests 的
+/// 可控时序用例覆盖。错误侧只关心常规拒绝（Rejected 原文透传）。
+fn no_slot_check() -> Result<(), persona_desktop::desktop_fill::ConfirmBindRejection> {
+    Ok(())
+}
+
+/// 解包常规拒绝的原文（历史 String 错误形态）；引擎在中途快照失效时
+/// 返回 Aborted——本套件不绑定槽位，不会出现，出现即断言失败。
+fn rejected_of(err: FillError) -> String {
+    match err {
+        FillError::Rejected(msg) => msg,
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
 
 /// 靶进程句柄：Drop 时保证进程被回收（测试 panic 也不留孤儿窗口）
 struct HostProcess {
@@ -224,8 +240,14 @@ fn cross_process_password_field_injection_succeeds() {
     assert!(validate_target(&snapshot, std::process::id()), "fresh cross-process snapshot must validate");
 
     let (user_filled, pwd_filled, title) =
-        execute_fill(&snapshot, "alice@example.com", "s3cret-Пароль⚡", std::process::id())
-            .expect("cross-process fill into ES_PASSWORD field");
+        execute_fill(
+            &snapshot,
+            "alice@example.com",
+            "s3cret-Пароль⚡",
+            std::process::id(),
+            &no_slot_check,
+        )
+        .expect("cross-process fill into ES_PASSWORD field");
     assert!(user_filled, "username must be injected");
     assert!(pwd_filled, "password must be injected");
     assert_eq!(title, "persona xproc login");
@@ -276,8 +298,16 @@ fn cross_process_plain_edit_window_rejected() {
     let mut host = HostProcess::spawn("persona xproc plain trap", false);
     let hwnd = find_window_by_title("persona xproc plain trap");
     let snapshot = snapshot_for(hwnd, "persona xproc plain trap", host.pid());
-    let err = execute_fill(&snapshot, "victim@example.com", "hunter2", std::process::id())
-        .expect_err("plain-edit-only window must be rejected");
+    let err = rejected_of(
+        execute_fill(
+            &snapshot,
+            "victim@example.com",
+            "hunter2",
+            std::process::id(),
+            &no_slot_check,
+        )
+        .expect_err("plain-edit-only window must be rejected"),
+    );
     assert!(err.contains("ES_PASSWORD"), "rejection must name ES_PASSWORD: {err}");
     let fields = enumerate_edit_fields(hwnd);
     for f in &fields {
@@ -301,8 +331,16 @@ fn cross_process_spoofed_title_process_rejected() {
     assert_ne!(host_b.pid(), snapshot_a.pid, "decoy must be a different process");
 
     // 快照指向已死的 A：hwnd 失效（或值复用但 pid 不符）→ 注入拒绝
-    let err = execute_fill(&snapshot_a, "victim@example.com", "hunter2", std::process::id())
-        .expect_err("fill must be rejected against the dead/spoofed snapshot");
+    let err = rejected_of(
+        execute_fill(
+            &snapshot_a,
+            "victim@example.com",
+            "hunter2",
+            std::process::id(),
+            &no_slot_check,
+        )
+        .expect_err("fill must be rejected against the dead/spoofed snapshot"),
+    );
     assert_eq!(err, "CAPTURED_TARGET_INVALID");
     assert!(!validate_target(&snapshot_a, std::process::id()));
 
@@ -335,15 +373,29 @@ fn cross_process_destroy_recreate_race_rejected() {
     // 进程内重建后：旧快照要么失效（hwnd 不同/已死）→ 拒绝；
     // 要么 hwnd 值被同进程同标题窗口复用 → 填的仍是宿主自己的窗口。
     if hwnd_new != hwnd_old {
-        let err = execute_fill(&snapshot, "victim@example.com", "hunter2", std::process::id())
-            .expect_err("stale snapshot hwnd must be rejected after destroy+recreate");
+        let err = rejected_of(
+            execute_fill(
+                &snapshot,
+                "victim@example.com",
+                "hunter2",
+                std::process::id(),
+                &no_slot_check,
+            )
+            .expect_err("stale snapshot hwnd must be rejected after destroy+recreate"),
+        );
         assert_eq!(err, "CAPTURED_TARGET_INVALID");
         assert!(!validate_target(&snapshot, std::process::id()));
     } else {
         // hwnd 值复用路径：注入只允许落在宿主进程（pid 校验保证），且
         // 值必须出现在宿主当前窗口的控件里
-        let (_, _, _) = execute_fill(&snapshot, "race@example.com", "hunter2", std::process::id())
-            .expect("hwnd reuse within the same process+title is semantically the same target");
+        let (_, _, _) = execute_fill(
+            &snapshot,
+            "race@example.com",
+            "hunter2",
+            std::process::id(),
+            &no_slot_check,
+        )
+        .expect("hwnd reuse within the same process+title is semantically the same target");
         let fields = enumerate_edit_fields(hwnd_new);
         let texts: Vec<String> = fields.iter().map(|f| read_field_text(f.hwnd)).collect();
         assert!(
@@ -356,8 +408,16 @@ fn cross_process_destroy_recreate_race_rejected() {
     // 跨进程形态）——旧快照注入必须拒绝
     host.quit();
     let mut decoy = HostProcess::spawn("persona xproc race", true);
-    let err = execute_fill(&snapshot, "victim@example.com", "hunter2", std::process::id())
-        .expect_err("snapshot of destroyed window must not fill into a decoy process");
+    let err = rejected_of(
+        execute_fill(
+            &snapshot,
+            "victim@example.com",
+            "hunter2",
+            std::process::id(),
+            &no_slot_check,
+        )
+        .expect_err("snapshot of destroyed window must not fill into a decoy process"),
+    );
     assert_eq!(err, "CAPTURED_TARGET_INVALID");
     assert!(!validate_target(&snapshot, std::process::id()));
     decoy.quit();
@@ -379,8 +439,16 @@ fn cross_process_inflight_destroy_rebuild_rejected() {
     // 挂钩：下一次 WM_SETTEXT 完成写入后，宿主就地销毁重建
     host.arm_race_hook();
 
-    let err = execute_fill(&snapshot, "race@example.com", "hunter2", std::process::id())
-        .expect_err("in-flight destroy+rebuild must reject the fill");
+    let err = rejected_of(
+        execute_fill(
+            &snapshot,
+            "race@example.com",
+            "hunter2",
+            std::process::id(),
+            &no_slot_check,
+        )
+        .expect_err("in-flight destroy+rebuild must reject the fill"),
+    );
     // 拒绝点：username 写完后销毁重建，密码写入前的逐控件重验证失败
     //（或旧 hwnd 彻底失效时的 CAPTURED_TARGET_INVALID——两种拒绝都算）
     assert!(

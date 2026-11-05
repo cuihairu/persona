@@ -7,6 +7,8 @@ cd /d %REPO%/desktop/src-tauri
 if exist C:\Users\Administrator\filltest.done del C:\Users\Administrator\filltest.done
 cargo test --lib desktop_fill > C:\Users\Administrator\filltest-lib.log 2>&1
 set LIBEXIT=%errorlevel%
+cargo test -p persona-fill-test --lib readback_frame > C:\Users\Administrator\filltest-frame.log 2>&1
+set FRAMEEXIT=%errorlevel%
 cargo test --features fill-test-host -p persona-fill-test --test desktop_fill_cross_process > C:\Users\Administrator\filltest-xproc.log 2>&1
 set XEXIT=%errorlevel%
-echo lib_exit=%LIBEXIT% xproc_exit=%XEXIT% > C:\Users\Administrator\filltest.done
+echo lib_exit=%LIBEXIT% frame_exit=%FRAMEEXIT% xproc_exit=%XEXIT% > C:\Users\Administrator\filltest.done

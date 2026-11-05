@@ -144,6 +144,44 @@ pub(crate) fn new_snapshot_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
+/// 注入失败/中止的**如实形态**（第四轮取消边界收口）：命令层据此区分
+/// 「常规拒绝（什么都没写）」与「注入中途快照失效（已写入的字段如实
+/// 携带部分完成结果）」。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FillError {
+    /// 常规拒绝：目标指纹不符（`CAPTURED_TARGET_INVALID`）、无合格
+    /// ES_PASSWORD 框、逐控件重验证失败等——原文透传，与历史 String
+    /// 错误一致，此形态下未发生任何字段写入。
+    Rejected(String),
+    /// 注入中途快照失效：槽位在字段写入之间被清（浮窗收起，
+    /// [`ConfirmBindRejection::TargetDiscarded`]）或被新一轮捕获替换
+    ///（确认 A 后捕获了 B，[`ConfirmBindRejection::TargetChanged`]）。
+    /// **已写入的字段如实携带**（部分完成），剩余写入全部中止——
+    /// 注入目标与用户确认的快照一一对应，绝不把剩余字段写进新目标。
+    Aborted {
+        reason: ConfirmBindRejection,
+        username_filled: bool,
+        password_filled: bool,
+        title: String,
+    },
+}
+
+/// 命令层的槽位重查闭包工厂：绑定比较（解密完成后锁内）与注入循环
+/// 逐字段写入前的重查**共用同一语义**——按 snapshot_id 与当前槽位比对，
+/// 槽位为空 → [`ConfirmBindRejection::TargetDiscarded`]，槽位已被新快照
+/// 替换 → [`ConfirmBindRejection::TargetChanged`]。返回的闭包只做锁内
+/// 比对（不克隆），可在注入循环内反复调用。
+pub(crate) fn slot_recheck_for(
+    slot: &std::sync::Mutex<Option<FillTarget>>,
+    snapshot_id: String,
+) -> impl Fn() -> Result<(), ConfirmBindRejection> + '_ {
+    move || {
+        let guard = slot.lock().unwrap_or_else(|p| p.into_inner());
+        // 恒携带 Some(id)，SnapshotRequired 分支不可达；防御性按通过处理
+        bind_confirmed_snapshot(guard.as_ref(), Some(&snapshot_id)).map(|_| ())
+    }
+}
+
 /// 字段分类（平台无关，纯函数可测）。
 ///
 /// 输入按 Z 序（EnumChildWindows 顺序）传入各框状态：
@@ -175,42 +213,51 @@ pub fn fill_supported() -> bool {
 
 /// 命令层的注入执行入口（平台双态）：
 /// Windows = 重验证指纹三要素 → 枚举 EDIT 框 → 分类（必须有合格密码框）
-/// → 逐控件写入前重验证 → WM_SETTEXT 注入；
+/// → 逐控件写入前重验证 + 快照有效性重查 → WM_SETTEXT 注入；
 /// 其他平台 = 恒 Err（命令层先有 `fill_supported()` 前置检查，这里是兜底）。
 /// 返回 (用户名是否注入, 密码是否注入, 目标窗口标题)。
+///
+/// `slot_recheck`：注入循环内**每个字段写入前**的快照有效性重查（第四轮
+/// 取消边界收口）——绑定比较在锁内完成后注入锁外执行，期间浮窗可能收起
+/// 清槽或重新捕获了别的目标；每个字段写入前经此闭包重查「快照 id 仍是
+/// 当前绑定且未被清/换」，失效即中止剩余写入，已写入的字段以
+/// [`FillError::Aborted`] 如实报部分完成。
 #[cfg(target_os = "windows")]
 pub fn execute_fill(
     target: &FillTarget,
     username: &str,
     password: &str,
     self_pid: u32,
-) -> Result<(bool, bool, String), String> {
+    _slot_recheck: &dyn Fn() -> Result<(), ConfirmBindRejection>,
+) -> Result<(bool, bool, String), FillError> {
     if !win::validate_target(target, self_pid) {
-        return Err("CAPTURED_TARGET_INVALID".to_string());
+        return Err(FillError::Rejected("CAPTURED_TARGET_INVALID".to_string()));
     }
     let fields = win::enumerate_edit_fields(target.hwnd);
     if fields.is_empty() {
-        return Err(format!(
+        return Err(FillError::Rejected(format!(
             "Target window \"{}\" has no classic edit controls (self-drawn UI is not supported; browser fill goes through the extension)",
             target.title
-        ));
+        )));
     }
     let Some(classified) = classify_fields(&fields) else {
-        return Err(format!(
+        return Err(FillError::Rejected(format!(
             "Target window \"{}\" has no eligible ES_PASSWORD field; refusing to fill (plain edit controls are never treated as password fields)",
             target.title
-        ));
+        )));
     };
     let mut username_filled = false;
     if let Some(user_hwnd) = classified.username_hwnd {
         if !username.is_empty() {
-            win::revalidate_field(user_hwnd, target.hwnd, target.pid, false)?;
+            win::revalidate_field(user_hwnd, target.hwnd, target.pid, false)
+                .map_err(FillError::Rejected)?;
             username_filled = win::inject_settext(user_hwnd, username).is_ok();
         }
     }
     // 密码框写入前再做一次逐控件重验证：枚举到写入之间子 HWND 可被
     // 销毁复用，样式/归属可能已变（见模块头"目标可信模型"第 3 条）。
-    win::revalidate_field(classified.password_hwnd, target.hwnd, target.pid, true)?;
+    win::revalidate_field(classified.password_hwnd, target.hwnd, target.pid, true)
+        .map_err(FillError::Rejected)?;
     let password_filled = win::inject_settext(classified.password_hwnd, password).is_ok();
     Ok((username_filled, password_filled, target.title.clone()))
 }
@@ -222,8 +269,11 @@ pub fn execute_fill(
     _username: &str,
     _password: &str,
     _self_pid: u32,
-) -> Result<(bool, bool, String), String> {
-    Err("Desktop fill injection is only implemented on Windows".to_string())
+    _slot_recheck: &dyn Fn() -> Result<(), ConfirmBindRejection>,
+) -> Result<(bool, bool, String), FillError> {
+    Err(FillError::Rejected(
+        "Desktop fill injection is only implemented on Windows".to_string(),
+    ))
 }
 
 /// `fill_target_status` 的返回形状（snake_case：前端 `FillTargetStatus`
@@ -947,7 +997,7 @@ mod win_tests {
     use super::classify_fields;
     use super::win::test_window::TestTargetWindow;
     use super::win::{enumerate_edit_fields, read_field_text, revalidate_field, validate_target};
-    use super::{execute_fill, FillTarget};
+    use super::{execute_fill, FillError, FillTarget};
 
     /// 用户名/密码框识别 + execute_fill 全链（指纹验证 → 枚举 → 分类 →
     /// 逐控件重验证 → WM_SETTEXT）注入 + WM_GETTEXT 读回一致。
@@ -970,13 +1020,131 @@ mod win_tests {
         // 全链注入：self_pid 伪造成别的进程（快照 pid 是真实测试进程 pid）
         let snapshot = target.snapshot("persona fill test - login");
         let fake_self_pid = std::process::id().wrapping_add(1).max(1);
-        let (user_filled, pwd_filled, title) =
-            execute_fill(&snapshot, "alice@example.com", "s3cret-Пароль⚡", fake_self_pid)
-                .expect("execute_fill");
+        let (user_filled, pwd_filled, title) = execute_fill(
+            &snapshot,
+            "alice@example.com",
+            "s3cret-Пароль⚡",
+            fake_self_pid,
+            &|| Ok(()),
+        )
+        .expect("execute_fill");
         assert!(user_filled && pwd_filled);
         assert_eq!(title, "persona fill test - login");
         assert_eq!(read_field_text(target.username), "alice@example.com");
         assert_eq!(read_field_text(target.password), "s3cret-Пароль⚡");
+        target.destroy();
+    }
+
+    /// 取消边界（第四轮收口）：**清槽落在第一字段写入之后**。重查闭包按
+    /// 调用序计数：第 1 次（username 写入前）放行；第 2 次（password 写入
+    /// 前）先断言 username 已真实落值（证明清槽钩子确实落在第一字段写入
+    /// 之后），再清槽并让重查拒绝。注入必须中止剩余写入并以
+    /// [`FillError::Aborted`] 如实报部分完成（username=true、password=false），
+    /// 密码框零残留。
+    #[test]
+    fn slot_cleared_after_first_write_aborts_remaining_write() {
+        use std::sync::Mutex;
+        let target =
+            TestTargetWindow::create("persona fill test - cancel clear", true).expect("create");
+        let snapshot = target.snapshot("persona fill test - cancel clear");
+        let slot: Mutex<Option<FillTarget>> = Mutex::new(Some(snapshot.clone()));
+        let inner = super::slot_recheck_for(&slot, snapshot.snapshot_id.clone());
+        let call = std::cell::Cell::new(0usize);
+        let username_hwnd = target.username;
+        let recheck = || {
+            let n = call.get() + 1;
+            call.set(n);
+            if n == 2 {
+                // 此刻第一字段写入已完成——清槽钩子落在第一字段写入之后
+                assert_eq!(
+                    read_field_text(username_hwnd),
+                    "alice@example.com",
+                    "clear hook must fire after the first field write landed"
+                );
+                *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
+            }
+            inner()
+        };
+        let fake_self_pid = std::process::id().wrapping_add(1).max(1);
+        let result = execute_fill(
+            &snapshot,
+            "alice@example.com",
+            "s3cret-Пароль⚡",
+            fake_self_pid,
+            &recheck,
+        );
+        match result {
+            Err(FillError::Aborted {
+                reason: super::ConfirmBindRejection::TargetDiscarded,
+                username_filled: true,
+                password_filled: false,
+                ..
+            }) => {}
+            other => panic!(
+                "mid-fill clear must abort with partial completion, got {other:?}"
+            ),
+        }
+        assert_eq!(
+            read_field_text(target.password),
+            "",
+            "password write must be aborted (no residue after the clear)"
+        );
+        target.destroy();
+    }
+
+    /// 取消边界（第四轮收口）：**槽位在第一字段写入后被新一轮捕获替换**
+    ///（确认 A 后浮窗捕获了 B）。与清槽用例同一时序控制：第 2 次重查时槽
+    /// 位已换成新 id，注入必须以 `TargetChanged` 中止剩余写入，密码不落。
+    #[test]
+    fn slot_replaced_after_first_write_aborts_remaining_write() {
+        use std::sync::Mutex;
+        let target =
+            TestTargetWindow::create("persona fill test - cancel swap", true).expect("create");
+        let snapshot = target.snapshot("persona fill test - cancel swap");
+        let slot: Mutex<Option<FillTarget>> = Mutex::new(Some(snapshot.clone()));
+        let inner = super::slot_recheck_for(&slot, snapshot.snapshot_id.clone());
+        let call = std::cell::Cell::new(0usize);
+        let username_hwnd = target.username;
+        let recheck = || {
+            let n = call.get() + 1;
+            call.set(n);
+            if n == 2 {
+                assert_eq!(
+                    read_field_text(username_hwnd),
+                    "alice@example.com",
+                    "swap hook must fire after the first field write landed"
+                );
+                // 模拟重新捕获：槽位换成新快照（不同 id）
+                let mut replacement = snapshot.clone();
+                replacement.snapshot_id = "re-captured-target-B".to_string();
+                *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(replacement);
+            }
+            inner()
+        };
+        let fake_self_pid = std::process::id().wrapping_add(1).max(1);
+        let result = execute_fill(
+            &snapshot,
+            "alice@example.com",
+            "s3cret-Пароль⚡",
+            fake_self_pid,
+            &recheck,
+        );
+        match result {
+            Err(FillError::Aborted {
+                reason: super::ConfirmBindRejection::TargetChanged,
+                username_filled: true,
+                password_filled: false,
+                ..
+            }) => {}
+            other => panic!(
+                "mid-fill target swap must abort with partial completion, got {other:?}"
+            ),
+        }
+        assert_eq!(
+            read_field_text(target.password),
+            "",
+            "password must never land in the re-captured target"
+        );
         target.destroy();
     }
 
@@ -991,8 +1159,11 @@ mod win_tests {
         assert!(classify_fields(&fields).is_none(), "no ES_PASSWORD field must reject classification");
         let snapshot = target.snapshot("persona fill test - plain");
         let fake_self_pid = std::process::id().wrapping_add(1).max(1);
-        let err = execute_fill(&snapshot, "alice", "s3cret", fake_self_pid)
+        let err = execute_fill(&snapshot, "alice", "s3cret", fake_self_pid, &|| Ok(()))
             .expect_err("plain-only window must be rejected");
+        let FillError::Rejected(err) = err else {
+            panic!("expected Rejected, got {err:?}");
+        };
         assert!(err.contains("ES_PASSWORD"), "error must mention ES_PASSWORD: {err}");
         // 两个普通框都必须原样为空（没写进去任何东西）
         assert_eq!(read_field_text(target.username), "");
@@ -1375,6 +1546,31 @@ mod confirm_binding_tests {
         );
         assert_eq!(
             bind_confirmed_snapshot(Some(&current), Some("snap-a")),
+            Err(ConfirmBindRejection::TargetChanged)
+        );
+    }
+
+    /// 命令层重查闭包工厂（`slot_recheck_for`，第四轮取消边界收口）：
+    /// 与绑定比较共用同一语义——槽位在 → 放行；清槽 → Discarded；
+    /// 换新快照 → Changed。注入循环内每个字段写入前调用它。
+    #[test]
+    fn slot_recheck_closure_matches_bind_semantics() {
+        use std::sync::Mutex;
+        let slot: Mutex<Option<FillTarget>> = Mutex::new(Some(target("snap-live", 7)));
+        let recheck = super::slot_recheck_for(&slot, "snap-live".to_string());
+        recheck().expect("current snapshot must pass the recheck");
+
+        // 清槽（浮窗收起）：在途注入的下一次重查必须拒绝
+        *slot.lock().unwrap_or_else(|p| p.into_inner()) = None;
+        assert_eq!(
+            recheck().map(|_| ()),
+            Err(ConfirmBindRejection::TargetDiscarded)
+        );
+
+        // 重新捕获（换新快照）：携旧 id 的重查必须拒绝
+        *slot.lock().unwrap_or_else(|p| p.into_inner()) = Some(target("snap-new", 8));
+        assert_eq!(
+            recheck().map(|_| ()),
             Err(ConfirmBindRejection::TargetChanged)
         );
     }
