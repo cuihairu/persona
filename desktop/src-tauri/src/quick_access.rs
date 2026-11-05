@@ -472,6 +472,13 @@ fn toggle_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, open
     match window.is_visible() {
         Ok(true) => {
             let _ = window.hide();
+            // 安全评审收紧：浮窗收起即丢弃填充目标。目标快照是"show 前
+            // 的前台窗口"，浮窗一旦收起，用户注意力已离开该目标；保留
+            // 陈旧槽位会让下一次热键周期外的注入打在过期指纹上（就绪态
+            // 与真实状态不一致，见 codex 2026-11-05 审查 P2）。
+            if window_label == WINDOW_LABEL {
+                clear_fill_target(app);
+            }
         }
         _ => {
             // 桌面填充目标捕获（#12）：此刻目标应用还持有前台，show 之前
@@ -523,10 +530,34 @@ fn open_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str, opened
     let _ = window.emit(opened_event, ());
 }
 
+/// 丢弃检索浮窗的填充注入目标快照（浮窗 hide / Esc / 失焦收尾都会走）。
+/// 陈旧目标不保留：`fill_target_status` 的 ready 必须反映真实可信状态。
+#[cfg(target_os = "windows")]
+fn clear_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
+    use crate::AppState;
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut slot = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+        *slot = None;
+    }
+}
+
+/// 非 Windows 平台：槽位恒空，无可清（签名对齐便于调用点无 cfg 分叉）。
+#[cfg(not(target_os = "windows"))]
+fn clear_fill_target<R: tauri::Runtime>(app: &AppHandle<R>) {
+    use crate::AppState;
+    if let Some(state) = app.try_state::<AppState>() {
+        let mut slot = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+        *slot = None;
+    }
+}
+
 /// 收回浮窗（前端 Esc / 失焦自收尾都走它，避免两处各写一遍 hide）
 fn close_window<R: tauri::Runtime>(app: &AppHandle<R>, window_label: &str) {
     if let Some(window) = app.get_webview_window(window_label) {
         let _ = window.hide();
+    }
+    if window_label == WINDOW_LABEL {
+        clear_fill_target(app);
     }
 }
 

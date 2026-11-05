@@ -1165,21 +1165,44 @@ pub async fn quick_access_open_credential<R: tauri::Runtime>(
 
 /// 查询桌面填充注入目标状态（#12）。前端据此决定浮窗填充动作是否可用
 ///（未捕获/已失效时点了也只会报错，提前暴露状态更诚实）。
+/// 就绪态与真实状态一致（安全评审 P2 收紧）：Windows 上对槽位做指纹
+/// 重验证，已失效目标（窗口关闭/复用/进程更换）即时清槽并报 not ready。
 #[command]
 pub async fn fill_target_status(
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<crate::desktop_fill::FillTargetStatus>, String> {
     let supported = crate::desktop_fill::fill_supported();
-    // 平台能力只影响 ready 判定；目标槽位读写两条平台路径一致（Linux 上
-    // 槽位永远是 None——quick_access 的捕获 stub 不写任何东西）
-    let guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
-    let ready = guard.as_ref().is_some();
-    let target_title = guard.as_ref().map(|t| t.title.clone());
+    let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
+    // 注入路径就绪 = 快照存在且当前指纹（hwnd 存活 + pid + 类名 + 可执行
+    // 文件 + 标题前缀）仍然一致；失效即刻丢弃。非 Windows 平台无指纹
+    // 校验能力，槽位本应为空，防御性视为失效。
+    let still_valid = match guard.as_ref() {
+        Some(t) => {
+            #[cfg(target_os = "windows")]
+            {
+                crate::desktop_fill::win::validate_target(t, std::process::id())
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = t;
+                false
+            }
+        }
+        None => false,
+    };
+    if !still_valid {
+        *guard = None;
+    }
+    let target = guard.as_ref();
+    let ready = still_valid;
+    let target_title = target.map(|t| t.title.clone());
+    let target_app = target.map(|t| crate::desktop_fill::exe_file_name(&t.exe_path));
     drop(guard);
     Ok(ApiResponse::success(crate::desktop_fill::FillTargetStatus {
         supported,
         ready,
         target_title,
+        target_app,
     }))
 }
 
@@ -1187,18 +1210,32 @@ pub async fn fill_target_status(
 /// 持有前台的目标窗口。范围（诚实边界，见 desktop_fill 模块注释）：
 /// - 仅 Windows（其余平台 `fill_supported()` = false，如实报错）；
 /// - 仅经典 Win32 EDIT 控件宿主（自绘/浏览器宿主不适用，浏览器归扩展）；
-/// - 仅 Password 类型凭据（用户名 + 密码两个字段）。
+/// - 仅 Password 类型凭据（用户名 + 密码两个字段）；
+/// - 仅注入带 `ES_PASSWORD` 样式且可见/启用/非只读的密码框——没有合格
+///   密码框即拒绝，普通框永不充当密码框（安全评审 P1 收紧）；
+/// - **必须先经用户确认**：浮窗展示目标应用名（可执行文件名）与窗口标题，
+///   用户显式确认后前端才带 `confirmed = true` 调用本命令；`confirmed`
+///   缺失/为 false 一律拒绝——不存在静默注入路径。
 /// 敏感面与 reveal_credential_secret 同级：走 `get_credential_data` 解密
 /// 路径（自带审计与 re-auth 门禁）。
 #[command]
 pub async fn desktop_fill_credential(
     credential_id: String,
+    confirmed: bool,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<crate::desktop_fill::DesktopFillResult>, String> {
     // 平台诚实性：非 Windows 不假装有功能
     if !crate::desktop_fill::fill_supported() {
         return Ok(ApiResponse::error(
             "Desktop fill injection is only implemented on Windows".to_string(),
+        ));
+    }
+    // 用户确认面（安全评审 P1）：目标应用名已在浮窗展示并由用户显式确认，
+    // 后端只放行显式确认的调用。确认不是授权边界本身（目标指纹才是），
+    // 但它是"不可静默直写"的硬门。
+    if !confirmed {
+        return Ok(ApiResponse::error(
+            "Desktop fill requires explicit user confirmation of the target app".to_string(),
         ));
     }
     let uuid = match Uuid::from_str(&credential_id) {
