@@ -138,7 +138,11 @@ impl HostProcess {
             {
                 Ok(line) if line.starts_with("READBACK") => {
                     let parts: Vec<&str> = line.split_whitespace().collect();
-                    assert_eq!(parts.len(), 3, "READBACK <user-hex> <pwd-hex>: {line:?}");
+                    // 在途竞态用例的预期结局：宿主销毁重建后两框皆为空——
+                    // 打回 `READBACK` / `READBACK  `（不足 3 段按全空处理）
+                    if parts.len() < 3 {
+                        return (String::new(), String::new());
+                    }
                     return (decode_utf16_hex(parts[1]), decode_utf16_hex(parts[2]));
                 }
                 Ok(_) => continue,
