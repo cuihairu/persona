@@ -11,7 +11,9 @@
 //!
 //! stdin 命令（按行）：
 //! - `readback`：**同进程**读回两个 Edit 的当前文本（WM_GETTEXTLENGTH +
-//!   WM_GETTEXT），按 UTF-16 hex 打回 `READBACK <user-hex> <pwd-hex>`。
+//!   WM_GETTEXT），按长度前缀协议打回
+//!   `READBACK <unit-count>:<hex> <unit-count>:<hex>`（UTF-16 hex 每单元
+//!   4 位小写，空字段 = `0:`；长度前缀保住空字段信息，见 fill-test/lib.rs）。
 //!   存在的原因：Windows 平台限制——跨进程 WM_GETTEXT 读 ES_PASSWORD
 //!   控件恒返回空串（2026-11-06 openclaw Server 2022 实测），注入成功的
 //!   密码断言只能由宿主进程自己读回；
@@ -94,6 +96,16 @@ fn main() {
             return String::new();
         }
         buf[..got as usize].iter().map(|u| format!("{u:04x}")).collect()
+    }
+
+    /// 同进程读回两个 Edit 的文本并按**长度前缀协议**打回 READBACK 帧
+    ///（`READBACK <unit-count>:<hex> <unit-count>:<hex>`，空字段 = `0:`）。
+    /// 长度前缀保住空字段信息：旧空格分隔协议下「username 空 + password
+    /// 非空」的帧只剩 2 段，被解析端误判双空，单字段残留无法检出。
+    unsafe fn readback_frame() -> String {
+        let user = control_text_hex(USERNAME_HWND.load(Ordering::Acquire));
+        let pwd = control_text_hex(PASSWORD_HWND.load(Ordering::Acquire));
+        persona_fill_test::encode_readback_frame(&user, &pwd)
     }
 
     unsafe fn create_target_window() -> isize {
@@ -260,9 +272,8 @@ fn main() {
             let Ok(line) = line else { break };
             match line.trim() {
                 "readback" => unsafe {
-                    let user = control_text_hex(USERNAME_HWND.load(Ordering::Acquire));
-                    let pwd = control_text_hex(PASSWORD_HWND.load(Ordering::Acquire));
-                    println!("READBACK {user} {pwd}");
+                    let frame = readback_frame();
+                    println!("{frame}");
                     let _ = std::io::stdout().flush();
                 },
                 "destroy-recreate" => unsafe {
