@@ -89,7 +89,14 @@ target entirely.
   successful ES_PASSWORD injection, plain-edit-only rejection, same-title
   decoy-process rejection, and destroy/recreate race rejection. It must run
   in an interactive desktop session (SSH sessions report no visible windows
-  and no foreground window).
+  and no foreground window). Platform note (measured on Windows Server 2022,
+  2026-11-06): a cross-process `WM_GETTEXT`/`WM_GETTEXTLENGTH` on an
+  `ES_PASSWORD` edit returns an empty string even after a successful
+  cross-process `WM_SETTEXT` — the OS hides password text from other
+  processes' read-back. The suite therefore verifies password injection via
+  same-process read-back (`fill-test-host` `readback` command) plus
+  cross-process `EM_GETPASSWORDCHAR`/style assertions; the plain-edit
+  cross-process read-back assertion is unchanged.
 - `desktop/src-tauri/src/quick_access.rs` — target capture hook in the
   floating-window toggle; hide/close discards the captured target.
 - `commands::fill_target_status` / `commands::desktop_fill_credential` —

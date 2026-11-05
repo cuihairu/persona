@@ -10,6 +10,11 @@
 //! 重建竞态拒绝——这些是测试进程内造窗覆盖不到的真跨进程语义。
 //!
 //! stdin 命令（按行）：
+//! - `readback`：**同进程**读回两个 Edit 的当前文本（WM_GETTEXTLENGTH +
+//!   WM_GETTEXT），按 UTF-16 hex 打回 `READBACK <user-hex> <pwd-hex>`。
+//!   存在的原因：Windows 平台限制——跨进程 WM_GETTEXT 读 ES_PASSWORD
+//!   控件恒返回空串（2026-11-06 openclaw Server 2022 实测），注入成功的
+//!   密码断言只能由宿主进程自己读回；
 //! - `destroy-recreate`：销毁当前顶层窗口并**同标题同样式**重建
 //!   （HWND 复用/重建竞态用例），完成后向 stdout 打 `RECREATED <hwnd>`；
 //! - `quit`：干净退出（销毁窗口，EXIT 0）。
@@ -34,8 +39,8 @@ fn main() {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
         PostMessageW, PostQuitMessage, RegisterClassW, ES_AUTOHSCROLL, ES_PASSWORD, MSG,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WNDCLASSW, WS_CHILD,
-        WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH,
+        WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     static TITLE: OnceLock<String> = OnceLock::new();
@@ -52,6 +57,31 @@ fn main() {
 
     fn pcw(s: &HSTRING) -> PCWSTR {
         PCWSTR(s.as_ptr())
+    }
+
+    /// 同进程读回一个 Edit 的文本并按 UTF-16 hex 编码（每单元 4 位小写，
+    /// 管道/console 编码无关）。hwnd 为 0 或读不到时返回空串。
+    unsafe fn control_text_hex(hwnd_value: isize) -> String {
+        if hwnd_value == 0 {
+            return String::new();
+        }
+        let hwnd = HWND(hwnd_value as *mut _);
+        let len = SendMessageW(hwnd, WM_GETTEXTLENGTH, Some(WPARAM(0)), Some(LPARAM(0))).0;
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; (len + 1) as usize];
+        let got = SendMessageW(
+            hwnd,
+            WM_GETTEXT,
+            Some(WPARAM(buf.len())),
+            Some(LPARAM(buf.as_mut_ptr() as isize)),
+        )
+        .0;
+        if got <= 0 {
+            return String::new();
+        }
+        buf[..got as usize].iter().map(|u| format!("{u:04x}")).collect()
     }
 
     unsafe fn create_target_window() -> isize {
@@ -167,6 +197,12 @@ fn main() {
         for line in stdin.lock().lines() {
             let Ok(line) = line else { break };
             match line.trim() {
+                "readback" => unsafe {
+                    let user = control_text_hex(USERNAME_HWND.load(Ordering::Acquire));
+                    let pwd = control_text_hex(PASSWORD_HWND.load(Ordering::Acquire));
+                    println!("READBACK {user} {pwd}");
+                    let _ = std::io::stdout().flush();
+                },
                 "destroy-recreate" => unsafe {
                     let top = TOP_HWND.load(Ordering::Acquire);
                     if top != 0 {

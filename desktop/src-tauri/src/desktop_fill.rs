@@ -452,6 +452,13 @@ pub mod win {
     }
 
     /// 读回一个输入框的当前文本（注入后验证与测试用；不进产品回显面）。
+    ///
+    /// **平台限制（openclaw Server 2022 实测）**：`field_hwnd` 属于其他
+    /// 进程且控件带 `ES_PASSWORD` 时，跨进程 `WM_GETTEXT`/`WM_GETTEXTLENGTH`
+    /// 恒返回空/0——即使跨进程 `WM_SETTEXT` 写入成功。系统对密码框做了
+    /// 跨进程读隐藏，本函数不能用于验证跨进程密码注入；验证须由目标进程
+    /// 自己读回（见 fill-test-host 的 `readback` 命令）或退而断言
+    /// `EM_GETPASSWORDCHAR`/样式。同进程调用不受影响。
     pub fn read_field_text(field_hwnd: isize) -> String {
         unsafe {
             let hwnd = HWND(field_hwnd as *mut _);

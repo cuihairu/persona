@@ -40,5 +40,7 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Gdi",
   # GetModuleHandleW（System/LibraryLoader）
   "Win32_System_LibraryLoader",
+  # EM_GETPASSWORDCHAR（掩码字符元数据，跨进程可读）
+  "Win32_UI_Controls",
   "Win32_UI_WindowsAndMessaging",
 ] }

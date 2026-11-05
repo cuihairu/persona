@@ -107,6 +107,30 @@ impl HostProcess {
         let _ = self.child.wait();
     }
 
+    /// 靶进程**同进程**读回两个 Edit 的文本（UTF-16 hex → String）。
+    /// 密码断言的唯一可靠通道：Windows 跨进程 WM_GETTEXT 读 ES_PASSWORD
+    /// 控件恒返回空串（平台限制，见套件头注释）。
+    fn readback(&mut self) -> (String, String) {
+        writeln!(self.stdin, "readback").expect("write readback");
+        self.stdin.flush().expect("flush stdin");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match self
+                .stdout_lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            {
+                Ok(line) if line.starts_with("READBACK") => {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    assert_eq!(parts.len(), 3, "READBACK <user-hex> <pwd-hex>: {line:?}");
+                    return (decode_utf16_hex(parts[1]), decode_utf16_hex(parts[2]));
+                }
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => panic!("host did not answer readback in time"),
+                Err(RecvTimeoutError::Disconnected) => panic!("host died during readback"),
+            }
+        }
+    }
+
     fn pid(&self) -> u32 {
         self.child.id()
     }
@@ -142,6 +166,31 @@ fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
     }
 }
 
+/// UTF-16 hex（每单元 4 位小写）→ String（fill-test-host readback 打回格式）
+fn decode_utf16_hex(hex: &str) -> String {
+    let units: Vec<u16> = (0..hex.len() / 2)
+        .map(|i| u16::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex unit"))
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+/// 跨进程 EM_GETPASSWORDCHAR（掩码字符元数据，非敏感、允许跨进程读）。
+/// 返回 0 = 无掩码（普通框）。
+fn password_char(field_hwnd: isize) -> u32 {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::Controls::EM_GETPASSWORDCHAR;
+    use windows::Win32::UI::WindowsAndMessaging::SendMessageW;
+    unsafe {
+        SendMessageW(
+            HWND(field_hwnd as *mut _),
+            EM_GETPASSWORDCHAR,
+            Some(WPARAM(0)),
+            Some(LPARAM(0)),
+        )
+        .0 as u32
+    }
+}
+
 /// 真机验收核心：跨进程对独立靶进程的 ES_PASSWORD 框注入成功，普通框
 /// 一个字符都不落。
 #[test]
@@ -158,12 +207,39 @@ fn cross_process_password_field_injection_succeeds() {
     assert!(pwd_filled, "password must be injected");
     assert_eq!(title, "persona xproc login");
 
-    // 读回验证：普通框 = 用户名，ES_PASSWORD 框 = 密码（Z 序第一普通/第二密码）
     let fields = enumerate_edit_fields(hwnd);
     assert_eq!(fields.len(), 2);
+
+    // 普通框（跨进程 WM_GETTEXT 不受限）：值必须原样落在框里
+    assert!(!fields[0].is_password, "first edit must be plain");
+    assert_eq!(password_char(fields[0].hwnd), 0, "plain edit must have no password char");
     assert_eq!(read_field_text(fields[0].hwnd), "alice@example.com");
+
+    // ES_PASSWORD 框：样式与掩码字符跨进程可验证（写入本身由 execute_fill
+    // 的 WM_SETTEXT 返回值担保——非零即写入成功）
     assert!(fields[1].is_password, "second edit must carry ES_PASSWORD");
-    assert_eq!(read_field_text(fields[1].hwnd), "s3cret-Пароль⚡");
+    assert_ne!(
+        password_char(fields[1].hwnd),
+        0,
+        "ES_PASSWORD edit must report a password char"
+    );
+
+    // 平台限制实录（2026-11-06 openclaw Server 2022 实测）：跨进程
+    // WM_GETTEXT 读 ES_PASSWORD 控件恒返回空串（WM_GETTEXTLENGTH 同）——
+    // WM_SETTEXT 写入成功但读被系统隐藏，跨进程读回不能用于验证密码注入
+    //（这也正是密码框存在的安全意义）。这里如实打印观察值留痕。
+    let cross_read = read_field_text(fields[1].hwnd);
+    eprintln!(
+        "cross-process WM_GETTEXT on ES_PASSWORD read {cross_read:?} \
+         (platform restriction: empty even after successful WM_SETTEXT)"
+    );
+
+    // 密码注入成功的决定性断言：靶进程**同进程**读回两个框——用户名与
+    // 密码都必须与注入值逐字符一致（读回在宿主进程内完成，绕开平台对
+    // 跨进程读密码框的隐藏，不构成对注入语义的削弱）
+    let (host_user, host_pwd) = host.readback();
+    assert_eq!(host_user, "alice@example.com", "same-process read-back: username");
+    assert_eq!(host_pwd, "s3cret-Пароль⚡", "same-process read-back: password");
     host.quit();
 }
 
