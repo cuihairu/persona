@@ -1334,32 +1334,48 @@ mod win_tests {
     fn clipboard_backup_restore_roundtrip() {
         let _guard = clipboard_test_lock();
         use super::win::{seed_clipboard, with_clipboard_paste};
-        // 预置"原有内容"（直接写，不走备份/恢复语义）
-        seed_clipboard("PREV-VALUE").expect("seed clipboard");
-        assert_eq!(read_clipboard_text(), "PREV-VALUE");
+        // 预置"原有内容"（直接写，不走备份/恢复语义）。值带每次运行的
+        // 唯一后缀：机器的 RDP/剪贴板同步链路（rdpclip 等）可能把**上一
+        // 轮**运行写过的固定字面量在剪贴板被清空后回灌（run4-red 实测
+        // 复现）——固定值会跟陈旧内容撞车，唯一值让回灌内容必然对不上。
+        let prev = format!("PREV-{}", uuid::Uuid::new_v4());
+        seed_clipboard(&prev).expect("seed clipboard");
+        assert_eq!(read_clipboard_text(), prev);
 
-        // 粘贴假密文：断言闭包期间读到的是密文、结束后恢复 PREV-VALUE
+        // 粘贴假密文：断言闭包期间读到的是密文、结束后恢复 prev
         let seen = std::cell::RefCell::new(String::new());
         let (_, warn) = with_clipboard_paste("TOP-SECRET", || {
             *seen.borrow_mut() = read_clipboard_text();
         })
         .expect("paste roundtrip");
         assert_eq!(seen.borrow().as_str(), "TOP-SECRET", "secret must be on clipboard during paste");
-        assert_eq!(read_clipboard_text(), "PREV-VALUE", "previous content must be restored");
+        assert_eq!(read_clipboard_text(), prev, "previous content must be restored");
         assert!(warn.is_none(), "restore should not warn: {warn:?}");
 
-        // 无原有内容时：结束后密文被清掉（写空串），不残留
+        // 无原有内容时：结束后密文被清掉（写空串），不残留。断空必须
+        // **读一次**：retry-until-non-empty 的旧读法会给外部剪贴板同步
+        // 进程留出整整 1 秒把陈旧内容灌回来（见上），把"读不到"放大成
+        // "读到垃圾"。
         seed_clipboard("").expect("clear clipboard");
         let (_, _) = with_clipboard_paste("GHOST", || ()).expect("paste roundtrip 2");
-        assert_eq!(read_clipboard_text(), "", "no prior content must leave no residue");
+        assert_eq!(
+            read_clipboard_text_expect_maybe_empty(),
+            "",
+            "no prior content must leave no residue"
+        );
 
         // 闭包 panic：恢复仍要发生，panic 在恢复之后传播
-        seed_clipboard("PREV-PANIC").expect("seed clipboard 2");
+        let prev_panic = format!("PREV-PANIC-{}", uuid::Uuid::new_v4());
+        seed_clipboard(&prev_panic).expect("seed clipboard 2");
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = with_clipboard_paste("PANIC-SECRET", || panic!("boom in paste closure"));
         }));
         assert!(panicked.is_err(), "closure panic must propagate after restore");
-        assert_eq!(read_clipboard_text(), "PREV-PANIC", "panic must not bypass clipboard restore");
+        assert_eq!(
+            read_clipboard_text(),
+            prev_panic,
+            "panic must not bypass clipboard restore"
+        );
     }
 
     /// 原剪贴板是非文本内容（文件/位图/自定义格式）时：恢复不了原文、
@@ -1498,6 +1514,9 @@ mod win_tests {
     /// 本机常有剪贴板监听进程短暂持有剪贴板（OpenClipboard 瞬时失败时
     /// `read_clipboard_text_once` 静默返回空串）；读回断言先小间隔重试，
     /// 把瞬时竞争与真实空剪贴板区分开（重试耗尽仍为空按空处理）。
+    /// **只用于期望非空的断言**——期望为空的断言用
+    /// [`read_clipboard_text_expect_maybe_empty`]，retry-until-non-empty
+    /// 会给外部剪贴板同步进程留时间灌回陈旧内容。
     fn read_clipboard_text() -> String {
         for _ in 0..20 {
             let text = read_clipboard_text_once();
@@ -1509,7 +1528,34 @@ mod win_tests {
         String::new()
     }
 
+    /// 期望为空的读回：只在 OpenClipboard 失败（监听进程短暂持锁）时
+    /// 重试，剪贴板一旦打开立即按当时内容返回——不给外部同步进程留
+    /// 灌回陈旧内容的窗口。
+    fn read_clipboard_text_expect_maybe_empty() -> String {
+        for _ in 0..20 {
+            match read_clipboard_text_once_state() {
+                ReadOutcome::Opened(text) => return text,
+                ReadOutcome::OpenFailed => {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        }
+        String::new()
+    }
+
+    enum ReadOutcome {
+        Opened(String),
+        OpenFailed,
+    }
+
     fn read_clipboard_text_once() -> String {
+        match read_clipboard_text_once_state() {
+            ReadOutcome::Opened(text) => text,
+            ReadOutcome::OpenFailed => String::new(),
+        }
+    }
+
+    fn read_clipboard_text_once_state() -> ReadOutcome {
         use windows::Win32::System::DataExchange::{
             CloseClipboard, GetClipboardData, OpenClipboard,
         };
@@ -1517,7 +1563,7 @@ mod win_tests {
         use windows::Win32::System::Ole::CF_UNICODETEXT;
         unsafe {
             if OpenClipboard(None).is_err() {
-                return String::new();
+                return ReadOutcome::OpenFailed;
             }
             let out: Option<String> = (|| {
                 let h = GetClipboardData(CF_UNICODETEXT.0 as u32).ok()?;
@@ -1540,7 +1586,7 @@ mod win_tests {
                 Some(text)
             })();
             let _ = CloseClipboard();
-            out.unwrap_or_default()
+            ReadOutcome::Opened(out.unwrap_or_default())
         }
     }
 
