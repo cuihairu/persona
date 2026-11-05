@@ -8,7 +8,7 @@
 - 结果：
   - lib 套件 `cargo test --lib desktop_fill`：**6 passed / 0 failed**（filltest-lib.log）；
   - 跨进程套件 `cargo test --features fill-test-host -p persona-fill-test
-    --test desktop_fill_cross_process`：**4 passed / 0 failed**（filltest-xproc.log）；
+--test desktop_fill_cross_process`：**4 passed / 0 failed**（filltest-xproc.log）；
   - 退出码标记 filltest.done：`lib_exit=0 xproc_exit=0`。
 
 ## 判断结论：跨进程 WM_GETTEXT 读 ES_PASSWORD 是 Windows 系统限制，注入本身真实成功

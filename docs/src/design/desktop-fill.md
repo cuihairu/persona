@@ -19,11 +19,11 @@ codex-2026-11-05 review (see `docs/评审/codex-2026-11-05-desktop-fill-vuln.md`
 
 ## Injection strategy (selection)
 
-| Option                               | Verdict               | Why                                                                                                                                                                                                                               |
-| ------------------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **WM_SETTEXT direct write** (chosen) | Primary               | No focus dependency, no synthetic keystrokes, reliable cross-process within the same desktop session; automatable for acceptance. Works only for classic Win32 EDIT controls.                                                     |
-| Clipboard relay (Ctrl+V)             | **Built, NOT wired**  | Helpers exist (`with_clipboard_paste` + `paste_into_focused`) but the production path never calls them — they are not an active fallback. Inherent limitation: the system clipboard is shared across the desktop session; any process can read the secret while it is parked there, so backup/restore only shrinks the exposure window and provides **no confidentiality**. Enabling it requires disclosing that boundary in the UI first. |
-| UI Automation                        | Not built             | Covers self-drawn controls, but adds `Win32_UI_Accessibility` + COM lifetime management; recorded as future extension, not stubbed.                                                                                               |
+| Option                               | Verdict              | Why                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------ | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **WM_SETTEXT direct write** (chosen) | Primary              | No focus dependency, no synthetic keystrokes, reliable cross-process within the same desktop session; automatable for acceptance. Works only for classic Win32 EDIT controls.                                                                                                                                                                                                                                                              |
+| Clipboard relay (Ctrl+V)             | **Built, NOT wired** | Helpers exist (`with_clipboard_paste` + `paste_into_focused`) but the production path never calls them — they are not an active fallback. Inherent limitation: the system clipboard is shared across the desktop session; any process can read the secret while it is parked there, so backup/restore only shrinks the exposure window and provides **no confidentiality**. Enabling it requires disclosing that boundary in the UI first. |
+| UI Automation                        | Not built            | Covers self-drawn controls, but adds `Win32_UI_Accessibility` + COM lifetime management; recorded as future extension, not stubbed.                                                                                                                                                                                                                                                                                                        |
 
 ## Field selection
 
@@ -63,7 +63,7 @@ executable name and window title, and the fill command (`desktop_fill_credential
 rejects any call without `confirmed = true`. There is no silent injection
 path; a mis-identified target is visible to the user before Enter.
 
-The ready state shown in the floating window reflects the *validated* state:
+The ready state shown in the floating window reflects the _validated_ state:
 `fill_target_status` revalidates the slot (invalid targets are dropped
 immediately), and hiding the quick access window discards the captured
 target entirely.
@@ -84,7 +84,7 @@ target entirely.
   (real windows with real EDIT controls, verified via WM_GETTEXT read-back).
 - `desktop/src-tauri/fill-test/` — cross-process suite (test-only workspace
   member, `cargo test --features fill-test-host -p persona-fill-test
-  --test desktop_fill_cross_process`):
+--test desktop_fill_cross_process`):
   a separate target process (`fill-test-host` bin) is injected into; covers
   successful ES_PASSWORD injection, plain-edit-only rejection, same-title
   decoy-process rejection, and destroy/recreate race rejection. It must run
