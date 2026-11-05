@@ -70,8 +70,8 @@ against the current slot under lock: a re-captured target returns
 newly current target; it injects only into the window the user actually
 confirmed (whose fingerprint is revalidated once more before the write).
 A mis-identified target is visible to the user before Enter. One platform
-limit remains honest here: if the *same process* recreates a window with
-the same title/class/exe and the HWND *value* is reused, Win32 cannot
+limit remains honest here: if the _same process_ recreates a window with
+the same title/class/exe and the HWND _value_ is reused, Win32 cannot
 distinguish it from the captured target — the write then lands inside the
 same process the user confirmed, backed by the confirmation face.
 
@@ -103,7 +103,7 @@ rather than silently fulfilled later.
   a separate target process (`fill-test-host` bin) is injected into; covers
   successful ES_PASSWORD injection (verified by same-process read-back
   inside the target), plain-edit-only rejection, same-title decoy-process
-  rejection, destroy/rebuild rejection completed *before* the injection,
+  rejection, destroy/rebuild rejection completed _before_ the injection,
   and a genuine **in-flight** race (a race hook in the target destroys and
   rebuilds the window while the injection request is mid-flight — the fill
   must be rejected and no secret may land in the rebuilt window). A
