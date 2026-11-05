@@ -58,10 +58,16 @@ const mockFill = personaAPI.desktopFillCredential as jest.Mock;
 const mockFillTarget = personaAPI.fillTargetStatus as jest.Mock;
 const mockFocusMain = personaAPI.focusMainWindow as jest.Mock;
 
-/** fill_target_status 的默认就绪响应（⌘F 确认面用） */
+/** fill_target_status 的默认就绪响应（⌘F 确认面用；snapshot_id 供确认绑定断言） */
 const readyTargetStatus = (app = 'notepad.exe', title = 'Login - Example App') => ({
   success: true,
-  data: { supported: true, ready: true, target_title: title, target_app: app },
+  data: {
+    supported: true,
+    ready: true,
+    target_title: title,
+    target_app: app,
+    snapshot_id: 'snap-confirm-1',
+  },
 });
 
 /** 取组件挂载时注册的指定事件回调（mockListen.mock.calls 由 beforeEach 清空） */
@@ -381,9 +387,9 @@ describe('components/QuickAccessPanel', () => {
     expect(dialog.textContent).toContain('Login - Example App');
     expect(mockFill).not.toHaveBeenCalled();
 
-    // 用户显式确认 → 带 confirmed=true 注入
+    // 用户显式确认 → 带 confirmed=true + 确认面捕获的 snapshot_id 注入
     fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
-    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true));
+    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true, 'snap-confirm-1'));
     // 成功后浮窗自动收起：焦点还给目标窗口
     await waitFor(() => expect(mockHide).toHaveBeenCalled());
   });
@@ -439,8 +445,52 @@ describe('components/QuickAccessPanel', () => {
     await screen.findByTestId('quick-access-fill-confirm');
     fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
 
-    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true));
+    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true, 'snap-confirm-1'));
     expect(mockHide).not.toHaveBeenCalled();
+  });
+
+  it('⌘F fill rejected as FILL_TARGET_CHANGED (in-flight confirm bound to a stale snapshot) never hides the window', async () => {
+    setup([credential({})]);
+    mockFillTarget.mockResolvedValue(readyTargetStatus());
+    mockFill.mockResolvedValue({
+      success: false,
+      error_code: 'FILL_TARGET_CHANGED',
+      error:
+        'Fill target changed after confirmation (a new window was captured); refusing to fill into the new target',
+    });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+    await screen.findByTestId('quick-access-fill-confirm');
+    fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
+
+    // 确认绑定（P1）：后端按 snapshot_id 拒绝被换目标的在途请求——
+    // 浮窗不收起（用户需重新走确认流），也不重试注入
+    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true, 'snap-confirm-1'));
+    await waitFor(() => expect(mockFill).toHaveBeenCalledTimes(1));
+    expect(mockHide).not.toHaveBeenCalled();
+  });
+
+  it('⌘F with a ready target but no snapshot_id errors locally without opening the confirm face', async () => {
+    setup([credential({})]);
+    mockFillTarget.mockResolvedValue({
+      success: true,
+      data: { supported: true, ready: true, target_title: 'T', target_app: 'app.exe', snapshot_id: null },
+    });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+
+    // 没有 snapshot_id 就无法绑定确认（P1）——视同无有效目标，不进确认面
+    await waitFor(() => expect(mockFillTarget).toHaveBeenCalled());
+    expect(screen.queryByTestId('quick-access-fill-confirm')).toBeNull();
+    expect(mockFill).not.toHaveBeenCalled();
   });
 
   it('⌘F on a non-Password credential rejects locally without probing or calling the backend', async () => {

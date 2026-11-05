@@ -719,6 +719,8 @@ export default {
       'Persona 将把该凭据填充到「{{app}}」（窗口「{{title}}」）。若这不是你意图的目标应用，请取消。',
     fillConfirmButton: '填充到该应用',
     fillCancel: '取消',
+    fillTargetChanged: '确认后注入目标已变化——请在目标应用上重新唤起浮窗并再次确认',
+    fillTargetDiscarded: '填充目标已丢弃（浮窗已收起）——请在目标应用上重新唤起浮窗并再次确认',
   },
   errorBoundary: {
     title: '出错了',

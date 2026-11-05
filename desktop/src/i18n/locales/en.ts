@@ -739,6 +739,10 @@ export default {
       'Persona will fill this credential into "{{app}}" (window "{{title}}"). Only continue if this is the app you intend.',
     fillConfirmButton: 'Fill into this app',
     fillCancel: 'Cancel',
+    fillTargetChanged:
+      'Fill target changed after confirmation — open the quick access window over the target app and confirm again',
+    fillTargetDiscarded:
+      'Fill target was discarded (floating window hidden) — open it over the target app and confirm again',
   },
   errorBoundary: {
     title: 'Something went wrong',

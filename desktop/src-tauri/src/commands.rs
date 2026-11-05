@@ -1197,12 +1197,14 @@ pub async fn fill_target_status(
     let ready = still_valid;
     let target_title = target.map(|t| t.title.clone());
     let target_app = target.map(|t| crate::desktop_fill::exe_file_name(&t.exe_path));
+    let snapshot_id = target.map(|t| t.snapshot_id.clone());
     drop(guard);
     Ok(ApiResponse::success(crate::desktop_fill::FillTargetStatus {
         supported,
         ready,
         target_title,
         target_app,
+        snapshot_id,
     }))
 }
 
@@ -1216,12 +1218,18 @@ pub async fn fill_target_status(
 /// - **必须先经用户确认**：浮窗展示目标应用名（可执行文件名）与窗口标题，
 ///   用户显式确认后前端才带 `confirmed = true` 调用本命令；`confirmed`
 ///   缺失/为 false 一律拒绝——不存在静默注入路径。
+/// - **确认绑定具体快照（P1 收紧）**：前端确认时带回捕获生成的
+///   `snapshot_id`；解密（在途窗口）完成后锁内按 id 与当前槽位比对——
+///   槽位已空（浮窗收起清槽）如实报 `FILL_TARGET_DISCARDED`，槽位已被
+///   重新捕获替换（确认 A 后又捕获了 B）如实报 `FILL_TARGET_CHANGED`，
+///   在途请求绝不转投新目标。
 /// 敏感面与 reveal_credential_secret 同级：走 `get_credential_data` 解密
 /// 路径（自带审计与 re-auth 门禁）。
 #[command]
 pub async fn desktop_fill_credential(
     credential_id: String,
     confirmed: bool,
+    snapshot_id: Option<String>,
     state: State<'_, AppState>,
 ) -> std::result::Result<ApiResponse<crate::desktop_fill::DesktopFillResult>, String> {
     // 平台诚实性：非 Windows 不假装有功能
@@ -1273,25 +1281,51 @@ pub async fn desktop_fill_credential(
     };
     let username = credential.username.unwrap_or_default();
 
-    // 取出目标快照（锁内只拷贝，注入在锁外做——注入是慢 FFI 调用）
+    // 确认绑定具体快照（P1 收紧）：解密是在途窗口——期间浮窗可能被重新
+    // 唤起捕获了别的目标，也可能已收起清槽。持锁按请求携带的 snapshot_id
+    // 绑定后克隆（注入是慢 FFI 调用，锁外执行；注入目标因此就是被确认的
+    // 那份快照，指纹重验证 + 逐控件重验证都锚定它，而非「此刻槽位里的目标」）。
     let target = {
         let guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
-        let Some(t) = guard.as_ref() else {
-            return Ok(ApiResponse::error(
-                "No captured fill target (open the quick access window over the target app first)"
-                    .to_string(),
-            ));
-        };
-        t.clone()
+        match crate::desktop_fill::bind_confirmed_snapshot(guard.as_ref(), snapshot_id.as_deref()) {
+            Ok(t) => t,
+            Err(crate::desktop_fill::ConfirmBindRejection::SnapshotRequired) => {
+                return Ok(ApiResponse::error_maybe_coded(
+                    Some("FILL_TARGET_SNAPSHOT_REQUIRED".to_string()),
+                    "Desktop fill confirmation must carry the snapshot id it confirmed"
+                        .to_string(),
+                ));
+            }
+            Err(crate::desktop_fill::ConfirmBindRejection::TargetDiscarded) => {
+                return Ok(ApiResponse::error_maybe_coded(
+                    Some("FILL_TARGET_DISCARDED".to_string()),
+                    "Confirmed fill target was discarded (floating window hidden or target cleared)"
+                        .to_string(),
+                ));
+            }
+            Err(crate::desktop_fill::ConfirmBindRejection::TargetChanged) => {
+                return Ok(ApiResponse::error_maybe_coded(
+                    Some("FILL_TARGET_CHANGED".to_string()),
+                    "Fill target changed after confirmation (a new window was captured); refusing to fill into the new target"
+                        .to_string(),
+                ));
+            }
+        }
     };
     let (username_filled, password_filled, target_title) =
         match crate::desktop_fill::execute_fill(&target, &username, &password, std::process::id())
         {
             Ok(result) => result,
             Err(msg) if msg == "CAPTURED_TARGET_INVALID" => {
-                // 失效目标即刻丢弃，避免下一次再撞同一堵墙
+                // 失效目标即刻丢弃，避免下一次再撞同一堵墙——但只丢弃仍是
+                // 本请求确认的那份快照：槽位若已被新一轮捕获（别的目标），
+                // 不能替用户清掉它
                 let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
-                *guard = None;
+                if guard.as_ref().map(|t| t.snapshot_id.as_str())
+                    == Some(target.snapshot_id.as_str())
+                {
+                    *guard = None;
+                }
                 return Ok(ApiResponse::error(
                     "Captured fill target is no longer valid (window closed or reused)".to_string(),
                 ));

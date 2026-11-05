@@ -94,12 +94,15 @@ const QuickAccessPanel: React.FC = () => {
   const [copied, setCopied] = useState<string | null>(null);
   /**
    * 桌面填充确认面（安全评审 P1）：注入前展示目标应用名（可执行文件名）
-   * + 窗口标题，用户显式确认才注入。null = 无待确认注入。
+   * + 窗口标题，用户显式确认才注入。null = 无待确认注入。`snapshotId`
+   * 是探测时捕获的快照标识（P1 确认绑定）——确认后原样带回后端，
+   * 在途请求期间目标被重新捕获/浮窗收起都会被如实拒绝，不转投新目标。
    */
   const [fillConfirm, setFillConfirm] = useState<{
     credential: Credential;
     app: string;
     title: string;
+    snapshotId: string;
   } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
@@ -264,14 +267,20 @@ const QuickAccessPanel: React.FC = () => {
   /**
    * 桌面应用内填充注入（#12）——**两步确认流**（安全评审 P1 收紧）：
    * 第一步（requestFill）探测注入目标并弹出确认面：浮窗展示目标应用名
-   * （可执行文件名）与窗口标题，用户显式确认后第二步才带 `confirmed=true`
-   * 调用后端注入。后端对未确认调用一律拒绝——不存在静默直写路径。
+   * （可执行文件名）与窗口标题，并捕获快照标识；用户显式确认后第二步才
+   * 带 `confirmed=true` + `snapshot_id` 调用后端注入——确认绑定到具体
+   * 快照，后端对未确认/目标已换/目标已丢的调用一律如实拒绝。
    * 成功后浮窗自动收起——焦点回到目标窗口，用户直接看到填好的字段。
    */
   const requestFill = useCallback(
     async (credential: Credential) => {
       const status = await personaAPI.fillTargetStatus();
-      if (!status.success || !status.data?.ready || !status.data.supported) {
+      if (
+        !status.success ||
+        !status.data?.ready ||
+        !status.data.supported ||
+        !status.data.snapshot_id
+      ) {
         toast.error(t('quickAccess.fillNoTarget'));
         return;
       }
@@ -279,15 +288,16 @@ const QuickAccessPanel: React.FC = () => {
         credential,
         app: status.data.target_app ?? t('quickAccess.fillUnknownApp'),
         title: status.data.target_title ?? '',
+        snapshotId: status.data.snapshot_id,
       });
     },
     [t],
   );
 
   const fillInTarget = useCallback(
-    async (credential: Credential) => {
+    async (credential: Credential, snapshotId: string) => {
       const doFill = async (): Promise<ApiResponse<DesktopFillResult> | null> => {
-        const res = await personaAPI.desktopFillCredential(credential.id, true);
+        const res = await personaAPI.desktopFillCredential(credential.id, true, snapshotId);
         if (res.success) return res;
         if (res.error_code === 'REAUTH_REQUIRED') {
           if (await reauth.requestReauth()) return doFill();
@@ -295,6 +305,16 @@ const QuickAccessPanel: React.FC = () => {
         }
         if (res.error_code === 'SERVICE_LOCKED') {
           toast.error(t('common.serviceLocked'));
+          return null;
+        }
+        // 确认绑定（P1）：确认后目标被换/被丢的在途请求——如实说原因，
+        // 提示重新走确认流，绝不复用旧确认
+        if (res.error_code === 'FILL_TARGET_CHANGED') {
+          toast.error(t('quickAccess.fillTargetChanged'));
+          return null;
+        }
+        if (res.error_code === 'FILL_TARGET_DISCARDED') {
+          toast.error(t('quickAccess.fillTargetDiscarded'));
           return null;
         }
         toast.error(res.error ?? t('quickAccess.fillFailed'));
@@ -337,7 +357,7 @@ const QuickAccessPanel: React.FC = () => {
       } else if (event.key === 'Enter') {
         const pending = fillConfirm;
         setFillConfirm(null);
-        void fillInTarget(pending.credential);
+        if (pending) void fillInTarget(pending.credential, pending.snapshotId);
       }
       return;
     }
@@ -551,7 +571,7 @@ const QuickAccessPanel: React.FC = () => {
                 onClick={() => {
                   const pending = fillConfirm;
                   setFillConfirm(null);
-                  if (pending) void fillInTarget(pending.credential);
+                  if (pending) void fillInTarget(pending.credential, pending.snapshotId);
                 }}
                 className="rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-3 py-1.5"
               >

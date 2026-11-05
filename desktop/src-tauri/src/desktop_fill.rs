@@ -63,6 +63,10 @@ pub struct FillTarget {
     pub window_class: String,
     /// 捕获时刻目标进程可执行文件完整路径（指纹三要素之三；查不到就不建目标）
     pub exe_path: String,
+    /// 捕获时生成的快照标识（P1 确认绑定）：用户确认时前端携带此 id，
+    /// 注入命令在异步解密（在途窗口）完成后按 id 与当前槽位比对——
+    /// 不一致/槽位已空一律拒绝，在途请求绝不转投重新捕获的新目标。
+    pub snapshot_id: String,
 }
 
 /// 单个候选输入框的状态（枚举产出，分类与逐控件重验证共用）。
@@ -93,6 +97,51 @@ pub struct ClassifiedFields {
     pub username_hwnd: Option<isize>,
     /// 必填：没有合格的 ES_PASSWORD 框时 `classify_fields` 整体返回 None
     pub password_hwnd: isize,
+}
+
+/// 确认绑定拒绝原因（P1 收紧：确认绑定到具体快照，在途请求不得转投新目标）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmBindRejection {
+    /// 请求未携带 snapshot_id（协议不符/旧前端）——确认面协议错误优先报出
+    SnapshotRequired,
+    /// 槽位为空：浮窗已收起/目标已被清（隐藏即丢弃）——携旧 id 的在途请求如实拒绝
+    TargetDiscarded,
+    /// 槽位已被新一轮捕获替换：确认 A 之后浮窗重新捕获了 B——携 A 的 id 拒绝，不注入 B
+    TargetChanged,
+}
+
+/// 把「用户确认」绑定到具体快照（P1 收紧，平台无关纯函数）。
+///
+/// 命令层在异步解密（在途窗口）完成后、注入前调用：请求必须携带捕获时
+/// 生成的 `snapshot_id`，且与**当前槽位**一致才放行。绑定成功返回的是被
+/// 确认的那份快照的克隆（命令层随后对该快照做指纹重验证后注入——注入
+/// 目标因此与用户确认的目标一一对应，而不是「解密完成那一刻的槽位」）：
+/// - `requested` 缺失 → [`ConfirmBindRejection::SnapshotRequired`]；
+/// - 槽位已空（浮窗收起清槽/失效清槽）→ [`ConfirmBindRejection::TargetDiscarded`]；
+/// - 槽位已是别的快照（确认后重新唤起浮窗捕获了新目标）→
+///   [`ConfirmBindRejection::TargetChanged`]——绝不转投新目标。
+pub fn bind_confirmed_snapshot(
+    slot: Option<&FillTarget>,
+    requested_snapshot_id: Option<&str>,
+) -> Result<FillTarget, ConfirmBindRejection> {
+    let Some(requested) = requested_snapshot_id else {
+        return Err(ConfirmBindRejection::SnapshotRequired);
+    };
+    let Some(target) = slot else {
+        return Err(ConfirmBindRejection::TargetDiscarded);
+    };
+    if target.snapshot_id != requested {
+        return Err(ConfirmBindRejection::TargetChanged);
+    }
+    Ok(target.clone())
+}
+
+/// 捕获时生成快照标识（P1 确认绑定）：UUID v4，唯一标识一份捕获。
+/// 非 Windows 编译单元里没有捕获路径（槽位恒空），保留此函数供平台
+/// 无关的绑定语义测试与未来平台实现使用。
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn new_snapshot_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 /// 字段分类（平台无关，纯函数可测）。
@@ -190,6 +239,9 @@ pub struct FillTargetStatus {
     pub target_title: Option<String>,
     /// 目标应用可执行文件名（如 "notepad.exe"；确认面展示用）
     pub target_app: Option<String>,
+    /// 当前有效快照的标识（P1 确认绑定）：确认面捕获此 id，注入请求
+    /// 必须原样带回——后端按它把确认绑定到具体快照（无目标/已失效为 null）
+    pub snapshot_id: Option<String>,
 }
 
 
@@ -277,6 +329,7 @@ pub mod win {
                 pid,
                 window_class,
                 exe_path,
+                snapshot_id: super::new_snapshot_id(),
             })
         }
     }
@@ -805,6 +858,7 @@ pub mod win {
                     pid,
                     window_class: window_class_name(self.top),
                     exe_path: process_image_path(pid),
+                    snapshot_id: super::super::new_snapshot_id(),
                 }
             }
         }
@@ -999,6 +1053,7 @@ mod win_tests {
             pid: real_pid,
             window_class: class.clone(),
             exe_path: exe.clone(),
+            snapshot_id: "test-own-window-snapshot".to_string(),
         };
         assert!(!validate_target(&own, real_pid), "own-process window must be rejected");
 
@@ -1146,5 +1201,82 @@ mod nonwin_tests {
         assert_eq!(c.password_hwnd, 13);
         // 空目标
         assert!(classify_fields(&[]).is_none());
+    }
+}
+
+/// P1 确认绑定快照（平台无关纯函数，两平台共享同一套语义测试）：
+/// 确认必须绑定到捕获时的具体快照——确认 A 后浮窗重新捕获 B、浮窗收起
+/// 清槽、请求缺 snapshot_id，三种在途请求都要如实拒绝，不得转投新目标。
+#[cfg(test)]
+mod confirm_binding_tests {
+    use super::{bind_confirmed_snapshot, ConfirmBindRejection, FillTarget};
+
+    fn target(id: &str, hwnd: isize) -> FillTarget {
+        FillTarget {
+            hwnd,
+            title: format!("login window {id}"),
+            pid: 4242,
+            window_class: "Notepad".to_string(),
+            exe_path: "C:\\Windows\\notepad.exe".to_string(),
+            snapshot_id: id.to_string(),
+        }
+    }
+
+    /// 请求缺 snapshot_id：确认面协议错误，优先如实报出
+    #[test]
+    fn request_without_snapshot_id_is_rejected() {
+        let slot = target("snap-a", 1);
+        assert_eq!(
+            bind_confirmed_snapshot(Some(&slot), None),
+            Err(ConfirmBindRejection::SnapshotRequired)
+        );
+        assert_eq!(
+            bind_confirmed_snapshot(None, None),
+            Err(ConfirmBindRejection::SnapshotRequired)
+        );
+    }
+
+    /// 隐藏即丢弃：浮窗收起清槽后，携旧 id 的在途请求拒绝
+    #[test]
+    fn cleared_slot_discards_inflight_confirmation() {
+        assert_eq!(
+            bind_confirmed_snapshot(None, Some("snap-a")),
+            Err(ConfirmBindRejection::TargetDiscarded)
+        );
+    }
+
+    /// 确认 A → 浮窗重新捕获 B：携 A 的 id 的在途请求拒绝，绝不转投 B
+    #[test]
+    fn recaptured_target_rejects_stale_confirmation() {
+        let a = target("snap-a", 1);
+        let b = target("snap-b", 2);
+        let rejection = bind_confirmed_snapshot(Some(&b), Some(&a.snapshot_id));
+        assert_eq!(rejection, Err(ConfirmBindRejection::TargetChanged));
+        // 拒绝路径不返回任何可注入目标（类型层面就无法把 B 误当返回值用）
+        assert_ne!(b.snapshot_id, a.snapshot_id);
+    }
+
+    /// id 与当前槽位一致：放行并绑定到被确认的那份快照
+    #[test]
+    fn matching_snapshot_binds_confirmation_to_that_target() {
+        let a = target("snap-a", 1);
+        let bound = bind_confirmed_snapshot(Some(&a), Some("snap-a")).expect("must bind");
+        assert_eq!(bound, a);
+        assert_eq!(bound.snapshot_id, "snap-a");
+        assert_eq!(bound.hwnd, 1);
+    }
+
+    /// 同一槽位先后两份快照：只有当前快照的 id 放行，前一份的 id 拒绝
+    #[test]
+    fn only_current_snapshot_id_is_accepted() {
+        let current = target("snap-b", 2);
+        assert_eq!(
+            bind_confirmed_snapshot(Some(&current), Some("snap-b")).map(|t| t.snapshot_id),
+            Ok("snap-b".to_string())
+        );
+        assert_eq!(
+            bind_confirmed_snapshot(Some(&current), Some("snap-a")),
+            Err(ConfirmBindRejection::TargetChanged)
+        );
     }
 }

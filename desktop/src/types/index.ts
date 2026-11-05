@@ -12,6 +12,9 @@
  * 另一台设备已抢先轮换）→ 提示同步状态已更新，请重试轮换。
  * ITEM_PASSWORD_REQUIRED / ITEM_PASSWORD_WRONG：钱包条目独立密码守卫
  * （reveal 种子材料缺参/不匹配）→ RevealSecretButton 内联追加密码输入。
+ * FILL_TARGET_SNAPSHOT_REQUIRED / FILL_TARGET_DISCARDED / FILL_TARGET_CHANGED：
+ * 桌面填充确认绑定（P1）——请求缺 snapshot_id / 确认后目标已丢弃（浮窗
+ * 收起清槽）/ 确认后目标被重新捕获替换 → 如实提示重新走确认流。
  */
 export type ApiErrorCode =
   | 'REAUTH_REQUIRED'
@@ -22,7 +25,10 @@ export type ApiErrorCode =
   | 'TRAVEL_MODE_ACTIVE'
   | 'CONCURRENT_CONFLICT'
   | 'ITEM_PASSWORD_REQUIRED'
-  | 'ITEM_PASSWORD_WRONG';
+  | 'ITEM_PASSWORD_WRONG'
+  | 'FILL_TARGET_SNAPSHOT_REQUIRED'
+  | 'FILL_TARGET_DISCARDED'
+  | 'FILL_TARGET_CHANGED';
 
 export interface ApiResponse<T> {
   success: boolean;
@@ -313,6 +319,8 @@ export interface FillTargetStatus {
   target_title: string | null;
   /** 目标应用可执行文件名（如 "notepad.exe"；确认面展示用） */
   target_app: string | null;
+  /** 当前有效快照标识（P1 确认绑定）：注入请求必须原样带回 */
+  snapshot_id: string | null;
 }
 
 /** 桌面填充注入结果（desktop_fill_credential 命令响应；snake_case 逐字对齐） */
