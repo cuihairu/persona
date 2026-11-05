@@ -57,16 +57,31 @@ write**: alive, still owned by the captured root window, same pid, class
 visible/enabled/not-read-only for both fields).
 
 Win32 checks are not atomic — a small race window between revalidation and
-`SendMessageW` remains. The residual risk is mitigated by the **explicit
-user confirmation gate**: the floating window shows the target app's
-executable name and window title, and the fill command (`desktop_fill_credential`)
-rejects any call without `confirmed = true`. There is no silent injection
-path; a mis-identified target is visible to the user before Enter.
+`SendMessageW` remains (per-control revalidation right before each write
+shrinks it; it cannot be eliminated). The residual risk is mitigated by the
+**explicit user confirmation gate, bound to the specific capture**: the
+floating window shows the target app's executable name and window title,
+and the fill command (`desktop_fill_credential`) rejects any call without
+`confirmed = true` **and** the `snapshot_id` issued at capture time. After
+the async decryption (the in-flight window), the backend re-checks the id
+against the current slot under lock: a re-captured target returns
+`FILL_TARGET_CHANGED`, a cleared target (floating window hidden) returns
+`FILL_TARGET_DISCARDED` — an in-flight request is never redirected to a
+newly current target; it injects only into the window the user actually
+confirmed (whose fingerprint is revalidated once more before the write).
+A mis-identified target is visible to the user before Enter. One platform
+limit remains honest here: if the *same process* recreates a window with
+the same title/class/exe and the HWND *value* is reused, Win32 cannot
+distinguish it from the captured target — the write then lands inside the
+same process the user confirmed, backed by the confirmation face.
 
 The ready state shown in the floating window reflects the _validated_ state:
 `fill_target_status` revalidates the slot (invalid targets are dropped
-immediately), and hiding the quick access window discards the captured
-target entirely.
+immediately) and now also carries the snapshot id for the confirmation
+flow. Hiding the quick access window clears the captured target (toggle
+hide/close paths); combined with snapshot binding this means in-flight
+confirmations from before the hide are rejected (`FILL_TARGET_DISCARDED`)
+rather than silently fulfilled later.
 
 ## Secrets hygiene
 
@@ -86,14 +101,24 @@ target entirely.
   member, `cargo test --features fill-test-host -p persona-fill-test
 --test desktop_fill_cross_process`):
   a separate target process (`fill-test-host` bin) is injected into; covers
-  successful ES_PASSWORD injection, plain-edit-only rejection, same-title
-  decoy-process rejection, and destroy/recreate race rejection. It must run
+  successful ES_PASSWORD injection (verified by same-process read-back
+  inside the target), plain-edit-only rejection, same-title decoy-process
+  rejection, destroy/rebuild rejection completed *before* the injection,
+  and a genuine **in-flight** race (a race hook in the target destroys and
+  rebuilds the window while the injection request is mid-flight — the fill
+  must be rejected and no secret may land in the rebuilt window). A
+  same-process same-fingerprint HWND-value reuse cannot be distinguished
+  by the platform and is asserted as such (values may land inside the same
+  host process), not claimed as rejection. It must run
   in an interactive desktop session (SSH sessions report no visible windows
-  and no foreground window). Platform note (measured on Windows Server 2022,
-  2026-11-06): a cross-process `WM_GETTEXT`/`WM_GETTEXTLENGTH` on an
-  `ES_PASSWORD` edit returns an empty string even after a successful
-  cross-process `WM_SETTEXT` — the OS hides password text from other
-  processes' read-back. The suite therefore verifies password injection via
+  and no foreground window). Platform note (observed on Windows Server 2022,
+  2026-11-06 — recorded as an observation, not asserted as a universal
+  Windows invariant): on that system a cross-process
+  `WM_GETTEXT`/`WM_GETTEXTLENGTH` on an `ES_PASSWORD` edit returned an
+  empty string even after a successful cross-process `WM_SETTEXT`. The
+  suite logs the observed value instead of hard-asserting emptiness; the
+  success criterion for password injection is the target process's
+  same-process read-back. The suite therefore verifies password injection via
   same-process read-back (`fill-test-host` `readback` command) plus
   cross-process `EM_GETPASSWORDCHAR`/style assertions; the plain-edit
   cross-process read-back assertion is unchanged.
