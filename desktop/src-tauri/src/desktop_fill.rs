@@ -169,7 +169,7 @@ pub mod win {
         CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
         OpenClipboard, SetClipboardData,
     };
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
     use windows::Win32::System::Ole::CF_UNICODETEXT;
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -317,10 +317,17 @@ pub mod win {
         }
     }
 
-    /// 剪贴板备份 → 覆写为密文 → 执行 `paste` 闭包 → 恢复备份。
-    /// 密文在剪贴板的驻留只覆盖闭包执行期；恢复失败如实返回警告（不静默
-    /// ——用户剪贴板里留着密码是事故）。备份前非文本内容（文件/位图）：
-    /// 恢复不了原文，结束时覆写为空串，由返回值里的警告说明。
+    /// 剪贴板备份 → 覆写为明文 → 执行 `paste` 闭包 → 恢复备份。
+    ///
+    /// **保密边界（如实声明）**：`value` 是明文；系统剪贴板是同桌面会话
+    /// 全局共享的，驻留期间任何进程都可读取，本函数只缩短暴露窗口，
+    /// 不提供保密保证。恢复失败如实返回警告（不静默——用户剪贴板里
+    /// 留着密码是事故）。备份前非文本内容（文件/位图）：恢复不了原文，
+    /// 结束时覆写为空串，由返回值里的警告说明。闭包 panic 同样先恢复
+    /// 剪贴板再传播（catch_unwind 包裹）。
+    ///
+    /// 当前**未接入生产路径**（生产只走 WM_SETTEXT）；启用前须在 UI/文档
+    /// 明确披露上述边界。
     pub fn with_clipboard_paste<T>(
         value: &str,
         paste: impl FnOnce() -> T,
@@ -341,9 +348,12 @@ pub mod win {
                         if ptr.is_null() {
                             return None;
                         }
-                        // CF_UNICODETEXT 是 NUL 结尾 UTF-16；长度不可知，
-                        // 靠 NUL 扫描（上限 1M 字符防失控）
-                        let wide = std::slice::from_raw_parts(ptr as *const u16, 1 << 20);
+                        // CF_UNICODETEXT 是 NUL 结尾 UTF-16。分配边界以
+                        // GlobalSize 实测为准（此前盲取 1M 字符切片存在
+                        // 越界读风险），NUL 扫描上限 1M 字符防失控。
+                        let total_chars = (GlobalSize(gh) / 2) as usize;
+                        let scan_limit = total_chars.min(1 << 20);
+                        let wide = std::slice::from_raw_parts(ptr as *const u16, scan_limit);
                         let mut n = 0usize;
                         while n < wide.len() && wide[n] != 0 {
                             n += 1;
@@ -359,15 +369,22 @@ pub mod win {
             let closed = CloseClipboard().map_err(|e| format!("CloseClipboard failed: {e}"));
             let set = closed.and_then(|()| set_clipboard_text(value));
 
-            let paste_result = set.map(|()| paste());
+            // catch_unwind：闭包 panic 不能绕过剪贴板恢复（panic 信息在
+            // 恢复之后按 ResumeUnwind 语义重新抛出）
+            let paste_result = set.map(|()| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(paste))
+            });
 
             // 恢复：写回备份（无文本备份则写空串，把密文清掉）
             let restore_warning = restore_clipboard(backup.as_deref().unwrap_or(""));
 
-            match (paste_result, restore_warning) {
-                (Ok(v), None) => Ok((v, None)),
-                (Ok(v), Some(w)) => Ok((v, Some(w))),
-                (Err(e), _) => Err(e),
+            match paste_result {
+                Err(panic_payload) => std::panic::resume_unwind(panic_payload),
+                Ok(Ok(v)) => match restore_warning {
+                    None => Ok((v, None)),
+                    Some(w) => Ok((v, Some(w))),
+                },
+                Ok(Err(e)) => Err(e),
             }
         }
     }
@@ -696,13 +713,36 @@ mod win_tests {
         seed_clipboard("").expect("clear clipboard");
         let (_, _) = with_clipboard_paste("GHOST", || ()).expect("paste roundtrip 2");
         assert_eq!(read_clipboard_text(), "", "no prior content must leave no residue");
+
+        // 闭包 panic：恢复仍要发生，panic 在恢复之后传播
+        seed_clipboard("PREV-PANIC").expect("seed clipboard 2");
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_clipboard_paste("PANIC-SECRET", || panic!("boom in paste closure"));
+        }));
+        assert!(panicked.is_err(), "closure panic must propagate after restore");
+        assert_eq!(read_clipboard_text(), "PREV-PANIC", "panic must not bypass clipboard restore");
     }
 
+    /// 本机常有剪贴板监听进程短暂持有剪贴板（OpenClipboard 瞬时失败时
+    /// `read_clipboard_text_once` 静默返回空串）；读回断言先小间隔重试，
+    /// 把瞬时竞争与真实空剪贴板区分开（重试耗尽仍为空按空处理）。
     fn read_clipboard_text() -> String {
+        let mut last = String::new();
+        for _ in 0..20 {
+            let text = read_clipboard_text_once();
+            if !text.is_empty() {
+                return text;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        last
+    }
+
+    fn read_clipboard_text_once() -> String {
         use windows::Win32::System::DataExchange::{
             CloseClipboard, GetClipboardData, OpenClipboard,
         };
-        use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+        use windows::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
         use windows::Win32::System::Ole::CF_UNICODETEXT;
         unsafe {
             if OpenClipboard(None).is_err() {
@@ -713,17 +753,19 @@ mod win_tests {
                 if h.is_invalid() {
                     return None;
                 }
-                let ptr = GlobalLock(windows::Win32::Foundation::HGLOBAL(h.0));
+                let gh = windows::Win32::Foundation::HGLOBAL(h.0);
+                let ptr = GlobalLock(gh);
                 if ptr.is_null() {
                     return None;
                 }
-                let wide = std::slice::from_raw_parts(ptr as *const u16, 1 << 20);
+                let scan_limit = ((GlobalSize(gh) / 2) as usize).min(1 << 20);
+                let wide = std::slice::from_raw_parts(ptr as *const u16, scan_limit);
                 let mut n = 0usize;
                 while n < wide.len() && wide[n] != 0 {
                     n += 1;
                 }
                 let text = String::from_utf16_lossy(&wide[..n]);
-                let _ = GlobalUnlock(windows::Win32::Foundation::HGLOBAL(h.0));
+                let _ = GlobalUnlock(gh);
                 Some(text)
             })();
             let _ = CloseClipboard();
