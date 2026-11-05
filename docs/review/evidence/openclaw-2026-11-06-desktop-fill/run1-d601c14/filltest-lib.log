@@ -1,0 +1,24 @@
+warning: variable does not need to be mutable
+    --> src\desktop_fill.rs:1049:13
+     |
+1049 |         let mut last = String::new();
+     |             ----^^^^
+     |             |
+     |             help: remove this `mut`
+     |
+     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: `persona-desktop` (lib test) generated 1 warning (run `cargo fix --lib -p persona-desktop --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running unittests src\lib.rs (target\debug\deps\persona_desktop-97d93c6127e2e095.exe)
+
+running 6 tests
+test desktop_fill::win_tests::classification_guards_ineligible_fields ... ok
+test desktop_fill::win_tests::plain_only_window_is_rejected_no_password_guessing ... ok
+test desktop_fill::win_tests::revalidate_field_rejects_gone_and_role_swapped_fields ... ok
+test desktop_fill::win_tests::settext_injection_roundtrip_on_real_window ... ok
+test desktop_fill::win_tests::target_validation_guards_hwnd_reuse ... ok
+test desktop_fill::win_tests::clipboard_backup_restore_roundtrip ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 1.20s
+

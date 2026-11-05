@@ -1,0 +1,19 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.38s
+     Running unittests src\lib.rs (target\debug\deps\persona_desktop-97d93c6127e2e095.exe)
+
+running 12 tests
+test desktop_fill::confirm_binding_tests::cleared_slot_discards_inflight_confirmation ... ok
+test desktop_fill::confirm_binding_tests::matching_snapshot_binds_confirmation_to_that_target ... ok
+test desktop_fill::confirm_binding_tests::only_current_snapshot_id_is_accepted ... ok
+test desktop_fill::confirm_binding_tests::recaptured_target_rejects_stale_confirmation ... ok
+test desktop_fill::confirm_binding_tests::request_without_snapshot_id_is_rejected ... ok
+test desktop_fill::win_tests::classification_guards_ineligible_fields ... ok
+test desktop_fill::win_tests::plain_only_window_is_rejected_no_password_guessing ... ok
+test desktop_fill::win_tests::target_validation_guards_hwnd_reuse ... ok
+test desktop_fill::win_tests::settext_injection_roundtrip_on_real_window ... ok
+test desktop_fill::win_tests::revalidate_field_rejects_gone_and_role_swapped_fields ... ok
+test desktop_fill::win_tests::clipboard_backup_restore_roundtrip ... ok
+test desktop_fill::win_tests::clipboard_paste_warns_when_non_text_content_is_cleared ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 251 filtered out; finished in 2.31s
+
