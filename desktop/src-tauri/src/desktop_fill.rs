@@ -228,7 +228,7 @@ pub fn execute_fill(
     username: &str,
     password: &str,
     self_pid: u32,
-    _slot_recheck: &dyn Fn() -> Result<(), ConfirmBindRejection>,
+    slot_recheck: &dyn Fn() -> Result<(), ConfirmBindRejection>,
 ) -> Result<(bool, bool, String), FillError> {
     if !win::validate_target(target, self_pid) {
         return Err(FillError::Rejected("CAPTURED_TARGET_INVALID".to_string()));
@@ -246,9 +246,19 @@ pub fn execute_fill(
             target.title
         )));
     };
+    let aborted = |reason, username_filled: bool, password_filled: bool| FillError::Aborted {
+        reason,
+        username_filled,
+        password_filled,
+        title: target.title.clone(),
+    };
     let mut username_filled = false;
     if let Some(user_hwnd) = classified.username_hwnd {
         if !username.is_empty() {
+            // 快照有效性重查：绑定比较之后注入在锁外执行，username 写入前
+            // 槽位可能已被清（浮窗收起）或被新一轮捕获替换——失效即中止，
+            // 不把已确认的凭据写进非确认目标
+            slot_recheck().map_err(|reason| aborted(reason, false, false))?;
             win::revalidate_field(user_hwnd, target.hwnd, target.pid, false)
                 .map_err(FillError::Rejected)?;
             username_filled = win::inject_settext(user_hwnd, username).is_ok();
@@ -256,6 +266,10 @@ pub fn execute_fill(
     }
     // 密码框写入前再做一次逐控件重验证：枚举到写入之间子 HWND 可被
     // 销毁复用，样式/归属可能已变（见模块头"目标可信模型"第 3 条）。
+    // 同样先重查快照有效性：第一字段写入完成到此刻之间槽位仍可能被清/换
+    //（可控制时序的真机用例：清槽钩子落在第一字段写入之后）——失效即
+    // 中止剩余写入，已写入的字段以 Aborted 如实报部分完成。
+    slot_recheck().map_err(|reason| aborted(reason, username_filled, false))?;
     win::revalidate_field(classified.password_hwnd, target.hwnd, target.pid, true)
         .map_err(FillError::Rejected)?;
     let password_filled = win::inject_settext(classified.password_hwnd, password).is_ok();
