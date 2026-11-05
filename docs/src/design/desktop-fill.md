@@ -64,11 +64,17 @@ floating window shows the target app's executable name and window title,
 and the fill command (`desktop_fill_credential`) rejects any call without
 `confirmed = true` **and** the `snapshot_id` issued at capture time. After
 the async decryption (the in-flight window), the backend re-checks the id
-against the current slot under lock: a re-captured target returns
-`FILL_TARGET_CHANGED`, a cleared target (floating window hidden) returns
-`FILL_TARGET_DISCARDED` — an in-flight request is never redirected to a
-newly current target; it injects only into the window the user actually
-confirmed (whose fingerprint is revalidated once more before the write).
+against the current slot under lock — this bind-compare happens **before
+any injection**: a re-captured target returns `FILL_TARGET_CHANGED`, a
+cleared target (floating window hidden) returns `FILL_TARGET_DISCARDED`.
+The injection itself runs outside the lock (slow FFI must not hold it), so
+the injection loop **rechecks slot validity before every field write** with
+the same bind semantics: a discard or re-capture mid-fill aborts the
+remaining writes with the same codes, and fields already written are
+reported honestly as partial completion — nothing is ever redirected into
+a newly current target; the request injects only into the window the user
+actually confirmed (whose fingerprint is revalidated once more before each
+write).
 A mis-identified target is visible to the user before Enter. One platform
 limit remains honest here: if the _same process_ recreates a window with
 the same title/class/exe and the HWND _value_ is reused, Win32 cannot
@@ -119,7 +125,10 @@ rather than silently fulfilled later.
   suite logs the observed value instead of hard-asserting emptiness; the
   success criterion for password injection is the target process's
   same-process read-back. The suite therefore verifies password injection via
-  same-process read-back (`fill-test-host` `readback` command) plus
+  same-process read-back (`fill-test-host` `readback` command — frames are
+  length-prefixed per field, `READBACK <unit-count>:<hex> <unit-count>:<hex>`
+  with empty fields carried as `0:`, so single-field residue can never be
+  silently parsed as double-empty) plus
   cross-process `EM_GETPASSWORDCHAR`/style assertions; the plain-edit
   cross-process read-back assertion is unchanged.
 - `desktop/src-tauri/src/quick_access.rs` — target capture hook in the
