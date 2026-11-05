@@ -166,10 +166,10 @@ fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
     }
 }
 
-/// UTF-16 hex（每单元 4 位小写）→ String（fill-test-host readback 打回格式）
+/// UTF-16 hex（每单元 4 位小写十六进制）→ String（fill-test-host readback 打回格式）
 fn decode_utf16_hex(hex: &str) -> String {
-    let units: Vec<u16> = (0..hex.len() / 2)
-        .map(|i| u16::from_str_radix(&hex[2 * i..2 * i + 2], 16).expect("hex unit"))
+    let units: Vec<u16> = (0..hex.len() / 4)
+        .map(|i| u16::from_str_radix(&hex[4 * i..4 * i + 4], 16).expect("hex unit"))
         .collect();
     String::from_utf16_lossy(&units)
 }
@@ -227,11 +227,16 @@ fn cross_process_password_field_injection_succeeds() {
     // 平台限制实录（2026-11-06 openclaw Server 2022 实测）：跨进程
     // WM_GETTEXT 读 ES_PASSWORD 控件恒返回空串（WM_GETTEXTLENGTH 同）——
     // WM_SETTEXT 写入成功但读被系统隐藏，跨进程读回不能用于验证密码注入
-    //（这也正是密码框存在的安全意义）。这里如实打印观察值留痕。
+    //（这也正是密码框存在的安全意义）。这里断言观察值恒为空——既是平台
+    // 行为的回归守卫，也如实记录"跨进程读回不能用于验证密码注入"的原因。
     let cross_read = read_field_text(fields[1].hwnd);
+    assert_eq!(
+        cross_read, "",
+        "cross-process WM_GETTEXT on ES_PASSWORD must be hidden by the OS (measured on Server 2022)"
+    );
     eprintln!(
         "cross-process WM_GETTEXT on ES_PASSWORD read {cross_read:?} \
-         (platform restriction: empty even after successful WM_SETTEXT)"
+         (platform restriction confirmed: empty even after successful WM_SETTEXT)"
     );
 
     // 密码注入成功的决定性断言：靶进程**同进程**读回两个框——用户名与
