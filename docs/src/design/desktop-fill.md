@@ -17,11 +17,11 @@ fill (FEATURE_GAP_ANALYSIS #12).
 
 ## Injection strategy (selection)
 
-| Option | Verdict | Why |
-| --- | --- | --- |
-| **WM_SETTEXT direct write** (chosen) | Primary | No focus dependency, no synthetic keystrokes, reliable cross-process within the same desktop session; automatable for acceptance. Works only for classic Win32 EDIT controls. |
-| Clipboard relay (Ctrl+V) | Fallback, implemented | Backs apps that validate on keystroke events; clipboard is backed up before paste and restored right after, secret exposure window is the paste closure only. Not primary: cross-process focus fights the system foreground lock. |
-| UI Automation | Not built | Covers self-drawn controls, but adds `Win32_UI_Accessibility` + COM lifetime management; recorded as future extension, not stubbed. |
+| Option                               | Verdict               | Why                                                                                                                                                                                                                               |
+| ------------------------------------ | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **WM_SETTEXT direct write** (chosen) | Primary               | No focus dependency, no synthetic keystrokes, reliable cross-process within the same desktop session; automatable for acceptance. Works only for classic Win32 EDIT controls.                                                     |
+| Clipboard relay (Ctrl+V)             | Fallback, implemented | Backs apps that validate on keystroke events; clipboard is backed up before paste and restored right after, secret exposure window is the paste closure only. Not primary: cross-process focus fights the system foreground lock. |
+| UI Automation                        | Not built             | Covers self-drawn controls, but adds `Win32_UI_Accessibility` + COM lifetime management; recorded as future extension, not stubbed.                                                                                               |
 
 ## Field selection
 
