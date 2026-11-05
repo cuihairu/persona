@@ -1,10 +1,18 @@
-# cargo-audit config: unfixable advisories as of 2026-11-03
+# cargo-audit config: unfixable advisories as of 2026-11-03 (rationale corrected 2026-11-05)
 # RUSTSEC-2023-0071 (rsa Marvin Attack): no fixed release; rsa 0.9/0.10-rc both affected.
 #   rsa is used only for ssh-key rsa-sha2 signing of local agent keys, not a network-facing decrypt path.
-# RUSTSEC-2026-0387 (crypto-bigint timing variability): fix requires crypto-bigint >=0.7.6,
-#   not reachable while rsa stays on 0.9/0.10-rc. Re-check when rsa ships a fixed release.
+# RUSTSEC-2026-0387 (crypto-bigint timing variability): patched = >=0.7.6. The tree's own
+#   crypto-bigint consumers moved to 0.7.x (k256/p256 on elliptic-curve 0.14; lock now 0.7.10).
+#   The residual crypto-bigint 0.5.5 instance is reachable ONLY via
+#   alloy-consensus -> k256 ^0.13 (non-optional dep in every alloy-consensus 2.x release,
+#   including 2.5.0, the latest as of 2026-09) -> elliptic-curve 0.13 -> crypto-bigint 0.5.5.
+#   k256 0.14 (elliptic-curve 0.14 / crypto-bigint 0.7) exists upstream (2026-07), but no
+#   alloy release adopts it. Clearing this ID therefore requires an alloy release on k256 0.14,
+#   or replacing alloy-consensus in the wallet signing path (user-deferred class of change).
+#   Re-check when alloy ships a k256-0.14-based release. Same chain holds in the
+#   desktop/src-tauri and fuzz workspaces (their audits run per-workspace without this file).
 [advisories]
 ignore = [
     "RUSTSEC-2023-0071", # rsa 0.9.10, 0.10.0-rc.18: no fix available
-    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: no semver-compatible fix
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: locked by alloy-consensus -> k256 ^0.13 (upstream)
 ]
