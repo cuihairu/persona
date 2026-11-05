@@ -124,9 +124,11 @@ impl HostProcess {
         }
     }
 
-    /// 靶进程**同进程**读回两个 Edit 的文本（UTF-16 hex → String）。
+    /// 靶进程**同进程**读回两个 Edit 的文本（长度前缀协议帧 → 解码）。
     /// 密码断言的唯一可靠通道：Windows 跨进程 WM_GETTEXT 读 ES_PASSWORD
-    /// 控件恒返回空串（平台限制，见套件头注释）。
+    /// 控件恒返回空串（平台限制，见套件头注释）。帧协议保证空字段被
+    /// 长度前缀如实携带（`0:`）——单字段残留不会被吞成双空；帧残缺/
+    /// 前缀非法直接报协议错，绝不静默当全空。
     fn readback(&mut self) -> (String, String) {
         writeln!(self.stdin, "readback").expect("write readback");
         self.stdin.flush().expect("flush stdin");
@@ -137,13 +139,8 @@ impl HostProcess {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             {
                 Ok(line) if line.starts_with("READBACK") => {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    // 在途竞态用例的预期结局：宿主销毁重建后两框皆为空——
-                    // 打回 `READBACK` / `READBACK  `（不足 3 段按全空处理）
-                    if parts.len() < 3 {
-                        return (String::new(), String::new());
-                    }
-                    return (decode_utf16_hex(parts[1]), decode_utf16_hex(parts[2]));
+                    return persona_fill_test::parse_readback_frame(&line)
+                        .expect("well-formed READBACK frame");
                 }
                 Ok(_) => continue,
                 Err(RecvTimeoutError::Timeout) => panic!("host did not answer readback in time"),
@@ -187,14 +184,6 @@ fn snapshot_for(hwnd: isize, title: &str, pid: u32) -> FillTarget {
         exe_path: process_image_path(pid),
         snapshot_id: format!("xproc-test-{hwnd}"),
     }
-}
-
-/// UTF-16 hex（每单元 4 位小写十六进制）→ String（fill-test-host readback 打回格式）
-fn decode_utf16_hex(hex: &str) -> String {
-    let units: Vec<u16> = (0..hex.len() / 4)
-        .map(|i| u16::from_str_radix(&hex[4 * i..4 * i + 4], 16).expect("hex unit"))
-        .collect();
-    String::from_utf16_lossy(&units)
 }
 
 /// 跨进程 EM_GETPASSWORDCHAR（掩码字符元数据，非敏感、允许跨进程读）。
@@ -401,9 +390,19 @@ fn cross_process_inflight_destroy_rebuild_rejected() {
         "",
         "recreated password field must be empty — the password write must never happen after the in-flight destroy"
     );
-    // 宿主进程同进程读回交叉确认（绕开跨进程读限制，直接问宿主）
+    // 宿主进程同进程读回交叉确认（绕开跨进程读限制，直接问宿主）。
+    // 长度前缀协议下空字段被如实携带（`0:`）——这里的两个断空是决定性
+    // 的零残留证明：任何单字段残留（哪怕 username 空 + password 非空）
+    // 都会如实在帧里出现并被断言拦下，不会被旧协议的「不足 3 段按双空」
+    // 吞掉。
     let (host_user, host_pwd) = host.readback();
-    assert_ne!(host_user, "race@example.com", "recreated window must not carry the injected username");
-    assert_ne!(host_pwd, "hunter2", "recreated window must not carry the injected password");
+    assert_eq!(
+        host_user, "",
+        "recreated window must not carry the injected username (decisive zero-residue)"
+    );
+    assert_eq!(
+        host_pwd, "",
+        "recreated window must not carry the injected password (decisive zero-residue)"
+    );
     host.quit();
 }
