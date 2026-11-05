@@ -38,9 +38,9 @@ fn main() {
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-        PostMessageW, PostQuitMessage, RegisterClassW, ES_AUTOHSCROLL, ES_PASSWORD, MSG,
-        WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_GETTEXT, WM_GETTEXTLENGTH,
-        WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, ES_AUTOHSCROLL,
+        ES_PASSWORD, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_DESTROY, WM_GETTEXT,
+        WM_GETTEXTLENGTH, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
     };
 
     static TITLE: OnceLock<String> = OnceLock::new();
