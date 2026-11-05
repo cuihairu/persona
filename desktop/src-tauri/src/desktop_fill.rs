@@ -213,18 +213,30 @@ pub mod win {
     /// 标题比对用前缀（登录对话框标题会随状态变化，如"登录 - 已断开"），
     /// 空标题窗口只验证存活 + pid。
     pub fn validate_target(target: &FillTarget, self_pid: u32) -> bool {
+        validate_snapshot(target.hwnd, &target.title, target.pid, self_pid)
+    }
+
+    /// 验证快照语义（[`validate_target`] 的展开形态，纯参数便于测试）：
+    /// hwnd 存活、所属进程 == expected_pid、expected_pid != self_pid
+    ///（本进程的窗口永不作为注入目标）、当前标题仍是 expected_title 前缀。
+    pub fn validate_snapshot(
+        hwnd: isize,
+        expected_title: &str,
+        expected_pid: u32,
+        self_pid: u32,
+    ) -> bool {
         unsafe {
-            let hwnd = HWND(target.hwnd as *mut _);
+            let hwnd = HWND(hwnd as *mut _);
             if !IsWindow(Some(hwnd)).as_bool() {
                 return false;
             }
             let mut pid = 0u32;
             GetWindowThreadProcessId(hwnd, Some(&mut pid));
-            if pid != target.pid || pid == self_pid {
+            if pid != expected_pid || pid == self_pid {
                 return false;
             }
             let current = window_text(hwnd);
-            current.starts_with(&target.title)
+            current.starts_with(expected_title)
         }
     }
 
@@ -358,6 +370,13 @@ pub mod win {
                 (Err(e), _) => Err(e),
             }
         }
+    }
+
+    /// 测试专用：直接写入剪贴板文本（绕过备份/恢复语义，用于给
+    /// [`with_clipboard_paste`] 的闭环测试造"原有内容"）。
+    #[cfg(test)]
+    pub(crate) fn seed_clipboard(value: &str) -> Result<(), String> {
+        set_clipboard_text(value)
     }
 
     /// 写入文本到剪贴板（内部 Open/Close，可独立调用）。返回 Err 的原文
@@ -607,22 +626,17 @@ mod win_tests {
         assert_eq!(c.password_hwnd, None);
     }
 
-    /// 目标重验证：pid 不符拒绝、标题前缀不符拒绝、死句柄拒绝。
+    /// 目标重验证（真 hwnd 走 validate_snapshot）：pid 不符拒绝、
+    /// 标题前缀不符拒绝、死句柄拒绝、销毁后拒绝；validate_target 对
+    /// 本进程窗口（pid == self_pid）恒拒绝。
     #[test]
     fn target_validation_guards_hwnd_reuse() {
-        let self_pid = std::process::id();
+        use super::win::validate_snapshot;
+        let fake_other_pid = std::process::id().wrapping_add(1).max(1);
         let target =
             TestTargetWindow::create("persona fill test - validate", false).expect("create target");
 
-        // 快照 pid 乱填（=0）与真实 pid 不符 → 拒绝
-        let t_bad_pid = super::FillTarget {
-            hwnd: target.top,
-            title: "persona fill test - validate".to_string(),
-            pid: 0,
-        };
-        assert!(!validate_target(&t_bad_pid, self_pid), "mismatched pid must be rejected");
-
-        // pid + 标题都对 → 放行
+        // pid + 标题都对（把 self_pid 伪造成别的进程）→ 放行
         let real_pid = {
             let mut pid = 0u32;
             unsafe {
@@ -633,51 +647,55 @@ mod win_tests {
             }
             pid
         };
-        assert_ne!(real_pid, self_pid, "test window pid must differ (sanity)");
-        let t_ok = super::FillTarget {
+        assert!(validate_snapshot(target.top, "persona fill test - validate", real_pid, fake_other_pid),
+            "matching snapshot must pass");
+
+        // 标题前缀不一致 → 拒绝（模拟 hwnd 复用到别的窗口）
+        assert!(!validate_snapshot(target.top, "totally different window", real_pid, fake_other_pid),
+            "stale title must be rejected");
+
+        // 快照 pid 乱填（=0）与真实 pid 不符 → 拒绝
+        assert!(!validate_snapshot(target.top, "persona fill test - validate", 0, fake_other_pid),
+            "mismatched pid must be rejected");
+
+        // 死句柄 → 拒绝
+        assert!(!validate_snapshot(0xDEAD_BEEFisize, "", real_pid, fake_other_pid));
+
+        // validate_target 层：本进程窗口（pid == self_pid）恒拒绝
+        let own = super::FillTarget {
             hwnd: target.top,
             title: "persona fill test - validate".to_string(),
             pid: real_pid,
         };
-        assert!(validate_target(&t_ok, self_pid), "matching snapshot must pass");
-
-        // 标题前缀不一致 → 拒绝（模拟 hwnd 复用到别的窗口）
-        let t_other = super::FillTarget {
-            hwnd: target.top,
-            title: "totally different window".to_string(),
-            pid: real_pid,
-        };
-        assert!(!validate_target(&t_other, self_pid), "stale title must be rejected");
-
-        // 死句柄 → 拒绝
-        let t_dead = super::FillTarget {
-            hwnd: 0xDEAD_BEEFisize,
-            title: String::new(),
-            pid: real_pid,
-        };
-        assert!(!validate_target(&t_dead, self_pid));
+        assert!(!validate_target(&own, real_pid), "own-process window must be rejected");
 
         target.destroy();
-        assert!(!validate_target(&t_ok, self_pid), "destroyed window must be rejected");
+        assert!(!validate_snapshot(target.top, "persona fill test - validate", real_pid, fake_other_pid),
+            "destroyed window must be rejected");
     }
 
     /// 剪贴板备份/恢复闭环：粘贴期间密文在场、结束后原内容恢复。
     #[test]
     fn clipboard_backup_restore_roundtrip() {
-        use super::win::with_clipboard_paste;
-        // 第一轮：把 "PREV-VALUE" 放进剪贴板（作为后续轮次的"原有内容"）
-        let (_, warn) = with_clipboard_paste("PREV-VALUE", || ()).expect("seed clipboard");
-        assert!(warn.is_none(), "seeding should not warn: {warn:?}");
+        use super::win::{seed_clipboard, with_clipboard_paste};
+        // 预置"原有内容"（直接写，不走备份/恢复语义）
+        seed_clipboard("PREV-VALUE").expect("seed clipboard");
+        assert_eq!(read_clipboard_text(), "PREV-VALUE");
 
-        // 第二轮：粘贴假密文，断言闭包期间读到的是密文、结束后恢复 PREV-VALUE
+        // 粘贴假密文：断言闭包期间读到的是密文、结束后恢复 PREV-VALUE
         let seen = std::cell::RefCell::new(String::new());
-        let (_, warn2) = with_clipboard_paste("TOP-SECRET", || {
+        let (_, warn) = with_clipboard_paste("TOP-SECRET", || {
             *seen.borrow_mut() = read_clipboard_text();
         })
         .expect("paste roundtrip");
         assert_eq!(seen.borrow().as_str(), "TOP-SECRET", "secret must be on clipboard during paste");
         assert_eq!(read_clipboard_text(), "PREV-VALUE", "previous content must be restored");
-        assert!(warn2.is_none(), "restore should not warn: {warn2:?}");
+        assert!(warn.is_none(), "restore should not warn: {warn:?}");
+
+        // 无原有内容时：结束后密文被清掉（写空串），不残留
+        seed_clipboard("").expect("clear clipboard");
+        let (_, _) = with_clipboard_paste("GHOST", || ()).expect("paste roundtrip 2");
+        assert_eq!(read_clipboard_text(), "", "no prior content must leave no residue");
     }
 
     fn read_clipboard_text() -> String {
