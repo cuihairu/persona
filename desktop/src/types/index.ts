@@ -308,8 +308,11 @@ export interface QuickAccessOpenCredential {
 /** 桌面填充注入目标状态（fill_target_status 命令响应；snake_case 逐字对齐） */
 export interface FillTargetStatus {
   supported: boolean;
+  /** 已捕获且当前指纹（窗口/进程/类名/可执行文件）仍然一致的目标 */
   ready: boolean;
   target_title: string | null;
+  /** 目标应用可执行文件名（如 "notepad.exe"；确认面展示用） */
+  target_app: string | null;
 }
 
 /** 桌面填充注入结果（desktop_fill_credential 命令响应；snake_case 逐字对齐） */

@@ -712,6 +712,13 @@ export default {
     fillPartial: '部分填充到「{{target}}」——请检查剩余字段',
     fillFailed: '桌面填充失败',
     fillPasswordOnly: '桌面填充仅支持密码类型凭据',
+    fillNoTarget: '没有有效的填充目标——请先在目标应用上唤起检索浮窗',
+    fillUnknownApp: '未知应用',
+    fillConfirmTitle: '确认填充目标',
+    fillConfirmBody:
+      'Persona 将把该凭据填充到「{{app}}」（窗口「{{title}}」）。若这不是你意图的目标应用，请取消。',
+    fillConfirmButton: '填充到该应用',
+    fillCancel: '取消',
   },
   errorBoundary: {
     title: '出错了',

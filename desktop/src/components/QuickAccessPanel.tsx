@@ -92,6 +92,15 @@ const QuickAccessPanel: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [copied, setCopied] = useState<string | null>(null);
+  /**
+   * 桌面填充确认面（安全评审 P1）：注入前展示目标应用名（可执行文件名）
+   * + 窗口标题，用户显式确认才注入。null = 无待确认注入。
+   */
+  const [fillConfirm, setFillConfirm] = useState<{
+    credential: Credential;
+    app: string;
+    title: string;
+  } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef(searchCredentials);
@@ -109,6 +118,7 @@ const QuickAccessPanel: React.FC = () => {
     setIsSearching(false);
     setActiveIndex(0);
     setCopied(null);
+    setFillConfirm(null);
   }, []);
 
   // 唤醒通道：热键每次唤起都要重新探解锁态（主窗口的解锁/锁定本窗口收不到
@@ -252,15 +262,32 @@ const QuickAccessPanel: React.FC = () => {
   );
 
   /**
-   * 桌面应用内填充注入（#12）：把用户名/密码注入浮窗唤起前持有前台的
-   * 目标窗口。仅 Windows + 经典 EDIT 控件宿主 + Password 凭据（后端
-   * desktop_fill 模块如实报错，不在前端预判平台）。成功后浮窗自动收起
-   * ——焦点回到目标窗口，用户直接看到填好的字段。
+   * 桌面应用内填充注入（#12）——**两步确认流**（安全评审 P1 收紧）：
+   * 第一步（requestFill）探测注入目标并弹出确认面：浮窗展示目标应用名
+   * （可执行文件名）与窗口标题，用户显式确认后第二步才带 `confirmed=true`
+   * 调用后端注入。后端对未确认调用一律拒绝——不存在静默直写路径。
+   * 成功后浮窗自动收起——焦点回到目标窗口，用户直接看到填好的字段。
    */
+  const requestFill = useCallback(
+    async (credential: Credential) => {
+      const status = await personaAPI.fillTargetStatus();
+      if (!status.success || !status.data?.ready || !status.data.supported) {
+        toast.error(t('quickAccess.fillNoTarget'));
+        return;
+      }
+      setFillConfirm({
+        credential,
+        app: status.data.target_app ?? t('quickAccess.fillUnknownApp'),
+        title: status.data.target_title ?? '',
+      });
+    },
+    [t],
+  );
+
   const fillInTarget = useCallback(
     async (credential: Credential) => {
       const doFill = async (): Promise<ApiResponse<DesktopFillResult> | null> => {
-        const res = await personaAPI.desktopFillCredential(credential.id);
+        const res = await personaAPI.desktopFillCredential(credential.id, true);
         if (res.success) return res;
         if (res.error_code === 'REAUTH_REQUIRED') {
           if (await reauth.requestReauth()) return doFill();
@@ -302,6 +329,18 @@ const QuickAccessPanel: React.FC = () => {
   );
 
   const onKeyDown = (event: React.KeyboardEvent) => {
+    // 确认面打开时拦截键盘：Esc 取消注入确认，Enter 确认注入
+    if (fillConfirm) {
+      event.preventDefault();
+      if (event.key === 'Escape') {
+        setFillConfirm(null);
+      } else if (event.key === 'Enter') {
+        const pending = fillConfirm;
+        setFillConfirm(null);
+        void fillInTarget(pending.credential);
+      }
+      return;
+    }
     const total = flatResults.length;
     const mod = event.metaKey || event.ctrlKey;
 
@@ -332,10 +371,11 @@ const QuickAccessPanel: React.FC = () => {
       event.preventDefault();
       void openInPersona(active);
     } else if (mod && event.key.toLowerCase() === 'f') {
-      // ⌘F 桌面填充：仅 Password 凭据（其余类型后端也填不了用户名/密码）
+      // ⌘F 桌面填充：先探测目标并弹确认面（仅 Password 凭据；其余类型
+      // 后端也填不了用户名/密码）
       event.preventDefault();
       if (active.credential_type === 'Password') {
-        void fillInTarget(active);
+        void requestFill(active);
       } else {
         toast.error(t('quickAccess.fillPasswordOnly'));
       }
@@ -365,7 +405,7 @@ const QuickAccessPanel: React.FC = () => {
 
   return (
     <div
-      className="h-screen w-screen bg-white dark:bg-gray-900 flex flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700"
+      className="relative h-screen w-screen bg-white dark:bg-gray-900 flex flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700"
       onKeyDown={onKeyDown}
       data-testid="quick-access-panel"
     >
@@ -480,6 +520,47 @@ const QuickAccessPanel: React.FC = () => {
         <span data-testid="quick-access-hint-fill">{t('quickAccess.hintFill')}</span>
       </div>
 
+      {fillConfirm && (
+        <div
+          className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-10"
+          data-testid="quick-access-fill-confirm"
+        >
+          <div className="w-full max-w-sm bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              {t('quickAccess.fillConfirmTitle')}
+            </p>
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300 break-words">
+              {t('quickAccess.fillConfirmBody', {
+                app: fillConfirm.app,
+                title: fillConfirm.title,
+              })}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                data-testid="quick-access-fill-cancel"
+                onClick={() => setFillConfirm(null)}
+                className="rounded-md px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                {t('quickAccess.fillCancel')}
+              </button>
+              <button
+                type="button"
+                data-testid="quick-access-fill-confirm-button"
+                autoFocus
+                onClick={() => {
+                  const pending = fillConfirm;
+                  setFillConfirm(null);
+                  if (pending) void fillInTarget(pending.credential);
+                }}
+                className="rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-3 py-1.5"
+              >
+                {t('quickAccess.fillConfirmButton')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <ReauthModal
         isOpen={reauth.isOpen}
         error={reauth.error}

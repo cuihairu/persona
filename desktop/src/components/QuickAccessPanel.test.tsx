@@ -55,7 +55,14 @@ const mockReveal = personaAPI.revealCredentialSecret as jest.Mock;
 const mockTotp = personaAPI.getTotpCode as jest.Mock;
 const mockOpenCred = personaAPI.quickAccessOpenCredential as jest.Mock;
 const mockFill = personaAPI.desktopFillCredential as jest.Mock;
+const mockFillTarget = personaAPI.fillTargetStatus as jest.Mock;
 const mockFocusMain = personaAPI.focusMainWindow as jest.Mock;
+
+/** fill_target_status 的默认就绪响应（⌘F 确认面用） */
+const readyTargetStatus = (app = 'notepad.exe', title = 'Login - Example App') => ({
+  success: true,
+  data: { supported: true, ready: true, target_title: title, target_app: app },
+});
 
 /** 取组件挂载时注册的指定事件回调（mockListen.mock.calls 由 beforeEach 清空） */
 const listenerFor = (event: string): (() => void) => {
@@ -348,8 +355,9 @@ describe('components/QuickAccessPanel', () => {
     await waitFor(() => expect(mockOpenCred).toHaveBeenCalled());
   });
 
-  it('⌘F fills the active Password credential into the captured target and hides the window', async () => {
+  it('⌘F asks for explicit target confirmation, then fills with confirmed=true and hides the window', async () => {
     setup([credential({})]);
+    mockFillTarget.mockResolvedValue(readyTargetStatus('victim-notepad.exe', 'Login - Example App'));
     mockFill.mockResolvedValue({
       success: true,
       data: {
@@ -366,13 +374,58 @@ describe('components/QuickAccessPanel', () => {
 
     fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
 
-    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1'));
+    // 确认面出现：展示目标应用名（可执行文件名）与窗口标题；后端此时
+    // 还没有被调用（不可静默直写）
+    const dialog = await screen.findByTestId('quick-access-fill-confirm');
+    expect(dialog.textContent).toContain('victim-notepad.exe');
+    expect(dialog.textContent).toContain('Login - Example App');
+    expect(mockFill).not.toHaveBeenCalled();
+
+    // 用户显式确认 → 带 confirmed=true 注入
+    fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
+    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true));
     // 成功后浮窗自动收起：焦点还给目标窗口
     await waitFor(() => expect(mockHide).toHaveBeenCalled());
   });
 
-  it('⌘F surfaces the backend fill failure instead of hiding', async () => {
+  it('⌘F cancel on the confirm face never calls the backend', async () => {
     setup([credential({})]);
+    mockFillTarget.mockResolvedValue(readyTargetStatus());
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+    await screen.findByTestId('quick-access-fill-confirm');
+
+    fireEvent.click(screen.getByTestId('quick-access-fill-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('quick-access-fill-confirm')).toBeNull());
+    expect(mockFill).not.toHaveBeenCalled();
+    expect(mockHide).not.toHaveBeenCalled();
+  });
+
+  it('⌘F without a ready fill target errors locally without touching the backend', async () => {
+    setup([credential({})]);
+    mockFillTarget.mockResolvedValue({
+      success: true,
+      data: { supported: true, ready: false, target_title: null, target_app: null },
+    });
+    render(<QuickAccessPanel />);
+
+    fireEvent.change(screen.getByTestId('quick-access-input'), { target: { value: 'git' } });
+    await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
+
+    fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+
+    await waitFor(() => expect(mockFillTarget).toHaveBeenCalled());
+    expect(screen.queryByTestId('quick-access-fill-confirm')).toBeNull();
+    expect(mockFill).not.toHaveBeenCalled();
+  });
+
+  it('⌘F surfaces the backend fill failure (after confirmation) instead of hiding', async () => {
+    setup([credential({})]);
+    mockFillTarget.mockResolvedValue(readyTargetStatus());
     mockFill.mockResolvedValue({
       success: false,
       error: 'Captured fill target is no longer valid (window closed or reused)',
@@ -383,12 +436,14 @@ describe('components/QuickAccessPanel', () => {
     await waitFor(() => expect(screen.getAllByTestId('quick-access-item')).toHaveLength(1));
 
     fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
+    await screen.findByTestId('quick-access-fill-confirm');
+    fireEvent.click(screen.getByTestId('quick-access-fill-confirm-button'));
 
-    await waitFor(() => expect(mockFill).toHaveBeenCalled());
+    await waitFor(() => expect(mockFill).toHaveBeenCalledWith('c1', true));
     expect(mockHide).not.toHaveBeenCalled();
   });
 
-  it('⌘F on a non-Password credential rejects locally without calling the backend', async () => {
+  it('⌘F on a non-Password credential rejects locally without probing or calling the backend', async () => {
     setup([credential({ credential_type: 'SecureNote' })]);
     render(<QuickAccessPanel />);
 
@@ -397,6 +452,7 @@ describe('components/QuickAccessPanel', () => {
 
     fireEvent.keyDown(screen.getByTestId('quick-access-panel'), { key: 'f', metaKey: true });
 
+    expect(mockFillTarget).not.toHaveBeenCalled();
     expect(mockFill).not.toHaveBeenCalled();
     expect(mockHide).not.toHaveBeenCalled();
   });
