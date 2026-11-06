@@ -13,7 +13,7 @@ import { credentialTypeLabel, getCredentialIcon } from './credentialDisplay';
 import FaviconImg from './FaviconImg';
 import Highlight from './Highlight';
 import ReauthModal from './ReauthModal';
-import type { Credential, Identity, SecretField } from '@/types';
+import type { ApiResponse, Credential, DesktopFillResult, Identity, SecretField } from '@/types';
 
 /** 后端唤醒事件（quick_access.rs OPENED_EVENT）：热键唤起时清查询 + 重新探解锁态 */
 const OPENED_EVENT = 'persona://quick-access-opened';
@@ -92,6 +92,18 @@ const QuickAccessPanel: React.FC = () => {
   const [isSearching, setIsSearching] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [copied, setCopied] = useState<string | null>(null);
+  /**
+   * 桌面填充确认面（安全评审 P1）：注入前展示目标应用名（可执行文件名）
+   * + 窗口标题，用户显式确认才注入。null = 无待确认注入。`snapshotId`
+   * 是探测时捕获的快照标识（P1 确认绑定）——确认后原样带回后端，
+   * 在途请求期间目标被重新捕获/浮窗收起都会被如实拒绝，不转投新目标。
+   */
+  const [fillConfirm, setFillConfirm] = useState<{
+    credential: Credential;
+    app: string;
+    title: string;
+    snapshotId: string;
+  } | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const searchRef = useRef(searchCredentials);
@@ -109,6 +121,7 @@ const QuickAccessPanel: React.FC = () => {
     setIsSearching(false);
     setActiveIndex(0);
     setCopied(null);
+    setFillConfirm(null);
   }, []);
 
   // 唤醒通道：热键每次唤起都要重新探解锁态（主窗口的解锁/锁定本窗口收不到
@@ -251,6 +264,77 @@ const QuickAccessPanel: React.FC = () => {
     [t],
   );
 
+  /**
+   * 桌面应用内填充注入（#12）——**两步确认流**（安全评审 P1 收紧）：
+   * 第一步（requestFill）探测注入目标并弹出确认面：浮窗展示目标应用名
+   * （可执行文件名）与窗口标题，并捕获快照标识；用户显式确认后第二步才
+   * 带 `confirmed=true` + `snapshot_id` 调用后端注入——确认绑定到具体
+   * 快照，后端对未确认/目标已换/目标已丢的调用一律如实拒绝。
+   * 成功后浮窗自动收起——焦点回到目标窗口，用户直接看到填好的字段。
+   */
+  const requestFill = useCallback(
+    async (credential: Credential) => {
+      const status = await personaAPI.fillTargetStatus();
+      if (
+        !status.success ||
+        !status.data?.ready ||
+        !status.data.supported ||
+        !status.data.snapshot_id
+      ) {
+        toast.error(t('quickAccess.fillNoTarget'));
+        return;
+      }
+      setFillConfirm({
+        credential,
+        app: status.data.target_app ?? t('quickAccess.fillUnknownApp'),
+        title: status.data.target_title ?? '',
+        snapshotId: status.data.snapshot_id,
+      });
+    },
+    [t],
+  );
+
+  const fillInTarget = useCallback(
+    async (credential: Credential, snapshotId: string) => {
+      const doFill = async (): Promise<ApiResponse<DesktopFillResult> | null> => {
+        const res = await personaAPI.desktopFillCredential(credential.id, true, snapshotId);
+        if (res.success) return res;
+        if (res.error_code === 'REAUTH_REQUIRED') {
+          if (await reauth.requestReauth()) return doFill();
+          return null;
+        }
+        if (res.error_code === 'SERVICE_LOCKED') {
+          toast.error(t('common.serviceLocked'));
+          return null;
+        }
+        // 确认绑定（P1）：确认后目标被换/被丢的在途请求——如实说原因，
+        // 提示重新走确认流，绝不复用旧确认
+        if (res.error_code === 'FILL_TARGET_CHANGED') {
+          toast.error(t('quickAccess.fillTargetChanged'));
+          return null;
+        }
+        if (res.error_code === 'FILL_TARGET_DISCARDED') {
+          toast.error(t('quickAccess.fillTargetDiscarded'));
+          return null;
+        }
+        toast.error(res.error ?? t('quickAccess.fillFailed'));
+        return null;
+      };
+      const res = await doFill();
+      if (!res?.data) return;
+      const d = res.data;
+      if (d.username_filled && d.password_filled) {
+        toast.success(t('quickAccess.fillDone', { target: d.target_title }));
+      } else {
+        toast(t('quickAccess.fillPartial', { target: d.target_title }));
+      }
+      setCopied(`${credential.id}:fill`);
+      window.setTimeout(() => setCopied(null), 2000);
+      void hideSelf();
+    },
+    [reauth, t],
+  );
+
   /** Enter：优先复制主密文字段，没有则退回复制用户名（面板不猜别的密文字段） */
   const copyPrimary = useCallback(
     (credential: Credential) => {
@@ -265,6 +349,18 @@ const QuickAccessPanel: React.FC = () => {
   );
 
   const onKeyDown = (event: React.KeyboardEvent) => {
+    // 确认面打开时拦截键盘：Esc 取消注入确认，Enter 确认注入
+    if (fillConfirm) {
+      event.preventDefault();
+      if (event.key === 'Escape') {
+        setFillConfirm(null);
+      } else if (event.key === 'Enter') {
+        const pending = fillConfirm;
+        setFillConfirm(null);
+        if (pending) void fillInTarget(pending.credential, pending.snapshotId);
+      }
+      return;
+    }
     const total = flatResults.length;
     const mod = event.metaKey || event.ctrlKey;
 
@@ -294,6 +390,15 @@ const QuickAccessPanel: React.FC = () => {
     } else if (mod && event.key.toLowerCase() === 'o') {
       event.preventDefault();
       void openInPersona(active);
+    } else if (mod && event.key.toLowerCase() === 'f') {
+      // ⌘F 桌面填充：先探测目标并弹确认面（仅 Password 凭据；其余类型
+      // 后端也填不了用户名/密码）
+      event.preventDefault();
+      if (active.credential_type === 'Password') {
+        void requestFill(active);
+      } else {
+        toast.error(t('quickAccess.fillPasswordOnly'));
+      }
     }
   };
 
@@ -320,7 +425,7 @@ const QuickAccessPanel: React.FC = () => {
 
   return (
     <div
-      className="h-screen w-screen bg-white dark:bg-gray-900 flex flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700"
+      className="relative h-screen w-screen bg-white dark:bg-gray-900 flex flex-col overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700"
       onKeyDown={onKeyDown}
       data-testid="quick-access-panel"
     >
@@ -432,8 +537,50 @@ const QuickAccessPanel: React.FC = () => {
         <span>{t('quickAccess.hintUsername')}</span>
         <span>{t('quickAccess.hintTotp')}</span>
         <span>{t('quickAccess.hintOpen')}</span>
+        <span data-testid="quick-access-hint-fill">{t('quickAccess.hintFill')}</span>
       </div>
 
+      {fillConfirm && (
+        <div
+          className="absolute inset-0 bg-black/40 flex items-center justify-center p-4 z-10"
+          data-testid="quick-access-fill-confirm"
+        >
+          <div className="w-full max-w-sm bg-white dark:bg-gray-800 rounded-lg shadow-lg p-4">
+            <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              {t('quickAccess.fillConfirmTitle')}
+            </p>
+            <p className="mt-2 text-sm text-gray-600 dark:text-gray-300 break-words">
+              {t('quickAccess.fillConfirmBody', {
+                app: fillConfirm.app,
+                title: fillConfirm.title,
+              })}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                data-testid="quick-access-fill-cancel"
+                onClick={() => setFillConfirm(null)}
+                className="rounded-md px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+              >
+                {t('quickAccess.fillCancel')}
+              </button>
+              <button
+                type="button"
+                data-testid="quick-access-fill-confirm-button"
+                autoFocus
+                onClick={() => {
+                  const pending = fillConfirm;
+                  setFillConfirm(null);
+                  if (pending) void fillInTarget(pending.credential, pending.snapshotId);
+                }}
+                className="rounded-md bg-primary-600 hover:bg-primary-700 text-white text-sm px-3 py-1.5"
+              >
+                {t('quickAccess.fillConfirmButton')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <ReauthModal
         isOpen={reauth.isOpen}
         error={reauth.error}

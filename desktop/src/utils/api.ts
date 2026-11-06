@@ -116,6 +116,8 @@ import type {
   BackupVersionView,
   BackupServerDeleteOutcome,
   QuickAccessStatus,
+  FillTargetStatus,
+  DesktopFillResult,
   GeneratorStatus,
   SshAgentStatus,
   SshAgentKey,
@@ -891,6 +893,32 @@ class PersonaAPI {
   ): Promise<ApiResponse<boolean>> {
     return invoke('quick_access_open_credential', {
       request: { identity_id: identityId, credential_id: credentialId },
+    });
+  }
+
+  /** 桌面填充注入目标状态（#12：浮窗填充动作可用性探测 + 确认面目标信息） */
+  async fillTargetStatus(): Promise<ApiResponse<FillTargetStatus>> {
+    return invoke('fill_target_status');
+  }
+
+  /**
+   * 桌面应用内填充注入（#12：注入到浮窗唤起前的前台窗口）。`confirmed`
+   * 必须来自用户对浮窗确认面（目标应用名 + 窗口标题）的显式确认——
+   * 后端对 confirmed=false 一律拒绝，不存在静默注入路径。`snapshotId`
+   * 是确认面从 fill_target_status 拿到的快照标识（P1 确认绑定）：后端
+   * 按它把确认绑定到具体快照——在途请求期间目标被重新捕获/浮窗收起
+   * 都会如实拒绝（FILL_TARGET_CHANGED / FILL_TARGET_DISCARDED），绝不
+   * 转投新目标。
+   */
+  async desktopFillCredential(
+    credentialId: string,
+    confirmed: boolean,
+    snapshotId: string,
+  ): Promise<ApiResponse<DesktopFillResult>> {
+    return invoke('desktop_fill_credential', {
+      credential_id: credentialId,
+      confirmed,
+      snapshot_id: snapshotId,
     });
   }
 

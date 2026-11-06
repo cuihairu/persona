@@ -1,0 +1,45 @@
+   Compiling persona-desktop v0.1.0 (C:\Users\Administrator\persona\desktop\src-tauri)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 45.52s
+     Running unittests src\lib.rs (target\debug\deps\persona_desktop-97d93c6127e2e095.exe)
+
+running 17 tests
+test desktop_fill::confirm_binding_tests::cleared_slot_discards_inflight_confirmation ... ok
+test desktop_fill::confirm_binding_tests::recaptured_target_rejects_stale_confirmation ... ok
+test desktop_fill::confirm_binding_tests::request_without_snapshot_id_is_rejected ... ok
+test desktop_fill::confirm_binding_tests::matching_snapshot_binds_confirmation_to_that_target ... ok
+test desktop_fill::confirm_binding_tests::only_current_snapshot_id_is_accepted ... ok
+test desktop_fill::confirm_binding_tests::slot_recheck_closure_matches_bind_semantics ... ok
+test desktop_fill::win_tests::classification_guards_ineligible_fields ... ok
+test desktop_fill::win_tests::clipboard_backup_restore_roundtrip ... ok
+test desktop_fill::win_tests::clipboard_paste_warns_on_panic_path_when_restore_fails ... FAILED
+test desktop_fill::win_tests::plain_only_window_is_rejected_no_password_guessing ... ok
+test desktop_fill::win_tests::revalidate_field_rejects_gone_and_role_swapped_fields ... ok
+test desktop_fill::win_tests::slot_cleared_after_first_write_aborts_remaining_write ... ok
+test desktop_fill::win_tests::slot_replaced_after_first_write_aborts_remaining_write ... ok
+test desktop_fill::win_tests::settext_injection_roundtrip_on_real_window ... ok
+test desktop_fill::win_tests::target_validation_guards_hwnd_reuse ... ok
+test desktop_fill::win_tests::clipboard_paste_warns_when_non_text_content_is_cleared ... FAILED
+test desktop_fill::win_tests::clipboard_paste_warns_when_restore_warning_is_swallowed_by_paste_failure ... ok
+
+failures:
+
+---- desktop_fill::win_tests::clipboard_paste_warns_on_panic_path_when_restore_fails stdout ----
+
+thread 'desktop_fill::win_tests::clipboard_paste_warns_on_panic_path_when_restore_fails' (10300) panicked at src\desktop_fill.rs:1451:13:
+closure panic must propagate after restore
+
+---- desktop_fill::win_tests::clipboard_paste_warns_when_non_text_content_is_cleared stdout ----
+
+thread 'desktop_fill::win_tests::clipboard_paste_warns_when_non_text_content_is_cleared' (6780) panicked at src\desktop_fill.rs:1404:9:
+assertion `left == right` failed
+  left: "PREV-PANIC-53cf055d-15b0-4d0d-a567-8d9e5908c474"
+ right: ""
+
+
+failures:
+    desktop_fill::win_tests::clipboard_paste_warns_on_panic_path_when_restore_fails
+    desktop_fill::win_tests::clipboard_paste_warns_when_non_text_content_is_cleared
+
+test result: FAILED. 15 passed; 2 failed; 0 ignored; 0 measured; 251 filtered out; finished in 0.60s
+
+error: test failed, to rerun pass `--lib`

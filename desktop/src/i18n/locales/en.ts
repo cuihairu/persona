@@ -727,6 +727,22 @@ export default {
     hintUsername: '⌘U username',
     hintTotp: '⌘T code',
     hintOpen: '⌘O open',
+    hintFill: '⌘F fill',
+    fillDone: 'Filled into "{{target}}"',
+    fillPartial: 'Partially filled into "{{target}}" — check the remaining fields',
+    fillFailed: 'Desktop fill failed',
+    fillPasswordOnly: 'Desktop fill supports password credentials only',
+    fillNoTarget: 'No valid fill target — open the quick access window over the target app first',
+    fillUnknownApp: 'unknown app',
+    fillConfirmTitle: 'Confirm fill target',
+    fillConfirmBody:
+      'Persona will fill this credential into "{{app}}" (window "{{title}}"). Only continue if this is the app you intend.',
+    fillConfirmButton: 'Fill into this app',
+    fillCancel: 'Cancel',
+    fillTargetChanged:
+      'Fill target changed after confirmation — open the quick access window over the target app and confirm again',
+    fillTargetDiscarded:
+      'Fill target was discarded (floating window hidden) — open it over the target app and confirm again',
   },
   errorBoundary: {
     title: 'Something went wrong',

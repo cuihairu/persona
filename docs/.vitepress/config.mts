@@ -71,6 +71,10 @@ const sidebarZh = [
       { text: "安全设计", link: "/zh/design/security" },
       { text: "Principal 与 Action 授权", link: "/zh/design/principal-action" },
       { text: "跨进程会话与授权中心", link: "/zh/design/session-center" },
+      {
+        text: "桌面应用内填充注入（Windows）",
+        link: "/zh/design/desktop-fill",
+      },
     ],
   },
   {
@@ -153,6 +157,10 @@ const sidebar = [
         link: "/design/principal-action",
       },
       { text: "Cross-Process Session Center", link: "/design/session-center" },
+      {
+        text: "Desktop Fill Injection (Windows)",
+        link: "/design/desktop-fill",
+      },
     ],
   },
   {

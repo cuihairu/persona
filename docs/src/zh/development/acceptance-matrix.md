@@ -72,19 +72,19 @@
 
 ### 平台能力矩阵
 
-| 平台 / 表面                                           | 编译成功                                                                   | 模拟测试                      | 真实交互                                       | 长期运行  |
-| ----------------------------------------------------- | -------------------------------------------------------------------------- | ----------------------------- | ---------------------------------------------- | --------- |
-| Rust 核心（core/cli/server/ssh-agent/connect-server） | ✅ ubuntu + windows-gnu/msvc check                                         | ✅ 行内 1,930 + 集成 65       | ⚠️ 仅手动脚本                                  | ❌ 零覆盖 |
-| 桌面（src-tauri，ubuntu）                             | ✅                                                                         | ✅ 261 + 8                    | ⚠️ Linux 走查管线在本机，不在 CI               | ❌        |
-| 桌面 Windows                                          | ⚠️ **仅 `cargo check`**（`rust-windows-desktop` 注释：运行时行为仍需真机） | ⚠️ 仅宿主 `cargo test` 的部分 | ❌ 命名管道审批 / TPM / NSIS 均未实机          | ❌        |
-| 桌面 macOS                                            | ⚠️ 仅 `desktop-build.yml::build` 能构建                                    | ⚠️ 无 macOS 测试 job          | ❌ Secure Enclave / Safari 桥未实机            | ❌        |
-| 桌面 Linux                                            | ✅                                                                         | ✅                            | ⚠️ 手动脚本 + 本机截图管线（不在 CI）          | ❌        |
-| 浏览器扩展 Chromium                                   | ✅ `web` build                                                             | ✅ 164（jsdom）               | ❌ 无真实浏览器↔host 往返                     | ❌        |
-| Safari 扩展                                           | ❌ 无构建                                                                  | ❌ 0 测试                     | ❌                                             | ❌        |
-| Android                                               | ✅ arm64 APK（`desktop-build.yml::android`，**受 nightly 48h 门禁影响**）  | ❌ 0 测试                     | ❌ 从未真机运行                                | ❌        |
-| iOS                                                   | ❌ **从未编译**（`Persona.h` 只暴露 10 个生命周期符号，业务 FFI 未暴露）   | ❌ 2 个 XCTest 从未执行       | ❌                                             | ❌        |
-| HarmonyOS                                             | ❌ 从未编译（无 hvigor wrapper，只能在 DevEco Studio 内构建）              | ❌ 0 测试                     | ❌                                             | ❌        |
-| 自建 server（GHCR）                                   | ✅ docker buildx                                                           | ✅ 6 个双设备测试             | ⚠️ `verify-account-redline.sh` 手动起真 server | ❌        |
+| 平台 / 表面                                           | 编译成功                                                                  | 模拟测试                                                       | 真实交互                                                                          | 长期运行  |
+| ----------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------------------------------------------- | --------------------------------------------------------------------------------- | --------- |
+| Rust 核心（core/cli/server/ssh-agent/connect-server） | ✅ ubuntu + windows-gnu/msvc check                                        | ✅ 行内 1,930 + 集成 65                                        | ⚠️ 仅手动脚本                                                                     | ❌ 零覆盖 |
+| 桌面（src-tauri，ubuntu）                             | ✅                                                                        | ✅ 261 + 8                                                     | ⚠️ Linux 走查管线在本机，不在 CI                                                  | ❌        |
+| 桌面 Windows                                          | ✅ 实机编译（2026-11-03 远程 Windows 会话，workspace build EXIT 0）       | ✅ 实机测试（`persona-core` 1196 例全绿 + cli/ssh-agent 套件） | ⚠️ SSH agent 命名管道 E2E 已实机；命名管道审批弹窗 / 生物识别 / TPM / NSIS 未实机 | ⚠️        |
+| 桌面 macOS                                            | ⚠️ 仅 `desktop-build.yml::build` 能构建                                   | ⚠️ 无 macOS 测试 job                                           | ❌ Secure Enclave / Safari 桥未实机                                               | ❌        |
+| 桌面 Linux                                            | ✅                                                                        | ✅                                                             | ⚠️ 手动脚本 + 本机截图管线（不在 CI）                                             | ❌        |
+| 浏览器扩展 Chromium                                   | ✅ `web` build                                                            | ✅ 164（jsdom）                                                | ❌ 无真实浏览器↔host 往返                                                        | ❌        |
+| Safari 扩展                                           | ❌ 无构建                                                                 | ❌ 0 测试                                                      | ❌                                                                                | ❌        |
+| Android                                               | ✅ arm64 APK（`desktop-build.yml::android`，**受 nightly 48h 门禁影响**） | ❌ 0 测试                                                      | ❌ 从未真机运行                                                                   | ❌        |
+| iOS                                                   | ❌ **从未编译**（`Persona.h` 只暴露 10 个生命周期符号，业务 FFI 未暴露）  | ❌ 2 个 XCTest 从未执行                                        | ❌                                                                                | ❌        |
+| HarmonyOS                                             | ❌ 从未编译（无 hvigor wrapper，只能在 DevEco Studio 内构建）             | ❌ 0 测试                                                      | ❌                                                                                | ❌        |
+| 自建 server（GHCR）                                   | ✅ docker buildx                                                          | ✅ 6 个双设备测试                                              | ⚠️ `verify-account-redline.sh` 手动起真 server                                    | ❌        |
 
 ### 跨客户端一致性：最大的洞
 
@@ -134,14 +134,14 @@
 
 ### 安全回归（沿用 AUDIT-060 覆盖面）
 
-| ID  | 场景                                                                | 层       | 状态                          | 验收条款                                        | 证据 / 缺口                                                           |
-| --- | ------------------------------------------------------------------- | -------- | ----------------------------- | ----------------------------------------------- | --------------------------------------------------------------------- |
-| S17 | 自动锁 / 重认证三端一致                                             | 真实交互 | ⚠️ 部分                       | Linux 有手册脚本，macOS / Windows 无实机记录    | `verify-biometric-linux.md`；`BUGS.md` 15/15                          |
-| S18 | SSH agent Windows 命名管道审批 + 生物识别                           | 真实交互 | 🚫 BLOCKED                    | 需真 Windows 桌面会话                           | AUDIT-032 仍开；`ci.yml` 只跑 `cargo check`                           |
-| S19 | NSIS 安装器 7 步（全新×2 / 升级 / 静默 / MSI 迁移 / 卸载×2 / 降级） | 真实交互 | ⚠️ 有清单无自动化             | 每步人工执行留记录                              | `WINDOWS_INSTALLER.md` §5                                             |
-| S20 | 同步双设备真 TCP 收敛 + 真冲突双版本保留                            | 模拟测试 | ✅ 已实现且测试               | 同 lamport 异设备时败者降级进 conflict 区不丢弃 | `server/tests/sync_two_device_e2e.rs`；`E2EE_SYNC_DESIGN.md` 验收锚点 |
-| S21 | 生物识别（Secure Enclave / Touch ID / TPM）                         | 真实交互 | 🚫 明确不支持（CI VM 无硬件） | spike 探针输出作为交付物，非门禁                | `desktop-build.yml::build` biometric spike                            |
-| S22 | 跨实现密码学 oracle                                                 | 模拟测试 | ✅ 已实现且测试               | 独立 Python 实现向量被 core 测试钉死            | `scripts/steam_guard_verify.py`                                       |
+| ID  | 场景                                                                | 层       | 状态                          | 验收条款                                                                                                                                  | 证据 / 缺口                                                           |
+| --- | ------------------------------------------------------------------- | -------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| S17 | 自动锁 / 重认证三端一致                                             | 真实交互 | ⚠️ 部分                       | Linux 有手册脚本，macOS / Windows 无实机记录                                                                                              | `verify-biometric-linux.md`；`BUGS.md` 15/15                          |
+| S18 | SSH agent Windows 命名管道审批 + 生物识别                           | 真实交互 | ⚠️ 部分                       | agent 命名管道 E2E 已实机闭环（2026-11-03 远程 Windows 会话，非交互路径 `PERSONA_NON_INTERACTIVE=1`）；桌面审批弹窗与生物识别门控仍未验收 | AUDIT-032 审批弹窗部分仍开；实机记录见 `todo.md` Windows 验收行       |
+| S19 | NSIS 安装器 7 步（全新×2 / 升级 / 静默 / MSI 迁移 / 卸载×2 / 降级） | 真实交互 | ⚠️ 有清单无自动化             | 每步人工执行留记录                                                                                                                        | `WINDOWS_INSTALLER.md` §5                                             |
+| S20 | 同步双设备真 TCP 收敛 + 真冲突双版本保留                            | 模拟测试 | ✅ 已实现且测试               | 同 lamport 异设备时败者降级进 conflict 区不丢弃                                                                                           | `server/tests/sync_two_device_e2e.rs`；`E2EE_SYNC_DESIGN.md` 验收锚点 |
+| S21 | 生物识别（Secure Enclave / Touch ID / TPM）                         | 真实交互 | 🚫 明确不支持（CI VM 无硬件） | spike 探针输出作为交付物，非门禁                                                                                                          | `desktop-build.yml::build` biometric spike                            |
+| S22 | 跨实现密码学 oracle                                                 | 模拟测试 | ✅ 已实现且测试               | 独立 Python 实现向量被 core 测试钉死                                                                                                      | `scripts/steam_guard_verify.py`                                       |
 
 ### 长期运行与耐久
 

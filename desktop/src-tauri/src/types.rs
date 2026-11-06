@@ -76,6 +76,10 @@ pub struct AppState {
     /// 进程里 OS 抢注成功没有"——见 `quick_access` 模块注释。用 std Mutex
     /// （同 ssh_approvals 槽位）：锁内只做字段读写，从不跨 await。
     pub quick_access: std::sync::Mutex<crate::quick_access::QuickAccessRuntime>,
+    /// 桌面填充注入目标（FEATURE_GAP_ANALYSIS #12）：热键唤起检索浮窗时
+    /// 捕获的前台窗口快照（`desktop_fill::FillTarget`）。None = 尚未捕获/
+    /// 目标已失效/平台不支持。std Mutex：锁内只做快照读写，从不跨 await。
+    pub fill_target: std::sync::Mutex<Option<crate::desktop_fill::FillTarget>>,
     /// 同步组配对进行中的会话（session_id → 会话态）。host 出码、guest
     /// 输码各存一条；完成/取消即移除。动态密码派生值与 SRP 私有份额只在
     /// 这里存活（内存态，不落盘）——见 `core/src/sync/pairing.rs` 模块

@@ -1,0 +1,46 @@
+[package]
+name = "persona-fill-test"
+version = "0.1.0"
+description = "Persona desktop fill injection cross-process test suite (test-only crate)"
+license = "MIT"
+edition = "2021"
+
+# 独立 test-only crate 的原因：跨进程注入套件需要在链接期嵌入
+# comctl32 v6 manifest（RUSTFLAGS /MANIFEST:EMBED，裸测试二进制无内嵌
+# manifest 会在加载器绑 comctl32 5.x 时 STATUS_ENTRYPOINT_NOT_FOUND，
+# 见 windows/app.manifest 与 commit 745dca2）。若把集成测试留在
+# persona-desktop 包内，cargo test 会连包内全部 bin（含内嵌了 manifest
+# 资源的 tauri 主程序）一起链接，触发 CVT1100 资源重复（MANIFEST,
+# 1, 0x0409）。独立包只构建测试与靶进程 bin，与主包 manifest 互不干扰。
+#
+# 门禁：bin 与测试都挂在 `fill-test-host` feature 后面，正常构建/打包
+# 不产出任何二进制。真机验收：
+#   cargo test --features fill-test-host --test desktop_fill_cross_process
+
+[lib]
+path = "lib.rs"
+
+[[bin]]
+name = "fill-test-host"
+path = "src/bin/fill-test-host.rs"
+required-features = ["fill-test-host"]
+
+[features]
+fill-test-host = []
+
+[dependencies]
+persona-desktop = { path = ".." }
+
+# windows crate 只挂在 Windows 目标下：Linux/CI 侧本 crate 的 bin 与测试
+# 全部 cfg 掉，不拉 windows 编译单元（windows-future 在非 MSVC 目标编不过）
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  # 靶进程窗口类注册（RegisterClassW/WNDCLASSW 在 Gdi feature 下）
+  "Win32_Graphics_Gdi",
+  # GetModuleHandleW（System/LibraryLoader）
+  "Win32_System_LibraryLoader",
+  # EM_GETPASSWORDCHAR（掩码字符元数据，跨进程可读）
+  "Win32_UI_Controls",
+  "Win32_UI_WindowsAndMessaging",
+] }

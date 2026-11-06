@@ -1,10 +1,23 @@
-# cargo-audit config: unfixable advisories as of 2026-11-03
+# cargo-audit config: unfixable advisories as of 2026-11-03 (rationale corrected 2026-11-05)
 # RUSTSEC-2023-0071 (rsa Marvin Attack): no fixed release; rsa 0.9/0.10-rc both affected.
 #   rsa is used only for ssh-key rsa-sha2 signing of local agent keys, not a network-facing decrypt path.
-# RUSTSEC-2026-0387 (crypto-bigint timing variability): fix requires crypto-bigint >=0.7.6,
-#   not reachable while rsa stays on 0.9/0.10-rc. Re-check when rsa ships a fixed release.
+# RUSTSEC-2026-0387 (crypto-bigint timing variability): patched = >=0.7.6. The tree's own
+#   crypto-bigint consumers moved to 0.7.x (k256/p256 on elliptic-curve 0.14; lock now 0.7.10).
+#   A residual crypto-bigint 0.5.5 instance EXISTS IN THE LOCK GRAPH via
+#   alloy-consensus 2.5.0 -> k256 0.13 -> elliptic-curve 0.13 -> crypto-bigint 0.5.5.
+#   An additional lock-graph edge via alloy-primitives -> k256 0.13 also exists (alloy-primitives
+#   is a direct core dependency). Caveat (evidence downgraded 2026-11-06 after independent
+#   review): the lock graph is NOT proof of runtime reachability. On the desktop workspace,
+#   `cargo tree --offline --locked --target all -i crypto-bigint@0.5.5` prints nothing
+#   ("nothing to print"), so whether the default build actually enables this chain is
+#   UNVERIFIED in either direction. k256 0.14 (elliptic-curve 0.14 / crypto-bigint 0.7) exists
+#   upstream (2026-07), but no alloy release adopts it. Whether an upstream version bump,
+#   feature adjustment, or dependency replacement can zero this ID out has not been verified
+#   with reproducible evidence. Re-check when alloy ships a k256-0.14-based release.
+#   Same lock-graph observations hold in the desktop/src-tauri and fuzz workspaces (their
+#   audits run per-workspace without this file).
 [advisories]
 ignore = [
     "RUSTSEC-2023-0071", # rsa 0.9.10, 0.10.0-rc.18: no fix available
-    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: no semver-compatible fix
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: present in the lock graph (alloy -> k256 0.13 chain); runtime enablement unverified
 ]

@@ -40,7 +40,7 @@
       "chokidar@<4": "^4.0.3",
       "colord@<2.9.4": "2.9.4",
       "crypto-browserify": "link:./vendor/crypto-browserify-stub",
-      "decode-uri-component@<0.5.0": "0.5.0",
+      "decode-uri-component@<0.5.0": "0.5.1",
       "esbuild@<0.28.1": "^0.28.1",
       "fast-uri@<3.1.4": "^3.1.4",
       "flatted@<3.4.0": "^3.4.2",
@@ -75,7 +75,8 @@
       "sprintf-js": "file:./vendor/sprintf-js-patched",
       "svgo@2": "2.8.4",
       "yaml@1": "1.10.3",
-      "vite@<7.3.7": "7.3.7"
+      "vite@<7.3.7": "7.3.7",
+      "decode-uri-component@0.5.0": "0.5.1"
     }
   }
 }
