@@ -153,7 +153,11 @@ jobs:
       - name: Run cargo-deny
         run: cargo deny check
       - name: Run cargo-audit
-        run: cargo audit
+        # cargo-audit 内置的 gix clone 在 runner 上持续失败（failed to prepare
+        # clone），改用系统 git 预克隆 advisory-db 后离线审计
+        run: |
+          git clone --depth 1 https://github.com/RustSec/advisory-db.git "$HOME/.cargo/advisory-db"
+          cargo audit --db "$HOME/.cargo/advisory-db" --no-fetch
 
   desktop:
     name: Desktop (Tauri + React)
@@ -209,7 +213,9 @@ jobs:
           flags: desktop
           fail_ci_if_error: false
       - name: Security Audit
-        run: pnpm --filter persona-desktop audit --audit-level=moderate
+        # pnpm 10 的 audit 不支持 --filter（旧写法报 Unknown option: 'recursive'），
+        # audit 本身就是按 workspace 全量 lockfile 跑，直接在根上审计
+        run: pnpm audit --audit-level=moderate
 
   web:
     name: Web (extension + website)
