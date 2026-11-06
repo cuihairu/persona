@@ -19,7 +19,7 @@
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@umijs/plugins": "^4.7.28",
+    "@umijs/plugins": "^4.7.30",
     "typescript": "npm:@typescript/typescript6@^6.0.2"
   }
 }
