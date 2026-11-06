@@ -69,22 +69,26 @@ any injection**: a re-captured target returns `FILL_TARGET_CHANGED`, a
 cleared target (floating window hidden) returns `FILL_TARGET_DISCARDED`.
 The injection itself runs outside the lock (slow FFI must not hold it), so
 the injection loop **rechecks slot validity before every field write** with
-the same bind semantics: a discard or re-capture mid-fill aborts the
-remaining writes with the same codes, and fields already written are
-reported honestly as partial completion — nothing is ever redirected into
-a newly current target; the request injects only into the window the user
-actually confirmed (whose fingerprint is revalidated once more before each
-write).
+the same bind semantics: a discard or re-capture found by that per-write
+recheck aborts the remaining writes with the same codes, and fields
+already written are reported honestly as partial completion — no write is
+ever _re-targeted_ at the slot's new target (the abort comes from the
+recheck that runs before the next field's write). What that recheck does
+**not** close is the revalidate-then-write race window described above: a
+write whose recheck already passed can still land in a window swapped in
+that gap; the fingerprint is revalidated once more before each write. The
+same-process HWND-value reuse limit below is a separate, independent
+limit.
 A mis-identified target is visible to the user before Enter. One platform
 limit remains honest here: if the _same process_ recreates a window with
 the same title/class/exe and the HWND _value_ is reused, Win32 cannot
 distinguish it from the captured target — the write then lands inside the
 same process the user confirmed, backed by the confirmation face.
 
-The ready state shown in the floating window reflects the _validated_ state:
-`fill_target_status` revalidates the slot (invalid targets are dropped
-immediately) and now also carries the snapshot id for the confirmation
-flow. Hiding the quick access window clears the captured target (toggle
+The ready state shown in the floating window reflects the slot as it was
+last validated: `fill_target_status` revalidates on read (invalid targets
+are dropped immediately) and now also carries the snapshot id for the
+confirmation flow. Hiding the quick access window clears the captured target (toggle
 hide/close paths); combined with snapshot binding this means in-flight
 confirmations from before the hide are rejected (`FILL_TARGET_DISCARDED`)
 rather than silently fulfilled later.
@@ -136,3 +140,22 @@ rather than silently fulfilled later.
 - `commands::fill_target_status` / `commands::desktop_fill_credential` —
   the command layer (status revalidation + `confirmed` gate); the floating
   window binds ⌘F to the confirm-then-fill flow (i18n'd hints included).
+- `desktop/src-tauri/fill-test/tests/desktop_fill_command_cancel.rs` — the
+  **command-layer** cancellation timing suite, runnable on its own:
+  `cargo test --features fill-test-host -p persona-fill-test --test desktop_fill_command_cancel`
+  (Windows + an interactive desktop session; without the `fill-test-host`
+  feature the suite compiles down to 0 tests).
+  It drives the real `desktop_fill_credential` command end to end (mock
+  runtime, real service decryption, a real cross-process target window) and
+  pins the cancel point with a pause hook in the target host: the test
+  mutates `AppState.fill_target` between the host's `HOOK_PAUSED` line and
+  its release command — strictly after the first field write and before the
+  password write, no polling. On the pre-round-4 command layer (bind-compare
+  under lock, no per-write recheck) the two mid-fill cases fail their
+  `assert!(!resp.success)` — that layer does not abort the remaining
+  writes, it returns success; their password read-back assertions never run
+  there, so the log alone does not prove the password landed. The red run is
+  archived in `docs/review/evidence/openclaw-2026-11-06-desktop-fill/run7-red-cmdcancel-old-impl/`;
+  the green re-run on main will be archived together with the fifth-pass
+  report `docs/review/2026-11-06-desktop-fill-fifth-pass.md` in a follow-up
+  commit.
