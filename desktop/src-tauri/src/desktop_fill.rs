@@ -1400,8 +1400,15 @@ mod win_tests {
                 .any(|w| w.contains("previous non-text clipboard content")),
             "non-text wipe must be logged via tracing::warn: {logged:?}"
         );
-        // 密文不残留（覆写为空串），并顺手把剪贴板清回空态
-        assert_eq!(read_clipboard_text(), "");
+        // 密文不残留（覆写为空串），并顺手把剪贴板清回空态。期望空的
+        // 读必须用 expect_maybe_empty：retry-until-non-empty 会给 rdpclip
+        // 等外部同步进程留出把上一条用例的 PREV-* 灌回来的窗口
+        // （openclaw 实测：本断言读到 roundtrip 用例的 PREV-PANIC 值）。
+        assert_eq!(
+            read_clipboard_text_expect_maybe_empty(),
+            "",
+            "no prior content must leave no residue"
+        );
         super::win::seed_clipboard("").ok();
     }
 
