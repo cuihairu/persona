@@ -116,7 +116,7 @@ The CI/CD pipeline runs the security checks automatically:
 ```yaml
 # .github/workflows/ci.yml — Security Audit job（两个独立 step）
 - run: cargo deny check
-- run: cargo audit   # 审计失败即失败 job，不再 continue-on-error 静默放行
+- run: cargo audit # 审计失败即失败 job，不再 continue-on-error 静默放行
 ```
 
 ### 2. Vulnerability Analysis

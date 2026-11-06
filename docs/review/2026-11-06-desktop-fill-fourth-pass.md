@@ -32,10 +32,10 @@ readback_frame 与跨进程套件已绿，只有 `cargo test --lib desktop_fill`
 
 ## 修复（红先行，只改测试，产品代码零改动）
 
-| commit   | 内容                                                                                 |
-| -------- | ------------------------------------------------------------------------------------ |
-| `2c05120` | 红证据先入仓：run5 真机四份原始日志（`lib_exit=101 …`）force-add 归档                  |
-| `a68fd72` | 期望空的读改用 `read_clipboard_text_expect_maybe_empty()`（单次读，只在 OpenClipboard 瞬时失败时重试） |
+| commit    | 内容                                                                                                                                                                         |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `2c05120` | 红证据先入仓：run5 真机四份原始日志（`lib_exit=101 …`）force-add 归档                                                                                                        |
+| `a68fd72` | 期望空的读改用 `read_clipboard_text_expect_maybe_empty()`（单次读，只在 OpenClipboard 瞬时失败时重试）                                                                       |
 | `a9d2eed` | panic 路径用例的注入写入函数改为「第 1 次（明文覆写）Ok、之后（写回备份）Err」，确定性构造 panic+恢复失败；用例收尾 `seed_clipboard("")` 清掉留在真剪贴板上的 `PANIC-SECRET` |
 
 `a9d2eed` 另修一处隐患：恢复是注入失败的，明文 `PANIC-SECRET` 会留在真
@@ -47,11 +47,11 @@ readback_frame 与跨进程套件已绿，只有 `cargo test --lib desktop_fill`
 日志显示 `Compiling persona-desktop … Finished in 46.34s`，确系新代码重编译
 后运行。`filltest.done`：**`lib_exit=0 frame_exit=0 xproc_exit=0`**
 
-| 套件            | 结果                                   | 覆盖第四轮新增用例                                                    |
-| --------------- | -------------------------------------- | --------------------------------------------------------------------- |
-| lib `--lib desktop_fill` | **17 passed / 0 failed**        | 取消时序 `slot_cleared/slot_replaced_after_first_write_aborts_remaining_write` 2 例 + 剪贴板 4 例 + 确认绑定 5 例 |
-| readback_frame  | **6 passed / 0 failed**                | 长度前缀 READBACK 协议（空字段/单字段残留/utf16 hex）                  |
-| 跨进程 xproc    | **5 passed / 0 failed**                | 在途销毁重建竞态 `cross_process_inflight_destroy_rebuild_rejected` 等  |
+| 套件                     | 结果                     | 覆盖第四轮新增用例                                                                                                |
+| ------------------------ | ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| lib `--lib desktop_fill` | **17 passed / 0 failed** | 取消时序 `slot_cleared/slot_replaced_after_first_write_aborts_remaining_write` 2 例 + 剪贴板 4 例 + 确认绑定 5 例 |
+| readback_frame           | **6 passed / 0 failed**  | 长度前缀 READBACK 协议（空字段/单字段残留/utf16 hex）                                                             |
+| 跨进程 xproc             | **5 passed / 0 failed**  | 在途销毁重建竞态 `cross_process_inflight_destroy_rebuild_rejected` 等                                             |
 
 原始日志（force-add 入仓）：
 `docs/review/evidence/openclaw-2026-11-06-desktop-fill/run6-green-a9d2eed/`
