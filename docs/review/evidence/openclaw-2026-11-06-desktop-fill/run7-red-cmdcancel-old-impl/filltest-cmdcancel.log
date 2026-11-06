@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.07s
+     Running tests\desktop_fill_command_cancel.rs (target\debug\deps\desktop_fill_command_cancel-6cb64db3fbaada90.exe)
+
+running 5 tests
+test command_layer_rejects_unconfirmed_fill ... ok
+test command_layer_requires_snapshot_id ... ok
+test command_layer_rejects_inflight_request_after_slot_clear ... ok
+test command_layer_mid_fill_target_swap_aborts_remaining_write ... FAILED
+test command_layer_mid_fill_slot_clear_aborts_remaining_write ... FAILED
+
+failures:
+
+---- command_layer_mid_fill_target_swap_aborts_remaining_write stdout ----
+
+thread 'command_layer_mid_fill_target_swap_aborts_remaining_write' (10212) panicked at fill-test\tests\desktop_fill_command_cancel.rs:548:5:
+mid-fill target swap must abort the fill (old implementation would report success here)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- command_layer_mid_fill_slot_clear_aborts_remaining_write stdout ----
+
+thread 'command_layer_mid_fill_slot_clear_aborts_remaining_write' (15904) panicked at fill-test\tests\desktop_fill_command_cancel.rs:478:5:
+mid-fill slot clear must abort the fill (old implementation would report success here)
+
+
+failures:
+    command_layer_mid_fill_slot_clear_aborts_remaining_write
+    command_layer_mid_fill_target_swap_aborts_remaining_write
+
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.93s
+
+error: test failed, to rerun pass `-p persona-fill-test --test desktop_fill_command_cancel`

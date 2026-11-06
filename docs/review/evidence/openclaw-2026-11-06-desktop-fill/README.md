@@ -1,4 +1,4 @@
-# openclaw 真机证据：桌面填充（2026-11-06，run1、run3–run6 原始日志均已入仓）
+# openclaw 真机证据：桌面填充（2026-11-06，run1、run3–run7 原始日志均已入仓）
 
 - 环境：openclaw（Administrator@10.240.0.3，Windows Server 2022 x64，msvc +
   RUSTUP_TOOLCHAIN=stable，交互式控制台会话经计划任务 `PersonaFillTest`（/IT）执行；
@@ -17,16 +17,26 @@
     剪贴板用例（根因见第四轮报告）；
   - **剪贴板用例修复后复验** HEAD `a9d2eed` → `run6-green-a9d2eed/`，
     `lib_exit=0 frame_exit=0 xproc_exit=0`。
+  - **第五轮红（旧命令层）** HEAD `ab42d44`（分支 `round5-red-old-impl`：命令层
+    取消时序套件 + 长度前缀 READBACK + 宿主暂停钩子，叠在 `a283573` 的旧命令层
+    上——绑定比较后锁释放、写入前无字段级重查）→ `run7-red-cmdcancel-old-impl/`，
+    `lib_exit=0 frame_exit=0 xproc_exit=0 cmdcancel_exit=101`。命令层套件 5 例：
+    3 过（确认门 / 缺 snapshot_id / 解密在途清槽拒绝），**2 红，红的正是两个
+    mid-fill 用例**：失败断言为 `assert!(!resp.success)`——旧实现在这两个时点
+    **返回成功**、未中止剩余写入（其后的密码读回断言因此未执行，日志本身不
+    直接证明密码落框），即「旧实现可复现取消路径」的红证据。运行前核对：该机 `git rev-parse HEAD` = `ab42d44`，
+    任务执行用 `filltest.bat` 的 SHA-256 `5CFCA21E…F926480A` 与仓内此文件一致。
 
 ## 结果
 
-| 轮次 | 代码      | lib 套件             | 跨进程套件          | 退出码（filltest.done）   |
-| ---- | --------- | -------------------- | ------------------- | ------------------------- |
-| run1 | `d601c14` | 6 passed / 0 failed  | 4 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
-| run3 | `a283573` | 12 passed / 0 failed | 5 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
-| run4 | `7e52d7b` | 12 passed / **3 failed**（红先行预期） | 5 passed / 0 failed | `lib_exit=101 frame_exit=101 xproc_exit=0` |
-| run5 | `4644114` | 15 passed / **2 failed**（剪贴板用例） | 5 passed / 0 failed | `lib_exit=101 frame_exit=0 xproc_exit=0` |
-| run6 | `a9d2eed` | **17 passed / 0 failed** | **5 passed / 0 failed** | `lib_exit=0 frame_exit=0 xproc_exit=0` |
+| 轮次 | 代码                  | lib 套件                               | 跨进程套件              | 退出码（filltest.done）                                                                       |
+| ---- | --------------------- | -------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------------- |
+| run1 | `d601c14`             | 6 passed / 0 failed                    | 4 passed / 0 failed     | `lib_exit=0 xproc_exit=0`                                                                     |
+| run3 | `a283573`             | 12 passed / 0 failed                   | 5 passed / 0 failed     | `lib_exit=0 xproc_exit=0`                                                                     |
+| run4 | `7e52d7b`             | 12 passed / **3 failed**（红先行预期） | 5 passed / 0 failed     | `lib_exit=101 frame_exit=101 xproc_exit=0`                                                    |
+| run5 | `4644114`             | 15 passed / **2 failed**（剪贴板用例） | 5 passed / 0 failed     | `lib_exit=101 frame_exit=0 xproc_exit=0`                                                      |
+| run6 | `a9d2eed`             | **17 passed / 0 failed**               | **5 passed / 0 failed** | `lib_exit=0 frame_exit=0 xproc_exit=0`                                                        |
+| run7 | `ab42d44`（旧命令层） | 12 passed / 0 failed                   | 5 passed / 0 failed     | `lib_exit=0 frame_exit=0 xproc_exit=0 cmdcancel_exit=101`（命令层套件 3 过 **2 红**，预期红） |
 
 run3 相比 run1 新增：`confirm_binding_tests` 5 例（确认绑定快照纯函数：确认 A→
 重捕获 B 拒绝、清槽后在途请求拒绝、缺 snapshot_id 拒绝等）、剪贴板非文本清空
@@ -42,6 +52,15 @@ retry-until-non-empty 去读**期望为空**的剪贴板，给了 rdpclip 把上
 after restore` 只能红。run6 全绿同时覆盖第四轮新增的取消时序两例
 （`slot_cleared/slot_replaced_after_first_write_aborts_remaining_write`）、
 READBACK 长度前缀协议 6 例与跨进程竞态 5 例。
+
+run7 是第五轮的红先行证据：套件本身在旧命令层上**可独立触发**
+（`cargo test --features fill-test-host -p persona-fill-test --test desktop_fill_command_cancel`，
+5 例全部真实执行、0 ignored），3 个门禁类用例在旧实现上也过，只有两个
+mid-fill 时序用例红——红点就是「绑定比较后锁释放、写入前无字段级重查」这条
+旧路径：断言 `mid-fill … must abort the fill`（`assert!(!resp.success)`）失败，
+即命令返回成功、未中止剩余写入；其后的密码读回断言未执行，日志不直接证明
+密码落框。实现侧（`8642e9b` 起的逐字段重查）在 main 上，绿侧复验将随第五轮
+报告 `docs/review/2026-11-06-desktop-fill-fifth-pass.md` 在后续提交归档。
 
 ## 判断结论：跨进程 WM_GETTEXT 读 ES_PASSWORD 是实测观察到的系统限制，注入本身真实成功
 

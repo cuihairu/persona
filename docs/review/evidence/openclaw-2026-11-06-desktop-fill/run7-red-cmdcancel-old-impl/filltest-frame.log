@@ -1,0 +1,13 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.05s
+     Running unittests lib.rs (target\debug\deps\persona_fill_test-fdd53013a4ed3a89.exe)
+
+running 6 tests
+test readback_frame_tests::both_empty_frame_parses_to_double_empty_and_bare_frame_is_an_error ... ok
+test readback_frame_tests::length_prefixed_protocol_preserves_empty_fields ... ok
+test readback_frame_tests::empty_username_non_empty_password_must_be_detected ... ok
+test readback_frame_tests::both_fields_non_empty_parse_through ... ok
+test readback_frame_tests::non_empty_username_empty_password_must_be_detected ... ok
+test readback_frame_tests::utf16_hex_roundtrip ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

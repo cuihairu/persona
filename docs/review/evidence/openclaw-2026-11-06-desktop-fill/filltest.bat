@@ -11,4 +11,6 @@ cargo test -p persona-fill-test --lib readback_frame > C:\Users\Administrator\fi
 set FRAMEEXIT=%errorlevel%
 cargo test --features fill-test-host -p persona-fill-test --test desktop_fill_cross_process > C:\Users\Administrator\filltest-xproc.log 2>&1
 set XEXIT=%errorlevel%
-echo lib_exit=%LIBEXIT% frame_exit=%FRAMEEXIT% xproc_exit=%XEXIT% > C:\Users\Administrator\filltest.done
+cargo test --features fill-test-host -p persona-fill-test --test desktop_fill_command_cancel > C:\Users\Administrator\filltest-cmdcancel.log 2>&1
+set CMDEXIT=%errorlevel%
+echo lib_exit=%LIBEXIT% frame_exit=%FRAMEEXIT% xproc_exit=%XEXIT% cmdcancel_exit=%CMDEXIT% > C:\Users\Administrator\filltest.done
