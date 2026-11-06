@@ -23,6 +23,13 @@
 //!   收到 `WM_SETTEXT`（即注入请求**在途**）时，先让原过程写入、随后在
 //!   同一消息处理内**同步销毁并重建**顶层窗口——注入请求跑到一半目标
 //!   就地换人，打回 `RACE_ARMED` / `RACE_TRIGGERED <hwnd>`；
+//! - `arm-pause-hook`：在 username 框上挂**暂停钩子**（旧式子类化）：
+//!   下一次 `WM_SETTEXT` 在原过程写入完成后，宿主**在同一消息处理内停住**
+//!   （注入线程仍阻塞在这条跨进程 SendMessageW 上），打回 `PAUSE_ARMED` /
+//!   `HOOK_PAUSED`；收到 stdin 命令 `hook-go` 才放行，打回 `HOOK_RESUMED`。
+//!   给命令层取消时序套件（tests/desktop_fill_command_cancel.rs）提供
+//!   **确定性**的第一字段写入完成后的插桩点：测试侧在 `HOOK_PAUSED` 与
+//!   `hook-go` 之间改动槽位，时序不是靠轮询碰运气；
 //! - `quit`：干净退出（销毁窗口，EXIT 0）。
 //!
 //! 非 Windows 平台：入口直接退出 0（不参与任何测试）。
@@ -63,11 +70,22 @@ fn main() {
     const WM_DESTROY_RECREATE: u32 = WM_APP + 1;
     /// 自定义消息：在 username 框上挂竞态钩子（同样必须在创建线程做）
     const WM_ARM_RACE_HOOK: u32 = WM_APP + 2;
+    /// 自定义消息：在 username 框上挂暂停钩子（同样必须在创建线程做）
+    const WM_ARM_PAUSE_HOOK: u32 = WM_APP + 3;
     /// username 框的原 wndproc（竞态钩子子类化前的过程指针；0 = 未挂钩）
     static ORIG_USERNAME_PROC: AtomicIsize = AtomicIsize::new(0);
     /// 竞态钩子已触发（首次 WM_SETTEXT 后销毁重建）——只触发一次
     static RACE_TRIGGERED: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
+    /// username 框的原 wndproc（暂停钩子子类化前的过程指针；0 = 未挂钩。
+    /// 与竞态钩子分开存：两个钩子各自一个宿主实例，互不同时挂）
+    static ORIG_PAUSE_PROC: AtomicIsize = AtomicIsize::new(0);
+    /// 暂停钩子已触发（首次 WM_SETTEXT 后停住）——只触发一次
+    static PAUSE_TRIGGERED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    /// 暂停钩子的放行开关（stdin `hook-go` 置位；60 秒兜底超时后自行放行，
+    /// 测试进程崩了也不留死锁的窗口）
+    static PAUSE_GO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     fn pcw(s: &HSTRING) -> PCWSTR {
         PCWSTR(s.as_ptr())
@@ -193,6 +211,23 @@ fn main() {
             let _ = std::io::stdout().flush();
             return LRESULT(0);
         }
+        if msg == WM_ARM_PAUSE_HOOK {
+            let username = USERNAME_HWND.load(Ordering::Acquire);
+            if username == 0 {
+                println!("PAUSE_ARM_FAILED no-username");
+            } else {
+                unsafe {
+                    let hook_fn: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+                        pause_proc;
+                    let proc_ptr = hook_fn as *const () as isize;
+                    let prev = SetWindowLongPtrW(HWND(username as *mut _), GWLP_WNDPROC, proc_ptr);
+                    ORIG_PAUSE_PROC.store(prev, Ordering::Release);
+                }
+                println!("PAUSE_ARMED");
+            }
+            let _ = std::io::stdout().flush();
+            return LRESULT(0);
+        }
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 
@@ -224,6 +259,45 @@ fn main() {
             }
             let new_top = create_target_window();
             println!("RACE_TRIGGERED {new_top}");
+            let _ = std::io::stdout().flush();
+        }
+        result
+    }
+
+    /// 暂停钩子过程（旧式子类化 username 框）：正常消息全部转交原过程；
+    /// 首次 `WM_SETTEXT` 在原过程写入完成后**停在同一消息处理里**——注入
+    /// 线程此刻仍阻塞在这条跨进程 SendMessageW 上，直到测试进程观察到
+    /// `HOOK_PAUSED`、改完槽位并发来 `hook-go` 才放行。这给命令层取消时序
+    /// 套件一个确定性的插桩点：清槽/换目标严格落在第一字段写入完成之后、
+    /// 注入流程恢复之前，不靠轮询时序碰运气。
+    unsafe extern "system" fn pause_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        let orig = ORIG_PAUSE_PROC.load(Ordering::Acquire);
+        let result = if orig != 0 {
+            let proc_fn: unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT =
+                std::mem::transmute(orig);
+            CallWindowProcW(Some(proc_fn), hwnd, msg, wparam, lparam)
+        } else {
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        };
+        if msg == WM_SETTEXT && !PAUSE_TRIGGERED.swap(true, Ordering::AcqRel) {
+            // 注入值已落进 username 框（注入线程还阻塞在这条消息上）；
+            // 停住等 hook-go（60 秒兜底：测试进程意外死亡也不永久挂死）
+            println!("HOOK_PAUSED");
+            let _ = std::io::stdout().flush();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !PAUSE_GO.load(Ordering::Acquire) {
+                if std::time::Instant::now() >= deadline {
+                    println!("HOOK_TIMEOUT");
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            println!("HOOK_RESUMED");
             let _ = std::io::stdout().flush();
         }
         result
@@ -297,6 +371,21 @@ fn main() {
                             LPARAM(0),
                         );
                     }
+                },
+                "arm-pause-hook" => unsafe {
+                    PAUSE_GO.store(false, Ordering::Release);
+                    let top = TOP_HWND.load(Ordering::Acquire);
+                    if top != 0 {
+                        let _ = PostMessageW(
+                            Some(HWND(top as *mut _)),
+                            WM_ARM_PAUSE_HOOK,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                    }
+                },
+                "hook-go" => {
+                    PAUSE_GO.store(true, Ordering::Release);
                 },
                 "quit" => {
                     QUITTING.store(true, Ordering::Release);
