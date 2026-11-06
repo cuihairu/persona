@@ -97,8 +97,7 @@ Win32 校验非原子——重验证与 `SendMessageW` 之间仍有极小竞态�
   `WM_GETTEXT`/`WM_GETTEXTLENGTH` 读 `ES_PASSWORD` 控件在跨进程
   `WM_SETTEXT` 写入成功后仍返回空串。套件记录观察值而非硬断言恒空；
   密码注入成功的判据是靶进程同进程读回（`fill-test-host` `readback`
-  命令——帧按字段长度前缀编码：`READBACK <unit-count>:<hex>
-  <unit-count>:<hex>`，空字段 = `0:`，单字段残留绝不会被静默解析成
+  命令——帧按字段长度前缀编码：`READBACK <unit-count>:<hex> <unit-count>:<hex>`，空字段 = `0:`，单字段残留绝不会被静默解析成
   双空）加跨进程 `EM_GETPASSWORDCHAR`/样式断言；普通框的跨进程读回
   断言不变。
 - `desktop/src-tauri/src/quick_access.rs` —— 浮窗 toggle 路径里的目标
