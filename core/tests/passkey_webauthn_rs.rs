@@ -15,14 +15,11 @@ use webauthn_rs::prelude::*;
 const RP_ID: &str = "example.com";
 const ORIGIN: &str = "https://example.com";
 
-/// `Base64UrlSafeData` serializes as a base64url string — use that to pull
-/// the challenge out of the RP's request.
-fn challenge_string(challenge: &Base64UrlSafeData) -> String {
-    serde_json::to_value(challenge)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string()
+/// webauthn-rs 0.6 represents the challenge as raw bytes (`Challenge =
+/// Vec<u8>`); encode them the same way the browser client would receive
+/// them (base64url, no padding).
+fn challenge_string(challenge: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(challenge)
 }
 
 fn client_data_json(ceremony: &str, challenge_b64: &str) -> Vec<u8> {
