@@ -106,7 +106,7 @@ jobs:
         with:
           workspaces: desktop/src-tauri
 
-      - uses: pnpm/action-setup@v6.1.0
+      - uses: pnpm/action-setup@v6.1.1
         # Version comes from the root package.json `packageManager` field
         # (pnpm@10.22.0); specifying `version` here conflicts with it.
 
