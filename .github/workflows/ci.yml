@@ -154,10 +154,11 @@ jobs:
         run: cargo deny check
       - name: Run cargo-audit
         # cargo-audit 内置的 gix clone 在 runner 上持续失败（failed to prepare
-        # clone），改用系统 git 预克隆 advisory-db 后离线审计
+        # clone），改用系统 git 预克隆 advisory-db 后离线审计。注意不能放
+        # $CARGO_HOME 下——cargo-deny 已经占用了 advisory-db 目录
         run: |
-          git clone --depth 1 https://github.com/RustSec/advisory-db.git "$HOME/.cargo/advisory-db"
-          cargo audit --db "$HOME/.cargo/advisory-db" --no-fetch
+          git clone --depth 1 https://github.com/RustSec/advisory-db.git "$RUNNER_TEMP/advisory-db"
+          cargo audit --db "$RUNNER_TEMP/advisory-db" --no-fetch
 
   desktop:
     name: Desktop (Tauri + React)
