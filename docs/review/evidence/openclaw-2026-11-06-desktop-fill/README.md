@@ -1,4 +1,4 @@
-# openclaw 真机证据：桌面填充（2026-11-06，两轮原始日志均已入仓）
+# openclaw 真机证据：桌面填充（2026-11-06，run1、run3–run6 原始日志均已入仓）
 
 - 环境：openclaw（Administrator@10.240.0.3，Windows Server 2022 x64，msvc +
   RUSTUP_TOOLCHAIN=stable，交互式控制台会话经计划任务 `PersonaFillTest`（/IT）执行；
@@ -9,7 +9,14 @@
     与守卫断言）→ 原始日志在 `run1-d601c14/`（此前 README 声称的两份 .log 一直
     **不在仓内**，2026-11-06 第三轮已从该机取回归档——文件为当时任务的真实输出）；
   - **第三轮** HEAD `a283573`（P1 确认绑定 snapshot_id + 真竞态用例 + 告警补齐）
-    → 顶层三份文件为本轮重跑的真实原始输出。
+    → 顶层三份文件为本轮重跑的真实原始输出；
+  - **第四轮红** HEAD `7e52d7b`（取消边界红测试 + READBACK 残留红测试，红先行）
+    → `run4-red-7e52d7b/`，`lib_exit=101 frame_exit=101 xproc_exit=0`（预期红）；
+  - **第四轮实现落地后** HEAD `4644114` → `run5-red-4644114/`，
+    `lib_exit=101 frame_exit=0 xproc_exit=0`：实现侧绿、红在两个 Windows-only
+    剪贴板用例（根因见第四轮报告）；
+  - **剪贴板用例修复后复验** HEAD `a9d2eed` → `run6-green-a9d2eed/`，
+    `lib_exit=0 frame_exit=0 xproc_exit=0`。
 
 ## 结果
 
@@ -17,12 +24,24 @@
 | ---- | --------- | -------------------- | ------------------- | ------------------------- |
 | run1 | `d601c14` | 6 passed / 0 failed  | 4 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
 | run3 | `a283573` | 12 passed / 0 failed | 5 passed / 0 failed | `lib_exit=0 xproc_exit=0` |
+| run4 | `7e52d7b` | 12 passed / **3 failed**（红先行预期） | 5 passed / 0 failed | `lib_exit=101 frame_exit=101 xproc_exit=0` |
+| run5 | `4644114` | 15 passed / **2 failed**（剪贴板用例） | 5 passed / 0 failed | `lib_exit=101 frame_exit=0 xproc_exit=0` |
+| run6 | `a9d2eed` | **17 passed / 0 failed** | **5 passed / 0 failed** | `lib_exit=0 frame_exit=0 xproc_exit=0` |
 
 run3 相比 run1 新增：`confirm_binding_tests` 5 例（确认绑定快照纯函数：确认 A→
 重捕获 B 拒绝、清槽后在途请求拒绝、缺 snapshot_id 拒绝等）、剪贴板非文本清空
 告警 1 例、跨进程**在途**销毁重建竞态 1 例（`fill-test-host` 竞态钩子：第一条
 WM_SETTEXT 写入完成后、密码写入前，宿主在同一消息处理内同步销毁重建——注入
 整体拒绝，重建窗口内密文零残留，宿主同进程读回交叉确认）。
+
+run6 相比 run5 只改测试（`a68fd72`、`a9d2eed` 两笔，产品代码零改动）：两个
+Windows-only 剪贴板用例的根因与修复见第四轮报告——非文本清空用例用
+retry-until-non-empty 去读**期望为空**的剪贴板，给了 rdpclip 把上一用例的
+`PREV-PANIC-*` 灌回来的整整 1 秒窗口；panic 路径用例注入的写入函数每次都
+返回 Err，明文覆写先失败、闭包根本不执行，`closure panic must propagate
+after restore` 只能红。run6 全绿同时覆盖第四轮新增的取消时序两例
+（`slot_cleared/slot_replaced_after_first_write_aborts_remaining_write`）、
+READBACK 长度前缀协议 6 例与跨进程竞态 5 例。
 
 ## 判断结论：跨进程 WM_GETTEXT 读 ES_PASSWORD 是实测观察到的系统限制，注入本身真实成功
 
