@@ -30,6 +30,16 @@ fill-test-host = []
 
 [dependencies]
 persona-desktop = { path = ".." }
+# MockBiometricProvider（AppState.biometric_provider 的测试装配用）
+persona-core = { path = "../../../core" }
+# 命令层取消时序套件（tests/desktop_fill_command_cancel.rs）经 tauri mock
+# runtime 直驱真命令 `desktop_fill_credential`：tokio test 运行时 + 每测
+# 临时 vault + 快照 id 生成。全部已在主包 Cargo.lock 里（desktop 的
+# dev-dependencies 同版本），不引入新上游
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tempfile = "3"
+uuid = { version = "1.6", features = ["v4"] }
+tauri = { version = "2", features = ["test"] }
 
 # windows crate 只挂在 Windows 目标下：Linux/CI 侧本 crate 的 bin 与测试
 # 全部 cfg 掉，不拉 windows 编译单元（windows-future 在非 MSVC 目标编不过）

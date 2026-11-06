@@ -5110,7 +5110,12 @@ dependencies = [
 name = "persona-fill-test"
 version = "0.1.0"
 dependencies = [
+ "persona-core",
  "persona-desktop",
+ "tauri",
+ "tempfile",
+ "tokio",
+ "uuid",
  "windows 0.61.3",
 ]
 
