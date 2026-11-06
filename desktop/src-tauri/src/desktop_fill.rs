@@ -1441,18 +1441,30 @@ mod win_tests {
     }
 
     /// 闭包 panic 分支：恢复完成后 `tracing::warn!("...on panic path...")`
-    /// 必须落日志，panic 在恢复之后原样重抛。注入失败的写入函数让恢复
-    /// 产生告警，确定性覆盖「panic + 恢复失败」的组合分支。
+    /// 必须落日志，panic 在恢复之后原样重抛。注入的写入函数**只让恢复
+    /// 失败**（第一次调用=明文覆写成功，之后=写回备份失败），确定性覆盖
+    /// 「panic + 恢复失败」的组合分支——若覆写就失败，闭包根本不会执行，
+    /// panic 分支无从触发（openclaw 实测：全 Err 写入函数让本用例恒红）。
     #[test]
     fn clipboard_paste_warns_on_panic_path_when_restore_fails() {
         let _guard = clipboard_test_lock();
         use super::win::with_clipboard_paste_with_writer;
+        // 第 1 次写（明文覆写）成功，第 2 次写（恢复备份）起确定性失败
+        let calls = std::cell::Cell::new(0usize);
         let (_, warns) = capture_warns(|| {
             let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = with_clipboard_paste_with_writer(
                     "PANIC-SECRET",
                     || panic!("boom in paste closure"),
-                    |_| Err("injected clipboard writer failure".to_string()),
+                    |_| {
+                        let n = calls.get();
+                        calls.set(n + 1);
+                        if n == 0 {
+                            Ok(())
+                        } else {
+                            Err("injected clipboard writer failure".to_string())
+                        }
+                    },
                 );
             }));
             assert!(panicked.is_err(), "closure panic must propagate after restore");
@@ -1463,6 +1475,9 @@ mod win_tests {
             }),
             "panic-path restore warning must be logged via tracing::warn: {warns:?}"
         );
+        // 恢复是注入失败的：明文 PANIC-SECRET 还留在真剪贴板上——测试
+        // 自己清掉，别把它留给后面用例或外部剪贴板同步进程。
+        super::win::seed_clipboard("").ok();
     }
 
     /// tracing 告警捕获（thread-local dispatcher，测试体内落 warn）：
