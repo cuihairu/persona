@@ -22,6 +22,7 @@ import {
 import { extractSaveProposal, type SaveProposal, type SaveScanInput } from './saveDetect.js';
 import { planLoginStep } from './loginSteps.js';
 import { mountPersonaUi } from './shadowUi.js';
+import { isTrustedPasskeyOrigin } from './passkeyOrigin.js';
 
 interface SuggestionItem {
     item_id: string;
@@ -1698,11 +1699,15 @@ function handlePasskeyPageMessage(event: MessageEvent) {
     }
 
     if (data.type === 'PERSONA_PASSKEY_CREATE') {
+        // Drop forged-origin requests before they reach the dialog/native gate.
+        if (!isTrustedPasskeyOrigin(data.payload?.origin, location.origin)) return;
         void handlePasskeyCreateRequest(data.requestId, data.payload);
         return;
     }
 
     if (data.type === 'PERSONA_PASSKEY_GET') {
+        // Same origin binding for the assertion/list path.
+        if (!isTrustedPasskeyOrigin(data.payload?.origin, location.origin)) return;
         void handlePasskeyGetRequest(data.requestId, data.payload);
         return;
     }

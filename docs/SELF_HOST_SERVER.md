@@ -17,7 +17,7 @@ The master password never leaves the device.
 A single `persona-server` binary is the entire server-side implementation of the
 sync relay, and the three deployment forms map to the S3 model: ① official
 hosting = persona officially runs the same image; ② self-hosted relay = the
-compose/cargo path on this page; ③ LAN direct = the same binary bound to the
+compose/cargo path on this page; ③ LAN self-hosted relay = the same binary bound to the
 on-site device's LAN address (`PERSONA_SERVER_HOST=192.168.x.x` or the default
 `0.0.0.0`). Clients only change `base_url`; the protocol is byte-for-byte
 identical — consistency across the three forms comes from "one router, one test

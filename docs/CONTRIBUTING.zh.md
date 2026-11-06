@@ -24,7 +24,7 @@
 
 - 使用 Conventional Commit 风格的 PR 标题；squash merge 会保留该标题作为最终 commit。
 - 保持 PR 聚焦，并尽量关联 issue。
-- 新增或完成路线图条目时更新 `TODO_BACKLOG.md`。
+- 新增或完成路线图条目时更新 `todo.md`。
 - 为新逻辑添加测试，并在可行时本地运行 `make lint-all` / `make test-all`。
 
 ## Code Ownership

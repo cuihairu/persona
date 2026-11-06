@@ -31,13 +31,13 @@
 - `server/` 可选服务端
 - `docs/` 文档体系
 - `website/` 官网
-- 根级 `Cargo.toml`、`Cargo.lock`、`README.md`、`TODO.md`
+- 根级 `Cargo.toml`、`Cargo.lock`、`README.md`、`todo.md`
 
 因此，项目“整体进度”应以父提交为准，而不是以当前 `HEAD` 文件数量为准。
 
 ## 进度基线
 
-基于父提交中的 [`TODO.md`](./TODO.md) 内容统计：
+基于父提交中的 [`todo.md`](./todo.md) 内容统计：
 
 - 已完成：52 项
 - 未完成：21 项

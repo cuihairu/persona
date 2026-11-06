@@ -173,9 +173,24 @@ pub async fn run_passkey_approval_server_with<S: PasskeyApprovalSink>(
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    // A leftover socket from a crashed previous run would fail bind.
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
+    // 陈旧 socket 残骸（上次进程崩溃没清理）会挡 bind；但活着的另一个桌面
+    // 实例在监听时不得无条件删除劫持（transport.rs 同款口径）。
+    let listener = match UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(err) if path.exists() => {
+            if !persona_ssh_agent::transport::is_stale_socket(&path) {
+                anyhow::bail!(
+                    "approval socket {} already bound by a live process: {err}",
+                    path.display()
+                );
+            }
+            std::fs::remove_file(&path)?;
+            UnixListener::bind(&path)?
+        }
+        Err(err) => {
+            anyhow::bail!("failed to bind approval socket {}: {err}", path.display())
+        }
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

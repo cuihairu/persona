@@ -41,9 +41,9 @@ const BasicLayout: React.FC = () => {
             >
               GitHub
             </Button>
-            <Button type="primary" icon={<DownloadOutlined />}>
-              <Link to="/download" style={{ color: 'inherit' }}>下载</Link>
-            </Button>
+            <Link to="/download" style={{ color: 'inherit' }}>
+              <Button type="primary" icon={<DownloadOutlined />}>下载</Button>
+            </Link>
           </Space>
         </div>
       </Header>
@@ -68,9 +68,10 @@ const BasicLayout: React.FC = () => {
           </div>
           <div className={styles.footerSection}>
             <h4>关于</h4>
-            <Link to="/security">安全性</Link>
-            <Link to="/privacy">隐私政策</Link>
-            <Link to="/terms">使用条款</Link>
+            {/* 无对应路由且暂无正式文案：不制造 404，标注「即将上线」 */}
+            <span className={styles.comingSoon}>安全性（即将上线）</span>
+            <span className={styles.comingSoon}>隐私政策（即将上线）</span>
+            <span className={styles.comingSoon}>使用条款（即将上线）</span>
           </div>
           <div className={styles.footerSection}>
             <h4>联系我们</h4>

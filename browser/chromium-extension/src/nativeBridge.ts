@@ -363,23 +363,60 @@ function extensionGlobal(): { runtime: any; storage?: any } {
     return g.browser ?? g.chrome;
 }
 
+/**
+ * 配对状态（含长期 HMAC pairing key）只允许进 `chrome.storage.session`
+ * （内存区，浏览器退出即清）。绝不落 `storage.local`（未加密持久盘区）；
+ * 若会话区不可用（旧环境），宁可要求重新配对也不落盘。
+ */
+function sessionArea(): any {
+    return extensionGlobal().storage?.session;
+}
+
 function storageGet<T>(key: string): Promise<T | undefined> {
     return new Promise((resolve) => {
-        extensionGlobal().storage.local.get(key, (value: any) =>
-            resolve(value?.[key] as T | undefined)
-        );
+        const area = sessionArea();
+        if (!area) return resolve(undefined);
+        area.get(key, (value: any) => resolve(value?.[key] as T | undefined));
     });
 }
 
 function storageSet<T>(key: string, value: T): Promise<void> {
     return new Promise((resolve) => {
-        extensionGlobal().storage.local.set({ [key]: value }, () => resolve());
+        const area = sessionArea();
+        if (!area) return resolve();
+        area.set({ [key]: value }, () => resolve());
+    });
+}
+
+/** 旧版把配对状态写进了持久盘区；迁移时读取一次以搬入内存区。 */
+function storageLocalGet<T>(key: string): Promise<T | undefined> {
+    return new Promise((resolve) => {
+        const local = extensionGlobal().storage?.local;
+        if (!local) return resolve(undefined);
+        local.get(key, (value: any) => resolve(value?.[key] as T | undefined));
+    });
+}
+
+/** 迁移完成后清除持久盘区残留（把已落盘的 pairing key 从磁盘抹掉）。 */
+function storageLocalRemove(key: string): Promise<void> {
+    return new Promise((resolve) => {
+        const local = extensionGlobal().storage?.local;
+        if (!local) return resolve();
+        local.remove(key, () => resolve());
     });
 }
 
 async function loadPairingState(): Promise<PairingState> {
     const existing = await storageGet<PairingState>(PAIRING_STORAGE_KEY);
     if (existing?.clientInstanceId) return existing;
+    // One-time migration: legacy versions persisted the pairing state to
+    // storage.local; move it into the session area and scrub the disk copy.
+    const legacy = await storageLocalGet<PairingState>(PAIRING_STORAGE_KEY);
+    if (legacy?.clientInstanceId) {
+        await storageSet(PAIRING_STORAGE_KEY, legacy);
+        await storageLocalRemove(PAIRING_STORAGE_KEY);
+        return legacy;
+    }
     const clientInstanceId = crypto.randomUUID?.() ?? String(Date.now());
     const state: PairingState = { clientInstanceId };
     await storageSet(PAIRING_STORAGE_KEY, state);

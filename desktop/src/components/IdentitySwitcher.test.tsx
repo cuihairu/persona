@@ -81,6 +81,35 @@ describe('components/IdentitySwitcher', () => {
     expect(document.querySelector('.bg-gray-100.text-gray-800')).not.toBeNull();
   });
 
+  it('does not emit uncontrolled->controlled warning when identity loads after mount', () => {
+    const identity = { id: '1', name: 'Late', identity_type: 'Personal', tags: [] };
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const service: { identities: any[]; currentIdentity: any; switchIdentity: jest.Mock } = {
+        identities: [identity],
+        currentIdentity: null,
+        switchIdentity: jest.fn(),
+      };
+      (usePersonaService as jest.Mock).mockReturnValue(service);
+      // 首渲染：currentIdentity=null（headlessui useControllable 按 value!==undefined
+      // 判定受控；value 必须永不为 undefined，否则身份加载完成即触发转换告警）
+      const { rerender } = render(<IdentitySwitcher onCreateIdentity={() => {}} />);
+
+      service.currentIdentity = identity;
+      (usePersonaService as jest.Mock).mockReturnValue(service);
+      rerender(<IdentitySwitcher onCreateIdentity={() => {}} />);
+
+      expect(screen.getByText('Late')).toBeInTheDocument();
+      expect(
+        errorSpy.mock.calls.filter((args) =>
+          String(args[0]).includes('changing from uncontrolled to controlled'),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('switches identity on option click', () => {
     const identities = [
       { id: 'id-a', name: 'Alpha', identity_type: 'Personal', tags: [] },

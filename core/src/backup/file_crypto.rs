@@ -112,8 +112,13 @@ pub fn decrypt_bytes(data: &[u8], passphrase: &str) -> Result<Vec<u8>> {
             .ok_or_else(|| anyhow!("Bad header len"))?,
     ) as usize;
     cursor += 8;
+    // checked_add：enc_len 是文件里的 u64（不受信），`cursor + enc_len` 可能
+    // 溢出 usize 在 debug 下 panic（DoS）；先查后切片。
+    let ciphertext_end = cursor
+        .checked_add(enc_len)
+        .ok_or_else(|| anyhow!("Bad ciphertext len"))?;
     let ciphertext = data
-        .get(cursor..cursor + enc_len)
+        .get(cursor..ciphertext_end)
         .ok_or_else(|| anyhow!("Bad ciphertext len"))?;
 
     // 历史格式：解密侧 iterations/parallelism 恒 3/1（头部只存 mem_kib）
@@ -198,6 +203,18 @@ mod tests {
                 v.extend_from_slice(&[9u8; 12]);
                 v.extend_from_slice(&8u32.to_le_bytes()); // mem_kib
                 v.extend_from_slice(&999u64.to_le_bytes()); // enc_len beyond EOF
+                v
+            },
+            {
+                // enc_len = u64::MAX：`cursor + enc_len` 会溢出 usize（debug 下
+                // panic）。checked_add 必须转为"Bad ciphertext len"而非崩溃。
+                let mut v = MAGIC.to_vec();
+                v.push(16);
+                v.extend_from_slice(&[7u8; 16]);
+                v.push(12);
+                v.extend_from_slice(&[9u8; 12]);
+                v.extend_from_slice(&8u32.to_le_bytes()); // mem_kib
+                v.extend_from_slice(&u64::MAX.to_le_bytes());
                 v
             },
         ];

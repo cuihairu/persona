@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
 import type {
@@ -48,6 +48,12 @@ export const usePersonaService = () => {
     resetSidebarFilter,
     setCredentialSearchQuery,
   } = useAppStore();
+
+  // 身份切换/凭据加载的过期响应守卫（JS-5）：快速连续切换身份时，慢的
+  // 上一个请求后到会覆盖新身份的状态。每个操作递增序号，完成后若序号已
+  // 被更新的操作取代则丢弃结果，防身份凭据串号。
+  const switchSeq = useRef(0);
+  const credentialLoadSeq = useRef(0);
 
   // Check if service is unlocked on mount
   useEffect(() => {
@@ -247,7 +253,9 @@ export const usePersonaService = () => {
         try {
           await personaAPI.setActiveIdentity(response.data.id);
         } catch {
-          // ignore
+          // 创建已服务端确认，不撤销；但激活失败必须可见——workspace 活动
+          // 身份仍指旧身份，CLI/浏览器会按旧身份工作，不得静默成功
+          toast.error(t('svc.activateIdentityFailed'));
         }
         toast.success(t('svc.identityCreated'));
         return response.data;
@@ -319,23 +327,46 @@ export const usePersonaService = () => {
     }
   };
 
-  const switchIdentity = async (identity: Identity, options?: { silent?: boolean }) => {
-    setCurrentIdentity(identity);
+  /** 切换活动身份。以服务端提交成功为准才更新 UI 身份与凭据；
+   * 失败保留原身份并走 setError，不弹成功提示（silent 只抑制成功
+   * toast，不抑制失败反馈——失败静默会让用户以为已在目标身份工作）。 */
+  const switchIdentity = async (
+    identity: Identity,
+    options?: { silent?: boolean },
+  ): Promise<boolean> => {
+    clearError();
+    // 序号守卫：并发切换时慢的旧切换完成不得覆盖新切换的 currentIdentity
+    const seq = ++switchSeq.current;
     try {
-      await personaAPI.setActiveIdentity(identity.id);
-    } catch {
-      // ignore
-    }
-    await loadCredentialsForIdentity(identity.id);
-    // 搜索跳转等场景传 silent：切换是手段不是用户动作，toast 属噪声
-    if (!options?.silent) {
-      toast.success(t('svc.switchedTo', { name: identity.name }));
+      const response = await personaAPI.setActiveIdentity(identity.id);
+      if (seq !== switchSeq.current) return false;
+      if (!response.success) {
+        const errorMessage = response.error || t('svc.switchFailed');
+        setError(errorMessage);
+        toast.error(errorMessage);
+        return false;
+      }
+      setCurrentIdentity(identity);
+      await loadCredentialsForIdentity(identity.id);
+      // 搜索跳转等场景传 silent：切换是手段不是用户动作，成功 toast 属噪声
+      if (!options?.silent) {
+        toast.success(t('svc.switchedTo', { name: identity.name }));
+      }
+      return true;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : t('svc.switchFailed');
+      setError(errorMessage);
+      toast.error(errorMessage);
+      return false;
     }
   };
 
   const loadCredentialsForIdentity = async (identityId: string) => {
+    // 序号守卫：慢的旧身份凭据响应后到不得覆盖新身份（JS-5 凭据串号）
+    const seq = ++credentialLoadSeq.current;
     try {
       const response = await personaAPI.getCredentialsForIdentity(identityId);
+      if (seq !== credentialLoadSeq.current) return;
       if (response.success && response.data) {
         setCredentials(response.data);
       } else {
@@ -344,6 +375,7 @@ export const usePersonaService = () => {
         clearPendingCredentialSelection();
       }
     } catch {
+      if (seq !== credentialLoadSeq.current) return;
       setError(t('svc.loadCredentialsFailed'));
       clearPendingCredentialSelection();
     }

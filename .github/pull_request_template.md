@@ -7,7 +7,7 @@ Summary
 Checklist
 - [ ] Linked issue (if any)
 - [ ] PR title follows Conventional Commits (e.g., `feat(cli): ...`)
-- [ ] Updated TODO_BACKLOG.md for new tasks/scopes (if relevant)
+- [ ] Updated todo.md for new tasks/scopes (if relevant)
 - [ ] Tests added/updated
 - [ ] `cargo fmt && cargo clippy` pass
 - [ ] Desktop `npm run lint && npm test` pass

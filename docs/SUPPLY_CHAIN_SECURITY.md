@@ -2,7 +2,7 @@
 
 > [English](SUPPLY_CHAIN_SECURITY.md) | [中文](SUPPLY_CHAIN_SECURITY.zh.md)
 
-This project runs comprehensive supply chain security checks to ensure the security, license compliance, and source trustworthiness of every dependency.
+This project runs supply chain security checks to ensure the security, license compliance, and source trustworthiness of all dependencies.
 
 ## Toolchains
 

@@ -377,6 +377,49 @@ mod unix_e2e {
         env::remove_var("PERSONA_AGENT_TEST_KEY_COMMENT");
     }
 
+    #[test]
+    fn test_agent_drops_oversized_frame() {
+        // Regression (BUG-1/P1): a 4-byte u32 length prefix of `0xFF_FF_FF_FF`
+        // must NOT drive an unbounded `vec![0u8; pkt_len]` (~4 GB) allocation.
+        // The agent must drop the connection instead of OOMing the credential
+        // broker. Mirrors the bounds-checking convention of `read_ssh_string`.
+        let agent = Agent::new();
+
+        let (server_std, mut client) = StdUnixStream::pair().expect("stream pair");
+        server_std
+            .set_nonblocking(true)
+            .expect("server nonblocking");
+        client.set_nonblocking(false).expect("client blocking");
+
+        let mut agent_clone = agent.clone_shallow();
+        let agent_thread = thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .worker_threads(1)
+                .thread_name("agent-oversize")
+                .build()
+                .expect("agent runtime");
+            runtime.block_on(async move {
+                let server_stream = UnixStream::from_std(server_std).expect("to tokio stream");
+                handle_connection(&mut agent_clone, AgentStream::Unix(server_stream))
+                    .await
+                    .expect("handle connection")
+            });
+        });
+
+        // u32::MAX length prefix — far beyond MAX_AGENT_PKT_LEN (16 MiB).
+        client
+            .write_all(&[0xFF, 0xFF, 0xFF, 0xFF])
+            .expect("write oversized length");
+
+        // The connection must be dropped (EOF) rather than a 4 GB alloc/abort.
+        let mut probe = [0u8; 1];
+        let n = client.read(&mut probe).expect("read after oversized frame");
+        assert_eq!(n, 0, "connection should be closed after oversized frame");
+
+        agent_thread.join().expect("agent thread finished");
+    }
+
     fn request_agent_identities(stream: &mut StdUnixStream) -> (Vec<u8>, String) {
         let mut request = vec![0u8; 5];
         BigEndian::write_u32(&mut request[0..4], 1);

@@ -10,6 +10,10 @@ use persona_core::{
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// 读 agent socket 响应的长度上限（与 ssh-agent 侧 BUG-1 同法）：恶意/损坏
+/// 的代理可能报一个超大长度导致无界内存分配，先查再分配。
+const MAX_AGENT_RESP_LEN: usize = 16 * 1024 * 1024;
+
 #[derive(Args, Debug)]
 pub struct SshArgs {
     #[command(subcommand)]
@@ -782,6 +786,9 @@ async fn query_agent_identities(sock_path: &str) -> Result<usize> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let resp_len = BigEndian::read_u32(&len_buf) as usize;
+    if resp_len > MAX_AGENT_RESP_LEN {
+        anyhow::bail!("Agent response length {} exceeds limit", resp_len);
+    }
     let mut resp = vec![0u8; resp_len];
     stream.read_exact(&mut resp).await?;
     if resp.is_empty() || resp[0] != 12 {
@@ -821,6 +828,9 @@ async fn query_agent_identities(sock_path: &str) -> Result<usize> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).await?;
     let resp_len = BigEndian::read_u32(&len_buf) as usize;
+    if resp_len > MAX_AGENT_RESP_LEN {
+        anyhow::bail!("Agent response length {} exceeds limit", resp_len);
+    }
     let mut resp = vec![0u8; resp_len];
     stream.read_exact(&mut resp).await?;
     if resp.is_empty() || resp[0] != 12 {
@@ -1507,38 +1517,108 @@ fn stop_agent() -> Result<()> {
         println!("{}", "Empty PID file.".yellow());
         return Ok(());
     }
-    let stopped = stop_agent_pid(pid)?;
-    if stopped {
-        println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
-        // Cleanup sock/pid files
-        let _ = std::fs::remove_file(pid_file);
-        let sock_file = state_dir.join("ssh-agent.sock");
-        let _ = std::fs::remove_file(sock_file);
-    } else {
-        println!("{}", "Failed to stop agent".red());
+    match stop_agent_pid(pid)? {
+        StopOutcome::Stopped => {
+            println!("{} Stopped persona-ssh-agent (pid {})", "✓".green(), pid);
+            // Cleanup sock/pid files
+            let _ = std::fs::remove_file(pid_file);
+            let sock_file = state_dir.join("ssh-agent.sock");
+            let _ = std::fs::remove_file(sock_file);
+        }
+        // 进程已不在（陈旧 pidfile）：清掉文件，按"无需再停"处理。
+        StopOutcome::AlreadyGone => {
+            println!(
+                "{}",
+                format!("PID {pid} is not running (stale pidfile); removing.").yellow()
+            );
+            let _ = std::fs::remove_file(pid_file);
+            let sock_file = state_dir.join("ssh-agent.sock");
+            let _ = std::fs::remove_file(sock_file);
+        }
+        // PID 被别的进程复用（不是 agent）：拒绝杀，绝不误伤。
+        StopOutcome::Refused => {
+            println!(
+                "{}",
+                format!("PID {pid} is not persona-ssh-agent; refusing to kill.").red()
+            );
+        }
     }
     Ok(())
 }
 
+/// stop_agent 的三态结果：杀成功 / 进程早已不在（陈旧 pidfile）/ 拒绝杀。
+#[derive(PartialEq, Debug)]
+enum StopOutcome {
+    Stopped,
+    AlreadyGone,
+    Refused,
+}
+
+/// 读 /proc/<pid>/cmdline 判断该 PID 是否为 persona-ssh-agent。
+///
+/// `None` = 进程不存在；`Some(true)` = 是我们；`Some(false)` = 别的进程。
+/// 用来防"陈旧 pidfile + PID 被复用"时误杀无辜进程。
 #[cfg(unix)]
-fn stop_agent_pid(pid: &str) -> Result<bool> {
-    use std::process::Command;
-    Ok(matches!(Command::new("kill").arg(pid).status(), Ok(s) if s.success()))
+fn is_persona_agent_process(pid: &str) -> Option<bool> {
+    let cmdline = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let text = String::from_utf8_lossy(&cmdline);
+    let is_agent = text
+        .split('\0')
+        .any(|arg| arg.contains("persona-ssh-agent"));
+    Some(is_agent)
+}
+
+#[cfg(unix)]
+fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
+    let Ok(numeric) = pid.parse::<i32>() else {
+        // 非数字 pidfile 是损坏状态而非进程：按陈旧清理，不误判为"拒绝杀"。
+        return Ok(StopOutcome::AlreadyGone);
+    };
+    match is_persona_agent_process(pid) {
+        None => Ok(StopOutcome::AlreadyGone),
+        Some(false) => Ok(StopOutcome::Refused),
+        Some(true) => {
+            // 直接用 libc::kill 发 SIGTERM：fork 外部 `kill` 在内存吃紧时可能
+            // 因 fork 失败返回 Err，被误报为 Refused 而留下 pidfile；直接
+            // 系统调用无此窗口。EPERM 等仍按 Refused 处理（与旧语义一致）。
+            let rc = unsafe { libc::kill(numeric, libc::SIGTERM) };
+            Ok(if rc == 0 {
+                StopOutcome::Stopped
+            } else {
+                StopOutcome::Refused
+            })
+        }
+    }
 }
 
 #[cfg(windows)]
-fn stop_agent_pid(pid: &str) -> Result<bool> {
+fn stop_agent_pid(pid: &str) -> Result<StopOutcome> {
     use std::process::Command;
+
+    // Windows 没有 /proc：用 tasklist 探测进程是否还在（输出含 PID 数字即
+    // 存活，判定不受系统语言影响）；不在则按陈旧 pidfile 处理，与 Unix
+    // 侧语义对齐，也让 AlreadyGone 分支在 Windows 上可达。
+    let listed = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output();
+    let alive = matches!(&listed, Ok(o) if String::from_utf8_lossy(&o.stdout).contains(pid));
+    if !alive {
+        return Ok(StopOutcome::AlreadyGone);
+    }
 
     let status = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
     if matches!(status, Ok(s) if s.success()) {
-        return Ok(true);
+        return Ok(StopOutcome::Stopped);
     }
 
     let status_force = Command::new("taskkill")
         .args(["/PID", pid, "/T", "/F"])
         .status();
-    Ok(matches!(status_force, Ok(s) if s.success()))
+    Ok(if matches!(status_force, Ok(s) if s.success()) {
+        StopOutcome::Stopped
+    } else {
+        StopOutcome::Refused
+    })
 }
 
 #[cfg(test)]
@@ -1847,14 +1927,21 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn stop_agent_pid_nonexistent_returns_false() {
-        assert!(!stop_agent_pid("99999999").unwrap());
+    fn stop_agent_pid_nonexistent_is_already_gone() {
+        assert_eq!(
+            stop_agent_pid("99999999").unwrap(),
+            StopOutcome::AlreadyGone
+        );
     }
 
     #[cfg(windows)]
     #[test]
-    fn stop_agent_pid_nonexistent_returns_false() {
-        assert!(!stop_agent_pid("99999999").unwrap());
+    fn stop_agent_pid_nonexistent_is_already_gone() {
+        // tasklist 探测不到进程 → 按"陈旧 pidfile"处理（与 Unix 一致）。
+        assert_eq!(
+            stop_agent_pid("99999999").unwrap(),
+            StopOutcome::AlreadyGone
+        );
     }
 
     // ------------------------------------------------------------------
@@ -2022,6 +2109,53 @@ mod tests {
         out.extend_from_slice(&len_buf);
         out.extend_from_slice(&payload);
         stream.write_all(&out).await.unwrap();
+    }
+
+    /// Mock agent that lies about the response length (u32::MAX), then closes.
+    /// 客户端必须在分配前拒绝（BUG-1 同法长度上限），否则会尝试分配 4GiB。
+    #[cfg(unix)]
+    async fn serve_oversized_length(listener: tokio::net::UnixListener) {
+        use byteorder::{BigEndian, ByteOrder};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut len_buf = [0u8; 4];
+        stream.read_exact(&mut len_buf).await.unwrap();
+        let req_len = BigEndian::read_u32(&len_buf) as usize;
+        let mut req = vec![0u8; req_len];
+        stream.read_exact(&mut req).await.unwrap();
+        assert_eq!(req, vec![11u8]);
+
+        let mut out = [0u8; 4];
+        BigEndian::write_u32(&mut out, u32::MAX);
+        stream.write_all(&out).await.unwrap();
+        let _ = stream.shutdown().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn query_agent_identities_rejects_oversized_length() {
+        use tokio::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let listener = UnixListener::bind(dir.path().join("oversize.sock")).unwrap();
+        let server = tokio::spawn(serve_oversized_length(listener));
+        let err = query_agent_identities(dir.path().join("oversize.sock").to_str().unwrap())
+            .await
+            .expect_err("oversized length prefix must fail before allocation");
+        assert!(err.to_string().contains("exceeds limit"), "{err}");
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stop_agent_pid_verification_distinguishes_stale_and_reused() {
+        // 一个必然不存在的 PID：/proc 下无此进程 → None（陈旧 pidfile 判据）。
+        assert_eq!(is_persona_agent_process("999999999"), None);
+        // 自己这个测试进程存在，但不是 persona-ssh-agent → Some(false)
+        // （PID 被复用时的拒绝判据）。
+        let me = std::process::id().to_string();
+        assert_eq!(is_persona_agent_process(&me), Some(false));
     }
 
     #[cfg(unix)]
@@ -3051,10 +3185,16 @@ mod tests {
         stop_agent().expect("stop with an empty pid file works");
 
         // A live process is stopped and the state files are cleaned up.
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
+        // 通过 sh 的 $0 位置传入 "persona-ssh-agent"，让 /proc/<pid>/cmdline
+        // 含 agent 名（否则会按"非 agent 进程"拒绝，无法走到杀进程分支）。
+        // 不用改名软链：本机 coreutils 是按 argv[0] 分发的单二进制，改 argv[0]
+        // 会直接拒绝运行（Security violation）。
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 5")
+            .arg("persona-ssh-agent")
             .spawn()
-            .expect("sleep spawns");
+            .expect("agent-named sh spawns");
         std::fs::write(dir.path().join("ssh-agent.pid"), child.id().to_string()).unwrap();
         std::fs::write(dir.path().join("ssh-agent.sock"), "/tmp/persona-stop.sock").unwrap();
         stop_agent().expect("stop with a live pid works");
@@ -3068,9 +3208,14 @@ mod tests {
             "sock file removed"
         );
 
-        // An unkillable pid reports failure without erroring.
+        // A stale pidfile (PID already gone) is treated as already-stopped and
+        // cleaned up, without erroring.
         std::fs::write(dir.path().join("ssh-agent.pid"), "99999999").unwrap();
-        stop_agent().expect("a failed stop reports but does not error");
+        stop_agent().expect("a stale pidfile reports and cleans without error");
+        assert!(
+            !dir.path().join("ssh-agent.pid").exists(),
+            "stale pid file removed"
+        );
     }
 
     #[test]

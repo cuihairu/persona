@@ -612,7 +612,7 @@ mod tests {
         assert!(
             err.to_string()
                 .to_lowercase()
-                .contains("failed to create directory"),
+                .contains("workspace directory is not writable"),
             "unexpected error: {err}"
         );
 

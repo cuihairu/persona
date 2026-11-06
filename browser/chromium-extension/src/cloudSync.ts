@@ -393,7 +393,14 @@ export async function pullCloudOps(
             }
             throw new Error(`oplog_pull_failed (HTTP ${resp.status})${detail}`);
         }
-        const body = (await resp.json()) as PullResponse;
+        // 成功路径也要防非 JSON 响应体：untrusted 输入，解析失败须转成
+        // 明确错误（对齐 :389 错误体纪律），而非裸 SyntaxError 上抛。
+        let body: PullResponse;
+        try {
+            body = (await resp.json()) as PullResponse;
+        } catch {
+            throw new Error(`oplog_pull_failed (HTTP ${resp.status}): malformed JSON response`);
+        }
         ops.push(...(body.ops ?? []));
         pages += 1;
         cursor = body.next_cursor ?? null;

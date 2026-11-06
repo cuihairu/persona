@@ -2,7 +2,7 @@
 
 > [English](ROADMAP.md) | [中文](ROADMAP.zh.md)
 
-Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track stays experimental and deferred until that foundation is proven — wallet security requirements (irreversible outcomes, signing confirmations, a transaction-level threat model) deserve a dedicated design pass of their own. Daily task tracking lives in the root [TODO](../todo.md) (full backlog: [TODO_BACKLOG](../TODO_BACKLOG.md)); this file is the milestone view.
+Priority policy (2026-09): the password-manager track targets 1Password parity first. The wallet track stays experimental and deferred until that foundation is proven — wallet security requirements (irreversible outcomes, signing confirmations, a transaction-level threat model) deserve a dedicated design pass of their own. Daily task tracking lives in the root [TODO](../todo.md); this file is the milestone view.
 
 Product position (2026-10): Persona positions as a **local-first digital identity runtime**, not another password manager. Password / SSH key / TOTP / Wallet / Passkey are identity _materials_; reveal / copy / fill / sign / save are _actions_ governed by a policy engine; scenes are organized as _identities_ under a (future) _principal_. The 1Password-parity track below stays the capability benchmark, not the product narrative. Concept docs: `docs/src/concepts/`.
 

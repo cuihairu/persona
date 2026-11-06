@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import toast from 'react-hot-toast';
 import i18n from '@/i18n';
 import { personaAPI } from '@/utils/api';
 import type { SshApprovalRequest } from '@/types';
@@ -65,13 +66,19 @@ export const useSshApprovals = (enabled: boolean) => {
     };
   }, [enabled]);
 
-  /** 应答队首请求（重复 id / 未知 id 由后端按拒绝处理） */
+  /** 应答队首请求（重复 id / 未知 id 由后端按拒绝处理）。
+   *  队列移除以服务端确认为准：应答失败时请求留在队列里可重试，
+   *  失败走 toast——Allow 静默丢失会让 agent 连接挂到后端 120s 超时。 */
   const respond = useCallback(async (requestId: string, allow: boolean) => {
-    setQueue((prev) => prev.filter((r) => r.request_id !== requestId));
     try {
-      await personaAPI.sshApprovalRespond(requestId, allow);
-    } catch {
-      // 命令失败（未知/过期 id）不影响本地队列清理
+      const response = await personaAPI.sshApprovalRespond(requestId, allow);
+      if (!response.success) {
+        toast.error(response.error || i18n.t('svc.approvalRespondFailed'));
+        return;
+      }
+      setQueue((prev) => prev.filter((r) => r.request_id !== requestId));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : i18n.t('svc.approvalRespondFailed'));
     }
   }, []);
 

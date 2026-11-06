@@ -2,17 +2,12 @@
   <img src="docs/branding/logo.svg" width="64" alt="Persona logo" />
   <h1>Persona</h1>
   <p><strong>本地优先的身份材料管理器</strong></p>
-  <p>
-    <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /></a>
-    <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a>
-    <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-    <img src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white" alt="Rust" />
-    <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
-    <img src="https://img.shields.io/badge/Windows-0078D4?logo=windows11&logoColor=white" alt="Windows" />
-    <img src="https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white" alt="macOS" />
-    <img src="https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black" alt="Linux" />
-  </p>
 </div>
+
+<p align="center">
+  <a href="https://github.com/cuihairu/persona/releases"><img src="https://img.shields.io/badge/status-in%20development-orange" alt="Status: in development" /></a> <a href="https://github.com/cuihairu/persona/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cuihairu/persona/ci.yml?branch=main&label=CI" alt="CI" /></a> <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a> <a href="https://codecov.io/gh/cuihairu/persona"><img src="https://codecov.io/gh/cuihairu/persona/branch/main/graph/badge.svg" alt="codecov" /></a> <img src="https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white" alt="Rust" /> <img src="https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white" alt="TypeScript" /> <img src="https://img.shields.io/badge/Windows-0078D4?logo=windows11&logoColor=white" alt="Windows" /> <img src="https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white" alt="macOS" /> <img src="https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black" alt="Linux" /> <a href="https://cuihairu.github.io/persona/zh/"><img src="https://img.shields.io/badge/%E6%96%87%E6%A1%A3-blue" alt="docs" /></a>
+</p>
+
 
 > [English](README.md) | **中文**
 
@@ -65,6 +60,22 @@ Persona 是一个本地优先、零知识的管理器，服务于「一个人运
 
 </details>
 
+### 配置开关效果（动态图）
+
+每个高级开关（设置 → 通用 → 高级）的 off→on 动画：侧栏类别 / 工具节点
+出现，或凭据列表弹出站点图标。由 `scripts/doc-config-switch-gif.mjs` 重新
+生成，该脚本同时断言每个开关的效果（开关失效即脚本失败）。
+
+<p align="center">
+  <img src="docs/branding/ui/config-switches/ssh-agent.gif" height="400" alt="SSH Agent 开关：SSH 密钥类别与 SSH Agent 工具出现" />
+  <img src="docs/branding/ui/config-switches/wallet.gif" height="400" alt="Wallet 开关：钱包工具出现" />
+</p>
+
+<p align="center">
+  <img src="docs/branding/ui/config-switches/passkeys.gif" height="400" alt="Passkeys 开关：通行密钥类别出现" />
+  <img src="docs/branding/ui/config-switches/fetch-favicons.gif" height="400" alt="Fetch Favicons 开关：凭据列表出现站点图标" />
+</p>
+
 ### 手机版 — Android 手机，1080×2400 像素
 
 解锁页、凭据列表、工具与设置——Android 真机界面，默认（zh-CN）语言，深色主题。
@@ -105,7 +116,7 @@ persona/
 - 服务端：Rust + Axum（可选）
 - 钱包：rust-bitcoin（BTC）与 alloy（EVM），用官方测试向量做回归验证
 
-Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rust-bitcoin、alloy——而不是替换它们；真正属于本仓库自研工作的是产品层（身份模型、策略引擎、配对协议、保险库层级）。
+Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rust-bitcoin、alloy——而不是替换它们；本仓实现的是产品层（身份模型、策略引擎、配对协议、保险库层级），密码学原语一律使用经审计的 crate（如 ed25519-dalek）。
 
 ## 安全要点
 
@@ -126,6 +137,7 @@ Persona 站在成熟的开源基础之上——Tauri、React、Axum、sqlx、rus
 
 ```bash
 # Clone the repository
+
 git clone git@github.com:cuihairu/persona.git
 cd persona
 
@@ -143,7 +155,7 @@ make ci
 pnpm install
 
 # Run the desktop client in dev mode
-pnpm --filter desktop run dev
+pnpm --filter persona-desktop run dev
 
 # Build the browser extension bundle
 pnpm --filter persona-chromium-extension run build
@@ -431,7 +443,7 @@ persona wallet passwd "Main"
 - [MONOREPO](./docs/MONOREPO.md) – 单仓（monorepo）的取舍与工具链
 - [UNINSTALL](./docs/UNINSTALL.md) – 卸载与数据保留（卸载不删数据，重装接续；显式 purge 步骤）
 - [ROADMAP](./docs/ROADMAP.md) – 路线图与细化的 TODO 条目
-- [TODO](./todo.md) – 每日维护的任务清单（完整待办见 [TODO_BACKLOG](./TODO_BACKLOG.md)）
+- [TODO](./todo.md) – 每日维护的任务清单
 - [BRIDGE_PROTOCOL](./docs/BRIDGE_PROTOCOL.md) – 浏览器扩展 native messaging 协议
 - [品牌素材](./docs/branding/README.md) – logo、字标、配色与使用规范
 

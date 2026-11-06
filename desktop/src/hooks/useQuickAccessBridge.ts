@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import toast from 'react-hot-toast';
+import { useTranslation } from 'react-i18next';
 import { useAppStore } from '@/stores/appStore';
 import { personaAPI } from '@/utils/api';
 import type { QuickAccessOpenCredential } from '@/types';
@@ -19,6 +21,7 @@ const OPEN_CREDENTIAL_EVENT = 'persona://quick-access-open-credential';
  * 静默 switch 到不存在的身份只会把主界面带进空态。
  */
 export const useQuickAccessBridge = () => {
+  const { t } = useTranslation();
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
@@ -39,8 +42,13 @@ export const useQuickAccessBridge = () => {
         setCurrentIdentity(target);
         try {
           await personaAPI.setActiveIdentity(target.id);
-        } catch {
-          // 落库失败不阻断跳转：主界面按内存态继续切
+        } catch (err) {
+          // 落库失败不阻断跳转（主界面按内存态继续切），但失败必须可见：
+          // workspace 活动身份仍指向原身份，CLI/浏览器会按旧身份工作——
+          // 静默成功等于让调用方以为全局已切换（switchIdentity 同口径）
+          const errorMessage = err instanceof Error ? err.message : t('svc.switchFailed');
+          useAppStore.getState().setError(errorMessage);
+          toast.error(errorMessage);
         }
       }
     };
@@ -66,5 +74,5 @@ export const useQuickAccessBridge = () => {
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [t]);
 };

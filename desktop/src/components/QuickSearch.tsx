@@ -63,11 +63,19 @@ const QuickSearch = () => {
       return;
     }
     setIsSearching(true);
+    // 防抖清理不能取消在途 await：查询变更后旧响应后到会覆盖新结果。
+    // cleanup 置 stale 丢弃过期结果（React 标准过期请求守卫）。
+    let stale = false;
     const timer = setTimeout(async () => {
-      setResults(await searchRef.current(trimmed));
+      const res = await searchRef.current(trimmed);
+      if (stale) return;
+      setResults(res);
       setIsSearching(false);
     }, DEBOUNCE_MS);
-    return () => clearTimeout(timer);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
   }, [query, open]);
 
   const groups = useMemo(() => groupByIdentity(results, identities), [results, identities]);

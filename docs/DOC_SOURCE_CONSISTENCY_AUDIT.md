@@ -73,7 +73,7 @@ C root-level status 27 (ahead 3 / behind 21 / mismatch 3) | D build/site 21 (ahe
 | C-11 | DESIGN_NOTE.md                         | `init_service` ownership + `usePersonaService.ts:176-203` line numbers                                                  | `core/src/service.rs:1836`; `desktop/src-tauri/src/commands.rs:218`; `usePersonaService.ts:199`                                               | Mismatch | P2       | Fixed                                                              |
 | C-12 | Makefile                               | 12 flutter targets (install/build/dev/test/lint/clean/security-check/i18n-extract)                                      | `mobile/` is ios/android/harmony/rust native projects, no pubspec.yaml; `mobile/README.md` and memory mobile-native-no-ffi mandate no Flutter | Ahead    | P1       | Deleted all flutter targets (design decision, provenance below)    |
 | C-13 | docs/README.md                         | no audit table entry                                                                                                    | —                                                                                                                                             | Behind   | P2       | Added index row                                                    |
-| C-14 | TODO.md                                | 2240 lines: process narrative, decorative symbols, parenthesis padding, emotional wording                               | —                                                                                                                                             | Behind   | P2       | Trimmed 2240 → 236 lines, all 163 requirements kept (below)        |
+| C-14 | todo.md                                | 2240 lines: process narrative, decorative symbols, parenthesis padding, emotional wording                               | —                                                                                                                                             | Behind   | P2       | Trimmed 2240 → 236 lines, all 163 requirements kept (below)        |
 
 ### Group D: build/install/site docs
 
@@ -125,7 +125,7 @@ C root-level status 27 (ahead 3 / behind 21 / mismatch 3) | D build/site 21 (ahe
 - **FS-3 (Group C subagent)**: claimed the memory directory reference in FINAL_SUMMARY §7 is "unreachable" (the memory/ subdirectory does not exist).
   This contradicts the persistent memory directory declared in this session's environment, so it was judged a subagent search-path problem; **not adopted, reference left in place**.
 
-## TODO.md trimming
+## todo.md trimming
 
 - Before trimming: 2240 lines (process narrative, decorative symbols, parenthesis padding, emotional wording).
 - After trimming: 236 lines, all 163 requirements kept: 10 unfinished (each with unlock conditions), 153 completed (one line + commit/test-count evidence).

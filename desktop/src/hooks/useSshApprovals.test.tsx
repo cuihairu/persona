@@ -1,4 +1,5 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
+import toast from 'react-hot-toast';
 import { useSshApprovals, SSH_APPROVAL_EVENT } from './useSshApprovals';
 import { personaAPI } from '@/utils/api';
 import type { SshApprovalRequest } from '@/types';
@@ -10,6 +11,14 @@ const listenMock = jest.fn<
   [string, ListenHandler]
 >();
 let capturedHandler: ListenHandler | null = null;
+
+jest.mock('react-hot-toast', () => ({
+  __esModule: true,
+  default: {
+    success: jest.fn(),
+    error: jest.fn(),
+  },
+}));
 
 jest.mock('@tauri-apps/api/event', () => ({
   listen: (event: string, handler: ListenHandler) => listenMock(event, handler),
@@ -36,6 +45,8 @@ const sampleRequest: SshApprovalRequest = {
   reason: 'policy',
 };
 
+const toastError = toast.error as jest.Mock;
+
 describe('hooks/useSshApprovals', () => {
   beforeEach(() => {
     capturedHandler = null;
@@ -47,6 +58,7 @@ describe('hooks/useSshApprovals', () => {
       success: true,
       data: true,
     });
+    toastError.mockReset();
   });
 
   it('subscribes only when enabled', async () => {
@@ -107,6 +119,36 @@ describe('hooks/useSshApprovals', () => {
     expect(personaAPI.sshApprovalRespond).toHaveBeenCalledWith('ssh-1', true);
     expect(result.current.pending).toBeNull();
     expect(result.current.pendingCount).toBe(0);
+  });
+
+  it('keeps the request queued and toasts when the respond fails', async () => {
+    const { result } = renderHook(() => useSshApprovals(true));
+
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    act(() => {
+      (capturedHandler as ListenHandler)({ payload: sampleRequest });
+    });
+
+    // 后端拒绝了应答：请求必须留在队列里（可重试）而不是静默消失，
+    // 否则 Allow 丢失后 agent 连接会挂到 120s 超时
+    (personaAPI.sshApprovalRespond as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      data: undefined,
+      error: 'expired',
+    });
+    await act(async () => {
+      await result.current.respond('ssh-1', true);
+    });
+    expect(result.current.pendingCount).toBe(1);
+    expect(result.current.pending?.request_id).toBe('ssh-1');
+    expect(toastError).toHaveBeenCalledWith('expired');
+
+    (personaAPI.sshApprovalRespond as jest.Mock).mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      await result.current.respond('ssh-1', true);
+    });
+    expect(result.current.pendingCount).toBe(1);
+    expect(toastError).toHaveBeenLastCalledWith('ipc gone');
   });
 
   it('clears queue when disabled', async () => {

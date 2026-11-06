@@ -24,7 +24,7 @@ Examples:
 
 - Use a Conventional Commit–style PR title; squash merges will keep the title as the final commit.
 - Keep PRs focused and linked to issues when possible.
-- Update `TODO_BACKLOG.md` when you add or complete roadmap items.
+- Update `todo.md` when you add or complete roadmap items.
 - Add tests for new logic and run `make lint-all` / `make test-all` locally when feasible.
 
 ## Code Ownership

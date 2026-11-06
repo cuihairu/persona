@@ -78,9 +78,9 @@ const IndexPage: React.FC = () => {
               集成 SSH Agent、数字钱包和 TOTP 验证，一站式保护您的数字资产。
             </Paragraph>
             <Space size="large" className={styles.heroActions}>
-              <Button type="primary" size="large" icon={<ThunderboltOutlined />}>
-                <Link to="/download" style={{ color: 'inherit' }}>免费下载</Link>
-              </Button>
+              <Link to="/download" style={{ color: 'inherit' }}>
+                <Button type="primary" size="large" icon={<ThunderboltOutlined />}>免费下载</Button>
+              </Link>
               <Button size="large" icon={<GithubOutlined />} href="https://github.com/persona-id/persona" target="_blank">
                 查看源码
               </Button>
@@ -176,9 +176,9 @@ const IndexPage: React.FC = () => {
               <li>✓ 细粒度访问策略（按主机、时间限制）</li>
               <li>✓ 完整的审计日志</li>
             </ul>
-            <Button type="primary">
-              <Link to="/features" style={{ color: 'inherit' }}>了解更多</Link>
-            </Button>
+            <Link to="/features" style={{ color: 'inherit' }}>
+              <Button type="primary">了解更多</Button>
+            </Link>
           </div>
           <div className={styles.highlightCode}>
             <pre>
@@ -228,9 +228,9 @@ $ persona wallet sign --chain eth \\
               <li>✓ 硬件钱包级安全</li>
               <li>✓ 交易签名确认</li>
             </ul>
-            <Button type="primary">
-              <Link to="/features" style={{ color: 'inherit' }}>了解更多</Link>
-            </Button>
+            <Link to="/features" style={{ color: 'inherit' }}>
+              <Button type="primary">了解更多</Button>
+            </Link>
           </div>
         </div>
       </section>
@@ -249,9 +249,9 @@ $ persona wallet sign --chain eth \\
             <Button type="primary" size="large" icon={<GithubOutlined />} href="https://github.com/persona-id/persona" target="_blank">
               GitHub 仓库
             </Button>
-            <Button size="large">
-              <Link to="/docs" style={{ color: 'inherit' }}>查看文档</Link>
-            </Button>
+            <Link to="/docs" style={{ color: 'inherit' }}>
+              <Button size="large">查看文档</Button>
+            </Link>
           </Space>
         </div>
       </section>
@@ -265,9 +265,9 @@ $ persona wallet sign --chain eth \\
           <Paragraph className={styles.ctaDesc}>
             下载 Persona，开始您的安全之旅。完全免费，无需注册。
           </Paragraph>
-          <Button type="primary" size="large">
-            <Link to="/download" style={{ color: 'inherit' }}>立即下载</Link>
-          </Button>
+          <Link to="/download" style={{ color: 'inherit' }}>
+            <Button type="primary" size="large">立即下载</Button>
+          </Link>
         </div>
       </section>
     </div>

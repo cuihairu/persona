@@ -29,27 +29,48 @@ pub fn validate_workspace_path<P: AsRef<Path>>(path: P) -> Result<()> {
         anyhow::bail!("Workspace path must be absolute: {}", path.display());
     }
 
-    // Check if parent directory exists and is writable
-    if let Some(parent) = path.parent() {
+    // A path without a parent (such as `/`) has no workspace parent to probe.
+    // Keep this check before inspecting the target so validation does not
+    // require permission to write to the filesystem root.
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+
+    // An existing directory is itself the relevant location to check. Its
+    // parent may have stricter permissions (for example, Windows' shared Temp
+    // directory) while the workspace directory remains writable. Existing
+    // non-directory targets retain the historical parent probe; read_dir
+    // below deliberately tolerates targets such as Unix sockets.
+    let (write_dir, write_dir_label) = if path.is_dir() {
+        (path, "Workspace directory")
+    } else {
         if !parent.exists() {
             anyhow::bail!(
                 "Parent directory does not exist: {} (create it first)",
                 parent.display()
             );
         }
-        // Check if parent is writable
-        let test_file = parent.join(".persona_write_test");
-        match std::fs::write(&test_file, "test") {
-            Ok(_) => {
-                let _ = std::fs::remove_file(&test_file);
-            }
-            Err(e) => {
-                anyhow::bail!(
-                    "Parent directory is not writable: {} ({})",
-                    parent.display(),
-                    e
-                );
-            }
+        (parent, "Parent directory")
+    };
+
+    // Use a unique name and create_new so concurrent validations cannot
+    // overwrite or remove each other's probe file.
+    let test_file = write_dir.join(format!(".persona_write_test-{}", uuid::Uuid::new_v4()));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&test_file)
+    {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&test_file);
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "{} is not writable: {} ({})",
+                write_dir_label,
+                write_dir.display(),
+                e
+            );
         }
     }
 
@@ -61,7 +82,6 @@ pub fn validate_workspace_path<P: AsRef<Path>>(path: P) -> Result<()> {
                 path.display()
             );
         }
-
         if let Ok(entries) = std::fs::read_dir(path) {
             let count = entries.count();
             if count > 0 {

@@ -267,6 +267,20 @@ describe('pullCloudOps', () => {
         );
     });
 
+    it('200 但响应体非 JSON → 明确错误而非裸 SyntaxError', async () => {
+        const fetchImpl = jest.fn(async () => ({
+            ok: true,
+            status: 200,
+            json: async () => {
+                throw new SyntaxError('Unexpected token < in JSON');
+            },
+        })) as unknown as typeof fetch;
+
+        await expect(pullCloudOps(conn, null, fetchImpl)).rejects.toThrow(
+            'oplog_pull_failed (HTTP 200): malformed JSON response'
+        );
+    });
+
     it('cursor 永不收敛 → oplog_pull_too_many_pages（不无限翻页）', async () => {
         const fetchImpl = jest.fn(async () =>
             ({

@@ -130,19 +130,6 @@ docs-deploy: ## 部署文档到 GitHub Pages
 docs-clean: ## 清理文档构建文件
 	./scripts/build-docs.sh clean
 
-# 发布相关
-release-patch: ## 发布补丁版本
-	@echo "发布补丁版本..."
-	@./scripts/release.sh patch
-
-release-minor: ## 发布次要版本
-	@echo "发布次要版本..."
-	@./scripts/release.sh minor
-
-release-major: ## 发布主要版本
-	@echo "发布主要版本..."
-	@./scripts/release.sh major
-
 # 安全检查
 security-audit: ## 运行安全审计
 	@echo "运行 Rust 安全审计..."

@@ -1,0 +1,10 @@
+# cargo-audit config: unfixable advisories as of 2026-11-03
+# RUSTSEC-2023-0071 (rsa Marvin Attack): no fixed release; rsa 0.9/0.10-rc both affected.
+#   rsa is used only for ssh-key rsa-sha2 signing of local agent keys, not a network-facing decrypt path.
+# RUSTSEC-2026-0387 (crypto-bigint timing variability): fix requires crypto-bigint >=0.7.6,
+#   not reachable while rsa stays on 0.9/0.10-rc. Re-check when rsa ships a fixed release.
+[advisories]
+ignore = [
+    "RUSTSEC-2023-0071", # rsa 0.9.10, 0.10.0-rc.18: no fix available
+    "RUSTSEC-2026-0387", # crypto-bigint 0.5.5: no semver-compatible fix
+]

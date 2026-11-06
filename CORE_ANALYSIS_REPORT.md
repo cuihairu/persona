@@ -31,7 +31,7 @@
 |-----|-----|
 | **项目名称** | Persona Core Library |
 | **主要语言** | Rust |
-| **数据库** | SQLite (sqlx + rusqlite) |
+| **数据库** | SQLite (sqlx，无 rusqlite) |
 | **异步运行时** | Tokio |
 | **代码规模** | 3,197 行 |
 | **文件数** | 24 个 |
@@ -1105,6 +1105,5 @@ async fn main() -> Result<()> {
 ---
 
 **报告完成时间**: 2025-01-14  
-**分析工具**: Claude Code + Manual Analysis  
 **报告版本**: 1.0
 

@@ -1,30 +1,45 @@
 # TODO
 
-- [x] 缺陷：一键启用后，配置的按钮开关状态未联动（来源：用户 2026-10-14，登记 `66d0091`；2026-10-14 修完 `9abce66` 前端回读 + `dc6021c` 落盘往返测试）
-  - 现象：执行「一键启用」之后，**配置里的按钮/开关状态没有跟着一起变动**（界面显示与实际启用状态不一致）
-  - 风险定性：**显示与真实状态不一致**，比单纯显示错误更危险——用户会据此误判服务是否已启用
-  - 验收：先复现并给根因 file:line（重点怀疑：一键启用的批量操作完成后**没有回读真实状态**、只改了本地 UI 状态、或回读结果未广播到各配置项的开关组件）；修复后**以真实状态为准刷新**，并在真实连接下验证一键启用/停用后所有相关开关一致
-  - 提示：不要只在 UI 层补一次状态刷新——要确认**批量操作后存在统一的状态回读点**，否则同类不一致会再次出现
-  - 根因：`desktop/src/components/SshIntegrationSection.tsx:64-98` 的 `apply()` 渲染**写入响应的快照**（`setStatus(resp.data)`）且把状态刷新 `void refreshAnalysis()`（不 await）——组件唯一的统一回读点 `refresh()`（:39-48，状态 + 配置分析一起回读）在变更后**从未被调用**；写入响应快照与盘上状态漂移（响应迟到/为空、外部并发改 config）时界面就停在旧值。**后端不是根因**：`commands.rs:5368-5410` 两个写命令落盘后都重跑 `ssh_agent_integration_status()` 回读。
-  - 修法：`apply()` 成功后 `await refresh()` 走统一回读点（状态行、启用/停用按钮文案、配置分析面板同批刷新），不新增旁路刷新函数；写入失败不触发回读（无变更），保持原状态。
-  - 验证：前端 14 测试全绿（含 2 条新回归：回读优先于响应快照、回读把配置分析面板一起带到最新；把 `apply()` 还原成旧实现后这 2 条如期红）；后端新增 `desktop/src-tauri/tests/ssh_integration_roundtrip.rs` 3 测试——HOME 指向临时目录**真写真读** `~/.ssh/config`，启用→回读 `enabled=true`、重复启用不产生第二个锚点块、停用→回读 `enabled=false` 且用户原配置原样保留、外部改指别处后如实报 anomaly 而非谎报已启用、读不出 config 时拒写；tsc/eslint 干净。
+- [x] 缺陷：一键启用后，配置的按钮开关状态未联动（来源：用户 2026-10-14；修复 `9abce66` 前端回读 + `dc6021c` 落盘往返测试；前端 14 测试 + 后端 3 测试全绿）
+- [x] 缺陷：右键菜单未国际化（来源：用户 2026-10-14；修复 `4b0ebac`；jest 80 测试 + cargo test --lib 265 测试全绿）
+- [x] 文档首页预览图拆分：电脑版 / 手机版分开展示（来源：用户 2026-10-14；修复 `8f9ab29`）
+- [x] 文档双语未落地（来源：用户 2026-10-14；README `012c466` + docs `7087914`；docs 30 个工程文档补 `*.zh.md` 共 7582 行）
+- [x] R-P1 switchIdentity 改为服务端成功后才更新 UI（来源：2026-10-24 原型外部审查；修复 `5883ec2`）
+- [x] R-P2 desktop/src/hooks/ 同款乐观更新模式排查（来源：2026-10-24 审查；修复 `5fec32d`；修 5 处 + 判定无需修 9 类；desktop 56 套件 736 例全绿）
+- [x] R-P3 Principal/Action 体系化设计文档（来源：2026-10-24 审查；修复 `37ffc6d`；docs/src/design/principal-action.md + /zh/）
+- [x] R-P4 跨进程统一会话/授权中心调研与方案（来源：2026-10-24 审查；修复 `4a0bb00`；docs/src/design/session-center.md + /zh/）
+- [x] R-P5 同步「局域网直传」命名与实现核对（来源：2026-10-24 审查；修复 `b100345`；名实不符，已更名「局域网自建中转 / LAN self-hosted relay」6 处）
+- [x] R-P6 端到端验收场景清单 + 跨平台能力矩阵（来源：2026-10-24 审查；修复 `25662c9`；docs/src/development/acceptance-matrix.md + /zh/）
+- [x] DOC-GIF 配置开关效果动态图（来源：用户令；修复 `cd902aa`；SettingsModal 4 开关 off/on 对比图 + GIF 入 `docs/branding/ui/config-switches/`，流水线 `scripts/doc-config-switch-gif.mjs` 可重跑，兼 17 条断言回归测试全绿）
 
-- [x] 缺陷：右键菜单未国际化（来源：用户 2026-10-14；2026-10-14 修完 `4b0ebac`）
-  - 现象：**右键菜单（上下文菜单）文案是硬编码中文/英文，没走 i18n**，与其余界面语言不一致
-  - 验收：右键菜单所有条目**纳入本仓既有 i18n 体系**（**不另起一套**，先核 i18n 机制怎么做的并给 file:line）；切换语言后右键菜单同步生效；覆盖所有触发右键的位置（列表项、空白处等），不只修一处
-  - 排查：全仓 grep（排除 target/node_modules/dist）证伪 webview 内与浏览器扩展的自定义右键菜单（`onContextMenu`、`chrome.contextMenus` 均零命中）——**唯一应用自持右键菜单是系统托盘**（`desktop/src-tauri/src/lib.rs` `setup_tray`，5 条英文硬编码）。既有 i18n 机制：`desktop/src/i18n/index.ts`（i18next + initReactI18next，内联同步资源，DEFAULT_LOCALE=zh-CN）+ `desktop/src/i18n/locales/{zh-CN,en}.ts`。
-  - 修法：真值源进既有 locale 表（新增 `tray.*` 命名空间，两语言各 5 键）；Rust 只渲染不存词——`set_tray_locale` 无状态命令（无锁屏门禁：锁屏时菜单也要跟界面语言）按推送文案重建菜单，setup 兜底 zh-CN 默认（与 DEFAULT_LOCALE 一致，前端首推即覆盖）；推送点 = App 启动语言恢复 ×2 + SettingsModal 切换成功。**坑**：组件级 `t` 是 `getFixedT` 旧语言快照（react-i18next useTranslation.js:76），切换后立刻推会推旧语言 → 推送处一律用全局 `i18n.t`。
-  - 验证：jest 80 绿（新增回归 3：切换后推英文真值——旧实现（用组件级 t）实测红；持久化失败不推送并回滚 UI）；`cargo test --lib` 265 绿（新增 `set_tray_locale_is_harmless_noop_without_tray`：无托盘降级运行无害 no-op）；tsc/eslint/cargo fmt/clippy 干净。
+## 未完成
 
-- [x] 文档首页预览图拆分：电脑版 / 手机版分开展示（来源：用户 2026-10-14；2026-10-14 修完 `8f9ab29`）
-  - 现状：`README.md:39` 有 `## UI Preview`，**未按设备分栏**；仓库内无 `docs/screenshots/` 目录
-  - 要求：预览拆成**电脑版**与**手机版**两组分别展示，各自标注设备/尺寸，**截图取自真实运行界面**（不是示意图）
-  - 验收：两组截图清晰可辨、路径相对引用、首页直接可见
-  - 落地：`## UI Preview` 下分 `### Desktop — 1600×1000 window（2× DPR 截图，3200×2000 px）` 与 `### Mobile — Android phone, 1080×2400 px` 两组（README.md 与 README.zh.md 同步拆分）；截图全部用仓库已有的真实运行截图（docs/branding/ui/ 4 张桌面 + 4 张 Android 真机，mobile 截图逐张目检确认为真实运行界面：解锁页/凭据列表/工具/设置，zh-CN 默认语言深色主题），相对路径引用、首页直出，逐张核验 src 引用全部存在。
-- [x] 文档双语未落地（来源：用户 2026-10-14；README 部分 `012c466` 已落地，docs 部分 2026-10-14 修完 `7087914`）
-  - 现状：`README.md` **377 行单语英文**，无 `README.zh.md`
-  - 要求：按全局规矩——**英文为 README 主文档**，中文转 **`README.zh.md`**，两份**顶部加切换器**（`> **English** | [中文](README.zh.md)` / `> [English](README.md) | **中文**`），切换器必须在首屏
-  - 覆盖范围：**README 及 docs 下文档**（用户点名"文档没有双语"，不止 README）；中文版要完整对应，不是摘要
-  - 验收：zh 行数与 en 相当；逐节覆盖；顶部切换器两份都有
-  - 落地：README 对（`012c466`，375/379 行，切换器 ：17 首屏）之外，docs/ 下 30 个英文工程文档全部补 `*.zh.md`（7582 行新增），每个 en 文件标题后插入 `> [English](X.md) | [中文](X.zh.md)` 切换器、每个 zh 文件首行 `> [English](X.md) | **中文**`（与 README 同款）；术语表统一（保险库/凭据/分身/桥/主密码等），代码块/命令/路径/URL/内联代码原样保留；`审计-文档一致性.md` 本就是中文，不重复。逐对核验标题数一致、首行格式正确、无 AI 痕迹字样；docs 门禁全绿（prettier 3.6.2 --write 后 diff 干净 + VitePress build 死链检查通过）。
+- [ ] OS 自动填充集成：iOS AutoFill 供体、macOS 系统填充；Passkey 的 OS 平台认证器（macOS LocalAuthentication / Windows Hello）同属此缺口。解锁条件：需对应平台机器（iOS=macOS+Xcode、鸿蒙=DevEco），本机 Linux 无环境。2026-10-16 巡检复核：条件仍成立（本机 Linux，无 Xcode/DevEco）
+- [ ] 桌面应用级填充：Windows 桌面应用内的填充注入（现状仅浏览器桥）。解锁条件：需 Windows 桌面会话实机验收。2026-11-03 复核：解锁条件已满足（openclaw 实机会话可用），但功能本身未实现——FEATURE_GAP_ANALYSIS #12「未实现（仅浏览器桥）」，且 #22 注释明确「不做一键填进浏览器（填充归浏览器扩展，浮窗只负责取件）」——无可验收对象，需先实现桌面填充注入再验收；本机（Linux 无头）无桌面开发环境，保持原状并逐条说明
+- [ ] Web 端：1Password.com 形态的浏览器端（低优先，出现真实需求再评估）。2026-10-16 巡检复核：未出现真实需求信号
+- [ ] M5 浏览器插件接账号（Safari 侧）：Swift 宿主端实现桥协议 v7（报文 → `persona bridge` 子进程封装）。解锁条件：需 macOS+Xcode 实机（挂起待实机批次，docs/BRIDGE_PROTOCOL.md §20 + browser/safari-extension/README.md）。2026-10-16 巡检复核：条件仍成立（本机无 macOS）
+- [x] Windows 实机测试与优化：编译层（x86_64-pc-windows-gnu 全绿）与 CI 守卫（rust-windows + rust-windows-desktop job）已收口，缺实机行为验收。修复 `1281714`；openclaw 实机验收（Administrator@10.240.0.3，Windows Server 2022 x64，msvc 工具链 + RUSTUP_TOOLCHAIN=stable 1.99.1，rsproxy 镜像，2026-11-03）：① `cargo build --workspace` EXIT 0（4m56s，仅 1 条无害 dead_code 警告）——编译层实机收口；② `cargo test -p persona-core` EXIT 0（1196 例全绿：1169+2+6+3+6+2+1+7，含 webauthn/openssl 依赖路径；vendored openssl 需 perl+MSVC cl.exe——git 自带 MinGit 无 perl 且 github 对远端不可达，用 Strawberry Perl 5.42.3.1 portable（本地下行+scp）+ BuildTools 2022 vcvars64 环境解决）；③ `cargo test -p persona-cli` EXIT 0（含 bridge/credential/totp/ssh 集成套件）；④ `cargo test -p persona-ssh-agent` EXIT 0；⑤ CLI 运行验收（acceptance-ws 全流程）：init/add/credential add+list/password generate（random 20 + words 6）/totp setup+code 全 EXIT 0；⑥ SSH agent 命名管道 E2E：ssh generate → add-to-agent（agent 监听 `\\.\pipe\agent.socket`，PERSONA_NON_INTERACTIVE=1 走 env 密码）→ NamedPipeClientStream 连接 OK → ssh status（PID 17036，Agent keys: 1）→ stop-agent（EXIT 0，agent 进程与管道均消失）。M4 剩余子项与理由：named-pipe 审批流（需桌面 UI 审批弹窗，CLI 无对应路径）；biometric gating（本机 0 个 Biometric 设备，Windows Hello 物理不可行）；NSIS 安装器（远端无 NSIS 且 github 不可达，需下载安装 + tauri 前端构建链，不在本批验收范围）。2026-11-03 巡检复核：核心实机行为验收闭环，条件满足
+- [ ] SCIM/SSO bridging（future）。2026-10-16 巡检复核：无触发信号，维持 future
+- [ ] Watchtower 外联扩展：domain breach alerts / dark web monitoring / OSINT 标识符查询。押后（2026-09-22 决策）；重启条件 = 1Password 对齐完成 + THREAT_MODEL 变更门槛 + 明确 opt-in 形态。2026-10-16 巡检复核：条件仍成立（1Password 对齐虽收口但 THREAT_MODEL 无变更、opt-in 形态未定；FEATURE_GAP_ANALYSIS.md:90 口径未变）
+- [ ] #21 团队与共享：家庭/团队共享库 + 共享条目权限，依赖账号体系。2026-10-01 用户裁定登记待办、暂不实现（docs/FEATURE_GAP_ANALYSIS.md #21）。2026-10-16 巡检复核：裁决未变，维持搁置（不重开）
 
+## 代码深审 2026-11-01（P2/P3 待办；来源 docs/review/2026-11-01-code-review.md）
+
+- [x] P2 · JS-1 · 安全 · 扩展 passkey 桥未绑定 origin：`handlePasskeyPageMessage` 校验 `payload.origin === location.origin`（content.ts:1685-1695,1740-1790），不符丢弃 · 修复 `0e569d1`；`isTrustedPasskeyOrigin`（passkeyOrigin.ts:12，`new URL(origin).origin === pageOrigin`，非字符串/畸形 URL 一律 false）覆盖 dialog/native 门与 assertion/list 路径两处；passkeyOrigin.test.ts 6 例回归全绿（同源 true / 攻击者 / undefined / null / 42 / 畸形字符串 false）
+- [x] P2 · JS-2 · 安全 · NMH 配对 HMAC 密钥持久化：`pairingKeyB64`/`sessionId` 移入 `chrome.storage.session`（nativeBridge.ts:576,376；违反 cloudSync.ts:16 纪律） · 修复 `f9c42ac`；配对状态只写 `chrome.storage.session`（内存区，退出即清），并做一次性迁移：legacy `storage.local` 副本迁入 session 后 `storageLocalRemove` 擦除盘区残留；nativeBridge 测试套件全绿
+- [x] P2 · JS-3 · 健壮性 · sync pull 成功路径 JSON 解析加 try/catch（cloudSync.ts:396，对齐 :389 错误体） · 修复 `64be325`；成功路径 `resp.json()` 包 try/catch，解析失败转 `oplog_pull_failed (HTTP <status>): malformed JSON response` 而非裸 SyntaxError 上抛（untrusted 输入，对齐 :389 错误体纪律）
+- [x] P2 · JS-4 · 竞态 · QuickSearch/QuickAccessPanel 防抖竞态加请求序号守卫（QuickSearch.tsx:66-69、QuickAccessPanel.tsx:176-179） · 修复 `3dadc71`；cleanup stale 守卫（clearTimeout 不能取消在途 await，慢响应不得覆盖新查询结果；`let stale=false` + cleanup 置 true）覆盖 QuickSearch 与 QuickAccessPanel 两处 + 回归测试（迟到的旧响应不覆盖新结果）；desktop 738 测试全绿
+- [x] P2 · JS-5 · 竞态 · 身份切换凭据串号：`loadCredentialsForIdentity` 加序号守卫/AbortController（usePersonaService.ts:340-341,359） · 修复 `b1ff8e6`；`switchSeq` + `credentialLoadSeq` 双序号守卫（switchIdentity 慢完成不覆盖 currentIdentity、慢凭据响应不覆盖新身份）；usePersonaService.test.tsx 36 例全绿（含 2 例新增竞态回归），desktop `npx tsc --noEmit` 干净
+- [x] P2 · 安全 · blob 附件 `storage_path` 路径穿越防御：retrieve_file/delete_file 加 travel.rs 同款逃逸检查（blob.rs:199,214,251,265；当前写入方安全，防御纵深） · 修复 `6a64c0e`；新增 `resolve_within_root`（拒绝对路径/`..`/`.` 组件，口径同 travel.rs:538）覆盖 retrieve/delete × 单文件/分块 4 处；blob 15 测试全绿（含新增 `test_storage_path_traversal_rejected` 根外诱饵文件不受读写），clippy -p persona-core 干净
+- [x] P2 · 可用性 · CLI 读 agent socket 无界长度分配：ssh.rs:785/824 加长度上限（与 BUG-1 同法） · 修复 `e37c372`；`MAX_AGENT_RESP_LEN`（16MiB）查前分配，覆盖 unix/windows 双路径 query_agent_identities；新增 `query_agent_identities_rejects_oversized_length`（u32::MAX 长度前缀分配前拒绝），cli 3 例全绿，clippy -p persona-cli 干净
+- [x] P2 · 竞态 · agent socket bind TOCTOU + 无条件删除：transport.rs:82-90 改 bind 失败不先删/验证陈旧（passkey_bridge.rs:177 同） · 修复 `ca27e8f`；unix bind 改"先 bind 失败才查陈旧"：活 socket 报错拒绝劫持、仅陈旧残骸（非 socket/连不上）删后重试；新增 `is_stale_socket` 并复用于 passkey_bridge.rs 审批 socket；transport 6 测试全绿（新增 live 拒绝 + 陈旧接管 2 例），clippy -p persona-ssh-agent 干净，desktop/src-tauri cargo check 通过
+- [x] P3 · 健壮性 · PERSENC1 头部长度溢出：file_crypto.rs:113-116 改 checked_add/界检查 · 修复 `3ebf39b`；decrypt_bytes 的 enc_len 切片改 `cursor.checked_add(enc_len)`（u64 长度前缀不受信，溢出即 Bad ciphertext len 而非 panic）；file_crypto 5 测试全绿（新增 enc_len=u64::MAX 用例）
+- [x] P3 · 健壮性 · Web3 keystore scrypt 参数溢出：wallet_encryption.rs:306 改 checked_mul + 先校验参数 · 修复 `ae9159b`；import/export 两侧 128*r*n 改 checked_mul（u32::MAX×u32::MAX 溢出即 work factor too high 而非 panic/回绕）；wallet_encryption 29 测试全绿（新增 `keystore_rejects_overflowing_scrypt_work_factor`）
+- [x] P3 · 健壮性 · stop_agent 陈旧 pidfile 误杀：ssh.rs:1508-1512 kill 前验证 /proc/<pid>/cmdline · 修复 `72a9839`；`stop_agent_pid` 改三态（Stopped/AlreadyGone/Refused）：kill 前读 /proc/<pid>/cmdline 确认是 persona-ssh-agent，PID 复用即拒绝不误杀，进程已不在则当陈旧 pidfile 清理；cli stop_agent 3 测试全绿（含验证分判 stale/reused），clippy -p persona-cli 干净。跟进加固 `85f60fa`（2026-11-03）：unix 杀进程从 fork 外部 `kill` 改为直接 `libc::kill` 发 SIGTERM——全量门禁跑 cli 套件时（2169s、swap 挤满）fork 失败被误判为 Refused 留下 pidfile，`stop_agent_handles_missing_empty_and_live_pid_files` 假红一次；另非数字 pidfile 按陈旧清理（原按 Refused 拒绝）；persona-cli 全套 517 过 0 失败，clippy --workspace --all-targets --all-features -D warnings 干净
+- [x] P3 · 卫生 · server-18996.log 运行时日志被 git 跟踪：git rm --cached + .gitignore 加 `*.log` · 修复 `317f0d5`；`git rm --cached server-18996.log`（文件留盘），.gitignore 加 `*.log`（`git check-ignore` 验证已忽略）
+- [x] P3 · 卫生 · website `lint` 死脚本：删脚本或装 eslint 依赖+配置（website/package.json；CI 不跑） · 修复 `cc1ea45`；删死 `lint` 脚本（无 eslint 依赖/配置，CI 从不跑，运行即 command not found）；website/package.json JSON 校验通过
+
+## 漏洞扫描遗留（2026-11-03 全舰队扫描，源 scratch/vuln-scan-*.md）
+
+- [ ] VULN-PERSONA-001 [中危·RUSTSEC-2026-0387] crypto-bigint 0.5.5→0.7.6+【跨大版本需改代码】：fuzz 与 desktop/src-tauri 两工作区均命中，由 elliptic-curve 0.13/p256 或 rsa 0.9 锁定；验收：cargo audit 该 ID 清零 + 两工作区 cargo test 绿（fuzz 为 --no-run 全量编译 + 4 目标 -runs=1000 冒烟）
+- [ ] VULN-PERSONA-002 [BLOCKED·上游无修复·中危 5.9·RUSTSEC-2023-0071] rsa 0.9.10（desktop）与 0.10.0-rc.18（fuzz/desktop）：patched 为空，等上游发布或换库；不勾，验收：上游出 patched 或换库后 cargo audit 该 ID 清零

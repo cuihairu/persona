@@ -345,16 +345,16 @@ device 不同的第二条 → 降级为冲突副本（`conflict_of` 指向主位
 同步语义只有一份——§5 的 oplog push/pull + 库级快照压缩，客户端视角
 无「哪种服务器」之分；形态只决定**同一协议由谁跑、跑在哪**：
 
-| 形态       | 运行体                                                              | 客户端 base_url               | 定位     |
-| ---------- | ------------------------------------------------------------------- | ----------------------------- | -------- |
-| 官方托管   | persona 官方部署的 `persona-server`（同一二进制/镜像）              | `https://sync.persona.app` 类 | 默认路径 |
-| 自建 relay | 用户自部署 `persona-server`（compose/cargo，`SELF_HOST_SERVER.md`） | 用户自己的 host               | 隐私优先 |
-| 局域网直传 | 同一 `persona-server` 绑到现场设备的局域网地址                      | `http://局域网IP:port`        | 零外网   |
+| 形态           | 运行体                                                              | 客户端 base_url               | 定位     |
+| -------------- | ------------------------------------------------------------------- | ----------------------------- | -------- |
+| 官方托管       | persona 官方部署的 `persona-server`（同一二进制/镜像）              | `https://sync.persona.app` 类 | 默认路径 |
+| 自建 relay     | 用户自部署 `persona-server`（compose/cargo，`SELF_HOST_SERVER.md`） | 用户自己的 host               | 隐私优先 |
+| 局域网自建中转 | 同一 `persona-server` 绑到现场设备的局域网地址                      | `http://局域网IP:port`        | 零外网   |
 
 三形态共用**同一客户端协议**（core `SyncRemote` 的 wire 语义：
 `PUT/GET /sync/snapshot`、`POST /sync/push`、`GET /sync/pull`、
 `GET /sync/head`、设备信封分发端点），三形态是**同一 `persona-server`
-二进制的三种部署**，不复刻三份实现；LAN 直传只是它绑定在现场设备上。
+二进制的三种部署**，不复刻三份实现；局域网自建中转只是它绑定在现场设备上。
 
 **验收口径**：三形态一致性测试——同一份 core 集成场景（push/pull/
 收敛/快照 bootstrap）对三种 transport 各跑一遍，行为断言完全一致。

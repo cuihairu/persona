@@ -76,17 +76,50 @@ pub enum AgentListener {
     },
 }
 
+/// socket 路径上的旧文件是否是可接管的陈旧残骸。
+///
+/// - 不存在 / 非 socket 文件（崩溃残留的普通文件、symlink 等）→ 陈旧；
+/// - 是 socket 但 connect 不上（ECONNREFUSED）→ 上一进程死了没清理 → 陈旧；
+/// - 是 socket 且能连上 → 有活 agent 在监听 → 非陈旧。
+#[cfg(unix)]
+pub fn is_stale_socket(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => {
+            // 探测连接：连上即有人监听。连接被立刻关闭，agent 侧按 EOF 处理。
+            std::os::unix::net::UnixStream::connect(path).is_err()
+        }
+        Ok(_) => true,
+        Err(_) => true,
+    }
+}
+
 impl AgentListener {
     /// Create a new listener
     #[cfg(unix)]
     pub async fn bind(path: &std::path::Path) -> Result<Self> {
-        // Remove existing socket if present
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
+        // 先直接 bind，不预先删除（TOCTOU：exists→remove→bind 之间路径可能
+        // 被换掉）。只有确认旧路径是陈旧残骸（非 socket 或无人监听）才接管，
+        // 活着的 agent 一律报错而非静默劫持路径（无条件删除会连活 socket 一起删）。
+        match tokio::net::UnixListener::bind(path) {
+            Ok(listener) => Ok(AgentListener::Unix(listener)),
+            Err(err) if path.exists() => {
+                if !is_stale_socket(path) {
+                    return Err(anyhow::anyhow!(
+                        "socket {} already bound by a live agent: {err}",
+                        path.display()
+                    ));
+                }
+                // 陈旧残骸：删掉重试一次。
+                std::fs::remove_file(path)?;
+                let listener = tokio::net::UnixListener::bind(path)?;
+                Ok(AgentListener::Unix(listener))
+            }
+            Err(err) => Err(anyhow::anyhow!(
+                "failed to bind agent socket {}: {err}",
+                path.display()
+            )),
         }
-
-        let listener = tokio::net::UnixListener::bind(path)?;
-        Ok(AgentListener::Unix(listener))
     }
 
     /// Create a new named pipe listener on Windows
@@ -241,6 +274,47 @@ mod tests {
 
         let out_buf = client_task.await.unwrap();
         assert_eq!(&out_buf, b"pong");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_bind_rejects_live_socket_instead_of_hijacking() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("live.sock");
+
+        // 第一个 listener 绑定后仍在监听（活 agent）。
+        let first = AgentListener::bind(&sock_path).await.unwrap();
+
+        // 第二个 bind 必须失败，而不是把活 socket 删掉劫持。
+        let err = AgentListener::bind(&sock_path)
+            .await
+            .err()
+            .expect("bind to a live socket must fail");
+        assert!(err.to_string().contains("live agent"), "{err}");
+
+        // 第一个 listener 依旧可用。
+        assert!(first.address().ends_with("live.sock"));
+        drop(first);
+        // 清理，避免 tempdir 删除残留 socket 时出问题（无妨，但仍显式清）。
+        let _ = std::fs::remove_file(&sock_path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_bind_takes_over_stale_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("stale.sock");
+
+        {
+            // 绑定后丢弃，不清理文件：留下一个无人监听的 socket 残骸。
+            let _listener = AgentListener::bind(&sock_path).await.unwrap();
+        }
+
+        // 陈旧残骸应被接管，bind 成功。
+        let listener = AgentListener::bind(&sock_path).await.unwrap();
+        assert!(listener.address().ends_with("stale.sock"));
+        drop(listener);
+        let _ = std::fs::remove_file(&sock_path);
     }
 
     #[cfg(unix)]

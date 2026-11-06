@@ -1,32 +1,35 @@
-# 上下文（Context）
+# Context
 
-**一句话**：上下文是客户端**可观察到**的环境事实集合，用来回答「我现在在哪、
-在做什么」，从而建议分身、参与策略判断。
+**In one sentence**: context is the set of environmental facts the client **can
+observe**, used to answer "where am I and what am I doing right now," so it can suggest
+identities and feed policy decisions.
 
-关键约束：**Context 是观察事实，不是用户声明**。用户没有「手动切换网页身份」
-这个动作——网址就是网址；本机目录就是目录。所以上下文的能力上限是**建议**
-与**默认选择**，而不是伪造身份。
+The key constraint: **context is observed fact, not user declaration**. There is no
+"manually switch my web identity" action — a URL is a URL, and a local directory is a
+directory. So the ceiling of what context can do is **suggestions** and **default
+choices**, never forging an identity.
 
-## 已落地的上下文维度
+## Context dimensions that have landed
 
-| 维度        | 事实来源                                    | 已消费方                                                              |
-| ----------- | ------------------------------------------- | --------------------------------------------------------------------- |
-| 页面来源    | 浏览器扩展的 page origin                    | 建议查询、**origin binding**（TLD+1 域名绑定，不匹配即拒绝填充/save） |
-| 站点偏好    | 每站点 autofill 默认值                      | 密码/TOTP 默认条目、`savePromptDisabled`                              |
-| 当前身份    | `workspaces.active_identity_id`（全局指针） | 所有入口的建议过滤、新凭据归属                                        |
-| SSH 会话    | SSH Agent 的 key + host                     | 每密钥/每主机策略、known_hosts、确认门槛                              |
-| 信任/威胁态 | 域策略表                                    | 可信域才允许激进自动填充；阻塞/可疑域拒绝一切填充与保存               |
+| Dimension          | Source of fact                                   | Consumers                                                                                        |
+| ------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Page origin        | browser extension's page origin                  | suggestion queries, **origin binding** (TLD+1 domain binding; no match, no fill/save)            |
+| Site preferences   | per-site autofill defaults                       | password/TOTP default entries, `savePromptDisabled`                                              |
+| Current identity   | `workspaces.active_identity_id` (global pointer) | suggestion filtering in every entry point, ownership of new credentials                          |
+| SSH session        | SSH Agent's key + host                           | per-key/per-host policy, known_hosts, confirmation gates                                         |
+| Trust/threat state | domain policy table                              | aggressive autofill only on trusted domains; blocked/suspicious domains refuse all fill and save |
 
-注意「当前身份」本身也参与了上下文：CSS（上下文无关）的另一面是——身份是
-**显式**组件，上下文是**隐式**组件，两者合并出最终建议。浏览器扩展的
-`suggesting_for` 正是起源+当前身份的组合。
+Note that the "current identity" itself also participates in context: the flip side of
+context-independent behavior is that identity is the **explicit** component and context
+the **implicit** one, and the two combine into the final suggestion. The browser
+extension's `suggesting_for` is exactly that combination of origin + current identity.
 
-## 规划方向
+## Planned direction
 
-> **阶段 1–4 已实现**（2026-10-12 ~ 2026-10-14）：`persona suggest
-[--json|--short]`、`persona context map/get/unmap/status`、
-> `persona shell-hook`、历史学习（migration 020，默认关）、
-> `persona ssh run --host` 主机维度建议、桥接与浏览器扩展的建议排序。
+> **Phases 1–4 are implemented** (2026-10-12 ~ 2026-10-14): `persona suggest
+[--json|--short]`, `persona context map/get/unmap/status`, `persona shell-hook`,
+> history learning (migration 020, off by default), host-dimension suggestions in
+> `persona ssh run --host`, and suggestion ranking in the bridge and browser extension.
 
 ```text
 Context:
@@ -36,26 +39,28 @@ Context:
     terminal   = zsh
     user       = cuihairu
 
-        ↓（建议）
+        ↓ (suggestion)
 
 Identity: OpenSource
 ```
 
-- 终端/CLI 场景（阶段 1+2）：cwd 所在仓库、主机名 →
-  `persona suggest` 建议该用得上的分身，`persona context map/unmap`
-  管理静态映射，`persona shell-hook` 把候选挂进提示符，`persona use`
-  一键确认；
-- SSH 场景（阶段 3）：`persona ssh run --host <host>` 连接前在 stderr
-  打一行目标主机维度的分身建议（只建议不授权；`PERSONA_NO_CONTEXT=1`
-  可关）；`persona ssh add-to-agent --identity <name>` 让 agent 只加载
-  该分身的 SSH 密钥（按 `PERSONA_AGENT_IDENTITY` fail-closed 过滤）；
-- 浏览器场景（阶段 4）：桥协议 `get_suggestions` 接受可选
-  `host`/`cwd` 信号，响应带 `context` 提示与逐条目 `identity` 标注，
-  建议分身的凭据并入结果并排最前；扩展弹窗消费同一套信号
-  （同一 core `suggest()`；映射损坏时静默降级为普通建议）。
+- Terminal/CLI scenarios (phases 1+2): the repository containing the cwd and the
+  hostname → `persona suggest` proposes identities likely to apply, `persona context
+map/unmap` manages static mappings, `persona shell-hook` puts candidates into your
+  prompt, and `persona use` confirms in one step;
+- SSH scenarios (phase 3): `persona ssh run --host <host>` prints one line of
+  host-scoped identity suggestions to stderr before connecting (suggestion only, never
+  authorization; disable with `PERSONA_NO_CONTEXT=1`); `persona ssh add-to-agent
+--identity <name>` makes the agent load only that identity's SSH keys (filtered
+  fail-closed by `PERSONA_AGENT_IDENTITY`);
+- Browser scenarios (phase 4): the bridge protocol's `get_suggestions` accepts
+  optional `host`/`cwd` signals, responses carry a `context` hint and per-entry
+  `identity` labels, and the suggested identity's credentials join the results ranked
+  first; the extension popup consumes the same signals (the same core `suggest()`,
+  silently degrading to plain suggestions when a mapping is broken).
 
-完整设计见
+For the full design see
 [CONTEXT_AWARE_DESIGN](https://github.com/cuihairu/persona/blob/main/docs/CONTEXT_AWARE_DESIGN.md)
-（阶段 1–4 已实现）。
-在此之前，机制只有一个硬规则：**上下文只会影响建议与默认值，永远不会绕过
-策略放行一个动作**。
+(phases 1–4 implemented).
+Across all of it, the mechanism obeys one hard rule: **context only ever influences
+suggestions and defaults — it never bypasses policy to allow an action.**
