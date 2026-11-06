@@ -1,4 +1,4 @@
-# openclaw 真机证据：桌面填充（2026-11-06，run1、run3–run7 原始日志均已入仓）
+# openclaw 真机证据：桌面填充（2026-11-06，run1、run3–run8 原始日志均已入仓）
 
 - 环境：openclaw（Administrator@10.240.0.3，Windows Server 2022 x64，msvc +
   RUSTUP_TOOLCHAIN=stable，交互式控制台会话经计划任务 `PersonaFillTest`（/IT）执行；
@@ -23,9 +23,16 @@
     `lib_exit=0 frame_exit=0 xproc_exit=0 cmdcancel_exit=101`。命令层套件 5 例：
     3 过（确认门 / 缺 snapshot_id / 解密在途清槽拒绝），**2 红，红的正是两个
     mid-fill 用例**：失败断言为 `assert!(!resp.success)`——旧实现在这两个时点
-    **返回成功**、未中止剩余写入（其后的密码读回断言因此未执行，日志本身不
+    **返回成功**、未报告中止（其后的密码读回断言因此未执行，日志本身不
     直接证明密码落框），即「旧实现可复现取消路径」的红证据。运行前核对：该机 `git rev-parse HEAD` = `ab42d44`，
     任务执行用 `filltest.bat` 的 SHA-256 `5CFCA21E…F926480A` 与仓内此文件一致。
+  - **第五轮绿（main，逐字段重查实现）** HEAD `8cb81c9`（= 当时 origin/main，
+    含 4 笔本批次提交 + CI prettier 自动修复）→ `run8-green-8cb81c9/`，
+    `lib_exit=0 frame_exit=0 xproc_exit=0 cmdcancel_exit=0`：命令层套件 **5/5 全绿**
+    （run7 上必红的两个 mid-fill 用例在此通过），lib 17/17、readback_frame 6/6、
+    跨进程 5/5。运行前核对该机 HEAD `8cb81c9`（`git status` 无已跟踪改动）、
+    任务用 `filltest.bat` SHA-256 与仓内一致；`persona-desktop` 重编译
+    `Finished in 1m 56s`，确系新代码。
 
 ## 结果
 
@@ -37,6 +44,7 @@
 | run5 | `4644114`             | 15 passed / **2 failed**（剪贴板用例） | 5 passed / 0 failed     | `lib_exit=101 frame_exit=0 xproc_exit=0`                                                      |
 | run6 | `a9d2eed`             | **17 passed / 0 failed**               | **5 passed / 0 failed** | `lib_exit=0 frame_exit=0 xproc_exit=0`                                                        |
 | run7 | `ab42d44`（旧命令层） | 12 passed / 0 failed                   | 5 passed / 0 failed     | `lib_exit=0 frame_exit=0 xproc_exit=0 cmdcancel_exit=101`（命令层套件 3 过 **2 红**，预期红） |
+| run8 | `8cb81c9`（main）     | **17 passed / 0 failed**               | **5 passed / 0 failed** | `lib_exit=0 frame_exit=0 xproc_exit=0 cmdcancel_exit=0`（命令层套件 **5/5**）                 |
 
 run3 相比 run1 新增：`confirm_binding_tests` 5 例（确认绑定快照纯函数：确认 A→
 重捕获 B 拒绝、清槽后在途请求拒绝、缺 snapshot_id 拒绝等）、剪贴板非文本清空
@@ -58,7 +66,7 @@ run7 是第五轮的红先行证据：套件本身在旧命令层上**可独立�
 5 例全部真实执行、0 ignored），3 个门禁类用例在旧实现上也过，只有两个
 mid-fill 时序用例红——红点就是「绑定比较后锁释放、写入前无字段级重查」这条
 旧路径：断言 `mid-fill … must abort the fill`（`assert!(!resp.success)`）失败，
-即命令返回成功、未中止剩余写入；其后的密码读回断言未执行，日志不直接证明
+即命令返回成功、未报告中止；其后的密码读回断言未执行，日志不直接证明
 密码落框。实现侧（`8642e9b` 起的逐字段重查）在 main 上，绿侧复验将随第五轮
 报告 `docs/review/2026-11-06-desktop-fill-fifth-pass.md` 在后续提交归档。
 

@@ -1,0 +1,13 @@
+   Compiling persona-fill-test v0.1.0 (C:\Users\Administrator\persona\desktop\src-tauri\fill-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 27.12s
+     Running tests\desktop_fill_command_cancel.rs (target\debug\deps\desktop_fill_command_cancel-6cb64db3fbaada90.exe)
+
+running 5 tests
+test command_layer_rejects_unconfirmed_fill ... ok
+test command_layer_rejects_inflight_request_after_slot_clear ... ok
+test command_layer_requires_snapshot_id ... ok
+test command_layer_mid_fill_slot_clear_aborts_remaining_write ... ok
+test command_layer_mid_fill_target_swap_aborts_remaining_write ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.40s
+

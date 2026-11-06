@@ -1,0 +1,13 @@
+   Compiling persona-fill-test v0.1.0 (C:\Users\Administrator\persona\desktop\src-tauri\fill-test)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 29.96s
+     Running tests\desktop_fill_cross_process.rs (target\debug\deps\desktop_fill_cross_process-a56defe36513d55c.exe)
+
+running 5 tests
+test cross_process_plain_edit_window_rejected ... ok
+test cross_process_password_field_injection_succeeds ... ok
+test cross_process_inflight_destroy_rebuild_rejected ... ok
+test cross_process_destroy_recreate_race_rejected ... ok
+test cross_process_spoofed_title_process_rejected ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
