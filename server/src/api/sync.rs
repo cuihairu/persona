@@ -2718,7 +2718,7 @@ mod tests {
         assert!(!bootstrapped);
 
         // 首设备代授权：拆自己的 group key → 用对方公钥封新信封上传
-        let envelope = seal_group_key(&group, phone.key_pair.public_bytes());
+        let envelope = seal_group_key(&group, phone.key_pair.public_bytes()).unwrap();
         admin
             .put_group_key(phone_id, &envelope)
             .await
@@ -2789,7 +2789,7 @@ mod tests {
         admin
             .put_group_key(
                 id_b,
-                &seal_group_key(&group_old, dev_b.key_pair.public_bytes()),
+                &seal_group_key(&group_old, dev_b.key_pair.public_bytes()).unwrap(),
             )
             .await
             .expect("authorize B");
@@ -2878,7 +2878,7 @@ mod tests {
         admin
             .put_group_key(
                 id_c,
-                &seal_group_key(&group_new, dev_c.key_pair.public_bytes()),
+                &seal_group_key(&group_new, dev_c.key_pair.public_bytes()).unwrap(),
             )
             .await
             .expect("authorize C");
@@ -2953,7 +2953,7 @@ mod tests {
         admin
             .put_group_key(
                 id_b,
-                &seal_group_key(&group_old, dev_b.key_pair.public_bytes()),
+                &seal_group_key(&group_old, dev_b.key_pair.public_bytes()).unwrap(),
             )
             .await
             .unwrap();
@@ -3009,7 +3009,7 @@ mod tests {
         admin
             .put_group_key(
                 id_a,
-                &seal_group_key(crashed_key.as_bytes(), dev_a.key_pair.public_bytes()),
+                &seal_group_key(crashed_key.as_bytes(), dev_a.key_pair.public_bytes()).unwrap(),
             )
             .await
             .unwrap();

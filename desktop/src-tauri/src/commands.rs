@@ -1199,13 +1199,15 @@ pub async fn fill_target_status(
     let target_app = target.map(|t| crate::desktop_fill::exe_file_name(&t.exe_path));
     let snapshot_id = target.map(|t| t.snapshot_id.clone());
     drop(guard);
-    Ok(ApiResponse::success(crate::desktop_fill::FillTargetStatus {
-        supported,
-        ready,
-        target_title,
-        target_app,
-        snapshot_id,
-    }))
+    Ok(ApiResponse::success(
+        crate::desktop_fill::FillTargetStatus {
+            supported,
+            ready,
+            target_title,
+            target_app,
+            snapshot_id,
+        },
+    ))
 }
 
 /// 桌面应用内填充注入（#12）：把凭据的用户名/密码注入到检索浮窗唤起前
@@ -1296,8 +1298,7 @@ pub async fn desktop_fill_credential(
             Err(crate::desktop_fill::ConfirmBindRejection::SnapshotRequired) => {
                 return Ok(ApiResponse::error_maybe_coded(
                     Some("FILL_TARGET_SNAPSHOT_REQUIRED".to_string()),
-                    "Desktop fill confirmation must carry the snapshot id it confirmed"
-                        .to_string(),
+                    "Desktop fill confirmation must carry the snapshot id it confirmed".to_string(),
                 ));
             }
             Err(crate::desktop_fill::ConfirmBindRejection::TargetDiscarded) => {
@@ -1326,25 +1327,19 @@ pub async fn desktop_fill_credential(
         &slot_recheck,
     ) {
         Ok(result) => result,
-        Err(crate::desktop_fill::FillError::Rejected(msg))
-            if msg == "CAPTURED_TARGET_INVALID" =>
-        {
+        Err(crate::desktop_fill::FillError::Rejected(msg)) if msg == "CAPTURED_TARGET_INVALID" => {
             // 失效目标即刻丢弃，避免下一次再撞同一堵墙——但只丢弃仍是
             // 本请求确认的那份快照：槽位若已被新一轮捕获（别的目标），
             // 不能替用户清掉它
             let mut guard = state.fill_target.lock().unwrap_or_else(|p| p.into_inner());
-            if guard.as_ref().map(|t| t.snapshot_id.as_str())
-                == Some(target.snapshot_id.as_str())
-            {
+            if guard.as_ref().map(|t| t.snapshot_id.as_str()) == Some(target.snapshot_id.as_str()) {
                 *guard = None;
             }
             return Ok(ApiResponse::error(
                 "Captured fill target is no longer valid (window closed or reused)".to_string(),
             ));
         }
-        Err(crate::desktop_fill::FillError::Rejected(msg)) => {
-            return Ok(ApiResponse::error(msg))
-        }
+        Err(crate::desktop_fill::FillError::Rejected(msg)) => return Ok(ApiResponse::error(msg)),
         Err(crate::desktop_fill::FillError::Aborted {
             reason,
             username_filled,
@@ -1383,12 +1378,14 @@ pub async fn desktop_fill_credential(
             }
         }
     };
-    Ok(ApiResponse::success(crate::desktop_fill::DesktopFillResult {
-        username_filled,
-        password_filled,
-        target_title,
-        warning: None,
-    }))
+    Ok(ApiResponse::success(
+        crate::desktop_fill::DesktopFillResult {
+            username_filled,
+            password_filled,
+            target_title,
+            warning: None,
+        },
+    ))
 }
 
 /// 把主窗口拉到前台（浮窗锁定态的"去解锁"出口）
@@ -2519,7 +2516,10 @@ pub async fn sync_authorize(
         Err(e) => return Ok(ApiResponse::error(format!("Failed to list devices: {e}"))),
     };
     let envelope =
-        persona_core::sync::envelope::seal_group_key(&group_key_bytes, &target.public_key);
+        match persona_core::sync::envelope::seal_group_key(&group_key_bytes, &target.public_key) {
+            Ok(envelope) => envelope,
+            Err(e) => return Ok(ApiResponse::error(format!("Failed to seal group key: {e}"))),
+        };
     match api.put_group_key(target_id, &envelope).await {
         Ok(()) => Ok(ApiResponse::success(true)),
         Err(e) => Ok(ApiResponse::error(format!(

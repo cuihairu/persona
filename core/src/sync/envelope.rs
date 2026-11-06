@@ -25,13 +25,26 @@ const TAG_LEN: usize = 16;
 pub const ENVELOPE_LEN: usize = EPH_PUB_LEN + GROUP_KEY_LEN + TAG_LEN;
 
 /// 用设备 X25519 公钥密封 group key（建组与为新设备授权时调用）。
-pub fn seal_group_key(group_key: &[u8; GROUP_KEY_LEN], device_public: &[u8; 32]) -> Vec<u8> {
+/// `device_public` 来自服务器登记的设备记录，属不受信输入：若它是低阶点，
+/// 共享密钥塌缩成公开常量，任何人（含恶意服务器）都能自行拆封信封、
+/// 偷换 group key——因此拒封（fail-closed，与 [`open_group_key`] 拆封侧
+/// 的同名防线对称）。
+pub fn seal_group_key(
+    group_key: &[u8; GROUP_KEY_LEN],
+    device_public: &[u8; 32],
+) -> Result<Vec<u8>, PersonaError> {
+    reject_low_order_public("device public key", device_public)?;
     let mut eph_secret_bytes = [0u8; 32];
     rand::rng().fill(&mut eph_secret_bytes);
     let eph_secret = StaticSecret::from(eph_secret_bytes);
     let eph_public = PublicKey::from(&eph_secret);
 
     let shared = eph_secret.diffie_hellman(&PublicKey::from(*device_public));
+    if !shared.was_contributory() {
+        return Err(PersonaError::CryptographicError(
+            "device public key is a low-order point".to_string(),
+        ));
+    }
     let okm = derive_okm(&shared);
 
     use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
@@ -47,12 +60,16 @@ pub fn seal_group_key(group_key: &[u8; GROUP_KEY_LEN], device_public: &[u8; 32])
     let mut out = Vec::with_capacity(ENVELOPE_LEN);
     out.extend_from_slice(eph_public.as_bytes());
     out.extend_from_slice(&ciphertext);
-    out
+    Ok(out)
 }
 
 /// 设备用自己的私钥拆信封。失败 = 信封不是包给这把私钥的（或被篡改）——
 /// 两种成因不区分（[`PersonaError::CryptographicError`]），调用方一律按
 /// 「未授权该同步组」处理（fail-closed）。
+///
+/// 信封来自服务器，属不受信输入：`eph_pub` 若是低阶点（如全零），X25519
+/// 共享密钥塌缩成公开常量，攻击者可本地复算 HKDF 并自造合法信封把自选
+/// group key 注入设备——因此低阶点在 AEAD 之前显式拒绝（fail-closed）。
 pub fn open_group_key(
     envelope: &[u8],
     device_secret: &[u8; 32],
@@ -66,8 +83,14 @@ pub fn open_group_key(
     let eph_public_bytes: [u8; 32] = envelope[..EPH_PUB_LEN]
         .try_into()
         .expect("slice length checked above");
+    reject_low_order_public("device envelope ephemeral key", &eph_public_bytes)?;
     let secret = StaticSecret::from(*device_secret);
     let shared = secret.diffie_hellman(&PublicKey::from(eph_public_bytes));
+    if !shared.was_contributory() {
+        return Err(PersonaError::CryptographicError(
+            "device envelope ephemeral key is a low-order point".to_string(),
+        ));
+    }
     let okm = derive_okm(&shared);
 
     use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
@@ -84,6 +107,19 @@ pub fn open_group_key(
     plaintext.try_into().map_err(|_| {
         PersonaError::CryptographicError("device envelope payload length mismatch".to_string())
     })
+}
+
+/// 显式拒绝全零公钥字节（低阶点里最常见的一枚）：早拒给出精确错误，
+/// 也为 DH 实现日后更替留一道不依赖 `was_contributory` 的防线。
+/// 全部低阶点由 `SharedSecret::was_contributory` 兜底——低阶点的 X25519
+/// 输出恒为全零 ⇒ 共享密钥非贡献性 ⇒ 对方可本地复算派生密钥。
+fn reject_low_order_public(what: &str, bytes: &[u8; 32]) -> Result<(), PersonaError> {
+    if *bytes == [0u8; 32] {
+        return Err(PersonaError::CryptographicError(format!(
+            "{what} is an all-zero low-order point"
+        )));
+    }
+    Ok(())
 }
 
 /// HKDF-SHA256：salt = None（零盐），ikm = ephemeral DH 共享密钥，
@@ -109,7 +145,7 @@ mod tests {
     fn seal_open_round_trip() {
         let device = keypair();
         let group_key = [7u8; 32];
-        let envelope = seal_group_key(&group_key, device.public_bytes());
+        let envelope = seal_group_key(&group_key, device.public_bytes()).unwrap();
         assert_eq!(envelope.len(), ENVELOPE_LEN);
         let opened = open_group_key(&envelope, device.secret_bytes()).unwrap();
         assert_eq!(opened, group_key);
@@ -119,7 +155,7 @@ mod tests {
     fn wrong_device_cannot_open() {
         let device = keypair();
         let outsider = keypair();
-        let envelope = seal_group_key(&[1u8; 32], device.public_bytes());
+        let envelope = seal_group_key(&[1u8; 32], device.public_bytes()).unwrap();
         let err = open_group_key(&envelope, outsider.secret_bytes()).unwrap_err();
         assert!(err.to_string().contains("failed authentication"), "{err}");
     }
@@ -127,7 +163,7 @@ mod tests {
     #[test]
     fn tampered_ciphertext_is_rejected() {
         let device = keypair();
-        let mut envelope = seal_group_key(&[2u8; 32], device.public_bytes());
+        let mut envelope = seal_group_key(&[2u8; 32], device.public_bytes()).unwrap();
         let last = envelope.len() - 1;
         envelope[last] ^= 0x01;
         assert!(open_group_key(&envelope, device.secret_bytes()).is_err());
@@ -136,7 +172,7 @@ mod tests {
     #[test]
     fn tampered_ephemeral_public_is_rejected() {
         let device = keypair();
-        let mut envelope = seal_group_key(&[3u8; 32], device.public_bytes());
+        let mut envelope = seal_group_key(&[3u8; 32], device.public_bytes()).unwrap();
         envelope[0] ^= 0xff;
         assert!(open_group_key(&envelope, device.secret_bytes()).is_err());
     }
@@ -154,8 +190,8 @@ mod tests {
         // （不可链接性），且各自都能被设备私钥拆开
         let device = keypair();
         let group_key = [9u8; 32];
-        let a = seal_group_key(&group_key, device.public_bytes());
-        let b = seal_group_key(&group_key, device.public_bytes());
+        let a = seal_group_key(&group_key, device.public_bytes()).unwrap();
+        let b = seal_group_key(&group_key, device.public_bytes()).unwrap();
         assert_ne!(a, b);
         assert_eq!(
             open_group_key(&a, device.secret_bytes()).unwrap(),
@@ -165,5 +201,26 @@ mod tests {
             open_group_key(&b, device.secret_bytes()).unwrap(),
             group_key
         );
+    }
+
+    /// 回归（AUDIT-2026-11-05 P1-3）：恶意服务器把信封 `eph_pub` 换成
+    /// 低阶点（全零）后，共享密钥塌成公开常量，攻击者可本地复算密钥并
+    /// 自造「合法」信封注入自选 group key——必须在 AEAD 之前拒绝，且
+    /// 错误信息指明低阶点（而非含糊的 authentication failed）。
+    #[test]
+    fn open_rejects_all_zero_ephemeral_public() {
+        let device = keypair();
+        let mut envelope = seal_group_key(&[4u8; 32], device.public_bytes()).unwrap();
+        envelope[..EPH_PUB_LEN].fill(0);
+        let err = open_group_key(&envelope, device.secret_bytes()).unwrap_err();
+        assert!(err.to_string().contains("low-order"), "{err}");
+    }
+
+    /// 同一防线的封口侧：服务器登记的设备公钥若是低阶点，密封出的信封
+    /// 对攻击者透明——拒封而不是产出可被拆的信封。
+    #[test]
+    fn seal_rejects_all_zero_device_public() {
+        let err = seal_group_key(&[5u8; 32], &[0u8; 32]).unwrap_err();
+        assert!(err.to_string().contains("low-order"), "{err}");
     }
 }

@@ -8796,7 +8796,8 @@ pub(crate) mod tests {
         let envelope = persona_core::sync::envelope::seal_group_key(
             &group_key,
             identity.key_pair.public_bytes(),
-        );
+        )
+        .unwrap();
         let entries = vec![persona_core::sync::remote::SyncGroupKeyEntry {
             device_id: identity.device_id,
             envelope,
@@ -8814,7 +8815,8 @@ pub(crate) mod tests {
         let identity = device_identity(1);
         let other = device_identity(2);
         let envelope =
-            persona_core::sync::envelope::seal_group_key(&[1u8; 32], other.key_pair.public_bytes());
+            persona_core::sync::envelope::seal_group_key(&[1u8; 32], other.key_pair.public_bytes())
+                .unwrap();
         let entries = vec![persona_core::sync::remote::SyncGroupKeyEntry {
             device_id: other.device_id,
             envelope,

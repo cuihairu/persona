@@ -511,7 +511,7 @@ impl<R: SyncRemote> SyncSession<R> {
                 continue;
             }
             let envelope =
-                super::envelope::seal_group_key(new_group.as_bytes(), &device.public_key);
+                super::envelope::seal_group_key(new_group.as_bytes(), &device.public_key)?;
             admin.put_group_key(device.id, &envelope).await?;
         }
 

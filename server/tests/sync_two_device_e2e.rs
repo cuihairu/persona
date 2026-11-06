@@ -176,7 +176,7 @@ async fn authorize(admin: &SyncAdminApi, me: &DeviceIdentity, target: Uuid) {
         .into_iter()
         .find(|d| d.id == target)
         .expect("target device registered");
-    let sealed = envelope::seal_group_key(&group, &target_device.public_key);
+    let sealed = envelope::seal_group_key(&group, &target_device.public_key).unwrap();
     admin.put_group_key(target, &sealed).await.unwrap();
 }
 

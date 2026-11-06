@@ -686,7 +686,7 @@ impl SyncAdminApi {
             return Ok(false);
         }
         let group = super::keys::GroupKey::generate()?;
-        let envelope = super::envelope::seal_group_key(group.as_bytes(), device_public);
+        let envelope = super::envelope::seal_group_key(group.as_bytes(), device_public)?;
         self.put_group_key(device_id, &envelope).await?;
         Ok(true)
     }
