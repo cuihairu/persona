@@ -9,10 +9,10 @@
 
 pub mod approval;
 pub mod biometric;
-pub mod desktop_fill;
 #[cfg(test)]
 mod command_layer_tests;
 pub mod commands;
+pub mod desktop_fill;
 // Connect HTTP 端点自 v0.1 起是独立 crate（桌面/CLI 共用同一 router），
 // 这里 re-export 保持 `crate::connect_server::*` 引用路径不变。
 pub use persona_connect_server as connect_server;

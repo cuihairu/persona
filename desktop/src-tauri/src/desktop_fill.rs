@@ -308,7 +308,6 @@ pub struct FillTargetStatus {
     pub snapshot_id: Option<String>,
 }
 
-
 /// 目标应用可执行文件名（确认面展示用，如 "notepad.exe"）。平台无关的
 /// 纯字符串处理（路径分隔符按 Win32/Unix 两种都切）。
 pub fn exe_file_name(exe_path: &str) -> String {
@@ -337,25 +336,27 @@ pub mod win {
     //! Win32 实现。全部函数失败都返回 Err 带原文，不 panic、不静默。
 
     use windows::core::BOOL;
-    use windows::Win32::Foundation::{HANDLE, GlobalFree, HWND, LPARAM, WPARAM};
+    use windows::Win32::Foundation::{GlobalFree, HANDLE, HWND, LPARAM, WPARAM};
     use windows::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable,
         OpenClipboard, SetClipboardData,
     };
-    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
+    use windows::Win32::System::Memory::{
+        GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE,
+    };
     use windows::Win32::System::Ole::CF_UNICODETEXT;
     use windows::Win32::System::Threading::{
         AttachThreadInput, GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         IsWindowEnabled, SendInput, SetFocus, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-        KEYEVENTF_KEYUP, VK_CONTROL, VK_V, VIRTUAL_KEY,
+        KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL, VK_V,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumChildWindows, GetAncestor, GetClassNameW, GetForegroundWindow, GetWindowLongPtrW,
-        GetWindowThreadProcessId, GetWindowTextLengthW, GetWindowTextW, IsWindow,
-        IsWindowVisible, SendMessageW, SetForegroundWindow, GA_ROOT, GWL_STYLE, WM_GETTEXT,
-        WM_GETTEXTLENGTH, WM_SETTEXT, ES_PASSWORD, ES_READONLY,
+        GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible,
+        SendMessageW, SetForegroundWindow, ES_PASSWORD, ES_READONLY, GA_ROOT, GWL_STYLE,
+        WM_GETTEXT, WM_GETTEXTLENGTH, WM_SETTEXT,
     };
 
     use super::FieldState;
@@ -462,7 +463,8 @@ pub mod win {
         expected_pid: u32,
         require_password: bool,
     ) -> Result<(), String> {
-        let state = field_state(field_hwnd).ok_or_else(|| "target field window is gone".to_string())?;
+        let state =
+            field_state(field_hwnd).ok_or_else(|| "target field window is gone".to_string())?;
         unsafe {
             let root = GetAncestor(HWND(field_hwnd as *mut _), GA_ROOT);
             if root.0 as isize != target_hwnd {
@@ -704,17 +706,17 @@ pub mod win {
 
             // catch_unwind：闭包 panic 不能绕过剪贴板恢复（panic 信息在
             // 恢复之后按 ResumeUnwind 语义重新抛出）
-            let paste_result = set.map(|()| {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(paste))
-            });
+            let paste_result =
+                set.map(|()| std::panic::catch_unwind(std::panic::AssertUnwindSafe(paste)));
 
             // 恢复：写回备份（无文本备份则写空串，把密文清掉）
             let mut restore_warning = set_text(backup.as_deref().unwrap_or("")).err();
             // 非文本内容（文件/位图/自定义格式）恢复不了原文——覆写为空串
             // 后必须返回告警（不能静默销毁用户剪贴板）
             if restore_warning.is_none() && had_non_text {
-                let msg = "previous non-text clipboard content was cleared and could not be restored"
-                    .to_string();
+                let msg =
+                    "previous non-text clipboard content was cleared and could not be restored"
+                        .to_string();
                 tracing::warn!("clipboard paste: {msg}");
                 restore_warning = Some(msg);
             }
@@ -762,7 +764,9 @@ pub mod win {
         use windows::Win32::System::DataExchange::{
             CloseClipboard, EmptyClipboard, SetClipboardData,
         };
-        use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        use windows::Win32::System::Memory::{
+            GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+        };
         unsafe {
             open_clipboard_with_retry()?;
             let result = (|| {
@@ -804,7 +808,9 @@ pub mod win {
             if unsafe { OpenClipboard(None) }.is_ok() {
                 return Ok(());
             }
-            std::thread::sleep(std::time::Duration::from_millis(20 * u64::from(attempt + 1)));
+            std::thread::sleep(std::time::Duration::from_millis(
+                20 * u64::from(attempt + 1),
+            ));
         }
         Err("cannot open clipboard".to_string())
     }
@@ -819,7 +825,8 @@ pub mod win {
                 let mut wide: Vec<u16> = value.encode_utf16().collect();
                 wide.push(0);
                 let bytes = wide.len() * 2;
-                let h = GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| format!("GlobalAlloc: {e}"))?;
+                let h =
+                    GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| format!("GlobalAlloc: {e}"))?;
                 let ptr = GlobalLock(h);
                 if ptr.is_null() {
                     let _ = GlobalFree(Some(h));
@@ -872,7 +879,11 @@ pub mod win {
                     ki: KEYBDINPUT {
                         wVk: vk,
                         wScan: 0,
-                        dwFlags: if keyup { KEYEVENTF_KEYUP } else { Default::default() },
+                        dwFlags: if keyup {
+                            KEYEVENTF_KEYUP
+                        } else {
+                            Default::default()
+                        },
                         time: 0,
                         dwExtraInfo: 0,
                     },
@@ -1101,9 +1112,7 @@ mod win_tests {
                 password_filled: false,
                 ..
             }) => {}
-            other => panic!(
-                "mid-fill clear must abort with partial completion, got {other:?}"
-            ),
+            other => panic!("mid-fill clear must abort with partial completion, got {other:?}"),
         }
         assert_eq!(
             read_field_text(target.password),
@@ -1157,9 +1166,9 @@ mod win_tests {
                 password_filled: false,
                 ..
             }) => {}
-            other => panic!(
-                "mid-fill target swap must abort with partial completion, got {other:?}"
-            ),
+            other => {
+                panic!("mid-fill target swap must abort with partial completion, got {other:?}")
+            }
         }
         assert_eq!(
             read_field_text(target.password),
@@ -1177,7 +1186,10 @@ mod win_tests {
         let fields = enumerate_edit_fields(target.top);
         assert_eq!(fields.len(), 2);
         assert!(fields.iter().all(|f| !f.is_password));
-        assert!(classify_fields(&fields).is_none(), "no ES_PASSWORD field must reject classification");
+        assert!(
+            classify_fields(&fields).is_none(),
+            "no ES_PASSWORD field must reject classification"
+        );
         let snapshot = target.snapshot("persona fill test - plain");
         let fake_self_pid = std::process::id().wrapping_add(1).max(1);
         let err = execute_fill(&snapshot, "alice", "s3cret", fake_self_pid, &|| Ok(()))
@@ -1185,7 +1197,10 @@ mod win_tests {
         let FillError::Rejected(err) = err else {
             panic!("expected Rejected, got {err:?}");
         };
-        assert!(err.contains("ES_PASSWORD"), "error must mention ES_PASSWORD: {err}");
+        assert!(
+            err.contains("ES_PASSWORD"),
+            "error must mention ES_PASSWORD: {err}"
+        );
         // 两个普通框都必须原样为空（没写进去任何东西）
         assert_eq!(read_field_text(target.username), "");
         assert_eq!(read_field_text(target.password), "");
@@ -1198,24 +1213,66 @@ mod win_tests {
     fn classification_guards_ineligible_fields() {
         use super::FieldState as F;
         // 只读密码框：不合格 → 无合格密码框 → 拒绝
-        let ro = vec![F { hwnd: 1, is_password: true, visible: true, enabled: true, read_only: true }];
+        let ro = vec![F {
+            hwnd: 1,
+            is_password: true,
+            visible: true,
+            enabled: true,
+            read_only: true,
+        }];
         assert!(classify_fields(&ro).is_none());
         // 隐藏密码框：拒绝
-        let hidden = vec![F { hwnd: 2, is_password: true, visible: false, enabled: true, read_only: false }];
+        let hidden = vec![F {
+            hwnd: 2,
+            is_password: true,
+            visible: false,
+            enabled: true,
+            read_only: false,
+        }];
         assert!(classify_fields(&hidden).is_none());
         // 禁用密码框：拒绝
-        let disabled = vec![F { hwnd: 3, is_password: true, visible: true, enabled: false, read_only: false }];
+        let disabled = vec![F {
+            hwnd: 3,
+            is_password: true,
+            visible: true,
+            enabled: false,
+            read_only: false,
+        }];
         assert!(classify_fields(&disabled).is_none());
         // 隐藏密码框 + 可见用户名框：仍然拒绝（不能只填用户名进可疑窗口）
         let mixed = vec![
-            F { hwnd: 4, is_password: false, visible: true, enabled: true, read_only: false },
-            F { hwnd: 5, is_password: true, visible: false, enabled: true, read_only: false },
+            F {
+                hwnd: 4,
+                is_password: false,
+                visible: true,
+                enabled: true,
+                read_only: false,
+            },
+            F {
+                hwnd: 5,
+                is_password: true,
+                visible: false,
+                enabled: true,
+                read_only: false,
+            },
         ];
         assert!(classify_fields(&mixed).is_none());
         // 合格密码框 + 隐藏用户名框：填密码，用户名如实报未填
         let pwd_only = vec![
-            F { hwnd: 6, is_password: false, visible: false, enabled: true, read_only: false },
-            F { hwnd: 7, is_password: true, visible: true, enabled: true, read_only: false },
+            F {
+                hwnd: 6,
+                is_password: false,
+                visible: false,
+                enabled: true,
+                read_only: false,
+            },
+            F {
+                hwnd: 7,
+                is_password: true,
+                visible: true,
+                enabled: true,
+                read_only: false,
+            },
         ];
         let c = classify_fields(&pwd_only).unwrap();
         assert_eq!(c.username_hwnd, None);
@@ -1228,7 +1285,8 @@ mod win_tests {
     /// ES_PASSWORD 样式拒绝（hwnd 复用字段角色对调的场景）。
     #[test]
     fn revalidate_field_rejects_gone_and_role_swapped_fields() {
-        let target = TestTargetWindow::create("persona fill test - revalidate", true).expect("create");
+        let target =
+            TestTargetWindow::create("persona fill test - revalidate", true).expect("create");
         let mut pid = 0u32;
         unsafe {
             GetWindowThreadProcessId(
@@ -1269,17 +1327,34 @@ mod win_tests {
         };
         let class = super::win::window_class_name(target.top);
         let exe = super::win::process_image_path(real_pid);
-        assert!(!class.is_empty() && !exe.is_empty(), "fingerprint helpers must work in-test");
+        assert!(
+            !class.is_empty() && !exe.is_empty(),
+            "fingerprint helpers must work in-test"
+        );
 
         // 指纹全对（self_pid 伪造成别的进程）→ 放行
         assert!(
-            validate_snapshot(target.top, "persona fill test - validate", real_pid, &class, &exe, fake_other_pid),
+            validate_snapshot(
+                target.top,
+                "persona fill test - validate",
+                real_pid,
+                &class,
+                &exe,
+                fake_other_pid
+            ),
             "matching snapshot must pass"
         );
 
         // 标题前缀不一致 → 拒绝（模拟 hwnd 复用到别的窗口）
         assert!(
-            !validate_snapshot(target.top, "totally different window", real_pid, &class, &exe, fake_other_pid),
+            !validate_snapshot(
+                target.top,
+                "totally different window",
+                real_pid,
+                &class,
+                &exe,
+                fake_other_pid
+            ),
             "stale title must be rejected"
         );
 
@@ -1291,24 +1366,52 @@ mod win_tests {
 
         // 快照 pid 乱填（=0）与真实 pid 不符 → 拒绝
         assert!(
-            !validate_snapshot(target.top, "persona fill test - validate", 0, &class, &exe, fake_other_pid),
+            !validate_snapshot(
+                target.top,
+                "persona fill test - validate",
+                0,
+                &class,
+                &exe,
+                fake_other_pid
+            ),
             "mismatched pid must be rejected"
         );
 
         // 类名不符 → 拒绝
         assert!(
-            !validate_snapshot(target.top, "persona fill test - validate", real_pid, "OtherClass", &exe, fake_other_pid),
+            !validate_snapshot(
+                target.top,
+                "persona fill test - validate",
+                real_pid,
+                "OtherClass",
+                &exe,
+                fake_other_pid
+            ),
             "mismatched class must be rejected"
         );
 
         // 可执行文件路径不符 → 拒绝（同标题同 pid 的伪装进程场景）
         assert!(
-            !validate_snapshot(target.top, "persona fill test - validate", real_pid, &class, "C:\\attacker.exe", fake_other_pid),
+            !validate_snapshot(
+                target.top,
+                "persona fill test - validate",
+                real_pid,
+                &class,
+                "C:\\attacker.exe",
+                fake_other_pid
+            ),
             "mismatched exe path must be rejected"
         );
 
         // 死句柄 → 拒绝
-        assert!(!validate_snapshot(0xDEAD_BEEFisize, "", real_pid, &class, &exe, fake_other_pid));
+        assert!(!validate_snapshot(
+            0xDEAD_BEEFisize,
+            "",
+            real_pid,
+            &class,
+            &exe,
+            fake_other_pid
+        ));
 
         // validate_target 层：本进程窗口（pid == self_pid）恒拒绝
         let own = FillTarget {
@@ -1319,11 +1422,21 @@ mod win_tests {
             exe_path: exe.clone(),
             snapshot_id: "test-own-window-snapshot".to_string(),
         };
-        assert!(!validate_target(&own, real_pid), "own-process window must be rejected");
+        assert!(
+            !validate_target(&own, real_pid),
+            "own-process window must be rejected"
+        );
 
         target.destroy();
         assert!(
-            !validate_snapshot(target.top, "persona fill test - validate", real_pid, &class, &exe, fake_other_pid),
+            !validate_snapshot(
+                target.top,
+                "persona fill test - validate",
+                real_pid,
+                &class,
+                &exe,
+                fake_other_pid
+            ),
             "destroyed window must be rejected"
         );
     }
@@ -1348,8 +1461,16 @@ mod win_tests {
             *seen.borrow_mut() = read_clipboard_text();
         })
         .expect("paste roundtrip");
-        assert_eq!(seen.borrow().as_str(), "TOP-SECRET", "secret must be on clipboard during paste");
-        assert_eq!(read_clipboard_text(), prev, "previous content must be restored");
+        assert_eq!(
+            seen.borrow().as_str(),
+            "TOP-SECRET",
+            "secret must be on clipboard during paste"
+        );
+        assert_eq!(
+            read_clipboard_text(),
+            prev,
+            "previous content must be restored"
+        );
         assert!(warn.is_none(), "restore should not warn: {warn:?}");
 
         // 无原有内容时：结束后密文被清掉（写空串），不残留。断空必须
@@ -1370,7 +1491,10 @@ mod win_tests {
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = with_clipboard_paste("PANIC-SECRET", || panic!("boom in paste closure"));
         }));
-        assert!(panicked.is_err(), "closure panic must propagate after restore");
+        assert!(
+            panicked.is_err(),
+            "closure panic must propagate after restore"
+        );
         assert_eq!(
             read_clipboard_text(),
             prev_panic,
@@ -1467,7 +1591,10 @@ mod win_tests {
                     },
                 );
             }));
-            assert!(panicked.is_err(), "closure panic must propagate after restore");
+            assert!(
+                panicked.is_err(),
+                "closure panic must propagate after restore"
+            );
         });
         assert!(
             warns.iter().any(|w| {
@@ -1488,11 +1615,7 @@ mod win_tests {
         struct WarnCapture(Arc<Mutex<Vec<String>>>);
         struct MessageVisitor(String);
         impl tracing::field::Visit for MessageVisitor {
-            fn record_debug(
-                &mut self,
-                field: &tracing::field::Field,
-                value: &dyn std::fmt::Debug,
-            ) {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
                 if field.name() == "message" {
                     self.0 = format!("{value:?}");
                 }
@@ -1638,12 +1761,19 @@ mod nonwin_tests {
             read_only: ro,
         };
         // 正常：用户名第一个合格非密码框，密码第一个合格密码样式框
-        let ok = vec![f(1, false, true, true, false), f(2, true, true, true, false), f(3, true, true, true, false)];
+        let ok = vec![
+            f(1, false, true, true, false),
+            f(2, true, true, true, false),
+            f(3, true, true, true, false),
+        ];
         let c = classify_fields(&ok).unwrap();
         assert_eq!(c.username_hwnd, Some(1));
         assert_eq!(c.password_hwnd, 2);
         // 没有任何密码样式框：**整体拒绝**（不再猜"第二个框"）
-        let plain_only = vec![f(7, false, true, true, false), f(8, false, true, true, false)];
+        let plain_only = vec![
+            f(7, false, true, true, false),
+            f(8, false, true, true, false),
+        ];
         assert!(classify_fields(&plain_only).is_none());
         // 全密码框：没有用户名框，只填密码
         let all_pwd = vec![f(1, true, true, true, false), f(2, true, true, true, false)];
@@ -1660,7 +1790,10 @@ mod nonwin_tests {
         let disabled = vec![f(11, true, true, false, false)];
         assert!(classify_fields(&disabled).is_none());
         // 密码框合格但用户名框全部不合格：只填密码
-        let pwd_only = vec![f(12, false, false, true, true), f(13, true, true, true, false)];
+        let pwd_only = vec![
+            f(12, false, false, true, true),
+            f(13, true, true, true, false),
+        ];
         let c = classify_fields(&pwd_only).unwrap();
         assert_eq!(c.username_hwnd, None);
         assert_eq!(c.password_hwnd, 13);

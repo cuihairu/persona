@@ -459,7 +459,10 @@ impl std::fmt::Debug for CryptoWalletData {
             .field("address", &self.address)
             .field("network", &self.network)
             .field("bip39_passphrase", &"[redacted]")
-            .field("item_password_hash", &self.item_password_hash.as_ref().map(|_| "[set]"))
+            .field(
+                "item_password_hash",
+                &self.item_password_hash.as_ref().map(|_| "[set]"),
+            )
             .field("item_password_hint", &self.item_password_hint)
             .finish()
     }
@@ -471,7 +474,10 @@ impl std::fmt::Debug for SshKeyData {
             .field("private_key", &"[redacted]")
             .field("public_key", &self.public_key)
             .field("key_type", &self.key_type)
-            .field("passphrase", &self.passphrase.as_ref().map(|_| "[redacted]"))
+            .field(
+                "passphrase",
+                &self.passphrase.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
     }
 }
@@ -480,7 +486,10 @@ impl std::fmt::Debug for ApiKeyData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ApiKeyData")
             .field("api_key", &"[redacted]")
-            .field("api_secret", &self.api_secret.as_ref().map(|_| "[redacted]"))
+            .field(
+                "api_secret",
+                &self.api_secret.as_ref().map(|_| "[redacted]"),
+            )
             .field("token", &self.token.as_ref().map(|_| "[redacted]"))
             .field("permissions", &self.permissions)
             .field("expires_at", &self.expires_at)
@@ -552,7 +561,10 @@ impl std::fmt::Debug for GameTokenData {
             .field("issuer", &self.issuer)
             .field("account_name", &self.account_name)
             .field("url", &self.url)
-            .field("identity_secret", &self.identity_secret.as_ref().map(|_| "[redacted]"))
+            .field(
+                "identity_secret",
+                &self.identity_secret.as_ref().map(|_| "[redacted]"),
+            )
             .field("device_id", &self.device_id)
             .finish()
     }
@@ -634,8 +646,14 @@ impl std::fmt::Debug for IdentityData {
             .field("birthday", &self.birthday)
             .field("address", &self.address)
             .field("id_number", &self.id_number.as_ref().map(|_| "[redacted]"))
-            .field("passport_number", &self.passport_number.as_ref().map(|_| "[redacted]"))
-            .field("driver_license", &self.driver_license.as_ref().map(|_| "[redacted]"))
+            .field(
+                "passport_number",
+                &self.passport_number.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "driver_license",
+                &self.driver_license.as_ref().map(|_| "[redacted]"),
+            )
             .field("tax_id", &self.tax_id.as_ref().map(|_| "[redacted]"))
             .field("organization", &self.organization)
             .field("job_title", &self.job_title)
