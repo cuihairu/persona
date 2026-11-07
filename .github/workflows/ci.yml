@@ -20,6 +20,9 @@ on:
       - '*.svg'
       - '.editorconfig'
 
+permissions:
+  contents: read
+
 jobs:
   rust:
     name: Rust (core/cli/server/agents)

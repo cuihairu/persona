@@ -615,7 +615,41 @@ pub mod relay {
     }
 
     impl PairingRelayClient {
+        /// Build a relay client, refusing to send pairing material over
+        /// cleartext HTTP to a non-loopback host.
+        ///
+        /// Pairing messages carry the group key and invite secrets, so a plain
+        /// `http://` relay on a real network would expose them in transit. Loopback
+        /// (`http://127.0.0.1`, `http://localhost`, `http://[::1]`) stays allowed so
+        /// local development and the in-process test relay keep working.
         pub fn new(base_url: impl Into<String>) -> Result<Self> {
+            let base_url = base_url.into().trim_end_matches('/').to_owned();
+            let parsed = url::Url::parse(&base_url).map_err(|e| {
+                PersonaError::ConfigurationError(format!(
+                    "pairing relay URL is not a valid URL: {e}"
+                ))
+            })?;
+            if parsed.scheme() == "http" {
+                let host = parsed
+                    .host_str()
+                    .unwrap_or_default()
+                    .trim_start_matches('[')
+                    .trim_end_matches(']');
+                let loopback = host == "localhost"
+                    || host == "::1"
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .map(|ip| ip.is_loopback())
+                        .unwrap_or(false);
+                if !loopback {
+                    return Err(PersonaError::ConfigurationError(
+                        "pairing relay URL must use https:// (cleartext http:// is \
+                         only allowed for loopback hosts)"
+                            .to_string(),
+                    )
+                    .into());
+                }
+            }
             let http = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(5))
                 .build()
@@ -624,10 +658,7 @@ pub mod relay {
                         "pairing relay client init failed: {e}"
                     ))
                 })?;
-            Ok(Self {
-                base_url: base_url.into().trim_end_matches('/').to_owned(),
-                http,
-            })
+            Ok(Self { base_url, http })
         }
 
         fn uri(&self, session_id: &str, path: &str) -> String {
@@ -1067,6 +1098,18 @@ mod tests {
         #[tokio::test]
         async fn relay_poll_interval_is_sane() {
             assert!(POLL_EVERY.as_millis() >= 100);
+        }
+
+        #[test]
+        fn relay_client_rejects_cleartext_http_on_non_loopback() {
+            assert!(PairingRelayClient::new("http://example.com").is_err());
+            assert!(PairingRelayClient::new("http://192.168.1.10").is_err());
+            // Loopback http:// stays allowed for the local test relay.
+            assert!(PairingRelayClient::new("http://127.0.0.1:8000").is_ok());
+            assert!(PairingRelayClient::new("http://localhost:8000").is_ok());
+            assert!(PairingRelayClient::new("http://[::1]:8000").is_ok());
+            // https:// always allowed.
+            assert!(PairingRelayClient::new("https://relay.example.com").is_ok());
         }
     }
 
