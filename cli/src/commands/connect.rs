@@ -11,7 +11,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, Subcommand};
 use colored::Colorize;
-use persona_connect_server::ConnectServerHandle;
 
 use crate::config::CliConfig;
 use crate::utils::core_ext::CoreResultExt;
@@ -412,6 +411,28 @@ async fn serve(
     unix_socket: Option<Option<std::path::PathBuf>>,
     passphrase_env: Option<&str>,
 ) -> Result<()> {
+    serve_until(config, ui, port, unix_socket, passphrase_env, async {
+        tokio::signal::ctrl_c()
+            .await
+            .context("failed to listen for Ctrl-C")
+    })
+    .await
+}
+
+/// `serve` 主体，「等待退出信号」参数化——这是测试缝：生产喂 Ctrl-C，
+/// 测试喂可控 future，使 解锁 → start → 打印端点 → stop → 清理 全路径
+/// 可被单测执行（否则 serve 只能在真实终端手工冒烟）。
+async fn serve_until<F>(
+    config: &CliConfig,
+    ui: &dyn PromptUi,
+    port: u16,
+    unix_socket: Option<Option<std::path::PathBuf>>,
+    passphrase_env: Option<&str>,
+    shutdown: F,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
     let transport = resolve_transport(port, unix_socket)?;
     let service = open_unlocked(config, ui, passphrase_env).await?;
     let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(service)));
@@ -449,7 +470,10 @@ async fn serve(
             );
         }
     }
-    run_until_interrupt(handle).await
+    shutdown.await?;
+    handle.stop();
+    println!("{}", "Connect listener stopped".bright_black());
+    Ok(())
 }
 
 /// `serve` 旗标 → 传输层（纯函数，单测入口）。
@@ -503,26 +527,23 @@ fn resolve_transport(
 /// 而非 cfg 掉，保住跨平台形状覆盖。
 #[cfg_attr(not(unix), allow(dead_code))]
 fn default_socket_path() -> std::path::PathBuf {
-    if let Some(runtime) = dirs::runtime_dir() {
+    socket_path_from(dirs::runtime_dir(), dirs::home_dir())
+}
+
+/// [`default_socket_path`] 的纯函数内核（单测入口）：runtime 目录在 →
+/// `$runtime/persona/connect.sock`；否则 `$home/.persona/connect.sock`；
+/// home 也不可得 → `./.persona/connect.sock`（相对路径随 cwd，仅剩的兜底）。
+fn socket_path_from(
+    runtime_dir: Option<std::path::PathBuf>,
+    home_dir: Option<std::path::PathBuf>,
+) -> std::path::PathBuf {
+    if let Some(runtime) = runtime_dir {
         return runtime.join("persona").join("connect.sock");
     }
-    dirs::home_dir()
+    home_dir
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(".persona")
         .join("connect.sock")
-}
-
-/// 阻塞到 Ctrl-C；句柄 stop 触发 graceful shutdown。
-/// （拆出独立函数仅为复用打印/收尾编排；测试经
-/// [`start_connect_server`] 的句柄直接驱动 shutdown——ctrl_c 无信号
-/// 可注入，router 层行为已由 connect-server crate 全量覆盖。）
-async fn run_until_interrupt(handle: ConnectServerHandle) -> Result<()> {
-    tokio::signal::ctrl_c()
-        .await
-        .context("failed to listen for Ctrl-C")?;
-    handle.stop();
-    println!("{}", "Connect listener stopped".bright_black());
-    Ok(())
 }
 
 // -----------------------------------------------------------------------
@@ -916,45 +937,35 @@ mod tests {
         assert!(token_rows(&config).await.is_empty());
     }
 
-    /// serve 编排的冒烟：解锁 → start_connect_server → health 冒烟 →
-    /// handle.stop 收尾（ctrl_c 无信号可注入，run_until_interrupt 不进
-    /// 测试；router 行为由 connect-server crate 全量覆盖）。
+    /// serve 编排的冒烟（TCP 传输）：serve_until 的信号注入缝使
+    /// resolve → 解锁 → start → 打印 → stop 全路径进单测
+    /// （health/router 行为由 connect-server crate 全量覆盖）。
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
-    async fn serve_pipeline_serves_health_then_shuts_down() {
+    async fn serve_pipeline_tcp_starts_prints_and_stops_on_signal() {
         let _guard = env_guard();
         let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
         let (_dir, config) = seeded_workspace().await;
 
-        let service = open_unlocked(&config, &ScriptedUi::new(), None)
-            .await
-            .unwrap();
-        let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(service)));
-        let handle = persona_connect_server::start_connect_server(slot, 0)
-            .await
-            .unwrap();
-        assert_ne!(handle.port, 0, "OS 分配后的真实端口");
-
-        // loopback health 冒烟（无 HTTP 客户端依赖，裸 TCP + HTTP/1.0）
-        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", handle.port))
-            .await
-            .unwrap();
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        stream
-            .write_all(b"GET /api/v1/connect/health HTTP/1.1\r\nhost: 127.0.0.1\r\nconnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).await.unwrap();
-        let body = String::from_utf8_lossy(&buf);
-        assert!(body.contains("\"ok\":true"), "{body}");
-        assert!(body.contains("persona-connect"), "{body}");
-
-        handle.stop();
+        // 信号立即就绪：serve 编排全路径（resolve → 解锁 → start →
+        // 打印 TCP 端点臂 → 收信号 → stop → 收尾打印）必须走完并正常返回。
+        // health 冒烟不在此重复——connect-server lib 的 http_over_tcp
+        // 测试已全量覆盖（含三防线），此处钉的是 serve 自身的编排。
+        serve_until(
+            &config,
+            &ScriptedUi::new(),
+            0,
+            None,
+            None,
+            std::future::ready(Ok(())),
+        )
+        .await
+        .unwrap();
     }
 
-    /// serve 编排的冒烟（unix 传输）：解锁 → start(with Unix transport) →
-    /// health 经 socket 冒烟 → handle.stop 收尾、socket 文件移除。
+    /// serve 编排的冒烟（unix 传输，serve_until 驱动）：health 应答作为
+    /// 退出信号的前置条件——serve 必须真的把 listener 起来、打印 unix 端点臂、
+    /// 收到信号后 stop 并移除 socket 文件，全路径单测执行。
     #[cfg(unix)]
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
@@ -964,32 +975,39 @@ mod tests {
         let (_dir, config) = seeded_workspace().await;
 
         let socket = _dir.path().join("connect.sock");
-        let service = open_unlocked(&config, &ScriptedUi::new(), None)
-            .await
-            .unwrap();
-        let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(service)));
-        // 旗标→传输走 resolve_transport（与 serve() 同路径）
-        let transport = resolve_transport(0, Some(Some(socket.clone()))).unwrap();
-        let handle = persona_connect_server::start_connect_server_with_transport(slot, transport)
-            .await
-            .unwrap();
-        assert_eq!(handle.socket_path.as_deref(), Some(socket.as_path()));
-        assert_eq!(handle.port, 0, "unix 传输无 TCP 端口");
+        // 退出信号 = 首次 health 应答成功（listener 真起来了才允许退出）。
+        let probe = async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            for _ in 0..300 {
+                if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket).await {
+                    let _ = stream
+                        .write_all(
+                            b"GET /api/v1/connect/health HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n",
+                        )
+                        .await;
+                    let mut buf = Vec::new();
+                    let _ = stream.read_to_end(&mut buf).await;
+                    let body = String::from_utf8_lossy(&buf);
+                    if body.contains("\"ok\":true") && body.contains("persona-connect") {
+                        return Ok(());
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            anyhow::bail!("unix listener 未在 3s 内应答 health")
+        };
+        serve_until(
+            &config,
+            &ScriptedUi::new(),
+            0,
+            Some(Some(socket.clone())),
+            None,
+            probe,
+        )
+        .await
+        .unwrap();
 
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        let mut stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
-        stream
-            .write_all(b"GET /api/v1/connect/health HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
-            .await
-            .unwrap();
-        let mut buf = Vec::new();
-        stream.read_to_end(&mut buf).await.unwrap();
-        let body = String::from_utf8_lossy(&buf);
-        assert!(body.contains("\"ok\":true"), "{body}");
-        assert!(body.contains("persona-connect"), "{body}");
-
-        handle.stop();
-        // 收尾：socket 文件随关停移除（轮询，不 sleep 猜时长）
+        // 收尾：socket 文件随 stop 移除（轮询，不 sleep 猜时长）
         let mut gone = false;
         for _ in 0..100 {
             if !socket.exists() {
@@ -1029,16 +1047,20 @@ mod tests {
 
     #[test]
     fn resolve_transport_defaults_to_loopback_tcp() {
+        // matches! + guard：断言即判定，无 match+panic 的不可达覆盖死角。
         let t = resolve_transport(0, None).unwrap();
-        match t {
-            persona_connect_server::ConnectTransport::Tcp { port } => assert_eq!(port, 0),
-            other => panic!("未给 --unix-socket 应得 TCP: {other:?}"),
-        }
+        assert!(
+            matches!(t, persona_connect_server::ConnectTransport::Tcp { port: 0 }),
+            "未给 --unix-socket 应得 TCP(0): {t:?}"
+        );
         let t = resolve_transport(8737, None).unwrap();
-        match t {
-            persona_connect_server::ConnectTransport::Tcp { port } => assert_eq!(port, 8737),
-            other => panic!("--port 应得 TCP: {other:?}"),
-        }
+        assert!(
+            matches!(
+                t,
+                persona_connect_server::ConnectTransport::Tcp { port: 8737 }
+            ),
+            "--port 应得对应端口 TCP: {t:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -1046,21 +1068,25 @@ mod tests {
     fn resolve_transport_unix_bare_uses_default_path_and_explicit_path_wins() {
         // 裸用 → 缺省路径（与 default_socket_path 一致）
         let t = resolve_transport(0, Some(None)).unwrap();
-        match t {
-            persona_connect_server::ConnectTransport::Unix { path } => {
-                assert_eq!(path, default_socket_path(), "裸用应取缺省路径");
-            }
-            other => panic!("--unix-socket 应得 Unix: {other:?}"),
-        }
+        assert!(
+            matches!(
+                t,
+                persona_connect_server::ConnectTransport::Unix { ref path }
+                    if *path == default_socket_path()
+            ),
+            "裸用应取缺省路径: {t:?}"
+        );
         // 显式路径优先
         let explicit = std::path::PathBuf::from("/tmp/persona-test.sock");
         let t = resolve_transport(0, Some(Some(explicit.clone()))).unwrap();
-        match t {
-            persona_connect_server::ConnectTransport::Unix { path } => {
-                assert_eq!(path, explicit, "显式路径应覆盖缺省");
-            }
-            other => panic!("--unix-socket <path> 应得 Unix: {other:?}"),
-        }
+        assert!(
+            matches!(
+                t,
+                persona_connect_server::ConnectTransport::Unix { ref path }
+                    if *path == explicit
+            ),
+            "显式路径应覆盖缺省: {t:?}"
+        );
     }
 
     #[test]
@@ -1085,20 +1111,38 @@ mod tests {
     #[test]
     fn default_socket_path_is_stable_and_falls_back_under_persona_dir() {
         let path = default_socket_path();
+        // display 预计算：多行 assert 的 message 参数行只在失败时执行，
+        // 成功的测试填不上那个覆盖洞——先算好再单行断言。
+        let shown = path.display().to_string();
         // 形态固定：*/persona/connect.sock 或 */.persona/connect.sock——
         // 消费者按文档定位，不随版本抖动。用 Path::ends_with 按**组件**比较：
         // 字符串斜杠后缀在 Windows（反斜杠）上必然误报（openclaw 实机抓到）。
         let stable_shape =
             path.ends_with("persona/connect.sock") || path.ends_with(".persona/connect.sock");
-        assert!(stable_shape, "缺省路径形态不符: {}", path.display());
+        assert!(stable_shape, "缺省路径形态不符: {shown}");
         if std::env::var_os("XDG_RUNTIME_DIR").is_some() {
             // XDG_RUNTIME_DIR 是 unix 环境变量（此分支不会在 Windows 触发）；
             // 组件级前缀判断同上，避免分隔符绑定。
-            assert!(
-                path.starts_with(std::path::Path::new("/")),
-                "有 XDG_RUNTIME_DIR 时应在运行时目录: {}",
-                path.display()
-            );
+            let anchored = path.starts_with(std::path::Path::new("/"));
+            assert!(anchored, "有 XDG_RUNTIME_DIR 时应在运行时目录: {shown}");
         }
+    }
+
+    /// 缺省路径内核三分支：runtime → home → cwd 兜底（default_socket_path
+    /// 只是接线 dirs；分支逻辑在此钉死）。
+    #[test]
+    fn socket_path_from_prefers_runtime_then_home_then_cwd() {
+        assert_eq!(
+            socket_path_from(Some("/run/user/1000".into()), Some("/home/u".into())),
+            std::path::PathBuf::from("/run/user/1000/persona/connect.sock")
+        );
+        assert_eq!(
+            socket_path_from(None, Some("/home/u".into())),
+            std::path::PathBuf::from("/home/u/.persona/connect.sock")
+        );
+        assert_eq!(
+            socket_path_from(None, None),
+            std::path::PathBuf::from("./.persona/connect.sock")
+        );
     }
 }
