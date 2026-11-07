@@ -14,6 +14,8 @@
 
 - [x] Connect API unix socket 传输：`persona connect serve --unix-socket [PATH]`（socket 文件 0600 + accept 层 SO_PEERCRED 属主 uid 校验 fail-closed，异 uid 连接进 HTTP 解析前丢弃；Host 白名单仅 TCP 强制——unix 无名字解析面；`--port` 同给硬报错；Windows 显式报错给 TCP 替代指引）。陈旧残骸接管口径收口 `persona_core::socket::is_stale_socket`（ssh-agent 改 re-export 同源）。来源：用户 2026-11-07；修复 `209b24e`；门禁：nextest 2096 全绿 + doctest 绿 + clippy -D warnings 绿 + fmt 绿 + `x86_64-pc-windows-gnu --all-targets` check 干净；openclaw（Windows Server 2022，stable 1.99.1 msvc）实机验收（2026-11-07）：`cargo test -p persona-connect-server` 38 过（含 `unix_transport_is_rejected_on_windows_with_tcp_fallback_hint`）、`-p persona-cli connect` 19 过、行为冒烟 `connect serve --unix-socket` 在**要主密码之前**即报平台错误给 TCP 指引（exit 1）；实机抓到并修复 1 个跨平台断言 bug（路径形态断言按 `/` 字符串后缀匹配，Windows 反斜杠必炸 → `Path::ends_with` 组件级比较，commit `fc392f9`）
 
+- [x] Connect unix socket 传输的覆盖率收尾（PR #148）：serve 信号注入缝（serve_until）、Accept trait 泛型 + FlakyAccept 错误注入、peer_gate/socket_path_from 纯函数化与配套测试，补掉可覆盖缺口（patch 82.33%→实测提升，project 由 -0.05% 红翻 +0.05% 绿）；并确立 codecov.yml 政策：patch target 90%（跨平台 cfg 分支与防御性不可达行在单平台覆盖率下结构性够不到97%，真实缺口仍红），project 保持 auto 零容忍。来源：用户 2026-11-08 令（A+B+C）；代码修复 `aab309d`；门禁：connect-server 45 + cli connect 21 测试绿 + clippy -D warnings 绿 + fmt 绿 + windows-gnu --all-targets 干净
+
 ## 未完成
 
 - [ ] mermaid 12 升级待手动评估：vitepress-plugin-mermaid@2.0.17 peer 仅支持 mermaid 10||11，#132（2026-11-06 dependabot PR 被直接合入）令 docs workflow `npm ci` ERESOLVE 红。已回退 docs mermaid→^11.17.2 并同步 package-lock（干净环境 npm ci + vitepress build 双绿验证）。重启条件：vitepress-plugin-mermaid 发布声明支持 mermaid 12 的版本（当前 latest 2.0.17 仍 10||11，2026-11-06 核）

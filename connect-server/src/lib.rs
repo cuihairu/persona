@@ -277,50 +277,105 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
 /// 不一致（其他用户、异常凭据）直接丢弃连接继续 accept——fail-closed，
 /// 不消耗 HTTP 层任何状态。校验放在 accept 而非 middleware：被拒连接
 /// 根本不进入 HTTP 解析面。
+///
+/// 内层 accept 泛型（[`Accept`]）是可测性缝：错误分类/退避逻辑用注入
+/// 错误序列的 mock 驱动，真实路径仍是 tokio `UnixListener`。
 #[cfg(unix)]
-struct UidCheckedListener {
-    inner: tokio::net::UnixListener,
+struct UidCheckedListener<L = tokio::net::UnixListener> {
+    inner: L,
     /// socket 文件属主 uid（= 本进程 uid，bind 时读取）。
     owner_uid: u32,
 }
 
+/// [`UidCheckedListener`] 的内层 accept 抽象（可测性缝，仅 unix 平台）。
+///
+/// 固定产出 tokio `UnixStream`/`unix::SocketAddr`（peer 校验需要
+/// `peer_cred`），错误按 `io::Result` 上抛——真实实现是 tokio
+/// `UnixListener` 的固有方法，测试实现可注入错误序列。
 #[cfg(unix)]
-impl UidCheckedListener {
-    /// 纯判定函数（单测入口）：peer uid 是否与属主一致。
-    fn peer_allowed(peer_uid: u32, owner_uid: u32) -> bool {
-        peer_uid == owner_uid
+trait Accept: Send + 'static {
+    fn accept(
+        &mut self,
+    ) -> impl std::future::Future<
+        Output = std::io::Result<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)>,
+    > + Send;
+
+    fn local_addr(&self) -> std::io::Result<tokio::net::unix::SocketAddr>;
+}
+
+#[cfg(unix)]
+impl Accept for tokio::net::UnixListener {
+    async fn accept(
+        &mut self,
+    ) -> std::io::Result<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)> {
+        tokio::net::UnixListener::accept(self).await
+    }
+
+    fn local_addr(&self) -> std::io::Result<tokio::net::unix::SocketAddr> {
+        tokio::net::UnixListener::local_addr(self)
+    }
+}
+
+/// peer uid 判定纯函数（仅 unix 平台）：peer uid 是否与 socket 属主一致。
+///
+/// 自由函数而非 inherent 方法——[`UidCheckedListener`] 泛型化后，
+/// 测试不必为一次纯比较标注实例类型。
+#[cfg(unix)]
+fn peer_allowed(peer_uid: u32, owner_uid: u32) -> bool {
+    peer_uid == owner_uid
+}
+
+#[cfg(unix)]
+impl<L> UidCheckedListener<L>
+where
+    L: Accept,
+{
+    /// peer 凭据判定：`Ok` 且 uid == 属主 → 放行；mismatch / 取不到凭据 →
+    /// 拒（各自留痕后返回 false，连接被丢弃）。
+    ///
+    /// 拆成纯函数是可测性缝：`Err` 分支在 Linux 上不可从真实连接触发
+    /// （SO_PEERCRED 对已连接 socket 恒成功），单测直接喂 `io::Error`；
+    /// mismatch 分支由 `unix_listener_drops_connections_whose_uid_is_not_the_owner`
+    /// 端到端覆盖。
+    fn peer_gate(cred: std::io::Result<tokio::net::unix::UCred>, owner_uid: u32) -> bool {
+        match cred {
+            Ok(cred) if peer_allowed(cred.uid(), owner_uid) => true,
+            Ok(cred) => {
+                tracing::warn!(
+                    peer_uid = cred.uid(),
+                    owner_uid,
+                    peer_pid = ?cred.pid(),
+                    "dropped unix socket connection: peer uid is not the socket owner"
+                );
+                false
+            }
+            Err(err) => {
+                // 取不到凭据按拒绝处理（fail-closed）。0600 文件权限
+                // 已是内核层主防线，此为兜底层。
+                tracing::warn!("dropped unix socket connection: peer cred unavailable: {err}");
+                false
+            }
+        }
     }
 }
 
 #[cfg(unix)]
-impl axum::serve::Listener for UidCheckedListener {
+impl<L> axum::serve::Listener for UidCheckedListener<L>
+where
+    L: Accept,
+{
     type Io = tokio::net::UnixStream;
     type Addr = tokio::net::unix::SocketAddr;
 
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
             match self.inner.accept().await {
-                Ok((stream, addr)) => match stream.peer_cred() {
-                    Ok(cred) if Self::peer_allowed(cred.uid(), self.owner_uid) => {
+                Ok((stream, addr)) => {
+                    if Self::peer_gate(stream.peer_cred(), self.owner_uid) {
                         return (stream, addr);
                     }
-                    Ok(cred) => {
-                        tracing::warn!(
-                            peer_uid = cred.uid(),
-                            owner_uid = self.owner_uid,
-                            peer_pid = ?cred.pid(),
-                            "dropped unix socket connection: peer uid is not the socket owner"
-                        );
-                        // stream 丢弃 → 对端读到 EOF；继续 accept 下一个
-                    }
-                    Err(err) => {
-                        // 取不到凭据按拒绝处理（fail-closed）。0600 文件权限
-                        // 已是内核层主防线，此为兜底层。
-                        tracing::warn!(
-                            "dropped unix socket connection: peer cred unavailable: {err}"
-                        );
-                    }
-                },
+                    // stream 丢弃 → 对端读到 EOF/RST；继续 accept 下一个
+                }
                 Err(err) => {
                     // accept 错误语义与 axum serve/listener.rs 一致（连接类
                     // 错误立即重试；其余 log + 1s 退避，防 EMFILE 类打转）。
@@ -2436,11 +2491,213 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn peer_uid_gate_allows_owner_and_rejects_others() {
-        assert!(UidCheckedListener::peer_allowed(1000, 1000));
-        assert!(!UidCheckedListener::peer_allowed(1001, 1000));
+        assert!(peer_allowed(1000, 1000));
+        assert!(!peer_allowed(1001, 1000));
+        assert!(!peer_allowed(0, 1000), "root 也不是属主");
+    }
+
+    /// accept 循环的丢弃分支端到端：伪造 owner_uid（自身 +1）模拟异 uid，
+    /// 连接在 accept 层被丢弃——请求得不到任何 HTTP 响应（EOF），服务继续
+    /// 存活。真实跨 uid 需要第二个用户（CI 不可得），判定纯函数另测；
+    /// 此测钉住「丢弃而非接受/挂起」的行为本身。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_listener_drops_connections_whose_uid_is_not_the_owner() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("connect.sock");
+        let inner = tokio::net::UnixListener::bind(&path).unwrap();
+        let our_uid = std::fs::metadata(&path).unwrap().uid();
+        let checked = UidCheckedListener {
+            inner,
+            owner_uid: our_uid.wrapping_add(1),
+        };
+        let router = build_router(ConnectServerState::new_unix(Arc::new(TokioMutex::new(
+            None,
+        ))));
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            let _ = axum::serve(checked, router)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await;
+        });
+
+        // 连接本身会被内核接受（握手与 accept 层校验无关），随后被丢弃：
+        // 写请求 → 无任何 HTTP 响应。两种断开形状都算「丢弃成功」——
+        // 优雅 EOF（请求已被读走）或 ConnectionReset（请求字节还在内核
+        // 接收队列里，close 时被 RST 丢弃）；共同点是 buf 里没有任何
+        // HTTP 字节 = 没进解析面。
+        let mut stream = tokio::net::UnixStream::connect(&path).await.unwrap();
+        stream
+            .write_all(
+                b"GET /api/v1/connect/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf))
+            .await
+            .expect("被丢弃的连接应快速断开，而非挂起");
+        // EOF（请求被读走）与 RST（请求字节仍在内核队列，close 时被丢弃）
+        // 都是「丢弃成功」——判定并进单表达式：两种时序下同一条判定行恒执行，
+        // 消息变量预计算（多行 assert 的消息参数行只在失败时执行）。
+        let discarded = read.is_ok()
+            || matches!(&read, Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset);
+        let outcome = format!("{read:?}");
+        let got = String::from_utf8_lossy(&buf).into_owned();
         assert!(
-            !UidCheckedListener::peer_allowed(0, 1000),
-            "root 也不是属主"
+            discarded,
+            "丢弃应表现为 EOF 或 RST，实得 {outcome}，buf: {got}"
+        );
+        assert!(buf.is_empty(), "不得有任何 HTTP 字节: {got}");
+        let _ = shutdown_tx.send(());
+    }
+
+    /// peer_gate 的凭据不可用分支（fail-closed 兜底层）：Linux 上真实连接
+    /// 的 SO_PEERCRED 恒成功，`Err` 路径只能直接喂——拒绝并留痕，不得放行。
+    #[cfg(unix)]
+    #[test]
+    fn peer_gate_rejects_when_credentials_are_unavailable() {
+        let err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "no creds");
+        type L = tokio::net::UnixListener;
+        assert!(
+            !UidCheckedListener::<L>::peer_gate(Err(err), 1000),
+            "取不到凭据必须按拒绝处理（fail-closed）"
+        );
+        // 放行与拒绝的判定同源 peer_allowed（mismatch 路径由 drops 测试端到端覆盖）
+        assert!(peer_allowed(1000, 1000));
+        assert!(!peer_allowed(0, 1000));
+    }
+
+    /// accept 循环的错误分类与退避（axum serve/listener.rs 同口径）：
+    /// 连接类错误立即重试不退避；其余 log + 1s 退避。真实 UnixListener 的
+    /// accept 错误在测试里不可复现（确定性 Accept mock 注入错误序列：
+    /// Refused → 立即重试；PermissionDenied → 退避；然后交出真实连接）。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn accept_loop_classifies_errors_retries_and_backs_off() {
+        use std::collections::VecDeque;
+
+        /// 注入错误序列、随后交出预 accept 连接的 mock。
+        struct FlakyAccept {
+            errors: VecDeque<std::io::ErrorKind>,
+            ready: Option<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)>,
+        }
+        impl Accept for FlakyAccept {
+            async fn accept(
+                &mut self,
+            ) -> std::io::Result<(tokio::net::UnixStream, tokio::net::unix::SocketAddr)>
+            {
+                if let Some(kind) = self.errors.pop_front() {
+                    return Err(std::io::Error::new(kind, "injected"));
+                }
+                Ok(self
+                    .ready
+                    .take()
+                    .expect("错误序列耗尽后应交出预 accept 的连接"))
+            }
+            fn local_addr(&self) -> std::io::Result<tokio::net::unix::SocketAddr> {
+                // 测试不调用（axum Serve::local_addr 是显式方法，serve 循环不碰）；
+                // SocketAddr 非 Copy/无 ==，不为它造存储。
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "flaky mock has no local addr",
+                ))
+            }
+        }
+
+        // 预 accept 一条真实连接（客户端配对），mock 负责先吐两个错误。
+        let dir = tempfile::tempdir().unwrap();
+        let real = tokio::net::UnixListener::bind(dir.path().join("real.sock")).unwrap();
+        let client = tokio::net::UnixStream::connect(dir.path().join("real.sock"))
+            .await
+            .unwrap();
+        let (server, server_addr) = real.accept().await.unwrap();
+        drop(real);
+        // SocketAddr 无 PartialEq/Copy/Clone——移动进 mock 前先取 Debug 文本。
+        let server_addr_dbg = format!("{server_addr:?}");
+
+        let mut checked = UidCheckedListener {
+            inner: FlakyAccept {
+                errors: VecDeque::from([
+                    std::io::ErrorKind::ConnectionRefused, // 连接类 → 立即重试
+                    std::io::ErrorKind::PermissionDenied,  // 其余 → 1s 退避
+                ]),
+                ready: Some((server, server_addr)),
+            },
+            owner_uid: std::fs::metadata(dir.path().join("real.sock"))
+                .map(|m| {
+                    use std::os::unix::fs::MetadataExt;
+                    m.uid()
+                })
+                .unwrap_or(0),
+        };
+
+        let started = std::time::Instant::now();
+        let (stream, returned_addr) = tokio::time::timeout(
+            Duration::from_secs(5),
+            axum::serve::Listener::accept(&mut checked),
+        )
+        .await
+        .expect("错误序列后应交付连接");
+        // PermissionDenied 走了 1s 退避；ConnectionRefused 不退避。
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(900),
+            "非连接类错误必须退避 ~1s，实测 {elapsed:?}"
+        );
+        assert_eq!(format!("{returned_addr:?}"), server_addr_dbg);
+        // mock 的 local_addr（Listener trait 必备）：Flaky 没有真实地址 → Unsupported。
+        {
+            use axum::serve::Listener as _;
+            let err = checked.local_addr().expect_err("Flaky mock 应报无地址");
+            assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        }
+        drop(stream);
+        drop(client);
+    }
+
+    /// local_addr 透传（axum Serve::local_addr 的被调方）。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_listener_local_addr_delegates_to_inner() {
+        use axum::serve::Listener as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("addr.sock");
+        let inner = tokio::net::UnixListener::bind(&path).unwrap();
+        let expected = inner.local_addr().unwrap();
+        let checked = UidCheckedListener {
+            inner,
+            owner_uid: 0,
+        };
+        assert_eq!(
+            format!("{:?}", checked.local_addr().unwrap()),
+            format!("{expected:?}")
+        );
+    }
+
+    /// 端点名超长（unix socket 路径上限 ~108 字节）：bind 失败且路径名
+    /// 未占用 → 显式「failed to bind」错误，而非「已有活 listener」误导。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_listener_bind_error_on_overlong_endpoint_names_the_cause() {
+        let dir = tempfile::tempdir().unwrap();
+        let long_name = "n".repeat(200); // 超过 sun_path 的 108 字节上限
+        let path = dir.path().join(long_name);
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let err = start_connect_server_with_transport(service, ConnectTransport::Unix { path })
+            .await
+            .expect_err("超长端点名 bind 必须失败");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to bind connect socket"),
+            "应指明 bind 失败: {msg}"
+        );
+        assert!(
+            !msg.contains("live process"),
+            "路径名未占用，不得误导为活 listener: {msg}"
         );
     }
 
