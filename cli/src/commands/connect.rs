@@ -471,8 +471,22 @@ fn resolve_transport(
                     "--port cannot be combined with --unix-socket (a unix socket has no TCP port)"
                 );
             }
-            let path = explicit.unwrap_or_else(default_socket_path);
-            Ok(persona_connect_server::ConnectTransport::Unix { path })
+            // Windows：在解锁之前就拒（fail-fast——先要主密码再报「平台不支持」
+            // 是把能力边界藏在交互后面）。库侧 start_connect_server_with_transport
+            // 仍保留同语义兜底（任何调用方都能传 Unix，库必须自卫）。
+            #[cfg(not(unix))]
+            {
+                let _ = explicit;
+                anyhow::bail!(
+                    "unix socket transport is not supported on this platform; \
+                     use TCP loopback instead (drop --unix-socket)"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let path = explicit.unwrap_or_else(default_socket_path);
+                Ok(persona_connect_server::ConnectTransport::Unix { path })
+            }
         }
     }
 }
@@ -481,8 +495,13 @@ fn resolve_transport(
 ///
 /// 首选 `$XDG_RUNTIME_DIR/persona/connect.sock`（XDG 运行时目录随会话
 /// 登出清理、0700 属主私有）；无 XDG_RUNTIME_DIR（SSH/非 XDG 环境、
-/// macOS）时退 `~/.persona/connect.sock`（与 connect.port 同目录，消费者
-/// 约定的本机位置）。
+/// macOS、Windows 回退分支）时退 `~/.persona/connect.sock`（与 connect.port
+/// 同目录，消费者约定的本机位置）。
+///
+/// Windows 上无生产调用方（resolve_transport 的 unix 分支 cfg(unix)），但
+/// 单测仍在此验证回退形态（openclaw 实机抓过斜杠断言 bug）——条件 allow
+/// 而非 cfg 掉，保住跨平台形状覆盖。
+#[cfg_attr(not(unix), allow(dead_code))]
 fn default_socket_path() -> std::path::PathBuf {
     if let Some(runtime) = dirs::runtime_dir() {
         return runtime.join("persona").join("connect.sock");
@@ -1022,6 +1041,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolve_transport_unix_bare_uses_default_path_and_explicit_path_wins() {
         // 裸用 → 缺省路径（与 default_socket_path 一致）
@@ -1049,6 +1069,17 @@ mod tests {
         // 都会让调用方对着错误端点排查——硬报错。
         let err = resolve_transport(8737, Some(None)).unwrap_err();
         assert!(err.to_string().contains("--unix-socket"), "{err}");
+    }
+
+    /// Windows：unix 传输在**解锁之前**即拒（fail-fast，不先要主密码）。
+    /// 库侧 start_connect_server_with_transport 另有同语义兜底（见其测试）。
+    #[cfg(not(unix))]
+    #[test]
+    fn resolve_transport_rejects_unix_before_unlock_on_windows() {
+        let err = resolve_transport(0, Some(None)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not supported"), "应说明平台不支持: {msg}");
+        assert!(msg.contains("TCP"), "应给出 TCP 替代指引: {msg}");
     }
 
     #[test]
