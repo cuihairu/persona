@@ -9,8 +9,9 @@ use crate::{config::CliConfig, utils::core_ext::CoreResultExt};
 use persona_core::{
     custom_fields::new_custom_field,
     models::{
-        Credential, CredentialData, CredentialType, CustomField, CustomFieldType, EntityType,
-        IdentityData, PasswordCredentialData, SecureNoteData, SecurityLevel, SoftwareLicenseData,
+        ApiKeyData, Credential, CredentialData, CredentialType, CustomField, CustomFieldType,
+        EntityType, IdentityData, PasswordCredentialData, SecureNoteData, SecurityLevel,
+        SoftwareLicenseData,
     },
     Identity, PersonaService,
 };
@@ -373,7 +374,9 @@ async fn add_credential(config: &CliConfig, ui: &dyn PromptUi, args: AddArgs) ->
     let mut service = init_service(config, ui).await?;
     let identity = resolve_identity(&mut service, &identity_name).await?;
 
-    // 三种类型不走 password/secret 路径：note / identity / software-license
+    // note / identity / software-license 不走 secret 路径（各自必填字段）；
+    // api-key 走 secret 路径但 data 变体必须是 ApiKey（见该臂注释）；
+    // 其余单秘密类型（password 等）落 `_` 兜底。
     let credential_data = match credential_type {
         // Secure Note：正文走 --note（或可见提示输入），密码路径不适用。
         CredentialTypeOption::Note => {
@@ -436,6 +439,26 @@ async fn add_credential(config: &CliConfig, ui: &dyn PromptUi, args: AddArgs) ->
                 download_url,
                 seats,
                 valid_until,
+            })
+        }
+        // API key：与 password 同为「单秘密」取值路径，但 data 变体必须是
+        // ApiKey——曾走 `_` 兜底被建成 Password 变体（type=ApiKey +
+        // data=Password），`secrets resolve IDENTITY/ITEM/api_key` 直接报
+        // "unknown field"，按变体消费的下游（cockpit 等）同样失效。
+        CredentialTypeOption::ApiKey => {
+            let secret_value = if prompt_secret {
+                super::service::prompt_credential_secret(ui)?
+            } else if let Some(raw) = secret {
+                raw
+            } else {
+                ui.input("API key (leave blank to skip)", None, true)?
+            };
+            CredentialData::ApiKey(ApiKeyData {
+                api_key: secret_value,
+                api_secret: None,
+                token: None,
+                permissions: Vec::new(),
+                expires_at: None,
             })
         }
         _ => {
@@ -1316,6 +1339,63 @@ mod tests {
         }
 
         std::env::remove_var("PERSONA_CREDENTIAL_SECRET");
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+    }
+
+    /// `--credential-type api-key` 必须落 **ApiKey data 变体**（回归）：
+    /// 曾经落进 `_` 兜底被建成 Password 变体——type=ApiKey + data=Password，
+    /// `secrets resolve IDENTITY/ITEM/api_key` 报 "unknown field"（valid 只有
+    /// password/email），按 data 变体消费的下游（cockpit 等）全部失效。
+    /// 元数据 type 列一直显示 ApiKey，错在 data，只有解密路径能发现。
+    #[tokio::test]
+    async fn add_api_key_stores_api_key_data_variant_not_password() {
+        let _guard = lock_process_env();
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+        let dir = TempDir::new().unwrap();
+        let config = config_for(&dir);
+        {
+            let db = Database::from_file(config.get_database_path())
+                .await
+                .unwrap();
+            db.migrate().await.unwrap();
+            let mut service = crate::commands::service::new_service(db).await.unwrap();
+            service.initialize_user("master-pin").await.unwrap();
+        }
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "master-pin");
+        seed(&config, "bob").await;
+
+        std::env::set_var("PERSONA_CREDENTIAL_SECRET", "sk-env-key-1");
+        let mut args = add_args("bob", "k-api", None, false);
+        if let CredentialCommand::Add(add) = &mut args.command {
+            add.credential_type = CredentialTypeOption::ApiKey;
+            add.prompt_secret = true;
+        }
+        execute(args, &config)
+            .await
+            .expect("add api-key via env secret works");
+        std::env::remove_var("PERSONA_CREDENTIAL_SECRET");
+
+        let service =
+            crate::commands::service::init_service(&config, &crate::utils::prompt::TerminalUi)
+                .await
+                .unwrap();
+        let bob = service.get_identity_by_name("bob").await.unwrap().unwrap();
+        let creds = service.get_credentials_for_identity(&bob.id).await.unwrap();
+        assert_eq!(creds.len(), 1);
+        assert_eq!(
+            creds[0].credential_type,
+            CredentialType::ApiKey,
+            "元数据 type 应为 ApiKey"
+        );
+        let data = service.get_credential_data(&creds[0].id).await.unwrap();
+        match data {
+            Some(CredentialData::ApiKey(api)) => assert_eq!(api.api_key, "sk-env-key-1"),
+            other => panic!(
+                "api-key 必须落 ApiKey data 变体（而非 Password），实得: {:?}",
+                other
+            ),
+        }
+
         std::env::remove_var("PERSONA_MASTER_PASSWORD");
     }
 
