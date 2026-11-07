@@ -978,7 +978,12 @@ mod tests {
         // 退出信号 = 首次 health 应答成功（listener 真起来了才允许退出）。
         let probe = async {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            // 结构上刻意「先睡后探 + 标志位退出」：sleep 无条件执行；成功用
+            // fall-through 而非 return/break 跳出，块收尾花括号在每次成功
+            // 迭代里都被执行（early return 会让它们成为永远填不上的覆盖洞）。
+            let mut answered = false;
             for _ in 0..300 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                 if let Ok(mut stream) = tokio::net::UnixStream::connect(&socket).await {
                     let _ = stream
                         .write_all(
@@ -989,12 +994,17 @@ mod tests {
                     let _ = stream.read_to_end(&mut buf).await;
                     let body = String::from_utf8_lossy(&buf);
                     if body.contains("\"ok\":true") && body.contains("persona-connect") {
-                        return Ok(());
+                        answered = true;
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                if answered {
+                    break;
+                }
             }
-            anyhow::bail!("unix listener 未在 3s 内应答 health")
+            if !answered {
+                anyhow::bail!("unix listener 未在 3s 内应答 health");
+            }
+            Ok(())
         };
         serve_until(
             &config,

@@ -2540,16 +2540,18 @@ mod tests {
         let read = tokio::time::timeout(Duration::from_secs(3), stream.read_to_end(&mut buf))
             .await
             .expect("被丢弃的连接应快速断开，而非挂起");
-        match read {
-            Ok(_) => {} // 优雅 EOF（或 RST 后读到已缓冲的 0 字节）
-            Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset => {} // RST 丢弃
-            Err(err) => panic!("丢弃应表现为 EOF 或 RST，实得: {err}"),
-        }
+        // EOF（请求被读走）与 RST（请求字节仍在内核队列，close 时被丢弃）
+        // 都是「丢弃成功」——判定并进单表达式：两种时序下同一条判定行恒执行，
+        // 消息变量预计算（多行 assert 的消息参数行只在失败时执行）。
+        let discarded = read.is_ok()
+            || matches!(&read, Err(err) if err.kind() == std::io::ErrorKind::ConnectionReset);
+        let outcome = format!("{read:?}");
+        let got = String::from_utf8_lossy(&buf).into_owned();
         assert!(
-            buf.is_empty(),
-            "非属主连接必须无 HTTP 响应（在解析前丢弃），实得: {:?}",
-            String::from_utf8_lossy(&buf)
+            discarded,
+            "丢弃应表现为 EOF 或 RST，实得 {outcome}，buf: {got}"
         );
+        assert!(buf.is_empty(), "不得有任何 HTTP 字节: {got}");
         let _ = shutdown_tx.send(());
     }
 
@@ -2641,12 +2643,18 @@ mod tests {
         .await
         .expect("错误序列后应交付连接");
         // PermissionDenied 走了 1s 退避；ConnectionRefused 不退避。
+        let elapsed = started.elapsed();
         assert!(
-            started.elapsed() >= Duration::from_millis(900),
-            "非连接类错误必须退避 ~1s，实测 {:?}",
-            started.elapsed()
+            elapsed >= Duration::from_millis(900),
+            "非连接类错误必须退避 ~1s，实测 {elapsed:?}"
         );
         assert_eq!(format!("{returned_addr:?}"), server_addr_dbg);
+        // mock 的 local_addr（Listener trait 必备）：Flaky 没有真实地址 → Unsupported。
+        {
+            use axum::serve::Listener as _;
+            let err = checked.local_addr().expect_err("Flaky mock 应报无地址");
+            assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+        }
         drop(stream);
         drop(client);
     }
