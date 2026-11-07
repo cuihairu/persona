@@ -310,7 +310,11 @@ macOS LocalAuthentication `DeviceOwnerAuthentication` / Windows Hello）换取
 
 桌面宿主进程内嵌 axum listener（DR-1），让本机脚本/工具按 token 范围只读
 拉取凭据。**开关默认关闭**：不创建 listener 即无端口面；启用时 bind 硬编码
-loopback、端口由 OS 分配（无配置面，不可被诱导监听 0.0.0.0）。新增威胁面：
+loopback、端口由 OS 分配（无配置面，不可被诱导监听 0.0.0.0）。
+_2026-11-07 更新_：第二传输 `--unix-socket` 完全不开 TCP 端口——socket 文件
+`0600` + accept 层 `SO_PEERCRED` 与 socket 属主 uid 核对（异 uid 在进入 HTTP
+解析前丢弃）；Host 白名单不适用（无名字解析面，`Origin`/token/限额防线不变）。
+新增威胁面：
 
 - **信任根与可见面**：解锁态 + token 二元门禁（缺一即拒）。token 决定
   「哪个身份下的哪些类型」；scope 外条目 404 与 403 同形（对消费者不存在，

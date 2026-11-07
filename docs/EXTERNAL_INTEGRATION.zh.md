@@ -57,11 +57,33 @@ pconn_C-LUE7XcPUhlPMdbh6v7Rx_Z6GzrbDqRDqx_DN_1Yrg
 ### 第 2 步：起 listener（本机后台，一次性）
 
 ```bash
-persona connect serve --port 8737        # 默认 --port 0 由 OS 分配；Ctrl-C 退出
+persona connect serve --port 8737        # 默认 loopback TCP：--port 0 由 OS 分配；Ctrl-C 退出
+persona connect serve --unix-socket      # Unix domain socket（unix 平台）：$XDG_RUNTIME_DIR/persona/connect.sock
+persona connect serve --unix-socket /run/user/1000/p.sock   # 显式 socket 路径
 ```
 
-- 只监听 `127.0.0.1`，请求不出本机；保险库需处于解锁态——前台终端用 `--passphrase-env <VAR>` 指定读哪个环境变量（须已设且非空），桌面版在设置里开关。非交互解锁的完整说明见 [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md)。
+两种传输，二选一：
+
+- **loopback TCP（默认）**：只监听 `127.0.0.1`，请求不出本机。`--port` 仅对
+  此传输生效（`--port` 与 `--unix-socket` 同给是错误——unix socket 没有 TCP 端口）。
+- **Unix domain socket**（`--unix-socket`，unix 平台；Windows 上报错并给出
+  TCP 替代指引）：socket 文件 `0600`，**且**每个接受的连接在 accept 层核对
+  socket 属主 uid（`SO_PEERCRED`，异 uid 连接在进入 HTTP 解析前即被丢弃）。
+  不开端口。`Host` 白名单不适用于 socket 路径（无 DNS rebinding 面——文件
+  路径不可被域名解析）；`Origin`、token、限额三条防线在两种传输上原样生效。
+
+保险库需处于解锁态——前台终端用 `--passphrase-env <VAR>` 指定读哪个环境变量
+（须已设且非空），桌面版在设置里开关。非交互解锁的完整说明见
+[`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md)。
+
 - listener 进程与消费者进程解耦：token 校验每请求进行，保险库锁定时返回 503（见错误码表）。
+
+经 socket 调用：
+
+```bash
+curl -s --unix-socket "$XDG_RUNTIME_DIR/persona/connect.sock" \
+  -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/connect/health
+```
 
 ### 第 3 步：调用（消费者侧，任何 HTTP 客户端）
 
@@ -166,27 +188,27 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" $B/items/<id>/totp
 
 **三维 scope**：identities × item_types × verbs。`create` 时「缺省 = 全部合法集，给了限定就收窄」。scope 外的条目与不存在的条目返回**同一 404 形**（实测：password-only token 读 totp 条目 → `not_found`，与编造 id 无差别），不泄露存在性。
 
-| 边界       | 语义                                                                                                                                 |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| verbs      | 仅 `read` 可授予且 HTTP 仅暴露 `read`；`use` 已入授权模型但**暂无消费端点**（预留，勿依赖）；`export` / `sign` 对 token 主体不可授予 |
-| 类型排除   | ssh-key / crypto-wallet / custom **永不可授权**（不在可授权类型集）；passkey 不走此端点（独立 Unix socket 审批通道）                 |
-| 可授权类型 | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license              |
-| 网络面     | 只监听 `127.0.0.1`；`Host` 头非 `127.0.0.1`/`localhost` → 421；带 `Origin` 头（浏览器侧请求）→ 403                                   |
-| 速率       | 每 token 120 请求/分钟（固定窗），超限 429                                                                                           |
-| 锁定       | 保险库锁定 → 503 `vault_locked`，不消耗限额                                                                                          |
-| 审计       | 每次 token 校验/拒绝留审计记录；解密路径与桌面/CLI 展示相同                                                                          |
+| 边界       | 语义                                                                                                                                                                                     |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| verbs      | 仅 `read` 可授予且 HTTP 仅暴露 `read`；`use` 已入授权模型但**暂无消费端点**（预留，勿依赖）；`export` / `sign` 对 token 主体不可授予                                                     |
+| 类型排除   | ssh-key / crypto-wallet / custom **永不可授权**（不在可授权类型集）；passkey 不走此端点（独立 Unix socket 审批通道）                                                                     |
+| 可授权类型 | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license                                                                  |
+| 网络面     | TCP 传输：只监听 `127.0.0.1`，`Host` 头非 `127.0.0.1`/`localhost` → 421；Unix 传输：不开端口，socket 文件 `0600` + accept 层属主 uid 核对。两种传输下带 `Origin` 头（浏览器侧请求）→ 403 |
+| 速率       | 每 token 120 请求/分钟（固定窗），超限 429                                                                                                                                               |
+| 锁定       | 保险库锁定 → 503 `vault_locked`，不消耗限额                                                                                                                                              |
+| 审计       | 每次 token 校验/拒绝留审计记录；解密路径与桌面/CLI 展示相同                                                                                                                              |
 
 ## 错误码表（实测形状）
 
-| HTTP | code               | 实测 message                                  | 触发                                     |
-| ---- | ------------------ | --------------------------------------------- | ---------------------------------------- |
-| 401  | `unauthorized`     | `missing or malformed bearer token`           | 无/格式错 Authorization 头               |
-| 401  | `unauthorized`     | `invalid token`                               | 未知、已吊销、已过期的 token（三者同形） |
-| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | 请求带 `Origin` 头                       |
-| 404  | `not_found`        | `item not found`                              | 条目不存在 / 已归档 / scope 外（同形）   |
-| 421  | `bad_host`         | `host not allowed`                            | `Host` 头非 `127.0.0.1`/`localhost`      |
-| 429  | `rate_limited`     | —                                             | 超过 120 req/min                         |
-| 503  | `vault_locked`     | —                                             | 保险库锁定（不耗限额）                   |
+| HTTP | code               | 实测 message                                  | 触发                                                                           |
+| ---- | ------------------ | --------------------------------------------- | ------------------------------------------------------------------------------ |
+| 401  | `unauthorized`     | `missing or malformed bearer token`           | 无/格式错 Authorization 头                                                     |
+| 401  | `unauthorized`     | `invalid token`                               | 未知、已吊销、已过期的 token（三者同形）                                       |
+| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | 请求带 `Origin` 头                                                             |
+| 404  | `not_found`        | `item not found`                              | 条目不存在 / 已归档 / scope 外（同形）                                         |
+| 421  | `bad_host`         | `host not allowed`                            | `Host` 头非 `127.0.0.1`/`localhost`（仅 TCP 传输；unix socket 上该检查不生效） |
+| 429  | `rate_limited`     | —                                             | 超过 120 req/min                                                               |
+| 503  | `vault_locked`     | —                                             | 保险库锁定（不耗限额）                                                         |
 
 重试纪律：401 不要重试（确定性拒绝，去查吊销/到期）；503 可退避重试（等属主解锁）；429 按分钟窗退避。
 

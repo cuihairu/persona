@@ -5,12 +5,19 @@
 //! token 存储（工作区库内 `connect_tokens` 表）跨宿主天然互通。
 //! 其余语义见下（模块文档自 desktop 迁移时保持原样）。
 //!
-//! axum listener 内嵌在宿主进程内，bind 硬编码 `127.0.0.1`（端口 0 =
-//! OS 分配；地址无配置面，「拒绝非 loopback 配置」由硬编码天然满足）。
+//! listener 内嵌在宿主进程内，双传输（[`ConnectTransport`]）：
+//! - **TCP loopback**（默认）：bind 硬编码 `127.0.0.1`（端口 0 = OS 分配；
+//!   地址无配置面，「拒绝非 loopback 配置」由硬编码天然满足）。
+//! - **Unix domain socket**（`--unix-socket`，仅 unix 平台）：socket 文件
+//!   0600 + accept 层 peer-uid 校验（连不上 ≠ 能通过，uid 不符连接即被丢弃），
+//!   无 TCP 端口；Windows 无此传输，创建即报错。
+//!
 //! 默认关闭：不开启 = 不创建 listener。
 //!
 //! 请求管线（每请求）：
-//! 1. Host 头白名单（`127.0.0.1`/`localhost`）→ 否则 421（DNS rebinding）
+//! 1. Host 头白名单（`127.0.0.1`/`localhost`）→ 否则 421（DNS rebinding）。
+//!    **仅 TCP**：unix socket 无名字解析面，DNS rebinding 不可达，跳过该检查
+//!    （客户端可发任意 Host，如 Go 生态常用的 `http://unix/…`）。
 //! 2. `Origin` 头出现即 403（本机 API 无合法浏览器跨源消费者，CORS 全关）
 //! 3. `/health` 免认证零信息；其余要求 `Authorization: Bearer pconn_…`
 //! 4. token 哈希查库（吊销/未知同形 401，无缓存窗口）
@@ -25,6 +32,7 @@
 //! （`persona_core::connect`），本模块只做 HTTP 面编排。
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -51,6 +59,20 @@ const RATE_WINDOW: Duration = Duration::from_secs(60);
 /// 的 service 字段同型，命令层 clone 传入）。
 pub type ArcTokService = Arc<TokioMutex<Option<PersonaService>>>;
 
+/// Connect listener 的传输层。
+///
+/// - [`ConnectTransport::Tcp`]：loopback TCP（默认；`port` 0 = OS 分配真实端口）。
+/// - [`ConnectTransport::Unix`]：unix domain socket（仅 unix 平台可创建成功；
+///   Windows 上 [`start_connect_server_with_transport`] 直接报错——tokio 无
+///   Windows UnixListener，named pipe 形态是后续议题而非本传输的等价物）。
+#[derive(Clone, Debug)]
+pub enum ConnectTransport {
+    /// loopback TCP：`127.0.0.1:{port}`（port 0 = OS 分配）。
+    Tcp { port: u16 },
+    /// unix domain socket：0600 文件权限 + accept 层属主 uid 校验。
+    Unix { path: PathBuf },
+}
+
 #[derive(Clone)]
 pub struct ConnectServerState {
     /// 与 AppState 共享的同一 service 槽位（token 校验 + 解锁态门禁）。
@@ -58,6 +80,14 @@ pub struct ConnectServerState {
     /// 每 token 固定窗计数：token id → (窗口起点, 已计请求数)。纯内存、
     /// 进程重启即清——这是宿主保护（防失控轮询拖垮宿主），不是审计。
     rates: Arc<Mutex<HashMap<Uuid, (Instant, u32)>>>,
+    /// Host 头白名单（`127.0.0.1`/`localhost`/`::1`）是否强制。
+    ///
+    /// 该防线针对 DNS rebinding：域名解析到本机 IP + 恶意 Host 打到 loopback
+    /// 端口。unix socket 没有名字解析面（连接打到文件路径，浏览器/域名解析
+    /// 不可达），白名单无防护对象、只剩误拒合法客户端的成本（Go 生态常用
+    /// `Host: unix` 之类的任意值），故 unix 传输跳过；`Origin`/token/限额
+    /// 三条防线在两种传输上原样生效。
+    require_loopback_host: bool,
 }
 
 impl ConnectServerState {
@@ -65,6 +95,16 @@ impl ConnectServerState {
         Self {
             service,
             rates: Arc::new(Mutex::new(HashMap::new())),
+            require_loopback_host: true,
+        }
+    }
+
+    /// unix 传输的 state：跳过 Host 白名单（理由见字段文档）。
+    #[cfg(unix)]
+    fn new_unix(service: ArcTokService) -> Self {
+        Self {
+            require_loopback_host: false,
+            ..Self::new(service)
         }
     }
 
@@ -98,34 +138,224 @@ pub fn build_router(state: ConnectServerState) -> Router {
         .with_state(state)
 }
 
-/// 启动 Connect listener。返回句柄（实际端口 + 关停通道）；bind 失败
-/// （端口被占等）向上传播给调用方（设置页显式报错，不静默重试）。
+/// 启动 Connect listener（loopback TCP，兼容入口）。
+///
+/// 等价于 [`start_connect_server_with_transport`] + [`ConnectTransport::Tcp`]。
+/// 返回句柄（实际端口 + 关停通道）；bind 失败（端口被占等）向上传播给调用方
+/// （设置页显式报错，不静默重试）。
 pub async fn start_connect_server(
     service: ArcTokService,
     port: u16,
 ) -> anyhow::Result<ConnectServerHandle> {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let actual_port = listener.local_addr()?.port();
-    let router = build_router(ConnectServerState::new(service));
+    start_connect_server_with_transport(service, ConnectTransport::Tcp { port }).await
+}
+
+/// 按指定传输启动 Connect listener，返回句柄（TCP：实际端口；unix：
+/// socket 路径）+ 关停通道。bind 失败向上传播，不静默重试。
+///
+/// - [`ConnectTransport::Tcp`]：`127.0.0.1:{port}`（0 = OS 分配）。
+/// - [`ConnectTransport::Unix`]：0600 socket 文件 + accept 层属主 uid 校验
+///   （陈旧残骸接管、活 listener 一律报错不劫持，口径同 ssh-agent transport）。
+///   非 unix 平台（Windows）直接报错——见 [`ConnectTransport`] 文档。
+pub async fn start_connect_server_with_transport(
+    service: ArcTokService,
+    transport: ConnectTransport,
+) -> anyhow::Result<ConnectServerHandle> {
+    match transport {
+        ConnectTransport::Tcp { port } => {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            let listener = tokio::net::TcpListener::bind(addr).await?;
+            let actual_port = listener.local_addr()?.port();
+            let router = build_router(ConnectServerState::new(service));
+            let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, router)
+                    .with_graceful_shutdown(async {
+                        let _ = shutdown_rx.await;
+                    })
+                    .await;
+            });
+            Ok(ConnectServerHandle {
+                port: actual_port,
+                socket_path: None,
+                shutdown: shutdown_tx,
+            })
+        }
+        ConnectTransport::Unix { path } => {
+            #[cfg(unix)]
+            {
+                start_unix(service, path).await
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = (service, path);
+                // Windows 上 tokio 没有 UnixListener（AF_UNIX 不可移植到本 crate
+                // 的支持面）；named pipe 是另一传输形态，不在此冒充。显式报错，
+                // 调用方（CLI --unix）拿到可执行的替代指引。
+                anyhow::bail!(
+                    "unix socket transport is not supported on this platform; \
+                     use TCP loopback instead (`persona connect serve` without --unix)"
+                )
+            }
+        }
+    }
+}
+
+/// unix 传输实现（仅 unix 平台编译）。
+///
+/// 三层本地防护：① socket 文件 0600（bind 后立即收紧，防 umask 残留组/
+/// 其他位）；② accept 层属主 uid 校验（[`UidCheckedListener`]——文件权限
+/// 是内核层，uid 校验兜住权限位被改动/异常场景，fail-closed）；③ HTTP 层
+/// token 认证（两种传输相同）。`Origin`/限额原样生效，Host 白名单跳过
+/// （见 [`ConnectServerState::require_loopback_host`]）。
+#[cfg(unix)]
+async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<ConnectServerHandle> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+
+    // 先 bind，不预先删除（TOCTOU：exists→remove→bind 之间路径可能被换掉）。
+    // 只有确认旧路径是陈旧残骸（非 socket 或无人监听）才接管；活着的 listener
+    // 一律报错而非静默劫持路径（口径同 ssh-agent transport::bind，实现收口
+    // 在 persona_core::socket::is_stale_socket）。
+    let listener = match tokio::net::UnixListener::bind(&path) {
+        Ok(listener) => listener,
+        Err(err) => {
+            // 用 symlink_metadata 判「路径名被占用」：存在断链 symlink 时
+            // Path::exists() 跟随链接为 false 会漏掉可接管的残骸。
+            if path.symlink_metadata().is_err() {
+                anyhow::bail!("failed to bind connect socket {}: {err}", path.display());
+            }
+            if !persona_core::socket::is_stale_socket(&path) {
+                anyhow::bail!(
+                    "connect socket {} already bound by a live process: {err}",
+                    path.display()
+                );
+            }
+            std::fs::remove_file(&path)?;
+            tokio::net::UnixListener::bind(&path)?
+        }
+    };
+
+    // 0600：bind 创建的 socket 文件权限 = 0777 & ~umask（常见 umask 022 →
+    // 0755，group/other 可见）。立即收紧到仅属主可连（unix socket 连接需要
+    // 写权限，0600 即同用户独占——内核层）。
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    // 属主 = 刚 bind 成功的本进程用户（新鲜文件或接管后重建，见上）。
+    let owner_uid = std::fs::metadata(&path)?.uid();
+
+    let listener = UidCheckedListener {
+        inner: listener,
+        owner_uid,
+    };
+    let router = build_router(ConnectServerState::new_unix(service));
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let cleanup = path.clone();
     tokio::spawn(async move {
         let _ = axum::serve(listener, router)
             .with_graceful_shutdown(async {
                 let _ = shutdown_rx.await;
             })
             .await;
+        // 正常关停：移除 socket 文件（崩溃残骸由下一次启动按陈旧接管处理）。
+        let _ = std::fs::remove_file(&cleanup);
     });
     Ok(ConnectServerHandle {
-        port: actual_port,
+        port: 0,
+        socket_path: Some(path),
         shutdown: shutdown_tx,
     })
 }
 
+/// accept 层属主 uid 校验的 unix listener 包装（仅 unix 平台）。
+///
+/// 每个新连接先取 `SO_PEERCRED`：uid 与 socket 文件属主一致才交付给 axum，
+/// 不一致（其他用户、异常凭据）直接丢弃连接继续 accept——fail-closed，
+/// 不消耗 HTTP 层任何状态。校验放在 accept 而非 middleware：被拒连接
+/// 根本不进入 HTTP 解析面。
+#[cfg(unix)]
+struct UidCheckedListener {
+    inner: tokio::net::UnixListener,
+    /// socket 文件属主 uid（= 本进程 uid，bind 时读取）。
+    owner_uid: u32,
+}
+
+#[cfg(unix)]
+impl UidCheckedListener {
+    /// 纯判定函数（单测入口）：peer uid 是否与属主一致。
+    fn peer_allowed(peer_uid: u32, owner_uid: u32) -> bool {
+        peer_uid == owner_uid
+    }
+}
+
+#[cfg(unix)]
+impl axum::serve::Listener for UidCheckedListener {
+    type Io = tokio::net::UnixStream;
+    type Addr = tokio::net::unix::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            match self.inner.accept().await {
+                Ok((stream, addr)) => match stream.peer_cred() {
+                    Ok(cred) if Self::peer_allowed(cred.uid(), self.owner_uid) => {
+                        return (stream, addr);
+                    }
+                    Ok(cred) => {
+                        tracing::warn!(
+                            peer_uid = cred.uid(),
+                            owner_uid = self.owner_uid,
+                            peer_pid = ?cred.pid(),
+                            "dropped unix socket connection: peer uid is not the socket owner"
+                        );
+                        // stream 丢弃 → 对端读到 EOF；继续 accept 下一个
+                    }
+                    Err(err) => {
+                        // 取不到凭据按拒绝处理（fail-closed）。0600 文件权限
+                        // 已是内核层主防线，此为兜底层。
+                        tracing::warn!(
+                            "dropped unix socket connection: peer cred unavailable: {err}"
+                        );
+                    }
+                },
+                Err(err) => {
+                    // accept 错误语义与 axum serve/listener.rs 一致（连接类
+                    // 错误立即重试；其余 log + 1s 退避，防 EMFILE 类打转）。
+                    let connection_error = matches!(
+                        err.kind(),
+                        std::io::ErrorKind::ConnectionRefused
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::ConnectionReset
+                    );
+                    if connection_error {
+                        continue;
+                    }
+                    tracing::error!("accept error: {err}");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.inner.local_addr()
+    }
+}
+
 /// 运行中 listener 的句柄。
+#[derive(Debug)]
 pub struct ConnectServerHandle {
-    /// listener 实际绑定端口（端口 0 = OS 分配后的真实值）。
+    /// listener 实际绑定端口（TCP 传输，端口 0 = OS 分配后的真实值）。
+    /// **unix 传输恒为 0**（没有 TCP 端口；端点见 [`Self::socket_path`]）。
     pub port: u16,
+    /// unix 传输的 socket 路径（TCP 传输为 `None`）。
+    ///
+    /// 正常关停后 socket 文件已移除；进程崩溃留下的残骸由下一次启动按
+    /// 陈旧接管（`persona_core::socket::is_stale_socket`）处理。
+    pub socket_path: Option<PathBuf>,
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
@@ -224,32 +454,35 @@ async fn guard(
     mut request: Request,
     next: Next,
 ) -> Response {
-    // 防线 1：Host 头白名单。到达 listener 的流量必然打到本机端口，
-    // Host 的 host 部分仍必须是 loopback 名——DNS rebinding（evil.com →
-    // 127.0.0.1）会带恶意 Host，直接 421。
-    let host_ok = request
-        .headers()
-        .get(header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(|h| {
-            // 括号 IPv6（RFC 9110 §4.1.2）省略端口时不能按 ':' 切端口：
-            // "[::1]" 会被 rsplit_once 剩 "[::"，白名单里的 ::1 反被误拒。
-            // 仅当整段不以 ']' 结尾（即不是无端口的括号 IPv6）才剥端口。
-            let authority = if h.ends_with(']') {
-                h
-            } else {
-                h.rsplit_once(':').map_or(h, |(host, _)| host)
-            };
-            let authority = authority.trim_start_matches('[').trim_end_matches(']');
-            authority == "127.0.0.1" || authority == "localhost" || authority == "::1"
-        })
-        .unwrap_or(false);
-    if !host_ok {
-        return err_json(
-            StatusCode::MISDIRECTED_REQUEST,
-            "bad_host",
-            "host not allowed",
-        );
+    // 防线 1：Host 头白名单（仅 loopback TCP）。到达 listener 的流量必然
+    // 打到本机端口，Host 的 host 部分仍必须是 loopback 名——DNS rebinding
+    // （evil.com → 127.0.0.1）会带恶意 Host，直接 421。unix socket 无名字
+    // 解析面（见 `require_loopback_host` 字段文档），跳过。
+    if state.require_loopback_host {
+        let host_ok = request
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .map(|h| {
+                // 括号 IPv6（RFC 9110 §4.1.2）省略端口时不能按 ':' 切端口：
+                // "[::1]" 会被 rsplit_once 剩 "[::"，白名单里的 ::1 反被误拒。
+                // 仅当整段不以 ']' 结尾（即不是无端口的括号 IPv6）才剥端口。
+                let authority = if h.ends_with(']') {
+                    h
+                } else {
+                    h.rsplit_once(':').map_or(h, |(host, _)| host)
+                };
+                let authority = authority.trim_start_matches('[').trim_end_matches(']');
+                authority == "127.0.0.1" || authority == "localhost" || authority == "::1"
+            })
+            .unwrap_or(false);
+        if !host_ok {
+            return err_json(
+                StatusCode::MISDIRECTED_REQUEST,
+                "bad_host",
+                "host not allowed",
+            );
+        }
     }
 
     // 防线 2：CORS 全关。Origin 出现即 403（含预检 OPTIONS——不返回任何
@@ -2055,6 +2288,179 @@ mod tests {
             .expect("bind 失败应保持 io::Error 原样，供设置页显式报错");
         assert_eq!(io.kind(), std::io::ErrorKind::AddrInUse, "错误: {err}");
         drop(occupied);
+    }
+
+    // -------------------------------------------------------------------
+    // unix domain socket 传输
+    // -------------------------------------------------------------------
+
+    /// 经 unix socket 发裸 HTTP/1.1（与 http_over_tcp 同款：无 HTTP 客户端依赖）。
+    #[cfg(unix)]
+    async fn http_over_unix(
+        path: &std::path::Path,
+        method: &str,
+        uri: &str,
+        host: &str,
+        extra: &str,
+    ) -> String {
+        let mut stream = tokio::net::UnixStream::connect(path).await.unwrap();
+        let request =
+            format!("{method} {uri} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n{extra}\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut buf = Vec::new();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut buf))
+            .await
+            .expect("unix listener 未在 5s 内应答")
+            .unwrap();
+        String::from_utf8(buf).expect("响应非 UTF-8")
+    }
+
+    /// unix 传输全生命周期：health 200（含**任意 Host**——该白名单只属
+    /// TCP/loopback，unix socket 无名字解析面）→ Origin 403 → 缺 token 401 →
+    /// stop 后 socket 文件移除且不可再连。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_listener_serves_defenses_and_cleans_up_socket_on_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("connect.sock");
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let handle = start_connect_server_with_transport(
+            service,
+            ConnectTransport::Unix { path: path.clone() },
+        )
+        .await
+        .unwrap();
+        assert_eq!(handle.port, 0, "unix 传输没有 TCP 端口");
+        assert_eq!(handle.socket_path.as_deref(), Some(path.as_path()));
+
+        // 0600：仅属主可连（unix socket 连接需要写权限）。
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "socket 文件必须 0600，实际 {:o}", mode);
+
+        // health：Host 白名单在 unix 传输上跳过（evil Host 不再 421）
+        let text = http_over_unix(
+            &path,
+            "GET",
+            "/api/v1/connect/health",
+            "evil.example.com",
+            "",
+        )
+        .await;
+        assert!(
+            text.starts_with("HTTP/1.1 200"),
+            "unix 传输无 DNS rebinding 面，任意 Host 应 200: {text}"
+        );
+        assert!(text.contains("\"ok\":true"), "响应缺包络: {text}");
+
+        // Origin 防线在 unix 传输上原样生效
+        let text = http_over_unix(
+            &path,
+            "GET",
+            "/api/v1/connect/health",
+            "localhost",
+            "Origin: http://evil.example.com\r\n",
+        )
+        .await;
+        assert!(
+            text.starts_with("HTTP/1.1 403"),
+            "unix 传输跨源未拦: {text}"
+        );
+
+        // token 防线原样生效（库未初始化 → 缺 token 401）
+        let text = http_over_unix(&path, "GET", "/api/v1/connect/items", "localhost", "").await;
+        assert!(
+            text.starts_with("HTTP/1.1 401"),
+            "unix 传输缺 token 应 401: {text}"
+        );
+
+        handle.stop();
+        // graceful shutdown 后 socket 文件移除、连接被拒（轮询而非 sleep 猜时长）
+        let removed = async {
+            for _ in 0..100 {
+                if !path.exists() && tokio::net::UnixStream::connect(&path).await.is_err() {
+                    return true;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            false
+        }
+        .await;
+        assert!(
+            removed,
+            "stop() 后 socket 文件应移除且不可连接: {}",
+            path.display()
+        );
+    }
+
+    /// 陈旧残骸接管、活 listener 不劫持（口径同 ssh-agent transport）。
+    /// 崩溃残留：socket 文件在、无人监听 → 接管；有人监听 → 报错不抢。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_listener_takes_over_stale_socket_but_refuses_live_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("connect.sock");
+
+        // 造陈旧残骸：bind 后立刻 drop（文件留下，无人监听 = 崩溃形态）
+        let dead = tokio::net::UnixListener::bind(&path).unwrap();
+        drop(dead);
+        assert!(path.exists(), "崩溃残骸应留下 socket 文件");
+        assert!(
+            persona_core::socket::is_stale_socket(&path),
+            "无人监听的残骸应判陈旧"
+        );
+
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let handle = start_connect_server_with_transport(
+            service.clone(),
+            ConnectTransport::Unix { path: path.clone() },
+        )
+        .await
+        .expect("陈旧残骸应被接管");
+        // 活 listener：第二次 bind 同一路径必须报错而非静默劫持
+        let err = start_connect_server_with_transport(
+            service,
+            ConnectTransport::Unix { path: path.clone() },
+        )
+        .await
+        .expect_err("活 socket 上二次 bind 必须报错，不得劫持");
+        assert!(
+            err.to_string().contains("live process"),
+            "错误应指明已有活 listener: {err}"
+        );
+        handle.stop();
+    }
+
+    /// peer uid 判定纯函数：同 uid 放行、异 uid 拒绝（fail-closed 的单测
+    /// 入口——跨 uid 连接需要第二个真实用户，CI 不具备，判定逻辑在此固化）。
+    #[cfg(unix)]
+    #[test]
+    fn peer_uid_gate_allows_owner_and_rejects_others() {
+        assert!(UidCheckedListener::peer_allowed(1000, 1000));
+        assert!(!UidCheckedListener::peer_allowed(1001, 1000));
+        assert!(
+            !UidCheckedListener::peer_allowed(0, 1000),
+            "root 也不是属主"
+        );
+    }
+
+    /// 非 unix 平台（Windows）：Unix 传输创建即报错并给出 TCP 替代指引，
+    /// 不 panic、不留半初始化 listener。
+    #[cfg(not(unix))]
+    #[tokio::test]
+    async fn unix_transport_is_rejected_on_windows_with_tcp_fallback_hint() {
+        let service: ArcTokService = Arc::new(TokioMutex::new(None));
+        let err = start_connect_server_with_transport(
+            service,
+            ConnectTransport::Unix {
+                path: std::path::PathBuf::from(r"\\.\pipe\persona-connect-test"),
+            },
+        )
+        .await
+        .expect_err("Windows 上 Unix 传输必须显式报错");
+        let msg = err.to_string();
+        assert!(msg.contains("not supported"), "错误应说明平台不支持: {msg}");
+        assert!(msg.contains("TCP"), "错误应给出 TCP 替代指引: {msg}");
     }
 
     async fn body_json(response: Response) -> serde_json::Value {
