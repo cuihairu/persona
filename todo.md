@@ -12,7 +12,7 @@
 - [x] R-P6 端到端验收场景清单 + 跨平台能力矩阵（来源：2026-10-24 审查；修复 `25662c9`；docs/src/development/acceptance-matrix.md + /zh/）
 - [x] DOC-GIF 配置开关效果动态图（来源：用户令；修复 `cd902aa`；SettingsModal 4 开关 off/on 对比图 + GIF 入 `docs/branding/ui/config-switches/`，流水线 `scripts/doc-config-switch-gif.mjs` 可重跑，兼 17 条断言回归测试全绿）
 
-- [x] Connect API unix socket 传输：`persona connect serve --unix-socket [PATH]`（socket 文件 0600 + accept 层 SO_PEERCRED 属主 uid 校验 fail-closed，异 uid 连接进 HTTP 解析前丢弃；Host 白名单仅 TCP 强制——unix 无名字解析面；`--port` 同给硬报错；Windows 显式报错给 TCP 替代指引）。陈旧残骸接管口径收口 `persona_core::socket::is_stale_socket`（ssh-agent 改 re-export 同源）。来源：用户 2026-11-07；修复 `209b24e`；门禁：nextest 2096 全绿 + doctest 绿 + clippy -D warnings 绿 + fmt 绿 + `x86_64-pc-windows-gnu --all-targets` check 干净，实机验收见后续条目
+- [x] Connect API unix socket 传输：`persona connect serve --unix-socket [PATH]`（socket 文件 0600 + accept 层 SO_PEERCRED 属主 uid 校验 fail-closed，异 uid 连接进 HTTP 解析前丢弃；Host 白名单仅 TCP 强制——unix 无名字解析面；`--port` 同给硬报错；Windows 显式报错给 TCP 替代指引）。陈旧残骸接管口径收口 `persona_core::socket::is_stale_socket`（ssh-agent 改 re-export 同源）。来源：用户 2026-11-07；修复 `209b24e`；门禁：nextest 2096 全绿 + doctest 绿 + clippy -D warnings 绿 + fmt 绿 + `x86_64-pc-windows-gnu --all-targets` check 干净；openclaw（Windows Server 2022，stable 1.99.1 msvc）实机验收（2026-11-07）：`cargo test -p persona-connect-server` 38 过（含 `unix_transport_is_rejected_on_windows_with_tcp_fallback_hint`）、`-p persona-cli connect` 19 过、行为冒烟 `connect serve --unix-socket` 在**要主密码之前**即报平台错误给 TCP 指引（exit 1）；实机抓到并修复 1 个跨平台断言 bug（路径形态断言按 `/` 字符串后缀匹配，Windows 反斜杠必炸 → `Path::ends_with` 组件级比较，commit `fc392f9`）
 
 ## 未完成
 
