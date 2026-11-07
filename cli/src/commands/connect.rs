@@ -1055,16 +1055,18 @@ mod tests {
     fn default_socket_path_is_stable_and_falls_back_under_persona_dir() {
         let path = default_socket_path();
         // 形态固定：*/persona/connect.sock 或 */.persona/connect.sock——
-        // 消费者按文档定位，不随版本抖动。
-        let s = path.to_string_lossy();
-        assert!(
-            s.ends_with("/persona/connect.sock") || s.ends_with("/.persona/connect.sock"),
-            "缺省路径形态不符: {s}"
-        );
+        // 消费者按文档定位，不随版本抖动。用 Path::ends_with 按**组件**比较：
+        // 字符串斜杠后缀在 Windows（反斜杠）上必然误报（openclaw 实机抓到）。
+        let stable_shape =
+            path.ends_with("persona/connect.sock") || path.ends_with(".persona/connect.sock");
+        assert!(stable_shape, "缺省路径形态不符: {}", path.display());
         if std::env::var_os("XDG_RUNTIME_DIR").is_some() {
+            // XDG_RUNTIME_DIR 是 unix 环境变量（此分支不会在 Windows 触发）；
+            // 组件级前缀判断同上，避免分隔符绑定。
             assert!(
-                s.starts_with('/'),
-                "有 XDG_RUNTIME_DIR 时应在运行时目录: {s}"
+                path.starts_with(std::path::Path::new("/")),
+                "有 XDG_RUNTIME_DIR 时应在运行时目录: {}",
+                path.display()
             );
         }
     }
