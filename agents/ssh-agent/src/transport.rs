@@ -78,21 +78,10 @@ pub enum AgentListener {
 
 /// socket 路径上的旧文件是否是可接管的陈旧残骸。
 ///
-/// - 不存在 / 非 socket 文件（崩溃残留的普通文件、symlink 等）→ 陈旧；
-/// - 是 socket 但 connect 不上（ECONNREFUSED）→ 上一进程死了没清理 → 陈旧；
-/// - 是 socket 且能连上 → 有活 agent 在监听 → 非陈旧。
+/// 实现收口在 core（`persona_core::socket`），connect server 与 ssh-agent
+/// 共用同一口径；此处保留 re-export 维持 `transport::is_stale_socket` 调用面。
 #[cfg(unix)]
-pub fn is_stale_socket(path: &std::path::Path) -> bool {
-    use std::os::unix::fs::FileTypeExt;
-    match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.file_type().is_socket() => {
-            // 探测连接：连上即有人监听。连接被立刻关闭，agent 侧按 EOF 处理。
-            std::os::unix::net::UnixStream::connect(path).is_err()
-        }
-        Ok(_) => true,
-        Err(_) => true,
-    }
-}
+pub use persona_core::socket::is_stale_socket;
 
 impl AgentListener {
     /// Create a new listener

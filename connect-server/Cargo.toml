@@ -17,6 +17,7 @@ tracing = "0.1"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }
 # 过期 token 的端到端契约测试要在真库上改写 expires_at（生产代码不碰
 # 直写 SQL，故只进 dev）；sqlx/chrono 已在 workspace 锁内，不引入新依赖。
