@@ -945,6 +945,7 @@ export default {
     generateFailed: 'Generation failed',
     generateNoIdentity: 'Select an identity first',
     copyPublicKey: 'Copy public key',
+    copy: 'Copy',
     copied: 'Copied',
     generatePublicKey: 'Public key',
   },

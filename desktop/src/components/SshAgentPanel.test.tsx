@@ -244,6 +244,28 @@ describe('components/SshAgentPanel', () => {
   });
 
   // -----------------------------------------------------------------
+  // 行内复制在「操作」列（用户令 2026-11-08：复制公钥挪进操作列，就叫复制）
+  // -----------------------------------------------------------------
+
+  it('copies the public key from the actions column button labeled 复制', async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    (usePersonaService as jest.Mock).mockReturnValue(
+      makeService({ sshKeys: [LIST_KEY] }),
+    );
+
+    const { getByTestId, getByText } = render(<SshAgentPanel />);
+    // 按钮「复制」位于操作列（同一单元格内有编辑/删除）
+    const copyBtn = getByTestId('ssh-key-copy-k1');
+    expect(copyBtn.textContent).toContain('复制');
+    // 公钥列只做纯文本展示，不再承载复制按钮
+    expect(copyBtn.contains(getByText('ssh-ed25519 AAAA test'))).toBe(false);
+    fireEvent.click(copyBtn);
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('ssh-ed25519 AAAA test'));
+    await waitFor(() => expect(getByTestId('ssh-key-copy-k1').textContent).toContain('已复制'));
+  });
+
+  // -----------------------------------------------------------------
   // P2-⑤：类型列位数/曲线徽标（后端现算，前端纯展示）
   // -----------------------------------------------------------------
 

@@ -493,24 +493,12 @@ const SshAgentPanel: React.FC = () => {
                     </td>
                     <td className="px-6 py-3 text-sm">
                       {key.public_key ? (
-                        <button
-                          onClick={() => handleCopyRowPublicKey(key.id, key.public_key!)}
-                          className="btn-ghost inline-flex items-center text-xs"
-                          data-testid={`ssh-key-copy-${key.id}`}
+                        <span
+                          className="font-mono text-xs text-gray-500 dark:text-gray-400 truncate inline-block max-w-[14rem] align-middle"
                           title={key.public_key}
                         >
-                          {copiedKeyId === key.id ? (
-                            <>
-                              <CheckIcon className="w-4 h-4 mr-1 text-green-600 dark:text-green-400" />
-                              {t('sshAgent.copied')}
-                            </>
-                          ) : (
-                            <>
-                              <ClipboardDocumentIcon className="w-4 h-4 mr-1" />
-                              {t('sshAgent.copyPublicKey')}
-                            </>
-                          )}
-                        </button>
+                          {key.public_key}
+                        </span>
                       ) : (
                         <span className="text-gray-400 dark:text-gray-500">—</span>
                       )}
@@ -536,6 +524,26 @@ const SshAgentPanel: React.FC = () => {
                     </td>
                     <td className="px-6 py-3 text-sm whitespace-nowrap">
                       <div className="flex items-center gap-1">
+                        {key.public_key && (
+                          <button
+                            onClick={() => handleCopyRowPublicKey(key.id, key.public_key!)}
+                            className="btn-ghost inline-flex items-center h-8 px-2 text-xs"
+                            data-testid={`ssh-key-copy-${key.id}`}
+                            title={key.public_key}
+                          >
+                            {copiedKeyId === key.id ? (
+                              <>
+                                <CheckIcon className="w-4 h-4 mr-1 text-green-600 dark:text-green-400" />
+                                {t('sshAgent.copied')}
+                              </>
+                            ) : (
+                              <>
+                                <ClipboardDocumentIcon className="w-4 h-4 mr-1" />
+                                {t('sshAgent.copy')}
+                              </>
+                            )}
+                          </button>
+                        )}
                         <button
                           onClick={() => beginEdit(key)}
                           className="btn-ghost inline-flex items-center h-8 px-2 text-xs"

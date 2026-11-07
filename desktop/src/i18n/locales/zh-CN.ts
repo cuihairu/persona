@@ -920,6 +920,7 @@ export default {
     generateFailed: '生成失败',
     generateNoIdentity: '请先选择身份',
     copyPublicKey: '复制公钥',
+    copy: '复制',
     copied: '已复制',
     generatePublicKey: '公钥',
   },
