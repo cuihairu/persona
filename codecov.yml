@@ -1,0 +1,18 @@
+# Codecov 状态策略（2026-11-08 确立，PR #148 落地）
+#
+# patch 默认 target=auto 会把目标锚定到 project 基线（本仓 ~97%）。对含
+# 下列两类行的 diff，该目标是**结构性不可达**——不是质量问题：
+#   1. 跨平台 cfg(not(unix)) 分支：覆盖率在 Linux runner 上插桩运行，
+#      Windows-only 代码不在产物里，按「未覆盖」计入 patch；
+#   2. 防御性/互斥不可达分支：fail-closed 的 peer_cred Err 臂、测试的
+#      失败路径（bail/panic 臂）、EOF 与 RST 互斥时序、宏展开与块收尾
+#      花括号的插桩归属噪音。
+#
+# patch 定 90%：真实逻辑缺口（掉到 90% 以下）依然红。project 保持默认
+# auto 对比基线、零容忍——覆盖率回归照常被抓（main 曾因 -0.05% 变红，
+# 由 PR #148 修复回 +0.05%）。
+coverage:
+  status:
+    patch:
+      default:
+        target: 90%
