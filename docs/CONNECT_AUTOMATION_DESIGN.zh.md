@@ -71,6 +71,10 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
   既有 tokio。bind 地址硬编码 `127.0.0.1`，
   端口默认 `0`（OS 分配）+ 显式配置项；**拒绝任何非 loopback 配置**
   （fail-closed，配置了就启动失败并报错，不静默回退）。
+  _2026-11-07 更新_：新增第二传输——`--unix-socket` 服务 Unix domain socket
+  （socket 文件 `0600` + accept 层属主 uid 核对，不开 TCP 端口；无名字解析面
+  故 Host 白名单不适用）。TCP 传输的上述 loopback 硬编码保持不变；loopback-only
+  决策的适用范围限定于 TCP。
 
 ### DR-2 认证与授权：scope token（一次性显示、只存哈希、三维 scope）
 

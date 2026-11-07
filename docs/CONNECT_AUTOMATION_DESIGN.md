@@ -71,6 +71,10 @@ The HTTP service is embedded in the **already-unlocked host process**; core ship
   the existing tokio. The bind address is hardcoded to `127.0.0.1`,
   the port defaults to `0` (OS-assigned) plus an explicit config option; **any non-loopback configuration is rejected**
   (fail-closed: if one is set, startup fails with an error — no silent fallback).
+  _Update 2026-11-07_: a second transport landed — `--unix-socket` serves a Unix domain
+  socket (file `0600` + accept-time peer-uid check, no TCP port, Host allowlist not
+  applicable without a name-resolution surface). The TCP transport keeps the hardcoded
+  loopback binding above unchanged; the loopback-only decision is scoped to TCP.
 
 ### DR-2 Authentication and authorization: scoped tokens (shown once, hash-only storage, three-dimensional scope)
 

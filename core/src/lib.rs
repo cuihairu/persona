@@ -25,6 +25,8 @@ pub mod logging;
 pub mod models;
 pub mod password;
 pub mod service;
+#[cfg(unix)]
+pub mod socket;
 pub mod storage;
 pub mod sync;
 #[cfg(feature = "backup")]

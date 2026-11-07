@@ -312,7 +312,11 @@ does not require clicking the Persona icon first"**, adding a threat surface:
 
 The desktop host embeds an in-process axum listener (DR-1) so local scripts/tools can pull credentials read-only
 within a token scope. **The switch is off by default**: no listener created means no port surface; when enabled the bind is
-hardcoded to loopback and the port is OS-assigned (no configuration surface, cannot be coaxed into listening on 0.0.0.0). New threat surface:
+hardcoded to loopback and the port is OS-assigned (no configuration surface, cannot be coaxed into listening on 0.0.0.0).
+_Update 2026-11-07_: a second transport `--unix-socket` serves a Unix domain socket with no TCP port at all —
+socket file `0600` plus an accept-time `SO_PEERCRED` uid check against the socket owner (foreign uid dropped before
+HTTP parsing), and the Host allowlist is not applicable (no name-resolution surface; `Origin`/token/rate defenses unchanged).
+New threat surface:
 
 - **Trust root and visibility**: an unlocked-state + token two-way gate (either missing refuses). The token decides
 - **Trust root and visibility**: an unlocked-state + token two-way gate (either missing refuses). The token decides

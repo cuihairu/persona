@@ -83,16 +83,38 @@ pconn_C-LUE7XcPUhlPMdbh6v7Rx_Z6GzrbDqRDqx_DN_1Yrg
 ### Step 2: start the listener (local background, one-time)
 
 ```bash
-persona connect serve --port 8737        # default --port 0 lets the OS assign; Ctrl-C to exit
+persona connect serve --port 8737        # TCP loopback (default): --port 0 lets the OS assign; Ctrl-C to exit
+persona connect serve --unix-socket      # Unix domain socket (unix platforms): $XDG_RUNTIME_DIR/persona/connect.sock
+persona connect serve --unix-socket /run/user/1000/p.sock   # explicit socket path
 ```
 
-- Listens only on `127.0.0.1`; requests never leave the machine; the vault must
-  be unlocked — in a foreground terminal use `--passphrase-env <VAR>` to specify
-  which environment variable to read (it must already be set and non-empty), and
-  the desktop app toggles this in Settings. For the full non-interactive unlock
-  story see [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md).
+Two transports, pick one:
+
+- **TCP loopback (default)**: listens only on `127.0.0.1`; requests never leave
+  the machine. `--port` applies here only (`--port` + `--unix-socket` together
+  is an error — a unix socket has no TCP port).
+- **Unix domain socket** (`--unix-socket`, unix platforms; Windows reports an
+  error with the TCP hint): the socket file is `0600` **and** every accepted
+  connection is checked against the socket owner's uid at accept time
+  (`SO_PEERCRED`; a foreign uid's connection is dropped before HTTP parsing).
+  No TCP port is opened. The `Host` allowlist does not apply over the socket
+  (no DNS-rebinding surface — a filesystem path is not name-resolvable);
+  `Origin`, token, and rate-limit checks apply identically on both transports.
+
+The vault must be unlocked — in a foreground terminal use `--passphrase-env <VAR>`
+to specify which environment variable to read (it must already be set and
+non-empty), and the desktop app toggles this in Settings. For the full
+non-interactive unlock story see [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md).
+
 - The listener process is decoupled from the consumer process: token validation
   happens per request, and a locked vault returns 503 (see the error code table).
+
+Calling over the socket:
+
+```bash
+curl -s --unix-socket "$XDG_RUNTIME_DIR/persona/connect.sock" \
+  -H "Authorization: Bearer $TOKEN" http://localhost/api/v1/connect/health
+```
 
 ### Step 3: call it (consumer side, any HTTP client)
 
@@ -206,27 +228,27 @@ Items outside the scope and nonexistent items return the **same 404 shape**
 (verified: a password-only token reading a totp item → `not_found`,
 indistinguishable from a fabricated id), so existence is never leaked.
 
-| Boundary           | Semantics                                                                                                                                                                                                                            |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| verbs              | Only `read` can be granted and HTTP exposes only `read`; `use` is already in the authorization model but **has no consumer endpoint yet** (reserved, do not rely on it); `export` / `sign` can never be granted to a token principal |
-| Excluded types     | ssh-key / crypto-wallet / custom can **never be authorized** (they are not in the authorizable type set); passkeys do not go through this endpoint (they use a separate Unix socket approval channel)                                |
-| Authorizable types | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license                                                                                                              |
-| Network surface    | Listens only on `127.0.0.1`; a `Host` header other than `127.0.0.1`/`localhost` → 421; a request carrying an `Origin` header (browser-originated) → 403                                                                              |
-| Rate               | 120 requests/minute per token (fixed window); exceeding it → 429                                                                                                                                                                     |
-| Locking            | Locked vault → 503 `vault_locked`, does not consume the rate limit                                                                                                                                                                   |
-| Auditing           | Every token validation/rejection leaves an audit record; the decryption path is the same one the desktop/CLI display uses                                                                                                            |
+| Boundary           | Semantics                                                                                                                                                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| verbs              | Only `read` can be granted and HTTP exposes only `read`; `use` is already in the authorization model but **has no consumer endpoint yet** (reserved, do not rely on it); `export` / `sign` can never be granted to a token principal                             |
+| Excluded types     | ssh-key / crypto-wallet / custom can **never be authorized** (they are not in the authorizable type set); passkeys do not go through this endpoint (they use a separate Unix socket approval channel)                                                            |
+| Authorizable types | password / api_key / totp / note / bank_card / server_config / certificate / game_account / identity / software_license                                                                                                                                          |
+| Network surface    | TCP transport: listens only on `127.0.0.1`, a `Host` header other than `127.0.0.1`/`localhost` → 421. Unix transport: no TCP port; socket file `0600` + accept-time peer-uid check. Either way, a request carrying an `Origin` header (browser-originated) → 403 |
+| Rate               | 120 requests/minute per token (fixed window); exceeding it → 429                                                                                                                                                                                                 |
+| Locking            | Locked vault → 503 `vault_locked`, does not consume the rate limit                                                                                                                                                                                               |
+| Auditing           | Every token validation/rejection leaves an audit record; the decryption path is the same one the desktop/CLI display uses                                                                                                                                        |
 
 ## Error code table (verified shapes)
 
-| HTTP | code               | Verified message                              | Trigger                                                          |
-| ---- | ------------------ | --------------------------------------------- | ---------------------------------------------------------------- |
-| 401  | `unauthorized`     | `missing or malformed bearer token`           | Missing or malformed Authorization header                        |
-| 401  | `unauthorized`     | `invalid token`                               | Unknown, revoked, or expired token (all three indistinguishable) |
-| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | Request carries an `Origin` header                               |
-| 404  | `not_found`        | `item not found`                              | Item does not exist / is archived / out of scope (same shape)    |
-| 421  | `bad_host`         | `host not allowed`                            | `Host` header other than `127.0.0.1`/`localhost`                 |
-| 429  | `rate_limited`     | —                                             | More than 120 req/min                                            |
-| 503  | `vault_locked`     | —                                             | Vault locked (does not consume the rate limit)                   |
+| HTTP | code               | Verified message                              | Trigger                                                                                                              |
+| ---- | ------------------ | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 401  | `unauthorized`     | `missing or malformed bearer token`           | Missing or malformed Authorization header                                                                            |
+| 401  | `unauthorized`     | `invalid token`                               | Unknown, revoked, or expired token (all three indistinguishable)                                                     |
+| 403  | `origin_forbidden` | `browser-originated requests are not allowed` | Request carries an `Origin` header                                                                                   |
+| 404  | `not_found`        | `item not found`                              | Item does not exist / is archived / out of scope (same shape)                                                        |
+| 421  | `bad_host`         | `host not allowed`                            | `Host` header other than `127.0.0.1`/`localhost` (TCP transport only; the check does not apply over the unix socket) |
+| 429  | `rate_limited`     | —                                             | More than 120 req/min                                                                                                |
+| 503  | `vault_locked`     | —                                             | Vault locked (does not consume the rate limit)                                                                       |
 
 Retry discipline: never retry a 401 (deterministic rejection — go check
 revocation/expiry); 503 can be retried with backoff (waiting for the owner to

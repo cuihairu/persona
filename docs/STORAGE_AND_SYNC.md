@@ -421,9 +421,12 @@ implemented today.)
 ## Local Automation (Connect API)
 
 An HTTP interface that lets local scripts / CI / command-line tools read
-vault entries **read-only**. Off by default; once enabled it listens only on
-`127.0.0.1` (on a system-assigned port), and requests never leave the
-machine. See
+vault entries **read-only**. Off by default; once enabled the default TCP
+transport listens only on `127.0.0.1` (on a system-assigned port), and
+requests never leave the machine. A second transport, `--unix-socket`, serves
+a Unix domain socket instead (file `0600` + accept-time peer-uid check, no TCP
+port — see `EXTERNAL_INTEGRATION.md` Step 2 for the exact semantics; available
+on unix platforms, Windows reports the TCP fallback). See
 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md) and
 [THREAT_MODEL](./THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)
 for details. **The guide for integrating an external project (three steps +

@@ -318,11 +318,15 @@ Mode」激活期间同步整体暂停（推拉双停），被移出的身份不�
 ## 本机自动化（Connect API）
 
 让本机的脚本 / CI / 命令行工具**只读**读取 vault 条目的 HTTP 接口。默认
-关闭；开启后只监听 `127.0.0.1`（端口由系统分配），请求永不离开本机。
-详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)、
-[THREAT_MODEL](./THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)。
-**外部项目接入指南（三步 + 实测响应样例 + 令牌到期/吊销语义 + 权限边界）
-见 [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)。**
+关闭；开启后默认 TCP 传输只监听 `127.0.0.1`（端口由系统分配），请求永不
+离开本机。第二传输 `--unix-socket` 改服务 Unix domain socket（文件 `0600`
+
+- accept 层属主 uid 核对，不开 TCP 端口——精确语义见
+  [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md) 第 2 步；unix 平台
+  可用，Windows 报错并给出 TCP 替代指引）。详见 [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md)、
+  [THREAT_MODEL](./THREAT_MODEL.md#connect-local-automation-endpoint-127001-http-2026-09-secrets-automation)。
+  **外部项目接入指南（三步 + 实测响应样例 + 令牌到期/吊销语义 + 权限边界）
+  见 [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md)。**
 
 **两步用起来：**
 

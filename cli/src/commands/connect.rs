@@ -33,11 +33,16 @@ enum ConnectCommand {
         #[command(subcommand)]
         command: TokenCommand,
     },
-    /// 前台启动 Connect listener（127.0.0.1，Ctrl-C 退出）
+    /// 前台启动 Connect listener（loopback TCP 或 unix socket，Ctrl-C 退出）
     Serve {
-        /// 监听端口（默认 0 = 由 OS 分配）
+        /// 监听端口（默认 0 = 由 OS 分配；仅 TCP 传输）
         #[arg(long, default_value_t = 0)]
         port: u16,
+        /// 改用 Unix domain socket（0600 文件 + 属主 uid 校验；可带路径，
+        /// 缺省 $XDG_RUNTIME_DIR/persona/connect.sock，无 XDG_RUNTIME_DIR
+        /// 时退 ~/.persona/connect.sock）。与 --port 互斥；Windows 上报错
+        #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        unix_socket: Option<Option<std::path::PathBuf>>,
         /// 从指定环境变量读主密码（必须已设且非空）
         #[arg(long)]
         passphrase_env: Option<String>,
@@ -102,8 +107,9 @@ pub(crate) async fn execute_with(
         },
         ConnectCommand::Serve {
             port,
+            unix_socket,
             passphrase_env,
-        } => serve(config, ui, port, passphrase_env.as_deref()).await,
+        } => serve(config, ui, port, unix_socket, passphrase_env.as_deref()).await,
     }
 }
 
@@ -403,21 +409,107 @@ async fn serve(
     config: &CliConfig,
     ui: &dyn PromptUi,
     port: u16,
+    unix_socket: Option<Option<std::path::PathBuf>>,
     passphrase_env: Option<&str>,
 ) -> Result<()> {
+    let transport = resolve_transport(port, unix_socket)?;
     let service = open_unlocked(config, ui, passphrase_env).await?;
     let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(service)));
-    let handle = persona_connect_server::start_connect_server(slot, port).await?;
-    println!(
-        "{}",
-        format!(
-            "🔌 Connect listener on http://127.0.0.1:{} — Ctrl-C to stop",
-            handle.port
-        )
-        .cyan()
-        .bold()
-    );
+    let handle =
+        persona_connect_server::start_connect_server_with_transport(slot, transport).await?;
+    match &handle.socket_path {
+        Some(path) => {
+            println!(
+                "{}",
+                format!(
+                    "🔌 Connect listener on unix://{} (0600 + uid-checked) — Ctrl-C to stop",
+                    path.display()
+                )
+                .cyan()
+                .bold()
+            );
+            println!(
+                "{}",
+                format!(
+                    "   probe: curl --unix-socket {} http://localhost/api/v1/connect/health",
+                    path.display()
+                )
+                .bright_black()
+            );
+        }
+        None => {
+            println!(
+                "{}",
+                format!(
+                    "🔌 Connect listener on http://127.0.0.1:{} — Ctrl-C to stop",
+                    handle.port
+                )
+                .cyan()
+                .bold()
+            );
+        }
+    }
     run_until_interrupt(handle).await
+}
+
+/// `serve` 旗标 → 传输层（纯函数，单测入口）。
+///
+/// - 未给 `--unix-socket` → loopback TCP（`--port`，0 = OS 分配）；
+/// - `--unix-socket` 裸用 → unix socket，路径取 [`default_socket_path`]；
+/// - `--unix-socket <path>` → unix socket，指定路径；
+/// - `--port`（非 0）+ `--unix-socket` 同时给 → 报错（unix 无 TCP 端口，
+///   静默忽略任一侧都会让调用方对着错误端点排查）。
+fn resolve_transport(
+    port: u16,
+    unix_socket: Option<Option<std::path::PathBuf>>,
+) -> Result<persona_connect_server::ConnectTransport> {
+    match unix_socket {
+        None => Ok(persona_connect_server::ConnectTransport::Tcp { port }),
+        Some(explicit) => {
+            if port != 0 {
+                anyhow::bail!(
+                    "--port cannot be combined with --unix-socket (a unix socket has no TCP port)"
+                );
+            }
+            // Windows：在解锁之前就拒（fail-fast——先要主密码再报「平台不支持」
+            // 是把能力边界藏在交互后面）。库侧 start_connect_server_with_transport
+            // 仍保留同语义兜底（任何调用方都能传 Unix，库必须自卫）。
+            #[cfg(not(unix))]
+            {
+                let _ = explicit;
+                anyhow::bail!(
+                    "unix socket transport is not supported on this platform; \
+                     use TCP loopback instead (drop --unix-socket)"
+                );
+            }
+            #[cfg(unix)]
+            {
+                let path = explicit.unwrap_or_else(default_socket_path);
+                Ok(persona_connect_server::ConnectTransport::Unix { path })
+            }
+        }
+    }
+}
+
+/// `--unix-socket` 裸用时的缺省路径。
+///
+/// 首选 `$XDG_RUNTIME_DIR/persona/connect.sock`（XDG 运行时目录随会话
+/// 登出清理、0700 属主私有）；无 XDG_RUNTIME_DIR（SSH/非 XDG 环境、
+/// macOS、Windows 回退分支）时退 `~/.persona/connect.sock`（与 connect.port
+/// 同目录，消费者约定的本机位置）。
+///
+/// Windows 上无生产调用方（resolve_transport 的 unix 分支 cfg(unix)），但
+/// 单测仍在此验证回退形态（openclaw 实机抓过斜杠断言 bug）——条件 allow
+/// 而非 cfg 掉，保住跨平台形状覆盖。
+#[cfg_attr(not(unix), allow(dead_code))]
+fn default_socket_path() -> std::path::PathBuf {
+    if let Some(runtime) = dirs::runtime_dir() {
+        return runtime.join("persona").join("connect.sock");
+    }
+    dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".persona")
+        .join("connect.sock")
 }
 
 /// 阻塞到 Ctrl-C；句柄 stop 触发 graceful shutdown。
@@ -861,6 +953,54 @@ mod tests {
         handle.stop();
     }
 
+    /// serve 编排的冒烟（unix 传输）：解锁 → start(with Unix transport) →
+    /// health 经 socket 冒烟 → handle.stop 收尾、socket 文件移除。
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn serve_pipeline_over_unix_socket_serves_health_then_cleans_up() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+
+        let socket = _dir.path().join("connect.sock");
+        let service = open_unlocked(&config, &ScriptedUi::new(), None)
+            .await
+            .unwrap();
+        let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(service)));
+        // 旗标→传输走 resolve_transport（与 serve() 同路径）
+        let transport = resolve_transport(0, Some(Some(socket.clone()))).unwrap();
+        let handle = persona_connect_server::start_connect_server_with_transport(slot, transport)
+            .await
+            .unwrap();
+        assert_eq!(handle.socket_path.as_deref(), Some(socket.as_path()));
+        assert_eq!(handle.port, 0, "unix 传输无 TCP 端口");
+
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let mut stream = tokio::net::UnixStream::connect(&socket).await.unwrap();
+        stream
+            .write_all(b"GET /api/v1/connect/health HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let body = String::from_utf8_lossy(&buf);
+        assert!(body.contains("\"ok\":true"), "{body}");
+        assert!(body.contains("persona-connect"), "{body}");
+
+        handle.stop();
+        // 收尾：socket 文件随关停移除（轮询，不 sleep 猜时长）
+        let mut gone = false;
+        for _ in 0..100 {
+            if !socket.exists() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(gone, "stop 后 socket 文件应移除: {}", socket.display());
+    }
+
     #[tokio::test]
     #[allow(clippy::await_holding_lock)]
     async fn serve_passphrase_env_var_missing_is_a_hard_error() {
@@ -871,6 +1011,7 @@ mod tests {
             ConnectArgs {
                 command: ConnectCommand::Serve {
                     port: 0,
+                    unix_socket: None,
                     passphrase_env: Some("PERSONA_TEST_MISSING_VAR".to_string()),
                 },
             },
@@ -880,5 +1021,84 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("is not set (or blank)"), "{err}");
+    }
+
+    // -------------------------------------------------------------------
+    // resolve_transport / default_socket_path
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn resolve_transport_defaults_to_loopback_tcp() {
+        let t = resolve_transport(0, None).unwrap();
+        match t {
+            persona_connect_server::ConnectTransport::Tcp { port } => assert_eq!(port, 0),
+            other => panic!("未给 --unix-socket 应得 TCP: {other:?}"),
+        }
+        let t = resolve_transport(8737, None).unwrap();
+        match t {
+            persona_connect_server::ConnectTransport::Tcp { port } => assert_eq!(port, 8737),
+            other => panic!("--port 应得 TCP: {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_transport_unix_bare_uses_default_path_and_explicit_path_wins() {
+        // 裸用 → 缺省路径（与 default_socket_path 一致）
+        let t = resolve_transport(0, Some(None)).unwrap();
+        match t {
+            persona_connect_server::ConnectTransport::Unix { path } => {
+                assert_eq!(path, default_socket_path(), "裸用应取缺省路径");
+            }
+            other => panic!("--unix-socket 应得 Unix: {other:?}"),
+        }
+        // 显式路径优先
+        let explicit = std::path::PathBuf::from("/tmp/persona-test.sock");
+        let t = resolve_transport(0, Some(Some(explicit.clone()))).unwrap();
+        match t {
+            persona_connect_server::ConnectTransport::Unix { path } => {
+                assert_eq!(path, explicit, "显式路径应覆盖缺省");
+            }
+            other => panic!("--unix-socket <path> 应得 Unix: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_transport_rejects_port_plus_unix_socket() {
+        // 两侧同时给是调用方旗标冲突：unix 无 TCP 端口，静默忽略任一侧
+        // 都会让调用方对着错误端点排查——硬报错。
+        let err = resolve_transport(8737, Some(None)).unwrap_err();
+        assert!(err.to_string().contains("--unix-socket"), "{err}");
+    }
+
+    /// Windows：unix 传输在**解锁之前**即拒（fail-fast，不先要主密码）。
+    /// 库侧 start_connect_server_with_transport 另有同语义兜底（见其测试）。
+    #[cfg(not(unix))]
+    #[test]
+    fn resolve_transport_rejects_unix_before_unlock_on_windows() {
+        let err = resolve_transport(0, Some(None)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not supported"), "应说明平台不支持: {msg}");
+        assert!(msg.contains("TCP"), "应给出 TCP 替代指引: {msg}");
+    }
+
+    #[test]
+    fn default_socket_path_is_stable_and_falls_back_under_persona_dir() {
+        let path = default_socket_path();
+        // 形态固定：*/persona/connect.sock 或 */.persona/connect.sock——
+        // 消费者按文档定位，不随版本抖动。用 Path::ends_with 按**组件**比较：
+        // 字符串斜杠后缀在 Windows（反斜杠）上必然误报（openclaw 实机抓到）。
+        let stable_shape =
+            path.ends_with("persona/connect.sock") || path.ends_with(".persona/connect.sock");
+        assert!(stable_shape, "缺省路径形态不符: {}", path.display());
+        if std::env::var_os("XDG_RUNTIME_DIR").is_some() {
+            // XDG_RUNTIME_DIR 是 unix 环境变量（此分支不会在 Windows 触发）；
+            // 组件级前缀判断同上，避免分隔符绑定。
+            assert!(
+                path.starts_with(std::path::Path::new("/")),
+                "有 XDG_RUNTIME_DIR 时应在运行时目录: {}",
+                path.display()
+            );
+        }
     }
 }
