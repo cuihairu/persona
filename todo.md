@@ -12,6 +12,8 @@
 - [x] R-P6 端到端验收场景清单 + 跨平台能力矩阵（来源：2026-10-24 审查；修复 `25662c9`；docs/src/development/acceptance-matrix.md + /zh/）
 - [x] DOC-GIF 配置开关效果动态图（来源：用户令；修复 `cd902aa`；SettingsModal 4 开关 off/on 对比图 + GIF 入 `docs/branding/ui/config-switches/`，流水线 `scripts/doc-config-switch-gif.mjs` 可重跑，兼 17 条断言回归测试全绿）
 
+- [x] Connect API unix socket 传输：`persona connect serve --unix-socket [PATH]`（socket 文件 0600 + accept 层 SO_PEERCRED 属主 uid 校验 fail-closed，异 uid 连接进 HTTP 解析前丢弃；Host 白名单仅 TCP 强制——unix 无名字解析面；`--port` 同给硬报错；Windows 显式报错给 TCP 替代指引）。陈旧残骸接管口径收口 `persona_core::socket::is_stale_socket`（ssh-agent 改 re-export 同源）。来源：用户 2026-11-07；修复 `209b24e`；门禁：nextest 2096 全绿 + doctest 绿 + clippy -D warnings 绿 + fmt 绿 + `x86_64-pc-windows-gnu --all-targets` check 干净，实机验收见后续条目
+
 ## 未完成
 
 - [ ] mermaid 12 升级待手动评估：vitepress-plugin-mermaid@2.0.17 peer 仅支持 mermaid 10||11，#132（2026-11-06 dependabot PR 被直接合入）令 docs workflow `npm ci` ERESOLVE 红。已回退 docs mermaid→^11.17.2 并同步 package-lock（干净环境 npm ci + vitepress build 双绿验证）。重启条件：vitepress-plugin-mermaid 发布声明支持 mermaid 12 的版本（当前 latest 2.0.17 仍 10||11，2026-11-06 核）
