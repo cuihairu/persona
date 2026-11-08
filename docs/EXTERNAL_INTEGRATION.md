@@ -106,6 +106,11 @@ to specify which environment variable to read (it must already be set and
 non-empty), and the desktop app toggles this in Settings. For the full
 non-interactive unlock story see [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md).
 
+The unlocked session **auto-locks** after `security.auto_lock_timeout` seconds
+of inactivity (workspace `config.toml`, default `300`; **`0` = never**). While
+locked the data plane answers `503` (error code table) while `health` keeps
+answering — set `auto_lock_timeout = 0` for unattended `connect serve`.
+
 - The listener process is decoupled from the consumer process: token validation
   happens per request, and a locked vault returns 503 (see the error code table).
 
