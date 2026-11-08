@@ -634,6 +634,11 @@ persona-debug analyze --file ipc-trace.log
 
 #### systemd (Linux)
 
+> **Target architecture** — the `persona-service` unit below does not exist
+> today. For the _current_ `persona connect serve` (foreground command, no
+> daemonization), the systemd **user**-unit example lives in
+> [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md), Step 2.
+
 ```ini
 [Unit]
 Description=Persona Core Service

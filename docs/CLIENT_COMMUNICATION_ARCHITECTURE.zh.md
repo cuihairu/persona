@@ -627,6 +627,10 @@ persona-debug analyze --file ipc-trace.log
 
 #### systemd (Linux)
 
+> **目标架构** —— 下面的 `persona-service` 单元今天并不存在。**当前**的
+> `persona connect serve`（前台命令、不 daemon 化）其 systemd **用户**单元
+> 示例见 [`EXTERNAL_INTEGRATION.zh.md`](./EXTERNAL_INTEGRATION.zh.md) 第 2 步。
+
 ```ini
 [Unit]
 Description=Persona Core Service

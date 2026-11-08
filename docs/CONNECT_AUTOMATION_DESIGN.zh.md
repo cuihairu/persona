@@ -62,7 +62,8 @@ HTTP 服务嵌入**已解锁的宿主进程**，core 出框架无关服务层，
   解锁会话走）。
 - **A2 CLI `persona connect serve`（后续）**：headless 服务器/CI 长会话
   用同一 core 服务层 + 同一 token 存储（工作区库内），前台进程 + Ctrl-C
-  退出，不做 daemon 化（systemd 用户单元由用户自配，文档给示例）。
+  退出，不做 daemon 化（systemd 用户单元由用户自配——承诺的示例见
+  [`EXTERNAL_INTEGRATION.zh.md`](./EXTERNAL_INTEGRATION.zh.md) 第 2 步「起 listener」）。
 - **否决独立进程/容器**：1P Connect 容器形态服务于「服务器托管、多消费
   者远程访问」——与本地优先边界相反；独立本地常驻进程则引入密钥跨进程
   传递（违背「解锁态在宿主进程内」的单一边界）与第二份生命周期管理。

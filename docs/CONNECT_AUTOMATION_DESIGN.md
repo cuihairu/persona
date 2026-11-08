@@ -62,7 +62,8 @@ The HTTP service is embedded in the **already-unlocked host process**; core ship
   the unlock session).
 - **A2 CLI `persona connect serve` (later)**: for headless servers/CI long sessions,
   the same core service layer + the same token store (inside the workspace database), foreground process + Ctrl-C
-  to quit, no daemonization (systemd user units are configured by the user, with an example in the docs).
+  to quit, no daemonization (systemd user units are configured by the user — the promised example lives in
+  [`EXTERNAL_INTEGRATION.md`](./EXTERNAL_INTEGRATION.md), Step 2 "start the listener").
 - **Rejected standalone process/container**: 1P Connect's container shape serves "server-hosted, multi-consumer
   remote access" — the opposite of the local-first boundary; a standalone local resident process would instead introduce cross-process
   key transfer (violating the single boundary of "the unlocked state lives inside the host process") plus a second lifecycle manager.

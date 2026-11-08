@@ -78,6 +78,58 @@ persona connect serve --unix-socket /run/user/1000/p.sock   # 显式 socket 路�
 
 - listener 进程与消费者进程解耦：token 校验每请求进行，保险库锁定时返回 503（见错误码表）。
 
+#### 可选：以 systemd 用户单元运行
+
+`connect serve` 刻意保持前台命令形态——不做 daemon 化（DR-1，见
+[`CONNECT_AUTOMATION_DESIGN.zh.md`](./CONNECT_AUTOMATION_DESIGN.zh.md)：
+解锁态只存在于宿主进程内）。要随登录会话自启，systemd 用户单元**由你自己
+配置**；以下是设计文档承诺的示例：
+
+```ini
+# ~/.config/systemd/user/persona-connect.service
+[Unit]
+Description=Persona Connect API (local automation endpoint)
+
+[Service]
+# 工作区命令是 local-by-default：需要当前目录有 config.toml（或显式
+# --config）。把 cwd 指向你用 `persona init` 初始化过的工作区。
+WorkingDirectory=%h/.persona
+# 解锁用的主密码——只有一个变量，绝不进命令行：
+#   printf '%s\n' 'PERSONA_MASTER_PASSWORD=...' > ~/.config/persona-connect.env
+#   chmod 600 ~/.config/persona-connect.env
+# 前导 '-' 让 systemd 对缺失文件不报错；若密码最终不可得，serve 在解锁处
+# 失败退出（无 TTY 可交互提示）。
+EnvironmentFile=-%h/.config/persona-connect.env
+# 按 `persona` 实际安装位置调整。
+ExecStart=%h/.local/bin/persona connect serve --unix-socket
+# systemd stop 发 SIGTERM → 优雅关停：listener 任务收尾、socket 文件移除、
+# 退出码 0。只对崩溃重启；RestartSec 防止密码错误变成紧密重启循环。
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now persona-connect.service
+systemctl --user stop persona-connect.service   # 优雅关停：socket 文件已移除
+```
+
+行为注记：
+
+- **先绑定后解锁**：单元一起来 `/health` 即可探测，数据面在 argon2 解锁
+  完成（数秒）前如实返回 `503 vault_locked`。消费者按「保险库已锁定」处理
+  即可——退避重试（见错误码表）。
+- `--unix-socket` 绑定 `$XDG_RUNTIME_DIR/persona/connect.sock`（systemd
+  用户单元自带 `XDG_RUNTIME_DIR`）；socket 文件 `0600`，**且**每个接受的
+  连接在 accept 层核对属主 uid——不开 TCP 端口。
+- 崩溃留下的陈旧 socket（SIGKILL、OOM）自愈：下次启动接管。正常停止——
+  含 `systemctl --user stop`——会移除该文件。
+- headless 主机：`loginctl enable-linger $USER` 让单元在无交互登录时也运行；
+  此时密码必须来自 `EnvironmentFile`（没有 TTY 可提示）。
+
 经 socket 调用：
 
 ```bash
