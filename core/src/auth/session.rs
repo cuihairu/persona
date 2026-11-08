@@ -46,6 +46,21 @@ pub struct SessionMetadata {
     pub permissions: Vec<String>,
 }
 
+/// `now + duration` 的饱和版——到期时间计算的唯一入口。
+///
+/// 「永不自动锁」会把 `Duration::MAX`（`auto_lock_timeout = 0` 的运行时
+/// 映射）乃至配置里的天文秒数传进来；`SystemTime + Duration` 溢出即
+/// **panic**（实测：`auto_lock_timeout = 0` → `Session::new` 直接炸掉
+/// `connect serve`，status=101）。两端平台可表示范围不一致（unix
+/// `time_t` i64 ≈ 292B 年；Windows FILETIME u64×100ns ≈ 58k 年），取
+/// 双方都装得下、且远超任何会话语义的 **1 万年** 作为饱和上限——对
+/// 「永不过期」语义等价。`now` 契约 = 真实当前时间戳（生产调用方均是）。
+/// 两个分支均有测试：超大值走饱和、普通值直通。
+pub(crate) fn saturating_add(now: SystemTime, duration: Duration) -> SystemTime {
+    const FAR: Duration = Duration::from_secs(10_000 * 365 * 24 * 60 * 60); // 1 万年
+    now + if duration > FAR { FAR } else { duration }
+}
+
 impl Session {
     /// Create a new session
     pub fn new(user_id: String, timeout: Duration) -> Self {
@@ -55,7 +70,7 @@ impl Session {
             user_id,
             created_at: now,
             last_activity: now,
-            expires_at: now + timeout,
+            expires_at: saturating_add(now, timeout),
             last_sensitive_op: None,
             locked: false,
             metadata: SessionMetadata {
@@ -125,7 +140,7 @@ impl Session {
 
     /// Extend the session expiration
     pub fn extend(&mut self, duration: Duration) {
-        self.expires_at = SystemTime::now() + duration;
+        self.expires_at = saturating_add(SystemTime::now(), duration);
         self.touch();
     }
 
@@ -390,6 +405,37 @@ impl Default for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// saturating_add 两分支：超大 duration 饱和到 1 万年上限（曾裸加
+    /// 溢出 panic——auto_lock_timeout=0 → Session::new 炸掉 serve，
+    /// status=101），普通值原样直通。
+    #[test]
+    fn saturating_add_caps_overflow_and_passes_through() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let far = saturating_add(now, Duration::MAX);
+        let over_cap = saturating_add(
+            now,
+            Duration::from_secs(10_000 * 365 * 24 * 60 * 60) + Duration::from_secs(60),
+        );
+        assert_eq!(far, over_cap, "超过上限一律饱和到 1 万年");
+        assert!(far > now);
+        let normal = saturating_add(now, Duration::from_secs(3600));
+        assert_eq!(normal, now + Duration::from_secs(3600));
+    }
+
+    /// 回归：`auto_lock_timeout = 0` 的「永不」映射（Duration::MAX）曾让
+    /// `Session::new` 在 `now + timeout` 处溢出 panic（serve status=101）。
+    #[test]
+    fn session_new_with_max_duration_never_expires_without_panicking() {
+        let session = Session::new("u".to_string(), Duration::MAX);
+        assert!(session.is_valid());
+        assert!(!session.is_expired());
+
+        let mut extended = Session::new("u".to_string(), Duration::from_secs(60));
+        extended.extend(Duration::MAX);
+        assert!(extended.is_valid());
+        assert!(!extended.is_expired());
+    }
 
     #[test]
     fn test_session_creation() {

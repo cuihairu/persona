@@ -1,5 +1,5 @@
 use super::auto_lock::{AutoLockEvent, LockReason};
-use super::{EnhancedAutoLockConfig, Session};
+use super::{session::saturating_add, EnhancedAutoLockConfig, Session};
 use crate::models::auto_lock_policy::AutoLockPolicy;
 use crate::storage::AutoLockPolicyRepository;
 use serde::{Deserialize, Serialize};
@@ -130,7 +130,12 @@ impl CachedAutoLockManager {
 
         // Apply policy settings to session
         if let Some(ref p) = policy {
-            session.expires_at = SystemTime::now() + Duration::from_secs(p.absolute_timeout_secs);
+            // 策略里的 absolute_timeout_secs 来自库/配置（u64 无上界），
+            // 裸加溢出即 panic——与 Session::new 同一饱和口径。
+            session.expires_at = saturating_add(
+                SystemTime::now(),
+                Duration::from_secs(p.absolute_timeout_secs),
+            );
         }
 
         let session_info = CachedSessionInfo {
