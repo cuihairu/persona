@@ -18,6 +18,8 @@
 
 - [x] Connect serve 优雅关机与解锁顺序：SIGTERM 于 serve() 入口急注册（tokio signal() 构造期装 handler，systemd stop/kill 全程走优雅路径）+ Handle 新增 stop_and_wait()（等 listener 任务含 socket 清理真正完成，消灭 fire-and-forget 在进程退出竞态里丢清理任务的问题）；serve_until 改为先起监听后解锁（health 0.90s，原4.46s；解锁前数据面如实 503 vault_locked，命中 EXTERNAL_INTEGRATION 既有重试纪律）；Ctrl-C 刻意保持惰性注册（console 密码提示 ISIG 仍开，提前接管会吞取消键——解锁窗口内 Ctrl-C 残骸由陈旧接管自愈，已实测）。附修 init 两处失实提示（persona unlock 子命令不存在；passwd 不做首启引导）。来源：用户 2026-11-08 令；修复 `b3a35de`；门禁：nextest 590 全绿 + clippy/fmt/windows-gnu 干净 + 真机SIGTERM 与计时双验证；PR #150 全 checks 绿（patch 98.57%）合并 `84bfd85`
 
+- [x] 兑现 DR-1 承诺：`connect serve` 的 systemd 用户单元样例（EN/ZH 对称，EXTERNAL_INTEGRATION 第 2 步新增 "Optional: run it under a systemd user unit" 小节：`~/.config/systemd/user/persona-connect.service` 含 WorkingDirectory（workspace 命令 local-by-default，cwd 须有 config.toml）+ `EnvironmentFile=-%h/…` 承载 PERSONA_MASTER_PASSWORD（0600、不进 argv）+ `--unix-socket` + `Restart=on-failure`/`RestartSec=5`（systemd stop = SIGTERM = 优雅关停，PR #150 语义）；行为注记：先绑定后解锁（health 即答、数据面 503 vault_locked 至 argon2 完成）、socket $XDG_RUNTIME_DIR 路径与 0600+uid 校验、陈旧 socket 自愈、headless linger。DR-1 原文"示例见 docs"改为直接回指该节；未来态 daemon 的 [Unit] 样例加区分注记防混淆。来源：用户 2026-11-08 令；修复 `3e5552c`；门禁：prettier@3.6.2 绿 + VitePress 死链构建绿；真机 systemd --user 验证（enable→health 200 1.30s、解锁前 503、stop→stopped 收尾+socket 移除，测试 unit 与密码 env 已清理）；PR #151 全绿合并 `469c1ce4`
+
 ## 未完成
 
 - [ ] mermaid 12 升级待手动评估：vitepress-plugin-mermaid@2.0.17 peer 仅支持 mermaid 10||11，#132（2026-11-06 dependabot PR 被直接合入）令 docs workflow `npm ci` ERESOLVE 红。已回退 docs mermaid→^11.17.2 并同步 package-lock（干净环境 npm ci + vitepress build 双绿验证）。重启条件：vitepress-plugin-mermaid 发布声明支持 mermaid 12 的版本（当前 latest 2.0.17 仍 10||11，2026-11-06 核）
