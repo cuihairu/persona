@@ -16,6 +16,8 @@
 
 - [x] Connect unix socket 传输的覆盖率收尾（PR #148）：serve 信号注入缝（serve_until）、Accept trait 泛型 + FlakyAccept 错误注入、peer_gate/socket_path_from 纯函数化与配套测试，补掉可覆盖缺口（patch 82.33%→**95.41%**（codecov.yml target 90%），project 由 97.13%/-0.05% 红翻 **97.20%/+0.06%** 绿（终态随 main `e46523d` 复核））；并确立 codecov.yml 政策：patch target 90%（跨平台 cfg 分支与防御性不可达行在单平台覆盖率下结构性够不到97%，真实缺口仍红），project 保持 auto 零容忍。来源：用户 2026-11-08 令（A+B+C）；代码修复 `aab309d`；门禁：connect-server 45 + cli connect 21 测试绿 + clippy -D warnings 绿 + fmt 绿 + windows-gnu --all-targets 干净
 
+- [x] Connect serve 优雅关机与解锁顺序：SIGTERM 于 serve() 入口急注册（tokio signal() 构造期装 handler，systemd stop/kill 全程走优雅路径）+ Handle 新增 stop_and_wait()（等 listener 任务含 socket 清理真正完成，消灭 fire-and-forget 在进程退出竞态里丢清理任务的问题）；serve_until 改为先起监听后解锁（health 0.90s，原4.46s；解锁前数据面如实 503 vault_locked，命中 EXTERNAL_INTEGRATION 既有重试纪律）；Ctrl-C 刻意保持惰性注册（console 密码提示 ISIG 仍开，提前接管会吞取消键——解锁窗口内 Ctrl-C 残骸由陈旧接管自愈，已实测）。附修 init 两处失实提示（persona unlock 子命令不存在；passwd 不做首启引导）。来源：用户 2026-11-08 令；修复 `b3a35de`；门禁：nextest 590 全绿 + clippy/fmt/windows-gnu 干净 + 真机SIGTERM 与计时双验证；PR #150 全 checks 绿（patch 98.57%）合并 `84bfd85`
+
 ## 未完成
 
 - [ ] mermaid 12 升级待手动评估：vitepress-plugin-mermaid@2.0.17 peer 仅支持 mermaid 10||11，#132（2026-11-06 dependabot PR 被直接合入）令 docs workflow `npm ci` ERESOLVE 红。已回退 docs mermaid→^11.17.2 并同步 package-lock（干净环境 npm ci + vitepress build 双绿验证）。重启条件：vitepress-plugin-mermaid 发布声明支持 mermaid 12 的版本（当前 latest 2.0.17 仍 10||11，2026-11-06 核）
