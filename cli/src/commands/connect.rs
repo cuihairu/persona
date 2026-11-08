@@ -411,12 +411,42 @@ async fn serve(
     unix_socket: Option<Option<std::path::PathBuf>>,
     passphrase_env: Option<&str>,
 ) -> Result<()> {
-    serve_until(config, ui, port, unix_socket, passphrase_env, async {
-        tokio::signal::ctrl_c()
-            .await
-            .context("failed to listen for Ctrl-C")
-    })
-    .await
+    // 构造即注册 SIGTERM（在起监听之前）：此后任何时刻的 systemd stop / kill
+    // 都进同一条优雅关停路径，消灭「默认信号杀进程 → unix socket 残骸」窗口。
+    let shutdown = shutdown_signal()?;
+    serve_until(config, ui, port, unix_socket, passphrase_env, shutdown).await
+}
+
+/// 生产关停信号 future。SIGTERM 与 Ctrl-C 二选一即返回 `Ok(())`。
+///
+/// - **SIGTERM**：`shutdown_signal()` 构造时同步装好 OS handler（tokio
+///   `signal()` 的 `signal_enable` 是构造期调用）——serve() 在监听启动前
+///   调用本函数，SIGTERM 在进程任何阶段都被接管；若信号发生在解锁期间，
+///   tokio 的 watch 通道缓存该投递，`shutdown.await` 一到即处理（优雅、
+///   不丢、不产生残骸）。
+/// - **Ctrl-C(SIGINT)**：刻意保持惰性（select 首次 poll 才注册）。console
+///   的密码提示只清 ECHO、ISIG 仍开启——若提示期间就接管 SIGINT，用户的
+///   Ctrl-C 会被 tokio 吞掉、提示无法取消。代价：解锁窗口内的 Ctrl-C 仍是
+///   默认退出，可能留 socket 残骸，由下次启动按陈旧接管自愈（已实测）。
+fn shutdown_signal() -> Result<impl std::future::Future<Output = Result<()>>> {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        Ok(async move {
+            tokio::select! {
+                r = tokio::signal::ctrl_c() => r.context("failed to listen for Ctrl-C"),
+                _ = term.recv() => Ok(()),
+            }
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(async {
+            tokio::signal::ctrl_c()
+                .await
+                .context("failed to listen for Ctrl-C")
+        })
+    }
 }
 
 /// `serve` 主体，「等待退出信号」参数化——这是测试缝：生产喂 Ctrl-C，
@@ -434,10 +464,14 @@ where
     F: std::future::Future<Output = Result<()>>,
 {
     let transport = resolve_transport(port, unix_socket)?;
-    let service = open_unlocked(config, ui, passphrase_env).await?;
-    let slot = std::sync::Arc::new(tokio::sync::Mutex::new(Some(service)));
+    // 先起监听、后解锁：health 立即可探测（argon2 解锁的秒级延迟不再挡在
+    // fleet 探针前面）；解锁完成前数据面如实 503 vault_locked——与「保险库
+    // 锁定」同一语义，EXTERNAL_INTEGRATION 的重试纪律（503 退避重试）已覆盖
+    // 该窗口，消费者无需感知「正在输密码」这种中间态。
+    let slot = std::sync::Arc::new(tokio::sync::Mutex::new(None));
     let handle =
-        persona_connect_server::start_connect_server_with_transport(slot, transport).await?;
+        persona_connect_server::start_connect_server_with_transport(slot.clone(), transport)
+            .await?;
     match &handle.socket_path {
         Some(path) => {
             println!(
@@ -470,8 +504,21 @@ where
             );
         }
     }
+    // 解锁（监听已就绪）。失败：先优雅关停（等端口/socket 真释放）再原样
+    // 上抛——不留「报错退出但 listener 还挂着」的半初始化状态。
+    let service = match open_unlocked(config, ui, passphrase_env).await {
+        Ok(service) => service,
+        Err(err) => {
+            handle.stop_and_wait().await;
+            return Err(err);
+        }
+    };
+    *slot.lock().await = Some(service);
+
     shutdown.await?;
-    handle.stop();
+    // stop_and_wait：等 listener 任务完成（serve 循环退出 + socket 文件已删）。
+    // fire-and-forget 的 stop 在随后的进程退出竞态里可能丢掉清理任务。
+    handle.stop_and_wait().await;
     println!("{}", "Connect listener stopped".bright_black());
     Ok(())
 }
@@ -1027,6 +1074,56 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert!(gone, "stop 后 socket 文件应移除: {}", socket.display());
+    }
+
+    /// SIGTERM 走优雅关停（systemd stop / kill 的入口）：`shutdown_signal()`
+    /// 构造期即同步装好 OS handler（tokio `signal()` 语义），此后自发 SIGTERM
+    /// 必被 tokio 接管并返回 Ok——而非默认行为直接杀死进程（那会在 unix 下
+    /// 留陈旧 socket）。Ctrl-C 刻意保持惰性注册（密码提示的 ISIG 仍开，
+    /// 提前接管会吞掉用户的取消键——见 shutdown_signal 文档）。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_signal_returns_ok_on_sigterm() {
+        let fut = shutdown_signal().expect("signal() 构造期应完成注册");
+        // 构造已完成注册，此刻的 SIGTERM 由 tokio 接管（不会杀死本测试进程）
+        unsafe {
+            libc::kill(std::process::id() as i32, libc::SIGTERM);
+        }
+        let result = fut.await;
+        assert!(result.is_ok(), "SIGTERM 应触发关停信号: {result:?}");
+    }
+
+    /// 解锁失败不留半初始化状态：错误密码 → 先优雅关停（socket 文件真实
+    /// 移除、连接被拒）再原样上抛——不存在「报错退出但 listener 还挂着」。
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn serve_until_stops_listener_when_unlock_fails() {
+        let _guard = env_guard();
+        let (_dir, config) = seeded_workspace().await;
+        std::env::set_var("PERSONA_MASTER_PASSWORD", "definitely-wrong");
+        let socket = _dir.path().join("unlock-fail.sock");
+        let result = serve_until(
+            &config,
+            &ScriptedUi::new(),
+            0,
+            Some(Some(socket.clone())),
+            None,
+            std::future::ready(Ok(())),
+        )
+        .await;
+        std::env::remove_var("PERSONA_MASTER_PASSWORD");
+
+        let err = result.expect_err("错误密码必须失败");
+        assert!(
+            err.to_string().contains("Authentication failed"),
+            "应是认证失败而非其它: {err}"
+        );
+        assert!(!socket.exists(), "解锁失败后 socket 文件必须已移除");
+        assert!(
+            tokio::net::UnixStream::connect(&socket).await.is_err(),
+            "解锁失败后连接必须被拒"
+        );
     }
 
     #[tokio::test]

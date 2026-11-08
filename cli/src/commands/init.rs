@@ -334,7 +334,9 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
                         "{} Database created, but user initialization failed",
                         "⚠".yellow().bold()
                     );
-                    println!("  You can set up authentication later using `persona passwd`");
+                    println!(
+                        "  Set up authentication later with `persona init --master-password <pw>` (first-run only; existing users are never re-initialized)"
+                    );
                 }
             }
         }
@@ -343,7 +345,9 @@ async fn initialize_database(workspace_path: &Path, master_password: Option<&str
             "{} Database created, authentication not configured",
             "✓".green().bold()
         );
-        println!("  Run 'persona unlock' to set up your master password");
+        println!(
+            "  Set the master password on first use: `persona add` will prompt for it (set PERSONA_MASTER_PASSWORD for automation)"
+        );
     }
 
     Ok(())

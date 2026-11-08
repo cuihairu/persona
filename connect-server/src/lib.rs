@@ -168,7 +168,7 @@ pub async fn start_connect_server_with_transport(
             let actual_port = listener.local_addr()?.port();
             let router = build_router(ConnectServerState::new(service));
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-            tokio::spawn(async move {
+            let closed = tokio::spawn(async move {
                 let _ = axum::serve(listener, router)
                     .with_graceful_shutdown(async {
                         let _ = shutdown_rx.await;
@@ -179,6 +179,7 @@ pub async fn start_connect_server_with_transport(
                 port: actual_port,
                 socket_path: None,
                 shutdown: shutdown_tx,
+                closed,
             })
         }
         ConnectTransport::Unix { path } => {
@@ -255,7 +256,7 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
     let router = build_router(ConnectServerState::new_unix(service));
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     let cleanup = path.clone();
-    tokio::spawn(async move {
+    let closed = tokio::spawn(async move {
         let _ = axum::serve(listener, router)
             .with_graceful_shutdown(async {
                 let _ = shutdown_rx.await;
@@ -268,6 +269,7 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
         port: 0,
         socket_path: Some(path),
         shutdown: shutdown_tx,
+        closed,
     })
 }
 
@@ -412,12 +414,27 @@ pub struct ConnectServerHandle {
     /// 陈旧接管（`persona_core::socket::is_stale_socket`）处理。
     pub socket_path: Option<PathBuf>,
     shutdown: tokio::sync::oneshot::Sender<()>,
+    /// listener 任务的收尾凭证（serve 循环结束 + socket 文件清理都在其内）。
+    closed: tokio::task::JoinHandle<()>,
 }
 
 impl ConnectServerHandle {
     /// 触发 graceful shutdown（同步发送；listener 任务自行收尾）。
+    ///
+    /// fire-and-forget：调用方**不等清理完成**。进程随后立即退出时 runtime
+    /// 会直接丢弃未跑完的清理任务（unix 下留陈旧 socket，靠下次启动接管
+    /// 自愈）——进程退出路径请用 [`Self::stop_and_wait`]。
     pub fn stop(self) {
         let _ = self.shutdown.send(());
+    }
+
+    /// 触发 graceful shutdown 并等待 listener 任务完成（含 socket 文件移除）。
+    ///
+    /// 进程退出前的正确收尾：`closed` 完成即保证端口/socket 已释放，不留
+    /// 竞态窗口（fire-and-forget 的 stop 在随后的进程退出下不保证清理）。
+    pub async fn stop_and_wait(self) {
+        let _ = self.shutdown.send(());
+        let _ = self.closed.await;
     }
 }
 
@@ -2429,22 +2446,17 @@ mod tests {
             "unix 传输缺 token 应 401: {text}"
         );
 
-        handle.stop();
-        // graceful shutdown 后 socket 文件移除、连接被拒（轮询而非 sleep 猜时长）
-        let removed = async {
-            for _ in 0..100 {
-                if !path.exists() && tokio::net::UnixStream::connect(&path).await.is_err() {
-                    return true;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            false
-        }
-        .await;
+        // stop_and_wait：等 listener 任务完成 = serve 循环退出 + socket 文件
+        // 已删（fire-and-forget 的 stop 会把清理留在进程退出的竞态里）。
+        handle.stop_and_wait().await;
         assert!(
-            removed,
-            "stop() 后 socket 文件应移除且不可连接: {}",
+            !path.exists(),
+            "stop_and_wait 返回后 socket 文件必须已移除: {}",
             path.display()
+        );
+        assert!(
+            tokio::net::UnixStream::connect(&path).await.is_err(),
+            "stop_and_wait 返回后连接必须被拒"
         );
     }
 
