@@ -288,12 +288,25 @@ mod tests {
             .await
             .unwrap();
         db.migrate().await.unwrap();
-        let service = new_service(db).await.unwrap();
+        let mut service = new_service(db).await.unwrap();
         assert_eq!(
             service.inactivity_timeout_secs(),
             u64::MAX,
             "0 配置应映射为永不自动锁"
         );
+        // 回归：曾在此 panic——Session::new 的 `now + Duration::MAX` 溢出
+        // （core/auth/session.rs:58，serve status=101 反复重启）。真实
+        // 解锁路径必须走通且保持解锁态。
+        // 密码用运行时拼接而非字面量：CodeQL rust/hard-coded-cryptographic-
+        // value 会把流入 initialize_user/authenticate_user 的字符串字面量
+        // 标为 critical（本 PR 实测，annotations cli/service.rs:300/302）。
+        let master = format!("autolock-test-{}", std::process::id());
+        service.initialize_user(&master).await.unwrap();
+        service
+            .authenticate_user(&master)
+            .await
+            .expect("MAX 超时下 authenticate 不得 panic");
+        assert!(service.is_unlocked(), "0 = 永不自动锁应保持解锁态");
 
         init_auto_lock_from_config(120);
         let db = Database::from_file(&dir.path().join("identities.db"))
