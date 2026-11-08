@@ -111,6 +111,12 @@ of inactivity (workspace `config.toml`, default `300`; **`0` = never**). While
 locked the data plane answers `503` (error code table) while `health` keeps
 answering — set `auto_lock_timeout = 0` for unattended `connect serve`.
 
+Authenticated Connect requests also refresh the session's sensitive-operation
+timer: the scoped token **is** the re-authentication (revocable, expiring,
+audited), so the desktop's force-lock-on-sensitive-timeout policy does not
+apply to this surface — an unattended consumer can keep reading secrets
+indefinitely.
+
 - The listener process is decoupled from the consumer process: token validation
   happens per request, and a locked vault returns 503 (see the error code table).
 

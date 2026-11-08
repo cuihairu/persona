@@ -279,6 +279,34 @@ impl AutoLockManager {
         }
     }
 
+    /// 刷新敏感活动与活动计时，并解除敏感超时造成的会话锁
+    /// （**不做 force-lock 判定**）。
+    ///
+    /// 仅供 token 鉴权面（Connect 中间件每请求调用）：scoped token 即
+    /// 再认证（可撤销、有到期、审计在案），桌面端「敏感操作超时 → 锁会话
+    /// 要求再认证」的 `force_lock_sensitive` 语义对 token 面不适用——否则
+    /// 无人值守 serve 在登录 5 分钟后的首个读密文请求永久 500 且无再认证
+    /// 入口（实测：fleet-apply --check 撞 `update_sensitive_activity`）。
+    pub async fn refresh_sensitive(&self, session_id: &str) -> Result<(), String> {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session_info) = sessions.get_mut(session_id) {
+            session_info.session.touch_sensitive();
+            session_info.session.unlock(); // 解除敏感超时锁 + 刷活动计时
+            Ok(())
+        } else {
+            Err("Session not found".to_string())
+        }
+    }
+
+    /// 测试用：把会话的敏感活动时间拨到 `ago` 之前（同 crate 单测可见）。
+    #[cfg(test)]
+    pub(crate) async fn backdate_sensitive_for_test(&self, session_id: &str, ago: Duration) {
+        let mut sessions = self.sessions.write().await;
+        if let Some(session_info) = sessions.get_mut(session_id) {
+            session_info.session.backdate_sensitive_for_test(ago);
+        }
+    }
+
     /// Update sensitive operation activity
     pub async fn update_sensitive_activity(&self, session_id: &str) -> Result<(), String> {
         let (force_lock_sensitive, sensitive_timeout_secs) = {

@@ -81,6 +81,10 @@ persona connect serve --unix-socket /run/user/1000/p.sock   # 显式 socket 路�
 错误码表）而 `health` 照常应答——无人值守的 `connect serve` 请设
 `auto_lock_timeout = 0`。
 
+经鉴权的 Connect 请求同时刷新会话的敏感操作计时：scoped token **本身就是**
+再认证（可撤销、有到期、有审计），因此桌面端「敏感操作超时 → 锁会话要求再
+认证」的强制锁定语义不适用于本面——无人值守消费方可以持续读取秘密。
+
 - listener 进程与消费者进程解耦：token 校验每请求进行，保险库锁定时返回 503（见错误码表）。
 
 #### 可选：以 systemd 用户单元运行
