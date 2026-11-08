@@ -109,6 +109,63 @@ non-interactive unlock story see [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_M
 - The listener process is decoupled from the consumer process: token validation
   happens per request, and a locked vault returns 503 (see the error code table).
 
+#### Optional: run it under a systemd user unit
+
+`connect serve` stays a foreground command by design — no daemonization (DR-1
+in [`CONNECT_AUTOMATION_DESIGN.md`](./CONNECT_AUTOMATION_DESIGN.md): the
+unlocked state lives inside the host process). Starting it with your login
+session is therefore _your_ unit to configure; this is the promised example:
+
+```ini
+# ~/.config/systemd/user/persona-connect.service
+[Unit]
+Description=Persona Connect API (local automation endpoint)
+
+[Service]
+# Workspace commands are local-by-default: they need a config.toml in the
+# current working directory (or an explicit --config). Point cwd at the
+# workspace you initialized with `persona init`.
+WorkingDirectory=%h/.persona
+# Master password for the unlock step — one variable, never on the command line.
+#   printf '%s\n' 'PERSONA_MASTER_PASSWORD=...' > ~/.config/persona-connect.env
+#   chmod 600 ~/.config/persona-connect.env
+# The leading '-' makes the file optional for systemd; if the password ends up
+# unavailable anyway, serve fails at unlock (no TTY to prompt on) and exits.
+EnvironmentFile=-%h/.config/persona-connect.env
+# Adjust to wherever the `persona` binary is installed.
+ExecStart=%h/.local/bin/persona connect serve --unix-socket
+# systemd stop sends SIGTERM -> graceful shutdown: the listener task finishes,
+# the socket file is removed, exit 0. Restart only on crashes; RestartSec keeps
+# a wrong/missing password from becoming a tight restart loop.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now persona-connect.service
+systemctl --user stop persona-connect.service   # graceful: socket file removed
+```
+
+Behavior notes:
+
+- **Bind precedes unlock**: `/health` answers as soon as the unit is up, while
+  the data plane returns `503 vault_locked` until the argon2 unlock completes a
+  few seconds later. Consumers treat it exactly like a locked vault — retry
+  with backoff (see the error code table).
+- `--unix-socket` binds `$XDG_RUNTIME_DIR/persona/connect.sock` (systemd user
+  units get `XDG_RUNTIME_DIR`); the socket file is `0600` **and** every accepted
+  connection is uid-checked at accept time, so no TCP port is opened.
+- A crash that leaves a stale socket file (SIGKILL, OOM) self-heals: the next
+  start takes it over. Normal stops — including `systemctl --user stop` —
+  remove the file.
+- Headless host: `loginctl enable-linger $USER` keeps the unit running without
+  an interactive login; the password must then come from the `EnvironmentFile`
+  (there is no TTY to prompt on).
+
 Calling over the socket:
 
 ```bash
