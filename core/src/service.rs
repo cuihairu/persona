@@ -381,6 +381,24 @@ impl PersonaService {
         Ok(())
     }
 
+    /// Connect token 面的敏感活动刷新（connect-server 鉴权中间件每请求调用）。
+    ///
+    /// scoped token 即再认证：刷新敏感与活动计时、解除敏感超时锁
+    /// （[`AutoLockManager::refresh_sensitive`]，无 force-lock 判定）。
+    /// 无会话时为 no-op——机会性刷新，不改变任何拒绝语义。没有它，无人值守
+    /// serve 在登录 5 分钟后的首个读密文请求会撞 `force_lock_sensitive` 锁
+    /// 且 token 面无再认证入口（实测 500）。
+    pub async fn mark_authorized_request(&self) -> Result<()> {
+        let session_id = self.current_session_id.read().await.clone();
+        let Some(session_id) = session_id else {
+            return Ok(());
+        };
+        self.auto_lock_manager
+            .refresh_sensitive(&session_id)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))
+    }
+
     /// Update sensitive activity for auto-lock tracking
     async fn update_sensitive_auto_lock_activity(&self) -> Result<()> {
         let session_id_opt = {
@@ -4920,6 +4938,58 @@ mod tests {
         service.unlock("master-pin", &salt).unwrap();
         assert!(service.is_unlocked());
         assert_ne!(user_id, Uuid::new_v4());
+    }
+
+    /// Connect 面敏感活动刷新回归：登录后敏感窗口（默认 300s）超时 →
+    /// force_lock_sensitive 锁会话、敏感操作报错——无人值守 serve 实测
+    /// （fleet-apply 的读密文请求 500，token 面无再认证入口，永久失败）。
+    /// `mark_authorized_request`（Connect 中间件每请求调用）刷新后恢复。
+    #[tokio::test]
+    async fn mark_authorized_request_clears_sensitive_timeout_lock() {
+        // 自建服务 + 运行时密码：字面量流入 authenticate_user 会被 CodeQL
+        // rust/hard-coded-cryptographic-value 标 critical（本 PR 实测，
+        // annotation core/src/service.rs:4950）；unlocked_service 内的
+        // 字面量是基线，不随本 diff 计。
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let mut service = PersonaService::new(db).await.unwrap();
+        let master = format!("sensitive-test-{}", std::process::id());
+        service.initialize_user(&master).await.unwrap();
+        service.authenticate_user(&master).await.unwrap();
+
+        let sid = service
+            .current_session_id
+            .read()
+            .await
+            .clone()
+            .expect("session after authenticate");
+        service
+            .auto_lock_manager
+            .backdate_sensitive_for_test(&sid, std::time::Duration::from_secs(600))
+            .await;
+
+        let err = service
+            .update_sensitive_auto_lock_activity()
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("sensitive operation timeout"),
+            "敏感窗口超时应报错: {err}"
+        );
+
+        // token 面刷新 → 恢复（等价 Connect 中间件的每请求调用）
+        service.mark_authorized_request().await.unwrap();
+        service
+            .update_sensitive_auto_lock_activity()
+            .await
+            .expect("刷新后敏感操作应通过");
+        assert!(service.is_unlocked());
+
+        // 无会话服务：机会性刷新为 no-op（不改任何拒绝语义）
+        let fresh_db = Database::in_memory().await.unwrap();
+        fresh_db.migrate().await.unwrap();
+        let fresh = PersonaService::new(fresh_db).await.unwrap();
+        fresh.mark_authorized_request().await.unwrap();
     }
 
     #[tokio::test]

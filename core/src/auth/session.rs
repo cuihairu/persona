@@ -86,6 +86,13 @@ impl Session {
         !self.locked && SystemTime::now() < self.expires_at
     }
 
+    /// 测试用：把敏感活动时间拨到 `ago` 之前（模拟敏感窗口超时）。
+    /// 仅同 crate 单测可见——生产没有「让时间倒流」的需求。
+    #[cfg(test)]
+    pub(crate) fn backdate_sensitive_for_test(&mut self, ago: Duration) {
+        self.last_sensitive_op = Some(SystemTime::now() - ago);
+    }
+
     /// Check if the session is expired (time-based only)
     pub fn is_expired(&self) -> bool {
         SystemTime::now() >= self.expires_at

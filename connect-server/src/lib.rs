@@ -641,6 +641,20 @@ async fn guard(
         );
     }
 
+    // token 已鉴权 + 已解锁：把本次请求记为敏感活动——scoped token 即再
+    // 认证（可撤销、有到期、审计在案），桌面端 force_lock_sensitive（敏感
+    // 超时 → 锁会话要求再认证）对 token 面不适用，否则登录 5 分钟后的首个
+    // 读密文请求永久 500 且无再认证入口。机会性刷新：失败仅 debug，不改变
+    // 任何拒绝语义。
+    {
+        let service_guard = state.service.lock().await;
+        if let Some(service) = service_guard.as_ref() {
+            if let Err(e) = service.mark_authorized_request().await {
+                tracing::debug!("sensitive-activity refresh skipped: {e}");
+            }
+        }
+    }
+
     request.extensions_mut().insert(row);
     normalize_framework_error(next.run(request).await).await
 }
