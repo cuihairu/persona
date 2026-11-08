@@ -10,7 +10,9 @@ use crate::config::CliConfig;
 use crate::utils::core_ext::CoreResultExt;
 use crate::utils::prompt::PromptUi;
 use persona_core::{AuditLog, Database, Emitter, PersonaService, ServerEventSink};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 /// 进程级审计事件上报器。
 ///
@@ -19,6 +21,33 @@ use std::sync::{Arc, OnceLock};
 /// 配置文件通道，避免令牌落盘）。core 不读环境变量——读取与构造
 /// 都在宿主侧完成。
 static EVENT_EMITTER: OnceLock<Emitter> = OnceLock::new();
+
+/// 进程级 auto-lock 空闲超时（秒；**0 = 永不自动锁**）。
+///
+/// main 在加载配置后按 `security.auto_lock_timeout` 写入，[`new_service`]
+/// 构造每个服务时应用。该字段此前只被写入 config.toml 与测试读取、从未
+/// 接进运行时——`connect serve` 因此恒用 PersonaService 硬编码默认 300s
+/// 空闲即锁，headless 无人值守场景数据面 5 分钟后全 503 且无人能重开。
+/// 默认 300 = core 硬编码默认，未调用 init 时行为不变。
+static AUTO_LOCK_TIMEOUT_SECS: AtomicU64 = AtomicU64::new(300);
+
+/// main 在 dispatch 前调用：把配置的空闲自动锁超时装进进程全局。
+pub(crate) fn init_auto_lock_from_config(secs: u64) {
+    AUTO_LOCK_TIMEOUT_SECS.store(secs, Ordering::Relaxed);
+}
+
+/// 配置秒数 → 服务端时长。**0 映射为 `Duration::MAX`（禁用）**：
+/// `is_unlocked` 判定是 `last_activity.elapsed() < timeout`，直接给
+/// `Duration::ZERO` 会变成「永远已过期」——反而必锁；`AutoLockConfig`
+/// 侧文档语义同为「0 = disabled」（其守卫是 `>0` 才检查），MAX 在两条
+/// 判定路径下都等价于禁用。
+fn auto_lock_duration(secs: u64) -> Duration {
+    if secs == 0 {
+        Duration::MAX
+    } else {
+        Duration::from_secs(secs)
+    }
+}
 
 /// main 在 dispatch 前调用：按环境变量构造全局上报器并启动后台 flush。
 pub(crate) fn init_event_emitter_from_env() {
@@ -79,6 +108,11 @@ fn event_emitter() -> Option<Emitter> {
 /// 链不变。
 pub(crate) async fn new_service(db: Database) -> persona_core::Result<PersonaService> {
     let mut service = PersonaService::new(db).await?;
+    // 应用进程级 auto-lock 配置。必须在 authenticate_user 之前——session
+    // 以 self.auto_lock_timeout 构造，晚设就管不住本次登录的会话。
+    service.set_auto_lock_timeout(auto_lock_duration(
+        AUTO_LOCK_TIMEOUT_SECS.load(Ordering::Relaxed),
+    ));
     if let Some(emitter) = event_emitter() {
         service.set_event_emitter(Some(emitter));
     }
@@ -224,6 +258,50 @@ mod tests {
                 .unwrap_or_else(|e| e.into_inner()),
             ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()),
         )
+    }
+
+    /// auto_lock_duration 的映射：0 = 永不自动锁（Duration::MAX），非 0 原样。
+    /// 0 若直译成 ZERO，`is_unlocked`（elapsed < timeout）会永远 false——
+    /// 「禁用」变「必锁」，这是本修复要避开的核心陷阱。
+    #[test]
+    fn auto_lock_duration_maps_zero_to_never() {
+        assert_eq!(auto_lock_duration(0), Duration::MAX);
+        assert_eq!(auto_lock_duration(1), Duration::from_secs(1));
+        assert_eq!(auto_lock_duration(300), Duration::from_secs(300));
+    }
+
+    /// new_service 应用进程级配置：init → 构造 → 断言 → RAII 恢复默认
+    /// （不留全局态给同进程其它 new_service 测试）。
+    #[tokio::test]
+    async fn new_service_applies_configured_auto_lock() {
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                init_auto_lock_from_config(300);
+            }
+        }
+        let _restore = Restore;
+
+        init_auto_lock_from_config(0);
+        let dir = TempDir::new().unwrap();
+        let db = Database::from_file(&dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let service = new_service(db).await.unwrap();
+        assert_eq!(
+            service.inactivity_timeout_secs(),
+            u64::MAX,
+            "0 配置应映射为永不自动锁"
+        );
+
+        init_auto_lock_from_config(120);
+        let db = Database::from_file(&dir.path().join("identities.db"))
+            .await
+            .unwrap();
+        db.migrate().await.unwrap();
+        let service = new_service(db).await.unwrap();
+        assert_eq!(service.inactivity_timeout_secs(), 120);
     }
 
     #[test]

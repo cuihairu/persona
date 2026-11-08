@@ -76,6 +76,11 @@ persona connect serve --unix-socket /run/user/1000/p.sock   # 显式 socket 路�
 （须已设且非空），桌面版在设置里开关。非交互解锁的完整说明见
 [`NON_INTERACTIVE_MODE.md`](./NON_INTERACTIVE_MODE.md)。
 
+解锁会话会在空闲 `security.auto_lock_timeout` 秒后**自动上锁**（工作区
+`config.toml`，默认 `300`；**`0` = 永不**）。锁定期间数据面返回 `503`（见
+错误码表）而 `health` 照常应答——无人值守的 `connect serve` 请设
+`auto_lock_timeout = 0`。
+
 - listener 进程与消费者进程解耦：token 校验每请求进行，保险库锁定时返回 503（见错误码表）。
 
 #### 可选：以 systemd 用户单元运行

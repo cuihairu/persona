@@ -172,6 +172,8 @@ async fn main() -> Result<()> {
 
     // Execute command
     commands::service::init_event_emitter_from_env();
+    // 空闲自动锁超时随配置生效（0 = 永不；见 service.rs 的全局注释）
+    commands::service::init_auto_lock_from_config(config.security.auto_lock_timeout);
     let result = match cli.command {
         Commands::Init(args) => commands::init::execute(args, &config).await,
         Commands::Bridge(args) => commands::bridge::execute(args).await,
