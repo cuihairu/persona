@@ -664,8 +664,9 @@ mod tests {
     use crate::utils::prompt::scripted::ScriptedUi;
     use base64::Engine;
     use persona_core::models::{
-        ApiKeyData, CredentialType, IdentityType, PasswordCredentialData, SecureNoteData,
-        SecurityLevel, SshKeyData, TwoFactorData,
+        ApiKeyData, BankCardData, CredentialType, CryptoWalletData, IdentityType,
+        PasswordCredentialData, SecureNoteData, SecurityLevel, ServerConfigData,
+        SoftwareLicenseData, SshKeyData, TwoFactorData,
     };
     use persona_core::Repository;
 
@@ -1165,5 +1166,395 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{err:#}").contains("must be a string REF"), "{err}");
+    }
+
+    // ---- 字段词汇表（纯函数全分支走查） ----
+
+    /// 每种有独立字段词汇的凭据类型一个样本；可选字段全部 Some，
+    /// 保证词汇表内每个字段都能取到值（unset 分支由错误路径测试覆盖）。
+    fn sample_of_each_variant() -> Vec<(&'static str, CredentialData)> {
+        vec![
+            (
+                "password",
+                CredentialData::Password(PasswordCredentialData {
+                    password: "p".into(),
+                    email: Some("e@x.io".into()),
+                    security_questions: vec![],
+                }),
+            ),
+            (
+                "api_key",
+                CredentialData::ApiKey(ApiKeyData {
+                    api_key: "k".into(),
+                    api_secret: Some("s".into()),
+                    token: Some("t".into()),
+                    permissions: vec![],
+                    expires_at: None,
+                }),
+            ),
+            (
+                "two_factor",
+                CredentialData::TwoFactor(TwoFactorData {
+                    secret_key: "SEED".into(),
+                    issuer: "github".into(),
+                    account_name: "alice".into(),
+                    algorithm: "SHA1".into(),
+                    digits: 6,
+                    hotp: None,
+                    initial_counter: None,
+                    period: 30,
+                }),
+            ),
+            (
+                "ssh_key",
+                CredentialData::SshKey(SshKeyData {
+                    private_key: "PRIVATE".into(),
+                    public_key: "PUBLIC".into(),
+                    key_type: "ed25519".into(),
+                    passphrase: Some("pp".into()),
+                }),
+            ),
+            (
+                "bank_card",
+                CredentialData::BankCard(BankCardData {
+                    card_number: "4111".into(),
+                    cardholder_name: "Alice".into(),
+                    expiry_date: "12/30".into(),
+                    cvv: "123".into(),
+                    bank_name: "Bank".into(),
+                    card_type: "visa".into(),
+                }),
+            ),
+            (
+                "server_config",
+                CredentialData::ServerConfig(ServerConfigData {
+                    hostname: "host".into(),
+                    ip_address: Some("10.0.0.2".into()),
+                    port: 2222,
+                    protocol: "ssh".into(),
+                    username: "root".into(),
+                    password: Some("pw".into()),
+                    ssh_key_id: None,
+                    additional_config: Default::default(),
+                }),
+            ),
+            (
+                "secure_note",
+                CredentialData::SecureNote(SecureNoteData { note: "n".into() }),
+            ),
+            (
+                "crypto_wallet",
+                CredentialData::CryptoWallet(CryptoWalletData {
+                    wallet_type: "bip39".into(),
+                    mnemonic_phrase: Some("m".into()),
+                    private_key: Some("pk".into()),
+                    public_key: "pub".into(),
+                    address: "0xabc".into(),
+                    network: "ethereum".into(),
+                    bip39_passphrase: None,
+                    item_password_hash: None,
+                    item_password_hint: None,
+                }),
+            ),
+            (
+                "software_license",
+                CredentialData::SoftwareLicense(SoftwareLicenseData {
+                    license_key: "LIC".into(),
+                    version: Some("2.0".into()),
+                    publisher: Some("Soft".into()),
+                    purchase_date: Some("2026-01-01".into()),
+                    order_number: Some("ORD".into()),
+                    support_email: Some("s@x.io".into()),
+                    download_url: Some("https://d.x.io".into()),
+                    seats: Some(3),
+                    valid_until: Some("2027-01-01".into()),
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn extract_and_field_tables_cover_every_variant() {
+        let samples = sample_of_each_variant();
+        assert_eq!(samples.len(), 9, "every typed variant must be sampled");
+        for (kind, data) in &samples {
+            let fields = data_fields_of(data);
+            assert!(!fields.is_empty(), "{kind} must list its vocabulary");
+            for field in fields {
+                // 命中字段且样本全 Some → 必取到值；各类型的值分支全走一遍
+                let value = extract_data_field(data, field)
+                    .unwrap_or_else(|e| panic!("{kind}/{field} listed but errored: {e}"));
+                assert!(value.is_some(), "{kind}/{field} unset in sample");
+            }
+            // 词汇表之外的字段 → 各类型自己的 _ 分支 → Ok(None)
+            assert_eq!(
+                extract_data_field(data, "no_such_field").unwrap(),
+                None,
+                "{kind} unknown field must read as absent"
+            );
+            // 主秘密别名必须落在该类型词汇表内；BankCard 无主秘密别名
+            // （resolve 走"无主秘密字段"分支），只查词汇表
+            if let Some(primary) = primary_secret_field(data) {
+                assert!(
+                    fields.contains(&primary),
+                    "{kind} primary secret {primary:?} missing from vocabulary"
+                );
+            }
+        }
+        // 无主秘密别名的类型（resolve 会报 no primary secret field）
+        let bank_card = samples
+            .iter()
+            .find(|(k, _)| *k == "bank_card")
+            .map(|(_, d)| d)
+            .unwrap();
+        assert!(
+            primary_secret_field(bank_card).is_none(),
+            "bank_card must have no primary secret alias"
+        );
+
+        // 无词汇/无主秘密的类型（Raw 命中两个 catch-all 与未知字段分支）
+        assert_eq!(data_fields_of(&CredentialData::Raw(vec![])), &[] as &[&str]);
+        assert_eq!(primary_secret_field(&CredentialData::Raw(vec![])), None);
+        assert_eq!(
+            extract_data_field(&CredentialData::Raw(vec![]), "x").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_data_field_unset_optional_fields_are_errors_not_empty_strings() {
+        let api = CredentialData::ApiKey(ApiKeyData {
+            api_key: "k".into(),
+            api_secret: None,
+            token: None,
+            permissions: vec![],
+            expires_at: None,
+        });
+        for field in ["api_secret", "token"] {
+            let err = extract_data_field(&api, field).unwrap_err();
+            assert!(format!("{err:#}").contains("is not set"), "{err}");
+        }
+        // 非字符串化字段（port 数字 → to_string 分支）也走统一出口
+        let mut server = ServerConfigData {
+            hostname: "h".into(),
+            ip_address: None,
+            port: 22,
+            protocol: "ssh".into(),
+            username: "u".into(),
+            password: None,
+            ssh_key_id: None,
+            additional_config: Default::default(),
+        };
+        let port =
+            extract_data_field(&CredentialData::ServerConfig(server.clone()), "port").unwrap();
+        assert_eq!(port, Some("22".to_string()));
+        server.port = 0;
+        let port = extract_data_field(&CredentialData::ServerConfig(server), "port").unwrap();
+        assert_eq!(port, Some("0".to_string()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn resolve_metadata_unset_url_and_notes_bail() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        service.authenticate_user("master-pin").await.unwrap();
+
+        // deploy（ApiKey）未设置 url / notes：缺省元数据同样拒绝空串
+        for field in ["url", "notes"] {
+            let err = resolve_ref(
+                &service,
+                &SecretRef::parse(&format!("work/deploy/{field}")).unwrap(),
+            )
+            .await
+            .unwrap_err();
+            assert!(format!("{err:#}").contains("is not set"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn secret_alias_without_primary_lists_valid_fields() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+        let db = Database::from_file(config.get_database_path())
+            .await
+            .unwrap();
+        let mut service = crate::commands::service::new_service(db).await.unwrap();
+        service.authenticate_user("master-pin").await.unwrap();
+        let identity = service.get_identity_by_name("work").await.unwrap().unwrap();
+        service
+            .create_credential(
+                identity.id,
+                "bank".to_string(),
+                CredentialType::BankCard,
+                SecurityLevel::High,
+                &CredentialData::BankCard(BankCardData {
+                    card_number: "4111".into(),
+                    cardholder_name: "Alice".into(),
+                    expiry_date: "12/30".into(),
+                    cvv: "123".into(),
+                    bank_name: "Bank".into(),
+                    card_type: "visa".into(),
+                }),
+            )
+            .await
+            .unwrap();
+
+        // BankCard 没有主秘密别名：报错要列出合法字段
+        let err = execute_with(
+            resolve_args(&["work/bank/secret"]),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no primary secret field"), "{msg}");
+        assert!(msg.contains("card_number"), "{msg}");
+    }
+
+    // ---- 解锁链错误分支 ----
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn open_unlocked_rejects_uninitialized_workspace() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let dir = tempfile::tempdir().unwrap();
+        let err = execute_with(
+            resolve_args(&["work/x/y"]),
+            &config_for(&dir),
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("Workspace not initialized"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn open_unlocked_rejects_wrong_master_password() {
+        let _guard = env_guard();
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "totally-wrong");
+        let (_dir, config) = seeded_workspace().await;
+        let err = execute_with(
+            resolve_args(&["work/login/password"]),
+            &config,
+            &ScriptedUi::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("Authentication failed"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn top_level_execute_routes_through_terminal_ui() {
+        let _guard = env_guard();
+        // PERSONA_MASTER_PASSWORD 优先于 ui 提示：TerminalUi 不会触交互
+        let _pw = EnvVar::set("PERSONA_MASTER_PASSWORD", "master-pin");
+        let (_dir, config) = seeded_workspace().await;
+        execute(resolve_args(&["work/login/name"]), &config)
+            .await
+            .unwrap();
+    }
+
+    // ---- run / k8s 入参校验（解锁前的 bail） ----
+
+    #[tokio::test]
+    async fn run_rejects_empty_command_before_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = SecretsArgs {
+            command: SecretsCommand::Run {
+                env: vec![],
+                command: vec![],
+            },
+        };
+        let err = execute_with(args, &config_for(&dir), &ScriptedUi::new())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("run requires a command"),
+            "{err}"
+        );
+    }
+
+    /// k8s 各入参校验在解锁前就 bail：config 指向空目录即可。
+    async fn k8s_validation_run(
+        config: &CliConfig,
+        name: &str,
+        namespace: Option<&str>,
+        keys: &[&str],
+        labels: &[&str],
+    ) -> Result<()> {
+        execute_with(
+            SecretsArgs {
+                command: SecretsCommand::K8s {
+                    name: name.to_string(),
+                    namespace: namespace.map(str::to_string),
+                    keys: keys.iter().map(|s| s.to_string()).collect(),
+                    labels: labels.iter().map(|s| s.to_string()).collect(),
+                    annotations: vec![],
+                },
+            },
+            config,
+            &ScriptedUi::new(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn k8s_input_validation_bails_before_unlock() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_for(&dir);
+
+        let err = k8s_validation_run(&config, "bad name", None, &["k=work/x/y"], &[])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not a valid Kubernetes object name"),
+            "{err}"
+        );
+
+        let err = k8s_validation_run(&config, "app", Some("bad ns"), &["k=work/x/y"], &[])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("not a valid namespace name"),
+            "{err}"
+        );
+
+        let err = k8s_validation_run(&config, "app", None, &[], &[])
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("at least one --key"), "{err}");
+
+        let err = k8s_validation_run(&config, "app", None, &["bad key=work/x/y"], &[])
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("has an invalid key"), "{err}");
+
+        let err = k8s_validation_run(&config, "app", None, &["noequals"], &[])
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("must be KEY=REF"), "{err}");
+
+        let err = k8s_validation_run(&config, "app", None, &["k=work/x/y"], &["bad label=v"])
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("invalid key"), "{err}");
     }
 }
