@@ -955,18 +955,22 @@ mod tests {
             body: String,
         }
 
+        /// 内存双向信箱（假 relay 的状态面；句柄供测试直接注错/注入消息）。
+        #[derive(Default)]
+        struct Mailbox {
+            salt: Option<Vec<u8>>,
+            to_host: Vec<Vec<u8>>,
+            to_guest: Vec<Vec<u8>>,
+        }
+
         /// 一次性 TCP 假 relay：内存双向信箱，路由与 server /pairing/* 一致。
-        fn spawn_mock_relay() -> String {
-            #[derive(Default)]
-            struct Mailbox {
-                salt: Option<Vec<u8>>,
-                to_host: Vec<Vec<u8>>,
-                to_guest: Vec<Vec<u8>>,
-            }
+        /// 返回 (base_url, 信箱句柄)。
+        fn spawn_mock_relay() -> (String, Arc<Mutex<Mailbox>>) {
             use base64::Engine as _;
             let state = Arc::new(Mutex::new(Mailbox::default()));
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let addr = listener.local_addr().unwrap();
+            let server_state = state.clone();
             std::thread::spawn(move || {
                 for stream in listener.incoming() {
                     let Ok(mut stream) = stream else { break };
@@ -1003,7 +1007,7 @@ mod tests {
                         body: String::from_utf8_lossy(&body).into_owned(),
                     };
                     let (status, resp_body) = {
-                        let mut st = state.lock().unwrap();
+                        let mut st = server_state.lock().unwrap();
                         let b64d =
                             |v: &str| base64::engine::general_purpose::STANDARD.decode(v).unwrap();
                         let b64e = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
@@ -1054,12 +1058,12 @@ mod tests {
                     let _ = stream.write_all(resp.as_bytes());
                 }
             });
-            format!("http://{addr}")
+            (format!("http://{addr}"), state)
         }
 
         #[tokio::test]
         async fn relay_client_drives_full_pairing_over_http_mock() {
-            let base_url = spawn_mock_relay();
+            let (base_url, _mailbox) = spawn_mock_relay();
             let client = PairingRelayClient::new(&base_url).unwrap();
 
             let (mut host, invite) = PairingHost::new_invite().unwrap();
@@ -1110,6 +1114,70 @@ mod tests {
             assert!(PairingRelayClient::new("http://[::1]:8000").is_ok());
             // https:// always allowed.
             assert!(PairingRelayClient::new("https://relay.example.com").is_ok());
+            // URL 本身不可解析 → 配置错误
+            assert!(PairingRelayClient::new("not a url at all").is_err());
+        }
+
+        #[tokio::test]
+        async fn join_begin_rejects_wrong_salt_length() {
+            let (base_url, mailbox) = spawn_mock_relay();
+            let client = PairingRelayClient::new(&base_url).unwrap();
+            let (_host, invite) = PairingHost::new_invite().unwrap();
+            let (session_id, _ttl) = client.create_session(&invite.salt).await.unwrap();
+
+            // 中转被篡改：session_info 回短 salt → join_begin 拒绝
+            mailbox.lock().unwrap().salt = Some(vec![0u8; 8]);
+            let link = PairingInviteLink {
+                code: invite.code,
+                relay_url: base_url,
+                session_id,
+            };
+            let Err(err) = client.join_begin(&link).await else {
+                panic!("join_begin must fail on wrong salt length");
+            };
+            assert!(err.to_string().contains("salt"), "got: {err}");
+        }
+
+        #[tokio::test]
+        async fn join_confirm_without_begin_is_rejected() {
+            let (base_url, _mailbox) = spawn_mock_relay();
+            let client = PairingRelayClient::new(&base_url).unwrap();
+            let (_host, invite) = PairingHost::new_invite().unwrap();
+            let (session_id, _ttl) = client.create_session(&invite.salt).await.unwrap();
+
+            // 未走 join_begin：guest 手里没有待投 M1 → join_confirm 拒绝
+            let (mut guest, _offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
+            let err = client
+                .join_confirm(&mut guest, &session_id)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("join_begin"), "got: {err}");
+        }
+
+        #[tokio::test]
+        async fn drive_host_rejects_out_of_order_message() {
+            let (base_url, _mailbox) = spawn_mock_relay();
+            let client = PairingRelayClient::new(&base_url).unwrap();
+            let (mut host, invite) = PairingHost::new_invite().unwrap();
+            let (session_id, _ttl) = client.create_session(&invite.salt).await.unwrap();
+
+            // 直接往 to-host 信箱塞一条方向/时序错的消息 → drive_host 报错退出
+            client
+                .post_to_host(
+                    &session_id,
+                    &PairingMessage::Handoff {
+                        server_proof: "AA".into(),
+                        wrapped_group_key: "AA".into(),
+                    },
+                )
+                .await
+                .unwrap();
+            let group_key: [u8; 32] = rand::random();
+            let err = client
+                .drive_host(&mut host, &group_key, &session_id)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("不接受"), "got: {err}");
         }
     }
 
@@ -1362,5 +1430,58 @@ mod tests {
         let err = host.accept_join(&offer2.client_public).unwrap_err();
         assert!(matches!(err, PersonaError::InvalidInput(_)));
         drop((guest, guest2));
+    }
+
+    #[test]
+    fn wrapped_group_key_with_bad_length_is_rejected() {
+        let err = open_group_key_with(&[0u8; 32], &[0u8; 10]).unwrap_err();
+        assert!(matches!(err, PersonaError::CryptographicError(_)));
+    }
+
+    #[test]
+    fn guest_finish_twice_is_rejected() {
+        let (mut host, invite) = PairingHost::new_invite().unwrap();
+        let (mut guest, offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
+        let host_offer = host.accept_join(&offer.client_public).unwrap();
+        guest.finish(&host_offer.server_public).unwrap();
+        let err = guest.finish(&host_offer.server_public).unwrap_err();
+        assert!(matches!(err, PersonaError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn protocol_rejects_wrong_direction_messages() {
+        let group_key: [u8; 32] = rand::random();
+
+        // host 侧只收 ClientPublic/ClientProof：Handoff 拒收
+        let (mut host, invite) = PairingHost::new_invite().unwrap();
+        let err = host
+            .handle_message(
+                PairingMessage::Handoff {
+                    server_proof: "AA".into(),
+                    wrapped_group_key: "AA".into(),
+                },
+                &group_key,
+            )
+            .unwrap_err();
+        assert!(matches!(err, PersonaError::InvalidInput(_)));
+
+        // guest 侧只收 ServerOffer/Handoff：ClientProof 拒收
+        let (mut guest, _offer) = PairingGuest::start(&invite.code, &invite.salt).unwrap();
+        let err = guest
+            .handle_message(PairingMessage::ClientProof {
+                client_proof: "AA".into(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, PersonaError::InvalidInput(_)));
+    }
+
+    #[test]
+    fn invite_link_decode_rejects_bad_version() {
+        // 版本前缀不支持
+        let err = PairingInviteLink::decode("persona-pair-0.eyJhIjoxfQ").unwrap_err();
+        assert!(matches!(err, PersonaError::InvalidInput(_)));
+        // 缺版本段
+        let err = PairingInviteLink::decode("no-dot-here").unwrap_err();
+        assert!(matches!(err, PersonaError::InvalidInput(_)));
     }
 }
