@@ -46,6 +46,12 @@ ignore = [
     # zvariant_derive 5.15.0 随 zvariant 5.15.0 被引入；advisory 无安全补丁，
     # 宏已并入 zbus 6。待 keyring 后端升级到 zbus 6 时一并移除并复查。
     "RUSTSEC-2026-0372",
+    # 捆绑 SQLite CVE-2026-119375（本地 WAL 页大小混淆可读未初始化内存）：
+    # 补丁版 libsqlite3-sys 0.39（SQLite 3.54）随 rusqlite 0.41 发布，但
+    # sqlx-sqlite 最新 0.9.0 仍钉 libsqlite3-sys <0.38，依赖树暂无升级路径。
+    # persona 只打开自建 vault 库（不读不可信第三方 db+wal），暴露面低。
+    # 待 sqlx-sqlite 发布接入 libsqlite3-sys >=0.39 的版本后升级并删除此 ignore。
+    "RUSTSEC-2026-0459",
 ]
 
 [licenses]
