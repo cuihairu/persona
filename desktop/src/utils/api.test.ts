@@ -917,4 +917,101 @@ describe('utils/api command mapping coverage', () => {
       });
     });
   });
+
+  it('tray locale and device remark pass through to the backend', async () => {
+    await personaAPI.setTrayLocale({ tray: { show: true } } as any);
+    expect(mockInvoke).toHaveBeenCalledWith('set_tray_locale', {
+      labels: { tray: { show: true } },
+    });
+
+    await personaAPI.syncSetDeviceRemark('  my device  ');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_set_device_remark', {
+      remark: '  my device  ',
+    });
+  });
+
+  it('sync status and group lifecycle methods map to their invokes', async () => {
+    await personaAPI.syncStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_status');
+
+    await personaAPI.syncGroupStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_status');
+
+    await personaAPI.syncGroupPairingCreate();
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_pairing_create');
+
+    await personaAPI.syncGroupPairingPoll('sess-1');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_pairing_poll', {
+      sessionId: 'sess-1',
+    });
+
+    await personaAPI.syncGroupPairingCancel('sess-1');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_pairing_cancel', {
+      sessionId: 'sess-1',
+    });
+
+    await personaAPI.syncGroupJoinBegin('persona://join/abc');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_join_begin', {
+      inviteLink: 'persona://join/abc',
+    });
+
+    await personaAPI.syncGroupJoinConfirm('sess-1');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_join_confirm', {
+      sessionId: 'sess-1',
+    });
+
+    await personaAPI.syncGroupJoinCancel('sess-1');
+    expect(mockInvoke).toHaveBeenCalledWith('sync_group_join_cancel', {
+      sessionId: 'sess-1',
+    });
+  });
+
+  it('custom fields and ssh integration map to their invokes', async () => {
+    await personaAPI.getCredentialCustomFields('c1');
+    expect(mockInvoke).toHaveBeenCalledWith('get_credential_custom_fields', {
+      credential_id: 'c1',
+    });
+
+    await personaAPI.setCredentialCustomFields('c1', [{ label: 'k', value: 'v' }]);
+    expect(mockInvoke).toHaveBeenCalledWith('set_credential_custom_fields', {
+      credential_id: 'c1',
+      fields: [{ label: 'k', value: 'v' }],
+    });
+
+    await personaAPI.sshAgentIntegrationStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('ssh_agent_integration_status');
+
+    await personaAPI.sshAgentIntegrationEnable();
+    expect(mockInvoke).toHaveBeenCalledWith('ssh_agent_integration_enable');
+
+    await personaAPI.sshAgentIntegrationDisable();
+    expect(mockInvoke).toHaveBeenCalledWith('ssh_agent_integration_disable');
+
+    await personaAPI.sshAgentConfigAnalysis();
+    expect(mockInvoke).toHaveBeenCalledWith('ssh_agent_config_analysis');
+  });
+
+  it('fill target and generator hotkey methods map to their invokes', async () => {
+    await personaAPI.fillTargetStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('fill_target_status');
+
+    await personaAPI.desktopFillCredential('c1', true, 'snap-1');
+    expect(mockInvoke).toHaveBeenCalledWith('desktop_fill_credential', {
+      credential_id: 'c1',
+      confirmed: true,
+      snapshot_id: 'snap-1',
+    });
+
+    await personaAPI.generatorStatus();
+    expect(mockInvoke).toHaveBeenCalledWith('generator_status');
+
+    await personaAPI.generatorSet(true, 'CmdOrCtrl+G');
+    expect(mockInvoke).toHaveBeenCalledWith('generator_set', {
+      enabled: true,
+      accelerator: 'CmdOrCtrl+G',
+    });
+
+    await personaAPI.generatorOpen();
+    expect(mockInvoke).toHaveBeenCalledWith('generator_open');
+  });
 });
