@@ -2454,4 +2454,475 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
     }
+
+    // ---- 校验与错误分支：各 handler 的 422/404/409 形状 ----
+
+    #[test]
+    fn webauthn_state_default_is_empty() {
+        let state = AccountWebauthnState::default();
+        assert!(state.take("a", WebauthnCeremony::Register).is_none());
+    }
+
+    #[tokio::test]
+    async fn register_rejects_blank_and_oversized_username() {
+        let router = router().await;
+        for username in ["   ".to_owned(), "a".repeat(257)] {
+            let (status, body) = send(
+                router.clone(),
+                request(
+                    "POST",
+                    "/api/v1/accounts/register",
+                    None,
+                    Some("application/json"),
+                    &json!({"username": username}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn create_options_rejects_invalid_user_handle() {
+        let router = router().await;
+        let account_id = create_account(&router, "pk-baduh@example.com").await;
+        let (status, body) = send(
+            router.clone(),
+            request(
+                "POST",
+                &format!("/api/v1/accounts/{account_id}/passkeys/create-options"),
+                None,
+                Some("application/json"),
+                &json!({"rp_id": RP_ID, "user_handle": "!!not-b64!!"}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+
+    #[tokio::test]
+    async fn passkey_register_rejects_malformed_payload() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "pk-badreg@example.com").await;
+        let url = format!("/api/v1/accounts/{account_id}/passkeys/register");
+        let post = |payload: serde_json::Value| {
+            let router = router.clone();
+            let url = url.clone();
+            async move {
+                send(
+                    router,
+                    request(
+                        "POST",
+                        &url,
+                        None,
+                        Some("application/json"),
+                        &payload.to_string(),
+                    ),
+                )
+                .await
+            }
+        };
+
+        // 缺 credentialId / 缺 attestationObject → 422（每轮都要新挑战：
+        // take 一次性消费发生在字段校验之前）
+        let _ = get_create_options(&router, &account_id).await;
+        let (status, body) = post(json!({
+            "attestation_response": {"attestationObject": "AA"},
+            "client_data_json": "e30", "origin": ORIGIN,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        let _ = get_create_options(&router, &account_id).await;
+        let (status, body) = post(json!({
+            "attestation_response": {"credentialId": "AA"},
+            "client_data_json": "e30", "origin": ORIGIN,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // attestationObject 不是合法 base64 → 422
+        let _ = get_create_options(&router, &account_id).await;
+        let (status, body) = post(json!({
+            "attestation_response": {"credentialId": "AA", "attestationObject": "!!"},
+            "client_data_json": "e30", "origin": ORIGIN,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // attestationObject 解码后超过 8 KiB → 422
+        let _ = get_create_options(&router, &account_id).await;
+        let (status, body) = post(json!({
+            "attestation_response": {
+                "credentialId": "AA",
+                "attestationObject": B64URL.encode(vec![0u8; 9000]),
+            },
+            "client_data_json": "e30", "origin": ORIGIN,
+        }))
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        assert_eq!(account_passkey_count(&state, &account_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn passkey_register_duplicate_credential_conflicts() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "pk-dupcred@example.com").await;
+
+        // 直接向 webauthn 状态 store 同一挑战两次：同一份完整可验证的
+        // attestation 载荷提交两次，第二次 INSERT 撞 credential_id UNIQUE → 409
+        // （挑战须是合法 base64url——软件认证器侧会校验）
+        let challenge = B64URL.encode(b"fixed-duplicate-challenge");
+        let client_data = create_client_data(&challenge);
+        let reg = passkey::register_passkey(RP_ID, ORIGIN, client_data.as_bytes(), false).unwrap();
+        let body = json!({
+            "attestation_response": {
+                "credentialId": B64URL.encode(&reg.credential_id),
+                "attestationObject": B64URL.encode(&reg.attestation_object),
+            },
+            "client_data_json": B64URL.encode(client_data.as_bytes()),
+            "origin": ORIGIN,
+        })
+        .to_string();
+        let url = format!("/api/v1/accounts/{account_id}/passkeys/register");
+
+        state.account_webauthn.store(
+            &account_id,
+            challenge.to_string(),
+            RP_ID.to_string(),
+            WebauthnCeremony::Register,
+        );
+        let (status, resp) = send(
+            router.clone(),
+            request("POST", &url, None, Some("application/json"), &body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{resp}");
+
+        state.account_webauthn.store(
+            &account_id,
+            challenge.to_string(),
+            RP_ID.to_string(),
+            WebauthnCeremony::Register,
+        );
+        let (status, resp) = send(
+            router.clone(),
+            request("POST", &url, None, Some("application/json"), &body),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{resp}");
+    }
+
+    #[tokio::test]
+    async fn login_options_rejects_blank_and_oversized_credential_id() {
+        let (router, _) = setup_state().await;
+        let account_id = create_account(&router, "pk-badlogin@example.com").await;
+        for credential_id in [String::new(), "x".repeat(1025)] {
+            let (status, body) = send(
+                router.clone(),
+                request(
+                    "POST",
+                    &format!("/api/v1/accounts/{account_id}/passkeys/login-options"),
+                    None,
+                    Some("application/json"),
+                    &json!({"credential_id": credential_id}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        }
+    }
+
+    #[tokio::test]
+    async fn srp_register_rejects_duplicate_and_bad_fields() {
+        let (router, _) = setup_state().await;
+        let account_id = create_account(&router, "srp-badfields@example.com").await;
+        register_account_srp(&router, &account_id).await;
+        let reg = srp::register_verifier(SRP_DEVICE, SRP_PASSWORD).unwrap();
+        let url = format!("/api/v1/accounts/{account_id}/srp/register");
+
+        // 同设备重复注册 → 409
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({
+                    "device_name": SRP_DEVICE,
+                    "salt": b64(&reg.salt),
+                    "verifier": b64(&reg.verifier),
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+        // device_name 空 / 含空白 → 422
+        for name in ["", "de vice"] {
+            let (status, body) = send(
+                router.clone(),
+                req(
+                    "POST",
+                    &url,
+                    &json!({
+                        "device_name": name,
+                        "salt": b64(&reg.salt),
+                        "verifier": b64(&reg.verifier),
+                    })
+                    .to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        }
+
+        // salt 不是合法 base64 → 422
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({
+                    "device_name": "dev2",
+                    "salt": "!!not-b64!!",
+                    "verifier": b64(&reg.verifier),
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // salt 解码后超过 64 字节 → 422
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({
+                    "device_name": "dev2",
+                    "salt": b64(&[0u8; 100]),
+                    "verifier": b64(&reg.verifier),
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+
+    #[tokio::test]
+    async fn recovery_code_verify_rejects_bad_format() {
+        let router = router().await;
+        let account_id = create_account(&router, "rc-bad@example.com").await;
+        let url = format!("/api/v1/accounts/{account_id}/recovery-codes/verify");
+
+        // 长度不是 32 → 422
+        let (status, body) = send(
+            router.clone(),
+            req("POST", &url, &json!({"code": "abc"}).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // 32 位但不是 hex → 422
+        let (status, body) = send(
+            router.clone(),
+            req("POST", &url, &json!({"code": "z".repeat(32)}).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+
+    #[tokio::test]
+    async fn authorize_device_rejects_unknown_and_mismatched() {
+        let (router, _) = setup_state().await;
+        let account_id = create_account(&router, "dev-auth@example.com").await;
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                "/api/v1/sync/devices",
+                &json!({"device_name": "laptop", "public_key": b64(&[7u8; 32])}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        let device_id = body["device_id"].as_str().unwrap().to_string();
+        let url = format!("/api/v1/accounts/{account_id}/devices");
+
+        // 未注册的 sync device → 422
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"device_id": "unknown-device", "public_key": b64(&[7u8; 32])}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // public_key 不是合法 base64 → 422
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"device_id": device_id, "public_key": "!!"}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // public_key 与注册时不符 → 422
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"device_id": device_id, "public_key": b64(&[9u8; 32])}).to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    }
+
+    #[tokio::test]
+    async fn revoke_device_unknown_returns_not_found() {
+        let router = router().await;
+        let account_id = create_account(&router, "dev-revoke@example.com").await;
+        let (status, _) = send(
+            router.clone(),
+            request(
+                "DELETE",
+                &format!("/api/v1/accounts/{account_id}/devices/no-such-device"),
+                Some(&format!("Bearer {TOKEN}")),
+                None,
+                "",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn sessions_reject_blank_srp_token_and_challengeless_assertion() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "sess-blank@example.com").await;
+        let url = format!("/api/v1/accounts/{account_id}/sessions");
+
+        // 空白 srp_token → 401
+        let (status, body) = send(
+            router.clone(),
+            req("POST", &url, &json!({"srp_token": "   "}).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+        // 没走 login-options 的断言（无在途挑战可消费）→ 401
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"passkey_assertion": {
+                    "credential_id": "x", "client_data_json": "e30", "origin": ORIGIN,
+                    "authenticator_data": "AQ", "signature": "AQ",
+                }})
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(account_session_count(&state, &account_id).await, 0);
+    }
+
+    #[tokio::test]
+    async fn sessions_reject_malformed_assertion_fields() {
+        let (router, state) = setup_state().await;
+        let account_id = create_account(&router, "pk-badassert@example.com").await;
+        let reg = register_account_passkey(&router, &account_id).await;
+        let passkey_id = B64URL.encode(&reg.credential_id);
+        let url = format!("/api/v1/accounts/{account_id}/sessions");
+
+        // 挑战一次性消费，每个畸形载荷前都要重发 login-options
+        async fn fresh_login_options(router: &axum::Router, account_id: &str, passkey_id: &str) {
+            let (status, body) = send(
+                router.clone(),
+                request(
+                    "POST",
+                    &format!("/api/v1/accounts/{account_id}/passkeys/login-options"),
+                    None,
+                    Some("application/json"),
+                    &json!({"credential_id": passkey_id}).to_string(),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+
+        // client_data_json 不是 base64 → 422
+        fresh_login_options(&router, &account_id, &passkey_id).await;
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"passkey_assertion": {
+                    "credential_id": passkey_id, "client_data_json": "!!",
+                    "origin": ORIGIN, "authenticator_data": "AQ", "signature": "AQ",
+                }})
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // authenticator_data 不是 base64 → 422
+        fresh_login_options(&router, &account_id, &passkey_id).await;
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"passkey_assertion": {
+                    "credential_id": passkey_id,
+                    "client_data_json": B64URL.encode(
+                        br#"{"type":"webauthn.get","challenge":"x","origin":"https://example.com"}"#,
+                    ),
+                    "origin": ORIGIN, "authenticator_data": "!!", "signature": "AQ",
+                }})
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+        // clientData origin 与声明不符 → parse 拒绝 → 401
+        fresh_login_options(&router, &account_id, &passkey_id).await;
+        let evil = r#"{"type":"webauthn.get","challenge":"x","origin":"https://evil.example"}"#
+            .to_string();
+        let (_, out) = login_options_and_assert(&router, &account_id, &reg).await;
+        let (status, body) = send(
+            router.clone(),
+            req(
+                "POST",
+                &url,
+                &json!({"passkey_assertion": {
+                    "credential_id": passkey_id,
+                    "client_data_json": B64URL.encode(evil.as_bytes()),
+                    "origin": ORIGIN,
+                    "authenticator_data": B64URL.encode(&out.authenticator_data),
+                    "signature": B64URL.encode(&out.signature_der),
+                }})
+                .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+        assert_eq!(account_session_count(&state, &account_id).await, 0);
+    }
 }
