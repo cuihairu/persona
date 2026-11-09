@@ -1431,4 +1431,37 @@ mod tests {
         assert_eq!(decoded.bank_name, card.bank_name);
         assert_eq!(decoded.card_type, card.card_type);
     }
+
+    // Legacy 镜像结构是私有类型，集成 canary（core/tests/secret_canary.rs）
+    // 触达不了，只能模块内覆盖：口径一致——秘密 → [redacted]，诊断字段保留。
+    #[test]
+    fn legacy_debug_impls_redact_secrets() {
+        let ltf = LegacyTwoFactorData {
+            secret_key: "CANARY-ltf-seed-secret".to_string(),
+            issuer: "Legacy Issuer".to_string(),
+            account_name: "alice@example.com".to_string(),
+            algorithm: "SHA1".to_string(),
+            digits: 6,
+            period: 30,
+        };
+        let dbg = format!("{ltf:?}");
+        assert!(!dbg.contains("CANARY"), "{dbg}");
+        assert!(dbg.contains("[redacted]"), "{dbg}");
+        assert!(dbg.contains("Legacy Issuer"), "{dbg}");
+
+        let lgt = LegacyGameTokenData {
+            provider: "steam_guard".to_string(),
+            secret_key: "CANARY-lgt-secretkey-secret".to_string(),
+            issuer: "Legacy Steam".to_string(),
+            account_name: "gamer".to_string(),
+            url: Some("https://legacy.example".to_string()),
+        };
+        let dbg = format!("{lgt:?}");
+        assert!(!dbg.contains("CANARY"), "{dbg}");
+        assert!(dbg.contains("[redacted]"), "{dbg}");
+        assert!(
+            dbg.contains("Legacy Steam") && dbg.contains("legacy.example"),
+            "{dbg}"
+        );
+    }
 }
