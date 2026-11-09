@@ -19,8 +19,8 @@ use std::collections::HashMap;
 
 use persona_core::models::credential::{
     ApiKeyData, BankCardData, CryptoWalletData, GameTokenData, IdentityData,
-    PasswordCredentialData, SecurityQuestion, ServerConfigData, SshKeyData,
-    SoftwareLicenseData, TwoFactorData,
+    PasswordCredentialData, SecurityQuestion, ServerConfigData, SoftwareLicenseData, SshKeyData,
+    TwoFactorData,
 };
 
 /// 断言 `dbg` 不含任何 canary（秘密零泄漏）、含脱敏占位符，且诊断字段保留。
@@ -200,7 +200,14 @@ fn server_config_data_debug_redacts_password() {
     assert_redacted(
         &dbg,
         &["CANARY-srv-password-secret"],
-        &["host-visible", "10.0.0.2", "ssh", "alice", "timezone", "UTC"],
+        &[
+            "host-visible",
+            "10.0.0.2",
+            "ssh",
+            "alice",
+            "timezone",
+            "UTC",
+        ],
     );
 
     let without = ServerConfigData {
@@ -260,7 +267,10 @@ fn game_token_data_debug_redacts_steam_secrets() {
     let dbg = format!("{token:?}");
     assert_redacted(
         &dbg,
-        &["CANARY-game-secretkey-secret", "CANARY-game-identity-secret"],
+        &[
+            "CANARY-game-secretkey-secret",
+            "CANARY-game-identity-secret",
+        ],
         &[
             "steam_guard",
             "Steam",
