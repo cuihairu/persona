@@ -1203,4 +1203,648 @@ describe('hooks/usePersonaService', () => {
     expect(useAppStore.getState().credentials).toEqual([]);
     expect(useAppStore.getState().passwordChangeRequired).toBe(false);
   });
+
+  // -- 补全：解锁/创建的错误与异常臂 --------------------------------------
+
+  it('initializeService flags PASSWORD_CHANGE_REQUIRED without a generic error toast', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'initService').mockResolvedValue({
+      success: false,
+      error: 'policy rotation required',
+      error_code: 'PASSWORD_CHANGE_REQUIRED',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.initializeService('pw');
+    });
+
+    expect(out).toBe(false);
+    expect(useAppStore.getState().passwordChangeRequired).toBe(true);
+    expect(useAppStore.getState().isUnlocked).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('initializeService surfaces a plain failure through error state and toast', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'initService').mockResolvedValue({
+      success: false,
+      error: 'wrong master password',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.initializeService('pw');
+    });
+
+    expect(out).toBe(false);
+    expect(useAppStore.getState().error).toBe('wrong master password');
+    expect(toastError).toHaveBeenCalledWith('wrong master password');
+    expect(useAppStore.getState().passwordChangeRequired).toBe(false);
+  });
+
+  it('initializeService survives an IPC rejection with the localized message', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'initService').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.initializeService('pw');
+    });
+
+    expect(out).toBe(false);
+    expect(useAppStore.getState().error).toBeTruthy();
+    expect(toastError).toHaveBeenCalled();
+    expect(useAppStore.getState().isLoading).toBe(false);
+  });
+
+  it('unlockWithBiometric surfaces a generic failure via error state', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'biometricUnlock').mockResolvedValue({
+      success: false,
+      error: 'os dialog denied',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.unlockWithBiometric();
+    });
+
+    expect(out.success).toBe(false);
+    expect(useAppStore.getState().isUnlocked).toBe(false);
+    expect(useAppStore.getState().error).toBe('os dialog denied');
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('createIdentity survives an IPC rejection with error state', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'createIdentity').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.createIdentity('Work', 'Work', null);
+    });
+
+    expect(out).toBeUndefined();
+    expect(useAppStore.getState().error).toBeTruthy();
+    expect(toastError).toHaveBeenCalled();
+    expect(useAppStore.getState().isLoading).toBe(false);
+  });
+
+  it('updateIdentity survives an IPC rejection and returns null', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'updateIdentity').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.updateIdentity(makeIdentity('id-1'));
+    });
+
+    expect(out).toBeNull();
+    expect(useAppStore.getState().error).toBeTruthy();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('createCredential survives an IPC rejection with error state', async () => {
+    mockUnlockedOnMount();
+    useAppStore.setState({ currentIdentity: makeIdentity('id-1') });
+    jest.spyOn(personaAPI, 'createCredential').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.createCredential({ title: 'x' });
+    });
+
+    expect(out).toBeUndefined();
+    expect(useAppStore.getState().error).toBeTruthy();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  // -- updateCredential / updateCredentialData ---------------------------
+
+  it('updateCredential reloads credentials on success and returns the updated row', async () => {
+    mockUnlockedOnMount();
+    const updated = makeCredential('c1');
+    useAppStore.setState({ currentIdentity: makeIdentity('id-1') });
+    const getSpy = jest
+      .spyOn(personaAPI, 'getCredentialsForIdentity')
+      .mockResolvedValue({ success: true, data: [updated], error: undefined });
+    jest.spyOn(personaAPI, 'updateCredential').mockResolvedValue({
+      success: true,
+      data: updated,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.updateCredential({ id: 'c1' } as any);
+    });
+
+    expect(out?.id).toBe('c1');
+    expect(getSpy).toHaveBeenCalledWith('id-1');
+    expect(useAppStore.getState().credentials[0]?.id).toBe('c1');
+    expect(toastSuccess).toHaveBeenCalled();
+  });
+
+  it('updateCredential reports failure without reloading', async () => {
+    mockUnlockedOnMount();
+    useAppStore.setState({ currentIdentity: makeIdentity('id-1') });
+    const getSpy = jest
+      .spyOn(personaAPI, 'getCredentialsForIdentity')
+      .mockResolvedValue({ success: true, data: [], error: undefined });
+    jest.spyOn(personaAPI, 'updateCredential').mockResolvedValue({
+      success: false,
+      error: 'name conflict',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.updateCredential({ id: 'c1' } as any);
+    });
+
+    expect(out).toBeNull();
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith('name conflict');
+  });
+
+  it('updateCredential survives an IPC rejection and returns null', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'updateCredential').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.updateCredential({ id: 'c1' } as any);
+    });
+
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalled();
+    expect(useAppStore.getState().isLoading).toBe(false);
+  });
+
+  it('updateCredentialData passes the raw response through untouched', async () => {
+    mockUnlockedOnMount();
+    const raw = { success: true, data: { version: 2 }, error: undefined } as any;
+    const spy = jest.spyOn(personaAPI, 'updateCredentialData').mockResolvedValue(raw);
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.updateCredentialData({ id: 'c1' } as any);
+    });
+
+    expect(out).toBe(raw);
+    expect(spy).toHaveBeenCalledWith({ id: 'c1' });
+  });
+
+  // -- 历史与恢复 ---------------------------------------------------------
+
+  it('getCredentialHistory returns entries on success and empty list on failure', async () => {
+    mockUnlockedOnMount();
+    const entries = [{ version: 1 }] as any[];
+    jest.spyOn(personaAPI, 'getCredentialHistory').mockResolvedValue({
+      success: true,
+      data: entries,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.getCredentialHistory('c1');
+    });
+    expect(out).toEqual(entries);
+
+    jest.spyOn(personaAPI, 'getCredentialHistory').mockResolvedValue({
+      success: false,
+      error: 'no history',
+    } as any);
+    await act(async () => {
+      out = await result.current.getCredentialHistory('c1');
+    });
+    expect(out).toEqual([]);
+    expect(toastError).toHaveBeenCalledWith('no history');
+  });
+
+  it('getCredentialHistory survives an IPC rejection with empty list', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'getCredentialHistory').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.getCredentialHistory('c1');
+    });
+    expect(out).toEqual([]);
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('restoreCredentialVersion reloads on success and reports failure both ways', async () => {
+    mockUnlockedOnMount();
+    const updated = makeCredential('c1');
+    useAppStore.setState({ currentIdentity: makeIdentity('id-1') });
+    const getSpy = jest
+      .spyOn(personaAPI, 'getCredentialsForIdentity')
+      .mockResolvedValue({ success: true, data: [updated], error: undefined });
+    jest.spyOn(personaAPI, 'restoreCredentialVersion').mockResolvedValue({
+      success: true,
+      data: updated,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.restoreCredentialVersion('c1', 3);
+    });
+    expect(out?.id).toBe('c1');
+    expect(getSpy).toHaveBeenCalledWith('id-1');
+    expect(toastSuccess).toHaveBeenCalled();
+
+    jest.spyOn(personaAPI, 'restoreCredentialVersion').mockResolvedValue({
+      success: false,
+      error: 'version gone',
+    } as any);
+    await act(async () => {
+      out = await result.current.restoreCredentialVersion('c1', 3);
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalledWith('version gone');
+  });
+
+  it('restoreCredentialVersion survives an IPC rejection and returns null', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'restoreCredentialVersion').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.restoreCredentialVersion('c1', 3);
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  // -- 附件四动作 ---------------------------------------------------------
+
+  it('listAttachments returns entries on success and empty list on failure', async () => {
+    mockUnlockedOnMount();
+    const entries = [{ id: 'att-1' }] as any[];
+    jest.spyOn(personaAPI, 'listAttachments').mockResolvedValue({
+      success: true,
+      data: entries,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.listAttachments('c1');
+    });
+    expect(out).toEqual(entries);
+
+    jest.spyOn(personaAPI, 'listAttachments').mockResolvedValue({
+      success: false,
+      error: 'locked',
+    } as any);
+    await act(async () => {
+      out = await result.current.listAttachments('c1');
+    });
+    expect(out).toEqual([]);
+    expect(toastError).toHaveBeenCalledWith('locked');
+  });
+
+  it('listAttachments survives an IPC rejection with empty list', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'listAttachments').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.listAttachments('c1');
+    });
+    expect(out).toEqual([]);
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('getCredentialCustomFields returns the array on success and null on failure', async () => {
+    mockUnlockedOnMount();
+    const fields = [{ label: 'k', value: 'v' }] as any[];
+    jest.spyOn(personaAPI, 'getCredentialCustomFields').mockResolvedValue({
+      success: true,
+      data: fields,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.getCredentialCustomFields('c1');
+    });
+    expect(out).toEqual(fields);
+
+    // 非数组 data（后端异常态）→ null，面板显示错误行而非空态
+    jest.spyOn(personaAPI, 'getCredentialCustomFields').mockResolvedValue({
+      success: true,
+      data: null,
+      error: undefined,
+    } as any);
+    await act(async () => {
+      out = await result.current.getCredentialCustomFields('c1');
+    });
+    expect(out).toBeNull();
+  });
+
+  it('getCredentialCustomFields survives an IPC rejection and returns null', async () => {
+    mockUnlockedOnMount();
+    jest
+      .spyOn(personaAPI, 'getCredentialCustomFields')
+      .mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.getCredentialCustomFields('c1');
+    });
+    expect(out).toBeNull();
+  });
+
+  it('attachFileToCredential returns the entry on success and reports failure', async () => {
+    mockUnlockedOnMount();
+    const entry = { id: 'att-1' } as any;
+    jest.spyOn(personaAPI, 'attachFileToCredential').mockResolvedValue({
+      success: true,
+      data: entry,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.attachFileToCredential('c1', '/tmp/a.txt', true);
+    });
+    expect(out).toEqual(entry);
+
+    jest.spyOn(personaAPI, 'attachFileToCredential').mockResolvedValue({
+      success: false,
+      error: 'file too large',
+    } as any);
+    await act(async () => {
+      out = await result.current.attachFileToCredential('c1', '/tmp/a.txt', true);
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalledWith('file too large');
+  });
+
+  it('attachFileToCredential survives an IPC rejection and returns null', async () => {
+    mockUnlockedOnMount();
+    jest
+      .spyOn(personaAPI, 'attachFileToCredential')
+      .mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.attachFileToCredential('c1', '/tmp/a.txt', true);
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('saveAttachmentToFile returns true on success and reports failure', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'saveAttachmentToFile').mockResolvedValue({
+      success: true,
+      data: true,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.saveAttachmentToFile('att-1', '/tmp/out');
+    });
+    expect(out).toBe(true);
+
+    jest.spyOn(personaAPI, 'saveAttachmentToFile').mockResolvedValue({
+      success: false,
+      error: 'path not writable',
+    } as any);
+    await act(async () => {
+      out = await result.current.saveAttachmentToFile('att-1', '/tmp/out');
+    });
+    expect(out).toBe(false);
+    expect(toastError).toHaveBeenCalledWith('path not writable');
+  });
+
+  it('saveAttachmentToFile survives an IPC rejection and returns false', async () => {
+    mockUnlockedOnMount();
+    jest
+      .spyOn(personaAPI, 'saveAttachmentToFile')
+      .mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.saveAttachmentToFile('att-1', '/tmp/out');
+    });
+    expect(out).toBe(false);
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('deleteAttachment returns true on success and reports failure', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'deleteAttachment').mockResolvedValue({
+      success: true,
+      data: true,
+      error: undefined,
+    });
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.deleteAttachment('att-1');
+    });
+    expect(out).toBe(true);
+
+    jest.spyOn(personaAPI, 'deleteAttachment').mockResolvedValue({
+      success: false,
+      error: 'attachment in use',
+    } as any);
+    await act(async () => {
+      out = await result.current.deleteAttachment('att-1');
+    });
+    expect(out).toBe(false);
+    expect(toastError).toHaveBeenCalledWith('attachment in use');
+  });
+
+  it('deleteAttachment survives an IPC rejection and returns false', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'deleteAttachment').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.deleteAttachment('att-1');
+    });
+    expect(out).toBe(false);
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  // -- 余下 catch / else 臂 ----------------------------------------------
+
+  it('generatePassword survives an IPC rejection with empty string', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'generatePassword').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: string | undefined;
+    await act(async () => {
+      out = await result.current.generatePassword();
+    });
+    expect(out).toBe('');
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('getCredentialData survives an IPC rejection with null', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'getCredentialData').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.getCredentialData('c1');
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('getTotpCode survives an IPC rejection with null', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'getTotpCode').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.getTotpCode('c1');
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('toggleCredentialFavorite survives an IPC rejection with null', async () => {
+    mockUnlockedOnMount();
+    jest
+      .spyOn(personaAPI, 'toggleCredentialFavorite')
+      .mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: any;
+    await act(async () => {
+      out = await result.current.toggleCredentialFavorite('c1');
+    });
+    expect(out).toBeNull();
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('deleteCredential survives an IPC rejection with false', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'deleteCredential').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let out: boolean | undefined;
+    await act(async () => {
+      out = await result.current.deleteCredential('c1');
+    });
+    expect(out).toBe(false);
+    expect(toastError).toHaveBeenCalled();
+  });
+
+  it('refreshSshAgentStatus toasts the thrown message on IPC rejection', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'getSshAgentStatus').mockRejectedValue(new Error('socket gone'));
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.refreshSshAgentStatus();
+    });
+    expect(toastError).toHaveBeenCalledWith('socket gone');
+  });
+
+  it('startSshAgent toasts the API error when the backend refuses to start', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'startSshAgent').mockResolvedValue({
+      success: false,
+      error: 'agent already running',
+    } as any);
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.startSshAgent('pw');
+    });
+    expect(toastError).toHaveBeenCalledWith('agent already running');
+    expect(useAppStore.getState().sshAgentStatus).toBeNull();
+  });
+
+  it('stopSshAgent toasts the thrown message on IPC rejection', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'stopSshAgent').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.stopSshAgent();
+    });
+    expect(toastError).toHaveBeenCalledWith('ipc down');
+  });
+
+  it('loadSshKeys toasts the localized message on IPC rejection', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'getSshKeys').mockRejectedValue(new Error('ipc down'));
+
+    const { result } = renderHook(() => usePersonaService());
+    await act(async () => {
+      await result.current.loadSshKeys();
+    });
+    expect(toastError).toHaveBeenCalled();
+    expect(useAppStore.getState().sshKeys).toEqual([]);
+  });
+
+  it('ssh key file seams normalize IPC rejections into failed responses', async () => {
+    mockUnlockedOnMount();
+    jest.spyOn(personaAPI, 'inspectSshKeyFile').mockRejectedValue(new Error('bad path'));
+    jest.spyOn(personaAPI, 'importSshKey').mockRejectedValue(new Error('denied'));
+    jest.spyOn(personaAPI, 'generateSshKey').mockRejectedValue(new Error('quota'));
+
+    const { result } = renderHook(() => usePersonaService());
+    let inspected: any;
+    let imported: any;
+    let generated: any;
+    await act(async () => {
+      inspected = await result.current.inspectSshKeyFile('/tmp/k');
+      imported = await result.current.importSshKey({
+        identity_id: 'id-1',
+        path: '/tmp/k',
+      });
+      generated = await result.current.generateSshKey({
+        identity_id: 'id-1',
+        key_type: 'ed25519',
+      });
+    });
+
+    expect(inspected.success).toBe(false);
+    expect(inspected.error).toBe('bad path');
+    expect(imported.success).toBe(false);
+    expect(imported.error).toBe('denied');
+    expect(generated.success).toBe(false);
+    expect(generated.error).toBe('quota');
+  });
 });
