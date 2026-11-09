@@ -111,8 +111,15 @@ jest.mock('@/components/SettingsModal', () => ({
 
 jest.mock('react-hot-toast', () => ({
   __esModule: true,
-  default: { success: jest.fn(), error: jest.fn() },
+  // 可调用（更新提示 toast(...)）且保留 success/error（既有断言）
+  default: Object.assign(jest.fn(), { success: jest.fn(), error: jest.fn() }),
   Toaster: () => null,
+}));
+
+// 更新检查默认关（各用例不触发网络）；单开用例如下按需翻转
+jest.mock('@/utils/updateCheck', () => ({
+  isUpdateCheckEnabled: jest.fn(() => false),
+  checkForUpdate: jest.fn().mockResolvedValue({ status: 'none' }),
 }));
 
 jest.mock('@/utils/clipboard', () => ({
@@ -574,5 +581,52 @@ describe('App', () => {
     expect(useAppStore.getState().selectedCredentialId).toBeNull();
     expect(screen.getByTestId('detail-placeholder')).toBeInTheDocument();
     confirmSpy.mockRestore();
+  });
+
+  it('unlock gate resolves immediately when already on the unlock screen', async () => {
+    serviceState.isUnlocked = false;
+    render(<App />);
+    const resolve = jest.fn();
+    window.dispatchEvent(new CustomEvent('persona:need-unlock', { detail: { resolve } }));
+    expect(resolve).toHaveBeenCalledWith(false);
+    expect(screen.queryByTestId('unlock-gate-modal')).not.toBeInTheDocument();
+  });
+
+  it('unlock gate opens and resolves through the modal cancel', async () => {
+    serviceState.isUnlocked = true;
+    // 事件处理器读的是 store 的解锁态（非 serviceState）
+    useAppStore.setState({ isUnlocked: true });
+    render(<App />);
+    const resolve = jest.fn();
+    window.dispatchEvent(new CustomEvent('persona:need-unlock', { detail: { resolve } }));
+    await screen.findByTestId('unlock-gate-modal');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(resolve).toHaveBeenCalledWith(false);
+    expect(screen.queryByTestId('unlock-gate-modal')).not.toBeInTheDocument();
+  });
+
+  it('clicking a vault in the sidebar switches to that identity', async () => {
+    serviceState.isUnlocked = true;
+    useAppStore.setState({
+      identities: [{ id: 'vault-1', name: 'Work', identity_type: 'Work' } as any],
+      currentIdentity: null,
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Work' }));
+    expect(serviceState.switchIdentity).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'vault-1' }),
+    );
+  });
+
+  it('toasts when an update is available', async () => {
+    const uc = require('@/utils/updateCheck');
+    uc.isUpdateCheckEnabled.mockReturnValue(true);
+    uc.checkForUpdate.mockResolvedValue({
+      status: 'update-available',
+      latestVersion: '2.0.0',
+    });
+    serviceState.isUnlocked = false;
+    render(<App />);
+    await waitFor(() => expect(toast).toHaveBeenCalled());
   });
 });

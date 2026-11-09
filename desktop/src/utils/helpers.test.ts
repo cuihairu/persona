@@ -40,6 +40,7 @@ describe('utils/helpers', () => {
     expect(getRelativeTime('2024-01-06T00:00:00Z')).toBe('4 days ago');
     expect(getRelativeTime('2023-12-30T00:00:00Z')).toBe('1 weeks ago');
     expect(getRelativeTime('2023-09-10T00:00:00Z')).toBe('4 months ago');
+    expect(getRelativeTime('2022-06-10T00:00:00Z')).toBe('1 years ago');
 
     jest.useRealTimers();
   });
@@ -75,6 +76,34 @@ describe('utils/helpers', () => {
 
     await expect(copyToClipboard('hello')).resolves.toBe(true);
     expect((document as any).execCommand).toHaveBeenCalledWith('copy');
+  });
+
+  it('copyToClipboard reports failure when execCommand throws', async () => {
+    const writeText = jest.fn().mockRejectedValue(new Error('nope'));
+    (navigator as any).clipboard = { writeText };
+    (document as any).execCommand = jest.fn(() => {
+      throw new Error('boom');
+    });
+
+    await expect(copyToClipboard('hello')).resolves.toBe(false);
+  });
+
+  it('generateSecurePassword includes the symbol charset when requested', () => {
+    const originalCrypto = window.crypto;
+    (window as any).crypto = {
+      getRandomValues: (arr: Uint8Array) => {
+        for (let i = 0; i < arr.length; i++) arr[i] = 0;
+        // 62 % 92 = 62 → 落在追加的 symbols 段首（charset[62] === '!')
+        arr[0] = 62;
+        return arr;
+      },
+    };
+
+    const password = generateSecurePassword(24, true);
+    expect(password).toHaveLength(24);
+    expect(password).toContain('!');
+
+    (window as any).crypto = originalCrypto;
   });
 });
 

@@ -68,6 +68,17 @@ describe('utils/theme', () => {
         delete (window as { matchMedia?: unknown }).matchMedia;
       }
     });
+
+    it('returns false when matchMedia throws', () => {
+      (window as any).matchMedia = () => {
+        throw new Error('not implemented');
+      };
+      try {
+        expect(systemPrefersDark()).toBe(false);
+      } finally {
+        delete (window as { matchMedia?: unknown }).matchMedia;
+      }
+    });
   });
 
   describe('applyThemeClass', () => {

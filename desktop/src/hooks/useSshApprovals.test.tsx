@@ -167,4 +167,29 @@ describe('hooks/useSshApprovals', () => {
     expect(result.current.pending).toBeNull();
     expect(result.current.pendingCount).toBe(0);
   });
+
+  it('notifies via the system when the window is hidden', async () => {
+    const sendNotification = require('@tauri-apps/plugin-notification')
+      .sendNotification as jest.Mock;
+    sendNotification.mockClear();
+    // 触发前把 document.hidden 置真（失焦态），事后还原
+    const hiddenSpy = jest
+      .spyOn(document, 'hidden', 'get')
+      .mockReturnValue(true);
+
+    const { result } = renderHook(() => useSshApprovals(true));
+    await waitFor(() => expect(capturedHandler).not.toBeNull());
+    const handler = capturedHandler as ListenHandler;
+
+    act(() => {
+      handler({ payload: sampleRequest });
+    });
+
+    await waitFor(() => expect(sendNotification).toHaveBeenCalled());
+    expect(result.current.pending?.request_id).toBe('ssh-1');
+    expect(sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: expect.any(String) }),
+    );
+    hiddenSpy.mockRestore();
+  });
 });

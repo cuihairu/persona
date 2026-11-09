@@ -223,4 +223,20 @@ describe('utils/updateCheck persistence', () => {
     setLastCheckedAt('2026-09-26T10:00:00Z');
     expect(getLastCheckedAt()).toBe('2026-09-26T10:00:00Z');
   });
+
+  it('isUpdateCheckEnabled defaults to true when localStorage throws', () => {
+    const spy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw 0;
+    });
+    expect(isUpdateCheckEnabled()).toBe(true);
+    spy.mockRestore();
+  });
+
+  it('getLastCheckedAt defaults to null when localStorage throws', () => {
+    const spy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw 0;
+    });
+    expect(getLastCheckedAt()).toBeNull();
+    spy.mockRestore();
+  });
 });
