@@ -1,3 +1,6 @@
+// 本文件所有测试均为 unix 门控（桌面审批走 unix socket）；Windows 下模块
+// 为空，连带门控该导入避免 unused-imports（Windows clippy -D warnings 报红）。
+#[cfg(unix)]
 use super::*;
 
 #[cfg(unix)]
