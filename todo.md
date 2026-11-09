@@ -73,7 +73,7 @@
 
 ### 超大文件候选（>1000 行）
 
-- [ ] LAY-001 [P1] 拆分 `desktop/src-tauri/src/command_layer_tests.rs`（11855 行）——mock runtime 加固与按命令族的集成测试可独立拆分（`desktop/src-tauri/src/command_layer_tests.rs:13`）
+- [x] LAY-001 [P1] 拆分 `desktop/src-tauri/src/command_layer_tests.rs`（11855 行）——mock runtime 加固与按命令族的集成测试可独立拆分（`desktop/src-tauri/src/command_layer_tests.rs:13`）；2026-11-09 完成：拆为 `src/command_layer_tests/` 目录模块——`mod.rs`（978 行，共享 mock runtime/fixtures，逐字节保留原 helper）+ 23 个命令族测试模块（account/approval/biometric/connect/credential_*/identity*/ipc_contract/passkey/settings*/ssh/sync/wallet*，最大 `identity.rs` 1007 行），183 个测试原样保留（函数体零改动，仅 `use super::*` 引共享 fixtures）；验证：cargo test --workspace 273 lib + 16 integration 全绿、clippy --workspace --all-targets -D warnings 干净、fmt 干净
 - [ ] LAY-002 [P1] 拆分 `cli/src/commands/bridge.rs`（9375 行）——协议帧、配对、凭据、passkey、账号与同步处理器混在一个命令文件（`cli/src/commands/bridge.rs:459`）
 - [ ] LAY-003 [P1] 拆分 `core/src/service.rs`（9347 行）——认证、凭据、passkey、附件、connect、旅行与历史职责都汇入单一服务（`core/src/service.rs:67`）
 - [ ] LAY-004 [P1] 拆分 `desktop/src-tauri/src/commands.rs`（9232 行）——Tauri 命令面同时编排生命周期、同步、账号、SSH、passkey、钱包与附件（`desktop/src-tauri/src/commands.rs:218`）
