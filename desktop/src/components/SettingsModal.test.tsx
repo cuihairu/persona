@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import SettingsModal from './SettingsModal';
 import i18n from '@/i18n';
 import { usePersonaService } from '@/hooks/usePersonaService';
@@ -1994,5 +1994,721 @@ describe('components/SettingsModal', () => {
       expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
     });
     confirmSpy.mockRestore();
+  });
+
+  // -------------------------------------------------------------------------
+  // 失败/异常分支补齐：每个异步动作的 catch 与失败响应都必须给用户反馈，
+  // 不能静默吞掉错误，也不能让界面停留在"假成功"态。
+  // -------------------------------------------------------------------------
+
+  /** 打开同步配置表单（开关 → 数据范围披露 → 确认），返回 token 输入框 */
+  const openSyncConfigForm = async () => {
+    fireEvent.click(screen.getByTestId('sync-toggle'));
+    fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-token-input')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByTestId('sync-url-input'), {
+      target: { value: 'https://s.example.com' },
+    });
+    fireEvent.change(screen.getByTestId('sync-token-input'), { target: { value: 'fresh-tok' } });
+  };
+
+  it('surfaces sync config save failures and recovers the token placeholder', async () => {
+    mockIdentityHook();
+    mockGetSettings.mockResolvedValue({ success: true, data: null });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await openSyncConfigForm();
+
+    // 失败响应：toast 显示后端错误（144）
+    mockSetSync.mockResolvedValueOnce({ success: false, error: 'server said no' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-save'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('server said no');
+    });
+
+    // IPC 异常：toast 显示异常消息（147）
+    mockSetSync.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-save'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+
+    // 保存成功后 keyring 存在性查询失败：placeholder 回退到占位文案而非卡死（99）
+    mockSetSync.mockResolvedValueOnce({
+      success: true,
+      data: {
+        features: { ...DEFAULT_FEATURE_FLAGS },
+        sync: { enabled: true, server_url: 'https://s.example.com', server_token: '' },
+      },
+    });
+    mockTokenPresent.mockRejectedValueOnce(new Error('keyring unavailable'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-save'));
+    });
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('同步设置已保存');
+    });
+    expect(screen.getByTestId('sync-token-input')).toHaveAttribute('placeholder', 'API 令牌');
+  });
+
+  it('shows the sync status load failure message', async () => {
+    mockIdentityHook();
+
+    // 失败响应分支（279）
+    mockSyncStatus.mockResolvedValueOnce({ success: false, error: 'locked' });
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-devices-error')).toHaveTextContent('同步状态加载失败');
+    });
+
+    // IPC 异常分支（280-281）
+    cleanup();
+    mockSyncStatus.mockRejectedValueOnce(new Error('backend gone'));
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-devices-error')).toHaveTextContent('同步状态加载失败');
+    });
+  });
+
+  it('reports join failures and keeps the form for retry', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue({
+      success: true,
+      data: { joined: false, corrupted: false, device_id: null, device_name: null },
+    });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
+    });
+    fireEvent.change(screen.getByTestId('sync-device-name-input'), {
+      target: { value: 'laptop' },
+    });
+
+    // 失败响应
+    mockSyncJoin.mockResolvedValueOnce({ success: false, error: 'denied' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('denied');
+    });
+    expect(screen.getByTestId('sync-join-button')).toBeInTheDocument();
+
+    // IPC 异常
+    mockSyncJoin.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-join-button'));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('data-scope-confirm'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+  });
+
+  it('reports sync-now failures and clears busy state', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue({ success: true, data: [] });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-now-button')).toBeInTheDocument();
+    });
+
+    mockSyncNow.mockResolvedValueOnce({ success: false, error: 'offline' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-now-button'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('offline');
+    });
+
+    mockSyncNow.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-now-button'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+    // busy 已复位，按钮可再次点击
+    expect(screen.getByTestId('sync-now-button')).toBeEnabled();
+  });
+
+  it('reports a generic rotation failure without a concurrent-conflict hint', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-rotate-button')).toBeInTheDocument();
+    });
+
+    mockSyncRotate.mockResolvedValueOnce({ success: false, error: 'boom' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-rotate-button'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('boom');
+    });
+
+    mockSyncRotate.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-rotate-button'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('reports leave failures and keeps the joined state', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
+    });
+
+    mockSyncLeave.mockResolvedValueOnce({ success: false, error: 'locked' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-leave-button'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('locked');
+    });
+    // 仍在已加入态（不误清空设备列表）
+    expect(screen.getByTestId('sync-leave-button')).toBeInTheDocument();
+
+    mockSyncLeave.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-leave-button'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('reports authorize failures without dropping the pending device', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
+    });
+
+    mockSyncAuthorize.mockResolvedValueOnce({ success: false, error: 'not allowed' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-authorize-dev-phone'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('not allowed');
+    });
+    // 设备仍在待授权列表（未刷新丢失）
+    expect(screen.getByTestId('sync-authorize-dev-phone')).toBeInTheDocument();
+
+    // IPC 异常分支（439）
+    mockSyncAuthorize.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-authorize-dev-phone'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+  });
+
+  it('reports revoke failures and keeps the device row', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
+    });
+
+    mockSyncRevoke.mockResolvedValueOnce({ success: false, error: 'still primary' });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-revoke-dev-phone'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('still primary');
+    });
+    expect(screen.getByTestId('sync-revoke-dev-phone')).toBeInTheDocument();
+
+    // IPC 异常分支（458）
+    mockSyncRevoke.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-revoke-dev-phone'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+    confirmSpy.mockRestore();
+  });
+
+  it('abandons a remark edit through the cancel button and reports save rejection', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue(twoDevices);
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-remark-edit')).toBeInTheDocument();
+    });
+
+    // 取消按钮退出编辑态（640），不触发后端
+    fireEvent.click(screen.getByTestId('sync-remark-edit'));
+    expect(screen.getByTestId('sync-remark-input')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('sync-remark-cancel'));
+    expect(screen.queryByTestId('sync-remark-input')).not.toBeInTheDocument();
+    expect(mockSyncSetRemark).not.toHaveBeenCalled();
+
+    // 保存被 IPC 拒绝：catch 分支 toast（478 catch 臂）
+    fireEvent.click(screen.getByTestId('sync-remark-edit'));
+    fireEvent.change(screen.getByTestId('sync-remark-input'), {
+      target: { value: '新备注' },
+    });
+    mockSyncSetRemark.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-remark-save'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+  });
+
+  it('reopens the conflict modal from the banner button and closes it via keep-current', async () => {
+    mockIdentityHook();
+    mockSyncStatus.mockResolvedValue(joinedStatus);
+    mockSyncList.mockResolvedValue({ success: true, data: [] });
+    mockSyncNow.mockResolvedValue({
+      success: true,
+      data: { pulled: 2, materialized: 1, conflicts: 1, pending_identity: 0, pushed: 1, backfilled: 0 },
+    });
+    mockSyncConflictsList.mockResolvedValue(conflictedList);
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-now-button')).toBeInTheDocument();
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('sync-now-button'));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('sync-conflicts-modal')).toBeInTheDocument();
+    });
+
+    // 关闭弹窗（747）：暂不处理
+    fireEvent.click(within(screen.getByTestId('sync-conflicts-modal')).getByText('暂不处理'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('sync-conflicts-modal')).not.toBeInTheDocument();
+    });
+
+    // 从 banner 按钮再打开（597）
+    fireEvent.click(screen.getByTestId('sync-view-conflicts-button'));
+    expect(screen.getByTestId('sync-conflicts-modal')).toBeInTheDocument();
+  });
+
+  it('reports password-expiry policy save failures', async () => {
+    mockIdentityHook();
+    mockSetExpiry.mockResolvedValue({ success: false, error: 'locked' });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    fireEvent.change(screen.getByTestId('password-expiry-select'), { target: { value: '30' } });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('locked');
+    });
+
+    // IPC 异常分支（896）
+    mockSetExpiry.mockRejectedValueOnce(new Error('ipc gone'));
+    fireEvent.change(screen.getByTestId('password-expiry-select'), { target: { value: '60' } });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+  });
+
+  it('reports biometric disable failures', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: true, platform: 'linux-polkit' },
+    });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    const toggle = await screen.findByTestId('biometric-toggle');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+
+    mockBiometricDisable.mockResolvedValueOnce({ success: false, error: 'hw error' });
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('hw error');
+    });
+
+    mockBiometricDisable.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('biometric-toggle'));
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+  });
+
+  it('surfaces the enable failure inside the reauth modal and closes it', async () => {
+    mockIdentityHook();
+    mockBiometricStatus.mockResolvedValue({
+      success: true,
+      data: { available: true, enabled: false, platform: 'linux-polkit' },
+    });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    const toggle = await screen.findByTestId('biometric-toggle');
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'false'));
+    fireEvent.click(toggle);
+
+    const reauth = await screen.findByTestId('reauth-modal');
+    fireEvent.change(reauth.querySelector('input') as HTMLInputElement, {
+      target: { value: 'master-pw' },
+    });
+    mockBiometricEnable.mockResolvedValueOnce({ success: false, error: 'nope' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+    await waitFor(() => {
+      expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('nope');
+    });
+
+    // IPC 异常分支（952）
+    fireEvent.change(reauth.querySelector('input') as HTMLInputElement, {
+      target: { value: 'again' },
+    });
+    mockBiometricEnable.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+    await waitFor(() => {
+      expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('指纹解锁设置失败');
+    });
+
+    // 关闭重验窗（1132）：恢复可用状态
+    fireEvent.click(within(reauth).getByText('取消'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  it('keeps the travel modal open on a non-reauth failure and closes it', async () => {
+    travelHook();
+    // mockReset 清掉先前用例遗留的 mockResolvedValueOnce 队列
+    // （clearAllMocks 不清 once 队列，REAUTH 用例的"成功"once 会漂移到这里）
+    mockEnterTravel.mockReset();
+    mockEnterTravel.mockResolvedValueOnce({ success: false, error: 'denied' });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-enter-button')).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId('travel-enter-button'));
+    typeTravel('pw');
+    typeTravelConfirm('pw');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-passphrase-error')).toHaveTextContent('denied');
+    });
+    // 弹窗保留可重试；关闭即退出编辑
+    expect(screen.getByTestId('travel-passphrase-modal')).toBeInTheDocument();
+
+    // IPC 异常分支（991）
+    mockEnterTravel.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-passphrase-error')).toHaveTextContent('旅行模式操作失败');
+    });
+
+    fireEvent.click(within(screen.getByTestId('travel-passphrase-modal')).getByText('取消'));
+    expect(screen.queryByTestId('travel-passphrase-modal')).not.toBeInTheDocument();
+  });
+
+  it('reports reauth verification failures inside the reauth modal', async () => {
+    travelHook();
+    mockEnterTravel.mockReset();
+    mockReauthVerify.mockReset();
+    mockEnterTravel.mockResolvedValueOnce({
+      success: false,
+      error_code: 'REAUTH_REQUIRED',
+      error: 'Re-authentication required',
+    });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('travel-enter-button')).toBeEnabled();
+    });
+    fireEvent.click(screen.getByTestId('travel-enter-button'));
+    typeTravel('pw');
+    typeTravelConfirm('pw');
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-passphrase-submit'));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('reauth-modal')).toBeInTheDocument();
+    });
+
+    const reauth = screen.getByTestId('reauth-modal');
+    fireEvent.change(reauth.querySelector('input') as HTMLInputElement, {
+      target: { value: 'bad-pw' },
+    });
+    mockReauthVerify.mockResolvedValueOnce({ success: false, error: 'bad passphrase' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+    await waitFor(() => {
+      expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('bad passphrase');
+    });
+    // 重验失败：不重开口令窗（stay in reauth）
+    expect(screen.queryByTestId('travel-passphrase-modal')).not.toBeInTheDocument();
+
+    // IPC 异常 → 通用操作失败文案
+    fireEvent.change(reauth.querySelector('input') as HTMLInputElement, {
+      target: { value: 'again' },
+    });
+    mockReauthVerify.mockRejectedValueOnce(new Error('net'));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '确认' }));
+    });
+    await waitFor(() => {
+      expect(within(reauth).getByTestId('reauth-error')).toHaveTextContent('旅行模式操作失败');
+    });
+
+    // 关闭重验窗（1162-1163）
+    fireEvent.click(within(reauth).getByText('取消'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('reauth-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  it('cancels the change-master-password modal without rotating', async () => {
+    mockIdentityHook();
+    mockGetSettings.mockResolvedValue({ success: true, data: null });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    fireEvent.click(screen.getByTestId('change-password-button'));
+    const modal = await screen.findByTestId('change-password-modal');
+    expect(mockChangePw).not.toHaveBeenCalled();
+    fireEvent.click(within(modal).getByText('取消'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('change-password-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  it('rolls back the locale switch when the IPC call rejects', async () => {
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+    });
+    mockSetLocale.mockRejectedValueOnce(new Error('ipc gone'));
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+
+    fireEvent.change(screen.getByTestId('locale-select'), { target: { value: 'en' } });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('ipc gone');
+    });
+    expect(mockSetTrayLocale).not.toHaveBeenCalled();
+    expect(screen.getByTestId('locale-select')).toHaveValue('zh-CN');
+
+    await act(async () => {
+      await i18n.changeLanguage('zh-CN');
+    });
+  });
+
+  it('reports travel-mark failures and keeps the editor open', async () => {
+    const identity = {
+      id: 'id-1',
+      name: 'Work',
+      identity_type: 'Work',
+      description: '',
+      email: '',
+      phone: '',
+      tags: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      is_active: true,
+      travel_marked: false,
+    } as any;
+    const loadIdentities = jest.fn().mockResolvedValue(undefined);
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [identity],
+      currentIdentity: null,
+      updateIdentity: jest.fn(),
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+      lockService: jest.fn(),
+      loadIdentities,
+    });
+    mockSetTravelMarked.mockResolvedValueOnce({ success: false, error: 'locked' });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    openIdentitiesTab();
+    fireEvent.click(screen.getByTitle('编辑'));
+    const toggle = await screen.findByTestId('travel-mark-toggle-id-1');
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('locked');
+    });
+    expect(loadIdentities).not.toHaveBeenCalled();
+
+    mockSetTravelMarked.mockRejectedValueOnce(new Error('ipc gone'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('travel-mark-toggle-id-1'));
+    });
+    await waitFor(() => {
+      // catch 分支用 i18n 文案而非 err.message（与失败响应一致的用户口径）
+      expect(toast.error).toHaveBeenCalledWith('旅行标记保存失败');
+    });
+  });
+
+  it('closes the modal when the backdrop is clicked outside the panel', () => {
+    mockIdentityHook();
+    const onClose = jest.fn();
+    const { container } = render(<SettingsModal isOpen={true} onClose={onClose} />);
+    // 外层遮罩自身是事件目标（target === currentTarget）→ onClose
+    fireEvent.mouseDown(container.firstChild as Element);
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('edits every identity draft field and saves the merged changes', async () => {
+    const identity = {
+      id: 'id-1',
+      name: 'Work',
+      identity_type: 'Work',
+      description: '',
+      email: '',
+      phone: '',
+      tags: [],
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      is_active: true,
+      travel_marked: false,
+    } as any;
+    const updateIdentity = jest.fn().mockResolvedValue(true);
+    (usePersonaService as jest.Mock).mockReturnValue({
+      identities: [identity],
+      currentIdentity: null,
+      updateIdentity,
+      deleteIdentity: jest.fn(),
+      isLoading: false,
+      lockService: jest.fn(),
+      loadIdentities: jest.fn().mockResolvedValue(undefined),
+    });
+
+    await act(async () => {
+      render(<SettingsModal isOpen={true} onClose={() => {}} />);
+    });
+    openIdentitiesTab();
+    fireEvent.click(screen.getByTitle('编辑'));
+
+    // 类型下拉（1536）：名称输入框与下拉都可能显示 Work，取其中的 select
+    const typeSelect = screen
+      .getAllByDisplayValue('Work')
+      .find((el) => el.tagName === 'SELECT') as HTMLSelectElement;
+    fireEvent.change(typeSelect, { target: { value: 'Personal' } });
+    // 邮箱/电话/描述输入（1554/1562/1573）
+    const field = (label: string) =>
+      screen.getByText(label, { selector: 'label' }).parentElement as HTMLElement;
+    fireEvent.change(field('邮箱').querySelector('input') as HTMLInputElement, {
+      target: { value: 'work@example.com' },
+    });
+    fireEvent.change(field('电话').querySelector('input') as HTMLInputElement, {
+      target: { value: '13800000000' },
+    });
+    fireEvent.change(field('描述').querySelector('textarea') as HTMLTextAreaElement, {
+      target: { value: '主要工作身份' },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    });
+    await waitFor(() => {
+      expect(updateIdentity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          identity_type: 'Personal',
+          email: 'work@example.com',
+          phone: '13800000000',
+          description: '主要工作身份',
+        }),
+      );
+    });
   });
 });
