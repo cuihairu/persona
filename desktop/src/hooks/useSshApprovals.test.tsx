@@ -169,7 +169,7 @@ describe('hooks/useSshApprovals', () => {
   });
 
   it('notifies via the system when the window is hidden', async () => {
-    const sendNotification = require('@tauri-apps/plugin-notification')
+    const sendNotification = jest.requireMock('@tauri-apps/plugin-notification')
       .sendNotification as jest.Mock;
     sendNotification.mockClear();
     // 触发前把 document.hidden 置真（失焦态），事后还原

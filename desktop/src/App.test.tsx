@@ -619,7 +619,10 @@ describe('App', () => {
   });
 
   it('toasts when an update is available', async () => {
-    const uc = require('@/utils/updateCheck');
+    const uc = jest.requireMock('@/utils/updateCheck') as {
+      isUpdateCheckEnabled: jest.Mock;
+      checkForUpdate: jest.Mock;
+    };
     uc.isUpdateCheckEnabled.mockReturnValue(true);
     uc.checkForUpdate.mockResolvedValue({
       status: 'update-available',
