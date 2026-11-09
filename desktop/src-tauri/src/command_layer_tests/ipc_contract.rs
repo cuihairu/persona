@@ -19,7 +19,28 @@
 /// 两侧合起来构成完整契约。新命令若收多词参数：加上属性后在此表登记。
 #[test]
 fn command_ipc_arg_keys_match_api_ts_snake_case() {
-    let source = include_str!("../commands.rs");
+    // 命令层拆分后（LAY-004）源码分散在 commands/ 各 family 文件；
+    // 编译期拼接全部 family，契约断言逻辑不变。
+    let source = concat!(
+        include_str!("../commands/account.rs"),
+        include_str!("../commands/attachments.rs"),
+        include_str!("../commands/audit.rs"),
+        include_str!("../commands/autolock.rs"),
+        include_str!("../commands/backup.rs"),
+        include_str!("../commands/biometric.rs"),
+        include_str!("../commands/connect.rs"),
+        include_str!("../commands/credentials.rs"),
+        include_str!("../commands/health.rs"),
+        include_str!("../commands/identity.rs"),
+        include_str!("../commands/lifecycle.rs"),
+        include_str!("../commands/passkey.rs"),
+        include_str!("../commands/quickaccess.rs"),
+        include_str!("../commands/reveal.rs"),
+        include_str!("../commands/ssh.rs"),
+        include_str!("../commands/sync.rs"),
+        include_str!("../commands/travel.rs"),
+        include_str!("../commands/wallet.rs"),
+    );
 
     // (命令名, api.ts 发送的多词 snake_case 键)——2026-09-28 全量审计
     const AUDITED: &[(&str, &[&str])] = &[
