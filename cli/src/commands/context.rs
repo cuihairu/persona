@@ -458,4 +458,78 @@ mod tests {
             .expect_err("bogus action must fail");
         assert!(err.to_string().contains("Use on, off, status or clear"));
     }
+    // ---- execute 派发 + status/get 视图补测（只读真实 HOME/cwd，不写入）----
+
+    #[tokio::test]
+    async fn execute_dispatches_read_only_commands() {
+        let config = CliConfig::default();
+        execute(
+            ContextArgs {
+                command: ContextCommand::Get {
+                    pattern: "definitely-no-mapping-xyz".into(),
+                },
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+        execute(
+            ContextArgs {
+                command: ContextCommand::Status,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn get_mapping_prints_global_fallback_and_missing() {
+        let (global, repo) = temp_paths("get-global");
+        cleanup(&global);
+        cleanup(&repo);
+        let mut map = ContextMapFile::default();
+        map.hosts.insert(
+            "git.example.com".to_string(),
+            IdentityEntry {
+                identity: "work-id".to_string(),
+            },
+        );
+        write_map(&global, &map).unwrap();
+
+        // repo 未建 → 全局兜底命中
+        get_mapping("git.example.com", &global, &repo).unwrap();
+        // 双未命中 → "No mapping"
+        get_mapping("nothing-here", &global, &repo).unwrap();
+        cleanup(&global);
+        cleanup(&repo);
+    }
+
+    #[test]
+    fn map_creates_parent_dirs_and_status_lists_files() {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let dir = tempfile::TempDir::new().unwrap();
+        let global = dir.path().join("nested/deeper/context.toml");
+        let repo = dir.path().join("repo-side/context.toml");
+        // 深层路径：write_map 的 create_dir_all 分支
+        map_mapping("proj", "id-1", false, false, &global, &repo).unwrap();
+        assert!(global.exists());
+        // 仓库本地文件同款写入（repo_local=true 臂）
+        map_mapping("proj", "id-2", false, true, &global, &repo).unwrap();
+        assert!(repo.exists());
+
+        // status：两文件在场 + 覆盖变量缺席
+        status(&global, &repo).unwrap();
+
+        // 覆盖变量在场分支
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("PERSONA_CONTEXT_OVERRIDE", "mobile-identity");
+        status(&global, &repo).unwrap();
+        std::env::remove_var("PERSONA_CONTEXT_OVERRIDE");
+        drop(guard);
+
+        // 损坏文件 → status 标记警告但不失败
+        std::fs::write(&repo, ">>> not toml <<<").unwrap();
+        status(&global, &repo).unwrap();
+    }
 }
