@@ -764,4 +764,150 @@ mod tests {
                 .is_none()
         );
     }
+
+    // ------------------------------------------------------------------
+    // execute() 端到端：走真实 MapPaths::current()/ContextSignals::collect()
+    // 推导，HOME 重定向到空 TempDir（仅 Unix：Windows 的 dirs 走
+    // known-folder API、不认 HOME，无法重定向——见 write_global_map 注）。
+    // ------------------------------------------------------------------
+
+    /// HOME 重定向到空目录：全局映射表读空、仓库内表不存在。
+    /// 守卫先 drop（恢复 HOME）再删目录，drop 顺序与声明相反故安全。
+    #[cfg(unix)]
+    fn home_redirect() -> (TempDir, EnvRestore) {
+        let dir = TempDir::new().unwrap();
+        let guard = EnvRestore::set("HOME", dir.path());
+        (dir, guard)
+    }
+
+    /// 与 execute 同口径直算一次，锁定环境前置条件（重定向确实生效）。
+    #[cfg(unix)]
+    async fn current_suggestion(config: &CliConfig, override_name: Option<&str>) -> SuggestResult {
+        compute_suggestion(
+            config,
+            &MapPaths::current(),
+            &ContextSignals::collect(),
+            override_name,
+        )
+        .await
+        .unwrap()
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn execute_prints_suggestion_in_human_json_and_short_modes() {
+        let _lock = lock_env();
+        let (_home, _home_guard) = home_redirect();
+        let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
+        let dir = TempDir::new().unwrap();
+        seeded_db(&dir, false).await;
+        let config = config_for(&dir);
+        let _ovr = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "OpenSource");
+
+        // 前置条件锁定：重定向后两张映射表全空，唯一候选来自覆盖变量。
+        let result = current_suggestion(&config, Some("OpenSource")).await;
+        assert_eq!(result.candidates.len(), 1);
+        assert_eq!(result.candidates[0].identity, "OpenSource");
+        assert_eq!(result.candidates[0].reason, "env PERSONA_CONTEXT_OVERRIDE");
+
+        execute(
+            SuggestArgs {
+                json: false,
+                short: false,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+        execute(
+            SuggestArgs {
+                json: true,
+                short: false,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+        execute(
+            SuggestArgs {
+                json: false,
+                short: true,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn execute_human_output_reports_fallback_without_candidates() {
+        let _lock = lock_env();
+        let (_home, _home_guard) = home_redirect();
+        let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
+        let _ovr = EnvRestore::remove("PERSONA_CONTEXT_OVERRIDE");
+
+        // active 在位：无候选时提示保持 active。
+        let dir = TempDir::new().unwrap();
+        seeded_db(&dir, true).await;
+        let config = config_for(&dir);
+        let result = current_suggestion(&config, None).await;
+        assert!(result.candidates.is_empty());
+        assert_eq!(result.active.as_deref(), Some("OpenSource"));
+        execute(
+            SuggestArgs {
+                json: false,
+                short: false,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // active 也缺位：提示未设置。
+        let bare = TempDir::new().unwrap();
+        seeded_db(&bare, false).await;
+        let config = config_for(&bare);
+        let result = current_suggestion(&config, None).await;
+        assert!(result.candidates.is_empty());
+        assert_eq!(result.active, None);
+        execute(
+            SuggestArgs {
+                json: false,
+                short: false,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn execute_warns_on_invalid_override_before_fallback_line() {
+        let _lock = lock_env();
+        let (_home, _home_guard) = home_redirect();
+        let _no_ctx = EnvRestore::remove("PERSONA_NO_CONTEXT");
+        let dir = TempDir::new().unwrap();
+        seeded_db(&dir, false).await;
+        let config = config_for(&dir);
+        let _bad = EnvRestore::set("PERSONA_CONTEXT_OVERRIDE", "Ghost");
+
+        let result = current_suggestion(&config, Some("Ghost")).await;
+        assert!(result.candidates.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.contains("PERSONA_CONTEXT_OVERRIDE=Ghost")));
+
+        execute(
+            SuggestArgs {
+                json: false,
+                short: false,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+    }
 }
