@@ -1662,4 +1662,121 @@ mod tests {
         // 物化主位落库（远端内容），裁决等用户
         assert_eq!(report.materialized, 1);
     }
+    // ---- 重包容错矩阵：legacy / wrapped 损坏 / 密文损坏 / 明文非法，
+    // 逐条跳过不阻断整批；健康条目正常重包（对照组）。----
+
+    #[tokio::test]
+    async fn rewrap_all_skips_unreadable_credentials_one_by_one() {
+        let (db, identity, master) = seeded_db().await;
+        let cred_repo = CredentialRepository::new(db.clone());
+
+        // ① legacy：无 wrapped item key（取不出 item key）→ skip
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "legacy".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                vec![1u8; 32],
+                None,
+            ))
+            .await
+            .unwrap();
+
+        // ② wrapped 损坏（unwrap_item_key 失败）→ skip
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "bad-wrapped".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                vec![1u8; 32],
+                Some(vec![7u8; 8]),
+            ))
+            .await
+            .unwrap();
+
+        // ③ wrapped 有效但密文损坏（decrypt 失败）→ skip
+        let item_key = EncryptionService::generate_key();
+        let wrapped = master.encrypt(&item_key).unwrap();
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "bad-ciphertext".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                vec![9u8; 64],
+                Some(wrapped.clone()),
+            ))
+            .await
+            .unwrap();
+
+        // ④ 解密成功但明文不是合法 CredentialData（from_bytes 失败）→ skip
+        let junk = KeyHierarchy::new(&master)
+            .encrypt_with_item_key(&item_key, b"not-credential-data")
+            .unwrap();
+        cred_repo
+            .create(&Credential::new(
+                identity.id,
+                "bad-data".into(),
+                CredentialType::Password,
+                SecurityLevel::High,
+                junk,
+                Some(wrapped),
+            ))
+            .await
+            .unwrap();
+
+        // 对照组：健康凭据应正常重包
+        store_credential(&cred_repo, identity.id, "healthy", &master, "ok").await;
+
+        let new_group = GroupKey::generate().unwrap();
+        let (session, _) = session_for(&db, Uuid::new_v4(), GroupKey::generate().unwrap());
+        let (rewrapped, skipped) = session.rewrap_all(&master, &new_group).await.unwrap();
+        assert_eq!(
+            (rewrapped, skipped),
+            (1, 4),
+            "healthy rewrapped, 4 bad skipped"
+        );
+    }
+
+    // 裁决入口的形状防御：非凭据 kind 的副本、缺 payload 的 put 副本一律
+    // InvalidInput，oplog/主库零触碰。
+    #[tokio::test]
+    async fn resolve_rejects_non_credential_conflict_copy() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, mut copy) = seeded_conflict(item, &group, identity.id);
+        copy.kind = ItemKind::Unknown;
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+        let err = session
+            .resolve_conflict(&master, item, copy.op_id)
+            .await
+            .unwrap_err();
+        assert_variant(err, |e| matches!(e, PersonaError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_rejects_put_copy_without_payload() {
+        let (db, identity, master) = seeded_db().await;
+        let item = Uuid::new_v4();
+        let group = GroupKey::generate().unwrap();
+        let (primary, mut copy) = seeded_conflict(item, &group, identity.id);
+        copy.payload = None;
+        let sync_repo = SyncRepository::new(db.clone());
+        sync_repo.record_remote_op(&primary).await.unwrap();
+        sync_repo.record_remote_op(&copy).await.unwrap();
+
+        let (session, _) = session_for(&db, Uuid::new_v4(), group);
+        let err = session
+            .resolve_conflict(&master, item, copy.op_id)
+            .await
+            .unwrap_err();
+        assert_variant(err, |e| matches!(e, PersonaError::InvalidInput(_)));
+    }
 }
