@@ -90,20 +90,23 @@ describe('utils/helpers', () => {
 
   it('generateSecurePassword includes the symbol charset when requested', () => {
     const originalCrypto = window.crypto;
-    (window as any).crypto = {
+    const mockCrypto = {
       getRandomValues: (arr: Uint8Array) => {
         for (let i = 0; i < arr.length; i++) arr[i] = 0;
-        // 62 % 92 = 62 → 落在追加的 symbols 段首（charset[62] === '!')
+        // 62 % 88 = 62 → 落在追加的 symbols 段首（charset[62] === '!')
         arr[0] = 62;
         return arr;
       },
     };
+    // jsdom 的 window.crypto 是 getter-only（无 setter），直接赋值会被静默忽略，
+    // 导致用真随机数、断言偶发失败。必须走 defineProperty 才真正替换。
+    Object.defineProperty(window, 'crypto', { value: mockCrypto, configurable: true });
 
     const password = generateSecurePassword(24, true);
     expect(password).toHaveLength(24);
     expect(password).toContain('!');
 
-    (window as any).crypto = originalCrypto;
+    Object.defineProperty(window, 'crypto', { value: originalCrypto, configurable: true });
   });
 });
 
