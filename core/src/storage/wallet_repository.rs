@@ -10,10 +10,14 @@ use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Helper to convert Unix timestamp to DateTime<Utc>
-#[allow(dead_code)]
-fn timestamp_to_datetime(ts: i64) -> DateTime<Utc> {
-    Utc.timestamp_opt(ts, 0).unwrap()
+/// Convert a stored Unix timestamp to DateTime<Utc>. Out-of-range values
+/// (corrupt or truncated DB rows) surface as a Database error instead of
+/// panicking the caller's recovery path — the same tolerance passkey rows
+/// already have.
+fn timestamp_to_datetime(ts: i64) -> PersonaResult<DateTime<Utc>> {
+    Utc.timestamp_opt(ts, 0)
+        .single()
+        .ok_or_else(|| PersonaError::Database(format!("invalid stored timestamp: {ts}")))
 }
 
 /// Repository for managing crypto wallets
@@ -638,8 +642,8 @@ impl CryptoWalletRepository {
             encrypted_mnemonic: row.get("encrypted_mnemonic"),
             addresses: Vec::new(),        // Loaded separately
             metadata: Default::default(), // Loaded separately
-            created_at: Utc.timestamp_opt(created_at_ts, 0).unwrap(),
-            updated_at: Utc.timestamp_opt(updated_at_ts, 0).unwrap(),
+            created_at: timestamp_to_datetime(created_at_ts)?,
+            updated_at: timestamp_to_datetime(updated_at_ts)?,
             watch_only: row.get("watch_only"),
             security_level: serde_json::from_str(&security_level_str)?,
         })
@@ -673,9 +677,9 @@ impl CryptoWalletRepository {
                 index: row.get::<i64, _>("index") as u32,
                 used: row.get("used"),
                 balance: row.get("balance"),
-                last_activity: last_activity_ts.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+                last_activity: last_activity_ts.map(timestamp_to_datetime).transpose()?,
                 metadata: serde_json::from_str(&metadata_str)?,
-                created_at: Utc.timestamp_opt(created_at_ts, 0).unwrap(),
+                created_at: timestamp_to_datetime(created_at_ts)?,
             });
         }
 
@@ -841,8 +845,8 @@ impl CryptoWalletRepository {
             memo: row.get("memo"),
             raw_transaction_data: row.get("raw_transaction_data"),
             required_signatures: row.get::<i32, _>("required_signatures") as usize,
-            created_at: Utc.timestamp_opt(created_at_ts, 0).unwrap(),
-            expires_at: expires_at_ts.map(|ts| Utc.timestamp_opt(ts, 0).unwrap()),
+            created_at: timestamp_to_datetime(created_at_ts)?,
+            expires_at: expires_at_ts.map(timestamp_to_datetime).transpose()?,
             metadata: serde_json::from_str(&metadata_str)?,
         })
     }
@@ -864,7 +868,7 @@ impl CryptoWalletRepository {
             signatures: serde_json::from_str(&signatures_str)?,
             raw_signed_transaction: row.get("raw_signed_transaction"),
             transaction_hash: row.get("transaction_hash"),
-            signed_at: Utc.timestamp_opt(signed_at_ts, 0).unwrap(),
+            signed_at: timestamp_to_datetime(signed_at_ts)?,
             broadcast_status: serde_json::from_str(&broadcast_status_str)?,
         })
     }
@@ -1472,9 +1476,16 @@ mod tests {
 
     #[test]
     fn test_timestamp_to_datetime_helper() {
-        let dt = timestamp_to_datetime(1_700_000_000);
+        let dt = timestamp_to_datetime(1_700_000_000).unwrap();
         assert_eq!(dt.timestamp(), 1_700_000_000);
         assert_eq!(*dt.offset(), chrono::Utc);
+
+        // Values beyond chrono's representable range surface as a Database
+        // error instead of a panic.
+        assert!(matches!(
+            timestamp_to_datetime(i64::MAX),
+            Err(PersonaError::Database(_))
+        ));
     }
 
     #[tokio::test]
@@ -1612,5 +1623,43 @@ mod tests {
             repo.signed_transaction_from_row(&row),
             Err(PersonaError::InvalidInput(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn out_of_range_timestamps_surface_database_errors() {
+        let db = Database::in_memory().await.unwrap();
+        db.migrate().await.unwrap();
+        let identity_id = seed_identity(&db).await;
+        let repo = CryptoWalletRepository::new(Arc::new(db.clone()));
+        let wallet = make_wallet(identity_id, "Corrupt Timestamps");
+        let created = repo.create(&wallet).await.unwrap();
+
+        // A wallet row whose `created_at` is outside chrono's representable
+        // range must fail row conversion with a Database error instead of
+        // panicking on the unwrap (DB corruption/manual edits must not
+        // break the listing path).
+        sqlx::query("UPDATE crypto_wallets SET created_at = ? WHERE id = ?")
+            .bind(i64::MAX)
+            .bind(created.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(matches!(
+            repo.find_all().await,
+            Err(PersonaError::Database(_))
+        ));
+        assert!(matches!(
+            repo.find_by_id(&created.id).await,
+            Err(PersonaError::Database(_))
+        ));
+
+        // Restoring a sane timestamp puts the row back in service.
+        sqlx::query("UPDATE crypto_wallets SET created_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now().timestamp())
+            .bind(created.id.to_string())
+            .execute(db.pool())
+            .await
+            .unwrap();
+        assert!(repo.find_by_id(&created.id).await.unwrap().is_some());
     }
 }
