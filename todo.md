@@ -98,7 +98,7 @@
 - [ ] LAY-021 [P1] 拆分 `core/src/sync/runtime.rs`（1665 行）——会话装配、backfill、捕获、密钥轮换、冲突处理共用（`core/src/sync/runtime.rs:29`）
 - [ ] LAY-022 [P1] 拆分 `core/src/storage/wallet_repository.rs`（1616 行）——钱包、地址、交易、统计仓储集中（`core/src/storage/wallet_repository.rs:20`）
 - [ ] LAY-023 [P1] 拆分 `core/src/travel.rs`（1614 行）——sidecar 加密封装、入退模式、文件保护与跨库重建聚合（`core/src/travel.rs:73`）
-- [ ] LAY-024 [P1] 拆分 `cli/src/commands/export.rs`（1610 行）——多格式导出计划、确认、文件加密与展示耦合（`cli/src/commands/export.rs:646`）
+- [x] LAY-024 [P1] 拆分 `cli/src/commands/export.rs`（1610 行）——多格式导出计划、确认、文件加密与展示耦合（`cli/src/commands/export.rs:646`）【2026-11-12 完成：2f78e53，1635 行 vs 1610（+1.5%）；mod.rs 123（execute 分发）+ args.rs 32 + plan.rs 146（身份选择/校验/输出路径/摘要）+ formats.rs 316（json/yaml/csv）+ output.rs 51（压缩/文件信息）+ tests/ 967；测试 24/24（23+summary 1）全绿，workspace clippy -D warnings 0，cargo fmt --check 干净】
 - [ ] LAY-025 [P1] 拆分 `core/src/auth/auto_lock.rs`（1579 行）——策略持久化、运行时、事件、审计和面板流转集中（`core/src/auth/auto_lock.rs:1`）
 - [ ] LAY-026 [P1] 拆分 `core/src/import_1pux.rs`（1495 行）——1Password 解包、模型转换与导入校验合并（`core/src/import_1pux.rs:1`）
 - [ ] LAY-027 [P1] 拆分 `cli/src/commands/import.rs`（1495 行）——交互流程、格式识别、进度与结果输出耦合（`cli/src/commands/import.rs:694`）
