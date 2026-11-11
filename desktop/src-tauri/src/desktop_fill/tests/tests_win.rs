@@ -5,7 +5,7 @@
 use super::classify_fields;
 use super::win::test_window::TestTargetWindow;
 use super::win::{enumerate_edit_fields, read_field_text, revalidate_field, validate_target};
-use super::{execute_fill, FillError, FillTarget};
+use super::{execute_fill, FieldState, FillError, FillTarget};
 
 /// 用户名/密码框识别 + execute_fill 全链（指纹验证 → 枚举 → 分类 →
 /// 逐控件重验证 → WM_SETTEXT）注入 + WM_GETTEXT 读回一致。
