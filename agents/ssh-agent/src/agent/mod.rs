@@ -103,23 +103,19 @@ impl Agent {
                 .take()
                 .or_else(|| std::env::var("PERSONA_MASTER_PASSWORD").ok());
             match pass {
-                Some(pass) => {
-                    match service.authenticate_user(&pass).await? {
-                        persona_core::auth::authentication::AuthResult::Success => {}
-                        _ => {
-                            unlocked = false;
-                        }
+                Some(pass) => match service.authenticate_user(&pass).await? {
+                    persona_core::auth::authentication::AuthResult::Success => {}
+                    _ => {
+                        unlocked = false;
                     }
-                }
+                },
                 None => {
                     unlocked = false;
                 }
             }
         }
         if !unlocked {
-            warn!(
-                "Vault is locked and no master password provided; no keys loaded"
-            );
+            warn!("Vault is locked and no master password provided; no keys loaded");
             return Ok(());
         }
         let identities = service.get_identities().await?;

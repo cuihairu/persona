@@ -142,11 +142,18 @@ pub async fn run_agent_with_hooks_and_env(
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".persona")
         });
-    let _ = std::fs::create_dir_all(&state_dir);
+    // State files are the host's readiness and status contract (the desktop
+    // polls for the socket record file to decide "agent started"). A silent
+    // write failure left the agent running while the host aborted it as
+    // failed — surface the real cause instead.
+    std::fs::create_dir_all(&state_dir)
+        .with_context(|| format!("Failed to create agent state dir {}", state_dir.display()))?;
     let sock_file = state_dir.join("ssh-agent.sock");
     let pid_file = state_dir.join("ssh-agent.pid");
-    let _ = std::fs::write(&sock_file, &endpoint);
-    let _ = std::fs::write(&pid_file, std::process::id().to_string());
+    std::fs::write(&sock_file, &endpoint)
+        .with_context(|| format!("Failed to write agent state file {}", sock_file.display()))?;
+    std::fs::write(&pid_file, std::process::id().to_string())
+        .with_context(|| format!("Failed to write agent state file {}", pid_file.display()))?;
 
     // Load keys from Persona
     let mut agent = Agent::new();
@@ -247,6 +254,29 @@ pub(crate) fn stdin_confirm_from_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn unwritable_state_dir_fails_startup_with_cause() {
+        // The host's readiness check depends on the state files; a state dir
+        // that cannot be written must fail the run with the real cause
+        // instead of leaving a running agent the host will abort as failed.
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("not-a-dir");
+        std::fs::write(&blocker, b"file").unwrap();
+        let overrides = crate::AgentEnvOverrides {
+            state_dir: Some(blocker.clone()),
+            socket_path: Some(dir.path().join("agent.sock")),
+            ..Default::default()
+        };
+        let err = run_agent_with_hooks_and_env(None, None, overrides)
+            .await
+            .expect_err("unwritable state dir must fail the run");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("not-a-dir") && msg.contains("state"),
+            "error must name the state dir: {msg}"
+        );
+    }
 
     #[test]
     fn tty_confirm_accepts_y_prefix_answers() {
