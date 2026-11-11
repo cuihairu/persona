@@ -44,6 +44,66 @@ fn sync_connect_rejects_missing_envelope() {
     );
 }
 
+/// 本机信封存在但信封封给**另一台设备**（device_id 对不上密钥）→
+/// sync_group_key_failed：与「缺信封」区分（后者是未授权，前者是数据
+/// 损坏/错配），fail-closed 不静默回退。
+#[test]
+fn sync_connect_rejects_envelope_sealed_for_other_device() {
+    let identity = device_identity(1);
+    let other = device_identity(2);
+    // 信封按 other 的公钥密封，但条目挂在 identity 名下——身份错配。
+    let envelope =
+        persona_core::sync::envelope::seal_group_key(&[1u8; 32], other.key_pair.public_bytes())
+            .unwrap();
+    let entries = vec![persona_core::sync::remote::SyncGroupKeyEntry {
+        device_id: identity.device_id,
+        envelope,
+        sealed_by: "test".to_string(),
+        created_at: "2026-10-07T00:00:00Z".to_string(),
+    }];
+
+    let err = open_own_group_key(&entries, &identity).unwrap_err();
+    assert!(
+        err.to_string().starts_with("sync_group_key_failed"),
+        "got: {err}"
+    );
+}
+
+/// SyncConnectRequest.user_gesture 是必填 bool（无缺省）：省略 → 反序列化
+/// 错误（扩展必须显式带手势，popup 点选）。
+#[test]
+fn sync_connect_request_requires_explicit_gesture() {
+    let err = serde_json::from_value::<SyncConnectRequest>(serde_json::json!({})).unwrap_err();
+    assert!(
+        err.to_string().contains("user_gesture"),
+        "missing user_gesture must fail deserialization, got: {err}"
+    );
+
+    let req: SyncConnectRequest =
+        serde_json::from_value(serde_json::json!({ "user_gesture": true })).unwrap();
+    assert!(req.user_gesture);
+}
+
+/// SyncConnectPayload 蛇形 wire 形态往返：扩展侧读 server_url/token/
+/// device_id/device_name/group_key_hex（§17 敏感口径只在 session 内存）。
+#[test]
+fn sync_connect_payload_round_trips_snake_case() {
+    let payload = SyncConnectPayload {
+        server_url: "https://sync.example.com".to_string(),
+        token: "tok-123".to_string(),
+        device_id: "dev-9".to_string(),
+        device_name: "Alice's Laptop".to_string(),
+        group_key_hex: "aabbcc".to_string(),
+    };
+    let json = serde_json::to_value(&payload).unwrap();
+    assert_eq!(json["server_url"], "https://sync.example.com");
+    assert_eq!(json["group_key_hex"], "aabbcc");
+
+    let back: SyncConnectPayload = serde_json::from_value(json).unwrap();
+    assert_eq!(back.token, "tok-123");
+    assert_eq!(back.device_name, "Alice's Laptop");
+}
+
 /// 无 workspace/settings → sync_not_configured（免解锁读 settings 的
 /// 错误分类锚点；run_sync_connect 的 keyring/服务器分支依赖真机
 /// secret service 与真服务器，留在 M6 实机走查覆盖）。
