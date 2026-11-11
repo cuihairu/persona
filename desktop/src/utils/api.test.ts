@@ -972,10 +972,12 @@ describe('utils/api command mapping coverage', () => {
       credential_id: 'c1',
     });
 
-    await personaAPI.setCredentialCustomFields('c1', [{ label: 'k', value: 'v' }]);
+    await personaAPI.setCredentialCustomFields('c1', [
+      { id: 'f1', label: 'k', value: 'v', type: 'text', section: null },
+    ]);
     expect(mockInvoke).toHaveBeenCalledWith('set_credential_custom_fields', {
       credential_id: 'c1',
-      fields: [{ label: 'k', value: 'v' }],
+      fields: [{ id: 'f1', label: 'k', value: 'v', type: 'text', section: null }],
     });
 
     await personaAPI.sshAgentIntegrationStatus();

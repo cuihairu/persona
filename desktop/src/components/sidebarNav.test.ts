@@ -1,4 +1,7 @@
+import type { TFunction } from 'i18next';
 import { filterLabel, viewForFilter } from './sidebarNav';
+
+const passthrough = ((key: string) => key) as TFunction;
 
 describe('components/sidebarNav', () => {
   it('viewForFilter maps the generator tool to the generator view', () => {
@@ -7,7 +10,7 @@ describe('components/sidebarNav', () => {
 
   it('filterLabel falls back to all items for an unknown identity id', () => {
     const label = filterLabel(
-      (key) => key,
+      passthrough,
       { kind: 'identity', value: 'missing-id' },
       [{ id: 'real-id', name: 'Real' } as any],
     );
@@ -16,7 +19,7 @@ describe('components/sidebarNav', () => {
 
   it('filterLabel resolves a known identity id to its name', () => {
     const label = filterLabel(
-      (key) => key,
+      passthrough,
       { kind: 'identity', value: 'real-id' },
       [{ id: 'real-id', name: 'Real' } as any],
     );

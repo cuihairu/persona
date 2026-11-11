@@ -1287,7 +1287,7 @@ describe('hooks/usePersonaService', () => {
     const { result } = renderHook(() => usePersonaService());
     let out: any;
     await act(async () => {
-      out = await result.current.createIdentity('Work', 'Work', null);
+      out = await result.current.createIdentity('Work', 'Work', undefined);
     });
 
     expect(out).toBeUndefined();
