@@ -938,10 +938,14 @@ mod tests {
     fn analyze_excludes_persona_managed_block_entries() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config");
+        // 用测试内自造的不存在路径而非真实稳定 socket：探测断言不能依赖
+        // 机器上是否恰有一个活 agent（并行测试/本机真实实例都会命中）。
+        let agent = dir.path().join("absent-agent.sock");
+        let agent = agent.to_string_lossy().to_string();
         std::fs::write(
             &config_path,
             format!(
-                "{BLOCK_BEGIN}\nHost *\n  IdentityAgent {AGENT}\n{BLOCK_END}\nHost a\n  ForwardAgent yes\n"
+                "{BLOCK_BEGIN}\nHost *\n  IdentityAgent {agent}\n{BLOCK_END}\nHost a\n  ForwardAgent yes\n"
             ),
         )
         .unwrap();
@@ -950,9 +954,9 @@ mod tests {
         assert!(a.entries.iter().all(|e| e.keyword != "IdentityAgent"));
         assert_eq!(a.forward_agent_entries.len(), 1);
         // 但生效判定包含块值：无用户全局条目时 ssh 实际用的就是块
-        assert_eq!(a.identity_agent_effective.as_deref(), Some(AGENT));
-        assert_eq!(a.effective_socket.as_deref(), Some(AGENT));
-        // AGENT 路径在测试环境不存在 → 探测 false（不是 None 的「未知」）
+        assert_eq!(a.identity_agent_effective.as_deref(), Some(agent.as_str()));
+        assert_eq!(a.effective_socket.as_deref(), Some(agent.as_str()));
+        // 路径不存在 → 探测 false（不是 None 的「未知」）
         assert_eq!(a.socket_alive, Some(false));
     }
 

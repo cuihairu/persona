@@ -20,7 +20,7 @@ pub use approval::{
     fingerprint_for_blob, ApprovalHandler, ApprovalRequest, DenyAllApprovalHandler,
     TtyApprovalHandler,
 };
-pub use daemon::{run_agent, run_agent_with_approval, run_agent_with_hooks};
+pub use daemon::{run_agent, run_agent_with_approval, run_agent_with_hooks, run_agent_with_hooks_and_env, AgentEnvOverrides};
 
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};

@@ -21,6 +21,7 @@ fn make_test_agent(keys: Vec<AgentKey>) -> Agent {
         policy: Arc::new(Mutex::new(enforcer)),
         biometric_provider,
         approval_handler: Arc::new(approval::DenyAllApprovalHandler),
+        master_password: None,
     }
 }
 
@@ -114,6 +115,7 @@ fn agent_with_policy(
         policy: Arc::new(Mutex::new(PolicyEnforcer::new(policy))),
         biometric_provider,
         approval_handler: Arc::new(approval::DenyAllApprovalHandler),
+        master_password: None,
     }
 }
 
@@ -186,6 +188,7 @@ fn agent_with(
         policy: Arc::new(Mutex::new(PolicyEnforcer::new(policy))),
         biometric_provider: biometric,
         approval_handler: approval,
+        master_password: None,
     }
 }
 

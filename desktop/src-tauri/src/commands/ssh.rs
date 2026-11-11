@@ -37,13 +37,7 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
     }
 
     let mut handle_guard = state.agent_handle.lock().await;
-    let password = request.master_password.clone();
-    let db_path_clone = db_path.clone();
-    let state_dir = agent_state_dir().to_string_lossy().to_string();
     // Desktop has no TTY: route RequireConfirm prompts through the GUI.
-    // PERSONA_AGENT_REQUIRE_CONFIRM=1 enables the confirm policy (read by
-    // PolicyEnforcer::from_env inside Agent::new).
-    std::env::set_var("PERSONA_AGENT_REQUIRE_CONFIRM", "1");
     let handler = Arc::new(crate::approval::DesktopApprovalHandler::new(
         app,
         state.ssh_approvals.clone(),
@@ -51,6 +45,23 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
     // biometric provider 与解锁屏/init_service 注入的是同一份：SSH key 的
     // require_biometric 策略走 OS 认证弹框（Agent::new 默认拒绝，注入才放行）
     let biometric = state.biometric_provider.clone();
+    // 显式传参取代 set_var：多线程进程里写进程级 env 与并发 getenv 是数据
+    // 竞争（Rust 2024 起 set_var 为 unsafe），且主密码一旦进 env 就终身
+    // 驻留。override 只活在 agent 任务栈上，主密码在密钥加载后被消费。
+    // 稳定 socket 路径：写进 ~/.ssh/config 的 IdentityAgent 必须跨重启不
+    // 变；daemon 缺省路径带 pid，只留给一次性 CLI 场景。外部已指定（测试
+    // guard 预占 bind 失败路径/自定义部署）则尊重不覆盖。
+    let injected_socket_path = std::env::var_os("PERSONA_AGENT_SOCKET_PATH")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from);
+    let overrides = persona_ssh_agent::AgentEnvOverrides {
+        master_password: request.master_password.clone(),
+        db_path: Some(std::path::PathBuf::from(&db_path)),
+        state_dir: Some(agent_state_dir()),
+        socket_path: injected_socket_path
+            .or_else(|| Some(crate::ssh_integration::agent_stable_socket())),
+        require_confirm: Some(true),
+    };
     // 启动失败不得静默：agent 任务把 run_agent_with_hooks 的错误存进共享槽位，
     // 就绪轮询读它回传 UI（旧实现只 eprintln，UI 恒报"运行中"假绿）。
     let startup_error = Arc::new(std::sync::Mutex::new(None::<String>));
@@ -58,27 +69,10 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
     // tauri 全局运行时而非调用方的 tokio 上下文：mock_app（测试）的
     // reactor 上 socket IO 永不唤醒，agent 必须活在健康的多线程运行时里。
     let handle = tauri::async_runtime::spawn(async move {
-        if let Some(pass) = password {
-            std::env::set_var("PERSONA_MASTER_PASSWORD", pass);
-        } else {
-            std::env::remove_var("PERSONA_MASTER_PASSWORD");
-        }
-        std::env::set_var("PERSONA_DB_PATH", &db_path_clone);
-        std::env::set_var("PERSONA_AGENT_STATE_DIR", &state_dir);
-        // 稳定 socket 路径：写进 ~/.ssh/config 的 IdentityAgent 必须跨重启
-        // 不变；daemon 缺省路径带 pid，只留给一次性 CLI 场景。外部已指定
-        // （测试 guard 预占 bind 失败路径/自定义部署）则尊重不覆盖。
-        let injected_socket_path =
-            std::env::var_os("PERSONA_AGENT_SOCKET_PATH").is_none_or(|v| v.is_empty());
-        if injected_socket_path {
-            std::env::set_var(
-                "PERSONA_AGENT_SOCKET_PATH",
-                crate::ssh_integration::agent_stable_socket(),
-            );
-        }
-        if let Err(err) = persona_ssh_agent::run_agent_with_hooks(
+        if let Err(err) = persona_ssh_agent::run_agent_with_hooks_and_env(
             Some(handler as Arc<dyn persona_ssh_agent::ApprovalHandler>),
             Some(biometric as Arc<dyn persona_core::BiometricProvider>),
+            overrides,
         )
         .await
         {
@@ -87,11 +81,6 @@ pub async fn start_ssh_agent<R: tauri::Runtime>(
                 *slot = Some(err.to_string());
             }
         }
-        if injected_socket_path {
-            std::env::remove_var("PERSONA_AGENT_SOCKET_PATH");
-        }
-        std::env::remove_var("PERSONA_AGENT_STATE_DIR");
-        std::env::remove_var("PERSONA_AGENT_REQUIRE_CONFIRM");
     });
     *handle_guard = Some(handle);
 

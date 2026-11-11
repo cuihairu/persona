@@ -60,6 +60,14 @@ async fn ssh_agent_status_reflects_state_files() {
 #[tokio::test]
 async fn start_stop_ssh_agent_lifecycle() {
     let dir = tempfile::tempdir().unwrap();
+    // Bind inside the sandbox dir: the real stable socket path is probed by
+    // the parallel ssh_integration analysis tests (socket_alive), so a
+    // lifecycle bind there makes them see a live agent and flake.
+    // sandbox_with_socket holds the process env lock for the whole test,
+    // which also serializes against the bind-failure test.
+    #[cfg(unix)]
+    let _guard = StateDirGuard::sandbox_with_socket(&dir, &dir.path().join("agent.sock"));
+    #[cfg(not(unix))]
     let _guard = StateDirGuard::sandbox(&dir);
     let app = mock_app();
 
@@ -83,6 +91,35 @@ async fn start_stop_ssh_agent_lifecycle() {
 
     init_service_ok(&app, "correct-horse").await;
 
+    // One SSH key in the vault: after start the agent must have loaded it
+    // through the injected master password (regression: the password is
+    // passed as a parameter now, not via PERSONA_MASTER_PASSWORD).
+    let resp = create_identity(
+        CreateIdentityRequest {
+            name: "Agent Loader".to_string(),
+            identity_type: "personal".to_string(),
+            description: None,
+            email: None,
+            phone: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    let identity_id = resp.data.expect("identity created").id;
+    let resp = generate_ssh_key(
+        GenerateSshKeyRequest {
+            identity_id: identity_id.clone(),
+            key_type: "ed25519".to_string(),
+            comment: Some("lifecycle@test".to_string()),
+            name: None,
+        },
+        app.state::<AppState>(),
+    )
+    .await
+    .unwrap();
+    assert!(resp.success, "key generation failed: {:?}", resp.error);
+
     // Start boots the in-process agent; status reports running.
     let resp = start_ssh_agent(
         StartAgentRequest {
@@ -96,6 +133,13 @@ async fn start_stop_ssh_agent_lifecycle() {
     assert!(resp.success, "agent start failed: {:?}", resp.error);
     assert!(resp.data.unwrap().running, "agent handle is alive");
 
+    // Regression: the agent must be configured via explicit parameters, the
+    // spawn task must not leak the master password into the process env.
+    assert!(
+        std::env::var("PERSONA_MASTER_PASSWORD").is_err(),
+        "master password must not linger in the environment"
+    );
+
     // The agent bound its socket in the sandboxed state dir.
     let sock = dir.path().join("ssh-agent.sock");
     let bound = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -105,6 +149,25 @@ async fn start_stop_ssh_agent_lifecycle() {
     })
     .await;
     assert!(bound.is_ok(), "agent socket never appeared at {sock:?}");
+
+    // The injected master password unlocked the vault and the key loaded.
+    // Keys are loaded after the socket binds (argon2 unlock takes seconds in
+    // debug builds, longer under full-suite CPU contention), so the probe
+    // retries with a ~30s budget until the accept loop is serving.
+    #[cfg(unix)]
+    {
+        // the state file records the endpoint the daemon actually bound
+        let endpoint = std::fs::read_to_string(&sock).expect("read agent endpoint");
+        let mut count = None;
+        for _ in 0..40 {
+            if let Ok(n) = query_agent_key_count(endpoint.trim()) {
+                count = Some(n);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        assert_eq!(count, Some(1), "agent must serve the vault's SSH key");
+    }
 
     // A second start while running returns the current status (no reboot).
     let resp = start_ssh_agent(
@@ -311,6 +374,11 @@ fn query_agent_key_count_fails_on_dead_socket() {
 /// 也要返回成功并清理环境变量）。
 #[tokio::test]
 async fn ssh_key_listing_and_agent_stop_small_arms() {
+    // stop_ssh_agent cleans up state files in the current agent state dir;
+    // without a sandbox + the process env lock it deletes the state files of
+    // whatever agent test runs in parallel.
+    let dir = tempfile::tempdir().unwrap();
+    let _guard = StateDirGuard::sandbox(&dir);
     let app = mock_app();
     let resp = get_ssh_keys(app.state::<AppState>()).await.unwrap();
     assert_eq!(resp.error.as_deref(), Some("Service not initialized"));

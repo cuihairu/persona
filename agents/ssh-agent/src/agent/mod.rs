@@ -5,6 +5,10 @@ pub struct Agent {
     pub(crate) policy: Arc<Mutex<PolicyEnforcer>>,
     pub(crate) biometric_provider: Arc<dyn BiometricProvider>,
     pub(crate) approval_handler: Arc<dyn ApprovalHandler>,
+    /// Host-injected vault password (preferred over the
+    /// `PERSONA_MASTER_PASSWORD` env var). Consumed by
+    /// [`Self::load_keys_from_persona`] so it does not outlive key loading.
+    pub(crate) master_password: Option<String>,
 }
 
 impl Default for Agent {
@@ -33,6 +37,7 @@ impl Agent {
             policy: Arc::new(Mutex::new(enforcer)),
             biometric_provider,
             approval_handler: Arc::new(approval::TtyApprovalHandler),
+            master_password: None,
         }
     }
 
@@ -49,12 +54,32 @@ impl Agent {
         self
     }
 
+    /// Inject the vault unlock password directly (preferred over the
+    /// `PERSONA_MASTER_PASSWORD` env var, which lingers for the whole
+    /// process lifetime once written).
+    pub fn with_master_password(mut self, password: Option<String>) -> Self {
+        self.master_password = password;
+        self
+    }
+
+    /// Inject the require-confirm policy directly (preferred over the
+    /// `PERSONA_AGENT_REQUIRE_CONFIRM` env var).
+    pub fn with_require_confirm(self, value: bool) -> Self {
+        if let Ok(mut policy_enforcer) = self.policy.lock() {
+            policy_enforcer.set_require_confirm(value);
+        }
+        self
+    }
+
     pub fn clone_shallow(&self) -> Self {
         Self {
             keys: self.keys.clone(),
             policy: self.policy.clone(),
             biometric_provider: self.biometric_provider.clone(),
             approval_handler: self.approval_handler.clone(),
+            // per-connection clones never need the password (keys are
+            // already loaded at that point)
+            master_password: None,
         }
     }
 
@@ -71,19 +96,30 @@ impl Agent {
         let mut service = PersonaService::new(db.clone()).await?;
         let mut unlocked = true;
         if service.has_users().await? {
-            if let Ok(pass) = std::env::var("PERSONA_MASTER_PASSWORD") {
-                match service.authenticate_user(&pass).await? {
-                    persona_core::auth::authentication::AuthResult::Success => {}
-                    _ => {
-                        unlocked = false;
+            // Host-injected password first (taken so it never outlives key
+            // loading); env var stays the CLI fallback.
+            let pass = self
+                .master_password
+                .take()
+                .or_else(|| std::env::var("PERSONA_MASTER_PASSWORD").ok());
+            match pass {
+                Some(pass) => {
+                    match service.authenticate_user(&pass).await? {
+                        persona_core::auth::authentication::AuthResult::Success => {}
+                        _ => {
+                            unlocked = false;
+                        }
                     }
                 }
-            } else {
-                unlocked = false;
+                None => {
+                    unlocked = false;
+                }
             }
         }
         if !unlocked {
-            warn!("Vault is locked and PERSONA_MASTER_PASSWORD not set; no keys loaded");
+            warn!(
+                "Vault is locked and no master password provided; no keys loaded"
+            );
             return Ok(());
         }
         let identities = service.get_identities().await?;

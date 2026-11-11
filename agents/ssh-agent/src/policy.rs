@@ -221,6 +221,14 @@ impl PolicyEnforcer {
         Self::new(policy)
     }
 
+    /// Host-side override for the `PERSONA_AGENT_REQUIRE_CONFIRM` env var.
+    /// Desktop apps run the agent in-process and inject policy through
+    /// [`crate::AgentEnvOverrides`] instead of writing process-global
+    /// environment state from a multi-threaded runtime.
+    pub fn set_require_confirm(&mut self, value: bool) {
+        self.policy.global.require_confirm = value;
+    }
+
     /// Check if a signature request should be allowed
     pub fn check_signature(
         &mut self,

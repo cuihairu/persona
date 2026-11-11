@@ -22,6 +22,32 @@ use crate::transport::{default_agent_path, AgentListener};
 use crate::{handle_connection, resolve_persona_db_path, Agent};
 use persona_core::BiometricProvider;
 
+/// Explicit host-supplied configuration for an in-process agent.
+///
+/// Every set field takes precedence over the corresponding environment
+/// variable (`PERSONA_MASTER_PASSWORD` / `PERSONA_DB_PATH` /
+/// `PERSONA_AGENT_STATE_DIR` / `PERSONA_AGENT_SOCKET_PATH` /
+/// `PERSONA_AGENT_REQUIRE_CONFIRM`), so hosts that run the agent inside a
+/// multi-threaded process (e.g. the desktop app) never have to write
+/// process-global environment state — a `std::env::set_var` in a running
+/// multi-threaded process is a data race against concurrent `getenv`
+/// calls, and a master password placed in the environment lingers there
+/// for the whole process lifetime.
+#[derive(Debug, Default, Clone)]
+pub struct AgentEnvOverrides {
+    /// Preferred over `PERSONA_MASTER_PASSWORD`. Consumed while loading
+    /// keys, so it does not stay resident in memory afterwards.
+    pub master_password: Option<String>,
+    /// Preferred over `PERSONA_DB_PATH`.
+    pub db_path: Option<PathBuf>,
+    /// Preferred over `PERSONA_AGENT_STATE_DIR` (default `~/.persona`).
+    pub state_dir: Option<PathBuf>,
+    /// Preferred over `PERSONA_AGENT_SOCKET_PATH`.
+    pub socket_path: Option<PathBuf>,
+    /// Preferred over `PERSONA_AGENT_REQUIRE_CONFIRM`.
+    pub require_confirm: Option<bool>,
+}
+
 /// Run the SSH agent daemon: bind the agent socket, load keys from the
 /// Persona vault, and serve agent requests until the process is killed.
 pub async fn run_agent() -> Result<()> {
@@ -47,6 +73,16 @@ pub async fn run_agent_with_hooks(
     approval: Option<Arc<dyn ApprovalHandler>>,
     biometric: Option<Arc<dyn BiometricProvider>>,
 ) -> Result<()> {
+    run_agent_with_hooks_and_env(approval, biometric, AgentEnvOverrides::default()).await
+}
+
+/// [`run_agent_with_hooks`] plus explicit [`AgentEnvOverrides`] for hosts
+/// that must not touch the process environment.
+pub async fn run_agent_with_hooks_and_env(
+    approval: Option<Arc<dyn ApprovalHandler>>,
+    biometric: Option<Arc<dyn BiometricProvider>>,
+    env_overrides: AgentEnvOverrides,
+) -> Result<()> {
     // 日志初始化绝不拦启动：内嵌进 desktop 时宿主壳已先装全局 subscriber
     // （文件 writer），此处再装只是无害地保持已装的。即便 init 将来出现
     // 其它失败形态，也不得让它变成 "SSH agent failed to start"。
@@ -55,8 +91,15 @@ pub async fn run_agent_with_hooks(
         .with_writer(|| Box::new(AgentLogSink))
         .init();
 
-    let socket_path = default_agent_path();
-    let db_path = resolve_persona_db_path();
+    let socket_path = env_overrides
+        .socket_path
+        .clone()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(default_agent_path);
+    let db_path = match env_overrides.db_path.clone() {
+        Some(db_path) => db_path,
+        None => resolve_persona_db_path(),
+    };
 
     // Create listener using cross-platform abstraction
     let mut listener = AgentListener::bind(&socket_path)
@@ -86,9 +129,14 @@ pub async fn run_agent_with_hooks(
     println!("SSH_AUTH_SOCK={}", endpoint);
 
     // Write state files
-    let state_dir = std::env::var("PERSONA_AGENT_STATE_DIR")
-        .ok()
-        .map(PathBuf::from)
+    let state_dir = env_overrides
+        .state_dir
+        .clone()
+        .or_else(|| {
+            std::env::var("PERSONA_AGENT_STATE_DIR")
+                .ok()
+                .map(PathBuf::from)
+        })
         .unwrap_or_else(|| {
             dirs::home_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
@@ -102,6 +150,12 @@ pub async fn run_agent_with_hooks(
 
     // Load keys from Persona
     let mut agent = Agent::new();
+    if let Some(confirm) = env_overrides.require_confirm {
+        agent = agent.with_require_confirm(confirm);
+    }
+    if let Some(password) = env_overrides.master_password {
+        agent = agent.with_master_password(Some(password));
+    }
     if let Some(handler) = approval {
         agent = agent.with_approval_handler(handler);
     }
