@@ -85,8 +85,9 @@ use guard::{err_json, is_vault_locked, ok_json};
 use persona_core::PersonaError;
 #[cfg(test)]
 use serde_json::json;
+#[cfg(unix)]
 use unix::UidCheckedListener;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use unix::{peer_allowed, Accept};
 
 #[derive(Clone)]
@@ -289,16 +290,6 @@ async fn start_unix(service: ArcTokService, path: PathBuf) -> anyhow::Result<Con
     })
 }
 
-/// accept 层属主 uid 校验的 unix listener 包装（仅 unix 平台）。
-///
-/// 每个新连接先取 `SO_PEERCRED`：uid 与 socket 文件属主一致才交付给 axum，
-/// 不一致（其他用户、异常凭据）直接丢弃连接继续 accept——fail-closed，
-/// 不消耗 HTTP 层任何状态。校验放在 accept 而非 middleware：被拒连接
-/// 根本不进入 HTTP 解析面。
-///
-/// 内层 accept 泛型（[`Accept`]）是可测性缝：错误分类/退避逻辑用注入
-/// 错误序列的 mock 驱动，真实路径仍是 tokio `UnixListener`。
-#[cfg(unix)]
 /// 运行中 listener 的句柄。
 #[derive(Debug)]
 pub struct ConnectServerHandle {

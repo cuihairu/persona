@@ -31,8 +31,16 @@
 //! 明文不进任何中间缓存）。scope 判定与 token 生命周期在 core
 //! （`persona_core::connect`），本模块只做 HTTP 面编排。
 
+#[cfg(unix)]
 use std::time::Duration;
 
+/// accept 层属主 uid 校验的 unix listener 包装（仅 unix 平台）。
+///
+/// 每个新连接先取 `SO_PEERCRED`：uid 与 socket 文件属主一致才交付给 axum，
+/// 不一致（其他用户、异常凭据）直接丢弃连接继续 accept——fail-closed，
+/// 不消耗 HTTP 层任何状态。校验放在 accept 而非 middleware：被拒连接
+/// 根本不进入 HTTP 解析面。
+#[cfg(unix)]
 pub(super) struct UidCheckedListener<L = tokio::net::UnixListener> {
     pub(super) inner: L,
     /// socket 文件属主 uid（= 本进程 uid，bind 时读取）。
@@ -45,6 +53,7 @@ pub(super) struct UidCheckedListener<L = tokio::net::UnixListener> {
 /// `peer_cred`），错误按 `io::Result` 上抛——真实实现是 tokio
 /// `UnixListener` 的固有方法，测试实现可注入错误序列。
 #[cfg(unix)]
+#[cfg(unix)]
 pub(super) trait Accept: Send + 'static {
     fn accept(
         &mut self,
@@ -55,6 +64,7 @@ pub(super) trait Accept: Send + 'static {
     fn local_addr(&self) -> std::io::Result<tokio::net::unix::SocketAddr>;
 }
 
+#[cfg(unix)]
 #[cfg(unix)]
 impl Accept for tokio::net::UnixListener {
     async fn accept(
@@ -73,10 +83,12 @@ impl Accept for tokio::net::UnixListener {
 /// 自由函数而非 inherent 方法——[`UidCheckedListener`] 泛型化后，
 /// 测试不必为一次纯比较标注实例类型。
 #[cfg(unix)]
+#[cfg(unix)]
 pub(super) fn peer_allowed(peer_uid: u32, owner_uid: u32) -> bool {
     peer_uid == owner_uid
 }
 
+#[cfg(unix)]
 #[cfg(unix)]
 impl<L> UidCheckedListener<L>
 where
@@ -114,6 +126,7 @@ where
     }
 }
 
+#[cfg(unix)]
 #[cfg(unix)]
 impl<L> axum::serve::Listener for UidCheckedListener<L>
 where
