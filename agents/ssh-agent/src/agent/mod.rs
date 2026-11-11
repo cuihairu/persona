@@ -211,17 +211,33 @@ impl Agent {
             return Ok(failure_packet());
         }
 
-        // Policy enforcement using PolicyEnforcer.
+        // Policy enforcement using PolicyEnforcer: check + record happen
+        // atomically under one lock (check/record split let concurrent
+        // requests all pass the rate limits before any was booked). The
+        // record is optimistic — the approval/biometric gates below may
+        // still refuse, in which case we roll it back.
         // The guard is scoped so it never spans an await (MutexGuard is !Send).
         let decision = {
             let mut policy_enforcer = self
                 .policy
                 .lock()
                 .map_err(|_| anyhow!("Policy lock poisoned"))?;
-            policy_enforcer.check_signature(&key.credential_id, hostname.as_deref())?
+            policy_enforcer.check_and_record_signature(&key.credential_id, hostname.as_deref())?
         };
         // 裁决统一词汇落审计/日志：与 core/Connect/CLI 同一表达。
         info!("Signature policy decision: {:?}", decision.to_authz());
+
+        // Roll back the optimistic policy record taken above. Used on every
+        // gate-refusal path below (user denies confirmation, biometric
+        // fails) so a refused signature does not consume rate-limit budget.
+        macro_rules! refused {
+            () => {{
+                if let Ok(mut policy_enforcer) = self.policy.lock() {
+                    policy_enforcer.rollback_signature(&key.credential_id, hostname.as_deref());
+                }
+            }};
+        }
+
         match decision {
             SignatureDecision::Denied { reason } => {
                 tracing::warn!("Signature denied: {}", reason);
@@ -247,6 +263,7 @@ impl Agent {
                     };
                     if !self.approval_handler.confirm(&request).await? {
                         tracing::warn!("Signature denied by user (reason: {})", reason);
+                        refused!();
                         return Ok(failure_packet());
                     }
                 } else {
@@ -266,10 +283,12 @@ impl Agent {
                         }
                         Ok(_) => {
                             tracing::warn!("Biometric authentication failed");
+                            refused!();
                             return Ok(failure_packet());
                         }
                         Err(e) => {
                             tracing::error!("Biometric authentication error: {}", e);
+                            refused!();
                             return Ok(failure_packet());
                         }
                     }
@@ -292,21 +311,13 @@ impl Agent {
                 };
                 if !self.approval_handler.confirm(&request).await? {
                     tracing::warn!("Signature denied by user (reason: {})", reason);
+                    refused!();
                     return Ok(failure_packet());
                 }
             }
             SignatureDecision::Allowed => {
                 // Proceed with signing
             }
-        }
-
-        // Record the signature for tracking
-        {
-            let mut policy_enforcer = self
-                .policy
-                .lock()
-                .map_err(|_| anyhow!("Policy lock poisoned"))?;
-            policy_enforcer.record_signature(&key.credential_id, hostname.as_deref());
         }
 
         // Per-algorithm signing; sig_blob carries the wire algorithm name

@@ -445,6 +445,49 @@ impl PolicyEnforcer {
         Ok(SignatureDecision::Allowed)
     }
 
+    /// Atomically check and record a signature (fix for the check/record
+    /// two-lock race): deciding and booking happen under the single policy
+    /// lock the caller already holds, so concurrent requests can no longer
+    /// all pass the limit check before any of them is recorded.
+    ///
+    /// Recording is optimistic: the caller may still have an approval/biometric
+    /// UI gate ahead (it runs outside the lock). When that gate refuses, the
+    /// caller must call [`Self::rollback_signature`] with the same
+    /// `(credential_id, hostname)` so the tentatively booked signature does
+    /// not consume budget.
+    pub fn check_and_record_signature(
+        &mut self,
+        credential_id: &Uuid,
+        hostname: Option<&str>,
+    ) -> Result<SignatureDecision> {
+        let decision = self.check_signature(credential_id, hostname)?;
+        // A denied request never reaches signing, so it must not consume
+        // budget; only decisions that may proceed are booked.
+        if !matches!(decision, SignatureDecision::Denied { .. }) {
+            self.record_signature(credential_id, hostname);
+        }
+        Ok(decision)
+    }
+
+    /// Roll back a signature recorded optimistically by
+    /// [`Self::check_and_record_signature`] (user/biometric gate refused).
+    pub fn rollback_signature(&mut self, credential_id: &Uuid, hostname: Option<&str>) {
+        self.state.signature_timestamps.pop();
+        // last_sign must reflect the newest remaining signature, otherwise a
+        // rolled-back attempt would keep the min-interval gate armed.
+        self.state.last_sign = self.state.signature_timestamps.last().copied();
+        if let Some(usage) = self.state.key_usage.get_mut(credential_id) {
+            usage.daily_count = usage.daily_count.saturating_sub(1);
+            usage.total_count = usage.total_count.saturating_sub(1);
+        }
+        if let Some(hostname) = hostname {
+            if let Some(usage) = self.state.host_usage.get_mut(hostname) {
+                usage.hourly_count = usage.hourly_count.saturating_sub(1);
+                usage.total_count = usage.total_count.saturating_sub(1);
+            }
+        }
+    }
+
     /// Record that a signature was performed
     pub fn record_signature(&mut self, credential_id: &Uuid, hostname: Option<&str>) {
         self.state.last_sign = Some(Instant::now());
@@ -604,7 +647,8 @@ impl SignatureDecision {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex as StdMutex, OnceLock};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
@@ -1307,5 +1351,140 @@ enabled = false
             SignatureDecision::Allowed => {}
             other => panic!("expected Allowed, got {:?}", other),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // check/record atomicity (two-lock race) and rollback semantics
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_concurrent_check_and_record_respects_hourly_limit() {
+        // The daemon handles each connection on its own spawned task. With
+        // the old split check_signature / record_signature (two separate
+        // lock acquisitions) every task could pass the check before any of
+        // them recorded, so the hourly limit was bypassed. The combined
+        // call decides and books under one lock: at most
+        // max_signatures_per_hour requests are admitted.
+        let policy = SigningPolicy {
+            global: GlobalPolicy {
+                min_interval_ms: 0,
+                max_signatures_per_hour: 3,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let enforcer = Arc::new(StdMutex::new(PolicyEnforcer::new(policy)));
+        let allowed = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..16)
+            .map(|_| {
+                let enforcer = Arc::clone(&enforcer);
+                let allowed = Arc::clone(&allowed);
+                std::thread::spawn(move || {
+                    let mut enforcer = enforcer.lock().unwrap();
+                    if matches!(
+                        enforcer
+                            .check_and_record_signature(&Uuid::new_v4(), None)
+                            .unwrap(),
+                        SignatureDecision::Allowed
+                    ) {
+                        allowed.fetch_add(1, Ordering::SeqCst);
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        assert_eq!(allowed.load(Ordering::SeqCst), 3);
+        // every admitted request is booked exactly once
+        assert_eq!(enforcer.lock().unwrap().state.signature_timestamps.len(), 3);
+    }
+
+    #[test]
+    fn test_denied_decision_does_not_consume_budget() {
+        let mut policy = SigningPolicy::default();
+        policy.global.deny_all = true;
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+
+        for _ in 0..3 {
+            assert!(matches!(
+                enforcer
+                    .check_and_record_signature(&cred_id, Some("github.com"))
+                    .unwrap(),
+                SignatureDecision::Denied { .. }
+            ));
+        }
+        // denied requests never reach signing, so they leave no trace in
+        // the ledger (otherwise repeated denied requests could exhaust the
+        // hourly budget without a single signature happening)
+        assert!(enforcer.state.signature_timestamps.is_empty());
+        assert!(enforcer.state.key_usage.is_empty());
+        assert!(enforcer.state.host_usage.is_empty());
+        assert!(enforcer.state.last_sign.is_none());
+    }
+
+    #[test]
+    fn test_rollback_restores_rate_limit_budget() {
+        let mut policy = SigningPolicy::default();
+        policy.global.min_interval_ms = 0;
+        policy.global.max_signatures_per_hour = 1;
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+
+        // The only hourly slot is booked...
+        assert!(matches!(
+            enforcer.check_and_record_signature(&cred_id, None).unwrap(),
+            SignatureDecision::Allowed
+        ));
+        // ...the approval gate refuses, the record is rolled back...
+        enforcer.rollback_signature(&cred_id, None);
+        assert!(enforcer.state.signature_timestamps.is_empty());
+        assert_eq!(enforcer.state.key_usage[&cred_id].daily_count, 0);
+
+        // ...and the next request is admitted again instead of denied.
+        assert!(matches!(
+            enforcer.check_and_record_signature(&cred_id, None).unwrap(),
+            SignatureDecision::Allowed
+        ));
+    }
+
+    #[test]
+    fn test_rollback_restores_min_interval_to_remaining_signature() {
+        let mut policy = SigningPolicy::default();
+        policy.global.min_interval_ms = 0;
+        let mut enforcer = PolicyEnforcer::new(policy);
+        let cred_id = Uuid::new_v4();
+        let host = "github.com";
+
+        // Two signatures go through, then the second one's gate refuses and
+        // its record is rolled back. last_sign must fall back to the first
+        // signature instead of being cleared...
+        assert!(matches!(
+            enforcer
+                .check_and_record_signature(&cred_id, Some(host))
+                .unwrap(),
+            SignatureDecision::Allowed
+        ));
+        assert!(matches!(
+            enforcer
+                .check_and_record_signature(&cred_id, Some(host))
+                .unwrap(),
+            SignatureDecision::Allowed
+        ));
+        enforcer.rollback_signature(&cred_id, Some(host));
+        assert_eq!(enforcer.state.signature_timestamps.len(), 1);
+        assert_eq!(enforcer.state.host_usage[host].hourly_count, 1);
+        assert!(enforcer.state.last_sign.is_some());
+
+        // ...otherwise the min-interval gate would be disarmed and an
+        // immediate request after the rollback would pass.
+        enforcer.policy.global.min_interval_ms = 60_000;
+        assert!(matches!(
+            enforcer.check_signature(&cred_id, Some(host)).unwrap(),
+            SignatureDecision::Denied { .. }
+        ));
     }
 }
