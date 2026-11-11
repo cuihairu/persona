@@ -2,8 +2,8 @@ use super::*;
 use crate::config::CliConfig;
 use crate::utils::prompt::scripted::ScriptedUi;
 use persona_core::models::{
-    ApiKeyData, CredentialType, IdentityData, SecureNoteData, SecurityLevel,
-    SoftwareLicenseData, SshKeyData,
+    ApiKeyData, CredentialType, IdentityData, SecureNoteData, SecurityLevel, SoftwareLicenseData,
+    SshKeyData,
 };
 use persona_core::Database;
 use std::sync::Mutex;
