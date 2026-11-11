@@ -188,8 +188,7 @@ mod tests {
         // 无发行版，仅 Linux/mac 可选路径命中，那里的 temp_dir 是 POSIX 路径）。
         if let Ok(status) = std::process::Command::new("zsh").arg("--version").status() {
             if status.success() {
-                let dir =
-                    std::env::temp_dir().join(format!("persona-hook-{}", std::process::id()));
+                let dir = std::env::temp_dir().join(format!("persona-hook-{}", std::process::id()));
                 std::fs::create_dir_all(&dir).unwrap();
                 let zsh_hook = dir.join("hook.zsh");
                 std::fs::write(&zsh_hook, zsh_snippet()).unwrap();
