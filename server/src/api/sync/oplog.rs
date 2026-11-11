@@ -12,6 +12,17 @@ pub(super) fn validate_op(index: usize, op: &WireOp) -> Vec<ErrorItem> {
     check("op_id", parse_uuid(&op.op_id).map(|_| ()));
     check("item_id", parse_uuid(&op.item_id).map(|_| ()));
     check("device_id", parse_uuid(&op.device_id).map(|_| ()));
+    // lamport 的两端存储列都是 i64：超界值经 `as i64` 截断成负数入库，
+    // 客户端 `as u64` 读回膨胀值后 LWW 全序被钉死、本地时钟 MAX() 防回
+    // 退卡死（audit 批2 #6）。i64::MAX 以内原样放行。
+    check(
+        "lamport",
+        if op.lamport <= i64::MAX as u64 {
+            Ok(())
+        } else {
+            Err(format!("must be <= {}", i64::MAX))
+        },
+    );
     if op.kind.is_empty() || op.kind.len() > 64 {
         check("kind", Err("must be 1..=64 bytes".to_string()));
     }

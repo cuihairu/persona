@@ -437,6 +437,53 @@ async fn oplog_rejects_oversized_batch_and_malformed_ops() {
 }
 
 /// 服务器 = 纯中继的直接断言：给一个含明文魔数的「密文」push 上去，
+/// lamport 超过 i64::MAX 的 op 拒收（audit 批2 #6）：服务器 lamport 列是
+/// i64，无校验时 `as i64` 把 ≈u64::MAX 的恶意值回绕成负数入库，客户端
+/// `as u64` 读回膨胀值——LWW 全序被钉死、本地时钟 MAX() 防回退卡死。
+#[tokio::test]
+async fn oplog_rejects_lamport_above_i64_max() {
+    let router = router().await;
+    let device = register_device(&router, "poisoner").await;
+    let item = Uuid::new_v4().to_string();
+
+    for lamport in [(i64::MAX as u64) + 1, u64::MAX] {
+        let ops = json!({"ops": [put_op_json(
+            &Uuid::new_v4().to_string(),
+            &item,
+            lamport,
+            &device,
+            &[7u8; 4],
+        )]});
+        let (status, body) = send(
+            router.clone(),
+            req("POST", "/api/v1/sync/oplog", &ops.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        let items = body["error"]["items"].as_array().unwrap();
+        assert!(
+            items.iter().any(|i| i["field"] == "lamport"),
+            "lamport must be named: {body}"
+        );
+    }
+
+    // 边界值 i64::MAX 合法放行（存储列就是 i64）。
+    let ops = json!({"ops": [put_op_json(
+        &Uuid::new_v4().to_string(),
+        &item,
+        i64::MAX as u64,
+        &device,
+        &[7u8; 4],
+    )]});
+    let (status, body) = send(
+        router,
+        req("POST", "/api/v1/sync/oplog", &ops.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["accepted"], 1);
+}
+
 /// 数据库行里该魔数只出现在 ciphertext 列——服务器没有（也不可能有）
 /// 任何明文副本列。真正的明文泄露面为空。
 #[tokio::test]
