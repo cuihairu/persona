@@ -1,6 +1,6 @@
 use super::super::agent::{
-    agent_binary_name, agent_state_dir, find_agent_binary_near, resolve_agent_binary,
-    with_startup_deadline,
+    agent_binary_name, agent_state_dir, find_agent_binary_near, format_sock_export_lines,
+    resolve_agent_binary, with_startup_deadline,
 };
 #[cfg(unix)]
 use super::protocol::serve_one_identity_query;
@@ -660,4 +660,66 @@ async fn list_skips_non_ssh_keys_and_agent_resolution_plants_binary() {
     let resolved = resolve_agent_binary().unwrap();
     std::fs::remove_file(&planted).unwrap();
     assert_eq!(resolved, planted);
+}
+
+// ---- 纯函数/只读分支锚定（Windows 上 agent 正路径是命名的管道与
+// 真实守护进程，本节用无 I/O 或只读状态文件的方式覆盖平台分支）----
+
+/// format_sock_export_lines 的平台契约：Linux 单行 `export`；Windows
+/// 输出 PowerShell 与 cmd.exe 两族（各带注释头）。纯函数、无 I/O，
+/// 全部平台可跑（Windows 分支由本文件在 CI 上锁定）。
+#[test]
+fn format_sock_export_lines_matches_platform_contract() {
+    let lines = format_sock_export_lines("/tmp/persona-agent.sock");
+    #[cfg(unix)]
+    assert_eq!(
+        lines,
+        vec!["  export SSH_AUTH_SOCK=/tmp/persona-agent.sock"]
+    );
+    #[cfg(windows)]
+    {
+        assert_eq!(lines.len(), 4, "windows emits both shells: {lines:?}");
+        assert_eq!(lines[0], "  # PowerShell");
+        assert_eq!(lines[1], "  $env:SSH_AUTH_SOCK = '/tmp/persona-agent.sock'");
+        assert_eq!(lines[2], "  # cmd.exe");
+        assert_eq!(lines[3], "  set SSH_AUTH_SOCK=/tmp/persona-agent.sock");
+    }
+}
+
+/// agent_status：空状态目录 + 无 SSH_AUTH_SOCK → 报「未运行」且成功
+/// （缺文件不是错误）。跨平台：Windows 上 query_target 为空即跳过
+/// 命名管道查询（真实 agent 管道是外部 I/O，不在单测范围）。
+#[tokio::test]
+async fn agent_status_reports_not_running_when_state_dir_empty() {
+    let _env = lock_process_env();
+    let dir = TempDir::new().unwrap();
+    let _state = sandbox_agent_state_dir(&dir);
+    let _sock = EnvVarGuard::remove("SSH_AUTH_SOCK");
+    let config = userless_workspace(&dir).await;
+
+    agent_status(&config)
+        .await
+        .expect("empty state dir reports not running");
+}
+
+/// agent_status：状态目录有 sock+pid 文件 → 读两份文件并报运行中。
+/// query 落空被静默吞掉（无真实 agent）；「真 agent 有应答」分支由
+/// unix 实机测试覆盖，Windows 命名管道应答属外部 I/O。
+#[tokio::test]
+async fn agent_status_reads_state_files_when_present() {
+    let _env = lock_process_env();
+    let dir = TempDir::new().unwrap();
+    let _state = sandbox_agent_state_dir(&dir);
+    let _sock = EnvVarGuard::remove("SSH_AUTH_SOCK");
+    let config = userless_workspace(&dir).await;
+
+    std::fs::write(
+        dir.path().join("ssh-agent.sock"),
+        "/tmp/persona-status.sock\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("ssh-agent.pid"), "424242\n").unwrap();
+    agent_status(&config)
+        .await
+        .expect("status reads both state files");
 }
