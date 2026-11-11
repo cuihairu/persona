@@ -122,12 +122,34 @@ mod tests {
         assert!(execute(Some("ZSH")).is_ok(), "case-insensitive");
     }
 
+    /// 把脚本经 stdin 喂给 `bash -s`（`-n` 时只查语法），`path` 作为进程内
+    /// PATH。返回子进程完整输出供断言。stdin 是唯一与平台无关的喂入方式：
+    /// Windows 上 msys bash 无法解析 `temp_dir()` 的 `C:\…`/`C:/…` 文件路径
+    /// （非 msys 父进程的 argv 不走 MSYS 路径转换，`C:\`/`C:/`/`/c/` 三种形态
+    /// 实测均 "No such file or directory"），而 stdin 在 Linux/Windows 等价。
+    fn run_bash(script: &str, args: &[&str], path: &str) -> std::process::Output {
+        use std::io::Write;
+        let mut child = std::process::Command::new("bash")
+            .args(args)
+            .env("PATH", path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("bash available");
+        child
+            .stdin
+            .as_mut()
+            .expect("piped stdin")
+            .write_all(script.as_bytes())
+            .expect("write script to bash stdin");
+        child.wait_with_output().expect("bash run")
+    }
+
     /// 双 shell 冒烟（设计验收）：生成的片段必须通过对应 shell 的语法检查，
-    /// 并在非交互下能 source + 调一次刷新函数（无候选 → 变量保持空）。
+    /// 并能装载 + 调一次刷新函数（无候选 → 变量保持空）。
     #[test]
     fn snippets_pass_shell_syntax_and_smoke_run() {
-        let dir = std::env::temp_dir().join(format!("persona-hook-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
         // `bash` 必须是真 bash 才冒烟（与下面 zsh 同规：可选环境）。GitHub
         // windows runner 的 PATH 上 `bash` 是 WSL stub——没装发行版时对任何
         // 参数都报错退出（UTF-16 提示），`--version` 探测不过 → 跳过；片段
@@ -138,35 +160,37 @@ mod tests {
             .map(|s| s.success())
             .unwrap_or(false);
         if bash_available {
-            let bash_hook = dir.join("hook.sh");
-            std::fs::write(&bash_hook, bash_snippet()).unwrap();
-            let ok = std::process::Command::new("bash")
-                .arg("-n")
-                .arg(&bash_hook)
-                .status()
-                .expect("bash available")
-                .success();
-            assert!(ok, "generated bash snippet must be syntactically valid");
-
-            // Source + direct call: 命令失败也必须把变量清空（静默降级）。
-            let probe = format!(
-                "source '{}'; __persona_context_ps1; test -z \"$PERSONA_CTX_SUGGEST\"",
-                bash_hook.display()
+            // 语法检查：snippet 经 stdin 读入，无文件路径依赖。
+            let out = run_bash(bash_snippet(), &["-n"], "/usr/bin:/bin");
+            assert!(
+                out.status.success(),
+                "generated bash snippet must be syntactically valid: {}",
+                String::from_utf8_lossy(&out.stderr)
             );
-            // PATH 上没有 persona 二进制 → command -v 失败 → 变量保持空。
-            let ok = std::process::Command::new("bash")
-                .arg("-c")
-                .arg(&probe)
-                .env("PATH", "/usr/bin:/bin")
-                .status()
-                .expect("bash smoke run")
-                .success();
-            assert!(ok, "bash hook must degrade to an empty suggestion var");
+
+            // 装载 + 调用：先置 PS1 让装载守卫在非交互 `bash -s` 下也成立
+            // （非交互默认 PS1 未设，守卫会跳过函数定义，冒烟会空转）。
+            // PATH 上没有 persona 二进制 → command -v 失败 → return 0 且
+            // 变量保持空（静默降级）。`&&` 链让「函数未定义」也如实失败。
+            let smoke = format!(
+                "PS1='$ '\n{}\n__persona_context_ps1 && test -z \"$PERSONA_CTX_SUGGEST\"\n",
+                bash_snippet()
+            );
+            let out = run_bash(&smoke, &["-s"], "/usr/bin:/bin");
+            assert!(
+                out.status.success(),
+                "bash hook must degrade to an empty suggestion var: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
 
-        // zsh：装了才冒烟（CI/本机可选）。
+        // zsh：装了才冒烟（CI/本机可选）。zsh 片段走文件源（zsh 在 Windows
+        // 无发行版，仅 Linux/mac 可选路径命中，那里的 temp_dir 是 POSIX 路径）。
         if let Ok(status) = std::process::Command::new("zsh").arg("--version").status() {
             if status.success() {
+                let dir =
+                    std::env::temp_dir().join(format!("persona-hook-{}", std::process::id()));
+                std::fs::create_dir_all(&dir).unwrap();
                 let zsh_hook = dir.join("hook.zsh");
                 std::fs::write(&zsh_hook, zsh_snippet()).unwrap();
                 let ok = std::process::Command::new("zsh")
@@ -176,8 +200,8 @@ mod tests {
                     .expect("zsh run")
                     .success();
                 assert!(ok, "generated zsh snippet must be syntactically valid");
+                std::fs::remove_dir_all(&dir).ok();
             }
         }
-        std::fs::remove_dir_all(&dir).ok();
     }
 }
