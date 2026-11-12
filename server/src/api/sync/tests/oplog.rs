@@ -475,11 +475,7 @@ async fn oplog_rejects_lamport_above_i64_max() {
         &device,
         &[7u8; 4],
     )]});
-    let (status, body) = send(
-        router,
-        req("POST", "/api/v1/sync/oplog", &ops.to_string()),
-    )
-    .await;
+    let (status, body) = send(router, req("POST", "/api/v1/sync/oplog", &ops.to_string())).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["accepted"], 1);
 }
