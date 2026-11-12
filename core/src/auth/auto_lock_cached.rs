@@ -29,9 +29,10 @@ struct CachedSessionInfo {
 pub struct CachedAutoLockManager {
     config: EnhancedAutoLockConfig,
     sessions: Arc<RwLock<HashMap<String, CachedSessionInfo>>>,
-    policy_cache: Arc<RwLock<HashMap<Uuid, AutoLockPolicy>>>,
+    policy_cache: Arc<RwLock<HashMap<Uuid, (AutoLockPolicy, Instant)>>>,
     default_policy_cache: Arc<RwLock<Option<AutoLockPolicy>>>,
-    user_policy_cache: Arc<RwLock<HashMap<Uuid, Uuid>>>, // user_id -> policy_id
+    // user_id -> (policy_id, cached_at)
+    user_policy_cache: Arc<RwLock<HashMap<Uuid, (Uuid, Instant)>>>,
     callbacks: Arc<RwLock<Vec<EventCallback>>>,
     policy_repository: Option<Arc<AutoLockPolicyRepository>>,
     background_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
@@ -258,11 +259,14 @@ impl CachedAutoLockManager {
 
         // Check user policy cache
         {
+            let now = Instant::now();
             let user_policy_cache = self.user_policy_cache.read().await;
-            if let Some(&policy_id) = user_policy_cache.get(&user_uuid) {
-                let policy_cache = self.policy_cache.read().await;
-                if let Some(policy) = policy_cache.get(&policy_id) {
-                    return Ok(Some(policy.clone()));
+            if let Some(&(policy_id, cached_at)) = user_policy_cache.get(&user_uuid) {
+                if now.duration_since(cached_at) < self.cache_ttl {
+                    let policy_cache = self.policy_cache.read().await;
+                    if let Some((policy, _)) = policy_cache.get(&policy_id) {
+                        return Ok(Some(policy.clone()));
+                    }
                 }
             }
         }
@@ -272,13 +276,14 @@ impl CachedAutoLockManager {
             match repo.get_user_policy(&user_uuid).await {
                 Ok(Some(policy)) => {
                     // Update caches
+                    let now = Instant::now();
                     {
                         let mut user_policy_cache = self.user_policy_cache.write().await;
-                        user_policy_cache.insert(user_uuid, policy.id);
+                        user_policy_cache.insert(user_uuid, (policy.id, now));
                     }
                     {
                         let mut policy_cache = self.policy_cache.write().await;
-                        policy_cache.insert(policy.id, policy.clone());
+                        policy_cache.insert(policy.id, (policy.clone(), now));
                     }
                     return Ok(Some(policy));
                 }
@@ -292,7 +297,10 @@ impl CachedAutoLockManager {
                         *self.default_policy_cache.write().await = Some(default_policy.clone());
                         {
                             let mut policy_cache = self.policy_cache.write().await;
-                            policy_cache.insert(default_policy.id, default_policy.clone());
+                            policy_cache.insert(
+                                default_policy.id,
+                                (default_policy.clone(), Instant::now()),
+                            );
                         }
                         return Ok(Some(default_policy));
                     }
@@ -308,7 +316,9 @@ impl CachedAutoLockManager {
     async fn check_session_compliance(&self, session_info: &CachedSessionInfo) -> bool {
         let policy = if let Some(policy_id) = session_info.policy_id {
             let policy_cache = self.policy_cache.read().await;
-            policy_cache.get(&policy_id).cloned()
+            policy_cache
+                .get(&policy_id)
+                .map(|(policy, _)| policy.clone())
         } else {
             None
         };
@@ -435,12 +445,10 @@ impl CachedAutoLockManager {
         let removed_policies = {
             let mut policy_cache = self.policy_cache.write().await;
             let initial_count = policy_cache.len();
+            let now = Instant::now();
 
-            // For now, just keep recently used policies
-            // In a real implementation, you might want to track last access time
-            if policy_cache.len() > 1000 {
-                policy_cache.retain(|_, _| true); // Keep all for now
-            }
+            policy_cache
+                .retain(|_, (_, cached_at)| now.duration_since(*cached_at) < self.cache_ttl);
 
             initial_count.saturating_sub(policy_cache.len())
         };
@@ -449,10 +457,10 @@ impl CachedAutoLockManager {
         let removed_user_policies = {
             let mut user_policy_cache = self.user_policy_cache.write().await;
             let initial_count = user_policy_cache.len();
+            let now = Instant::now();
 
-            if user_policy_cache.len() > 5000 {
-                user_policy_cache.retain(|_, _| true); // Keep all for now
-            }
+            user_policy_cache
+                .retain(|_, (_, cached_at)| now.duration_since(*cached_at) < self.cache_ttl);
 
             initial_count.saturating_sub(user_policy_cache.len())
         };
@@ -1131,5 +1139,48 @@ mod tests {
             result.removed_sessions, 0,
             "expired-but-idle session is kept"
         );
+    }
+
+    /// 策略缓存真实 TTL 逐出（audit 批2 #8）：占位实现 `retain(|_, _| true)`
+    /// 从不删除，条目只增不减。带时间戳后，过期条目（> cache_ttl）被
+    /// 逐出并计入 removed_*，新鲜条目保留。
+    #[tokio::test]
+    async fn optimize_caches_evicts_expired_policy_entries() {
+        let config = EnhancedAutoLockConfig::default();
+        let manager = CachedAutoLockManager::new(config);
+        let ttl = manager.cache_ttl;
+
+        let stale = Instant::now() - ttl - Duration::from_secs(1);
+        let fresh = Instant::now();
+        let old_policy = AutoLockPolicy::new(
+            "stale".to_string(),
+            crate::models::auto_lock_policy::AutoLockSecurityLevel::Medium,
+            300,
+        );
+        let old_id = old_policy.id;
+        let fresh_policy = AutoLockPolicy::new(
+            "fresh".to_string(),
+            crate::models::auto_lock_policy::AutoLockSecurityLevel::Medium,
+            300,
+        );
+
+        {
+            let mut policy_cache = manager.policy_cache.write().await;
+            policy_cache.insert(old_id, (old_policy, stale));
+            policy_cache.insert(fresh_policy.id, (fresh_policy.clone(), fresh));
+            let mut user_policy_cache = manager.user_policy_cache.write().await;
+            user_policy_cache.insert(old_id, (old_id, stale));
+            user_policy_cache.insert(Uuid::new_v4(), (fresh_policy.id, fresh));
+        }
+
+        let result = manager.optimize_caches().await;
+        assert_eq!(result.removed_policies, 1, "过期策略条目必须逐出");
+        assert_eq!(result.removed_user_policies, 1, "过期用户映射必须逐出");
+
+        let policy_cache = manager.policy_cache.read().await;
+        assert_eq!(policy_cache.len(), 1, "新鲜策略条目保留");
+        assert!(policy_cache.contains_key(&fresh_policy.id));
+        let user_policy_cache = manager.user_policy_cache.read().await;
+        assert_eq!(user_policy_cache.len(), 1);
     }
 }
