@@ -22,6 +22,7 @@ fn make_test_agent(keys: Vec<AgentKey>) -> Agent {
         biometric_provider,
         approval_handler: Arc::new(approval::DenyAllApprovalHandler),
         master_password: None,
+        audit_db: Arc::new(None),
     }
 }
 
@@ -116,6 +117,7 @@ fn agent_with_policy(
         biometric_provider,
         approval_handler: Arc::new(approval::DenyAllApprovalHandler),
         master_password: None,
+        audit_db: Arc::new(None),
     }
 }
 
@@ -189,6 +191,7 @@ fn agent_with(
         biometric_provider: biometric,
         approval_handler: approval,
         master_password: None,
+        audit_db: Arc::new(None),
     }
 }
 

@@ -9,6 +9,10 @@ pub struct Agent {
     /// `PERSONA_MASTER_PASSWORD` env var). Consumed by
     /// [`Self::load_keys_from_persona`] so it does not outlive key loading.
     pub(crate) master_password: Option<String>,
+    /// 加载期打开并已迁移的 vault 连接，跨签名复用（audit 批2 #9）：
+    /// 每次签名新开 DB + 跑 migrate 是热路径锁竞争；`None` 时回落
+    /// [`audit_sign_with_digest`] 的按次开库路径（测试键/直接调用）。
+    pub(crate) audit_db: Arc<Option<persona_core::Database>>,
 }
 
 impl Default for Agent {
@@ -38,6 +42,7 @@ impl Agent {
             biometric_provider,
             approval_handler: Arc::new(approval::TtyApprovalHandler),
             master_password: None,
+            audit_db: Arc::new(None),
         }
     }
 
@@ -80,6 +85,7 @@ impl Agent {
             // per-connection clones never need the password (keys are
             // already loaded at that point)
             master_password: None,
+            audit_db: self.audit_db.clone(),
         }
     }
 
@@ -93,6 +99,9 @@ impl Agent {
 
         let db = Database::from_file(db_path).await?;
         db.migrate().await?;
+        // 审计复用这条已迁移连接：sign_response 的热路径不再每次开库 +
+        // 跑 migrate（audit 批2 #9）。连接池由 Arc 引用计数保持存活。
+        self.audit_db = Arc::new(Some(db.clone()));
         let mut service = PersonaService::new(db.clone()).await?;
         let mut unlocked = true;
         if service.has_users().await? {
@@ -355,8 +364,7 @@ impl Agent {
         // Per-algorithm signing; sig_blob carries the wire algorithm name
         let sig_blob = build_signature_blob(key, &data_to_sign, flags)?;
         // Audit sign operation (best-effort, include SHA256 of signed data)
-        if let Err(e) = audit_sign_with_digest(&key.identity_id, &key.credential_id, &data_to_sign)
-        {
+        if let Err(e) = self.audit_sign(&key.identity_id, &key.credential_id, &data_to_sign) {
             tracing::warn!("audit sign failed: {}", e);
         }
         // response: type(14) string sig_blob
@@ -413,4 +421,54 @@ pub(super) fn audit_sign_with_digest(
         .build()?;
     let _ = rt.block_on(fut);
     Ok(())
+}
+
+impl Agent {
+    /// 审计一次签名，优先复用加载期已迁移的 vault 连接（audit 批2 #9）；
+    /// 无缓存连接（测试键路径/直接调用）时回落按次开库的
+    /// [`audit_sign_with_digest`]。
+    pub(super) fn audit_sign(
+        &self,
+        identity_id: &uuid::Uuid,
+        credential_id: &uuid::Uuid,
+        data: &[u8],
+    ) -> Result<()> {
+        let Some(db) = self.audit_db.as_ref().as_ref() else {
+            return audit_sign_with_digest(identity_id, credential_id, data);
+        };
+        let db = db.clone();
+
+        use persona_core::models::{AuditAction, AuditLog, ResourceType};
+        use persona_core::storage::AuditLogRepository;
+        let digest = ring::digest::digest(&ring::digest::SHA256, data);
+        let data_sha256 = hex::encode(digest.as_ref());
+        let identity_id = *identity_id;
+        let credential_id = *credential_id;
+
+        let fut = async move {
+            let repo = AuditLogRepository::new(db);
+            let log = AuditLog::new(
+                AuditAction::Custom("ssh_sign".to_string()),
+                ResourceType::Credential,
+                true,
+            )
+            .with_identity_id(Some(identity_id))
+            .with_credential_id(Some(credential_id))
+            .with_metadata("data_sha256".to_string(), data_sha256);
+            let _ = repo.create(&log).await;
+            Ok::<(), anyhow::Error>(())
+        };
+
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = fut.await;
+            });
+            return Ok(());
+        }
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let _ = rt.block_on(fut);
+        Ok(())
+    }
 }
