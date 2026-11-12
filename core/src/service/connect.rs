@@ -4,6 +4,12 @@ impl PersonaService {
     /// Connect 审计与 last_used 落库节流窗口（同 key 每 60s 至多一次）。
     pub(crate) const CONNECT_THROTTLE: Duration = Duration::from_secs(60);
 
+    /// 节流表容量上限：`unknown:{指纹}` 的 key 由请求方 token 决定，每个
+    /// 随机伪造 token 都不重复，无上限时可被无界撑大内存（audit 批2 #7）。
+    /// 超限时先清过期项腾位，仍满则丢弃本次标记（false = 不写审计）——
+    /// 洪水自限，表长封顶；窗口内已有 key 的节流不受影响。
+    pub(crate) const CONNECT_THROTTLE_MARKS_MAX: usize = 4096;
+
     /// 锁定门禁：Connect 数据面只在解锁会话内可用（DR-4；端点层把
     /// [`PersonaError::VaultLocked`] 映射为 503）。
     pub(crate) fn connect_gate(&self) -> Result<()> {
@@ -18,12 +24,20 @@ impl PersonaService {
 
     /// 同 key 节流：窗口内已写过则 false，否则刷新窗口并放行。
     /// 内存态，进程重启即清——防刷屏/批量写，不是访问限额。
+    /// 表长封顶 [`Self::CONNECT_THROTTLE_MARKS_MAX`]：未知 token 洪水的
+    /// 不重复指纹不再入表（对应审计也不写），内存不随请求量增长。
     pub(crate) fn connect_throttle_should_write(&self, key: &str) -> bool {
         let mut marks = self.connect_audit_marks.lock().unwrap();
         let now = Instant::now();
         match marks.get(key) {
             Some(t) if now.duration_since(*t) < Self::CONNECT_THROTTLE => false,
             _ => {
+                if marks.len() >= Self::CONNECT_THROTTLE_MARKS_MAX {
+                    marks.retain(|_, t| now.duration_since(*t) < Self::CONNECT_THROTTLE);
+                    if marks.len() >= Self::CONNECT_THROTTLE_MARKS_MAX {
+                        return false;
+                    }
+                }
                 marks.insert(key.to_string(), now);
                 true
             }

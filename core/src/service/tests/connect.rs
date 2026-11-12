@@ -437,6 +437,38 @@ async fn connect_use_verb_token_cannot_read_data_plane() {
         .is_some());
 }
 
+/// unknown:{指纹} 节流表有界（audit 批2 #7）：每个随机伪造 token 的指纹
+/// 都不同，无上限时可被反复携带随机 token 的请求无界撑大内存。超限后
+/// 新 key 丢弃（false = 不写审计），表长封顶；窗口内已有 key 的节流
+/// 语义不受洪水影响。
+#[tokio::test]
+async fn connect_throttle_marks_table_is_bounded() {
+    let db = Database::in_memory().await.unwrap();
+    db.migrate().await.unwrap();
+    let service = PersonaService::new(db).await.unwrap();
+    let max = PersonaService::CONNECT_THROTTLE_MARKS_MAX;
+
+    for i in 0..max {
+        assert!(
+            service.connect_throttle_should_write(&format!("unknown:fill-{i}")),
+            "cap 内的 key 都应放行写入"
+        );
+    }
+    assert_eq!(
+        service.connect_audit_marks.lock().unwrap().len(),
+        max,
+        "表长恰好到上限"
+    );
+
+    // 洪水期新 key 被丢弃，表长不再增长。
+    assert!(!service.connect_throttle_should_write("unknown:overflow"));
+    assert!(!service.connect_throttle_should_write(&format!("unknown:fill-{max}")));
+    assert_eq!(service.connect_audit_marks.lock().unwrap().len(), max);
+
+    // 窗口内已有 key 维持节流（false，不重写不扩容）。
+    assert!(!service.connect_throttle_should_write("unknown:fill-0"));
+}
+
 /// 过期与主体绑定（迁移 019）：未到期 token 鉴权放行；已过期的
 /// 同形拒绝（与吊销同形）并记失败审计。创建期拒绝过去时刻。
 #[tokio::test]
