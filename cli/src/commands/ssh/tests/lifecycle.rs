@@ -200,9 +200,13 @@ fn stop_agent_handles_missing_empty_and_live_pid_files() {
     // 含 agent 名（否则会按"非 agent 进程"拒绝，无法走到杀进程分支）。
     // 不用改名软链：本机 coreutils 是按 argv[0] 分发的单二进制，改 argv[0]
     // 会直接拒绝运行（Security violation）。
+    // 注意必须是复合命令（`sleep 5; :`）：dash/bash 对单一简单命令的 -c
+    // 会 exec 掉 shell（sh -c 'sleep 5' → 进程变 sleep），cmdline 丢失
+    // agent 名，stop_agent 判 Refused 不清文件——一个加载重载机器上的
+    // 时序 flake（本机 /bin/sh 就是 dash）。
     let mut child = std::process::Command::new("sh")
         .arg("-c")
-        .arg("sleep 5")
+        .arg("sleep 5; :")
         .arg("persona-ssh-agent")
         .spawn()
         .expect("agent-named sh spawns");
