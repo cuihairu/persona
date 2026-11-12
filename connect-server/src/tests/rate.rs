@@ -17,6 +17,40 @@ fn consume_rate_allows_exactly_the_cap_then_rejects_within_the_window() {
 }
 
 #[test]
+fn consume_rate_sweeps_expired_windows_of_dead_tokens() {
+    let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
+    // 死槽位：窗口已过期的历史 token 条目（token 已删/已换后永不再记账）。
+    let stale = match Instant::now().checked_sub(RATE_WINDOW + Duration::from_secs(1)) {
+        Some(at) => at,
+        None => {
+            eprintln!(
+                "skip: 单调时钟不足 {}s，造不出过期窗口",
+                RATE_WINDOW.as_secs()
+            );
+            return;
+        }
+    };
+    // 填到超过清扫阈值（阈值以下不会清——那是正常低基数部署）。
+    let mut dead = Vec::new();
+    for _ in 0..(RATE_SWEEP_THRESHOLD + 1) {
+        let id = Uuid::new_v4();
+        dead.push(id);
+        state
+            .rates
+            .lock()
+            .unwrap()
+            .insert(id, (stale, RATE_LIMIT_PER_MINUTE));
+    }
+    // 阈值记账顺路清扫：死槽位不留（慢泄漏，audit 批2 #10）。
+    let fresh = Uuid::new_v4();
+    assert!(state.consume_rate(fresh));
+    let rates = state.rates.lock().unwrap();
+    assert_eq!(rates.len(), 1, "只有本次请求的活槽位留下");
+    assert!(rates.contains_key(&fresh));
+    assert!(dead.iter().all(|id| !rates.contains_key(id)));
+}
+
+#[test]
 fn consume_rate_resets_the_counter_when_the_window_elapsed() {
     let state = ConnectServerState::new(Arc::new(TokioMutex::new(None)));
     let id = Uuid::new_v4();

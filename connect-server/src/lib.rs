@@ -48,6 +48,10 @@ use uuid::Uuid;
 pub const RATE_LIMIT_PER_MINUTE: u32 = 120;
 
 const RATE_WINDOW: Duration = Duration::from_secs(60);
+/// 速率表清扫阈值：达到该槽位数时清一次窗口已过期的死槽位（token 删除
+/// /更换后的残留条目，慢泄漏上界封顶，audit 批2 #10）。只在每这么多
+/// token 记账时触发一次，O(n) 摊还成本恒定。
+const RATE_SWEEP_THRESHOLD: usize = 16;
 
 /// `Arc<tokio::sync::Mutex<Option<PersonaService>>>` 别名（与 AppState
 /// 的 service 字段同型，命令层 clone 传入）。
@@ -129,6 +133,11 @@ impl ConnectServerState {
     fn consume_rate(&self, token_id: Uuid) -> bool {
         let mut rates = self.rates.lock().unwrap_or_else(|p| p.into_inner());
         let now = Instant::now();
+        // 低频清扫：达到阈值时清掉窗口已过期的死槽位，慢泄漏上界封顶。
+        // 阈值内（正常低基数部署）不触发，避免每请求 O(n) 全表扫。
+        if rates.len() >= RATE_SWEEP_THRESHOLD {
+            rates.retain(|_, (window_start, _)| now.duration_since(*window_start) < RATE_WINDOW);
+        }
         let slot = rates.entry(token_id).or_insert((now, 0));
         if now.duration_since(slot.0) >= RATE_WINDOW {
             *slot = (now, 1);
