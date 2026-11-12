@@ -197,13 +197,26 @@ async fn post_message(
 ) -> Result<impl IntoResponse, ApiError> {
     live_session(state, session_id).await?;
     let payload = decode_b64("payload", payload_b64, MAX_PAYLOAD_BYTES)?;
-    let (to_host, to_guest) = queue_lengths(state, session_id).await?;
-    let queued = if direction == "to_host" {
-        to_host
-    } else {
-        to_guest
-    };
-    if queued >= MAX_MESSAGES_PER_DIRECTION {
+    // 满队判定与入队同一语句（audit 批2 #5 同型竞态）：旧 COUNT→INSERT
+    // 两步窗口内并发 POST 可越过 MAX_MESSAGES_PER_DIRECTION。SQLite 单
+    // 写者语义让本语句天然原子；0 行受影响 = 队满。
+    let result = sqlx::query(
+        "INSERT INTO pairing_messages (session_id, direction, payload, created_at)
+         SELECT ?, ?, ?, ?
+         WHERE (SELECT COUNT(*) FROM pairing_messages
+                WHERE session_id = ? AND direction = ?) < ?",
+    )
+    .bind(session_id)
+    .bind(direction)
+    .bind(&payload)
+    .bind(Utc::now().to_rfc3339())
+    .bind(session_id)
+    .bind(direction)
+    .bind(MAX_MESSAGES_PER_DIRECTION)
+    .execute(&state.pool)
+    .await
+    .map_err(ApiError::internal)?;
+    if result.rows_affected() == 0 {
         return Err(ApiError::validation(
             "pairing queue full",
             vec![ErrorItem::batch(
@@ -212,17 +225,6 @@ async fn post_message(
             )],
         ));
     }
-    sqlx::query(
-        "INSERT INTO pairing_messages (session_id, direction, payload, created_at)
-         VALUES (?, ?, ?, ?)",
-    )
-    .bind(session_id)
-    .bind(direction)
-    .bind(&payload)
-    .bind(Utc::now().to_rfc3339())
-    .execute(&state.pool)
-    .await
-    .map_err(ApiError::internal)?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -232,30 +234,28 @@ async fn take_messages(
     direction: &str,
 ) -> Result<impl IntoResponse, ApiError> {
     live_session(state, session_id).await?;
-    let rows: Vec<SqliteRow> = sqlx::query(
-        "SELECT id, payload FROM pairing_messages
-         WHERE session_id = ? AND direction = ? ORDER BY id ASC",
+    // 取即消费原子化（audit 批2 #5）：DELETE...RETURNING 单语句完成挑选
+    // 与删除——旧 SELECT→逐条 DELETE 两步之间，并发同方向 GET 会拿到同
+    // 一批消息各删一次（双投递打乱 SRP 配对状态机）。RETURNING 行序无
+    // 保证，按 id 排序恢复协议消息顺序。
+    let mut rows: Vec<SqliteRow> = sqlx::query(
+        "DELETE FROM pairing_messages
+         WHERE id IN (
+             SELECT id FROM pairing_messages
+             WHERE session_id = ? AND direction = ?
+         )
+         RETURNING id, payload",
     )
     .bind(session_id)
     .bind(direction)
     .fetch_all(&state.pool)
     .await
     .map_err(ApiError::internal)?;
-    let mut messages = Vec::with_capacity(rows.len());
-    let mut taken = Vec::with_capacity(rows.len());
-    for row in rows {
-        taken.push(row.get::<i64, _>("id"));
-        let payload: Vec<u8> = row.get("payload");
-        messages.push(B64.encode(payload));
-    }
-    // 取即消费：逐条删除（session 仍留给后续消息）。
-    for id in taken {
-        sqlx::query("DELETE FROM pairing_messages WHERE id = ?")
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(ApiError::internal)?;
-    }
+    rows.sort_by_key(|row| row.get::<i64, _>("id"));
+    let messages = rows
+        .into_iter()
+        .map(|row| B64.encode(row.get::<Vec<u8>, _>("payload")))
+        .collect::<Vec<_>>();
     Ok(Json(json!({ "messages": messages })))
 }
 
@@ -415,6 +415,46 @@ mod tests {
         );
         let (_, got) = take_for(&router, &session_id, "to-guest").await;
         assert_eq!(got, vec![b"m2".to_vec(), b"m3".to_vec()]);
+    }
+
+    /// 取即消费原子性（audit 批2 #5）：并发同方向消费不得双投递——多条
+    /// 消息被多个并发 GET 分摊时，每条恰好出现一次。旧 SELECT→逐条
+    /// DELETE 两步之间，并发消费者会拿到同一批各删一次（双投递）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pairing_take_never_double_delivers_under_concurrency() {
+        let (router, _state) = setup(Some("unused-token")).await;
+        let session_id = create_session_for(&router, &[9u8; 16]).await;
+        for i in 0..3u8 {
+            assert_eq!(
+                post_message_for(&router, &session_id, "to-host", &[i, 0xAA, 0xBB]).await,
+                StatusCode::ACCEPTED
+            );
+        }
+
+        // 5 个并发消费者同方向各取一次。
+        let mut handles = Vec::new();
+        for _ in 0..5 {
+            let router = router.clone();
+            let session_id = session_id.clone();
+            handles.push(tokio::spawn(async move {
+                take_for(&router, &session_id, "to-host").await
+            }));
+        }
+        let mut delivered = Vec::new();
+        for handle in handles {
+            let (status, messages) = handle.await.unwrap();
+            assert_eq!(status, StatusCode::OK);
+            delivered.extend(messages);
+        }
+        delivered.sort();
+        let mut expected: Vec<Vec<u8>> = (0..3u8).map(|i| vec![i, 0xAA, 0xBB]).collect();
+        expected.sort();
+        assert_eq!(delivered, expected, "每条消息必须恰好投递一次");
+
+        // 消费完毕：队列空，再取为空列表。
+        let (status, messages) = take_for(&router, &session_id, "to-host").await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(messages.is_empty(), "consumed queue must be empty");
     }
 
     #[tokio::test]
