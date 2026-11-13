@@ -122,6 +122,113 @@ fn test_import_from_private_key_solana() {
     assert_eq!(wallet.addresses[0].address, expected);
 }
 
+// 深审 Major 回归（2026-11-13）：单密钥 Solana 钱包存的是原始 32 字节
+// Ed25519 种子，签名路径此前无条件按 64 字节 SLIP-0010 根节点解析，
+// 导入成功却永远无法签名。
+#[test]
+fn single_address_solana_wallet_signs_with_raw_seed() {
+    let mut wallet = import_from_private_key(
+        Uuid::new_v4(),
+        "sol-single".to_string(),
+        &hex::encode([9u8; 32]),
+        BlockchainNetwork::Solana,
+        "pw",
+    )
+    .unwrap();
+
+    let address = wallet.addresses[0].address.clone();
+    let key = signing_key_for_address(&wallet, "pw", &address).unwrap();
+    let WalletSigningKey::Ed25519(ed) = key else {
+        panic!("expected Ed25519 signing key");
+    };
+    // 签名密钥必须复现自身地址（此前解析错位，公钥对不上地址）
+    let derived =
+        crate::crypto::address_generator::generate_solana_address(&ed.public_bytes()).unwrap();
+    assert_eq!(derived, address);
+    let sig = ed.sign(b"payload");
+    assert!(ed.verify(b"payload", &sig));
+
+    // 错误密码不得解密
+    assert!(signing_key_for_address(&wallet, "wrong", &address).is_err());
+
+    wallet.addresses.clear();
+}
+
+// 深审 Major 回归（2026-11-13）：0xFF…FF 不是合法 secp256k1 标量
+//（≥ 曲线阶 n），但任何 32 字节都是合法 Ed25519 种子——导入侧的
+// secp256k1 校验不得对 Solana 生效。
+#[test]
+fn solana_seed_import_skips_secp256k1_validation() {
+    let wallet = import_from_private_key(
+        Uuid::new_v4(),
+        "sol-ff".to_string(),
+        &hex::encode([0xff_u8; 32]),
+        BlockchainNetwork::Solana,
+        "pw",
+    )
+    .expect("any 32 bytes are a valid Ed25519 seed");
+
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0xff_u8; 32]);
+    let expected = crate::crypto::address_generator::generate_solana_address(
+        &signing_key.verifying_key().to_bytes(),
+    )
+    .unwrap();
+    assert_eq!(wallet.addresses[0].address, expected);
+}
+
+// 深审 Major 回归（2026-11-13）：Solana HD 导出私钥此前按 secp256k1
+// XPrv 解析 Ed25519 根节点，必然报错——现在按 SLIP-0010 逐地址派生导出，
+// 且整包 JSON 可无损还原（恢复一致性核对放行）。
+#[test]
+fn solana_hd_wallet_export_roundtrips_private_keys() {
+    let password = "pw";
+    let wallet = import_from_mnemonic(
+        Uuid::new_v4(),
+        "sol-hd".to_string(),
+        TEST_PHRASE,
+        "",
+        BlockchainNetwork::Solana,
+        None,
+        2,
+        password,
+    )
+    .unwrap();
+
+    let exported = export_to_json(&wallet, true, Some(password)).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&exported).unwrap();
+    let keys = value["private_keys"]
+        .as_object()
+        .expect("solana HD export must carry private keys");
+    assert_eq!(keys.len(), 2);
+
+    // 每把导出密钥必须是 32 字节 hex，且重派生公钥等于其地址
+    for (addr, key_hex) in keys {
+        let secret: [u8; 32] = hex::decode(key_hex.as_str().unwrap())
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .expect("child secret must be 32 bytes");
+        let key = crate::crypto::wallet_crypto::Ed25519Key::from_parts(secret, [0u8; 32]).unwrap();
+        let derived =
+            crate::crypto::address_generator::generate_solana_address(&key.public_bytes()).unwrap();
+        assert_eq!(&derived, addr);
+    }
+
+    // JSON 恢复：地址逐一一致
+    let restored = import_from_json(Uuid::new_v4(), None, &exported, password).unwrap();
+    let restored_addrs: Vec<&str> = restored
+        .addresses
+        .iter()
+        .map(|a| a.address.as_str())
+        .collect();
+    let declared: Vec<&str> = wallet
+        .addresses
+        .iter()
+        .map(|a| a.address.as_str())
+        .collect();
+    assert_eq!(restored_addrs, declared);
+}
+
 #[test]
 fn test_parse_wif() {
     // Canonical mainnet compressed WIF for private key 1 (well-known pair).
@@ -192,6 +299,43 @@ fn test_import_from_private_key_accepts_wif() {
         "pw",
     )
     .is_err());
+}
+
+// 深审 Major 回归（2026-11-13）：import_from_private_key 的 WIF 回退入口
+// 此前绕过 import_from_wif 的 testnet/非压缩两道检查。
+#[test]
+fn import_from_private_key_wif_fallback_enforces_wif_contract() {
+    // Testnet WIF: version byte 0xef, compressed suffix.
+    let mut payload = vec![0xefu8];
+    payload.extend_from_slice(&[0x22u8; 32]);
+    payload.push(0x01);
+    let checksum = double_sha256(&payload);
+    payload.extend_from_slice(&checksum[..4]);
+    let testnet_wif = bs58::encode(payload).into_string();
+
+    let err = import_from_private_key(
+        Uuid::new_v4(),
+        "t".to_string(),
+        &testnet_wif,
+        BlockchainNetwork::Bitcoin,
+        "pw",
+    )
+    .expect_err("testnet WIF must be rejected through the fallback too");
+    assert!(err.to_string().contains("testnet WIF is not supported"));
+
+    // Uncompressed mainnet WIF (no 0x01 suffix).
+    let uncompressed = "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ";
+    let err = import_from_private_key(
+        Uuid::new_v4(),
+        "u".to_string(),
+        uncompressed,
+        BlockchainNetwork::Bitcoin,
+        "pw",
+    )
+    .expect_err("uncompressed WIF must be rejected through the fallback too");
+    assert!(err
+        .to_string()
+        .contains("Uncompressed WIF is not supported"));
 }
 
 #[test]
@@ -432,8 +576,22 @@ fn import_from_json_error_paths() {
 #[test]
 fn import_from_json_defaults_optional_fields() {
     // extended_public_key / description / watch_only are serde-defaulted.
+    // addresses 必须写真实派生地址：恢复一致性核对（2026-11-13 深审
+    // Critical 修复）会拒绝与助记词派生不符的地址集。
+    let reference = import_from_mnemonic(
+        Uuid::new_v4(),
+        "Ref".to_string(),
+        TEST_PHRASE,
+        "",
+        BlockchainNetwork::Polygon,
+        None,
+        1,
+        "pw",
+    )
+    .unwrap();
+    let first = reference.addresses[0].address.clone();
     let minimal = format!(
-        r#"{{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"minimal","network":"polygon","wallet_type":"hd","mnemonic":"{TEST_PHRASE}","addresses":["a"],"created_at":"2024-01-01T00:00:00Z"}}"#
+        r#"{{"version":1,"wallet_id":"00000000-0000-0000-0000-000000000000","name":"minimal","network":"polygon","wallet_type":"hd","mnemonic":"{TEST_PHRASE}","addresses":["{first}"],"created_at":"2024-01-01T00:00:00Z"}}"#
     );
     let wallet = import_from_json(Uuid::new_v4(), None, &minimal, "pw").unwrap();
     assert_eq!(wallet.network, BlockchainNetwork::Polygon);
@@ -472,4 +630,56 @@ fn test_import_bitcoin_private_key_yields_p2wkh_address() {
     // The key round-trips through WIF export (compressed mainnet).
     let wif = export_to_wif(&wallet, password).unwrap();
     assert!(wif.starts_with('K') || wif.starts_with('L'));
+}
+
+// 深审 Critical 回归（2026-11-13）：带 BIP39 passphrase 的 HD 导出，
+// JSON 里只有助记词、passphrase 无法随文件走——恢复时用空 passphrase
+// 会派生出另一个钱包。恢复一致性核对必须拒绝静默错位恢复，而不是
+// 假装成功（老行为：恢复出完全不同地址的钱包还覆盖 xpub）。
+#[test]
+fn json_restore_of_passphrase_export_is_refused() {
+    let identity_id = Uuid::new_v4();
+    let password = "test_password";
+
+    let wallet = import_from_mnemonic(
+        identity_id,
+        "Passphrase HD".to_string(),
+        TEST_PHRASE,
+        "hunter2",
+        BlockchainNetwork::Bitcoin,
+        None,
+        2,
+        password,
+    )
+    .unwrap();
+
+    let exported = export_to_json(&wallet, true, Some(password)).unwrap();
+    let err = import_from_json(Uuid::new_v4(), None, &exported, password)
+        .expect_err("passphrase-protected export must not restore silently");
+    assert!(
+        err.to_string().contains("passphrase"),
+        "error must point at the missing passphrase: {err}"
+    );
+
+    // 对照组：无 passphrase 导出照常恢复，地址逐一一致
+    let plain = import_from_mnemonic(
+        identity_id,
+        "Plain HD".to_string(),
+        TEST_PHRASE,
+        "",
+        BlockchainNetwork::Bitcoin,
+        None,
+        2,
+        password,
+    )
+    .unwrap();
+    let plain_export = export_to_json(&plain, true, Some(password)).unwrap();
+    let restored = import_from_json(Uuid::new_v4(), None, &plain_export, password).unwrap();
+    let restored_addrs: Vec<&str> = restored
+        .addresses
+        .iter()
+        .map(|a| a.address.as_str())
+        .collect();
+    let declared: Vec<&str> = plain.addresses.iter().map(|a| a.address.as_str()).collect();
+    assert_eq!(restored_addrs, declared);
 }

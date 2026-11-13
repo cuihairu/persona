@@ -157,6 +157,20 @@ pub fn signing_key_for_address(
 
     if wallet.network == BlockchainNetwork::Solana {
         let root_material = decrypt_private_key(&encrypted_key, password)?;
+
+        // 单密钥钱包存原始 32 字节 Ed25519 种子，直接签名（2026-11-13
+        // 深审 Major 修复：此前这里无条件按 64 字节 SLIP-0010 根节点解析，
+        // 单密钥 Solana 钱包导入成功却永远无法签名）。
+        if matches!(wallet.wallet_type, WalletType::SingleAddress) {
+            let secret: [u8; 32] = root_material.as_slice().try_into().map_err(|_| {
+                PersonaError::CryptographicError("Invalid Solana key material length".to_string())
+            })?;
+            let key = Ed25519Key::from_parts(secret, [0u8; 32])?;
+            return Ok(WalletSigningKey::Ed25519(key));
+        }
+
+        // HD 钱包存 64 字节 SLIP-0010 根节点（secret+chain code），按地址
+        // 派生路径签名。
         let secret: [u8; 32] = root_material
             .get(..32)
             .and_then(|s| s.try_into().ok())
@@ -242,7 +256,21 @@ pub fn import_from_private_key(
                         .to_string(),
                 ));
             }
-            parse_wif(private_key_hex)?.secret.to_vec()
+            // WIF 便捷入口与 import_from_wif 同一合同：拒收 testnet 与
+            // 非压缩格式（2026-11-13 深审 Major 修复：此前经这里绕过了
+            // 两道检查）。
+            let parsed = parse_wif(private_key_hex)?;
+            if parsed.testnet {
+                return Err(PersonaError::InvalidInput(
+                    "Bitcoin testnet WIF is not supported yet".to_string(),
+                ));
+            }
+            if !parsed.compressed {
+                return Err(PersonaError::InvalidInput(
+                    "Uncompressed WIF is not supported yet".to_string(),
+                ));
+            }
+            parsed.secret.to_vec()
         }
     };
 
@@ -260,37 +288,14 @@ pub fn import_from_private_key(
             .map_err(|e| PersonaError::CryptographicError(format!("Serialization error: {}", e)))?,
     );
 
-    // Derive address from private key (secp256k1)
-    let signing_key =
-        k256::ecdsa::SigningKey::from_slice(private_key_bytes.as_slice()).map_err(|e| {
-            PersonaError::CryptographicError(format!("Invalid secp256k1 private key: {}", e))
-        })?;
-    let verifying_key = signing_key.verifying_key();
-    let encoded = verifying_key.to_sec1_point(true);
-    let compressed_bytes = encoded.as_bytes();
-    let compressed: [u8; 33] = compressed_bytes
-        .try_into()
-        .map_err(|_| PersonaError::CryptographicError("Invalid compressed pubkey".to_string()))?;
-
+    // Derive address from key material (per-curve). The secp256k1 scalar
+    // validation must NOT gate the Solana path: any 32 bytes are a valid
+    // Ed25519 seed, but some of them are not valid secp256k1 scalars
+    // (2026-11-13 deep-audit Major fix).
     let (address_string, address_type) = match wallet.network {
-        BlockchainNetwork::Bitcoin => (
-            generate_bitcoin_address_from_compressed_pubkey(
-                &compressed,
-                BitcoinAddressType::P2WPKH,
-                false,
-            )?,
-            crate::models::wallet::AddressType::P2WPKH,
-        ),
-        BlockchainNetwork::Ethereum
-        | BlockchainNetwork::Polygon
-        | BlockchainNetwork::Arbitrum
-        | BlockchainNetwork::Optimism
-        | BlockchainNetwork::BinanceSmartChain => (
-            generate_ethereum_address_checksummed_from_compressed_pubkey(&compressed)?,
-            crate::models::wallet::AddressType::Ethereum,
-        ),
         BlockchainNetwork::Solana => {
-            // A Solana private key is a 32-byte Ed25519 seed
+            // A Solana private key is a 32-byte Ed25519 seed; the address
+            // is its public key.
             let secret: [u8; 32] = private_key_bytes
                 .as_slice()
                 .try_into()
@@ -300,6 +305,39 @@ pub fn import_from_private_key(
                 generate_solana_address(&signing_key.verifying_key().to_bytes())?,
                 crate::models::wallet::AddressType::Solana,
             )
+        }
+        ref network @ (BlockchainNetwork::Bitcoin
+        | BlockchainNetwork::Ethereum
+        | BlockchainNetwork::Polygon
+        | BlockchainNetwork::Arbitrum
+        | BlockchainNetwork::Optimism
+        | BlockchainNetwork::BinanceSmartChain) => {
+            let signing_key = k256::ecdsa::SigningKey::from_slice(private_key_bytes.as_slice())
+                .map_err(|e| {
+                    PersonaError::CryptographicError(format!(
+                        "Invalid secp256k1 private key: {}",
+                        e
+                    ))
+                })?;
+            let verifying_key = signing_key.verifying_key();
+            let encoded = verifying_key.to_sec1_point(true);
+            let compressed: [u8; 33] = encoded.as_bytes().try_into().map_err(|_| {
+                PersonaError::CryptographicError("Invalid compressed pubkey".to_string())
+            })?;
+            match network {
+                BlockchainNetwork::Bitcoin => (
+                    generate_bitcoin_address_from_compressed_pubkey(
+                        &compressed,
+                        BitcoinAddressType::P2WPKH,
+                        false,
+                    )?,
+                    crate::models::wallet::AddressType::P2WPKH,
+                ),
+                _ => (
+                    generate_ethereum_address_checksummed_from_compressed_pubkey(&compressed)?,
+                    crate::models::wallet::AddressType::Ethereum,
+                ),
+            }
         }
         other => {
             return Err(PersonaError::CryptographicError(format!(
@@ -369,7 +407,7 @@ pub fn import_from_json(
     let address_count = export.addresses.len().max(1);
 
     let mut wallet = if let Some(mnemonic) = export.mnemonic.as_deref() {
-        import_from_mnemonic(
+        let wallet = import_from_mnemonic(
             identity_id,
             wallet_name,
             mnemonic,
@@ -378,7 +416,9 @@ pub fn import_from_json(
             export.derivation_path.clone(),
             address_count,
             password,
-        )?
+        )?;
+        verify_restored_addresses(&wallet, &export.addresses, true)?;
+        wallet
     } else if let Some(private_keys) = export.private_keys.as_ref() {
         let private_key = private_keys.values().next().ok_or_else(|| {
             PersonaError::InvalidInput(
@@ -386,7 +426,10 @@ pub fn import_from_json(
             )
         })?;
 
-        import_from_private_key(identity_id, wallet_name, private_key, network, password)?
+        let wallet =
+            import_from_private_key(identity_id, wallet_name, private_key, network, password)?;
+        verify_restored_addresses(&wallet, &export.addresses, false)?;
+        wallet
     } else {
         return Err(PersonaError::InvalidInput(
             "Wallet JSON import requires mnemonic or private key data".to_string(),
@@ -397,6 +440,44 @@ pub fn import_from_json(
     wallet.extended_public_key = export.extended_public_key;
 
     Ok(wallet)
+}
+
+/// Restore consistency check (2026-11-13 codex deep-audit Critical fix):
+/// the addresses derived from the restored key material must match what
+/// the export declares, otherwise the restore silently produced a
+/// different wallet. Typical trigger: an HD export created with a BIP39
+/// passphrase — the passphrase cannot travel with the JSON, so deriving
+/// with an empty passphrase yields a wholly different address set.
+/// `exact` (mnemonic path) demands positional equality; the single-key
+/// path only demands the restored address be one of the declared ones.
+fn verify_restored_addresses(
+    wallet: &CryptoWallet,
+    declared: &[String],
+    exact: bool,
+) -> PersonaResult<()> {
+    if declared.is_empty() {
+        return Ok(());
+    }
+    let restored: Vec<&str> = wallet
+        .addresses
+        .iter()
+        .map(|a| a.address.as_str())
+        .collect();
+    let matches = if exact {
+        restored.len() == declared.len() && restored.iter().zip(declared).all(|(r, d)| r == d)
+    } else {
+        restored.len() == 1 && declared.iter().any(|d| d == restored[0])
+    };
+    if !matches {
+        return Err(PersonaError::InvalidInput(format!(
+            "restored addresses do not match the JSON export (restored {}, export declares {}); \
+             the export was most likely created with a BIP39 passphrase, which the JSON format \
+             does not carry — restore through the original passphrase-enabled flow instead",
+            restored.first().copied().unwrap_or("<none>"),
+            declared.first().map(String::as_str).unwrap_or("<none>"),
+        )));
+    }
+    Ok(())
 }
 
 fn derive_addresses(
