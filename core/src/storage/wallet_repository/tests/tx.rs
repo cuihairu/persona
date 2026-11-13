@@ -31,10 +31,11 @@ async fn test_transaction_requests_and_signed_transactions() {
         metadata: std::collections::HashMap::new(),
     };
     repo.create_transaction_request(&request).await.unwrap();
+    let first_request_id = request.id;
 
     let pending = repo.get_pending_requests(&created.id).await.unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].id, request.id);
+    assert_eq!(pending[0].id, first_request_id);
     assert_eq!(pending[0].amount, "1000");
     assert_eq!(pending[0].gas_limit, Some(21000));
     assert_eq!(pending[0].nonce, Some(1));
@@ -47,7 +48,9 @@ async fn test_transaction_requests_and_signed_transactions() {
     assert_eq!(stats.successful_transactions, 0);
     assert_eq!(stats.failed_transactions, 0);
 
-    // One successful and one failed broadcast.
+    // One successful broadcast: signs the first request.
+    // create_signed_transaction 现在同一事务里把 transaction_requests
+    // 的 signed_at 标记为已签（2026-11-13 深审 Major 修复）。
     let success = SignedTransaction {
         id: Uuid::new_v4(),
         request: request.clone(),
@@ -70,7 +73,16 @@ async fn test_transaction_requests_and_signed_transactions() {
     };
     repo.create_signed_transaction(&success).await.unwrap();
 
+    // 第二个请求先落库再签：请求行不存在会报 NotFound（老测试靠旧缺陷
+    // 合同——第二笔签名引用了从未落库的请求 id）。
     request.id = Uuid::new_v4();
+    repo.create_transaction_request(&request).await.unwrap();
+
+    // 已签请求退出待签集合（不再可重复触发签名），剩下的仍是第二笔
+    let pending = repo.get_pending_requests(&created.id).await.unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].id, request.id);
+
     let failed = SignedTransaction {
         id: Uuid::new_v4(),
         request,
@@ -84,6 +96,37 @@ async fn test_transaction_requests_and_signed_transactions() {
         },
     };
     repo.create_signed_transaction(&failed).await.unwrap();
+
+    // 第二笔签完：待签集合清空，请求行的 signed_at 已落库
+    let pending = repo.get_pending_requests(&created.id).await.unwrap();
+    assert_eq!(pending.len(), 0);
+    let signed_at: Option<i64> =
+        sqlx::query_scalar("SELECT signed_at FROM transaction_requests WHERE id = ?")
+            .bind(success.request.id.to_string())
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    assert!(signed_at.is_some(), "signed request must carry signed_at");
+
+    // 深审 Major 回归（2026-11-13）：签名引用从未落库的请求必须报
+    // NotFound，不得静默成功。
+    let ghost = SignedTransaction {
+        id: Uuid::new_v4(),
+        request: TransactionRequest {
+            id: Uuid::new_v4(),
+            ..success.request.clone()
+        },
+        signatures: vec![],
+        raw_signed_transaction: vec![1],
+        transaction_hash: "0000".to_string(),
+        signed_at: chrono::Utc::now(),
+        broadcast_status: crate::models::wallet::BroadcastStatus::NotBroadcast,
+    };
+    let err = repo
+        .create_signed_transaction(&ghost)
+        .await
+        .expect_err("signing a never-inserted request must fail");
+    assert!(matches!(err, PersonaError::NotFound(_)));
 
     let stats = repo.get_transaction_stats(&created.id).await.unwrap();
     assert_eq!(stats.total_transactions, 2);

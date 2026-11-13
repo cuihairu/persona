@@ -41,10 +41,18 @@ impl CryptoWalletRepository {
     }
 
     /// Create signed transaction
+    ///
+    /// 同一事务内写入签名结果并把原请求标记为已签（2026-11-13 codex 深审
+    /// Major 修复）：此前只插 signed_transactions、不动
+    /// transaction_requests.signed_at，待签查询（`signed_at IS NULL`）
+    /// 会把已签请求永远再列出来，可重复触发签名。请求不存在时报 NotFound
+    /// 并回滚插入。
     pub async fn create_signed_transaction(
         &self,
         signed_tx: &SignedTransaction,
     ) -> PersonaResult<SignedTransaction> {
+        let mut tx = self.db.pool().begin().await?;
+
         sqlx::query(
             r#"
             INSERT INTO signed_transactions (
@@ -62,8 +70,20 @@ impl CryptoWalletRepository {
         .bind(signed_tx.signed_at.timestamp())
         .bind(serde_json::to_string(&signed_tx.broadcast_status)?)
         .bind(chrono::Utc::now().timestamp())
-        .execute(self.db.pool())
+        .execute(tx.as_mut())
         .await?;
+
+        let marked = sqlx::query("UPDATE transaction_requests SET signed_at = $1 WHERE id = $2")
+            .bind(signed_tx.signed_at.timestamp())
+            .bind(signed_tx.request.id.to_string())
+            .execute(tx.as_mut())
+            .await?;
+
+        if marked.rows_affected() == 0 {
+            return Err(PersonaError::NotFound("Transaction request".to_string()));
+        }
+
+        tx.commit().await?;
 
         Ok(signed_tx.clone())
     }
