@@ -63,7 +63,13 @@ impl CryptoWalletRepository {
     }
 
     /// Update wallet
+    ///
+    /// 全程同一事务（2026-11-13 codex 深审 Critical 修复）：钱包行更新、
+    /// 地址重建与元数据更新此前各自独立提交，中途约束失败会留下新密钥、
+    /// 残缺地址与旧元数据的混合状态；现在任一步失败整体回滚。
     pub async fn update(&self, wallet: &CryptoWallet) -> PersonaResult<CryptoWallet> {
+        let mut tx = self.db.pool().begin().await?;
+
         sqlx::query(
             r#"
             UPDATE crypto_wallets SET
@@ -86,22 +92,24 @@ impl CryptoWalletRepository {
         .bind(wallet.watch_only)
         .bind(serde_json::to_string(&wallet.security_level)?)
         .bind(wallet.updated_at.timestamp())
-        .execute(self.db.pool())
+        .execute(tx.as_mut())
         .await?;
 
         // Delete old addresses and insert new ones
         sqlx::query("DELETE FROM wallet_addresses WHERE wallet_id = $1")
             .bind(wallet.id.to_string())
-            .execute(self.db.pool())
+            .execute(tx.as_mut())
             .await?;
 
         for address in &wallet.addresses {
-            self.add_address(&wallet.id, address).await?;
+            self.insert_address(&mut tx, &wallet.id, address).await?;
         }
 
         // Update metadata
-        self.update_wallet_metadata(&wallet.id, &wallet.metadata)
+        self.update_wallet_metadata(&mut tx, &wallet.id, &wallet.metadata)
             .await?;
+
+        tx.commit().await?;
 
         // Return updated wallet
         self.find_by_id(&wallet.id)
@@ -110,28 +118,13 @@ impl CryptoWalletRepository {
     }
 
     /// Delete wallet
+    ///
+    /// 单条父表删除（2026-11-13 codex 深审 Critical 修复）：四张子表
+    /// （wallet_addresses/wallet_metadata/transaction_requests/signed_transactions，
+    /// 见 migrations/009_crypto_wallets.sql）均带 `ON DELETE CASCADE` 且
+    /// 连接层启用外键强制，级联在 SQLite 同一条语句内完成，天然原子——
+    /// 此前逐表独立删除在中间失败时会留下半删除状态。
     pub async fn delete(&self, id: &Uuid) -> PersonaResult<bool> {
-        sqlx::query("DELETE FROM wallet_addresses WHERE wallet_id = $1")
-            .bind(id.to_string())
-            .execute(self.db.pool())
-            .await?;
-
-        sqlx::query("DELETE FROM wallet_metadata WHERE wallet_id = $1")
-            .bind(id.to_string())
-            .execute(self.db.pool())
-            .await?;
-
-        sqlx::query("DELETE FROM transaction_requests WHERE wallet_id = $1")
-            .bind(id.to_string())
-            .execute(self.db.pool())
-            .await?;
-
-        sqlx::query("DELETE FROM signed_transactions WHERE wallet_id = $1")
-            .bind(id.to_string())
-            .execute(self.db.pool())
-            .await?;
-
-        // Delete wallet
         let result = sqlx::query("DELETE FROM crypto_wallets WHERE id = $1")
             .bind(id.to_string())
             .execute(self.db.pool())
@@ -175,6 +168,7 @@ impl CryptoWalletRepository {
 
     async fn update_wallet_metadata(
         &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
         wallet_id: &Uuid,
         metadata: &WalletMetadata,
     ) -> PersonaResult<()> {
@@ -198,7 +192,7 @@ impl CryptoWalletRepository {
         .bind(serde_json::to_string(&metadata.security_settings)?)
         .bind(serde_json::to_string(&metadata.custom_data)?)
         .bind(chrono::Utc::now().timestamp())
-        .execute(self.db.pool())
+        .execute(tx.as_mut())
         .await?;
 
         Ok(())
