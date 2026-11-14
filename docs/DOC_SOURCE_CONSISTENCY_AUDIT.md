@@ -219,3 +219,5 @@ Severity: P0 = 0, P1 = 3, P2 = 2. All five fixed under source-wins (EN/zh pairs)
 - Form: **form ②** (VitePress locale routing, `/` = en, `/zh/` = zh).
 - Auto-detection: **none**. Grepping `docs/` (minus node_modules, dist, `.vitepress/cache`), `website/` and `desktop/src-tauri/src` for `navigator.language(s)`, `location.replace`, `lang-auto-picked`, `rootLocale` hits only the **two audit ledgers describing this very face** — no page source carries a probe. `docs/.vitepress/theme/index.ts` registers only `UiCarousel` and `MermaidRenderer`. The ROOT page has no script, so nothing would fire even if one existed.
 - Verdict: **no auto language switch; manual switch + explicit links only** (VitePress locale dropdown + README cross-links). The decision item is already filed as `todo.md` LANG-AUTO-001 (P2) by the previous G2 round — not implemented, locale routing untouched.
+
+> Post-commit addendum: the LuCI menu label is `Persona Server` (`packaging/openwrt/usr/lib/lua/luci/controller/persona.lua:13`), so the ENABLE step path was corrected from `Admin → Services → Persona` to `Admin → Services → Persona Server` in both language halves.

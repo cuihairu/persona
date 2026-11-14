@@ -68,7 +68,7 @@ UCI 只存非密路径与开关（`/etc/config/persona`）；令牌规格放在 
 
     echo 'phone:SECRET,tablet:SECRET2' > /etc/persona/tokens && chmod 600 /etc/persona/tokens
 
-经 LuCI 开启（Admin → Services → Persona，带设置页与日志尾随），或直接
+经 LuCI 开启（Admin → Services → Persona Server，带设置页与日志尾随），或直接
 `uci set persona.main.enabled='1' && /etc/init.d/persona restart`。
 令牌值既不进 UCI 也不进包体，打包面因此仍是零知识；令牌文件缺失或不可读时服务
 保持 fail-closed（进程仍会起来，`/api/v1` 返回 503，`/health` 仍 200——`server/src/lib.rs:449`）。

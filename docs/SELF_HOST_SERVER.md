@@ -78,7 +78,7 @@ spec stays in a root-only file that the init script reads at start:
 
     echo 'phone:SECRET,tablet:SECRET2' > /etc/persona/tokens && chmod 600 /etc/persona/tokens
 
-Enable through LuCI (Admin → Services → Persona, with its settings page and log
+Enable through LuCI (Admin → Services → Persona Server, with its settings page and log
 tail) or `uci set persona.main.enabled='1' && /etc/init.d/persona restart`.
 Token values never appear in UCI and never in the package payload, so the
 packaging surface stays zero-knowledge; a missing or unreadable token file
