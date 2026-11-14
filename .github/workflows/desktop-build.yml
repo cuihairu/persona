@@ -311,7 +311,7 @@ jobs:
         run: gh release delete nightly --cleanup-tag --yes || true
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v3.0.3
+        uses: softprops/action-gh-release@v3.0.4
         with:
           tag_name: ${{ steps.rel.outputs.tag }}
           name: ${{ steps.rel.outputs.name }}
