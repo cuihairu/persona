@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldCheckIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { clsx } from 'clsx';
 import { personaAPI } from '@/utils/api';
 import { credentialTypeLabel } from './credentialDisplay';
@@ -34,7 +35,7 @@ const KIND_LABELS: Record<HealthIssueKindPayload['type'], string> = {
  */
 const detailFor = (
   issue: HealthIssue,
-  t: (key: string, opts?: Record<string, unknown>) => string,
+  t: TFunction,
 ): string => {
   switch (issue.type) {
     case 'weak_password':

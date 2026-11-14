@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { personaAPI } from '../utils/api';
 import type {
   ConnectServerStatus,
@@ -32,7 +33,7 @@ const CONNECT_ITEM_TYPES: { value: string; label: string }[] = [
 ];
 
 /** scope 摘要（列表行）：身份 + 类型 + 只读 */
-function scopeSummary(t: (k: string, o?: Record<string, unknown>) => string, scope: ConnectTokenScope): string {
+function scopeSummary(t: TFunction, scope: ConnectTokenScope): string {
   const identityPart =
     scope.identities.length === 0
       ? t('settings.connect.scopeAllIdentitiesShort')
