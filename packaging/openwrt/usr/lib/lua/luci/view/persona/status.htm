@@ -1,0 +1,131 @@
+<%+header%>
+<h2><a id="content" name="content"><%:Persona Server 运行状态%></a></h2>
+
+<div id="persona-error" class="alert-message warning" style="display:none"></div>
+
+<div class="cbi-map">
+	<fieldset class="cbi-section">
+		<legend><%:服务状态%></legend>
+		<table class="table">
+			<tr><td><%:服务%></td><td><code id="persona-running">…</code></td></tr>
+			<tr><td><%:UCI 启用%></td><td><code id="persona-enabled">…</code></td></tr>
+			<tr><td><%:监听%></td><td><code id="persona-listen">…</code></td></tr>
+			<tr><td><%:数据库%></td><td><code id="persona-db">…</code></td></tr>
+			<tr><td><%:设备令牌文件%></td><td><code id="persona-tokens">…</code></td></tr>
+		</table>
+	</fieldset>
+
+	<fieldset class="cbi-section">
+		<legend><%:最近日志 (logread -e persona)%></legend>
+		<table class="table" id="persona-logs">
+			<tr><th><%:日志行%></th></tr>
+		</table>
+	</fieldset>
+</div>
+
+<p><%:每 10 秒自动刷新%></p>
+
+<script type="text/javascript">
+(function() {
+	var inflight = false;
+
+	function set_text(id, text) {
+		var el = document.getElementById(id);
+		if (el) el.textContent = text;
+	}
+
+	function clear_rows(id) {
+		var table = document.getElementById(id);
+		while (table.rows.length > 1) table.deleteRow(-1);
+		return table;
+	}
+
+	function add_row(id, cells) {
+		var table = document.getElementById(id);
+		var row = table.insertRow(-1);
+		for (var i = 0; i < cells.length; i++) {
+			var td = row.insertCell(-1);
+			td.textContent = cells[i];
+		}
+		return row;
+	}
+
+	function empty_row(id, message) {
+		var row = add_row(id, [message]);
+		var td = row.cells[0];
+		td.colSpan = document.getElementById(id).rows[0].cells.length;
+		td.style.color = '#888';
+	}
+
+	function state_color(state) {
+		var el = document.createElement('span');
+		el.textContent = state;
+		el.style.fontWeight = '600';
+		el.style.color = (state === 'running' || state === '正常') ? '#080' : '#c00';
+		return el;
+	}
+
+	function fmt_size(n) {
+		if (n === null || n === undefined) return '-';
+		if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+		if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+		return n + ' B';
+	}
+
+	function load() {
+		if (inflight) return;
+		inflight = true;
+		fetch('/cgi-bin/luci/admin/services/persona/api/status')
+			.then(function(r) { return r.json(); })
+			.then(function(j) {
+				var err = document.getElementById('persona-error');
+				if (j.error) {
+					err.textContent = j.error;
+					err.style.display = '';
+				} else {
+					err.style.display = 'none';
+				}
+
+				var run = document.getElementById('persona-running');
+				run.textContent = '';
+				run.appendChild(state_color(j.running ? 'running' : 'stopped'));
+
+				var en = document.getElementById('persona-enabled');
+				en.textContent = '';
+				en.appendChild(state_color(j.enabled ? '已启用' : '未启用'));
+
+				set_text('persona-listen', (j.host || '?') + ':' + (j.port || '?')
+					+ (j.listening ? '（端口监听中）' : '（端口未监听）'));
+
+				var db = document.getElementById('persona-db');
+				if (j.db_missing) {
+					db.textContent = (j.db || '-') + '（文件不存在，启动后自动创建）';
+					db.style.color = '#c00';
+				} else {
+					db.textContent = (j.db || '-') + '（' + fmt_size(j.db_size) + '）';
+					db.style.color = '';
+				}
+
+				set_text('persona-tokens', (j.tokens_file || '-')
+					+ (j.tokens_file_present ? '（存在）' : '（缺失 — /api 保持关闭）'));
+
+				clear_rows('persona-logs');
+				if (!j.logs || !j.logs.length) {
+					empty_row('persona-logs', '暂无 persona 日志');
+				} else {
+					j.logs.forEach(function(line) { add_row('persona-logs', [line]); });
+				}
+			})
+			.catch(function() {
+				var err = document.getElementById('persona-error');
+				err.textContent = '无法获取状态（接口请求失败）';
+				err.style.display = '';
+			})
+			.finally(function() { inflight = false; });
+	}
+
+	load();
+	setInterval(load, 10000);
+})();
+</script>
+<%+footer%>

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Idempotent pre-remove: stop the service (no-op when disabled/not running).
+[ -x /etc/init.d/persona ] && /etc/init.d/persona stop 2>/dev/null
+exit 0

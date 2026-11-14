@@ -1,0 +1,37 @@
+# Persona Server UCI configuration (persona package, /etc/config/persona).
+#
+# The server is configured purely through PERSONA_SERVER_* environment
+# variables; the procd init script renders those from this file on every
+# start. UCI is the single source of truth for runtime wiring (the same
+# model as OpenWrt-native services). The service ships disabled — enable
+# via LuCI (Services -> Persona Server) or `uci set persona.main.enabled=1`.
+#
+# Zero-knowledge red line: NO credential material lives in UCI. Device
+# tokens live only in a root-only file (default /etc/persona/tokens, mode
+# 0600) whose single line is "name:token,name:token"; the init script
+# reads it into the environment at start. The package itself ships no
+# credentials. The server stores only encrypted client data.
+
+config main 'main'
+	option enabled '0'
+	# Bind address for the HTTP API (PERSONA_SERVER_HOST).
+	option host '0.0.0.0'
+	# HTTP port (PERSONA_SERVER_PORT).
+	option port '3000'
+	# SQLite database path (PERSONA_SERVER_DB). Parent directory is
+	# created at start; backups default to <db-dir>/backups.
+	option db '/etc/persona/persona.db'
+	# Optional override for the backup directory (PERSONA_SERVER_BACKUP_DIR).
+	# Empty = default next to the database.
+	option backup_dir ''
+	# Backup version cap (PERSONA_SERVER_BACKUP_MAX_VERSIONS). 0 = server default.
+	option backup_max_versions '0'
+	# Ops-log retention in days (PERSONA_SERVER_OPS_RETENTION_DAYS). 0 = server default.
+	option ops_retention_days '0'
+	# Event retention in days (PERSONA_SERVER_EVENTS_RETENTION_DAYS). 0 = server default.
+	option events_retention_days '0'
+	# Path of the root-only device token file (0600). Its content — never
+	# this config — is the only place tokens live: one line of
+	# "name:token,name:token". Missing or empty file = /api stays
+	# disabled (fail-closed).
+	option tokens_file '/etc/persona/tokens'

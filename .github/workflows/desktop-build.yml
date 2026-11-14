@@ -28,6 +28,12 @@
 # ——Chrome/Edge 同包双名。Safari 需 Xcode 转换 + 签名账号，**不在
 # nightly**（todo 另立）。tag 正式版暂不发扩展，口径与 APK 一致。
 #
+# OpenWrt（2026-11-14）：persona-server musl 静态编译（x86_64 + aarch64）
+# → packaging/openwrt/build-ipk.sh 出三件套 ipk（persona 主包 arch 相关、
+# luci-app/app-meta arch=all）。nightly 资产 persona-nightly-openwrt-*.ipk；
+# aarch64 无真机，做结构检查（ELF 机器 + 静态链接 + ipk 成员）。tag 正式版
+# 暂不发，口径与 APK/扩展一致。
+#
 # Binaries are unsigned (SmartScreen/Gatekeeper will warn on install);
 # architecture-pinned per runner: linux/windows x64, macos arm64.
 name: Desktop Build
@@ -302,9 +308,122 @@ jobs:
           path: persona-extension.zip
           if-no-files-found: error
 
+  # OpenWrt IPK 打包：persona-server musl 静态编译（x86_64 用 apt
+  # musl-tools，aarch64 用 musl.cc 交叉工具链——sqlx bundled sqlite 与
+  # ring 在 musl 下干净），build-ipk.sh 出三件套。脚本/脚本门禁
+  # （shellcheck + sh -n + luac5.1）内联在本 job 最前，红在编译前。
+  openwrt:
+    name: openwrt ipk (x86_64 + aarch64 musl)
+    needs: gate
+    if: needs.gate.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: .
+          key: openwrt-musl
+
+      - name: Install packaging gate tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools lua5.1 file
+
+      - name: Download aarch64 musl cross toolchain
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.cache/cross-toolchains"
+          curl -sL --fail -o "$HOME/.cache/aarch64-musl.tgz" \
+            https://more.musl.cc/11.2.1/x86_64-linux-musl/aarch64-linux-musl-cross.tgz
+          tar xzf "$HOME/.cache/aarch64-musl.tgz" -C "$HOME/.cache/cross-toolchains"
+          "$HOME/.cache/cross-toolchains/aarch64-linux-musl-cross/bin/aarch64-linux-musl-gcc" --version
+
+      - name: Validate packaging scripts (shellcheck / sh -n / luac5.1)
+        shell: bash
+        run: |
+          shellcheck packaging/openwrt/build-ipk.sh
+          sh -n packaging/openwrt/build-ipk.sh \
+            packaging/openwrt/etc/init.d/persona \
+            packaging/openwrt/CONTROL/postinst packaging/openwrt/CONTROL/prerm
+          # LuCI app gate: parse the Lua controller/model with Lua 5.1
+          # (the interpreter LuCI runs on OpenWrt).
+          luac5.1 -p packaging/openwrt/usr/lib/lua/luci/controller/persona.lua \
+            packaging/openwrt/usr/lib/lua/luci/model/cbi/persona.lua
+
+      - name: Build persona-server (x86_64 musl static)
+        shell: bash
+        run: |
+          CC_x86_64_unknown_linux_musl=musl-gcc \
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+          cargo build -p persona-server --target x86_64-unknown-linux-musl --release
+
+      - name: Build persona-server (aarch64 musl static)
+        shell: bash
+        run: |
+          TC="$HOME/.cache/cross-toolchains/aarch64-linux-musl-cross/bin/aarch64-linux-musl-"
+          CC_aarch64_unknown_linux_musl="${TC}gcc" \
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${TC}gcc" \
+          AR_aarch64_unknown_linux_musl="${TC}ar" \
+          cargo build -p persona-server --target aarch64-unknown-linux-musl --release
+
+      - name: Package IPKs + structural checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=out/openwrt
+          packaging/openwrt/build-ipk.sh \
+            target/x86_64-unknown-linux-musl/release "$OUT"
+          packaging/openwrt/build-ipk.sh \
+            target/aarch64-unknown-linux-musl/release "$OUT" --arch aarch64
+          # aarch64 无真机：结构检查代替（ELF 机器 + 静态链接 + ipk 成员
+          # + data.tar.gz 目录条目——opkg 不为纯文件成员建父目录）。
+          elf=target/aarch64-unknown-linux-musl/release/persona-server
+          file "$elf" | tee /dev/stderr | grep -q 'static-pie linked'
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          for arch in x86_64 aarch64; do
+            ipk="$OUT/persona_${version}-1_${arch}.ipk"
+            test -f "$ipk"
+            tar -tzf "$ipk" | grep -qx './debian-binary'
+            rm -rf /tmp/ipk-verify && mkdir /tmp/ipk-verify
+            tar -xzf "$ipk" -C /tmp/ipk-verify
+            tar -tzf /tmp/ipk-verify/data.tar.gz | grep -qx 'usr/'
+            tar -xzOf /tmp/ipk-verify/data.tar.gz usr/bin/persona-server > /dev/null
+          done
+          find "$OUT" -type f -printf '%s %p\n' | sort -n
+
+      - name: Upload openwrt ipk artifacts (x86_64)
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: openwrt-ipk-x86_64
+          path: out/openwrt/persona_*_x86_64.ipk
+          if-no-files-found: error
+
+      - name: Upload openwrt ipk artifacts (aarch64)
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: openwrt-ipk-aarch64
+          path: out/openwrt/persona_*_aarch64.ipk
+          if-no-files-found: error
+
+      - name: Upload openwrt ipk artifacts (arch-all)
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: openwrt-ipk-all
+          path: |
+            out/openwrt/luci-app-persona_*_all.ipk
+            out/openwrt/app-meta-persona_*_all.ipk
+          if-no-files-found: error
+
   release:
     name: publish
-    needs: [gate, build, android, extension]
+    needs: [gate, build, android, extension, openwrt]
     if: >-
       needs.gate.outputs.should_build == 'true' &&
       (startsWith(github.ref, 'refs/tags/v') ||
@@ -314,11 +433,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      # nightly/dispatch 带 APK + 扩展 zip；tag 正式版只发桌面包（见文件
-      # 头口径）。needs 已含 android/extension，两个 artifact 必然已就绪。
+      # nightly/dispatch 带 APK + 扩展 zip + OpenWrt ipk；tag 正式版只发
+      # 桌面包（见文件头口径）。needs 已含全部 build job，artifact 必然
+      # 已就绪。
       - uses: actions/download-artifact@v8.0.2
         with:
-          pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64,extension-chromium}' }}
+          pattern: ${{ startsWith(github.ref, 'refs/tags/v') && 'desktop-*' || '{desktop-*,android-apk-arm64,extension-chromium,openwrt-ipk-*}' }}
           path: dist
           merge-multiple: true
 
@@ -350,6 +470,35 @@ jobs:
             echo "::error::extension zip missing from downloaded artifacts"
             exit 1
           fi
+
+      - name: Rename OpenWrt ipks (nightly naming)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        # 主包按架构出 persona-nightly-openwrt-<arch>.ipk；LuCI 界面与
+        # iStore 元数据包是 arch=all，两个架构共用同一份。
+        run: |
+          ok=1
+          for pair in \
+            "persona_*_x86_64.ipk:persona-nightly-openwrt-x86_64.ipk" \
+            "persona_*_aarch64.ipk:persona-nightly-openwrt-aarch64.ipk" \
+            "luci-app-persona_*_all.ipk:persona-nightly-openwrt-luci-app-all.ipk" \
+            "app-meta-persona_*_all.ipk:persona-nightly-openwrt-app-meta-all.ipk"
+          do
+            src="${pair%%:*}"
+            dst="${pair##*:}"
+            # set -- expands the glob (a quoted test would compare the
+            # literal pattern); build-ipk emits exactly one match each.
+            # shellcheck disable=SC2086  # glob expansion is the point
+            set -- dist/$src
+            if [ -f "$1" ]; then
+              mv "$1" "dist/$dst"
+              echo "renamed to $dst"
+            else
+              echo "::error::openwrt ipk missing from downloaded artifacts: $src"
+              ok=0
+            fi
+          done
+          [ "$ok" = "1" ] || exit 1
 
       - name: Generate SHA256SUMS + asset manifest (nightly only)
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}

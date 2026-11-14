@@ -1,0 +1,65 @@
+#!/bin/sh /etc/rc.common
+# Persona Server procd init. The server reads PERSONA_SERVER_* environment
+# variables only (no config file of its own), so this script maps UCI
+# /etc/config/persona to the environment on every start.
+#
+# Credential handling: tokens never pass through UCI. The init script reads
+# the root-only token file (uci main.tokens_file, mode 0600) at start and
+# exports its single line as PERSONA_SERVER_TOKENS. A missing or empty file
+# leaves the env unset — the server then keeps /api disabled (fail-closed).
+
+START=99
+STOP=10
+USE_PROCD=1
+NAME=persona
+PROG=/usr/bin/persona-server
+
+start_service() {
+	local enabled host port db backup_dir backup_max ops_ret events_ret tokens_file
+	config_load "$NAME"
+	config_get_bool enabled main enabled 0
+	[ "$enabled" = "1" ] || return 0
+	config_get host main host '0.0.0.0'
+	config_get port main port '3000'
+	config_get db main db '/etc/persona/persona.db'
+	config_get backup_dir main backup_dir ''
+	config_get backup_max main backup_max_versions '0'
+	config_get ops_ret main ops_retention_days '0'
+	config_get events_ret main events_retention_days '0'
+	config_get tokens_file main tokens_file '/etc/persona/tokens'
+
+	mkdir -p "$(dirname "$db")"
+
+	local tokens=''
+	if [ -n "$tokens_file" ] && [ -r "$tokens_file" ]; then
+		# Single-line spec "name:token,name:token"; strip CR/LF so stray
+		# line breaks cannot corrupt the value. NOTE: busybox tr has no
+		# [:space:] support (it deletes the literal set chars — seen live
+		# on the acceptance router), so only explicit escapes are used.
+		tokens=$(head -n 1 "$tokens_file" | tr -d '\r\n')
+	fi
+
+	local envs="PERSONA_SERVER_DB=$db PERSONA_SERVER_HOST=$host PERSONA_SERVER_PORT=$port PERSONA_SERVER_BACKUP_MAX_VERSIONS=$backup_max PERSONA_SERVER_OPS_RETENTION_DAYS=$ops_ret PERSONA_SERVER_EVENTS_RETENTION_DAYS=$events_ret"
+	# Only pass optional vars when non-empty: an empty-but-set env would
+	# override the server's own defaults with a bogus "" path.
+	[ -n "$backup_dir" ] && envs="$envs PERSONA_SERVER_BACKUP_DIR=$backup_dir"
+	[ -n "$tokens" ] && envs="$envs PERSONA_SERVER_TOKENS=$tokens"
+
+	procd_open_instance
+	procd_set_param command "$PROG"
+	# shellcheck disable=SC2086  # intentional word split: KEY=VALUE list
+	procd_set_param env $envs
+	procd_set_param respawn 3600 5 0
+	procd_set_param stdout 1
+	procd_set_param stderr 1
+	procd_close_instance
+}
+
+stop_service() {
+	service_stop "$PROG"
+}
+
+reload_service() {
+	stop
+	start
+}

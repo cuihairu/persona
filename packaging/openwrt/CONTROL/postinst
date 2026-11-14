@@ -1,0 +1,14 @@
+#!/bin/sh
+# Idempotent post-install: state dir + LuCI leaf dirs + init enablement.
+# The LuCI leaf dirs are pre-created here because opkg's unpacker does not
+# create missing parent directories (learned on the meshlet acceptance
+# router: view/<app>/ was absent, so the status template failed to unpack).
+# The service stays disabled in UCI until the user turns it on; enabling
+# the init link only wires boot start. An enabled service stopped by the
+# pre-remove of an upgrade comes back up here.
+mkdir -p /etc/persona
+chmod 0755 /etc/persona
+mkdir -p /usr/lib/lua/luci/controller /usr/lib/lua/luci/model/cbi /usr/lib/lua/luci/view/persona
+[ -x /etc/init.d/persona ] && /etc/init.d/persona enable
+[ "$(uci -q get persona.main.enabled)" = "1" ] && /etc/init.d/persona start >/dev/null 2>&1
+exit 0
