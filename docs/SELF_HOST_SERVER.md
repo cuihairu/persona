@@ -60,11 +60,11 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 The server also ships as a statically linked musl binary packaged as three
 OpenWrt ipks under `packaging/openwrt/`:
 
-| Package            | Arch                 | Contents                                                                             |
-| ------------------ | -------------------- | ------------------------------------------------------------------------------------ |
-| `persona`          | `x86_64` / `aarch64` | `/usr/bin/persona-server`, procd init script, UCI sample, LuCI controller/model/view |
-| `luci-app-persona` | `all`                | LuCI package (`Depends: persona`)                                                    |
-| `app-meta-persona` | `all`                | iStore metadata (`Depends: luci-app-persona`)                                        |
+| Package            | Arch                 | Contents                                                                              |
+| ------------------ | -------------------- | ------------------------------------------------------------------------------------- |
+| `persona`          | `x86_64` / `aarch64` | `/usr/bin/persona-server`, procd init script, UCI sample                              |
+| `luci-app-persona` | `all`                | LuCI package: controller, CBI settings page and status view (`Depends: persona`)      |
+| `app-meta-persona` | `all`                | iStore metadata: app manifest and icon (`Depends: luci-app-persona`)                  |
 
 Install `persona` first, then `luci-app-persona`, then `app-meta-persona` (the
 `Depends:` chain is honored by opkg, so picking `app-meta-persona` from iStore
@@ -82,7 +82,8 @@ Enable through LuCI (Admin → Services → Persona, with its settings page and 
 tail) or `uci set persona.main.enabled='1' && /etc/init.d/persona restart`.
 Token values never appear in UCI and never in the package payload, so the
 packaging surface stays zero-knowledge; a missing or unreadable token file
-leaves the service fail-closed (the server refuses to start).
+leaves the service fail-closed (the process still starts and `/api/v1` answers
+503, while `/health` stays 200 — `server/src/lib.rs:449`).
 
 ## Environment variable reference
 

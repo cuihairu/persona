@@ -102,6 +102,7 @@ persona/
 ├── desktop/            # Tauri + React desktop client (sync, passkeys, conflict UI)
 ├── browser/            # Browser clients (Chromium extension, Safari extension)
 ├── mobile/             # Mobile clients (iOS, Android, HarmonyOS)
+├── packaging/          # OpenWrt ipk 打包（路由器部署，LuCI + iStore）
 ├── connect-server/     # Local automation endpoint (127.0.0.1 HTTP, scope token)
 ├── server/             # Optional sync/automation service (Rust + Axum + SQLite)
 ├── website/            # Marketing site (UmiJS)
@@ -180,6 +181,17 @@ pnpm --filter persona-website run dev
 
 > Safari 不在 nightly 发布范围：Safari 扩展需经 Xcode 转换并签名，需要
 > Apple 开发者账号（已另立 todo 跟踪）。
+
+### 路由器安装（nightly）
+
+同一个 release 还发布 OpenWrt / iStoreOS 包：`persona-nightly-openwrt-x86_64.ipk`
+与 `persona-nightly-openwrt-aarch64.ipk`（`persona` 服务包：musl 静态二进制、
+procd init、UCI 样例）、`persona-nightly-openwrt-luci-app-all.ipk`（LuCI 设置页
+与状态页）与 `persona-nightly-openwrt-app-meta-all.ipk`（iStore 元数据）。先装
+`persona`，再装 LuCI 包——部署步骤、UCI 选项与令牌文件见
+[docs/SELF_HOST_SERVER.zh.md](./docs/SELF_HOST_SERVER.zh.md)。
+
+> 版本号 release 不发 ipk（与 Android APK、浏览器扩展同一口径）。
 
 ### 初始化工作区与基本操作
 

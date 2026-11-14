@@ -13,8 +13,9 @@ persona/
 ├── server/                # 可选同步服务器（Rust + Axum）
 ├── connect-server/        # Connect 本机自动化端点（secrets automation）
 ├── agents/                # 代理进程（ssh-agent 等）
-├── browser/              # 浏览器扩展与 wasm 组件
+├── browser/               # 浏览器扩展与 wasm 组件
 ├── mobile/                # 移动端（iOS/Android/HarmonyOS 原生工程，已入仓 + CI）
+├── packaging/             # OpenWrt ipk 打包（路由器部署，LuCI + iStore）
 ├── website/               # 项目官网
 ├── scripts/               # 构建/开发脚本
 ├── docker/                # 容器化部署

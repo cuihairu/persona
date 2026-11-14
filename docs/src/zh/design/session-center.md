@@ -179,7 +179,7 @@ grant，由 `authz::authorize` 裁决。
 | A4  | 撤销 Connect token 跨进程即时生效             | 模拟测试 | **已覆盖** | 保留为回归项；新增"锁定时不能撤销"的行为显式化或修正                                                |
 | A5  | CLI 启动的 SSH agent 能弹到桌面确认           | 真实交互 | 不可达     | 由 `persona ssh agent` 启动、桌面解锁、签名请求弹出桌面审批框并可用 Allow/Deny 应答；超时 120s 拒绝 |
 
-这些场景与 [验收场景清单与跨平台能力矩阵](/development/acceptance-matrix) 对齐编号。
+这些场景与 [验收场景清单与跨平台能力矩阵](/zh/development/acceptance-matrix) 对齐编号。
 
 ## 关联
 

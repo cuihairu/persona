@@ -17,6 +17,7 @@ persona/
 ├── agents/                # Agent processes (ssh-agent etc.)
 ├── browser/               # Browser extension and wasm components
 ├── mobile/                # Mobile (native iOS/Android/HarmonyOS projects, in-tree + CI)
+├── packaging/             # OpenWrt ipk packaging (router deployment, LuCI + iStore)
 ├── website/               # Project website
 ├── scripts/               # Build and dev scripts
 ├── docker/                # Containerized deployment

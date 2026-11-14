@@ -85,6 +85,7 @@
 | iOS                                                   | ❌ **从未编译**（`Persona.h` 只暴露 10 个生命周期符号，业务 FFI 未暴露）  | ❌ 2 个 XCTest 从未执行                                        | ❌                                                                                | ❌        |
 | HarmonyOS                                             | ❌ 从未编译（无 hvigor wrapper，只能在 DevEco Studio 内构建）             | ❌ 0 测试                                                      | ❌                                                                                | ❌        |
 | 自建 server（GHCR）                                   | ✅ docker buildx                                                          | ✅ 6 个双设备测试                                              | ⚠️ `verify-account-redline.sh` 手动起真 server                                    | ❌        |
+| OpenWrt / iStoreOS 路由器（ipk）                      | ✅ musl 静态编译 `x86_64` + `aarch64`（`desktop-build.yml::openwrt`）                | ❌ 0 测试（脚本门禁：shellcheck / `sh -n` / `luac5.1 -p`）                          | ⚠️ iStoreOS 24.10.8 x86_64 真机：opkg 安装 + 端口往返 + 模板解析；`aarch64` 无真机，仅结构检查                | ❌           |
 
 ### 跨客户端一致性：最大的洞
 

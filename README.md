@@ -104,6 +104,7 @@ persona/
 ├── desktop/            # Tauri + React desktop client (sync, passkeys, conflict UI)
 ├── browser/            # Browser clients (Chromium extension, Safari extension)
 ├── mobile/             # Mobile clients (iOS, Android, HarmonyOS)
+├── packaging/          # OpenWrt ipk packaging (router deployment, LuCI + iStore)
 ├── connect-server/     # Local automation endpoint (127.0.0.1 HTTP, scope token)
 ├── server/             # Optional sync/automation service (Rust + Axum + SQLite)
 ├── website/            # Marketing site (UmiJS)
@@ -184,6 +185,20 @@ browser. Chrome and Edge load it the same way:
 > Safari is not shipped in the nightly: converting and signing an extension
 > for Safari requires Xcode and an Apple developer account (tracked as a
 > separate work item).
+
+### Router Install (nightly)
+
+The same release ships the OpenWrt / iStoreOS packages:
+`persona-nightly-openwrt-x86_64.ipk` and `persona-nightly-openwrt-aarch64.ipk`
+(the `persona` service: static musl binary, procd init, UCI sample),
+`persona-nightly-openwrt-luci-app-all.ipk` (the LuCI settings and status pages)
+and `persona-nightly-openwrt-app-meta-all.ipk` (iStore metadata). Install
+`persona` first, then the LuCI package — deployment steps, UCI options and the
+token file are in
+[docs/SELF_HOST_SERVER.md](./docs/SELF_HOST_SERVER.md).
+
+> Versioned releases ship no ipk (the same policy as the Android APK and the
+> browser extension).
 
 ### Initialize a Workspace and Perform Basic Actions
 

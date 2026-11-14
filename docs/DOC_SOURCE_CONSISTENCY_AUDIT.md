@@ -166,3 +166,56 @@ this English twin resumes from Round G2 (finding G2-02).
 - SELF_HOST_SERVER env-var table against the init.d injection set and the server implementation.- Ledger leak surface: both audit ledgers sit at `docs/` root while vitepress uses `srcDir: "src"` (config.mts:185), so the ledgers never reach the published site; live probe of `https://cuihairu.github.io/persona/审计-文档一致性.html` returns 404. No `srcExclude` needed.
 
 **Three-Bucket Count (this round)**: A 0 / B 2 / C 1, P0 empty.
+
+## Round G2R (2026-11-15, re-verification of Round G2)
+
+> Same criteria (three buckets + six steps). This seat **re-verifies** rather than
+> re-audits: HEAD `bd21c2a` already carries one G2 round (the OpenWrt deployment
+> section + a ledger round). Scope: re-check every OpenWrt claim against the code
+> that implements it, and fill only the remaining gaps. The five in-flight dirty
+> files of a peer session (fill-test Rust scaffolding, extension build output) sit
+> outside `docs/` and were left untouched throughout.
+
+### Three-Bucket Count
+
+| Bucket | Count |
+| --- | --- |
+| Doc ahead of code (A) | 1 |
+| Code ahead of doc (B) | 3 |
+| Mismatch (C) | 1 |
+| **Total** | 5 |
+
+Severity: P0 = 0, P1 = 3, P2 = 2. All five fixed under source-wins (EN/zh pairs).
+
+### Audit Table
+
+| ID | Page | Claim | Source evidence | Bucket | Severity | Fix |
+| --- | --- | --- | --- | --- | --- | --- |
+| G2R-01 | docs/SELF_HOST_SERVER.md:85 (+zh:74) | a missing/unreadable token file means "the server **refuses to start**" | `server/src/main.rs:40-52`: neither token set → `auth = None` + `warn!`, the process still binds; `server/src/lib.rs:449-462` (`api_disabled_returns_503_when_token_unset`) → `/api/v1` 503, `/health` 200. Only a **malformed** `PERSONA_SERVER_TOKENS` panics (main.rs:43). The fail-closed half was right; "refuses to start" moved the compose `:?` refusal (docker-compose.deploy.yml:13) onto the bare binary path | A | P1 | Reworded to "the process still starts, `/api/v1` answers 503 and `/health` stays 200" with file:line |
+| G2R-02 | docs/SELF_HOST_SERVER.md:65 package table (+zh:55) | the `persona` package contents listed the "LuCI controller/model/view" | `packaging/openwrt/build-ipk.sh:90-100`: `persona` copies only `etc/init.d`, `etc/config`, `usr/bin`; the three LuCI files are staged at :132-138 for `luci-app-persona`; the manifest + icon at :177-185 for `app-meta-persona` | A | P2 | Contents restated per package: binary + init + UCI / LuCI controller+CBI+status view / manifest + icon |
+| G2R-03 | README.md:97-113 / README.zh.md:96-112 monorepo tree | no `packaging/` row (an 11-file tree carrying the whole ipk surface) | `git ls-files packaging` = 11 files under `packaging/openwrt/`; the same READMEs already advertised "OpenWrt ipk" on the doc-link line (486/474) added by `bd21c2a`, so only the tree was missing it | B | P1 | Added the `packaging/` row to both trees (comment column byte-aligned at offset 30) |
+| G2R-04 | README.md / README.zh.md nightly sections | the nightly artifact list named only the two extension zips — no entry point to the four ipks | `.github/workflows/desktop-build.yml:469-472` (four asset names); `:428` (a tag release downloads only `desktop-*`, so ipks never land on a versioned release) | B | P1 | New "Router Install (nightly)" section in both READMEs: the four asset names, install order, pointer to SELF_HOST_SERVER (no `.md#` anchor — GitHub rewrites heading anchors unpredictably) |
+| G2R-05 | docs/src/zh/design/session-center.md:182 | a **zh page** linking the English absolute route `/development/acceptance-matrix` | after a local rebuild `.vitepress/dist/zh/design/session-center.html` keeps `href="/persona/development/acceptance-matrix"`; `docs/src/zh/development/acceptance-matrix.md` exists, and the EN twin `docs/src/design/session-center.md:208` carries the same route correctly | C (cross-locale leakage) | P2 | Changed to `/zh/development/acceptance-matrix` |
+
+### Re-verified consistent (no change)
+
+- **Three packages, arches and the `Depends:` chain** ↔ `build-ipk.sh:104-118` (`persona`, `Architecture: $ARCH`, `Depends: libc`), `:152-166` (`luci-app-persona`, `all`, `Depends: persona`), `:196-210` (`app-meta-persona`, `Depends: luci-app-persona`).
+- **The four nightly asset names** ↔ `desktop-build.yml:469-472`, literal match; "never on a versioned release" ↔ `:428`.
+- **OpenWrt is an accepted platform, not a P0 ghost** ↔ `todo.md:168` OWRT-001 records a real iStoreOS 24.10.8 x86_64 router (three-package opkg install, port round-trip, `luci.template.parser.parse("persona/status")` OK); `aarch64` is structural checks only (`desktop-build.yml:376-390`) — the acceptance matrix now records that honestly rather than claiming device runs.
+- **Zero-knowledge / token surface**: 37 lines of `/etc/config/persona` carry no credential; no token literal anywhere in `build-ipk.sh`; the LuCI status endpoint reports `tokens_file_present` only (`controller/persona.lua:78-82`).
+- **Language form = form ②**: `docs/.vitepress/config.mts:185` `srcDir: "src"` + `:198-260` `root`/`zh` locales; `docs/src/*.md` ↔ `docs/src/zh/*.md` page pairs (32 × 2). The 62 EN pages plus `.zh.md` twins at the `docs/` root are **engineering docs on the GitHub surface**, outside `srcDir`, indexed by `docs/README.md` / `docs/README.zh.md` — not a third docs scheme.
+- **Cross-locale leakage after rebuild**: of 32 built `/zh/` pages, exactly **1** non-`/zh/` content link after stripping the `/persona` base — G2R-05, fixed. Each zh page's remaining `/zh/`-prefixed `<a class="title" href>` plus its `trans-title` menu entry is VitePress's own language switcher output (expected, not a defect), as are `/images/*`, `/ui/*`, `/persona-logo.svg`, `/vp-icons.css`, `/assets/*`.
+- **Dead links**: `npm run build` (vitepress 1.6.4) green locally in 19.16s, zero dead links. The only absolute links with a `.md` suffix (`/design/principal-action.md`, `/zh/design/principal-action.md`) still resolve to their pages under `cleanUrls`, so they are left alone.
+
+### Gates
+
+| Gate | Result |
+| --- | --- |
+| `npm run build` in `docs/` (vitepress 1.6.4) | ✅ local green, zero dead links, re-run after every `docs/src/**` edit |
+| README tree comment columns | ✅ byte offset 30 on both halves |
+
+### Language auto-switch (re-verification)
+
+- Form: **form ②** (VitePress locale routing, `/` = en, `/zh/` = zh).
+- Auto-detection: **none**. Grepping `docs/` (minus node_modules, dist, `.vitepress/cache`), `website/` and `desktop/src-tauri/src` for `navigator.language(s)`, `location.replace`, `lang-auto-picked`, `rootLocale` hits only the **two audit ledgers describing this very face** — no page source carries a probe. `docs/.vitepress/theme/index.ts` registers only `UiCarousel` and `MermaidRenderer`. The ROOT page has no script, so nothing would fire even if one existed.
+- Verdict: **no auto language switch; manual switch + explicit links only** (VitePress locale dropdown + README cross-links). The decision item is already filed as `todo.md` LANG-AUTO-001 (P2) by the previous G2 round — not implemented, locale routing untouched.
