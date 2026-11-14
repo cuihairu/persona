@@ -139,23 +139,23 @@ C root-level status 27 (ahead 3 / behind 21 / mismatch 3) | D build/site 21 (ahe
 
 ### Three-Bucket Count
 
-| Bucket | Count |
-| --- | --- |
-| Doc ahead of code (A) | 0 |
-| Code ahead of doc (B) | 2 |
-| Mismatch (C) | 1 |
-| **Total** | 3 |
+| Bucket                | Count |
+| --------------------- | ----- |
+| Doc ahead of code (A) | 0     |
+| Code ahead of doc (B) | 2     |
+| Mismatch (C)          | 1     |
+| **Total**             | 3     |
 
 The 2026-11-02 and 2026-11-05 rounds are recorded only in the Chinese ledger;
 this English twin resumes from Round G2 (finding G2-02).
 
 ### Audit Table
 
-| ID | Page | Claim | Source evidence | Bucket | Severity | Fix |
-| --- | --- | --- | --- | --- | --- | --- |
-| G2-01 | docs/SELF_HOST_SERVER.md (+zh twin, README links) | Self-hosting docs were silent about the three-package `packaging/openwrt/` set (persona x86_64/aarch64 + luci-app-persona all + app-meta-persona all) and the nightly `persona-nightly-openwrt-*.ipk` assets | `packaging/openwrt/build-ipk.sh`; `.github/workflows/desktop-build.yml:464-472`; `packaging/openwrt/etc/init.d/persona:42-46` | B | P1 | Added a "Router deployment (OpenWrt / iStoreOS ipk)" section to both language halves (package table, install order, nightly asset names, UCI + tokens-file zero-knowledge boundary) and extended the README doc-link label |
-| G2-02 | this English ledger vs the Chinese one | English twin stopped at the 2026-10-13 first round while the Chinese ledger carried the 11-02 and 11-05 rounds | `docs/DOC_SOURCE_CONSISTENCY_AUDIT.md` ends at line 131 | C | P2 | English twin now carries Round G2 forward; the Chinese ledger stays authoritative for the two historical rounds |
-| G2-03 | language auto-switch face | No browser-language detection anywhere (fleet-wide zero hits) | `docs/.vitepress/config.mts` has no `rootLocale`/`navigator.language`; `docs/.vitepress/theme/` has no detection script; live `/` = en-US, `/zh/` = zh-CN | C (investigation) | P2 | Recorded as "no auto-switch; manual link only" (VitePress locale dropdown + README cross-link). Auto-detection stays an enhancement pending a decision; not implemented |
+| ID    | Page                                              | Claim                                                                                                                                                                                                        | Source evidence                                                                                                                                           | Bucket            | Severity | Fix                                                                                                                                                                                                                        |
+| ----- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G2-01 | docs/SELF_HOST_SERVER.md (+zh twin, README links) | Self-hosting docs were silent about the three-package `packaging/openwrt/` set (persona x86_64/aarch64 + luci-app-persona all + app-meta-persona all) and the nightly `persona-nightly-openwrt-*.ipk` assets | `packaging/openwrt/build-ipk.sh`; `.github/workflows/desktop-build.yml:464-472`; `packaging/openwrt/etc/init.d/persona:42-46`                             | B                 | P1       | Added a "Router deployment (OpenWrt / iStoreOS ipk)" section to both language halves (package table, install order, nightly asset names, UCI + tokens-file zero-knowledge boundary) and extended the README doc-link label |
+| G2-02 | this English ledger vs the Chinese one            | English twin stopped at the 2026-10-13 first round while the Chinese ledger carried the 11-02 and 11-05 rounds                                                                                               | `docs/DOC_SOURCE_CONSISTENCY_AUDIT.md` ends at line 131                                                                                                   | C                 | P2       | English twin now carries Round G2 forward; the Chinese ledger stays authoritative for the two historical rounds                                                                                                            |
+| G2-03 | language auto-switch face                         | No browser-language detection anywhere (fleet-wide zero hits)                                                                                                                                                | `docs/.vitepress/config.mts` has no `rootLocale`/`navigator.language`; `docs/.vitepress/theme/` has no detection script; live `/` = en-US, `/zh/` = zh-CN | C (investigation) | P2       | Recorded as "no auto-switch; manual link only" (VitePress locale dropdown + README cross-link). Auto-detection stays an enhancement pending a decision; not implemented                                                    |
 
 ### Verified consistent (sampled, no change needed)
 
@@ -164,6 +164,5 @@ this English twin resumes from Round G2 (finding G2-02).
 - Monorepo layout row `browser/` against the real `chromium-extension/` + `safari-extension/` directories; extension install section (dual nightly names, Safari excluded) in both languages.
 - 66 vitepress nav/sidebar links re-checked against `docs/src` (srcDir): zero dead links (`/persona/` is the site base, not a content link).
 - SELF_HOST_SERVER env-var table against the init.d injection set and the server implementation.- Ledger leak surface: both audit ledgers sit at `docs/` root while vitepress uses `srcDir: "src"` (config.mts:185), so the ledgers never reach the published site; live probe of `https://cuihairu.github.io/persona/审计-文档一致性.html` returns 404. No `srcExclude` needed.
-
 
 **Three-Bucket Count (this round)**: A 0 / B 2 / C 1, P0 empty.
