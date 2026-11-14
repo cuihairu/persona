@@ -166,6 +166,25 @@ pnpm --filter persona-chromium-extension run build
 pnpm --filter persona-website run dev
 ```
 
+### Browser Extension Install (nightly)
+
+The [nightly release](../../releases/tag/nightly) ships the Chromium (MV3)
+extension as `persona-nightly-extension-chrome.zip` and
+`persona-nightly-extension-edge.zip` — both names contain the exact same
+package (identical SHA256, see `SHA256SUMS`); pick the file matching your
+browser. Chrome and Edge load it the same way:
+
+1. Download the zip for your browser and unzip it to a permanent location
+   (the browser loads the folder in place — do not delete it afterwards).
+2. Open `chrome://extensions` (Edge: `edge://extensions`), enable
+   **Developer mode**.
+3. Click **Load unpacked** and select the unzipped folder (the one
+   containing `manifest.json`).
+
+> Safari is not shipped in the nightly: converting and signing an extension
+> for Safari requires Xcode and an Apple developer account (tracked as a
+> separate work item).
+
 ### Initialize a Workspace and Perform Basic Actions
 
 ```bash

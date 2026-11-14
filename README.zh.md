@@ -164,6 +164,23 @@ pnpm --filter persona-chromium-extension run build
 pnpm --filter persona-website run dev
 ```
 
+### 浏览器扩展安装（nightly）
+
+[nightly 每日构建](../../releases/tag/nightly) 以
+`persona-nightly-extension-chrome.zip` 与 `persona-nightly-extension-edge.zip`
+两个名字发布 Chromium（MV3）扩展——两个文件是**同一个包**（SHA256 一致，见
+`SHA256SUMS`），按所用浏览器选名字下载即可。Chrome 与 Edge 安装方式相同：
+
+1. 下载对应 zip 并解压到一个**长期保留**的目录（浏览器按原位加载该目录，
+   之后不要删除或移动）。
+2. 打开 `chrome://extensions`（Edge：`edge://extensions`），开启**开发者
+   模式**。
+3. 点**加载已解压的扩展程序**，选择解压后的目录（含 `manifest.json` 的
+   那一层）。
+
+> Safari 不在 nightly 发布范围：Safari 扩展需经 Xcode 转换并签名，需要
+> Apple 开发者账号（已另立 todo 跟踪）。
+
 ### 初始化工作区与基本操作
 
 ```bash
