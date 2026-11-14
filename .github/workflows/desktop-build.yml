@@ -375,8 +375,9 @@ jobs:
             "target/${{ matrix.arch }}-unknown-linux-musl/release" "$OUT"
           # aarch64 无真机：结构检查代替（ELF 机器 + 静态链接 + ipk 成员
           # + data.tar.gz 目录条目——opkg 不为纯文件成员建父目录）。
+          # x86_64 musl 是 static-pie，aarch64 musl 是 plain static——都收。
           file "target/${{ matrix.arch }}-unknown-linux-musl/release/persona-server" \
-            | tee /dev/stderr | grep -q 'static-pie linked'
+            | tee /dev/stderr | grep -qE 'static-pie linked|statically linked'
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           ipk="$OUT/persona_${version}-1_${{ matrix.arch }}.ipk"
           test -f "$ipk"
