@@ -471,7 +471,7 @@ persona wallet passwd "Main"
 - [E2EE 同步设计](./docs/E2EE_SYNC_DESIGN.md) – 端到端加密同步设计（阶段 1–4 已落地）
 - [存储与同步指南](./docs/STORAGE_AND_SYNC.md) – 存储与同步模式、双设备走查
 - [群组同步模式](./docs/sync-group-mode.md) – 默认同步模式：动态口令 PAKE 配对、分批次的实现状态
-- [自托管服务端](./docs/SELF_HOST_SERVER.md) – 自托管指南（部署、环境变量、API 端点）
+- [自托管服务端](./docs/SELF_HOST_SERVER.md) – 自托管指南（部署、环境变量、API 端点、OpenWrt ipk）
 
 ### 安全文档
 

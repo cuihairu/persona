@@ -55,6 +55,35 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 # point compose's image at persona-server:local, then up -d as before
 ```
 
+## Router deployment (OpenWrt / iStoreOS ipk)
+
+The server also ships as a statically linked musl binary packaged as three
+OpenWrt ipks under `packaging/openwrt/`:
+
+| Package | Arch | Contents |
+| --- | --- | --- |
+| `persona` | `x86_64` / `aarch64` | `/usr/bin/persona-server`, procd init script, UCI sample, LuCI controller/model/view |
+| `luci-app-persona` | `all` | LuCI package (`Depends: persona`) |
+| `app-meta-persona` | `all` | iStore metadata (`Depends: luci-app-persona`) |
+
+Install `persona` first, then `luci-app-persona`, then `app-meta-persona` (the
+`Depends:` chain is honored by opkg, so picking `app-meta-persona` from iStore
+pulls the other two in order). Nightly builds publish the four assets
+`persona-nightly-openwrt-{x86_64,aarch64}.ipk` and
+`persona-nightly-openwrt-{luci-app,app-meta}-all.ipk` on the `nightly` release;
+they never appear on a versioned release.
+
+UCI stores only non-secret paths and switches (`/etc/config/persona`); the token
+spec stays in a root-only file that the init script reads at start:
+
+    echo 'phone:SECRET,tablet:SECRET2' > /etc/persona/tokens && chmod 600 /etc/persona/tokens
+
+Enable through LuCI (Admin → Services → Persona, with its settings page and log
+tail) or `uci set persona.main.enabled='1' && /etc/init.d/persona restart`.
+Token values never appear in UCI and never in the package payload, so the
+packaging surface stays zero-knowledge; a missing or unreadable token file
+leaves the service fail-closed (the server refuses to start).
+
 ## Environment variable reference
 
 | Variable                                      | Default               | Description                                                                                                                                                             |

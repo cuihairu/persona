@@ -45,6 +45,34 @@ docker build -f docker/Dockerfile.server -t persona-server:local .
 # 把 compose 的 image 改成 persona-server:local 后同样 up -d
 ```
 
+## 路由器部署（OpenWrt / iStoreOS ipk）
+
+服务端同时以 musl 静态链接二进制的形态打包为 `packaging/openwrt/` 下的三个
+OpenWrt ipk：
+
+| 包 | 架构 | 内容 |
+| --- | --- | --- |
+| `persona` | `x86_64` / `aarch64` | `/usr/bin/persona-server`、procd init 脚本、UCI 样例、LuCI controller/model/view |
+| `luci-app-persona` | `all` | LuCI 应用包（`Depends: persona`） |
+| `app-meta-persona` | `all` | iStore 元数据（`Depends: luci-app-persona`） |
+
+安装顺序 `persona` → `luci-app-persona` → `app-meta-persona`（opkg 会解析
+`Depends:` 链，从 iStore 直接选 `app-meta-persona` 会按序带上另外两个）。
+nightly 构建在 `nightly` release 上发布四个资产
+`persona-nightly-openwrt-{x86_64,aarch64}.ipk` 与
+`persona-nightly-openwrt-{luci-app,app-meta}-all.ipk`；版本号 release 从不包含
+它们。
+
+UCI 只存非密路径与开关（`/etc/config/persona`）；令牌规格放在 root 独占文件里，
+由 init 脚本启动时读取：
+
+    echo 'phone:SECRET,tablet:SECRET2' > /etc/persona/tokens && chmod 600 /etc/persona/tokens
+
+经 LuCI 开启（Admin → Services → Persona，带设置页与日志尾随），或直接
+`uci set persona.main.enabled='1' && /etc/init.d/persona restart`。
+令牌值既不进 UCI 也不进包体，打包面因此仍是零知识；令牌文件缺失或不可读时服务
+保持 fail-closed（服务端拒绝启动）。
+
 ## 环境变量全表
 
 | 变量                                          | 默认                  | 说明                                                                                    |

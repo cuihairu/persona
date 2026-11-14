@@ -483,7 +483,7 @@ address-poisoning heuristic; see
 - [E2EE Sync Design](./docs/E2EE_SYNC_DESIGN.md) – end-to-end encrypted sync design (phases 1–4 landed)
 - [Storage and Sync Guide](./docs/STORAGE_AND_SYNC.md) – storage and sync modes, dual-device walkthrough
 - [Sync Group Mode](./docs/sync-group-mode.md) – default sync mode: dynamic-password PAKE pairing, implementation status per batch
-- [Self-Host Server](./docs/SELF_HOST_SERVER.md) – self-hosting guide (deploy, env vars, API endpoints)
+- [Self-Host Server](./docs/SELF_HOST_SERVER.md) – self-hosting guide (deploy, env vars, API endpoints, OpenWrt ipk)
 
 ### Security Documentation
 
